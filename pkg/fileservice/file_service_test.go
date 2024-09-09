@@ -318,7 +318,7 @@ func testFileService(
 			content := make([]byte, _BlockContentSize*4)
 			_, err := rand.Read(content)
 			assert.Nil(t, err)
-			parts := randomSplit(content, 32)
+			parts := randomSplit(content, len(content)/10)
 
 			// write
 			writeVector := IOVector{
@@ -356,7 +356,7 @@ func testFileService(
 			readVector.Release()
 
 			// read, random entry
-			parts = randomSplit(content, 16)
+			parts = randomSplit(content, len(content)/10)
 			readVector.Entries = readVector.Entries[:0]
 			offset = int64(0)
 			for _, part := range parts {
@@ -701,7 +701,7 @@ func testFileService(
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						cacheData := allocator.Alloc(len(bs))
+						cacheData := allocator.AllocateCacheData(len(bs))
 						copy(cacheData.Bytes(), bs)
 						return cacheData, nil
 					},

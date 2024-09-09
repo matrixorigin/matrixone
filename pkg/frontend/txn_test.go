@@ -256,7 +256,7 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			wsp := newTestWorkspace()
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
-			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
 	eng := mock_frontend.NewMockEngine(ctrl)
@@ -286,7 +286,7 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
-			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
 	eng := mock_frontend.NewMockEngine(ctrl)
@@ -319,7 +319,7 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
-			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
 	eng := mock_frontend.NewMockEngine(ctrl)
@@ -353,7 +353,7 @@ func Test_rollbackStatement(t *testing.T) {
 				txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 				wsp := newTestWorkspace()
 				txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
-				txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+				txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 				txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 				return txnOperator, nil
 			}).AnyTimes()

@@ -19,8 +19,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
-	"net/http"
-	_ "net/http/pprof"
 	"runtime"
 	"sync"
 	"testing"
@@ -39,12 +37,6 @@ func fuzzFS(
 ) {
 
 	counterSet := new(perfcounter.CounterSet)
-	go func() {
-		mux := http.NewServeMux()
-		// performance counter
-		mux.Handle("/perf", counterSet)
-		http.ListenAndServe(":8912", mux)
-	}()
 
 	fs := newFS(counterSet)
 	defer fs.Close()
