@@ -22,8 +22,9 @@ import (
 )
 
 type objectStorageSemaphore struct {
-	upstream  ObjectStorage
-	semaphore chan struct{}
+	upstream    ObjectStorage
+	semaphore   chan struct{}
+	concurrency int64
 }
 
 func newObjectStorageSemaphore(
@@ -31,8 +32,9 @@ func newObjectStorageSemaphore(
 	capacity int64,
 ) *objectStorageSemaphore {
 	return &objectStorageSemaphore{
-		upstream:  upstream,
-		semaphore: make(chan struct{}, capacity),
+		upstream:    upstream,
+		semaphore:   make(chan struct{}, capacity),
+		concurrency: capacity,
 	}
 }
 
@@ -45,6 +47,10 @@ func (o *objectStorageSemaphore) release() {
 }
 
 var _ ObjectStorage = new(objectStorageSemaphore)
+
+func (o *objectStorageSemaphore) Concurrency() int64 {
+	return o.concurrency
+}
 
 func (o *objectStorageSemaphore) Delete(ctx context.Context, keys ...string) (err error) {
 	o.acquire()
