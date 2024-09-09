@@ -83,14 +83,15 @@ func NewLocalDataSource(
 
 		source.rangeSlice = rangesSlice
 	}
-
-	state, err := table.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
+	if readPolicy&engine.Policy_SkipReadCommittedInMem == 0 {
+		state, err := table.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+		source.pState = state
 	}
 
 	source.table = table
-	source.pState = state
 	source.txnOffset = txnOffset
 	source.snapshotTS = types.TimestampToTS(table.getTxn().op.SnapshotTS())
 
@@ -868,10 +869,11 @@ func (ls *LocalDataSource) GetTombstones(
 		ls.applyPStateInMemDeletes(bid, nil, deletedRows)
 	}
 
-	//_, err = ls.applyPStatePersistedDeltaLocation(bid, nil, deletedRows)
-	_, err = ls.applyPStateTombstoneObjects(bid, nil, deletedRows)
-	if err != nil {
-		return nil, err
+	if ls.tombstonePolicy&engine.Policy_SkipCommittedS3 == 0 {
+		_, err = ls.applyPStateTombstoneObjects(bid, nil, deletedRows)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return deletedRows, nil

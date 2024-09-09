@@ -393,6 +393,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 
 type shardingReader struct {
 	iteratePhase ReaderPhase
+	closed       bool
 	lrd          engine.Reader
 	tblDelegate  *txnTableDelegate
 	streamID     types.Uuid
@@ -413,9 +414,7 @@ func (r *shardingReader) Read(
 ) (isEnd bool, err error) {
 	defer func() {
 		if err != nil || isEnd {
-			r.lrd.Close()
-			//TODO:: close remote reader asynchronously through cleaner.
-			r.iteratePhase = InEnd
+			r.close()
 		}
 	}()
 	for {
@@ -477,7 +476,25 @@ func (r *shardingReader) Read(
 }
 
 func (r *shardingReader) Close() error {
-	r.lrd.Close()
+	return r.close()
+}
+
+func (r *shardingReader) close() error {
+	if !r.closed {
+		r.lrd.Close()
+		err := r.tblDelegate.forwardRead(
+			context.Background(),
+			shardservice.ReadNext,
+			func(param *shard.ReadParam) {
+				param.ReadCloseParam.Uuid = types.EncodeUuid(&r.streamID)
+			},
+			func(resp []byte) {
+			},
+		)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -281,6 +281,7 @@ message ReaderBuildParam {
     plan.Expr expr = 2;
     int32 scanType = 3;
     int32 readPolicy = 4;
+    int32 tombstoneApplyPolicy = 5;
 }
 
 message ReaderBuildResult {
