@@ -631,7 +631,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	for i := uint64(0); i < uint64(length); i++ {
 		_filePath, null1 := filePathVec.GetStrValue(i)
 		if null1 {
-			if err := rs.AppendBytes(nil, true); err != nil {
+			if err := rs.Append(int64(0), true); err != nil {
 				return err
 			}
 			continue
@@ -645,7 +645,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 
 		_content, null2 := contentVec.GetStrValue(i)
 		if null2 {
-			if err := rs.AppendBytes(nil, true); err != nil {
+			if err := rs.Append(int64(0), true); err != nil {
 				return err
 			}
 			continue
