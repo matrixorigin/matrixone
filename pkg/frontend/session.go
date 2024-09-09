@@ -1427,18 +1427,6 @@ func (ses *Session) GetFromRealUser() bool {
 	return ses.fromRealUser
 }
 
-func changeVersion(ctx context.Context, ses *Session, db string) error {
-	var err error
-	if _, ok := bannedCatalogDatabases[db]; ok {
-		return err
-	}
-	version, _ := GetVersionCompatibility(ctx, ses, db)
-	if ses.GetTenantInfo() != nil {
-		ses.GetTenantInfo().SetVersion(version)
-	}
-	return err
-}
-
 // getCNLabels returns requested CN labels.
 func (ses *Session) getCNLabels() map[string]string {
 	return ses.requestLabel
