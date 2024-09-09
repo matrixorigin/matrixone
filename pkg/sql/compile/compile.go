@@ -562,7 +562,20 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	return result, nil
 }
 
+// hasValidQueryPlan Check if SQL has a query plan
+func (c *Compile) hasValidQueryPlan() bool {
+	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
+		if qry.Query.StmtType != plan.Query_REPLACE {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Compile) fillS3ToNodeAnalyzeInfo(runC *Compile) {
+	if !c.hasValidQueryPlan() {
+		return
+	}
 	// record the number of s3 requests
 	c.anal.S3IOInputCount(c.anal.curr, runC.counterSet.FileService.S3.Put.Load())
 	c.anal.S3IOInputCount(c.anal.curr, runC.counterSet.FileService.S3.List.Load())
