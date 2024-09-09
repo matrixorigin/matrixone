@@ -1487,17 +1487,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	// check index invalid on the type
-	// for example, the text type don't support index
 	for _, str := range indexs {
 		if _, ok := colMap[str]; !ok {
 			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", str)
 		}
 		if colMap[str].Typ.Id == int32(types.T_blob) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
-		}
-		// ERIC TODO: FULL TEXT should be supported
-		if colMap[str].Typ.Id == int32(types.T_text) {
-			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
 		}
 		if colMap[str].Typ.Id == int32(types.T_datalink) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", str))
@@ -1779,17 +1774,6 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			},
 		}
 		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		// hidden composite primary key
-		colDef = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-		colDef.Alg = plan.CompressType_Lz4
-		colDef.Primary = true
-
-		tableDef.Pkey = &PrimaryKeyDef{
-			Names:       []string{catalog.FullTextIndex_TabCol_Id, catalog.FullTextIndex_TabCol_Position},
-			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: colDef,
-		}
 
 		logutil.Infof("indexDef %s", indexDef.String())
 		logutil.Infof("index columns = %v", indexParts)

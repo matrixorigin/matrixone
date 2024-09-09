@@ -2,6 +2,9 @@
 -- TODO: GENERATE the test case to cover all combinations of types (varchar, char and text)
 set experimental_fulltext_index=1;
 
+create table tmp (id bigint primary key, body varchar, title text, FULLTEXT(title, body));
+drop table tmp;
+
 create table src (id bigint primary key, body varchar, title text);
 
 insert into src values (0, 'red', 't1'), (1, 'yellow', 't2'), (2, 'blue', 't3'), (3, 'blue red', 't4');
