@@ -1127,6 +1127,7 @@ message DataDefinition {
 		DropSequence   drop_sequence    = 18;
 		AlterSequence  alter_sequence   = 19;
 		CreateView  create_view         = 20;
+		RenameTable rename_table 	    = 21;
 	}
 }
 
@@ -1287,6 +1288,10 @@ message AlterAddColumn {
 message AlterDropColumn {
 	uint32 idx = 1;
 	uint32 seq = 2;
+}
+
+message RenameTable {
+	repeated AlterTable alter_tables = 1;
 }
 
 message AlterTable {
