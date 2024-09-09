@@ -48,10 +48,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		if err != nil {
 			return
 		}
-		err = changeVersion(execCtx.reqCtx, ses, dbName)
-		if err != nil {
-			return
-		}
 		uniqueCheckOnAuto, err = GetUniqueCheckOnAutoIncr(execCtx.reqCtx, ses, dbName)
 		if err != nil {
 			return
