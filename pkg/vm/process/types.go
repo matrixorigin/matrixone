@@ -374,8 +374,6 @@ type BaseProcess struct {
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
-
-	FoldExprVecs []*vector.Vector
 }
 
 // Process contains context used in query execution

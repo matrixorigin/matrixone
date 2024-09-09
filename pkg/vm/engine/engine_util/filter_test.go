@@ -730,6 +730,8 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		plan2.ReplaceFoldExpr(proc, expr, &exes)
 	}
 	for i, expr := range exprs {
+		plan2.EvalFoldExpr(proc, expr, &exes)
+
 		BasePKFilter, err := ConstructBasePKFilter(expr, tableDef, proc)
 		require.NoError(t, err)
 		require.Equal(t, filters[i].Valid, BasePKFilter.Valid, exprStrings[i])

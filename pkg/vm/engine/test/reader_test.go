@@ -31,7 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -109,11 +111,19 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	// 	require.Equal(t, rowsCount, stats.DataObjectsVisible.RowCnt)
 	// }
 
+	var exes []colexec.ExpressionExecutor
+	proc := testutil2.NewProcessWithMPool("", mp)
 	expr := []*plan.Expr{
 		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
 			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
 		}),
+	}
+	for _, e := range expr {
+		plan2.ReplaceFoldExpr(proc, e, &exes)
+	}
+	for _, e := range expr {
+		plan2.EvalFoldExpr(proc, e, &exes)
 	}
 
 	txn, _, reader, err := testutil.GetTableTxnReader(
@@ -137,6 +147,9 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		ret.CleanOnlyData()
 	}
 
+	for _, exe := range exes {
+		exe.Free()
+	}
 	require.Equal(t, 1, resultHit)
 	require.NoError(t, txn.Commit(ctx))
 }
