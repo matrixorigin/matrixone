@@ -181,7 +181,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			var zero T
 			for _, k := range sortKeyCol {
 				if lastKey != zero && lastKey == k {
-					logutil.Fatal("duplicate sort key",
+					logutil.Warn("duplicate sort key",
 						zap.Any("one", lastKey),
 						zap.Any("other", k),
 						zap.Bool("isTombstone", m.isTombstone),
