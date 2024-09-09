@@ -182,6 +182,12 @@ func init() {
 		func(a *AccountsSetOption) { a.reset() },
 		reuse.DefaultOptions[AccountsSetOption](), //.
 	) // WithEnableChecker()
+
+	reuse.CreatePool[RenameTable](
+		func() *RenameTable { return &RenameTable{} },
+		func(r *RenameTable) { r.reset() },
+		reuse.DefaultOptions[RenameTable](), //.
+	) // WithEnableChecker()
 }
 
 type AlterUser struct {
@@ -630,6 +636,47 @@ func (node *AlterTable) reset() {
 	}
 
 	*node = AlterTable{}
+}
+
+type RenameTable struct {
+	statementImpl
+	AlterTables []*AlterTable
+}
+
+func (node *RenameTable) Format(ctx *FmtCtx) {
+	ctx.WriteString("rename table ")
+	prefix := ""
+	for _, t := range node.AlterTables {
+		ctx.WriteString(prefix)
+		t.Table.Format(ctx)
+		ctx.WriteString(" ")
+		t.Options[0].Format(ctx)
+		prefix = ", "
+	}
+}
+
+func NewRenameTable(alters []*AlterTable) *RenameTable {
+	a := new(RenameTable)
+	a.AlterTables = alters
+	return a
+}
+
+func (node *RenameTable) GetStatementType() string { return "Rename Table" }
+func (node *RenameTable) GetQueryType() string     { return QueryTypeDDL }
+
+func (node RenameTable) TypeName() string { return "tree.RenameTableStmt" }
+
+func (node *RenameTable) reset() {
+	for _, t := range node.AlterTables {
+		t.reset()
+	}
+}
+
+func (node *RenameTable) Free() {
+	for _, t := range node.AlterTables {
+		t.Free()
+	}
+	reuse.Free[RenameTable](node, nil)
 }
 
 type AlterTableOptions = []AlterTableOption

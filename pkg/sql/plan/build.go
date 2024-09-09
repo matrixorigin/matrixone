@@ -138,6 +138,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildAlterView(stmt, ctx)
 	case *tree.AlterTable:
 		return buildAlterTable(stmt, ctx)
+	case *tree.RenameTable:
+		return buildRenameTable(stmt, ctx)
 	case *tree.CreateIndex:
 		return buildCreateIndex(stmt, ctx)
 	case *tree.DropIndex:

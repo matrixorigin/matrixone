@@ -435,6 +435,10 @@ func (node *AlterTable) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
+func (node *RenameTable) StmtKind() StmtKind {
+	return defaultStatusTyp
+}
+
 func (node *CreateConnector) StmtKind() StmtKind {
 	return frontendStatusTyp
 }

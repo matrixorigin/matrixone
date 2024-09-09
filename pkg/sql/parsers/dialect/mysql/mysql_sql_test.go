@@ -2399,7 +2399,11 @@ var (
 		},
 		{
 			input:  "Rename table nation to nations",
-			output: "alter table nation rename to nations",
+			output: "rename table nation rename to nations",
+		},
+		{
+			input:  "rename table rename_table_01 to rename01,rename_table_02 to rename02,rename_table_03 to rename03,rename_table_04 to rename04,rename_table_05 to rename05",
+			output: "rename table rename_table_01 rename to rename01, rename_table_02 rename to rename02, rename_table_03 rename to rename03, rename_table_04 rename to rename04, rename_table_05 rename to rename05",
 		},
 		{
 			input:  "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'p1 comment', partition p2 values less than maxvalue comment 'p3 comment')",
