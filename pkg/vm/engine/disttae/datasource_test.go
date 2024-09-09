@@ -244,7 +244,7 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 			MetaLoc:      metaLoc,
 			PartitionNum: int16(i),
 		}
-		blkInfo.StateFlag |= objectio.AppendableFlag
+		blkInfo.ObjectFlags |= objectio.ObjectFlag_Appendable
 		relData.AppendBlockInfo(blkInfo)
 	}
 
