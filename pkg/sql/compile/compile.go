@@ -1603,6 +1603,7 @@ func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
 	return cpuNum
 }
 
+// load data inline goes here, should always be single parallel
 func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
 	s := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
@@ -1611,40 +1612,19 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, 
 	op.SetIsFirst(currentFirstFlag)
 	s.setRootOperator(op)
 	c.anal.isFirst = false
-
-	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
-	if parallelSize == 1 {
-		return []*Scope{s}, nil
-	}
-	ss := make([]*Scope, parallelSize)
-	for i := 0; i < parallelSize; i++ {
-		ss[i] = c.constructLoadMergeScope()
-	}
-
-	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, s)
-	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
-	dispatchOp.SetIdx(c.anal.curNodeIdx)
-	s.setRootOperator(dispatchOp)
-
-	ss[0].PreScopes = append(ss[0].PreScopes, s)
-	return ss, nil
+	return []*Scope{s}, nil
 }
 
+// load data infile, goes here for compressed file or parallel false
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	param.Parallel = false
-	mcpu := c.cnList[0].Mcpu
-	ss := make([]*Scope, mcpu)
-	for i := 0; i < mcpu; i++ {
-		ss[i] = c.constructLoadMergeScope()
-	}
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
 		fileOffsetTmp[i] = &pipeline.FileOffset{}
 		fileOffsetTmp[i].Offset = make([]int64, 0)
 		fileOffsetTmp[i].Offset = append(fileOffsetTmp[i].Offset, []int64{0, -1}...)
 	}
-
 	scope := c.constructScopeForExternal("", false)
 	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
@@ -1653,6 +1633,15 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
 
+	mcpu := c.getParallelSizeForExternalScan(n, ncpu) // dop of insert scopes
+	if mcpu == 1 {
+		return []*Scope{scope}, nil
+	}
+
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = c.constructLoadMergeScope()
+	}
 	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, scope)
 	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
 	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
@@ -3867,7 +3856,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					ctx, blk.BlockID, fs,
 				); err2 != nil {
 					return false, err2
-				} else if blk.Appendable || hasTombstone {
+				} else if blk.IsAppendable() || hasTombstone {
 					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}

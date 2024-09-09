@@ -105,7 +105,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
-	require.Equal(t, objectWriter.objStats[0].Size(), blocks[0].GetExtent().End()+FooterSize)
+	require.Equal(t, objectWriter.objStats.Size(), blocks[0].GetExtent().End()+FooterSize)
 
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	extents := make([]Extent, 3)
@@ -130,7 +130,7 @@ func TestNewObjectWriter(t *testing.T) {
 	oSize += meta.BlockHeader().ZoneMapArea().OriginSize()
 	// 24 is the size of empty bf and zm
 	oSize += HeaderSize + FooterSize + 24 + extents[0].OriginSize()
-	require.Equal(t, objectWriter.objStats[0].OriginSize(), oSize)
+	require.Equal(t, objectWriter.objStats.OriginSize(), oSize)
 	assert.Equal(t, uint32(3), meta.BlockCount())
 	assert.True(t, meta.BlockHeader().Appendable())
 	assert.Equal(t, uint16(math.MaxUint16), meta.BlockHeader().SortKey())
