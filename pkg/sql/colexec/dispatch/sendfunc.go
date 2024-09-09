@@ -90,6 +90,7 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIn
 				return err
 			}
 			onlyOneRegToDealThis(i, ap)
+			break
 		}
 	}
 
@@ -123,13 +124,12 @@ func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
-			if bat != nil && !bat.IsEmpty() {
-				queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
-				if err != nil || queryDone {
-					return err
-				}
-				onlyOneRegToDealThis(i, ap)
+			queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
+			if err != nil || queryDone {
+				return err
 			}
+			onlyOneRegToDealThis(i, ap)
+			break
 		}
 	}
 	return nil
@@ -162,13 +162,11 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
-			if bat != nil && !bat.IsEmpty() {
-				queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
-				if err != nil || queryDone {
-					return err
-				}
-				onlyOneRegToDealThis(i, ap)
+			queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
+			if err != nil || queryDone {
+				return err
 			}
+			onlyOneRegToDealThis(i, ap)
 			break
 		}
 	}
