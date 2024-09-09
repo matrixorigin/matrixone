@@ -42,10 +42,6 @@ func i82bool(v int8) bool {
 	return v == 1
 }
 
-func IsFakePkName(name string) bool {
-	return name == pkgcatalog.FakePrimaryKeyColName
-}
-
 const (
 	COLIDX_COMMITS = objectio.SEQNUM_COMMITTS
 )
@@ -913,7 +909,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		}
 		names[def.Name] = true
 		// Fake pk
-		if IsFakePkName(def.Name) {
+		if pkgcatalog.IsFakePkName(def.Name) {
 			def.FakePK = true
 			def.SortKey = false
 			def.SortIdx = -1

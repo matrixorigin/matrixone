@@ -51,30 +51,20 @@ func removeIf[T any](data []T, pred func(t T) bool) []T {
 	return data[:res]
 }
 
-type ReadFilterSearchFuncType func([]*vector.Vector) []int64
-
-type BlockReadFilter struct {
-	HasFakePK          bool
-	Valid              bool
-	SortedSearchFunc   ReadFilterSearchFuncType
-	UnSortedSearchFunc ReadFilterSearchFuncType
-}
-
 // ReadDataByFilter only read block data from storage by filter, don't apply deletes.
 func ReadDataByFilter(
 	ctx context.Context,
-	sid string,
+	tableName string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
-	searchFunc ReadFilterSearchFuncType,
-	fs fileservice.FileService,
+	searchFunc objectio.ReadFilterSearchFuncType,
 	mp *mpool.MPool,
-	tableName string,
+	fs fileservice.FileService,
 ) (sels []int64, err error) {
-	bat, rowidIdx, deleteMask, release, err := readBlockData(ctx, columns, colTypes, info, ts, fs, mp, nil, fileservice.Policy(0))
+	bat, rowidIdx, deleteMask, release, err := readBlockData(ctx, columns, colTypes, info, ts, fileservice.Policy(0), mp, fs)
 	if err != nil {
 		return
 	}
@@ -99,16 +89,14 @@ func ReadDataByFilter(
 // BlockDataReadNoCopy only read block data from storage, don't apply deletes.
 func BlockDataReadNoCopy(
 	ctx context.Context,
-	sid string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
-	fs fileservice.FileService,
-	mp *mpool.MPool,
-	vp engine.VectorPool,
 	policy fileservice.Policy,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 ) (*batch.Batch, *nulls.Bitmap, func(), error) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
@@ -132,7 +120,7 @@ func BlockDataReadNoCopy(
 
 	// read block data from storage specified by meta location
 	if loaded, rowidPos, deleteMask, release, err = readBlockData(
-		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
+		ctx, columns, colTypes, info, ts, policy, mp, fs,
 	); err != nil {
 		return nil, nil, nil, err
 	}
@@ -147,7 +135,7 @@ func BlockDataReadNoCopy(
 	// build rowid column if needed
 	if rowidPos >= 0 {
 		if loaded.Vecs[rowidPos], err = buildRowidColumn(
-			info, nil, mp, vp,
+			info, nil, mp,
 		); err != nil {
 
 			return nil, nil, nil, err
@@ -164,7 +152,6 @@ func BlockDataReadNoCopy(
 // BlockDataRead only read block data from storage, don't apply deletes.
 func BlockDataRead(
 	ctx context.Context,
-	sid string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	columns []uint16,
@@ -172,13 +159,12 @@ func BlockDataRead(
 	ts timestamp.Timestamp,
 	filterSeqnums []uint16,
 	filterColTypes []types.Type,
-	filter BlockReadFilter,
-	fs fileservice.FileService,
-	mp *mpool.MPool,
-	vp engine.VectorPool,
+	filter objectio.BlockReadFilter,
 	policy fileservice.Policy,
 	tableName string,
 	bat *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 ) error {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
@@ -189,26 +175,23 @@ func BlockDataRead(
 		err  error
 	)
 
-	var searchFunc ReadFilterSearchFuncType
-	if (filter.HasFakePK || !info.Sorted) && filter.UnSortedSearchFunc != nil {
+	var searchFunc objectio.ReadFilterSearchFuncType
+	if (filter.HasFakePK || !info.IsSorted()) && filter.UnSortedSearchFunc != nil {
 		searchFunc = filter.UnSortedSearchFunc
-	} else if info.Sorted && filter.SortedSearchFunc != nil {
+	} else if info.IsSorted() && filter.SortedSearchFunc != nil {
 		searchFunc = filter.SortedSearchFunc
 	}
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
-			ctx, sid, info, ds, filterSeqnums, filterColTypes,
-			types.TimestampToTS(ts), searchFunc, fs, mp, tableName,
+			ctx, tableName, info, ds, filterSeqnums, filterColTypes,
+			types.TimestampToTS(ts), searchFunc, mp, fs,
 		); err != nil {
 			return err
 		}
 		v2.TaskSelReadFilterTotal.Inc()
 		if len(sels) == 0 {
-			RecordReadFilterSelectivity(sid, 1, 1)
 			v2.TaskSelReadFilterHit.Inc()
-		} else {
-			RecordReadFilterSelectivity(sid, 0, 1)
 		}
 
 		if len(sels) == 0 {
@@ -217,8 +200,8 @@ func BlockDataRead(
 	}
 
 	err = BlockDataReadInner(
-		ctx, sid, info, ds, columns, colTypes,
-		types.TimestampToTS(ts), sels, fs, mp, vp, policy, bat,
+		ctx, info, ds, columns, colTypes,
+		types.TimestampToTS(ts), sels, policy, bat, mp, fs,
 	)
 	if err != nil {
 		return err
@@ -281,7 +264,6 @@ func windowCNBatch(bat *batch.Batch, start, end uint64) error {
 
 func BlockDataReadBackup(
 	ctx context.Context,
-	sid string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	ts types.TS,
@@ -326,18 +308,16 @@ func BlockDataReadBackup(
 // BlockDataReadInner only read data,don't apply deletes.
 func BlockDataReadInner(
 	ctx context.Context,
-	sid string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
 	selectRows []int64, // if selectRows is not empty, it was already filtered by filter
-	fs fileservice.FileService,
-	mp *mpool.MPool,
-	vp engine.VectorPool,
 	policy fileservice.Policy,
 	bat *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 ) (err error) {
 	var (
 		rowidPos    int
@@ -349,7 +329,7 @@ func BlockDataReadInner(
 
 	// read block data from storage specified by meta location
 	if loaded, rowidPos, deleteMask, release, err = readBlockData(
-		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
+		ctx, columns, colTypes, info, ts, policy, mp, fs,
 	); err != nil {
 		return
 	}
@@ -364,7 +344,7 @@ func BlockDataReadInner(
 		// build rowid column if needed
 		if rowidPos >= 0 {
 			if loaded.Vecs[rowidPos], err = buildRowidColumn(
-				info, selectRows, mp, vp,
+				info, selectRows, mp,
 			); err != nil {
 				return
 			}
@@ -416,7 +396,7 @@ func BlockDataReadInner(
 	// build rowid column if needed
 	if rowidPos >= 0 {
 		if loaded.Vecs[rowidPos], err = buildRowidColumn(
-			info, nil, mp, vp,
+			info, nil, mp,
 		); err != nil {
 			return
 		}
@@ -463,13 +443,8 @@ func buildRowidColumn(
 	info *objectio.BlockInfo,
 	sels []int64,
 	m *mpool.MPool,
-	vp engine.VectorPool,
 ) (col *vector.Vector, err error) {
-	if vp == nil {
-		col = vector.NewVec(objectio.RowidType)
-	} else {
-		col = vp.GetVector(objectio.RowidType)
-	}
+	col = vector.NewVec(objectio.RowidType)
 	if len(sels) == 0 {
 		err = objectio.ConstructRowidColumnTo(
 			col,
@@ -499,10 +474,9 @@ func readBlockData(
 	colTypes []types.Type,
 	info *objectio.BlockInfo,
 	ts types.TS,
-	fs fileservice.FileService,
-	m *mpool.MPool,
-	vp engine.VectorPool,
 	policy fileservice.Policy,
+	m *mpool.MPool,
+	fs fileservice.FileService,
 ) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, release func(), err error) {
 	rowidPos, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 
@@ -554,7 +528,7 @@ func readBlockData(
 		return
 	}
 
-	if info.Appendable {
+	if info.IsAppendable() {
 		bat, deleteMask, err = readABlkColumns(idxes)
 	} else {
 		bat, _, err = readColumns(idxes)
@@ -563,20 +537,13 @@ func readBlockData(
 	return
 }
 
-func ReadBlockDelete(
-	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService,
-) (bat *batch.Batch, isPersistedByCN bool, release func(), err error) {
-	isPersistedByCN, err = IsPersistedByCN(ctx, deltaloc, fs)
-	if err != nil {
-		return
-	}
-	bat, release, err = ReadBlockDeleteBySchema(ctx, deltaloc, fs, isPersistedByCN)
-	return
-}
-
-func ReadBlockDeleteBySchema(
-	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService, isPersistedByCN bool,
+func ReadDeletes(
+	ctx context.Context,
+	deltaLoc objectio.Location,
+	fs fileservice.FileService,
+	isPersistedByCN bool,
 ) (bat *batch.Batch, release func(), err error) {
+
 	var cols []uint16
 	var typs []types.Type
 
@@ -587,24 +554,8 @@ func ReadBlockDeleteBySchema(
 		cols = []uint16{0, objectio.SEQNUM_COMMITTS}
 		typs = []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType()}
 	}
-	bat, release, err = LoadTombstoneColumns(ctx, cols, typs, fs, deltaloc, nil, fileservice.Policy(0))
+	bat, release, err = LoadTombstoneColumns(ctx, cols, typs, fs, deltaLoc, nil, fileservice.Policy(0))
 	return
-}
-
-func IsPersistedByCN(
-	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService,
-) (bool, error) {
-	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, false, fs)
-	if err != nil {
-		return false, err
-	}
-	meta, ok := objectMeta.TombstoneMeta()
-	if !ok {
-		meta = objectMeta.MustDataMeta()
-	}
-	blkmeta := meta.GetBlockMeta(uint32(deltaloc.ID()))
-	columnCount := blkmeta.GetColumnCount()
-	return columnCount == 2, nil
 }
 
 func EvalDeleteRowsByTimestamp(
@@ -653,74 +604,6 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
 	return
 }
 
-// BlockPrefetch is the interface for cn to call read ahead
-// columns  Which columns should be taken for columns
-// service  fileservice
-// infos [s3object name][block]
-// FIXME: using objectio.BlockInfoSlice
-func BlockPrefetch(
-	sid string,
-	idxes []uint16,
-	service fileservice.FileService,
-	infos []*objectio.BlockInfo,
-	prefetchFile bool,
-) error {
-	if len(infos) == 0 {
-		return nil
-	}
-
-	// build reader
-	pref, err := BuildPrefetchParams(service, infos[0].MetaLocation())
-	if err != nil {
-		return err
-	}
-
-	// Generate prefetch task
-	for i := range infos {
-		pref.AddBlock(idxes, []uint16{infos[i].MetaLocation().ID()})
-	}
-
-	pref.prefetchFile = prefetchFile
-	err = MustGetPipeline(sid).Prefetch(pref)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func RecordReadDel(
-	sid string,
-	total, read, bisect time.Duration,
-) {
-	MustGetPipeline(sid).stats.selectivityStats.RecordReadDel(total, read, bisect)
-}
-
-func RecordReadFilterSelectivity(
-	sid string,
-	hit, total int,
-) {
-	MustGetPipeline(sid).stats.selectivityStats.RecordReadFilterSelectivity(hit, total)
-}
-
-func RecordBlockSelectivity(
-	sid string,
-	hit, total int,
-) {
-	MustGetPipeline(sid).stats.selectivityStats.RecordBlockSelectivity(hit, total)
-}
-
-func RecordColumnSelectivity(
-	sid string,
-	hit, total int,
-) {
-	MustGetPipeline(sid).stats.selectivityStats.RecordColumnSelectivity(hit, total)
-}
-
-func ExportSelectivityString(sid string) string {
-	return MustGetPipeline(sid).stats.selectivityStats.ExportString()
-}
-
 func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, end int) {
 	lowRowid := objectio.NewRowid(id, 0)
 	highRowid := objectio.NewRowid(id, math.MaxUint32)
@@ -756,31 +639,24 @@ func FillBlockDeleteMask(
 	blockId types.Blockid,
 	location objectio.Location,
 	fs fileservice.FileService,
+	createdByCN bool,
 ) (deleteMask *nulls.Nulls, err error) {
 	var (
-		rows *nulls.Nulls
-		//bisect           time.Duration
+		rows             *nulls.Nulls
 		release          func()
-		persistedByCN    bool
 		persistedDeletes *batch.Batch
 	)
 
 	if !location.IsEmpty() {
-		//t1 := time.Now()
-
-		if persistedDeletes, persistedByCN, release, err = ReadBlockDelete(ctx, location, fs); err != nil {
+		if persistedDeletes, release, err = ReadDeletes(ctx, location, fs, createdByCN); err != nil {
 			return nil, err
 		}
 		defer release()
 
-		//readCost := time.Since(t1)
-
-		if persistedByCN {
+		if createdByCN {
 			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(blockId, persistedDeletes)
 		} else {
-			//t2 := time.Now()
 			rows = EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
-			//bisect = time.Since(t2)
 		}
 
 		if rows != nil {

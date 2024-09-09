@@ -48,7 +48,6 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
-	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -109,13 +108,14 @@ func NewLocalFS(
 		return nil, err
 	}
 
-	if fs.memCache != nil {
-		fs.allocator = fs.memCache
-	} else {
-		fs.allocator = GetDefaultCacheDataAllocator()
-	}
-
 	return fs, nil
+}
+
+func (l *LocalFS) AllocateCacheData(size int) fscache.Data {
+	if l.memCache != nil {
+		l.memCache.cache.EnsureNBytes(size)
+	}
+	return DefaultCacheDataAllocator().AllocateCacheData(size)
 }
 
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -133,7 +133,8 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 
 	if *config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
 		l.memCache = NewMemCache(
-			NewMemoryCache(fscache.ConstCapacity(int64(*config.MemoryCapacity)), true, &config.CacheCallbacks),
+			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
+			&config.CacheCallbacks,
 			l.perfCounterSets,
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -151,6 +152,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 				fscache.ConstCapacity(int64(*config.DiskCapacity)),
 				l.perfCounterSets,
 				true,
+				l,
 			)
 			if err != nil {
 				return err
@@ -302,14 +304,6 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	stats := statistic.StatsInfoFromContext(ctx)
-
-	allocator := l.allocator
-	if vector.Policy.Any(SkipMemoryCache) {
-		allocator = GetDefaultCacheDataAllocator()
-	}
-	for i := range vector.Entries {
-		vector.Entries[i].allocator = allocator
-	}
 
 	for _, cache := range vector.Caches {
 
@@ -518,7 +512,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					C: counter,
 				}
 				var cacheData fscache.Data
-				cacheData, err = entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
+				cacheData, err = entry.ToCacheData(cr, nil, l)
 				if err != nil {
 					return err
 				}
@@ -596,7 +590,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				}
 			}
 
-			if err = entry.setCachedData(ctx); err != nil {
+			if err = entry.setCachedData(ctx, l); err != nil {
 				return err
 			}
 
@@ -665,7 +659,7 @@ func (l *LocalFS) handleReadCloserForRead(
 			closeFunc: func() error {
 				defer file.Close()
 				var cacheData fscache.Data
-				cacheData, err = entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
+				cacheData, err = entry.ToCacheData(buf, buf.Bytes(), l)
 				if err != nil {
 					return err
 				}
