@@ -76,7 +76,10 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			antiJoin.build(anal, proc)
+			err = antiJoin.build(anal, proc)
+			if err != nil {
+				return result, err
+			}
 			ctr.state = Probe
 
 		case Probe:
@@ -137,15 +140,19 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (antiJoin *AntiJoin) build(anal process.Analyze, proc *process.Process) {
+func (antiJoin *AntiJoin) build(anal process.Analyze, proc *process.Process) (err error) {
 	ctr := &antiJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(antiJoin.JoinMapTag, antiJoin.IsShuffle, antiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = message.ReceiveJoinMap(antiJoin.JoinMapTag, antiJoin.IsShuffle, antiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	ctr.batchRowCount = ctr.mp.GetRowCount()
+	return nil
 }
 
 func (ctr *container) emptyProbe(ap *AntiJoin, inbat *batch.Batch, proc *process.Process, result *vm.CallResult) error {
@@ -223,7 +230,7 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					}
-					bs := vector.MustFixedCol[bool](vec)
+					bs := vector.MustFixedColWithTypeCheck[bool](vec)
 					if bs[0] {
 						continue
 					}
@@ -247,7 +254,7 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						}
-						bs := vector.MustFixedCol[bool](vec)
+						bs := vector.MustFixedColWithTypeCheck[bool](vec)
 						if bs[0] {
 							matched = true
 							break

@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package fscache
 
-type RowGen interface {
-	HasNext() bool
-	Next() uint32
+import (
+	"context"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+)
+
+type CacheKey = pb.CacheKey
+
+type DataCache interface {
+	EnsureNBytes(n int)
+	Capacity() int64
+	Used() int64
+	Available() int64
+	Get(context.Context, CacheKey) (Data, bool)
+	Set(context.Context, CacheKey, Data) error
+	DeletePaths(context.Context, []string)
+	Flush()
+	Evict(chan int64)
 }

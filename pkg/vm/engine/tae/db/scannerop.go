@@ -40,7 +40,6 @@ type MergeTaskBuilder struct {
 	objDeltaLocCnt    map[*catalog.ObjectEntry]int
 	objDeltaLocRowCnt map[*catalog.ObjectEntry]uint32
 	distinctDeltaLocs map[string]struct{}
-	mergingObjs       map[*catalog.ObjectEntry]struct{}
 
 	objPolicy   merge.Policy
 	executor    *merge.MergeExecutor
@@ -59,7 +58,6 @@ func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
 		objDeltaLocRowCnt: make(map[*catalog.ObjectEntry]uint32),
 		distinctDeltaLocs: make(map[string]struct{}),
 		objDeltaLocCnt:    make(map[*catalog.ObjectEntry]int),
-		mergingObjs:       make(map[*catalog.ObjectEntry]struct{}),
 	}
 
 	op.DatabaseFn = op.onDataBase
@@ -101,11 +99,6 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 
 func (s *MergeTaskBuilder) PreExecute() error {
 	s.executor.RefreshMemInfo()
-	for obj := range s.mergingObjs {
-		if !objectValid(obj) {
-			delete(s.mergingObjs, obj)
-		}
-	}
 	s.skipForTransPageLimit = false
 	m := &dto.Metric{}
 	v2.TaskMergeTransferPageLengthGauge.Write(m)
@@ -168,18 +161,12 @@ func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err erro
 
 	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()))
 	if len(mobjs) > 1 {
-		for _, m := range mobjs {
-			s.mergingObjs[m] = struct{}{}
-		}
 		s.executor.ExecuteFor(tableEntry, mobjs, kind)
 	}
 	return
 }
 
 func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error) {
-	if _, ok := s.mergingObjs[objectEntry]; ok {
-		return moerr.GetOkStopCurrRecur()
-	}
 	if !objectEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -189,7 +176,7 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	}
 
 	// Rows will check objectStat, and if not loaded, it will load it.
-	s.objPolicy.OnObject(objectEntry, false)
+	s.objPolicy.OnObject(objectEntry)
 	return
 }
 func (s *MergeTaskBuilder) onTombstone(objectEntry *catalog.ObjectEntry) (err error) {

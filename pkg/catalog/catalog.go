@@ -183,3 +183,7 @@ func BuildQueryResultMetaPath(accountName, statementId string) string {
 func BuildProfilePath(serviceTyp string, nodeId string, typ, name string) string {
 	return fmt.Sprintf("%s/%s_%s_%s_%s", ProfileDir, serviceTyp, nodeId, typ, name)
 }
+
+func IsFakePkName(name string) bool {
+	return name == FakePrimaryKeyColName
+}

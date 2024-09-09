@@ -74,7 +74,10 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			rightSemi.build(analyze, proc)
+			err = rightSemi.build(analyze, proc)
+			if err != nil {
+				return result, err
+			}
 			if ctr.mp == nil && !rightSemi.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -137,11 +140,14 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) {
+func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) (err error) {
 	ctr := &rightSemi.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = message.ReceiveJoinMap(rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
@@ -151,6 +157,7 @@ func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) {
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(ctr.batchRowCount)
 	}
+	return nil
 }
 
 func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {
@@ -287,7 +294,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightSemi, proc *process.Proce
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					} else {
-						vcol := vector.MustFixedCol[bool](vec)
+						vcol := vector.MustFixedColWithTypeCheck[bool](vec)
 						if !vcol[0] {
 							continue
 						}
@@ -319,7 +326,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightSemi, proc *process.Proce
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						} else {
-							vcol := vector.MustFixedCol[bool](vec)
+							vcol := vector.MustFixedColWithTypeCheck[bool](vec)
 							if !vcol[0] {
 								continue
 							}

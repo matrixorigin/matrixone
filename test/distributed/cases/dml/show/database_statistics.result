@@ -9,10 +9,7 @@ Number of tables in mysql
 6
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-29
-show table_number from system_metrics;
-Number of tables in system_metrics
-23
+32
 show table_number from system;
 Number of tables in system
 6
