@@ -418,8 +418,7 @@ func MockCNDeleteInS3(
 	_, _, err = writer.Sync(context.Background())
 	//location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
 
-	stats = writer.GetObjectStats()[0]
-	stats.SetCNCreated()
+	stats = writer.GetObjectStats(objectio.WithCNCreated())
 
 	return
 }

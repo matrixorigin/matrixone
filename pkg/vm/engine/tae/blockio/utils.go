@@ -30,7 +30,7 @@ func GetTombstonesByBlockId(
 	ctx context.Context,
 	ts types.TS,
 	blockId objectio.Blockid,
-	getTombstoneFile func() (*objectio.ObjectStats, error),
+	getTombstoneFileFn func() (*objectio.ObjectStats, error),
 	deletedMask *nulls.Nulls,
 	fs fileservice.FileService,
 ) (err error) {
@@ -38,7 +38,7 @@ func GetTombstonesByBlockId(
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
 		location := tombstoneObject.BlockLocation(uint16(pos), objectio.BlockMaxRows)
 		if mask, err := FillBlockDeleteMask(
-			ctx, ts, blockId, location, fs,
+			ctx, ts, blockId, location, fs, tombstoneObject.GetCNCreated(),
 		); err != nil {
 			return false, err
 		} else {
@@ -54,7 +54,7 @@ func GetTombstonesByBlockId(
 		totalBlkCnt        int
 	)
 	if tombstoneObjectCnt, skipObjectCnt, totalBlkCnt, err = CheckTombstoneFile(
-		ctx, blockId[:], getTombstoneFile, onBlockSelectedFn, fs,
+		ctx, blockId[:], getTombstoneFileFn, onBlockSelectedFn, fs,
 	); err != nil {
 		return
 	}
@@ -120,7 +120,7 @@ func findTombstoneOfXXX(
 func CheckTombstoneFile(
 	ctx context.Context,
 	prefixPattern []byte,
-	getTombstoneFile func() (*objectio.ObjectStats, error),
+	getTombstoneFileFn func() (*objectio.ObjectStats, error),
 	onBlockSelectedFn func(*objectio.ObjectStats, int) (bool, error),
 	fs fileservice.FileService,
 ) (
@@ -129,11 +129,11 @@ func CheckTombstoneFile(
 	totalBlkCnt int,
 	err error,
 ) {
-	if getTombstoneFile == nil {
+	if getTombstoneFileFn == nil {
 		return
 	}
 	var tombstoneObject *objectio.ObjectStats
-	for tombstoneObject, err = getTombstoneFile(); err == nil && tombstoneObject != nil; tombstoneObject, err = getTombstoneFile() {
+	for tombstoneObject, err = getTombstoneFileFn(); err == nil && tombstoneObject != nil; tombstoneObject, err = getTombstoneFileFn() {
 		tombstoneObjectCnt++
 		tombstoneZM := tombstoneObject.SortKeyZoneMap()
 		if !tombstoneZM.PrefixEq(prefixPattern) {

@@ -96,3 +96,20 @@ func TestObjectStats_Marshal_UnMarshal(t *testing.T) {
 	require.True(t, bytes.Equal(stats.Marshal(), rawBytes))
 	fmt.Println(stats.String())
 }
+
+func TestObjectStatsOptions(t *testing.T) {
+	stats := NewObjectStats()
+	require.True(t, stats.IsZero())
+	require.False(t, stats.GetAppendable())
+	require.False(t, stats.GetCNCreated())
+	require.False(t, stats.GetSorted())
+
+	WithCNCreated()(stats)
+	require.True(t, stats.GetCNCreated())
+
+	WithSorted()(stats)
+	require.True(t, stats.GetSorted())
+
+	WithAppendable()(stats)
+	require.True(t, stats.GetAppendable())
+}
