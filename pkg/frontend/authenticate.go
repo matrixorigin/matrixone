@@ -8220,17 +8220,6 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		return err
 	}
 
-	// step3: update the session verison and session config
-	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == dbName {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
-		if err != nil {
-			return err
-		}
-
-		// TODO : Need to check the isolation level of this variable configuration
-		ses.SetConfig(dbName, configVar[configTyp], updateConfig)
-	}
-
 	return err
 }
 
@@ -8286,14 +8275,6 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	err = updateConfigForAccount()
 	if err != nil {
 		return err
-	}
-
-	// step3: update the session verison
-	if len(ses.GetDatabaseName()) != 0 {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
-		if err != nil {
-			return err
-		}
 	}
 
 	return err
