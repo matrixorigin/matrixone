@@ -137,18 +137,8 @@ func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 
 func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
-	for i, reg := range ap.LocalRegs {
-		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
-		if regIndex%localRegsCnt == batIndex%localRegsCnt {
-			if bat != nil && !bat.IsEmpty() {
-				queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
-				if err != nil || queryDone {
-					return err
-				}
-				reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, i)
-			}
-		}
-	}
+
+	// send to remote first because send to spool will modify the bat.Agg.
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
@@ -167,6 +157,22 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 			}
 		}
 	}
+
+	// send to matched local.
+	for i := range ap.LocalRegs {
+		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
+		if regIndex%localRegsCnt == batIndex%localRegsCnt {
+			if bat != nil && !bat.IsEmpty() {
+				queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
+				if err != nil || queryDone {
+					return err
+				}
+				onlyOneRegToDealThis(i, ap)
+			}
+			break
+		}
+	}
+
 	return nil
 }
 
