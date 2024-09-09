@@ -342,11 +342,11 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	case <-s.Proc.Ctx.Done():
 		// this clean-up action shouldn't be called before context check.
 		// because the clean-up action will cancel the context, and error will be suppressed.
-		p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
+		p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
 		runErr = nil
 
 	default:
-		p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
+		p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
 	}
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).

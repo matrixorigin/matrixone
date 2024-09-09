@@ -110,6 +110,18 @@ func (p *Pipeline) isCtePipelineAtLoop() (isMergeCte bool, atLoop bool) {
 	return false, false
 }
 
+// CleanRootOperator only do free or reset work for the last operator.
+// this is just used for RemoteRun because we kept the root operator of remote-pipeline at local.
+func (p *Pipeline) CleanRootOperator(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
+	if p.rootOp == nil {
+		return
+	}
+	p.rootOp.Reset(proc, pipelineFailed, err)
+	if !isPrepare {
+		p.rootOp.Free(proc, pipelineFailed, err)
+	}
+}
+
 // Cleanup do memory release work for whole pipeline.
 // we deliver the error because some operator may need to know what the error it is.
 func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
