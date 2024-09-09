@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -151,9 +152,9 @@ func (bm BlockObject) GenerateBlockInfo(objName ObjectName, sorted bool) BlockIn
 	}
 	blkInfo.SetMetaLocation(location)
 
-	blkInfo.StateFlag |= CNCreatedFlag
+	blkInfo.ObjectFlags |= ObjectFlag_CNCreated
 	if sorted {
-		blkInfo.StateFlag |= SortedFlag
+		blkInfo.ObjectFlags |= ObjectFlag_Sorted
 	}
 
 	return blkInfo
