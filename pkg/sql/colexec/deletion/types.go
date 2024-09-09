@@ -216,21 +216,23 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 	delCtx := deletion.DeleteCtx
 	// If the target table is a partition table, group and split the batch data
 	if len(deletion.ctr.partitionSources) != 0 {
-		delBatches, err := colexec.GroupByPartitionForDelete(
-			proc,
-			srcBat,
-			delCtx.RowIdIdx,
-			delCtx.PartitionIndexInBatch,
-			len(delCtx.PartitionTableIDs),
-			delCtx.PrimaryKeyIdx,
-		)
-		if err != nil {
-			return err
+		pkTyp := srcBat.Vecs[delCtx.PrimaryKeyIdx].GetType()
+		deletion.ctr.resBat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+		deletion.ctr.resBat.SetVector(1, vector.NewVec(*pkTyp))
+		var err error
+
+		for partIdx := range len(delCtx.PartitionTableIDs) {
+			deletion.ctr.resBat.CleanOnlyData()
+			expect := int32(partIdx)
+			err = colexec.FillPartitionBatchForDelete(proc, srcBat, deletion.ctr.resBat, expect, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, delCtx.PrimaryKeyIdx)
+			if err != nil {
+				deletion.ctr.resBat.Clean(proc.Mp())
+				return err
+			}
+
+			collectBatchInfo(proc, deletion, deletion.ctr.resBat, 0, partIdx, 1)
 		}
-		for i, delBatch := range delBatches {
-			collectBatchInfo(proc, deletion, delBatch, 0, i, 1)
-			delBatch.Clean(proc.GetMPool())
-		}
+		deletion.ctr.resBat.CleanOnlyData()
 	} else {
 		collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
 	}

@@ -15,8 +15,11 @@
 package insert
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -140,4 +143,13 @@ func (insert *Insert) AffectedRows() uint64 {
 
 func (insert *Insert) GetAffectedRows() *uint64 {
 	return &insert.ctr.affectedRows
+}
+
+func (insert *Insert) initBufForS3() {
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	insert.ctr.buf = batch.NewWithSize(len(attrs))
+	insert.ctr.buf.SetAttributes(attrs)
+	insert.ctr.buf.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+	insert.ctr.buf.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	insert.ctr.buf.Vecs[2] = vector.NewVec(types.T_binary.ToType())
 }
