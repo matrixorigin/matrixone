@@ -2806,7 +2806,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		if schemaName == "" {
 			schemaName = ctx.DefaultDatabase()
 		}
-		objRef, tableDef := ctx.Resolve(schemaName, tableName, nil)
+		objRef, tableDef := ctx.Resolve(schemaName, tableName, plan.Snapshot{TS: &timestamp.Timestamp{}})
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 		}
@@ -2845,7 +2845,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 				oldName := tableDef.Name
 				newName := string(opt.Name.ToTableName().ObjectName)
 				if oldName != newName {
-					_, tableDef := ctx.Resolve(schemaName, newName, nil)
+					_, tableDef := ctx.Resolve(schemaName, newName, plan.Snapshot{TS: &timestamp.Timestamp{}})
 					if tableDef != nil {
 						return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
 					}
