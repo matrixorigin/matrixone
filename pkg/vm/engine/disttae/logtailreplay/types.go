@@ -78,8 +78,8 @@ type sharedStates struct {
 
 // RowEntry represents a version of a row
 type RowEntry struct {
-	BlockID types.Blockid // we need to iter by block id, so put it first to allow faster iteration
-	RowID   types.Rowid
+	BlockID objectio.Blockid // we need to iter by block id, so put it first to allow faster iteration
+	RowID   objectio.Rowid
 	Time    types.TS
 
 	ID                int64 // a unique version id, for primary index building and validating
@@ -120,8 +120,8 @@ type PrimaryIndexEntry struct {
 	RowEntryID int64
 
 	// fields for validating
-	BlockID types.Blockid
-	RowID   types.Rowid
+	BlockID objectio.Blockid
+	RowID   objectio.Rowid
 	Time    types.TS
 }
 

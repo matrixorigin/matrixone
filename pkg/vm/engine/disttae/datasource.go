@@ -173,7 +173,7 @@ func (rs *RemoteDataSource) Close() {
 }
 
 func (rs *RemoteDataSource) applyInMemTombstones(
-	bid types.Blockid,
+	bid objectio.Blockid,
 	rowsOffset []int64,
 	deletedRows *nulls.Nulls,
 ) (leftRows []int64) {
@@ -189,7 +189,7 @@ func (rs *RemoteDataSource) applyInMemTombstones(
 
 func (rs *RemoteDataSource) applyPersistedTombstones(
 	ctx context.Context,
-	bid types.Blockid,
+	bid objectio.Blockid,
 	rowsOffset []int64,
 	mask *nulls.Nulls,
 ) (leftRows []int64, err error) {
@@ -586,7 +586,7 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 		return nil
 	}
 
-	var retainedRowIds []types.Rowid
+	var retainedRowIds []objectio.Rowid
 
 	for ; ls.wsCursor < ls.txnOffset; ls.wsCursor++ {
 		if writes[ls.wsCursor].bat == nil {
@@ -603,7 +603,7 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 			continue
 		}
 
-		retainedRowIds = vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.Vecs[0])
+		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
 		offsets := rowIdsToOffset(retainedRowIds, int64(0)).([]int64)
 
 		b, _ := retainedRowIds[0].Decode()
@@ -678,7 +678,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		// Add empty rowid for workspace row
 		// It is impossible for them to be be eliminated by tombstone in tomestone objects, so using emtpy rowid is totally safe.
 		for range bat.RowCount() {
-			vector.AppendFixed(bat.Vecs[len(bat.Vecs)-1], types.Rowid{}, false, mp)
+			vector.AppendFixed(bat.Vecs[len(bat.Vecs)-1], objectio.Rowid{}, false, mp)
 		}
 
 		defer func() {
@@ -749,7 +749,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 			}
 		}
 
-		rowIds := vector.MustFixedColWithTypeCheck[types.Rowid](bat.Vecs[batRowIdx])
+		rowIds := vector.MustFixedColWithTypeCheck[objectio.Rowid](bat.Vecs[batRowIdx])
 		deleted, err := ls.batchApplyTombstoneObjects(minTS, rowIds[applyOffset:])
 		if err != nil {
 			return err
@@ -906,14 +906,14 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 	done := false
 	writes := ls.table.getTxn().writes[:ls.txnOffset]
 
-	var delRowIds []types.Rowid
+	var delRowIds []objectio.Rowid
 
 	for idx := range writes {
 		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
 			continue
 		}
 
-		delRowIds = vector.MustFixedColWithTypeCheck[types.Rowid](writes[idx].bat.Vecs[0])
+		delRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
 		for _, delRowId := range delRowIds {
 			b, o := delRowId.Decode()
 			if bid.Compare(&b) != 0 {
@@ -1131,7 +1131,7 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 
 func (ls *LocalDataSource) batchApplyTombstoneObjects(
 	minTS types.TS,
-	rowIds []types.Rowid,
+	rowIds []objectio.Rowid,
 ) (deleted []int64, err error) {
 	//maxTombstoneTS := ls.pState.MaxTombstoneCreateTS()
 	//if maxTombstoneTS.Less(&minTS) {
@@ -1158,7 +1158,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		release func()
 	)
 
-	anyIf := func(check func(row types.Rowid) bool) bool {
+	anyIf := func(check func(row objectio.Rowid) bool) bool {
 		for _, r := range rowIds {
 			if check(r) {
 				return true
@@ -1173,7 +1173,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		if !obj.ZMIsEmpty() {
 			objZM := obj.SortKeyZoneMap()
 
-			if !anyIf(func(row types.Rowid) bool {
+			if !anyIf(func(row objectio.Rowid) bool {
 				return objZM.RowidPrefixEq(row.BorrowBlockID()[:])
 			}) {
 				continue
@@ -1192,7 +1192,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				return nil, err
 			}
 
-			if !anyIf(func(row types.Rowid) bool {
+			if !anyIf(func(row objectio.Rowid) bool {
 				exist, err = bfIndex.PrefixMayContainsKey(row.BorrowBlockID()[:], index.PrefixFnID_Block, 2)
 				if exist || err != nil {
 					return true
@@ -1211,10 +1211,10 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				return nil, err
 			}
 
-			var deletedRowIds []types.Rowid
+			var deletedRowIds []objectio.Rowid
 			var commit []types.TS
 
-			deletedRowIds = vector.MustFixedColWithTypeCheck[types.Rowid](loaded.Vecs[0])
+			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](loaded.Vecs[0])
 			if !obj.GetCNCreated() {
 				commit = vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[1])
 			}
