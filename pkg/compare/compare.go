@@ -284,7 +284,6 @@ func newCompare[T any](cmp func(T, T) int, cpy func([]T, []T, int64, int64), nul
 		rs:          make([]*nulls.Nulls, 2),
 		vs:          make([]*vector.Vector, 2),
 		isConstNull: make([]bool, 2),
-		isRollup:    make([]bool, 2),
 		nullsLast:   nullsLast,
 	}
 }
@@ -299,7 +298,6 @@ func (c *compare[T]) Set(idx int, vec *vector.Vector) {
 	c.xs[idx] = vector.ExpandFixedCol[T](vec)
 	c.isConstNull[idx] = vec.IsConstNull()
 	c.rs[idx] = vec.GetRollups()
-	c.isRollup[idx] = vec.IsRollup()
 }
 
 func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {
@@ -313,7 +311,7 @@ func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {
 }
 
 func (c *compare[T]) Copy(vecSrc, vecDst int, src, dst int64, _ *process.Process) error {
-	if c.isRollup[vecSrc] || c.rs[vecSrc].Contains(uint64(src)) {
+	if c.rs[vecSrc].Contains(uint64(src)) {
 		nulls.Add(c.rs[vecDst], uint64(dst))
 	} else {
 		nulls.Del(c.rs[vecDst], uint64(dst))

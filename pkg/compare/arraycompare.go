@@ -32,6 +32,12 @@ func (c arrayCompare) Set(idx int, v *vector.Vector) {
 }
 
 func (c arrayCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
+	if c.vs[vecSrc].GetRollups().Contains(uint64(src)) {
+		nulls.Add(c.vs[vecDst].GetRollups(), uint64(dst))
+	} else {
+		nulls.Del(c.vs[vecDst].GetRollups(), uint64(dst))
+		c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
+	}
 	if c.isConstNull[vecSrc] || c.vs[vecSrc].GetNulls().Contains(uint64(src)) {
 		nulls.Add(c.vs[vecDst].GetNulls(), uint64(dst))
 		return nil

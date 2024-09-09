@@ -34,7 +34,6 @@ type compare[T any] struct {
 	rs          []*nulls.Nulls
 	vs          []*vector.Vector
 	isConstNull []bool
-	isRollup    []bool
 	cpy         func([]T, []T, int64, int64)
 	nullsLast   bool
 }
