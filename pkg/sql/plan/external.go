@@ -176,7 +176,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(node.TableDef.Createsql), param)
-	if err != nil || param.Local || param.ScanType == tree.S3 {
+	if err != nil || param.Local {
 		return DefaultHugeStats()
 	}
 
