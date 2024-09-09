@@ -18,54 +18,34 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 func Test_GetUncommittedS3Tombstone(t *testing.T) {
-	proc := testutil.NewProc()
-
-	var locs []objectio.Location = make([]objectio.Location, 3)
-	var objs = make(map[objectio.ObjectId]objectio.Location)
-
-	locs[0] = objectio.NewRandomLocation(uint16(0), uint32(10))
-	locs[1] = objectio.NewRandomLocation(uint16(1), uint32(20))
-	locs[2] = objectio.NewRandomLocation(uint16(2), uint32(30))
-
-	objs[locs[0].ObjectId()] = locs[0]
-	objs[locs[1].ObjectId()] = locs[1]
-	objs[locs[2].ObjectId()] = locs[2]
-
-	txn := &Transaction{
-		blockId_tn_delete_metaLoc_batch: struct {
-			sync.RWMutex
-			data map[types.Blockid][]*batch.Batch
-		}{data: make(map[types.Blockid][]*batch.Batch)},
+	var statsList []objectio.ObjectStats
+	for i := 0; i < 3; i++ {
+		row := types.RandomRowid()
+		stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)
+		objectio.SetObjectStatsRowCnt(stats, uint32(10+i*10))
+		statsList = append(statsList, *stats)
 	}
 
-	for i := range locs {
-		oid := locs[i].ObjectId()
-		bid := types.NewBlockidWithObjectID(&oid, locs[i].ID())
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-		vector.AppendBytes(bat.Vecs[0], []byte(locs[i].String()), false, proc.GetMPool())
-
-		txn.blockId_tn_delete_metaLoc_batch.data[*bid] = append(
-			txn.blockId_tn_delete_metaLoc_batch.data[*bid], bat)
+	txn := &Transaction{
+		cn_flushed_s3_tombstone_object_stats_list: struct {
+			sync.RWMutex
+			data []objectio.ObjectStats
+		}{data: []objectio.ObjectStats{statsList[0], statsList[1], statsList[2]}},
 	}
 
 	objectSlice := objectio.ObjectStatsSlice{}
 
 	require.NoError(t, txn.getUncommittedS3Tombstone(&objectSlice))
-	require.Equal(t, len(locs), objectSlice.Len())
+	require.Equal(t, len(statsList), objectSlice.Len())
 
-	for i := range objectSlice.Len() {
-		loc := objs[*objectSlice.Get(i).ObjectName().ObjectId()]
-		require.Equal(t, loc.Rows(), objectSlice.Get(i).Rows())
+	for i, ss := range txn.cn_flushed_s3_tombstone_object_stats_list.data {
+		require.Equal(t, ss[:], objectSlice.Get(i)[:])
 	}
 
 }

@@ -46,7 +46,7 @@ var defaultConfig = func() *atomic.Pointer[Config] {
 	ret.Store(&Config{
 		CheckFraction:     ptrTo(uint32(4096)),
 		EnableMetrics:     ptrTo(true),
-		FullStackFraction: ptrTo(uint32(10)),
+		FullStackFraction: ptrTo(uint32(100)),
 	})
 
 	return ret

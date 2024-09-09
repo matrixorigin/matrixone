@@ -17,7 +17,6 @@ package hashmap
 import (
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -33,13 +32,12 @@ func init() {
 	}
 }
 
-func NewStrMap(hasNull bool, m *mpool.MPool) (*StrHashMap, error) {
+func NewStrMap(hasNull bool) (*StrHashMap, error) {
 	mp := &hashtable.StringHashMap{}
-	if err := mp.Init(m); err != nil {
+	if err := mp.Init(); err != nil {
 		return nil, err
 	}
 	return &StrHashMap{
-		m:       m,
 		hashMap: mp,
 		hasNull: hasNull,
 	}, nil
@@ -48,7 +46,6 @@ func NewStrMap(hasNull bool, m *mpool.MPool) (*StrHashMap, error) {
 func (m *StrHashMap) NewIterator() Iterator {
 	return &strHashmapIterator{
 		mp:            m,
-		m:             m.m,
 		values:        make([]uint64, UnitLimit),
 		zValues:       make([]int64, UnitLimit),
 		keys:          make([][]byte, UnitLimit),
@@ -61,11 +58,11 @@ func (m *StrHashMap) HasNull() bool {
 }
 
 func (m *StrHashMap) Free() {
-	m.hashMap.Free(m.m)
+	m.hashMap.Free()
 }
 
-func (m *StrHashMap) PreAlloc(n uint64, mp *mpool.MPool) error {
-	return m.hashMap.ResizeOnDemand(n, mp)
+func (m *StrHashMap) PreAlloc(n uint64) error {
+	return m.hashMap.ResizeOnDemand(n)
 }
 
 func (m *StrHashMap) GroupCount() uint64 {

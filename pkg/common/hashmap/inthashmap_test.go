@@ -26,7 +26,7 @@ import (
 func TestIntHashMap_Iterator(t *testing.T) {
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(false, m)
+		mp, err := NewIntHashMap(false)
 		require.NoError(t, err)
 		rowCount := 10
 		vecs := []*vector.Vector{
@@ -51,7 +51,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true, m)
+		mp, err := NewIntHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -72,7 +72,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true, m)
+		mp, err := NewIntHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int64, 0, 0),
@@ -92,7 +92,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true, m)
+		mp, err := NewIntHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_char, 1, 0),
@@ -112,7 +112,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true, m)
+		mp, err := NewIntHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_char, 1, 0),
@@ -132,7 +132,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(false, m)
+		mp, err := NewIntHashMap(false)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_char, 1, 0),

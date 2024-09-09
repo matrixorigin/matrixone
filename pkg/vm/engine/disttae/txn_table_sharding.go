@@ -18,7 +18,9 @@ import (
 	"context"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -93,7 +95,8 @@ func newTxnTable(
 	tbl.shard.service = service
 	tbl.shard.is = false
 
-	if service.Config().Enable {
+	if service.Config().Enable &&
+		db.databaseId != catalog.MO_CATALOG_ID {
 		tableID, policy, is, err := service.GetShardInfo(item.Id)
 		if err != nil {
 			return nil, err
@@ -106,7 +109,9 @@ func newTxnTable(
 
 	return tbl, nil
 }
-
+func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+	return tbl.origin.CollectChanges(ctx, from, to, mp)
+}
 func (tbl *txnTableDelegate) Stats(
 	ctx context.Context,
 	sync bool,

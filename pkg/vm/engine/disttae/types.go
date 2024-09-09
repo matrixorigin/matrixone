@@ -283,9 +283,9 @@ type Transaction struct {
 	// notice that it's guarded by txn.Lock() and has the same lifecycle as transaction.
 	cnBlkId_Pos map[types.Blockid]Pos
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	blockId_tn_delete_metaLoc_batch struct {
+	cn_flushed_s3_tombstone_object_stats_list struct {
 		sync.RWMutex
-		data map[types.Blockid][]*batch.Batch
+		data []objectio.ObjectStats
 	}
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
@@ -369,6 +369,14 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
+func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
+	txn.cn_flushed_s3_tombstone_object_stats_list.Lock()
+	defer txn.cn_flushed_s3_tombstone_object_stats_list.Unlock()
+
+	txn.cn_flushed_s3_tombstone_object_stats_list.data =
+		append(txn.cn_flushed_s3_tombstone_object_stats_list.data, stats)
+}
+
 func (txn *Transaction) Readonly() bool {
 	return txn.readOnly.Load()
 }
@@ -449,12 +457,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	txn.Lock()
 	defer txn.Unlock()
 	//free batches
-	for key := range txn.toFreeBatches {
-		for _, bat := range txn.toFreeBatches[key] {
-			txn.proc.PutBatch(bat)
-		}
-		delete(txn.toFreeBatches, key)
-	}
+	txn.CleanToFreeBatches()
 	//merge writes for the last statement
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
@@ -644,6 +647,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
 	}
+
+	txn.CleanToFreeBatches()
 
 	for i := len(txn.restoreTxnTableFunc) - 1; i >= 0; i-- {
 		txn.restoreTxnTableFunc[i]()
@@ -846,21 +851,17 @@ type withFilterMixin struct {
 	columns struct {
 		seqnums  []uint16
 		colTypes []types.Type
-		// colNulls []bool
 
 		pkPos                    int // -1 means no primary key in columns
 		indexOfFirstSortedColumn int
 	}
 
 	filterState struct {
-		evaluated bool
 		//point select for primary key
 		expr     *plan.Expr
-		filter   blockio.BlockReadFilter
+		filter   objectio.BlockReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
-		hasNull  bool
-		record   bool
 	}
 }
 

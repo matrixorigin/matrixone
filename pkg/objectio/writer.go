@@ -48,7 +48,7 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
-	objStats          []ObjectStats
+	objStats          ObjectStats
 	sortKeySeqnum     uint16
 	appendable        bool
 	originSize        uint32
@@ -73,7 +73,13 @@ const (
 	WriterTmp
 )
 
-const ObjectSizeLimit = 3 * mpool.GB
+// make it mutable in ut
+var ObjectSizeLimit = 3 * mpool.GB
+
+// SetObjectSizeLimit set ObjectSizeLimit to limit Bytes
+func SetObjectSizeLimit(limit int) {
+	ObjectSizeLimit = limit
+}
 
 func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.FileService) (*objectWriterV1, error) {
 	var name ObjectName
@@ -126,8 +132,14 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	return writer, nil
 }
 
-func (w *objectWriterV1) GetObjectStats() []ObjectStats {
-	return w.objStats
+func (w *objectWriterV1) GetObjectStats(opts ...ObjectStatsOptions) (copied ObjectStats) {
+	copied = w.objStats
+
+	for _, opt := range opts {
+		opt(&copied)
+	}
+
+	return copied
 }
 
 func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) ObjectStats {
@@ -157,14 +169,18 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaT
 // if an object only has deletes, only the tombstone object stats valid.
 //
 // if an object has both inserts and deletes, both stats are valid.
-func (w *objectWriterV1) DescribeObject() ([]ObjectStats, error) {
-	stats := make([]ObjectStats, 2)
+func (w *objectWriterV1) DescribeObject() (ObjectStats, error) {
+	var stats ObjectStats
+
 	if len(w.blocks[SchemaData]) != 0 {
-		stats[SchemaData] = describeObjectHelper(w, w.colmeta, SchemaData)
+		stats = describeObjectHelper(w, w.colmeta, SchemaData)
 	}
 
 	if len(w.blocks[SchemaTombstone]) != 0 {
-		stats[SchemaTombstone] = describeObjectHelper(w, w.tombstonesColmeta, SchemaTombstone)
+		if !stats.IsZero() {
+			panic("schema data and schema tombstone should not all be valid at the same time")
+		}
+		stats = describeObjectHelper(w, w.tombstonesColmeta, SchemaTombstone)
 	}
 
 	return stats, nil
@@ -412,7 +428,7 @@ func (w *objectWriterV1) writerBlocks(blocks []blockData) error {
 			size += uint64(len(block.data[idx]))
 		}
 	}
-	if size > ObjectSizeLimit {
+	if size > uint64(ObjectSizeLimit) {
 		return moerr.NewErrTooLargeObjectSizeNoCtx(size)
 	}
 	return nil
@@ -605,7 +621,7 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 }
 
 func (w *objectWriterV1) GetDataStats() ObjectStats {
-	return w.objStats[SchemaData]
+	return w.objStats
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {

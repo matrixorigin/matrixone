@@ -70,7 +70,7 @@ system_metrics
 use sub05;
 show create table index01;
 Table    Create Table
-index01    CREATE TABLE `index01` (\n  `col1` INT NOT NULL,\n  `col2` DATE NOT NULL,\n  `col3` VARCHAR(16) NOT NULL,\n  `col4` INT UNSIGNED NOT NULL,\n  PRIMARY KEY (`col1`)\n)
+index01    CREATE TABLE `index01` (\n  `col1` int NOT NULL,\n  `col2` date NOT NULL,\n  `col3` varchar(16) NOT NULL,\n  `col4` int unsigned NOT NULL,\n  PRIMARY KEY (`col1`)\n)
 select * from index02;
 col1    col2    col3
 a    33    1

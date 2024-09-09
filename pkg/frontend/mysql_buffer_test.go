@@ -17,14 +17,101 @@ package frontend
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/smartystreets/goconvey/convey"
 	"math/rand"
 	"net"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/smartystreets/goconvey/convey"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
 )
+
+func ReadPacketForTest(c *Conn) ([]byte, error) {
+	// Requests > 16MB
+	payloads := make([][]byte, 0)
+	totalLength := 0
+	var finalPayload []byte
+	var payload []byte
+	var err error
+	defer func() {
+		for i := range payloads {
+			c.allocator.Free(payloads[i])
+		}
+	}()
+
+	for {
+		var packetLength int
+		err = c.ReadIntoSlices(c.header[:], HeaderLengthOfTheProtocol)
+		if err != nil {
+			return nil, err
+		}
+		packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
+		sequenceId := c.header[3]
+		c.sequenceId = sequenceId + 1
+
+		if packetLength == 0 {
+			break
+		}
+		totalLength += packetLength
+		err = c.CheckAllowedPacketSize(totalLength)
+		if err != nil {
+			return nil, err
+		}
+
+		if totalLength != int(MaxPayloadSize) && len(payloads) == 0 {
+			signalPayload := make([]byte, totalLength)
+			err = c.ReadIntoSlices(signalPayload, totalLength)
+			if err != nil {
+				return nil, err
+			}
+			return signalPayload, nil
+		}
+
+		payload, err = c.ReadOnePayload(packetLength)
+		if err != nil {
+			return nil, err
+		}
+
+		payloads = append(payloads, payload)
+
+		if uint32(packetLength) != MaxPayloadSize {
+			break
+		}
+	}
+
+	if totalLength > 0 {
+		finalPayload = make([]byte, totalLength)
+	}
+
+	copyIndex := 0
+	for _, eachPayload := range payloads {
+		copy(finalPayload[copyIndex:], eachPayload)
+		copyIndex += len(eachPayload)
+	}
+	return finalPayload, nil
+}
+
+func stumblingToWrite(conn net.Conn, packet []byte) {
+	numParts := rand.Intn(3) + 2
+	splitPacket := make([][]byte, numParts)
+	currentIndex := 0
+	for i := 0; i < numParts-1; i++ {
+		remainingElements := len(packet) - currentIndex
+		maxSize := remainingElements - (numParts - i - 1)
+		partSize := rand.Intn(maxSize) + 1
+		splitPacket[i] = packet[currentIndex : currentIndex+partSize]
+		currentIndex += partSize
+	}
+	splitPacket[numParts-1] = packet[currentIndex:]
+	for i := range splitPacket {
+		_, err := conn.Write(splitPacket[i])
+		if err != nil {
+			panic(err)
+		}
+	}
+}
 
 func hasData(conn net.Conn) (bool, error) {
 	timeout := 1 * time.Second
@@ -69,7 +156,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
 		repeat := 5
-		packetSize := 1024 * 5 // 16MB
+		packetSize := 1024 * 5 // 5KB
 		go func() {
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
@@ -78,12 +165,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
-				_, err := server.Write(header)
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write header: %v", err))
-				}
-
-				_, err = server.Write(payload)
+				_, err := server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
@@ -105,7 +187,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
 		repeat := 5
-		packetSize := 1024 * 1024 * 5 // 16MB
+		packetSize := 1024 * 1024 * 5 // 5MB
 		go func() {
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
@@ -114,12 +196,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
-				_, err := server.Write(header)
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write header: %v", err))
-				}
-
-				_, err = server.Write(payload)
+				_, err := server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
@@ -154,12 +231,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
-				_, err := server.Write(header)
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write header: %v", err))
-				}
-
-				_, err = server.Write(payload)
+				_, err := server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
@@ -187,15 +259,144 @@ func TestMySQLProtocolRead(t *testing.T) {
 				header[3] = byte(i)
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
-				_, err := server.Write(header)
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write header: %v", err))
-				}
-
-				_, err = server.Write(payload)
+				_, err := server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
+			}
+			header := make([]byte, 4)
+			binary.LittleEndian.PutUint32(header[:4], 0)
+			header[3] = byte(totalPackets)
+			_, err := server.Write(header)
+			if err != nil {
+				panic(fmt.Sprintf("Failed to write header: %v", err))
+			}
+		}()
+
+		actualPayload, err := cm.Read()
+		if err != nil {
+			t.Fatalf("Failed to read payload: %v", err)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+	})
+}
+
+func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
+	var err error
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	sv.SessionTimeout.Duration = 24 * time.Hour
+	if err != nil {
+		panic(err)
+	}
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	cm, err := NewIOSession(client, pu)
+	if err != nil {
+		panic(err)
+	}
+	cm.allowedPacketSize = int(MaxPayloadSize) * 16
+	convey.Convey("Bad Network: read small packet < 1MB", t, func() {
+		exceptPayload := make([][]byte, 0)
+		actualPayload := make([][]byte, 0)
+		repeat := 5
+		packetSize := 1024 * 5 // 5KB
+		go func() {
+			for i := 0; i < repeat; i++ {
+				header := make([]byte, 4)
+				binary.LittleEndian.PutUint32(header, uint32(packetSize))
+				header[3] = byte(i)
+
+				payload := generateRandomBytes(packetSize)
+				exceptPayload = append(exceptPayload, payload)
+				stumblingToWrite(server, append(header, payload...))
+			}
+		}()
+		var data []byte
+		for i := 0; i < repeat; i++ {
+			data, err = cm.Read()
+			if err != nil {
+				t.Fatalf("Failed to read payload: %v", err)
+			}
+			actualPayload = append(actualPayload, data)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+	})
+
+	convey.Convey("Bad Network: read small packet > 1MB", t, func() {
+		exceptPayload := make([][]byte, 0)
+		actualPayload := make([][]byte, 0)
+		repeat := 5
+		packetSize := 1024 * 1024 * 5 // 5MB
+		go func() {
+			for i := 0; i < repeat; i++ {
+				header := make([]byte, 4)
+				binary.LittleEndian.PutUint32(header, uint32(packetSize))
+				header[3] = byte(i)
+
+				payload := generateRandomBytes(packetSize)
+				exceptPayload = append(exceptPayload, payload)
+				stumblingToWrite(server, append(header, payload...))
+			}
+		}()
+		var data []byte
+		for i := 0; i < repeat; i++ {
+			data, err = cm.Read()
+			if err != nil {
+				t.Fatalf("Failed to read payload: %v", err)
+			}
+			actualPayload = append(actualPayload, data)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+
+	})
+
+	convey.Convey("Bad Network: read big packet", t, func() {
+		exceptPayload := make([]byte, 0)
+		go func() {
+			packetSize := MaxPayloadSize // 16MB
+			totalPackets := 3
+
+			for i := 0; i < totalPackets; i++ {
+				header := make([]byte, 4)
+				if i == 2 {
+					packetSize -= 1
+				}
+				binary.LittleEndian.PutUint32(header[:4], packetSize)
+				header[3] = byte(i)
+
+				payload := generateRandomBytes(int(packetSize))
+				exceptPayload = append(exceptPayload, payload...)
+				stumblingToWrite(server, append(header, payload...))
+			}
+		}()
+
+		actualPayload, err := cm.Read()
+		if err != nil {
+			t.Fatalf("Failed to read payload: %v", err)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+
+	})
+
+	convey.Convey("Bad Network: read big packet, the last package size is equal to 16MB", t, func() {
+		exceptPayload := make([]byte, 0)
+		go func() {
+			packetSize := MaxPayloadSize // 16MB
+			totalPackets := 3
+
+			for i := 0; i < totalPackets; i++ {
+				header := make([]byte, 4)
+				binary.LittleEndian.PutUint32(header[:4], packetSize)
+				header[3] = byte(i)
+				payload := generateRandomBytes(int(packetSize))
+				exceptPayload = append(exceptPayload, payload...)
+				stumblingToWrite(server, append(header, payload...))
 			}
 			header := make([]byte, 4)
 			binary.LittleEndian.PutUint32(header[:4], 0)
@@ -272,7 +473,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 
 		var data []byte
 		for i := 0; i < rows; i++ {
-			data, err = cReader.Read()
+			data, err = ReadPacketForTest(cReader)
 			if err != nil {
 				t.Fatalf("Failed to read packet: %v", err)
 			}
@@ -334,7 +535,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -393,7 +594,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -456,7 +657,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -515,7 +716,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -581,7 +782,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -640,7 +841,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -654,6 +855,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 	})
 
 }
+
 func TestMySQLBufferReadLoadLocal(t *testing.T) {
 	var err error
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -755,7 +957,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		actualPayload := make([][]byte, 0)
 		go func() {
 			for {
-				_, err := cWriter.Read()
+				_, err := ReadPacketForTest(cWriter)
 				if err != nil {
 					return
 				}
@@ -783,7 +985,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-			exceptRow = generateRandomBytes(int(MaxPayloadSize))
+			exceptRow = generateRandomBytes(int(MaxPayloadSize) - 1)
 			exceptPayload = append(exceptPayload, exceptRow)
 			err = cWriter.Append(exceptRow...)
 			if err != nil {
@@ -811,13 +1013,13 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		}()
 
 		var data []byte
-		data, err = cReader.Read()
+		data, err = ReadPacketForTest(cReader)
 		convey.So(err, convey.ShouldBeNil)
 		actualPayload = append(actualPayload, data)
-		data, err = cReader.Read()
+		data, err = ReadPacketForTest(cReader)
 		convey.So(err, convey.ShouldBeNil)
 		actualPayload = append(actualPayload, data)
-		_, err = cReader.Read()
+		_, err = ReadPacketForTest(cReader)
 		convey.So(err, convey.ShouldNotBeNil)
 		for remain, _ = hasData(server); remain; remain, _ = hasData(server) {
 			_, _ = cReader.conn.Read(make([]byte, int(MaxPayloadSize)))
