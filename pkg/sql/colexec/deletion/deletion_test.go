@@ -120,10 +120,10 @@ func newBatch(proc *process.Process, rows int64) *batch.Batch {
 	// not random
 	ts := []types.Type{types.New(types.T_Rowid, 0, 0), types.New(types.T_int32, 0, 0), types.New(types.T_int32, 0, 0)}
 	bat := testutil.NewBatch(ts, false, int(rows), proc.Mp())
-	pkAttr := make([]string, 2)
+	pkAttr := make([]string, 3)
 	pkAttr[0] = "rowid"
 	pkAttr[1] = "pk"
-	pkAttr[1] = "partition_id"
+	pkAttr[2] = "partition_id"
 	bat.SetAttributes(pkAttr)
 	return bat
 }
@@ -202,7 +202,7 @@ func TestSplitBatch(t *testing.T) {
 			}
 			tt.args.srcBat = newBatch(tt.args.proc, 3)
 			if tt.name == "test_partition_table_1" {
-				vector.SetFixedAtNoTypeCheck(tt.args.srcBat.GetVector(2), 0, -1)
+				vector.SetFixedAtWithTypeCheck(tt.args.srcBat.GetVector(2), 0, int32(-1))
 			}
 			if err := deletion.SplitBatch(tt.args.proc, tt.args.srcBat); (err != nil) != tt.wantErr {
 				t.Errorf("Deletion.SplitBatch() error = %v, wantErr %v", err, tt.wantErr)
