@@ -127,7 +127,25 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			err = top.ctr.build(top, bat, proc, anal)
+
+			//because ctr.build will change input batch(append new Vector)
+			if top.ctr.buildBat == nil {
+				top.ctr.n = len(bat.Vecs)
+				top.ctr.poses = []int32{}
+				for i := range top.Fs {
+					top.ctr.poses = append(top.ctr.poses, int32(top.ctr.n+i))
+				}
+				top.ctr.buildBat = batch.NewWithSize(top.ctr.n + len(top.Fs))
+			}
+			top.ctr.buildBat.Recursive = bat.Recursive
+			top.ctr.buildBat.Ro = bat.Ro
+			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
+			top.ctr.buildBat.Attrs = bat.Attrs
+			top.ctr.buildBat.Aggs = bat.Aggs
+			copy(top.ctr.buildBat.Vecs, bat.Vecs)
+			top.ctr.buildBat.SetRowCount(bat.RowCount())
+
+			err = top.ctr.build(top, top.ctr.buildBat, proc, anal)
 			if err != nil {
 				return result, err
 			}
@@ -157,30 +175,12 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, analyze process.Analyze) error {
-	ctr.n = len(bat.Vecs)
-	ctr.poses = ctr.poses[:0]
 	for i := range ap.Fs {
 		vec, err := ctr.executorsForOrderColumn[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
 		}
-		aNewOrderColumn := true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				aNewOrderColumn = false
-				ctr.poses = append(ctr.poses, int32(j))
-				break
-			}
-		}
-		if aNewOrderColumn {
-			nv, err := vec.Dup(proc.Mp())
-			if err != nil {
-				return err
-			}
-			ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
-			bat.Vecs = append(bat.Vecs, nv)
-			analyze.Alloc(int64(nv.Size()))
-		}
+		bat.Vecs[ctr.n+i] = vec
 	}
 
 	if len(ctr.cmps) == 0 {
