@@ -912,6 +912,8 @@ message PreInsertCtx {
 	TableDef table_def 		= 2;
 	bool has_auto_col		= 3;
 	bool is_update			= 4;
+	Expr comp_pkey_expr     = 5;
+	Expr cluster_by_expr    = 6;
 }
 
 message RuntimeFilterSpec {

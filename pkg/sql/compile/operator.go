@@ -496,6 +496,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.IsUpdate = t.IsUpdate
 		op.HasAutoCol = t.HasAutoCol
 		op.EstimatedRowCount = t.EstimatedRowCount
+		op.CompPkeyExpr = t.CompPkeyExpr
+		op.ClusterByExpr = t.ClusterByExpr
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -676,6 +678,8 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	op.Attrs = attrs
 	op.IsUpdate = preCtx.IsUpdate
 	op.EstimatedRowCount = int64(ns[n.Children[0]].Stats.Outcnt)
+	op.CompPkeyExpr = preCtx.CompPkeyExpr
+	op.ClusterByExpr = preCtx.ClusterByExpr
 
 	return op, nil
 }
