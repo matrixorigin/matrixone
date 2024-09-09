@@ -11029,7 +11029,7 @@ yydefault:
 		var yyLOCAL bool
 //line mysql_sql.y:1572
 		{
-			yyLOCAL = false
+			yyLOCAL = true
 		}
 		yyVAL.union = yyLOCAL
 	case 135:

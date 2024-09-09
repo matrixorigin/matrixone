@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -58,7 +59,8 @@ func (o *objectStorageSemaphore) Exists(ctx context.Context, key string) (bool, 
 }
 
 func (o *objectStorageSemaphore) List(ctx context.Context, prefix string, fn func(isPrefix bool, key string, size int64) (bool, error)) (err error) {
-	// this operation may block for a long time, and less used, skip semaphore
+	o.acquire()
+	defer o.release()
 	return o.upstream.List(ctx, prefix, fn)
 }
 
@@ -69,14 +71,23 @@ func (o *objectStorageSemaphore) Read(ctx context.Context, key string, min *int6
 		o.release()
 		return nil, err
 	}
-	released := false
+
+	release := sync.OnceFunc(func() {
+		o.release()
+	})
+
 	return &readCloser{
-		r: r,
-		closeFunc: func() error {
-			if !released {
-				o.release()
-				released = true
+		r: readerFunc(func(buf []byte) (n int, err error) {
+			n, err = r.Read(buf)
+			if err != nil {
+				// release if error
+				release()
 			}
+			return
+		}),
+		closeFunc: func() error {
+			// release when close
+			release()
 			return r.Close()
 		},
 	}, nil
@@ -89,6 +100,7 @@ func (o *objectStorageSemaphore) Stat(ctx context.Context, key string) (size int
 }
 
 func (o *objectStorageSemaphore) Write(ctx context.Context, key string, r io.Reader, size int64, expire *time.Time) (err error) {
-	// this operation may block for a long time, and less used, skip semaphore
+	o.acquire()
+	defer o.release()
 	return o.upstream.Write(ctx, key, r, size, expire)
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -29,7 +30,7 @@ func GetTombstonesByBlockId(
 	ctx context.Context,
 	ts types.TS,
 	blockId objectio.Blockid,
-	getTombstoneFile func() (*objectio.ObjectStats, error),
+	getTombstoneFileFn func() (*objectio.ObjectStats, error),
 	deletedMask *nulls.Nulls,
 	fs fileservice.FileService,
 ) (err error) {
@@ -37,7 +38,7 @@ func GetTombstonesByBlockId(
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
 		location := tombstoneObject.BlockLocation(uint16(pos), objectio.BlockMaxRows)
 		if mask, err := FillBlockDeleteMask(
-			ctx, ts, blockId, location, fs,
+			ctx, ts, blockId, location, fs, tombstoneObject.GetCNCreated(),
 		); err != nil {
 			return false, err
 		} else {
@@ -53,7 +54,7 @@ func GetTombstonesByBlockId(
 		totalBlkCnt        int
 	)
 	if tombstoneObjectCnt, skipObjectCnt, totalBlkCnt, err = CheckTombstoneFile(
-		ctx, blockId[:], getTombstoneFile, onBlockSelectedFn, fs,
+		ctx, blockId[:], getTombstoneFileFn, onBlockSelectedFn, fs,
 	); err != nil {
 		return
 	}
@@ -79,6 +80,7 @@ func FindTombstonesOfBlock(
 ) (sels bitmap.Bitmap, err error) {
 	return findTombstoneOfXXX(ctx, blockId[:], tombstoneObjects, fs)
 }
+*/
 
 func FindTombstonesOfObject(
 	ctx context.Context,
@@ -106,7 +108,7 @@ func findTombstoneOfXXX(
 		return &tombstoneObjects[i], nil
 	}
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
-		sels.Add(uint64(curr))
+		sels.Add(uint64(curr - 1))
 		return false, nil
 	}
 	_, _, _, err = CheckTombstoneFile(
@@ -114,12 +116,11 @@ func findTombstoneOfXXX(
 	)
 	return
 }
-*/
 
 func CheckTombstoneFile(
 	ctx context.Context,
 	prefixPattern []byte,
-	getTombstoneFile func() (*objectio.ObjectStats, error),
+	getTombstoneFileFn func() (*objectio.ObjectStats, error),
 	onBlockSelectedFn func(*objectio.ObjectStats, int) (bool, error),
 	fs fileservice.FileService,
 ) (
@@ -128,11 +129,11 @@ func CheckTombstoneFile(
 	totalBlkCnt int,
 	err error,
 ) {
-	if getTombstoneFile == nil {
+	if getTombstoneFileFn == nil {
 		return
 	}
 	var tombstoneObject *objectio.ObjectStats
-	for tombstoneObject, err = getTombstoneFile(); err == nil && tombstoneObject != nil; tombstoneObject, err = getTombstoneFile() {
+	for tombstoneObject, err = getTombstoneFileFn(); err == nil && tombstoneObject != nil; tombstoneObject, err = getTombstoneFileFn() {
 		tombstoneObjectCnt++
 		tombstoneZM := tombstoneObject.SortKeyZoneMap()
 		if !tombstoneZM.PrefixEq(prefixPattern) {
@@ -171,7 +172,7 @@ func CheckTombstoneFile(
 			}
 			var goOn bool
 			if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
-				return
+				break
 			}
 		}
 	}
