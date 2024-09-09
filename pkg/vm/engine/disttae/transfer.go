@@ -410,7 +410,6 @@ func doTransferRowids(
 			attrs,
 			expr,
 			mp,
-			nil,
 			bat,
 		)
 		if err != nil {

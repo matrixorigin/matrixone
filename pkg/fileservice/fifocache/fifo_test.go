@@ -22,7 +22,7 @@ import (
 )
 
 func TestCacheSetGet(t *testing.T) {
-	cache := New[int, int](fscache.ConstCapacity(8), nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil)
 
 	cache.Set(1, 1, 1)
 	n, ok := cache.Get(1)
@@ -39,7 +39,7 @@ func TestCacheSetGet(t *testing.T) {
 }
 
 func TestCacheEvict(t *testing.T) {
-	cache := New[int, int](fscache.ConstCapacity(8), nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil)
 	for i := 0; i < 64; i++ {
 		cache.Set(i, i, 1)
 		if cache.used1+cache.used2 > cache.capacity() {
@@ -49,7 +49,7 @@ func TestCacheEvict(t *testing.T) {
 }
 
 func TestCacheEvict2(t *testing.T) {
-	cache := New[int, int](fscache.ConstCapacity(2), nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(2), ShardInt[int], nil, nil, nil)
 	cache.Set(1, 1, 1)
 	cache.Set(2, 2, 1)
 
@@ -77,25 +77,36 @@ func TestCacheEvict2(t *testing.T) {
 }
 
 func TestCacheEvict3(t *testing.T) {
-	nEvict := 0
-	cache := New[int, bool](fscache.ConstCapacity(1024), func(_ int, _ bool) {
-		nEvict++
-	}, ShardInt[int])
+	var nEvict, nGet, nSet int
+	cache := New(fscache.ConstCapacity(1024),
+		ShardInt[int],
+		func(_ int, _ bool) {
+			nSet++
+		},
+		func(_ int, _ bool) {
+			nGet++
+		},
+		func(_ int, _ bool) {
+			nEvict++
+		},
+	)
 	for i := 0; i < 1024; i++ {
 		cache.Set(i, true, 1)
 		cache.Get(i)
 		cache.Get(i)
 		assert.True(t, cache.used1+cache.used2 <= 1024)
-		//assert.True(t, len(cache.values) <= 1024)
 	}
 	assert.Equal(t, 0, nEvict)
+	assert.Equal(t, 1024, nSet)
+	assert.Equal(t, 2048, nGet)
 
 	for i := 0; i < 1024; i++ {
 		cache.Set(10000+i, true, 1)
 		assert.True(t, cache.used1+cache.used2 <= 1024)
-		//assert.True(t, len(cache.values) <= 1024)
 	}
 	assert.Equal(t, int64(102), cache.used1)
 	assert.Equal(t, int64(922), cache.used2)
 	assert.Equal(t, 1024, nEvict)
+	assert.Equal(t, 2048, nSet)
+	assert.Equal(t, 2048, nGet)
 }

@@ -139,11 +139,8 @@ func (obj *baseObject) TryUpgrade() (err error) {
 
 func (obj *baseObject) GetMeta() any { return obj.meta.Load() }
 func (obj *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
-	if !obj.meta.Load().IsAppendable() {
-		panic("not support")
-	}
 	if obj.meta.Load().HasDropCommitted() {
-		panic("not support")
+		return false
 	}
 	obj.RLock()
 	defer obj.RUnlock()
@@ -218,7 +215,7 @@ func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 // 	)
 // }
 
-func (obj *baseObject) Prefetch(idxes []uint16, blkID uint16) error {
+func (obj *baseObject) Prefetch(blkID uint16) error {
 	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -228,7 +225,7 @@ func (obj *baseObject) Prefetch(idxes []uint16, blkID uint16) error {
 		if err != nil {
 			return err
 		}
-		return blockio.Prefetch(obj.rt.SID(), idxes, []uint16{key.ID()}, obj.rt.Fs.Service, key)
+		return blockio.Prefetch(obj.rt.SID(), obj.rt.Fs.Service, key)
 	}
 }
 
