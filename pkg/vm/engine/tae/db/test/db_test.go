@@ -178,8 +178,8 @@ func TestTruncate1(t *testing.T) {
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(1, -1)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
 	db.BindSchema(schema)
 
 	bat := catalog.MockBatch(schema, 1)
@@ -6441,12 +6441,12 @@ func TestAppendAndGC2(t *testing.T) {
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 
 	schema1 := catalog.MockSchemaAll(13, 2)
-	schema1.BlockMaxRows = 10
-	schema1.ObjectMaxBlocks = 2
+	schema1.Extra.BlockMaxRows = 10
+	schema1.Extra.ObjectMaxBlocks = 2
 
 	schema2 := catalog.MockSchemaAll(13, 2)
-	schema2.BlockMaxRows = 10
-	schema2.ObjectMaxBlocks = 2
+	schema2.Extra.BlockMaxRows = 10
+	schema2.Extra.ObjectMaxBlocks = 2
 	{
 		txn, _ := db.StartTxn(nil)
 		database, err := txn.CreateDatabase("db", "", "")
@@ -6457,7 +6457,7 @@ func TestAppendAndGC2(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
-	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*10-1))
+	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
 
@@ -7628,9 +7628,6 @@ func TestCompactLargeTable(t *testing.T) {
 
 	tae.CheckRowsByScan(10, true)
 
-	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemDBSchema, false)
-	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemTableSchema, false)
-	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemColumnSchema, false)
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
@@ -9389,8 +9386,8 @@ func TestDedup3(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
-	schema.BlockMaxRows = 8
-	schema.ObjectMaxBlocks = 5
+	schema.Extra.BlockMaxRows = 8
+	schema.Extra.ObjectMaxBlocks = 5
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
@@ -9418,8 +9415,8 @@ func TestDedup4(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
-	schema.BlockMaxRows = 1
-	schema.ObjectMaxBlocks = 5
+	schema.Extra.BlockMaxRows = 1
+	schema.Extra.ObjectMaxBlocks = 5
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
@@ -9442,7 +9439,7 @@ func TestDeleteWithObjectStats(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2, 1)
-	schema.BlockMaxRows = 20
+	schema.Extra.BlockMaxRows = 20
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 20)
 	defer bat.Close()
@@ -9489,8 +9486,8 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
-	schema.BlockMaxRows = 1
-	schema.ObjectMaxBlocks = 5
+	schema.Extra.BlockMaxRows = 1
+	schema.Extra.ObjectMaxBlocks = 5
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
@@ -9526,7 +9523,7 @@ func TestTransferS3Deletes(t *testing.T) {
 	defer tae.Close()
 	rows := 10
 	schema := catalog.MockSchemaAll(2, 1)
-	schema.BlockMaxRows = 10
+	schema.Extra.BlockMaxRows = 10
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, rows)
 	defer bat.Close()
@@ -9552,8 +9549,8 @@ func TestStartStopTableMerge(t *testing.T) {
 	scheduler := merge.NewScheduler(db.Runtime, db.CNMergeSched)
 
 	schema := catalog.MockSchema(2, 0)
-	schema.BlockMaxRows = 1000
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 1000
+	schema.Extra.ObjectMaxBlocks = 2
 
 	txn, _ := db.StartTxn(nil)
 	database, _ := txn.CreateDatabase("db", "", "")
@@ -9576,8 +9573,8 @@ func TestDeleteByPhyAddrKeys(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
-	schema.BlockMaxRows = 1
-	schema.ObjectMaxBlocks = 5
+	schema.Extra.BlockMaxRows = 1
+	schema.Extra.ObjectMaxBlocks = 5
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
@@ -9603,8 +9600,8 @@ func TestRollbackMergeInQueue(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 5
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 5
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 10)
 	defer bat.Close()
@@ -9638,8 +9635,8 @@ func TestTransferInMerge(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 2)
-	schema.BlockMaxRows = 8192
-	schema.ObjectMaxBlocks = 256
+	schema.Extra.BlockMaxRows = 8192
+	schema.Extra.ObjectMaxBlocks = 256
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 400000)
 	defer bat.Close()

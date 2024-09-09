@@ -88,7 +88,7 @@ func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg
 		} else {
 			logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, schema.Name, cfg)
 			txn.Commit(ctx)
-			o.configProvider.InvalidCache(tbl)
+			g.configProvider.invalidCache(tbl)
 		}
 	}()
 

@@ -158,10 +158,6 @@ const (
 	MO_CDC_WATERMARK = "mo_cdc_watermark"
 )
 
-func IsSystemTable(id uint64) bool {
-	return id == MO_DATABASE_ID || id == MO_TABLES_ID || id == MO_COLUMNS_ID
-}
-
 const (
 	// Metrics and Trace related
 

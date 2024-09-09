@@ -76,7 +76,10 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 		db.catalog = catalog
 		db.DBNode = cmd.node
 		db.InsertLocked(un)
-		err = catalog.AddEntryLocked(db, un.GetTxn(), false)
+		// After replaying checkpoint, all entries' commit-ts were forced to be endts of the last checkpoint,
+		// so the start-ts of a txn from WAL can be smaller than the committs of the last checkpoint.
+		// To prevent AddEntryLocked from issusing a w-w conflict error, set the skipDedup arg true
+		err = catalog.AddEntryLocked(db, un.GetTxn(), true)
 		if err != nil {
 			panic(err)
 		}

@@ -133,10 +133,10 @@ type Schema struct {
 	Constraint     []byte
 
 	// do not send to cn
-	BlockMaxRows uint32
+	DeprecatedBlockMaxRows uint32
 	// for aobj, there're at most one blk
-	ObjectMaxBlocks uint16
-	Extra           *apipb.SchemaExtra
+	DeprecatedObjectMaxBlocks uint16
+	Extra                     *apipb.SchemaExtra
 
 	// do not write down, reconstruct them when reading
 	NameMap    map[string]int // name(letter case: origin) -> logical idx
@@ -364,11 +364,11 @@ func (s *Schema) MustRestoreExtra(data []byte) {
 
 func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
 	var sn2 int
-	if sn2, err = r.Read(types.EncodeUint32(&s.BlockMaxRows)); err != nil {
+	if sn2, err = r.Read(types.EncodeUint32(&s.DeprecatedBlockMaxRows)); err != nil {
 		return
 	}
 	n += int64(sn2)
-	if sn2, err = r.Read(types.EncodeUint16(&s.ObjectMaxBlocks)); err != nil {
+	if sn2, err = r.Read(types.EncodeUint16(&s.DeprecatedObjectMaxBlocks)); err != nil {
 		return
 	}
 	n += int64(sn2)
@@ -513,10 +513,10 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 
 func (s *Schema) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
-	if _, err = w.Write(types.EncodeUint32(&s.BlockMaxRows)); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&s.DeprecatedBlockMaxRows)); err != nil {
 		return
 	}
-	if _, err = w.Write(types.EncodeUint16(&s.ObjectMaxBlocks)); err != nil {
+	if _, err = w.Write(types.EncodeUint16(&s.DeprecatedObjectMaxBlocks)); err != nil {
 		return
 	}
 	if _, err = w.Write(types.EncodeUint32(&s.Version)); err != nil {

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -106,7 +107,7 @@ func TestPolicyBasic(t *testing.T) {
 	p := newBasicPolicy()
 
 	// only schedule objects whose size < cfg.objectMinOSize
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	cfg := testConfig(100, 3)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
@@ -117,7 +118,7 @@ func TestPolicyBasic(t *testing.T) {
 	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// only schedule objects less than cfg.maxOneRun
-	p.resetForTable(catalog.MockStaloneTableEntry(1, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	p.resetForTable(catalog.MockStaloneTableEntry(1, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	cfg = testConfig(100, 2)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
@@ -128,7 +129,7 @@ func TestPolicyBasic(t *testing.T) {
 	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// basic policy do not schedule tombstones
-	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	cfg = testConfig(100, 2)
 	require.False(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
@@ -136,7 +137,7 @@ func TestPolicyBasic(t *testing.T) {
 	require.Equal(t, 0, len(result))
 
 	// memory limit
-	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	cfg = testConfig(100, 3)
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 10, 1, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
@@ -152,14 +153,14 @@ func TestPolicyTombstone(t *testing.T) {
 	p := newTombstonePolicy()
 
 	// tombstone policy do not schedule data objects
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	cfg := testConfig(100, 2)
 	require.False(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
 	result := p.revise(0, math.MaxInt64, cfg)
 	require.Equal(t, 0, len(result))
 
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	cfg = testConfig(100, 2)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
@@ -169,7 +170,7 @@ func TestPolicyTombstone(t *testing.T) {
 	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// only schedule objects less than cfg.maxOneRun
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	cfg = testConfig(100, 2)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
@@ -180,7 +181,7 @@ func TestPolicyTombstone(t *testing.T) {
 	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// tombstone do not consider size limit
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	cfg = testConfig(100, 3)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
@@ -194,7 +195,7 @@ func TestPolicyTombstone(t *testing.T) {
 func TestPolicyGroup(t *testing.T) {
 	common.IsStandaloneBoost.Store(true)
 	g := newPolicyGroup(newBasicPolicy(), newTombstonePolicy())
-	g.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	g.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	g.config = &BasicPolicyConfig{MergeMaxOneRun: 2, ObjectMinOsize: 100}
 
 	g.onObject(newTestObjectEntry(t, 10, false))

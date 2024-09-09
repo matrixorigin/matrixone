@@ -632,7 +632,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		func(oData *objData, writer *blockio.BlockWriter) (bool, error) {
 			ds := NewBackupDeltaLocDataSource(ctx, fs, ts, tombstonesData)
 			blk := oData.stats.ConstructBlockInfo(uint16(0))
-			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, ts, fs)
+			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, nil, ts, fs)
 			if err != nil {
 				return true, err
 			}

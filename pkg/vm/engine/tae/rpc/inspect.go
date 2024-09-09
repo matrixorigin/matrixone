@@ -837,13 +837,16 @@ func (c *mergePolicyArg) Run() error {
 		if err != nil {
 			return err
 		}
-		c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
+		err = c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
 			MergeMaxOneRun:    int(c.maxMergeObjN),
 			ObjectMinOsize:    minosize,
 			MaxOsizeMergedObj: maxosize,
 			MinCNMergeSize:    cnsize,
 			MergeHints:        c.hints,
 		})
+		if err != nil {
+			return err
+		}
 		c.ctx.resp.Payload = []byte("success")
 	}
 	return nil

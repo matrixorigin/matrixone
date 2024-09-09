@@ -298,7 +298,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 				index.BlockPrefixFn,
 			)
 
-			split := containers.NewBatchSplitter(transferBatch, int(schema.BlockMaxRows))
+			split := containers.NewBatchSplitter(transferBatch, int(schema.Extra.BlockMaxRows))
 
 			for {
 				bat, err := split.Next()
