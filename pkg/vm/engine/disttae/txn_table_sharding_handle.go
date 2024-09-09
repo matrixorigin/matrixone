@@ -336,6 +336,7 @@ func HandleShardingReadNext(
 		return nil, moerr.NewInternalErrorNoCtx("stream reader not found, may be expired")
 	}
 	streamHandler.Unlock()
+	sr.deadline = time.Now().Add(StreamReaderLease)
 
 	sr.updateCols(cols, tbl.tableDef)
 
