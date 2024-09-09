@@ -1688,6 +1688,7 @@ func (tbl *txnTable) buildLocalDataSource(
 				tbl,
 				txnOffset,
 				ranges,
+				relData.GetTombstones(),
 				readPolicy,
 				policy,
 			)

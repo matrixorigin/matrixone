@@ -294,8 +294,9 @@ message ReadNextParam {
 }
 
 message ReadNextResult {
-    bytes batch = 1;
-    bool  isEnd = 2;
+   // bool  isEnd = 1;
+    //bytes batch = 2;
+    bytes result = 1;
 }
 
 message ReadCloseParam {

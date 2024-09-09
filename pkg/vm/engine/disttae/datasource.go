@@ -64,6 +64,7 @@ func NewLocalDataSource(
 	table *txnTable,
 	txnOffset int,
 	rangesSlice objectio.BlockInfoSlice,
+	extraTombstones engine.Tombstoner,
 	readPolicy engine.DataSourceReadPolicy,
 	policy engine.TombstoneApplyPolicy,
 ) (source *LocalDataSource, err error) {
@@ -73,6 +74,7 @@ func NewLocalDataSource(
 	source.ctx = ctx
 	source.mp = table.proc.Load().Mp()
 	source.tombstonePolicy = policy
+	source.extraTombstones = extraTombstones
 
 	if rangesSlice != nil && rangesSlice.Len() > 0 {
 		if bytes.Equal(
@@ -265,8 +267,9 @@ func (rs *RemoteDataSource) SetFilterZM(_ objectio.ZoneMap) {
 // --------------------------------------------------------------------------------
 
 type LocalDataSource struct {
-	rangeSlice objectio.BlockInfoSlice
-	pState     *logtailreplay.PartitionState
+	rangeSlice      objectio.BlockInfoSlice
+	extraTombstones engine.Tombstoner
+	pState          *logtailreplay.PartitionState
 
 	memPKFilter *MemPKFilter
 	pStateRows  struct {
@@ -801,6 +804,17 @@ func (ls *LocalDataSource) ApplyTombstones(
 
 	var err error
 
+	if ls.extraTombstones != nil {
+		rowsOffset = ls.extraTombstones.ApplyInMemTombstones(bid, rowsOffset, nil)
+		rowsOffset, err = ls.extraTombstones.ApplyPersistedTombstones(ctx, ls.fs, ls.snapshotTS, bid, rowsOffset, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(rowsOffset) == 0 {
+		return nil, nil
+	}
+
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 &&
 		dynamicPolicy&engine.Policy_SkipUncommitedInMemory == 0 {
 		rowsOffset = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
@@ -850,6 +864,14 @@ func (ls *LocalDataSource) GetTombstones(
 
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)
+
+	if ls.extraTombstones != nil {
+		ls.extraTombstones.ApplyInMemTombstones(bid, nil, deletedRows)
+		_, err = ls.extraTombstones.ApplyPersistedTombstones(ctx, ls.fs, ls.snapshotTS, bid, nil, deletedRows)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
 		ls.applyWorkspaceEntryDeletes(bid, nil, deletedRows)

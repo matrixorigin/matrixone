@@ -400,8 +400,9 @@ type shardingReader struct {
 	//relation data to distribute to remote CN which holds shard's partition state.
 	remoteRelData engine.RelData
 	//read policy for remote.
-	remoteReadPolicy engine.DataSourceReadPolicy
-	remoteScanType   int
+	remoteReadPolicy      engine.DataSourceReadPolicy
+	remoteTombApplyPolicy engine.TombstoneApplyPolicy
+	remoteScanType        int
 }
 
 func (r *shardingReader) Read(
@@ -449,7 +450,7 @@ func (r *shardingReader) Read(
 			}
 			r.iteratePhase = InRemote
 		case InRemote:
-			var end bool
+			//var end bool
 			err = r.tblDelegate.forwardRead(
 				ctx,
 				shardservice.ReadNext,
@@ -458,18 +459,23 @@ func (r *shardingReader) Read(
 					param.ReadNextParam.Columns = cols
 				},
 				func(resp []byte) {
-					//TODO:: unmarshall resp into batch and isEnd
-					//bat.UnmarshalBinary(resp)
-					//end = ?
+					isEnd = types.DecodeBool(resp)
+					if isEnd {
+						return
+					}
+					resp = resp[1:]
+					l := types.DecodeUint32(resp)
+					resp = resp[4:]
+					//FIXME??
+					if err := bat.UnmarshalBinary(resp[:l]); err != nil {
+						panic(err)
+					}
 				},
 			)
 			if err != nil {
 				return false, err
 			}
-			if !end {
-				return
-			}
-			return true, nil
+			return
 		}
 	}
 
@@ -484,7 +490,7 @@ func (r *shardingReader) close() error {
 		r.lrd.Close()
 		err := r.tblDelegate.forwardRead(
 			context.Background(),
-			shardservice.ReadNext,
+			shardservice.ReadClose,
 			func(param *shard.ReadParam) {
 				param.ReadCloseParam.Uuid = types.EncodeUuid(&r.streamID)
 			},
@@ -592,7 +598,12 @@ func buildShardingReaders(
 		}
 
 		localRelData, remoteRelData := group(shard)
-		ds, err := tbl.origin.buildLocalDataSource(ctx, txnOffset, localRelData, localReadPolicy, policy)
+		ds, err := tbl.origin.buildLocalDataSource(
+			ctx,
+			txnOffset,
+			localRelData,
+			localReadPolicy,
+			policy|engine.Policy_SkipCommittedInMemory|engine.Policy_SkipCommittedS3)
 		if err != nil {
 			return nil, err
 		}
@@ -611,11 +622,12 @@ func buildShardingReaders(
 		lrd.scanType = scanType
 
 		srd := &shardingReader{
-			lrd:              lrd,
-			tblDelegate:      tbl,
-			remoteRelData:    remoteRelData,
-			remoteReadPolicy: remoteReadPolicy,
-			remoteScanType:   scanType,
+			lrd:                   lrd,
+			tblDelegate:           tbl,
+			remoteRelData:         remoteRelData,
+			remoteReadPolicy:      remoteReadPolicy,
+			remoteTombApplyPolicy: engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3,
+			remoteScanType:        scanType,
 		}
 		rds = append(rds, srd)
 	}
