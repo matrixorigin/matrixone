@@ -125,7 +125,6 @@ func (rs *RemoteDataSource) Next(
 	seqNums []uint16,
 	_ any,
 	_ *mpool.MPool,
-	_ engine.VectorPool,
 	_ *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 
@@ -158,9 +157,8 @@ func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
 		bids[idx-begin] = blk.BlockID
 	}
 
-	// prefetch blk data
-	err := blockio.BlockPrefetch(
-		rs.proc.GetService(), seqNums, rs.fs, blks, true)
+	err := blockio.Prefetch(
+		rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
@@ -432,7 +430,6 @@ func (ls *LocalDataSource) Next(
 	seqNums []uint16,
 	filter any,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
 	bat *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 
@@ -452,7 +449,7 @@ func (ls *LocalDataSource) Next(
 		switch ls.iteratePhase {
 		case engine.InMem:
 			bat.CleanOnlyData()
-			err := ls.iterateInMemData(ctx, cols, types, seqNums, bat, mp, vp)
+			err := ls.iterateInMemData(ctx, cols, types, seqNums, bat, mp)
 			if err != nil {
 				return nil, engine.InMem, err
 			}
@@ -514,7 +511,6 @@ func (ls *LocalDataSource) iterateInMemData(
 	seqNums []uint16,
 	bat *batch.Batch,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
 ) (err error) {
 
 	bat.SetRowCount(0)
@@ -611,7 +607,8 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 		offsets := rowIdsToOffset(retainedRowIds, int64(0)).([]int64)
 
 		b, _ := retainedRowIds[0].Decode()
-		sels, err := ls.ApplyTombstones(ls.ctx, b, offsets, engine.Policy_CheckUnCommittedOnly)
+		sels, err := ls.ApplyTombstones(
+			ls.ctx, b, offsets, engine.Policy_CheckUnCommittedOnly)
 		if err != nil {
 			return err
 		}
@@ -1120,8 +1117,8 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	}
 
 	// prefetch blk data
-	err := blockio.BlockPrefetch(
-		ls.table.proc.Load().GetService(), seqNums, ls.fs, blks, true)
+	err := blockio.Prefetch(
+		ls.table.proc.Load().GetService(), ls.fs, blks[0].MetaLocation())
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
@@ -1157,9 +1154,8 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		bfIndex  index.StaticFilter
 		location objectio.Location
 
-		loaded        *batch.Batch
-		persistedByCN bool
-		release       func()
+		loaded  *batch.Batch
+		release func()
 	)
 
 	anyIf := func(check func(row types.Rowid) bool) bool {
@@ -1205,14 +1201,13 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 			}) {
 				continue
 			}
-
 			if err != nil {
 				return nil, err
 			}
 
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
-			if loaded, persistedByCN, release, err = blockio.ReadBlockDelete(ls.ctx, location, ls.fs); err != nil {
+			if loaded, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
 				return nil, err
 			}
 
@@ -1220,7 +1215,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 			var commit []types.TS
 
 			deletedRowIds = vector.MustFixedColWithTypeCheck[types.Rowid](loaded.Vecs[0])
-			if !persistedByCN {
+			if !obj.GetCNCreated() {
 				commit = vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[1])
 			}
 
