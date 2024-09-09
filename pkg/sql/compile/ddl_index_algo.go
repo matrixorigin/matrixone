@@ -95,13 +95,11 @@ func (s *Scope) handleMasterIndexTable(c *Compile, indexDef *plan.IndexDef, qryD
 // ERIC
 func (s *Scope) handleFullTextIndexTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
-	/*
-		if ok, err := s.isExperimentalEnabled(c, fulltextIndexFlag); err != nil {
-			return err
-		} else if !ok {
-			return moerr.NewInternalErrorNoCtx("FullText index is not enabled")
-		}
-	*/
+	if ok, err := s.isExperimentalEnabled(c, fulltextIndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("FullText index is not enabled")
+	}
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
