@@ -136,4 +136,18 @@ drop database rdb;
 drop database res_test;
 -- @session
 drop account if exists acc1;
+
+-- @ignore:0
+select version();
+drop database if exists abc;
+create database abc;
+use abc;
+select version();
+drop database abc;
+drop account if exists acc01;
+create account acc01 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=7&user=acc01:admin&password=123456
+select version();
+-- @session
+drop account if exists acc01;
 set global enable_privilege_cache = on;
