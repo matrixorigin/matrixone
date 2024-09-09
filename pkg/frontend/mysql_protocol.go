@@ -78,7 +78,7 @@ const charsetVarchar = 0x21
 const boolColumnLength = 12
 
 func init() {
-	serverVersion.Store("1.3.0")
+	serverVersion.Store("0.5.0")
 }
 
 func InitServerVersion(v string) {
@@ -98,7 +98,7 @@ func InitServerVersion(v string) {
 			serverVersion.Store(string(vv))
 		}
 	} else {
-		serverVersion.Store("1.3.0")
+		serverVersion.Store("0.5.0")
 	}
 }
 

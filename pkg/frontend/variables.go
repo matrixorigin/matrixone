@@ -3484,7 +3484,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("version"),
-		Default:           makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
+		Default:           "8.0.30-MatrixOne-v1.0.0",
 	},
 	"gtid_purged": {
 		Name:              "gtid_purged",

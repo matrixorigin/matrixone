@@ -24,6 +24,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
 	"runtime"
@@ -32,8 +33,6 @@ import (
 	"sync"
 	"time"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/RoaringBitmap/roaring"
 	"golang.org/x/exp/constraints"
