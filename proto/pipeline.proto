@@ -129,6 +129,12 @@ message Insert{
   plan.TableDef table_def = 10;
 }
 
+message MultiUpdate {
+  uint64 affected              = 1;
+  bool ToWriteS3 = 2;
+  repeated plan.UpdateCtx update_ctx = 3;
+}
+
 message Array{
   repeated int32 array = 1;
 }
