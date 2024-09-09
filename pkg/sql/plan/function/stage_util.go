@@ -18,6 +18,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -548,17 +549,10 @@ func (w *FileServiceWriter) Write(b []byte) (int, error) {
 
 func (w *FileServiceWriter) Close() error {
 	err := w.Writer.Close()
-	if err != nil {
-		return err
-	}
-	err = w.Group.Wait()
-	if err != nil {
-		return err
-	}
-	err = w.Reader.Close()
-	if err != nil {
-		return err
-	}
+	err2 := w.Group.Wait()
+	err3 := w.Reader.Close()
+	err = errors.Join(err, err2, err3)
+
 	w.Reader = nil
 	w.Writer = nil
 	w.Group = nil
