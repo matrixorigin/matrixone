@@ -60,21 +60,27 @@ var defaultConfig = func() *atomic.Pointer[Config] {
 func patchConfig(config Config, delta Config) Config {
 	if delta.CheckFraction != nil {
 		config.CheckFraction = delta.CheckFraction
+		logutil.Info("malloc set config", zap.Any("CheckFraction", *delta.CheckFraction))
 	}
 	if delta.EnableMetrics != nil {
 		config.EnableMetrics = delta.EnableMetrics
+		logutil.Info("malloc set config", zap.Any("EnableMetrics", *delta.EnableMetrics))
 	}
 	if delta.FullStackFraction != nil {
 		config.FullStackFraction = delta.FullStackFraction
+		logutil.Info("malloc set config", zap.Any("FullStackFraction", *delta.FullStackFraction))
 	}
 	if delta.Allocator != nil {
 		config.Allocator = delta.Allocator
+		logutil.Info("malloc set config", zap.Any("Allocator", *delta.Allocator))
 	}
 	if delta.HashmapSoftLimit != nil {
 		config.HashmapSoftLimit = delta.HashmapSoftLimit
+		logutil.Info("malloc set config", zap.Any("HashmapSoftLimit", *delta.HashmapSoftLimit))
 	}
 	if delta.HashmapHardLimit != nil {
 		config.HashmapHardLimit = delta.HashmapHardLimit
+		logutil.Info("malloc set config", zap.Any("HashmapHardLimit", *delta.HashmapHardLimit))
 	}
 	return config
 }
