@@ -361,6 +361,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.AlterView(c)
 	case AlterTable:
 		return s.AlterTable(c)
+	case RenameTable:
+		return s.RenameTable(c)
 	case DropTable:
 		return s.DropTable(c)
 	case DropSequence:
@@ -578,6 +580,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 		case plan.DataDefinition_ALTER_TABLE:
 			return []*Scope{
 				newScope(AlterTable).
+					withPlan(pn),
+			}, nil
+		case plan.DataDefinition_RENAME_TABLE:
+			return []*Scope{
+				newScope(RenameTable).
 					withPlan(pn),
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
