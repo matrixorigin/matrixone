@@ -254,6 +254,9 @@ type Session struct {
 
 	// mysql parser
 	mysqlParser mysql.MySQLParser
+
+	// create version
+	createVersion string
 }
 
 func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
@@ -1037,6 +1040,18 @@ func (ses *Session) GetConfig(ctx context.Context, dbName, varName string) (any,
 	return nil, moerr.NewInternalError(ctx, errorConfigDoesNotExist())
 }
 
+func (ses *Session) SetCreateVersion(version string) {
+	ses.rwmu.Lock()
+	defer ses.rwmu.Unlock()
+	ses.createVersion = version
+}
+
+func (ses *Session) GetCreateVersion() string {
+	ses.rwmu.RLock()
+	defer ses.rwmu.RUnlock()
+	return ses.createVersion
+}
+
 func (ses *Session) DeleteConfig(ctx context.Context, dbName, varName string) {
 	ses.rwmu.Lock()
 	defer ses.rwmu.Unlock()
@@ -1107,6 +1122,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	var userID int64
 	var pwd, accountStatus string
 	var accountVersion uint64
+	var createVersion string
 
 	//Get tenant info
 	tenant, err = GetTenantInfo(ctx, userInput)
@@ -1155,8 +1171,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	//account version
+	// account version
 	accountVersion, err = rsset[0].GetUint64(sysTenantCtx, 0, 3)
+	if err != nil {
+		return nil, err
+	}
+
+	// create version
+	createVersion, err = rsset[0].GetString(sysTenantCtx, 0, 4)
 	if err != nil {
 		return nil, err
 	}
@@ -1320,6 +1342,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRoutine(tenantID, ses.getRoutine(), accountVersion)
 	ses.Info(ctx, tenant.String())
+	ses.SetCreateVersion(createVersion)
 
 	return GetPassWord(pwd)
 }
