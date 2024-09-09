@@ -2889,7 +2889,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(shuffleArg)
 		if ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i] = c.newMergeScopeByCN([]*Scope{ss[i]}, ss[i].NodeInfo)
 		}
 		dispatchArg := constructDispatch(j, shuffleGroups, ss[i], n, false)
 		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
@@ -3442,7 +3442,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		probeScopes[i].setRootOperator(shuffleProbeOp)
 
 		if probeScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
-			probeScopes[i] = c.newMergeScope([]*Scope{probeScopes[i]})
+			probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
 		}
 
 		probeScopes[i].setRootOperator(constructDispatch(i, shuffleJoins, probeScopes[i], n, true))
@@ -3463,7 +3463,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		buildScopes[i].setRootOperator(shuffleBuildOp)
 
 		if buildScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
-			buildScopes[i] = c.newMergeScope([]*Scope{buildScopes[i]})
+			buildScopes[i] = c.newMergeScopeByCN([]*Scope{buildScopes[i]}, buildScopes[i].NodeInfo)
 		}
 
 		buildScopes[i].setRootOperator(constructDispatch(i, shuffleBuilds, buildScopes[i], n, false))
