@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -59,113 +58,52 @@ func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch
 	return nil
 }
 
-// GroupByPartitionForDeleteS3: Group data based on partition and return batch array with the same length as the number of partitions.
-// Data from the same partition is placed in the same batch
-func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, rowIdIdx int, partitionIdx int, partitionNum int, pkIdx int) ([]*batch.Batch, error) {
-	vecList := make([]*vector.Vector, partitionNum)
-	pkList := make([]*vector.Vector, partitionNum)
-	pkTyp := bat.Vecs[pkIdx].GetType()
-	for i := 0; i < partitionNum; i++ {
-		retVec := vector.NewVec(types.T_Rowid.ToType())
-		pkVec := vector.NewVec(*pkTyp)
-		vecList[i] = retVec
-		pkList[i] = pkVec
-	}
-
+// FillPartitionBatchForDelete fills the data into the corresponding batch based on the different partitions to which the current `row_id` data belongs.
+func FillPartitionBatchForDelete(proc *process.Process, input *batch.Batch, buffer *batch.Batch, expect int32, rowIdIdx int, partitionIdx int, pkIdx int) error {
 	// Fill the data into the corresponding batch based on the different partitions to which the current `row_id` data
+	rid2pid := vector.MustFixedColWithTypeCheck[int32](input.Vecs[partitionIdx])
 	var err error
-	for i, rowid := range vector.MustFixedColWithTypeCheck[types.Rowid](bat.Vecs[rowIdIdx]) {
-		if !bat.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
-			partition := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[partitionIdx])[i]
-			if partition == -1 {
-				err = moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
-				break
-			} else {
-				err = vector.AppendFixed(vecList[partition], rowid, false, proc.Mp())
+
+	for i, rowid := range vector.MustFixedColWithTypeCheck[types.Rowid](input.Vecs[rowIdIdx]) {
+		if !input.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
+			patition := rid2pid[i]
+			if patition == -1 {
+				return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+			} else if patition == expect {
+				err = vector.AppendFixed(buffer.Vecs[0], rowid, false, proc.GetMPool())
 				if err != nil {
-					break
+					return err
 				}
-				err = pkList[partition].UnionOne(bat.Vecs[pkIdx], int64(i), proc.Mp())
+				err = buffer.Vecs[1].UnionOne(input.Vecs[pkIdx], int64(i), proc.Mp())
 				if err != nil {
-					break
+					return err
 				}
 			}
 		}
 	}
-	if err != nil {
-		for _, vecElem := range vecList {
-			vecElem.Free(proc.Mp())
-		}
-		for _, vecElem := range pkList {
-			vecElem.Free(proc.Mp())
-		}
-		return nil, err
-	}
 
-	// create a batch array equal to the number of partitions
-	batches := make([]*batch.Batch, partitionNum)
-	for i := range vecList {
-		// initialize the vectors in each batch, the batch only contains a `row_id` column
-		retBatch := batch.New(true, []string{catalog.Row_ID, "pk"})
-		retBatch.SetRowCount(vecList[i].Length())
-		retBatch.SetVector(0, vecList[i])
-		retBatch.SetVector(1, pkList[i])
-		batches[i] = retBatch
-	}
-	return batches, nil
+	buffer.SetRowCount(buffer.Vecs[0].Length())
+	return nil
 }
 
-// GroupByPartitionForInsert: Group data based on partition and return batch array with the same length as the number of partitions.
-// Data from the same partition is placed in the same batch
-func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []string, pIdx int, partitionNum int) ([]*batch.Batch, error) {
-	// create a batch array equal to the number of partitions
-	batches := make([]*batch.Batch, partitionNum)
-	for partIdx := 0; partIdx < partitionNum; partIdx++ {
-		// initialize the vectors in each batch, corresponding to the original batch
-		partitionBatch := batch.NewWithSize(len(attrs))
-		partitionBatch.Attrs = attrs
-		for i := range partitionBatch.Attrs {
-			vecType := bat.GetVector(int32(i)).GetType()
-			retVec := vector.NewVec(*vecType)
-			partitionBatch.SetVector(int32(i), retVec)
-		}
-		batches[partIdx] = partitionBatch
-	}
-
-	// fill the data into the corresponding batch based on the different partitions to which the current row data belongs
-	var err error
-	for i, partition := range vector.MustFixedColWithTypeCheck[int32](bat.Vecs[pIdx]) {
-		if !bat.Vecs[pIdx].GetNulls().Contains(uint64(i)) {
+// FillPartitionBatchForInsert fills the partition batch for insert operation.
+func FillPartitionBatchForInsert(proc *process.Process, input *batch.Batch, buffer *batch.Batch, expect int32, partitionIdx int) error {
+	rid2pid := vector.MustFixedColWithTypeCheck[int32](input.Vecs[partitionIdx])
+	for i, partition := range rid2pid {
+		if !input.Vecs[partitionIdx].GetNulls().Contains(uint64(i)) {
 			if partition == -1 {
-				err = moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
-				break
-			} else {
-				//  `i` corresponds to the row number of the batch data,
-				//  `j` corresponds to the column number of the batch data
-				for j := range attrs {
-					err = batches[partition].GetVector(int32(j)).UnionOne(bat.Vecs[j], int64(i), proc.Mp())
-					if err != nil {
-						break
+				return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+			} else if partition == expect {
+				for j := range buffer.Attrs {
+					if err := buffer.Vecs[j].UnionOne(input.Vecs[j], int64(i), proc.GetMPool()); err != nil {
+						return err
 					}
-				}
-				if err != nil {
-					break
 				}
 			}
 		}
 	}
-	if err != nil {
-		for _, batchElem := range batches {
-			batchElem.Clean(proc.GetMPool())
-		}
-		return nil, err
-	}
-
-	for partIdx := range batches {
-		length := batches[partIdx].GetVector(0).Length()
-		batches[partIdx].SetRowCount(length)
-	}
-	return batches, nil
+	buffer.SetRowCount(buffer.Vecs[0].Length())
+	return nil
 }
 
 func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan.TableDef, ctx context.Context) error {
