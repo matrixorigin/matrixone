@@ -2169,12 +2169,13 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		shuffleJoins[i].setRootOperator(mergeOp)
 	}
 
+	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
 	case plan.Node_INNER:
 		for i := range shuffleJoins {
 			op := constructJoin(node, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
-			op.SetIdx(c.anal.curNodeIdx)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
 		}
 
@@ -2183,14 +2184,14 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 			for i := range shuffleJoins {
 				op := constructRightAnti(node, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				shuffleJoins[i].setRootOperator(op)
 			}
 		} else {
 			for i := range shuffleJoins {
 				op := constructAnti(node, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				shuffleJoins[i].setRootOperator(op)
 			}
 		}
@@ -2200,14 +2201,14 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 			for i := range shuffleJoins {
 				op := constructRightSemi(node, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				shuffleJoins[i].setRootOperator(op)
 			}
 		} else {
 			for i := range shuffleJoins {
 				op := constructSemi(node, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				shuffleJoins[i].setRootOperator(op)
 			}
 		}
@@ -2216,33 +2217,37 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		for i := range shuffleJoins {
 			op := constructLeft(node, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
-			op.SetIdx(c.anal.curNodeIdx)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
 		}
-
 	case plan.Node_RIGHT:
 		for i := range shuffleJoins {
 			op := constructRight(node, leftTyps, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
-			op.SetIdx(c.anal.curNodeIdx)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
 		}
 	default:
 		panic(moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("shuffle join do not support join type '%v'", node.JoinType)))
 	}
+	c.anal.isFirst = false
 
 	//construct shuffle build
+	currentFirstFlag = c.anal.isFirst
 	for i := range shuffleJoins {
 		buildScope := shuffleJoins[i].PreScopes[0]
 		mergeOp := merge.NewArgument()
+		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		buildScope.setRootOperator(mergeOp)
+
 		buildOp := constructShuffleBuild(shuffleJoins[i].RootOp, c.proc)
+		buildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScope.setRootOperator(buildOp)
 	}
+	c.anal.isFirst = false
 
 	return shuffleJoins
 }
-
 func (c *Compile) newProbeScopeListForBroadcastJoin(probeScopes []*Scope, forceOneCN bool) []*Scope {
 	if forceOneCN { // for right join, we have to merge these input for now
 		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, false)
