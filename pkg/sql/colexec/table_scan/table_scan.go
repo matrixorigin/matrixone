@@ -109,7 +109,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		// read data from storage engine
 		tableScan.ctr.buf.CleanOnlyData()
-		isEnd, err := tableScan.Reader.Read(proc.Ctx, tableScan.Attrs, nil, proc.Mp(), nil, tableScan.ctr.buf)
+		isEnd, err := tableScan.Reader.Read(proc.Ctx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
 		if err != nil {
 			e = err
 			return vm.CancelResult, err

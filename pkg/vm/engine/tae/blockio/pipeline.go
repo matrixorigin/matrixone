@@ -144,67 +144,30 @@ func jobFactory(
 }
 
 func fetchReader(params PrefetchParams) (reader *objectio.ObjectReader) {
-	if params.reader != nil {
-		reader = params.reader
-	} else {
-		reader = getReader(params.fs, params.key)
-	}
+	reader = getReader(params.fs, params.key)
 	return
 }
 
 // prefetch data job
 func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
-	if params.prefetchFile {
-		return getJob(
-			ctx,
-			makeName(reader.GetName()),
-			JTLoad,
-			func(_ context.Context) (res *tasks.JobResult) {
-				// TODO
-				res = &tasks.JobResult{}
-				var name string
-				if params.reader == nil {
-					name = params.key.Name().String()
-				} else {
-					name = params.reader.GetName()
-				}
-				err := reader.GetFs().PrefetchFile(ctx, name)
-				if err != nil {
-					res.Err = err
-					return
-				}
-				// no further reads
-				if params.reader == nil {
-					putReader(reader)
-				}
+	return getJob(
+		ctx,
+		makeName(reader.GetName()),
+		JTLoad,
+		func(_ context.Context) (res *tasks.JobResult) {
+			// TODO
+			res = &tasks.JobResult{}
+			err := reader.GetFs().PrefetchFile(ctx, params.key.Name().String())
+			if err != nil {
+				res.Err = err
 				return
-			},
-		)
-	} else {
-		return getJob(
-			ctx,
-			makeName(reader.GetName()),
-			JTLoad,
-			func(_ context.Context) (res *tasks.JobResult) {
-				// TODO
-				res = &tasks.JobResult{}
-				ioVectors, err := reader.ReadMultiBlocks(ctx,
-					params.ids, nil)
-				if err != nil {
-					res.Err = err
-					return
-				}
-				// no further reads
-				res.Res = nil
-				ioVectors.Release()
-				if params.reader == nil {
-					putReader(reader)
-				}
-				return
-			},
-		)
-	}
+			}
+			// no further reads
+			putReader(reader)
+			return
+		},
+	)
 }
 
 // prefetch metadata job
@@ -271,7 +234,6 @@ type IoPipeline struct {
 	}
 
 	stats struct {
-		selectivityStats  *objectio.Stats
 		prefetchDropStats stats.Counter
 	}
 	printer *stopper.Stopper
@@ -321,10 +283,6 @@ func (p *IoPipeline) fillDefaults() {
 	}
 	if p.jobFactory == nil {
 		p.jobFactory = jobFactory
-	}
-
-	if p.stats.selectivityStats == nil {
-		p.stats.selectivityStats = objectio.NewStats()
 	}
 
 	if p.sensors.prefetchDepth == nil {
@@ -459,29 +417,44 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		return
 	}
 
-	processes := make([]PrefetchParams, 0)
+	var metaProcesses, filesProcesses []PrefetchParams
 	for _, item := range items {
 		option := item.(PrefetchParams)
-		if len(option.ids) == 0 {
+		switch option.typ {
+		case PrefetchMetaType:
+			if len(metaProcesses) == 0 {
+				metaProcesses = make([]PrefetchParams, 0)
+			}
+			metaProcesses = append(metaProcesses, option)
 			job := prefetchMetaJob(
 				context.Background(),
 				item.(PrefetchParams),
 			)
 			p.schedulerPrefetch(job)
-			continue
+		case PrefetchFileType:
+			if len(filesProcesses) == 0 {
+				filesProcesses = make([]PrefetchParams, 0)
+			}
+			filesProcesses = append(filesProcesses, option)
+		default:
+			logutil.Errorf("unknown prefetch type %v", option.typ)
 		}
-		processes = append(processes, option)
 	}
-	if len(processes) == 0 {
-		return
+	schedulerJobs := func(
+		processes []PrefetchParams,
+		onJob func(context.Context, PrefetchParams) *tasks.Job,
+	) {
+		merged := mergePrefetch(processes)
+		for _, option := range merged {
+			job := onJob(context.Background(), option)
+			p.schedulerPrefetch(job)
+		}
 	}
-	merged := mergePrefetch(processes)
-	for _, option := range merged {
-		job := prefetchJob(
-			context.Background(),
-			option,
-		)
-		p.schedulerPrefetch(job)
+	if len(metaProcesses) > 0 {
+		go schedulerJobs(metaProcesses, prefetchMetaJob)
+	}
+	if len(filesProcesses) > 0 {
+		go schedulerJobs(filesProcesses, prefetchJob)
 	}
 }
 
@@ -503,13 +476,6 @@ func (p *IoPipeline) onWait(jobs ...any) {
 
 func (p *IoPipeline) crontask(ctx context.Context) {
 	hb := w.NewHeartBeaterWithFunc(time.Second*10, func() {
-		logutil.Info(p.stats.selectivityStats.ExportString())
-		// logutil.Info(p.sensors.prefetchDepth.String())
-		// wdrops := p.stats.prefetchDropStats.SwapW(0)
-		// if wdrops > 0 {
-		// 	logutil.Infof("PrefetchDropStats: %d", wdrops)
-		// }
-		// logutil.Info(objectio.ExportCacheStats())
 	}, nil)
 	hb.Start()
 	<-ctx.Done()
