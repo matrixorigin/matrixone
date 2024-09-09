@@ -27,6 +27,8 @@ type Int64HashMapCell struct {
 }
 
 type Int64HashMap struct {
+	allocator malloc.Allocator
+
 	blockCellCnt    uint64
 	blockMaxElemCnt uint64
 	cellCntMask     uint64
@@ -62,7 +64,7 @@ func (ht *Int64HashMap) allocate(index int, size uint64) error {
 	if ht.rawDataDeallocators[index] != nil {
 		panic("overwriting")
 	}
-	bs, de, err := allocator().Allocate(size, malloc.NoHints)
+	bs, de, err := ht.allocator.Allocate(size, malloc.NoHints)
 	if err != nil {
 		return err
 	}
@@ -72,7 +74,11 @@ func (ht *Int64HashMap) allocate(index int, size uint64) error {
 	return nil
 }
 
-func (ht *Int64HashMap) Init() (err error) {
+func (ht *Int64HashMap) Init(allocator malloc.Allocator) (err error) {
+	if allocator == nil {
+		allocator = defaultAllocator()
+	}
+	ht.allocator = allocator
 	ht.blockCellCnt = kInitialCellCnt
 	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, intCellSize)
 	ht.cellCntMask = kInitialCellCnt - 1
