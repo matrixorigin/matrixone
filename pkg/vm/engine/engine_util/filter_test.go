@@ -725,13 +725,11 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 
 	tableDef.Pkey.PkeyColName = "a"
 	var exes []colexec.ExpressionExecutor
-	var vecs []*vector.Vector
 
 	for _, expr := range exprs {
-		plan2.ReplaceFoldExpr(proc, expr, &exes, &vecs)
+		plan2.ReplaceFoldExpr(proc, expr, &exes)
 	}
 	for i, expr := range exprs {
-		plan2.EvalFoldExpr(proc, expr, &exes, &vecs)
 		BasePKFilter, err := ConstructBasePKFilter(expr, tableDef, proc)
 		require.NoError(t, err)
 		require.Equal(t, filters[i].Valid, BasePKFilter.Valid, exprStrings[i])

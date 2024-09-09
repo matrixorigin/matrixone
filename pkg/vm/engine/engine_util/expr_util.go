@@ -128,22 +128,19 @@ func mustColConstValueFromBinaryFuncExpr(
 
 func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *process.Process) ([][]byte, bool) {
 	vals := make([][]byte, len(exprs))
-	var vec *vector.Vector
 	_ = colDef
+	_ = proc
 	for idx := range exprs {
 		if fExpr, ok := exprs[idx].Expr.(*plan.Expr_Fold); ok {
-			if len(fExpr.Fold.Data) > 0 {
-				vec = vector.NewVec(types.T_any.ToType())
-				_ = vec.UnmarshalBinary(fExpr.Fold.Data)
-			} else {
-				idx := uintptr(fExpr.Fold.Id)
-				vec = proc.Base.FoldExprVecs[idx]
-			}
-			val, can := getConstantBytes(vec, true, 0)
-			if !can {
+			if len(fExpr.Fold.Data) == 0 {
 				return nil, false
 			}
-			vals[idx] = val
+			if !fExpr.Fold.IsConst {
+				return nil, false
+			}
+
+			vals[idx] = nil
+			vals[idx] = append(vals[idx], fExpr.Fold.Data...)
 		} else {
 			logutil.Errorf("const folded val expr is not a fold expr: %s\n", plan2.FormatExpr(exprs[idx]))
 			return nil, false

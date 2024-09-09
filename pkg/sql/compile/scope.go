@@ -545,7 +545,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 
 		for _, e := range s.DataSource.BlockFilterList {
-			err = plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes, &c.filterExprVecs)
+			err = plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
 			if err != nil {
 				return err
 			}

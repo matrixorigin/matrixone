@@ -248,7 +248,6 @@ func (c *Compile) clear() {
 		exe.Free()
 	}
 	c.filterExprExes = nil
-	c.filterExprVecs = nil
 
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
@@ -1830,14 +1829,14 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	if len(n.FilterList) != len(s.DataSource.FilterList) {
 		s.DataSource.FilterList = plan2.DeepCopyExprList(n.FilterList)
 		for _, e := range s.DataSource.FilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes, &c.filterExprVecs)
+			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
 				return err
 			}
 		}
 	}
 	for _, e := range s.DataSource.FilterList {
-		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes, &c.filterExprVecs)
+		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
 		if err != nil {
 			return err
 		}
@@ -1847,7 +1846,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	if len(n.BlockFilterList) != len(s.DataSource.BlockFilterList) {
 		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(n.BlockFilterList)
 		for _, e := range s.DataSource.BlockFilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes, &c.filterExprVecs)
+			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
 				return err
 			}
@@ -3848,13 +3847,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		if len(n.BlockFilterList) > 0 {
 			filterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
 			for _, e := range filterExpr {
-				_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes, &c.filterExprVecs)
+				_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 			}
 			for _, e := range filterExpr {
-				err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes, &c.filterExprVecs)
+				err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
 				if err != nil {
 					return nil, nil, nil, err
 				}

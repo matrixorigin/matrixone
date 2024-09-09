@@ -223,8 +223,9 @@ message Expr {
 }
 
 message FoldVal {
-	int32 id	= 1;
-	bytes data	= 2;
+	int32 id		= 1;
+	bool is_const 	= 2;
+	bytes data		= 3;
 }
 
 message LiteralVec {
