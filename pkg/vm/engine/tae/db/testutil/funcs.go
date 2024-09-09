@@ -19,7 +19,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -27,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -396,28 +394,11 @@ func GetSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row in
 
 func MockCNDeleteInS3(
 	fs *objectio.ObjectFS,
-	obj data.Object,
-	blkOffset uint16,
+	rowIDVec containers.Vector,
+	pkVec containers.Vector,
 	schema *catalog.Schema,
 	txn txnif.AsyncTxn,
-	deleteRows []uint32,
 ) (stats objectio.ObjectStats, err error) {
-	pkDef := schema.GetPrimaryKey()
-	var view *containers.Batch
-	err = obj.Scan(context.Background(), &view, txn, schema, blkOffset, []int{pkDef.Idx}, common.DefaultAllocator)
-	pkVec := containers.MakeVector(pkDef.Type, common.DefaultAllocator)
-	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	objID := obj.GetMeta().(*catalog.ObjectEntry).ID()
-	blkID := objectio.NewBlockidWithObjectID(objID, blkOffset)
-	if err != nil {
-		return
-	}
-	for _, row := range deleteRows {
-		pkVal := view.Vecs[0].Get(int(row))
-		pkVec.Append(pkVal, false)
-		rowID := objectio.NewRowid(blkID, row)
-		rowIDVec.Append(*rowID, false)
-	}
 	bat := containers.NewBatch()
 	bat.AddVector(catalog.AttrRowID, rowIDVec)
 	bat.AddVector("pk", pkVec)
@@ -437,8 +418,7 @@ func MockCNDeleteInS3(
 	_, _, err = writer.Sync(context.Background())
 	//location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
 
-	stats = writer.GetObjectStats()[0]
-	stats.SetCNCreated()
+	stats = writer.GetObjectStats(objectio.WithCNCreated())
 
 	return
 }

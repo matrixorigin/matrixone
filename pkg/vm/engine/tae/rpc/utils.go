@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 )
@@ -72,29 +71,14 @@ func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error 
 		return nil
 	}
 
-	//for loading deleted rowid.
-	columnIdx := 0
-	pkIdx := 1
-
 	//start loading jobs asynchronously,should create a new root context.
 	for _, stats := range req.TombstoneStats {
-		loc := stats.BlockLocation(uint16(0), options.DefaultBlockMaxRows)
-		pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
+		location := stats.BlockLocation(uint16(0), objectio.BlockMaxRows)
+		err := blockio.Prefetch(h.db.Opts.SID, h.db.Runtime.Fs.Service, location)
 		if err != nil {
 			return err
 		}
-		for i := range stats.BlkCnt() {
-			pref.AddBlockWithType(
-				[]uint16{uint16(columnIdx), uint16(pkIdx)},
-				[]uint16{uint16(i)},
-				uint16(objectio.SchemaTombstone))
-		}
-
-		if err = blockio.PrefetchWithMerged(h.db.Opts.SID, pref); err != nil {
-			return err
-		}
 	}
-
 	return nil
 }
 

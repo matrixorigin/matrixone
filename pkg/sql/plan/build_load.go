@@ -253,7 +253,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
 	var offset int64 = 0
-	if stmt.Param.Parallel && noCompress && !stmt.Param.Local {
+	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress && !stmt.Param.Local {
 		offset, err = IgnoredLines(stmt.Param, ctx)
 		if err != nil {
 			return nil, err
@@ -331,7 +331,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	inlineDataSize := unsafe.Sizeof(stmt.Param.Data)
 	builder.qry.LoadWriteS3 = true
 
-	if noCompress && (stmt.Param.Parallel || inlineDataSize < LoadParallelMinSize) {
+	if noCompress && (stmt.Param.FileSize-offset < LoadParallelMinSize || inlineDataSize < LoadParallelMinSize) {
 		builder.qry.LoadWriteS3 = false
 	}
 

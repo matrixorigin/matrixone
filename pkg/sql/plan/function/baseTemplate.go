@@ -57,7 +57,7 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 			p2 := vector.GenerateFunctionFixedTypeParameter[T1](parameters[1])
 			rs := vector.MustFunctionResult[T2](result)
 			rsVec := rs.GetResultVector()
-			rss := vector.MustFixedCol[T2](rsVec)
+			rss := vector.MustFixedColNoTypeCheck[T2](rsVec)
 
 			c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 			if c1 && c2 {
@@ -153,7 +153,7 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 			p2 := vector.GenerateFunctionFixedTypeParameter[T1](parameters[1])
 			rs := vector.MustFunctionResult[T2](result)
 			rsVec := rs.GetResultVector()
-			rss := vector.MustFixedCol[T2](rsVec)
+			rss := vector.MustFixedColNoTypeCheck[T2](rsVec)
 
 			c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 
@@ -367,7 +367,7 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
 	rs := vector.MustFunctionResult[types.Decimal128](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[types.Decimal128](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)
 	scale1 := p1.GetType().Scale
 	scale2 := p2.GetType().Scale
 
@@ -406,8 +406,8 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 		}
 	}
 
-	v1 := vector.MustFixedCol[types.Decimal128](p1.GetSourceVector())
-	v2 := vector.MustFixedCol[types.Decimal128](p2.GetSourceVector())
+	v1 := vector.MustFixedColNoTypeCheck[types.Decimal128](p1.GetSourceVector())
+	v2 := vector.MustFixedColNoTypeCheck[types.Decimal128](p2.GetSourceVector())
 	err := arithFn(v1, v2, rss, scale1, scale2, rsNull)
 	if err != nil {
 		return err
@@ -421,7 +421,7 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
 	rs := vector.MustFunctionResult[T](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[T](rsVec)
 
 	scale1 := p1.GetType().Scale
 	scale2 := p2.GetType().Scale
@@ -572,7 +572,7 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[1])
 	rs := vector.MustFunctionResult[types.Decimal128](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[types.Decimal128](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)
 
 	scale1 := p1.GetType().Scale
 	scale2 := p2.GetType().Scale
@@ -738,7 +738,7 @@ func opBinaryFixedFixedToFixed[
 	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -860,7 +860,7 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -1008,7 +1008,7 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -1320,7 +1320,7 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -1468,7 +1468,7 @@ func specialTemplateForModFunction[
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
 	rs := vector.MustFunctionResult[T](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[T](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -1610,7 +1610,7 @@ func specialTemplateForDivFunction[
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
 	rs := vector.MustFunctionResult[T2](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T2](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[T2](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -1752,7 +1752,7 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -1872,7 +1872,7 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -2188,7 +2188,7 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 func compareVarlenaEqual(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
 
 	v1, v2 := parameters[0], parameters[1]
 	if v1.IsConstNull() || v2.IsConstNull() {
@@ -2232,7 +2232,7 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -2353,7 +2353,7 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[Tr](result)
-	rss := vector.MustFixedCol[Tr](rs.GetResultVector())
+	rss := vector.MustFixedColNoTypeCheck[Tr](rs.GetResultVector())
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsAnyNull := false
@@ -2499,7 +2499,7 @@ func opUnaryFixedToFixed[
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -2561,7 +2561,7 @@ func opUnaryBytesToFixed[
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -2623,7 +2623,7 @@ func opUnaryStrToFixed[
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -3314,7 +3314,7 @@ func opUnaryFixedToFixedWithErrorCheck[
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -3386,7 +3386,7 @@ func opUnaryBytesToFixedWithErrorCheck[
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -3458,7 +3458,7 @@ func opUnaryStrToFixedWithErrorCheck[
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -3528,7 +3528,7 @@ func opNoneParamToFixed[Tr types.FixedSizeTExceptStrType](
 	result vector.FunctionResultWrapper, proc *process.Process, length int, resultFn func() Tr) error {
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
 	for i := 0; i < length; i++ {
 		rss[i] = resultFn()

@@ -274,7 +274,7 @@ func TestNewParallelScope(t *testing.T) {
 			[]vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector})
 
 		scopeToParallel.NodeInfo.Mcpu = 4
-		_, ss := newParallelScope(scopeToParallel, testCompile)
+		_, ss := newParallelScope(scopeToParallel)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
 		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
 		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
@@ -289,7 +289,7 @@ func TestNewParallelScope(t *testing.T) {
 
 		scopeToParallel.NodeInfo.Mcpu = 4
 
-		_, ss := newParallelScope(scopeToParallel, testCompile)
+		_, ss := newParallelScope(scopeToParallel)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
 		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
 		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
@@ -304,49 +304,11 @@ func TestNewParallelScope(t *testing.T) {
 
 		scopeToParallel.NodeInfo.Mcpu = 3
 
-		_, ss := newParallelScope(scopeToParallel, testCompile)
+		_, ss := newParallelScope(scopeToParallel)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
 		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
 		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
 	}
-}
-
-func TestBroadcastJoinScope(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
-	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
-	testCompile.addr = "cn1:6001"
-	testCompile.execType = plan2.ExecTypeAP_MULTICN
-	testCompile.anal = &analyzeModule{}
-	probe1 := generateScopeWithRootOperator(
-		testCompile.proc,
-		[]vm.OpType{vm.TableScan, vm.Projection})
-	probe1.NodeInfo.Addr = "cn1:6001"
-	probe1.NodeInfo.Mcpu = 4
-	probe2 := generateScopeWithRootOperator(
-		testCompile.proc,
-		[]vm.OpType{vm.TableScan, vm.Projection})
-	probe2.NodeInfo.Addr = "cn2:6001"
-	probe2.NodeInfo.Mcpu = 4
-	build1 := generateScopeWithRootOperator(
-		testCompile.proc,
-		[]vm.OpType{vm.TableScan, vm.Projection})
-	build1.NodeInfo.Addr = "cn1:6001"
-	build1.NodeInfo.Mcpu = 4
-
-	n := &plan.Node{
-		Stats: &plan.Stats{
-			BlockNum:     10000,
-			HashmapStats: &plan.HashMapStats{},
-		},
-	}
-
-	rs, buildScopes := testCompile.newBroadcastJoinScopeList([]*Scope{probe1, probe2}, []*Scope{build1}, n, false)
-	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
-	require.NoError(t, checkScopeWithExpectedList(rs[1], []vm.OpType{vm.Merge}))
-	require.NoError(t, checkScopeWithExpectedList(buildScopes[0], []vm.OpType{vm.Merge}))
-	require.NoError(t, checkScopeWithExpectedList(buildScopes[1], []vm.OpType{vm.Merge}))
 }
 
 func TestCompileExternValueScan(t *testing.T) {
@@ -367,8 +329,7 @@ func TestCompileExternValueScan(t *testing.T) {
 	}
 	rs, err := testCompile.compileExternValueScan(n, param, true)
 	require.NoError(t, err)
-	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
-	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
+	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.External}))
 }
 
 func TestCompileExternScanParallel(t *testing.T) {

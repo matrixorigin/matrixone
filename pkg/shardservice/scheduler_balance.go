@@ -17,6 +17,7 @@ package shardservice
 import (
 	"sort"
 
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -198,6 +199,7 @@ func (s *balanceScheduler) doBalance(
 		zap.String("new-replica", new.String()),
 	)
 
+	v2.ReplicaScheduleBalanceReplicaCounter.Add(1)
 	s.freezeFilter.add(from, to)
 	return true, nil
 }

@@ -136,6 +136,32 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	}
 }
 
+func (entry *TableEntry) GetSoftdeleteObjects(txnStartTS, dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
+	iter1 := entry.MakeDataObjectIt()
+	defer iter1.Release()
+	for iter1.Next() {
+		obj := iter1.Item()
+		needWait, txn := obj.GetLastMVCCNode().NeedWaitCommitting(collectTS)
+		if needWait {
+			txn.GetTxnState(true)
+		}
+	}
+	iter2 := entry.MakeDataObjectIt()
+	defer iter2.Release()
+	for iter2.Next() {
+		obj := iter2.Item()
+		if obj.DeletedAt.IsEmpty() {
+			continue
+		}
+		if obj.DeletedAt.GreaterEq(&dedupedTS) && obj.DeletedAt.LessEq(&collectTS) {
+			if objs == nil {
+				objs = make([]*ObjectEntry, 0)
+			}
+			objs = append(objs, obj)
+		}
+	}
+	return
+}
 func (entry *TableEntry) GetID() uint64 { return entry.ID }
 func (entry *TableEntry) IsVirtual() bool {
 	if !entry.db.IsSystemDB() {
@@ -594,15 +620,6 @@ func (entry *TableEntry) IsActive() bool {
 		return false
 	}
 	return !entry.HasDropCommitted()
-}
-
-// GetTerminationTS is coarse API: no consistency check
-func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
-	dbEntry := entry.GetDB()
-
-	terminated, ts = dbEntry.TryGetTerminatedTS(true)
-
-	return
 }
 
 func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, newSchema *Schema, err error) {
