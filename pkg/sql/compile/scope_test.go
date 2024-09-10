@@ -301,14 +301,14 @@ func TestNewParallelScope(t *testing.T) {
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch})
+			[]vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector})
 
 		scopeToParallel.NodeInfo.Mcpu = 3
 
 		_, ss := newParallelScope(scopeToParallel)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector}))
 	}
 }
 

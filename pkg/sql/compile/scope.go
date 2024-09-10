@@ -589,10 +589,8 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 		return s, nil
 	}
 
-	if op, ok := s.RootOp.(*dispatch.Dispatch); ok {
-		if len(op.RemoteRegs) > 0 {
-			panic("pipeline end with dispatch should have been merged in multi CN!")
-		}
+	if _, ok := s.RootOp.(*dispatch.Dispatch); ok {
+		panic("dispatch operator should never dup!")
 	}
 
 	// fake scope is used to merge parallel scopes, and do nothing itself
