@@ -196,3 +196,55 @@ null    11761
 null    1150
 2023    1100
 2024    9511
+SELECT
+year,
+country,
+SUM(profit) AS profit,
+GROUPING(product) AS grp_product
+FROM sales
+GROUP BY
+year,
+country
+WITH
+ROLLUP
+ORDER BY
+profit;
+Argument #1 of GROUPING function is not in GROUP BY
+SELECT
+year,
+country,
+SUM(profit) AS profit,
+GROUPING(year+1) AS grp_product
+FROM sales
+GROUP BY
+year,
+country
+WITH
+ROLLUP
+ORDER BY
+profit;
+Argument #1 of GROUPING function is not in GROUP BY
+SELECT
+year,
+country,
+SUM(profit) AS profit,
+FROM sales
+WHERE
+GROUPING(year) = 1
+GROUP BY
+year,
+country
+WITH
+ROLLUP
+ORDER BY
+profit;
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'FROM sales
+WHERE
+GROUPING(year) = 1
+GROUP BY
+year,
+country
+WITH
+ROLLUP
+ORDER BY
+' at line 5
