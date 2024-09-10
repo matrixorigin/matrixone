@@ -20,14 +20,13 @@ import (
 	"io"
 	"os"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-func (i *IOEntry) setCachedData(ctx context.Context) error {
+func (i *IOEntry) setCachedData(ctx context.Context, allocator CacheDataAllocator) error {
 	LogEvent(ctx, str_set_cache_data_begin)
 	t0 := time.Now()
 	defer func() {
@@ -40,11 +39,8 @@ func (i *IOEntry) setCachedData(ctx context.Context) error {
 	if len(i.Data) == 0 {
 		return nil
 	}
-	if i.allocator == nil {
-		i.allocator = GetDefaultCacheDataAllocator()
-	}
 	LogEvent(ctx, str_to_cache_data_begin)
-	cacheData, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, i.allocator)
+	cacheData, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, allocator)
 	LogEvent(ctx, str_to_cache_data_end)
 	if err != nil {
 		return err
@@ -56,7 +52,7 @@ func (i *IOEntry) setCachedData(ctx context.Context) error {
 	return nil
 }
 
-func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File) (err error) {
+func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File, allocator CacheDataAllocator) (err error) {
 	finally := i.prepareData()
 	defer finally(&err)
 	r := io.LimitReader(file, i.Size)
@@ -76,7 +72,7 @@ func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File) (err error)
 	if i.ReadCloserForRead != nil {
 		*i.ReadCloserForRead = io.NopCloser(bytes.NewReader(i.Data))
 	}
-	if err := i.setCachedData(ctx); err != nil {
+	if err := i.setCachedData(ctx, allocator); err != nil {
 		return err
 	}
 
@@ -85,37 +81,34 @@ func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File) (err error)
 	return nil
 }
 
-func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData memorycache.CacheData, err error) {
+func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData fscache.Data, err error) {
 	if len(data) == 0 {
 		data, err = io.ReadAll(r)
 		if err != nil {
 			return
 		}
 	}
-	cacheData = allocator.Alloc(len(data))
+	cacheData = allocator.AllocateCacheData(len(data))
 	copy(cacheData.Bytes(), data)
 	return
 }
 
 func (i *IOEntry) prepareData() (finally func(err *error)) {
 	if cap(i.Data) < int(i.Size) {
-		ptr, dec, err := getMallocAllocator().Allocate(uint64(i.Size), malloc.NoHints)
+		slice, dec, err := ioAllocator().Allocate(uint64(i.Size), malloc.NoHints)
 		if err != nil {
 			panic(err)
 		}
-		metric.FSMallocLiveObjectsIOEntryData.Inc()
-		i.Data = unsafe.Slice((*byte)(ptr), i.Size)
+		i.Data = slice
 		if i.releaseData != nil {
 			i.releaseData()
 		}
 		i.releaseData = func() {
-			dec.Deallocate(ptr, malloc.NoHints)
-			metric.FSMallocLiveObjectsIOEntryData.Dec()
+			dec.Deallocate(malloc.NoHints)
 		}
 		finally = func(err *error) {
 			if err != nil && *err != nil {
-				dec.Deallocate(ptr, malloc.NoHints)
-				metric.FSMallocLiveObjectsIOEntryData.Dec()
+				dec.Deallocate(malloc.NoHints)
 			}
 		}
 

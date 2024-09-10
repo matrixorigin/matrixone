@@ -1,3 +1,4 @@
+-- @bvt:issue#16709
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -614,3 +615,4 @@ drop snapshot sp105;
 drop account acc01;
 drop account acc02;
 drop account acc03;
+-- @bvt:issue#16709

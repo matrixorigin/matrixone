@@ -57,7 +57,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if t.TableType == catalog.SystemSourceRel {
-		return nil, moerr.NewNYI(ctx.GetContext(), "insert stream %s", tblName)
+		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
@@ -81,6 +81,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
+		builder.isRestore = true
 		oldSnapshot := builder.compCtx.GetSnapshot()
 		builder.compCtx.SetSnapshot(&Snapshot{
 			Tenant: &plan.SnapshotTenant{
@@ -94,7 +95,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 
 	bindCtx := NewBindContext(builder, nil)
-	ifExistAutoPkCol, insertWithoutUniqueKeyMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +302,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap)
+		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)
 		if err != nil {
 			return nil, err
 		}

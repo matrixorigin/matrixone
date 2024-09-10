@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -855,7 +857,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	case *tree.ParenSelect:
 		*selects = append(*selects, leftStmt.Select)
 	default:
-		return moerr.NewParseError(ctx, "unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
+		return moerr.NewParseErrorf(ctx, "unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
 	}
 
 	// right is not UNION always
@@ -879,7 +881,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 
 		*selects = append(*selects, rightStmt.Select)
 	default:
-		return moerr.NewParseError(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
+		return moerr.NewParseErrorf(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
 	}
 
 	switch stmt.Type {
@@ -1154,7 +1156,10 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if err != nil {
 		return nil, err
 	}
-	if f.CannotFold() || f.IsRealTimeRelated() {
+	if f.CannotFold() {
+		return expr, nil
+	}
+	if f.IsRealTimeRelated() && !varAndParamIsConst {
 		return expr, nil
 	}
 	isVec := false
@@ -1379,18 +1384,18 @@ func InitInfileParam(param *tree.ExternParam) error {
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+				return moerr.NewBadConfigf(param.Ctx, "the jsondata '%s' is not supported", jsondata)
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
 		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
 		}
 	}
 	if len(param.Filepath) == 0 {
@@ -1432,19 +1437,19 @@ func InitS3Param(param *tree.ExternParam) error {
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+				return moerr.NewBadConfigf(param.Ctx, "the jsondata '%s' is not supported", jsondata)
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
 
 		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
 		}
 	}
 	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
@@ -1811,6 +1816,11 @@ func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (str
 		dbName = ctx.DefaultDatabase()
 	}
 
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+	}
+
 	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
 		if connectDBFirst {
 			return "", moerr.NewNoDB(ctx.GetContext())
@@ -1929,7 +1939,7 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 		switch ast := p.(type) {
 		case *tree.NumVal:
 			if ast.ValType != tree.P_char {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "unsupport value '%s'", ast.String())
 			}
 		case *tree.ParamExpr:
 			if !isPrepareStmt {
@@ -1940,7 +1950,7 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 				return nil, moerr.NewInternalError(ctx.GetContext(), "offset not match")
 			}
 		default:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "unsupport value '%s'", ast.String())
 		}
 	}
 	return paramTypes, nil

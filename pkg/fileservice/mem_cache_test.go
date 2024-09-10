@@ -22,7 +22,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
@@ -46,15 +46,15 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 
 	size := int64(4 * runtime.GOMAXPROCS(0))
-	m := NewMemCache(NewMemoryCache(size, true, nil), nil)
+	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "")
 
 	vec := &IOVector{
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
-					cacheData := allocator.Alloc(1)
+				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+					cacheData := allocator.AllocateCacheData(1)
 					cacheData.Bytes()[0] = 42
 					return cacheData, nil
 				},
@@ -79,8 +79,8 @@ func TestMemCacheLeak(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
-					cacheData := allocator.Alloc(1)
+				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+					cacheData := allocator.AllocateCacheData(1)
 					cacheData.Bytes()[0] = 42
 					return cacheData, nil
 				},
@@ -104,7 +104,8 @@ func TestMemCacheLeak(t *testing.T) {
 // TestHighConcurrency this test is to mainly test concurrency issue in objectCache
 // and dataOverlap-checker.
 func TestHighConcurrency(t *testing.T) {
-	m := NewMemCache(NewMemoryCache(2, true, nil), nil)
+	m := NewMemCache(fscache.ConstCapacity(2), nil, nil, "")
+	defer m.Close()
 	ctx := context.Background()
 
 	n := 10
@@ -141,4 +142,112 @@ func TestHighConcurrency(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestMemoryCacheGlobalSizeHint(t *testing.T) {
+	cache := NewMemCache(
+		fscache.ConstCapacity(1<<20),
+		nil,
+		nil,
+		"test",
+	)
+	defer cache.Close()
+
+	ch := make(chan int64, 1)
+	cache.Evict(ch)
+	n := <-ch
+	if n > 1<<20 {
+		t.Fatalf("got %v", n)
+	}
+
+	// shrink
+	GlobalMemoryCacheSizeHint.Store(1 << 10)
+	defer GlobalMemoryCacheSizeHint.Store(0)
+	cache.Evict(ch)
+	n = <-ch
+	if n > 1<<10 {
+		t.Fatalf("got %v", n)
+	}
+
+	// shrink
+	GlobalMemoryCacheSizeHint.Store(1 << 9)
+	defer GlobalMemoryCacheSizeHint.Store(0)
+	ret := EvictMemoryCaches()
+	if ret["test"] > 1<<9 {
+		t.Fatalf("got %v", ret)
+	}
+
+}
+
+func BenchmarkMemoryCacheUpdate(b *testing.B) {
+	ctx := context.Background()
+
+	cache := NewMemCache(
+		fscache.ConstCapacity(1024),
+		nil,
+		nil,
+		"",
+	)
+	defer cache.Flush()
+
+	for i := range b.N {
+		vec := &IOVector{
+			FilePath: fmt.Sprintf("%d", i),
+			Entries: []IOEntry{
+				{
+					Data:       []byte("a"),
+					Size:       1,
+					CachedData: DefaultCacheDataAllocator().AllocateCacheData(1),
+				},
+			},
+		}
+		if err := cache.Update(ctx, vec, false); err != nil {
+			b.Fatal(err)
+		}
+		vec.Release()
+	}
+}
+
+func BenchmarkMemoryCacheRead(b *testing.B) {
+	ctx := context.Background()
+
+	cache := NewMemCache(
+		fscache.ConstCapacity(1024),
+		nil,
+		nil,
+		"",
+	)
+	defer cache.Flush()
+
+	vec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Data:       []byte("a"),
+				Size:       1,
+				CachedData: DefaultCacheDataAllocator().AllocateCacheData(1),
+			},
+		},
+	}
+	if err := cache.Update(ctx, vec, false); err != nil {
+		b.Fatal(err)
+	}
+	vec.Release()
+
+	for range b.N {
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size:        1,
+					ToCacheData: CacheOriginalData,
+				},
+			},
+		}
+		if err := cache.Read(ctx, vec); err != nil {
+			b.Fatal(err)
+		}
+		vec.Release()
+	}
+
 }

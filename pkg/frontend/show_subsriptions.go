@@ -181,9 +181,9 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 }
 
 func getSubInfoFromSql(ctx context.Context, ses FeSession, sql string) (subName, pubAccountName, pubName string, err error) {
-	var lowerAny interface{}
-	if lowerAny, err = ses.GetSessionSysVar("lower_case_table_names"); err != nil {
-		return
+	lowerAny, err := ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		lowerAny = int64(1)
 	}
 
 	var ast []tree.Statement

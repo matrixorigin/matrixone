@@ -10,7 +10,6 @@ restore account sys from snapshot sp01;
 
 select * from clu01;
 drop table clu01;
--- @bvt:issue
 
 
 
@@ -735,4 +734,45 @@ drop snapshot sp18;
 drop snapshot sp17;
 
 
+
+
+-- sys account restore to account: single db, single table
+drop database if exists test01;
+create database test01;
+use test01;
+
+drop table if exists rs01;
+create table rs01 (col1 int, col2 decimal(6), col3 varchar(30));
+insert into rs01 values (1, null, 'database');
+insert into rs01 values (2, 38291.32132, 'database');
+insert into rs01 values (3, null, 'database management system');
+insert into rs01 values (4, 10, null);
+insert into rs01 values (1, -321.321, null);
+insert into rs01 values (2, -1, null);
+select count(*) from rs01;
+
+drop snapshot if exists sp01;
+create snapshot sp01 for account sys;
+select count(*) from rs01 {snapshot = 'sp01'};
+insert into rs01 values (2, -1, null);
+insert into rs01 values (1, -321.321, null);
+select * from rs01;
+
+select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
+-- @ignore:0,6,7
+select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
+select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
+restore account sys from snapshot sp01;
+select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from rs01 {snapshot = 'sp01'};
+select * from rs01 {snapshot = 'sp01'};
+select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
+-- @ignore:0,6,7
+select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
+select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
+drop snapshot sp01;
+drop database test01;
 

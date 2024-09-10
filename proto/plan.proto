@@ -834,12 +834,14 @@ message Node {
 	int32 window_idx = 52;
 	repeated Expr onUpdateExprs = 53;
 	OriginTableMessageForFuzzy fuzzymessage = 54;
+	bool ifInsertFromUnique = 55;
 
 	//for message
-	repeated msgHeader send_msg_list = 55;
-	repeated msgHeader recv_msg_list = 56;
+	repeated msgHeader send_msg_list = 56 [(gogoproto.nullable) = false];
+	repeated msgHeader recv_msg_list = 57 [(gogoproto.nullable) = false];
 
-	Snapshot scan_snapshot = 57;
+	Snapshot scan_snapshot = 58;
+
 }
 
 // Snapshot Represents a snapshot of the database

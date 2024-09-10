@@ -80,6 +80,7 @@ func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine, ver
 
 	ar.accountRoutineMu.Lock()
 	defer ar.accountRoutineMu.Unlock()
+	logutil.Infof("[init account] set account id %d, connection id %d to account routine map", tenantID, rt.getConnectionID())
 	if _, ok := ar.accountId2Routine[tenantID]; !ok {
 		ar.accountId2Routine[tenantID] = make(map[*Routine]uint64)
 	}
@@ -110,6 +111,7 @@ func (ar *AccountRoutineManager) EnKillQueue(tenantID int64, version uint64) {
 	KillRecord := NewKillRecord(time.Now(), version)
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
+	logutil.Infof("[set suspend] set account id %d, version %d to kill queue at time %v, ", tenantID, version, KillRecord.killTime)
 	ar.killIdQueue[tenantID] = KillRecord
 
 }
@@ -124,6 +126,7 @@ func (ar *AccountRoutineManager) AlterRoutineStatue(tenantID int64, status strin
 	if rts, ok := ar.accountId2Routine[tenantID]; ok {
 		for rt := range rts {
 			if status == "restricted" {
+				logutil.Infof("[set restricted] alter routine, set account id %d, connection id %d restricted", tenantID, rt.getConnectionID())
 				rt.setResricted(true)
 			} else {
 				rt.setResricted(false)
@@ -346,7 +349,7 @@ func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatK
 			rt.killQuery(killMyself, statementId)
 		}
 	} else {
-		return moerr.NewInternalError(ctx, "Unknown connection id %d", id)
+		return moerr.NewInternalErrorf(ctx, "Unknown connection id %d", id)
 	}
 	return nil
 }
@@ -582,6 +585,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 			for rt, version := range rtMap {
 				if rt != nil && ((version+1)%math.MaxUint64)-1 <= killRecord.version {
 					//kill connect of this routine
+					logutil.Infof("[kill connection] do kill connection account id %d, version %d, connection id %d, ", account, killRecord.version, rt.getConnectionID())
 					rt.killConnection(false)
 					ar.deleteRoutine(account, rt)
 				}
@@ -595,7 +599,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 func (rm *RoutineManager) MigrateConnectionTo(ctx context.Context, req *query.MigrateConnToRequest) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
-		return moerr.NewInternalError(ctx, "cannot get routine to migrate connection %d", req.ConnID)
+		return moerr.NewInternalErrorf(ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
 	return routine.migrateConnectionTo(ctx, req)
 }
@@ -603,7 +607,7 @@ func (rm *RoutineManager) MigrateConnectionTo(ctx context.Context, req *query.Mi
 func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromRequest, resp *query.MigrateConnFromResponse) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
-		return moerr.NewInternalError(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
+		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
 	return routine.migrateConnectionFrom(resp)
 }
@@ -652,7 +656,7 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 
 	cfg, err := ConstructTLSConfig(rm.ctx, SV.TlsCaFile, SV.TlsCertFile, SV.TlsKeyFile)
 	if err != nil {
-		return moerr.NewInternalError(rm.ctx, "init TLS config error: %v", err)
+		return moerr.NewInternalErrorf(rm.ctx, "init TLS config error: %v", err)
 	}
 
 	rm.tlsConfig = cfg

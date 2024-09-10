@@ -72,15 +72,12 @@ func (builder *QueryBuilder) handleMessgaeFromTopToScan(nodeID int32) {
 	if orderByCol.Col.RelPos != scanNode.BindingTags[0] {
 		return
 	}
-	if scanNode.Stats.BlockNum < 64 {
-		return
-	}
 	if GetSortOrder(scanNode.TableDef, orderByCol.Col.ColPos) != 0 {
 		return
 	}
 
 	msgTag := builder.genNewMsgTag()
-	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(process.MsgTopValue)}
+	msgHeader := plan.MsgHeader{MsgTag: msgTag, MsgType: int32(process.MsgTopValue)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
 	scanNode.OrderBy = append(scanNode.OrderBy, DeepCopyOrderBy(node.OrderBy[0]))

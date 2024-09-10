@@ -101,7 +101,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 		totalBlkCnt += cnt
 	}
 	if host.DoTransfer() {
-		initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
+		host.InitTransferMaps(totalBlkCnt)
 	}
 
 	return m
@@ -141,7 +141,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	bufferRowCnt := 0
 	objRowCnt := uint32(0)
 	mergedRowCnt := uint32(0)
-	commitEntry := m.host.GetCommitEntry()
+	transferMaps := m.host.GetTransferMaps()
 	for m.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
@@ -165,7 +165,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		}
 
 		if m.host.DoTransfer() {
-			commitEntry.Booking.Mappings[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1].M[int32(rowIdx)] = api.TransDestPos{
+			(*transferMaps)[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1][int32(rowIdx)] = api.TransferDestPos{
 				ObjIdx: int32(objCnt),
 				BlkIdx: int32(uint32(objBlkCnt)),
 				RowIdx: int32(bufferRowCnt),
@@ -312,7 +312,7 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 	var merger Merger
 	typ := mergeHost.GetSortKeyType()
 	if typ.IsVarlen() {
-		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.MustStrCol)
+		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.InefficientMustStrCol)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:

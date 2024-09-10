@@ -167,10 +167,10 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 	}
 
 	if err := digThrough(); err != nil {
-		return moerr.NewInternalErrorNoCtx("set up tunnel failed: %v", err)
+		return moerr.NewInternalErrorNoCtxf("set up tunnel failed: %v", err)
 	}
 	if err := t.kickoff(); err != nil {
-		return moerr.NewInternalErrorNoCtx("kickoff pipe failed: %v", err)
+		return moerr.NewInternalErrorNoCtxf("kickoff pipe failed: %v", err)
 	}
 
 	func() {
@@ -550,18 +550,18 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if errors.Is(re, io.EOF) {
 				return false, re
 			}
-			return false, moerr.NewInternalError(errutil.ContextWithNoReport(ctx, true),
+			return false, moerr.NewInternalErrorf(errutil.ContextWithNoReport(ctx, true),
 				"preRecv message: %s, name %s", re.Error(), p.name)
 		}
+		tempBuf := p.src.readAvailBuf()
 		// set txn status and cmd time within the mutex together.
 		// only server->client pipe need to set the txn status.
 		if p.name == pipeServerToClient {
 			var currSeq int16
-			buf := p.src.readAvailBuf()
 
 			// issue#16042
-			if len(buf) > 3 {
-				currSeq = int16(buf[3])
+			if len(tempBuf) > 3 {
+				currSeq = int16(tempBuf[3])
 			}
 
 			// last sequence id is 255 and current sequence id is 0, the
@@ -576,16 +576,26 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				rotated = false
 			}
 
-			p.mu.inTxn = checkTxnStatus(buf)
+			inTxn, ok := checkTxnStatus(tempBuf)
+			if ok {
+				p.mu.inTxn = inTxn
+			}
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
 				peer.wg.Add(1)
 				p.transferred = true
 			}
-			if len(buf) > 3 {
-				lastSeq = int16(buf[3])
+			if len(tempBuf) > 3 {
+				lastSeq = int16(tempBuf[3])
+			}
+			p.mu.lastCmdTime = time.Now()
+		} else {
+			if isEmptyPacket(tempBuf) {
+				p.logger.Warn("there comes an empty packet from client")
+			}
+			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
+				p.mu.lastCmdTime = time.Now()
 			}
 		}
-		p.mu.lastCmdTime = time.Now()
 		return false, nil
 	}
 
@@ -615,7 +625,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		p.wg.Wait()
 
 		if err = p.src.sendTo(p.dst); err != nil {
-			return moerr.NewInternalErrorNoCtx("send message error: %v", err)
+			return moerr.NewInternalErrorNoCtxf("send message error: %v", err)
 		}
 	}
 	return ctx.Err()
@@ -741,7 +751,11 @@ func handleEOFPacket(msg []byte) bool {
 	return txnStatus(binary.LittleEndian.Uint16(msg[7:]))
 }
 
-func checkTxnStatus(msg []byte) bool {
+// the first return value is the txn status, and the second return value
+// indicates if we can get the txn status from the packet. If it is a ERROR
+// packet, the second return value is false.
+func checkTxnStatus(msg []byte) (bool, bool) {
+	ok := true
 	inTxn := true
 	// For the server->client pipe, we get the transaction status from the
 	// OK and EOF packet, which is used in connection transfer. If the session
@@ -750,6 +764,8 @@ func checkTxnStatus(msg []byte) bool {
 		inTxn = handleOKPacket(msg)
 	} else if isEOFPacket(msg) {
 		inTxn = handleEOFPacket(msg)
+	} else if isErrPacket(msg) {
+		ok = false
 	}
-	return inTxn
+	return inTxn, ok
 }

@@ -164,7 +164,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef, true)
-	err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil)
+	err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -247,13 +247,13 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			case *tree.UnresolvedName:
 				colName := realCol.ColName()
 				if _, ok := tableDef.Name2ColIndex[colName]; !ok {
-					return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.ColNameOrigin())
+					return ifExistAutoPkCol, moerr.NewInternalErrorf(ctx.GetContext(), "column '%s' does not exist", realCol.ColNameOrigin())
 				}
 				colToIndex[colName] = int32(i)
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 			default:
-				return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
+				return ifExistAutoPkCol, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported column type %v", realCol)
 			}
 		}
 		lastColIdx := len(tableDef.Cols) - 1
@@ -346,7 +346,7 @@ func checkNullMap(stmt *tree.Load, Cols []*ColDef, ctx CompilerContext) error {
 			}
 		}
 		if !find {
-			return moerr.NewInvalidInput(ctx.GetContext(), "wrong col name '%s' in nullif function", k)
+			return moerr.NewInvalidInputf(ctx.GetContext(), "wrong col name '%s' in nullif function", k)
 		}
 	}
 	return nil

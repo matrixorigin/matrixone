@@ -24,13 +24,14 @@ import (
 	"time"
 	"unsafe"
 
-	"go.uber.org/zap"
-
 	"github.com/docker/go-units"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonUtil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -223,7 +224,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 
 	if !found {
-		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
+		return 0, moerr.NewInvalidInputf(ctx, "bad input column name %v", columnName)
 	}
 
 	deletes := make(map[types.Rowid]struct{})
@@ -288,7 +289,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 	sz, ok := s.SizeMap[columnName]
 	if !ok {
-		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
+		return 0, moerr.NewInvalidInputf(ctx, "bad input column name %v", columnName)
 	}
 
 	return sz + szInPart, nil
@@ -297,7 +298,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 func ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	ts types.TS,
-	fn func(index int, obj logtailreplay.ObjectEntry) error,
+	fn func(obj logtailreplay.ObjectEntry) error,
 	executor ConcurrentExecutor,
 ) (err error) {
 	iter, err := state.NewObjectsIter(ts)
@@ -305,23 +306,20 @@ func ForeachVisibleDataObject(
 		return err
 	}
 	defer iter.Close()
-	var i int
 	var wg sync.WaitGroup
 	for iter.Next() {
-		var j = i
 		entry := iter.Entry()
 		if executor != nil {
 			wg.Add(1)
 			executor.AppendTask(func() error {
 				defer wg.Done()
-				return fn(j, entry)
+				return fn(entry)
 			})
 		} else {
-			if err = fn(j, entry); err != nil {
+			if err = fn(entry); err != nil {
 				break
 			}
 		}
-		i++
 	}
 	if executor != nil {
 		wg.Wait()
@@ -364,7 +362,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil, nil, err
 	}
 	var updateMu sync.Mutex
-	onObjFn := func(_ int, obj logtailreplay.ObjectEntry) error {
+	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
@@ -431,7 +429,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		}
 	}
 	if !found {
-		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
+		return nil, moerr.NewInvalidInputf(ctx, "bad input column name %v", name)
 	}
 
 	needCols := make([]*plan.ColDef, 0, n)
@@ -449,7 +447,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
 	var updateMu sync.Mutex
-	onObjFn := func(_ int, obj logtailreplay.ObjectEntry) error {
+	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
 			return err
@@ -551,9 +549,9 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 		return nil
 	}
 	for _, bat := range bats {
-		vs := vector.MustStrCol(bat.GetVector(0))
+		vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
 		for _, deltaLoc := range vs {
-			location, err := blockio.EncodeLocationFromString(deltaLoc)
+			location, err := blockio.EncodeLocationFromString(deltaLoc.UnsafeGetString(area))
 			if err != nil {
 				return err
 			}
@@ -592,9 +590,9 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 			continue
 		}
 		for _, bat := range bats {
-			vs := vector.MustStrCol(bat.GetVector(0))
+			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
 			for _, metalLoc := range vs {
-				location, err := blockio.EncodeLocationFromString(metalLoc)
+				location, err := blockio.EncodeLocationFromString(metalLoc.UnsafeGetString(area))
 				if err != nil {
 					return err
 				}
@@ -1613,7 +1611,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		tbl.writeTnPartition(tbl.getTxn().proc.Ctx, bat)
 	default:
 		tbl.getTxn().hasS3Op.Store(true)
-		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
+		panic(moerr.NewInternalErrorNoCtxf("Unsupport type for table delete %d", typ))
 	}
 	return nil
 }
@@ -2014,30 +2012,33 @@ func (tbl *txnTable) getPartitionState(
 ) (*logtailreplay.PartitionState, error) {
 	if !tbl.db.op.IsSnapOp() {
 		if tbl._partState.Load() == nil {
-			if err := tbl.updateLogtail(ctx); err != nil {
+			ps, err := tbl.tryToSubscribe(ctx)
+			if err != nil {
 				return nil, err
 			}
-			tbl._partState.Store(tbl.getTxn().engine.
-				getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot())
+			if ps == nil {
+				ps = tbl.getTxn().engine.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
+			}
+			tbl._partState.Store(ps)
 		}
 		return tbl._partState.Load(), nil
 	}
 
 	// for snapshot txnOp
 	if tbl._partState.Load() == nil {
-		p, err := tbl.getTxn().engine.getOrCreateSnapPart(
+		ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
 			ctx,
 			tbl,
 			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 		if err != nil {
 			return nil, err
 		}
-		tbl._partState.Store(p.Snapshot())
+		tbl._partState.Store(ps)
 	}
 	return tbl._partState.Load(), nil
 }
 
-func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
+func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
 	defer func() {
 		if err == nil {
 			tbl.getTxn().engine.globalStats.notifyLogtailUpdate(tbl.tableId)
@@ -2047,51 +2048,14 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	// if the table is created in this txn, skip
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
-		return err
+		return
 	}
 	if _, created := tbl.getTxn().createMap.Load(
 		genTableKey(accountId, tbl.tableName, tbl.db.databaseId)); created {
 		return
 	}
 
-	tableId := tbl.tableId
-	/*
-		if the table is truncated once or more than once,
-		it is suitable to use the old table id to sync logtail.
-
-		CORNER CASE 1:
-		create table t1(a int);
-		begin;
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // sync logtail for the new id failed.
-
-		CORNER CASE 2:
-		create table t1(a int);
-		begin;
-		select count(*) from t1; // sync logtail for the old succeeded.
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // not sync logtail this time.
-
-		CORNER CASE 3:
-		create table t1(a int);
-		begin;
-		truncate t1; //table id changed. there is no new table id in DN.
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // sync logtail for the new id failed.
-	*/
-	if tbl.oldTableId != 0 {
-		tableId = tbl.oldTableId
-	}
-
-	if err = tbl.getTxn().engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId,
-		tbl.db.op.SnapshotTS()); err != nil {
-		return
-	}
-	if _, err = tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl); err != nil {
-		return
-	}
-
-	return nil
+	return tbl.getTxn().engine.PushClient().toSubscribeTable(ctx, tbl)
 }
 
 func (tbl *txnTable) PKPersistedBetween(
@@ -2522,7 +2486,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 			info, exist := state.GetObject(*objstat.ObjectShortName())
 			if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
 				logutil.Errorf("object not visible: %s", info.String())
-				return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
+				return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 			}
 			objInfos = append(objInfos, info)
 		}
@@ -2579,19 +2543,46 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 	}
 
 	// if transfer info is too large, write it down to s3
-	if size := taskHost.commitEntry.Booking.ProtoSize(); size > 80*common.Const1MBytes {
+	// transfer info size is only related to row count.
+	rowCnt := 0
+	for _, m := range taskHost.transferMaps {
+		rowCnt += len(m)
+	}
+	// if transfer info is small, send it to tn directly.
+	if rowCnt < 8000000 {
+		size := len(taskHost.transferMaps)
+		mappings := make([]api.BlkTransMap, size)
+		for i := 0; i < size; i++ {
+			mappings[i] = api.BlkTransMap{
+				M: make(map[int32]api.TransDestPos),
+			}
+		}
+		taskHost.commitEntry.Booking = &api.BlkTransferBooking{
+			Mappings: mappings,
+		}
+
+		for i, m := range taskHost.transferMaps {
+			for r, pos := range m {
+				taskHost.commitEntry.Booking.Mappings[i].M[r] = api.TransDestPos{
+					ObjIdx: pos.ObjIdx,
+					BlkIdx: pos.BlkIdx,
+					RowIdx: pos.RowIdx,
+				}
+			}
+		}
+	} else {
 		if err := dumpTransferInfo(ctx, taskHost); err != nil {
 			return taskHost.commitEntry, err
 		}
-		idx := 0
-		locstr := ""
+		var locStr strings.Builder
 		locations := taskHost.commitEntry.BookingLoc
-		for ; idx < len(locations); idx += objectio.LocationLen {
-			loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
-			locstr += loc.String() + ","
+		blkCnt := types.DecodeInt32(commonUtil.UnsafeStringToBytes(locations[0]))
+		for _, filepath := range locations[blkCnt+1:] {
+			locStr.WriteString(filepath)
+			locStr.WriteString(",")
 		}
-		logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info (%v) %v",
-			tbl.tableId, tbl.tableName, common.HumanReadableBytes(size), locstr)
+		logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info %v",
+			tbl.tableId, tbl.tableName, locStr.String())
 	}
 
 	// commit this to tn
@@ -2601,62 +2592,97 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 	defer func() {
 		if err != nil {
-			idx := 0
 			locations := taskHost.commitEntry.BookingLoc
-			for ; idx < len(locations); idx += objectio.LocationLen {
-				loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
-				taskHost.fs.Delete(ctx, loc.Name().String())
+			for _, filepath := range locations {
+				_ = taskHost.fs.Delete(ctx, filepath)
 			}
 		}
 	}()
-	data, err := taskHost.commitEntry.Booking.Marshal()
-	if err != nil {
-		return
+	bookingMaps := taskHost.transferMaps
+	blkCnt := int32(len(bookingMaps))
+	totalRows := 0
+
+	// BookingLoc layout:
+	// | blockCnt | Blk1RowCnt | Blk2RowCnt | ... | filepath1 | filepath2 | ... |
+	taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc,
+		commonUtil.UnsafeBytesToString(types.EncodeInt32(&blkCnt)))
+	for _, m := range bookingMaps {
+		rowCnt := int32(len(m))
+		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc,
+			commonUtil.UnsafeBytesToString(types.EncodeInt32(&rowCnt)))
+		totalRows += len(m)
 	}
-	taskHost.commitEntry.BookingLoc = make([]byte, 0, objectio.LocationLen)
-	chunkSize := 1000 * mpool.MB
-	for len(data) > 0 {
-		var chunck []byte
-		if len(data) > chunkSize {
-			chunck = data[:chunkSize]
-			data = data[chunkSize:]
-		} else {
-			chunck = data
-			data = nil
+
+	columns := []string{"src_blk", "src_row", "dest_obj", "dest_blk", "dest_row"}
+	batchSize := min(200*mpool.MB/len(columns)/int(unsafe.Sizeof(int32(0))), totalRows)
+
+	buffer := batch.New(true, columns)
+
+	releases := make([]func(), len(columns))
+	for i := range columns {
+		t := types.T_int32.ToType()
+		vec, release := taskHost.GetVector(&t)
+		err = vec.PreExtend(batchSize, taskHost.GetMPool())
+		if err != nil {
+			return err
+		}
+		buffer.Vecs[i] = vec
+		releases[i] = release
+	}
+	objRowCnt := 0
+	for blkIdx, transMap := range bookingMaps {
+		for rowIdx, destPos := range transMap {
+			vector.AppendFixed(buffer.Vecs[0], int32(blkIdx), false, taskHost.GetMPool())
+			vector.AppendFixed(buffer.Vecs[1], rowIdx, false, taskHost.GetMPool())
+			vector.AppendFixed(buffer.Vecs[2], destPos.ObjIdx, false, taskHost.GetMPool())
+			vector.AppendFixed(buffer.Vecs[3], destPos.BlkIdx, false, taskHost.GetMPool())
+			vector.AppendFixed(buffer.Vecs[4], destPos.RowIdx, false, taskHost.GetMPool())
+
+			buffer.SetRowCount(buffer.RowCount() + 1)
+			objRowCnt++
+
+			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
+				filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
+				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
+				if err != nil {
+					return err
+				}
+
+				_, err = writer.Write(buffer)
+				if err != nil {
+					return err
+				}
+				buffer.CleanOnlyData()
+
+				_, err = writer.WriteEnd(ctx)
+				if err != nil {
+					return err
+				}
+				taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, filename)
+				objRowCnt = 0
+			}
+		}
+	}
+
+	// write remaining data
+	if buffer.RowCount() != 0 {
+		filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
+		writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
+		if err != nil {
+			return err
 		}
 
-		t := types.T_varchar.ToType()
-		v, releasev := taskHost.GetVector(&t)
-		vectorRowCnt := 1
-		vector.AppendBytes(v, chunck, false, taskHost.GetMPool())
-		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-		var writer *blockio.BlockWriter
-		writer, err = blockio.NewBlockWriterNew(taskHost.fs, name, 0, nil)
+		_, err = writer.Write(buffer)
 		if err != nil {
-			releasev()
-			return
+			return err
 		}
+		buffer.CleanOnlyData()
 
-		batch := batch.New(true, []string{"payload"})
-		batch.SetRowCount(vectorRowCnt)
-		batch.Vecs[0] = v
-		_, err = writer.WriteTombstoneBatch(batch)
+		_, err = writer.WriteEnd(ctx)
 		if err != nil {
-			releasev()
-			return
+			return err
 		}
-		var blocks []objectio.BlockObject
-		blocks, _, err = writer.Sync(ctx)
-		releasev()
-		if err != nil {
-			return
-		}
-		location := blockio.EncodeLocation(
-			name,
-			blocks[0].GetExtent(),
-			uint32(vectorRowCnt),
-			blocks[0].GetID())
-		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, location...)
+		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, filename)
 	}
 
 	taskHost.commitEntry.Booking = nil

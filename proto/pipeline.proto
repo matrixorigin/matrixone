@@ -201,6 +201,8 @@ message FuzzyFilter {
   float N = 1;
   string PkName = 2;
   plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
+  int32 BuildIdx = 4;
+  bool IfInsertFromUnique = 5;
 }
 
 message Join {

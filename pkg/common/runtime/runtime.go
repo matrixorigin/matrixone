@@ -158,14 +158,14 @@ type methodType interface {
 
 func CheckMethodVersion[Req interface{ GetMethod() T }, T methodType](ctx context.Context, versionMap map[T]int64, req Req) error {
 	if version, ok := versionMap[req.GetMethod()]; !ok {
-		return moerr.NewNotSupported(ctx, "%s not support in current version", req.GetMethod().String())
+		return moerr.NewNotSupportedf(ctx, "%s not support in current version", req.GetMethod().String())
 	} else {
 		v, ok := ProcessLevelRuntime().GetGlobalVariables(MOProtocolVersion)
 		if !ok {
 			return moerr.NewInternalError(ctx, "failed to get protocol version")
 		}
 		if v.(int64) < version {
-			return moerr.NewInternalError(ctx, "unsupported protocol version %d", version)
+			return moerr.NewInternalErrorf(ctx, "unsupported protocol version %d", version)
 		}
 	}
 	return nil

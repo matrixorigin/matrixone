@@ -29,6 +29,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type mockSQLWorker struct{}
+
+func newMockSQLWorker() *mockSQLWorker {
+	return &mockSQLWorker{}
+}
+
+func (w *mockSQLWorker) GetCNServerByConnID(_ uint32) (*CNServer, error) {
+	return nil, nil
+}
+
 func TestCNServer(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	temp := os.TempDir()
@@ -75,7 +85,7 @@ func TestRouter_SelectEmptyCN(t *testing.T) {
 	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, true)
+	ru := newRouter(mc, re, newMockSQLWorker(), true)
 
 	li1 := labelInfo{
 		Tenant: "t1",
@@ -110,7 +120,7 @@ func TestRouter_RouteForCommon(t *testing.T) {
 	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, true)
+	ru := newRouter(mc, re, newMockSQLWorker(), true)
 	ctx := context.TODO()
 
 	li1 := labelInfo{
@@ -187,7 +197,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	re := testRebalancer(t, st, logger, mc)
-	ru := newRouter(mc, re, true)
+	ru := newRouter(mc, re, newMockSQLWorker(), true)
 	li1 := labelInfo{
 		Tenant: "sys",
 	}
@@ -251,7 +261,7 @@ func TestRouter_SelectByConnID(t *testing.T) {
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
-	ru := newRouter(nil, re, true)
+	ru := newRouter(nil, re, re.connManager, true)
 
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
 	_, _, err := ru.Connect(cn1, testPacket, nil)
@@ -323,7 +333,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, true)
+	ru := newRouter(mc, re, newMockSQLWorker(), true)
 
 	connResult := make(map[string]struct{})
 	li1 := labelInfo{
@@ -433,7 +443,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, true)
+	ru := newRouter(mc, re, newMockSQLWorker(), true)
 
 	connResult := make(map[string]struct{})
 	li1 := labelInfo{
@@ -529,7 +539,7 @@ func TestRouter_Filter(t *testing.T) {
 	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, true)
+	ru := newRouter(mc, re, newMockSQLWorker(), true)
 
 	cn, err := ru.Route(ctx, clientInfo{username: "dump"}, func(s string) bool {
 		return s == addr1
@@ -587,7 +597,7 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, false)
+	ru := newRouter(mc, re, newMockSQLWorker(), false)
 
 	li1 := labelInfo{
 		Tenant: "t1",

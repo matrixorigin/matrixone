@@ -53,7 +53,7 @@ func currentAccountCall(_ int, proc *process.Process, arg *Argument, result *vm.
 			case "role_id":
 				rbat.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.RoleId, 1, proc.Mp())
 			default:
-				err = moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", attr)
+				err = moerr.NewInvalidInputf(proc.Ctx, "%v is not supported by current_account()", attr)
 			}
 			if err != nil {
 				return false, err
@@ -68,6 +68,6 @@ func currentAccountCall(_ int, proc *process.Process, arg *Argument, result *vm.
 		result.Batch = nil
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalErrorf(proc.Ctx, "unknown state %v", arg.ctr.state)
 	}
 }

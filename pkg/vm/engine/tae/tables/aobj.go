@@ -109,6 +109,9 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 
 func (obj *aobject) PrepareCompact() bool {
 	if obj.RefCount() > 0 {
+		if obj.meta.CheckPrintPrepareCompactLocked() {
+			obj.meta.PrintPrepareCompactDebugLog()
+		}
 		return false
 	}
 

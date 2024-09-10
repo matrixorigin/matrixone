@@ -17,12 +17,11 @@ package mometric
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"path"
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -34,6 +33,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
@@ -85,6 +85,7 @@ const (
 	ColumnSize        = "size"         // result column in `show accounts`, or column in table mo_catalog.mo_account
 	ColumnCreatedTime = "created_time" // column in table mo_catalog.mo_account
 	ColumnStatus      = "status"       // column in table mo_catalog.mo_account
+	ColumnObjectCount = "object_count"
 )
 
 var (
@@ -110,6 +111,7 @@ func GetUpdateStorageUsageInterval() time.Duration {
 func cleanStorageUsageMetric(logger *log.MOLogger, actor string) {
 	// clean metric data for next cron task.
 	metric.StorageUsageFactory.Reset()
+	metric.ObjectCountFactory.Reset()
 	logger.Info("clean storage usage metric", zap.String("actor", actor))
 }
 
@@ -193,6 +195,12 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			}
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
 
+			objectCount, err := result.Float64ValueByName(ctx, rowIdx, ColumnObjectCount)
+			if err != nil {
+				logutil.Error("get object count", zap.Error(err))
+			}
+
+			metric.ObjectCount(account).Set(objectCount)
 			metric.StorageUsage(account).Set(sizeMB)
 		}
 

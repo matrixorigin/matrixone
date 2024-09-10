@@ -56,7 +56,7 @@ func processlist(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 		for i, a := range arg.Attrs {
 			idx, ok := status.SessionField_value[a]
 			if !ok {
-				return false, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", a)
+				return false, moerr.NewInternalErrorf(proc.Ctx, "bad input select columns name %v", a)
 			}
 
 			tp := plan2.SessionsColTypes[idx]
@@ -163,7 +163,7 @@ func processlist(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 		result.Batch = nil
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalErrorf(proc.Ctx, "unknown state %v", arg.ctr.state)
 	}
 }
 
@@ -176,7 +176,7 @@ func isSysTenant(tenant string) bool {
 func fetchSessions(ctx context.Context, tenant string, qc qclient.QueryClient) ([]*status.Session, error) {
 	var nodes []string
 	sysTenant := isSysTenant(tenant)
-	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelector(),
+	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelectAll(),
 		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
 			return true

@@ -15,40 +15,41 @@
 package malloc
 
 import (
-	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type SizeBoundedAllocator struct {
-	upstream Allocator
-	max      uint64
-	counter  *atomic.Uint64
-	funcPool sync.Pool
+	upstream        Allocator
+	max             uint64
+	counter         *atomic.Uint64
+	deallocatorPool *ClosureDeallocatorPool[sizeBoundedDeallocatorArgs, *sizeBoundedDeallocatorArgs]
 }
 
-func NewSizeBoundedAllocator(upstream Allocator, maxSize uint64, counter *atomic.Uint64) *SizeBoundedAllocator {
+type sizeBoundedDeallocatorArgs struct {
+	size uint64
+}
+
+func (sizeBoundedDeallocatorArgs) As(Trait) bool {
+	return false
+}
+
+func NewSizeBoundedAllocator(upstream Allocator, maxSize uint64, counter *atomic.Uint64) (ret *SizeBoundedAllocator) {
 	if counter == nil {
 		counter = new(atomic.Uint64)
 	}
 
-	ret := &SizeBoundedAllocator{
+	ret = &SizeBoundedAllocator{
 		max:      maxSize,
 		upstream: upstream,
 		counter:  counter,
-	}
 
-	ret.funcPool = sync.Pool{
-		New: func() any {
-			argumented := new(argumentedFuncDeallocator[uint64])
-			argumented.fn = func(_ unsafe.Pointer, hints Hints, size uint64) {
-				ret.counter.Add(-size)
-				ret.funcPool.Put(argumented)
-			}
-			return argumented
-		},
+		deallocatorPool: NewClosureDeallocatorPool(
+			func(hints Hints, args *sizeBoundedDeallocatorArgs) {
+				ret.counter.Add(-args.size)
+			},
+		),
 	}
 
 	return ret
@@ -56,7 +57,7 @@ func NewSizeBoundedAllocator(upstream Allocator, maxSize uint64, counter *atomic
 
 var _ Allocator = new(SizeBoundedAllocator)
 
-func (s *SizeBoundedAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
+func (s *SizeBoundedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	for {
 
 		cur := s.counter.Load()
@@ -77,9 +78,12 @@ func (s *SizeBoundedAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointe
 			return nil, nil, err
 		}
 
-		fn := s.funcPool.Get().(*argumentedFuncDeallocator[uint64])
-		fn.SetArgument(size)
-		return ptr, ChainDeallocator(dec, fn), nil
+		return ptr, ChainDeallocator(
+			dec,
+			s.deallocatorPool.Get(sizeBoundedDeallocatorArgs{
+				size: size,
+			}),
+		), nil
 	}
 
 }

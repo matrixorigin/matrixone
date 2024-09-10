@@ -741,7 +741,7 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 // InitCronExpr support min interval 5 min, max 12 hour
 func InitCronExpr(ctx context.Context, duration time.Duration) error {
 	if duration < 0 || duration > 12*time.Hour {
-		return moerr.NewNotSupported(ctx, "export cron expr not support cycle: %v", duration)
+		return moerr.NewNotSupportedf(ctx, "export cron expr not support cycle: %v", duration)
 	}
 	if duration < 5*time.Minute {
 		MergeTaskCronExpr = fmt.Sprintf("@every %.0fs", duration.Seconds())

@@ -126,7 +126,7 @@ func DebugPlan(pl *plan.Plan) string {
 	}
 }
 
-func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings, options *ExplainOptions) error {
+func explainStep(ctx context.Context, step *plan.Node, nodes []*plan.Node, settings *FormatSettings, options *ExplainOptions) error {
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
@@ -216,6 +216,33 @@ func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings,
 					settings.buffer.PushNewLine(buf.String(), false, settings.level)
 				}
 			}
+
+			if nodedescImpl.Node.NodeType == plan.Node_FUZZY_FILTER {
+				buf := bytes.NewBuffer(make([]byte, 0, 360))
+				buf.WriteString("Build on: ")
+				var sinkScan, tableScan *plan.Node
+				for _, childNodeID := range step.Children {
+					index, err := serachNodeIndex(ctx, childNodeID, nodes)
+					if err != nil {
+						return err
+					}
+					childNode := nodes[index]
+					if childNode.NodeType == plan.Node_TABLE_SCAN {
+						tableScan = childNode
+					} else {
+						sinkScan = childNode
+					}
+				}
+				if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.5 {
+					buf.WriteString("TableScan")
+					if step.IfInsertFromUnique {
+						buf.WriteString(" (InsertFromUnique)")
+					}
+				} else {
+					buf.WriteString("SinkScan")
+				}
+				settings.buffer.PushNewLine(buf.String(), false, settings.level)
+			}
 		}
 
 		// print out the actual operation information
@@ -249,7 +276,7 @@ func traversalPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, set
 	if node == nil {
 		return nil
 	}
-	err1 := explainStep(ctx, node, settings, options)
+	err1 := explainStep(ctx, node, Nodes, settings, options)
 	if err1 != nil {
 		return err1
 	}
@@ -278,7 +305,7 @@ func serachNodeIndex(ctx context.Context, nodeID int32, Nodes []*plan.Node) (int
 			return int32(i), nil
 		}
 	}
-	return -1, moerr.NewInvalidInput(ctx, "invliad plan nodeID %d", nodeID)
+	return -1, moerr.NewInvalidInputf(ctx, "invliad plan nodeID %d", nodeID)
 }
 
 func PreOrderPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, graphData *GraphData, options *ExplainOptions) error {

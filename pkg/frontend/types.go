@@ -328,7 +328,7 @@ type FeSession interface {
 	DisableTrace() bool
 	Close()
 	Clear()
-	getCachedPlan(sql string) *cachedPlan
+	getCachedPlan(sql [32]byte) *cachedPlan
 
 	GetFPrints() footPrints
 	ResetFPrints()
@@ -390,6 +390,27 @@ type ExecCtx struct {
 	resper            Responser
 	results           []ExecResult
 	isIssue3482       bool
+}
+
+func (execCtx *ExecCtx) Close() {
+	execCtx.reqCtx = nil
+	execCtx.prepareStmt = nil
+	execCtx.runResult = nil
+	execCtx.stmt = nil
+	execCtx.isLastStmt = false
+	execCtx.tenant = ""
+	execCtx.userName = ""
+	execCtx.sqlOfStmt = ""
+	execCtx.cw = nil
+	execCtx.runner = nil
+	execCtx.loadLocalWriter = nil
+	execCtx.proc = nil
+	execCtx.ses = nil
+	execCtx.cws = nil
+	execCtx.input = nil
+	execCtx.executeParamTypes = nil
+	execCtx.resper = nil
+	execCtx.results = nil
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -468,12 +489,18 @@ func (ses *feSessionImpl) GetFPrints() footPrints {
 func (ses *feSessionImpl) EnterFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addEnter(idx)
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.SetFootPrints(idx, true)
+		}
 	}
 }
 
 func (ses *feSessionImpl) ExitFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addExit(idx)
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.SetFootPrints(idx, false)
+		}
 	}
 }
 
@@ -766,7 +793,7 @@ func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
 	return ses.sesSysVars
 }
 
-func (ses *feSessionImpl) GetSessionSysVar(name string) (interface{}, error) {
+func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())

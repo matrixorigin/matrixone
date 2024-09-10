@@ -1101,3 +1101,86 @@ col2
 drop database db11;
 drop snapshot sp18;
 drop snapshot sp17;
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists rs01;
+create table rs01 (col1 int, col2 decimal(6), col3 varchar(30));
+insert into rs01 values (1, null, 'database');
+insert into rs01 values (2, 38291.32132, 'database');
+insert into rs01 values (3, null, 'database management system');
+insert into rs01 values (4, 10, null);
+insert into rs01 values (1, -321.321, null);
+insert into rs01 values (2, -1, null);
+select count(*) from rs01;
+count(*)
+6
+drop snapshot if exists sp01;
+create snapshot sp01 for account sys;
+select count(*) from rs01 {snapshot = 'sp01'};
+count(*)
+6
+insert into rs01 values (2, -1, null);
+insert into rs01 values (1, -321.321, null);
+select * from rs01;
+col1    col2    col3
+1    null    database
+2    38291    database
+3    null    database management system
+4    10    null
+1    -321    null
+2    -1    null
+2    -1    null
+1    -321    null
+select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
+count(*)
+1
+select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
+dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
+273210    test01    def    create database test01    0    1    2024-08-28 11:34:06    0    
+select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
+attname
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
+col3
+restore account sys from snapshot sp01;
+select count(*) from rs01 {snapshot = 'sp01'};
+count(*)
+6
+select count(*) from rs01 {snapshot = 'sp01'};
+count(*)
+6
+select count(*) from rs01 {snapshot = 'sp01'};
+count(*)
+6
+select count(*) from rs01 {snapshot = 'sp01'};
+count(*)
+6
+select count(*) from rs01 {snapshot = 'sp01'};
+count(*)
+6
+select * from rs01 {snapshot = 'sp01'};
+col1    col2    col3
+1    null    database
+2    38291    database
+3    null    database management system
+4    10    null
+1    -321    null
+2    -1    null
+select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
+count(*)
+1
+select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
+dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
+273210    test01    def    create database test01    0    1    2024-08-28 11:34:06    0    
+select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
+attname
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
+col3
+drop snapshot sp01;
+drop database test01;

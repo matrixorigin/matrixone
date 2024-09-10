@@ -146,13 +146,23 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 			getUpgradeLogger().Info("get current mo cluster latest version",
 				zap.String("latest", v.Version),
-				zap.String("final", final.Version))
+				zap.Uint32("latest versionOffset", v.VersionOffset),
+				zap.String("final", final.Version),
+				zap.Uint32("final versionOffset", final.VersionOffset))
 
 			// cluster is upgrading to v1, only v1's cn can start up.
-			if !v.IsReady() && v.Version != final.Version {
-				panic(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
-					final.Version,
-					v.Version))
+			if !v.IsReady() {
+				if v.Version != final.Version {
+					panic(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
+						final.Version,
+						v.Version))
+				} else if v.VersionOffset != final.VersionOffset {
+					panic(fmt.Sprintf("cannot upgrade to version %s with versionOffset[%d], because version %s with versionOffset[%d] is in upgrading",
+						final.Version,
+						final.VersionOffset,
+						v.Version,
+						v.VersionOffset))
+				}
 			}
 			// cluster is running at v1, cannot startup a old version to join cluster.
 			if v.IsReady() && versions.Compare(final.Version, v.Version) < 0 {
@@ -190,7 +200,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				}
 
 				getUpgradeLogger().Info("final version added",
-					zap.String("final", final.Version))
+					zap.String("final", final.Version), zap.Uint32("versionOffset", final.VersionOffset))
 
 				latest, err := versions.MustGetLatestReadyVersion(txn)
 				if err != nil {
@@ -207,7 +217,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 				var upgrades []versions.VersionUpgrade
 				from := latest
-				append := func(v versions.Version) {
+				appendUpgrade := func(v versions.Version) {
 					order := int32(len(upgrades))
 					u := versions.VersionUpgrade{
 						FromVersion:        from,
@@ -228,12 +238,12 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 				// can upgrade to final version directly.
 				if final.CanDirectUpgrade(latest) {
-					append(final)
+					appendUpgrade(final)
 				} else {
 					for _, v := range s.handles {
 						if versions.Compare(v.Metadata().Version, from) > 0 &&
 							v.Metadata().CanDirectUpgrade(from) {
-							append(v.Metadata())
+							appendUpgrade(v.Metadata())
 							from = v.Metadata().Version
 						}
 					}
@@ -290,6 +300,8 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 			return
 		case <-timer.C:
 			if s.upgrade.finalVersionCompleted.Load() {
+				getUpgradeLogger().Info("discovery completed the final version upgrade",
+					zap.String("final", s.getFinalVersionHandle().Metadata().Version))
 				return
 			}
 
@@ -307,7 +319,6 @@ func (s *service) performUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) (bool, error) {
 	final := s.getFinalVersionHandle().Metadata()
-
 	// make sure only one cn can execute upgrade logic
 	state, ok, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, true)
 	if err != nil {

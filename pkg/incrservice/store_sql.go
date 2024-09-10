@@ -190,7 +190,7 @@ func (s *sqlStore) Allocate(
 						return err
 					}
 					trace.GetService().Sync()
-					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
+					getLogger().Error("pre lock released by lock table changed",
 						zap.String("update-sql", sql),
 						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),
@@ -198,6 +198,8 @@ func (s *sqlStore) Allocate(
 						zap.Uint64("affected-rows", res.AffectedRows),
 						zap.Duration("cost", time.Since(start)),
 						zap.Bool("ctx-done", ctxDone()))
+					retry = true
+					return moerr.NewTxnNeedRetryNoCtx()
 				}
 				res.Close()
 				return nil

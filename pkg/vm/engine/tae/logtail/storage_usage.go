@@ -109,9 +109,26 @@ type UsageData struct {
 	Size  uint64
 
 	special triode
+
+	// this will not persist
+	// only global ckp will update
+	ObjectAbstract
 }
 
-var zeroUsageData UsageData = UsageData{math.MaxUint32, math.MaxUint64, math.MaxUint64, math.MaxInt64, unknown}
+type ObjectAbstract struct {
+	TotalObjCnt  int
+	TotalObjSize int
+	TotalBlkCnt  int
+	TotalRowCnt  int
+}
+
+var zeroUsageData UsageData = UsageData{
+	AccId:   math.MaxUint32,
+	DbId:    math.MaxUint64,
+	TblId:   math.MaxUint64,
+	Size:    math.MaxInt64,
+	special: unknown,
+}
 
 // MockUsageData generates accCnt * dbCnt * tblCnt UsageDatas.
 // the accIds, dbIds and tblIds are random produced.
@@ -140,6 +157,29 @@ func MockUsageData(accCnt, dbCnt, tblCnt int, allocator *atomic.Uint64) (result 
 func (u UsageData) String() string {
 	return fmt.Sprintf("account id = %d; database id = %d; table id = %d; size = %d",
 		u.AccId, u.DbId, u.TblId, u.Size)
+}
+
+func (u *UsageData) Merge(other UsageData, delete bool) {
+	if delete {
+		if u.Size <= other.Size {
+			u.Size = 0
+			u.TotalObjSize = 0
+		} else {
+			u.Size -= other.Size
+			u.TotalObjSize -= other.TotalObjSize
+		}
+
+		u.TotalObjCnt -= other.TotalObjCnt
+		u.TotalRowCnt -= other.TotalRowCnt
+		u.TotalBlkCnt -= other.TotalBlkCnt
+
+	} else {
+		u.Size += other.Size
+		u.TotalObjSize += other.TotalObjSize
+		u.TotalObjCnt += other.TotalObjCnt
+		u.TotalRowCnt += other.TotalRowCnt
+		u.TotalBlkCnt += other.TotalBlkCnt
+	}
 }
 
 func (u UsageData) IsZero() bool {
@@ -256,6 +296,21 @@ func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint64]uint64) {
 	usages = make(map[uint64]uint64)
 	c.data.Scan(func(item UsageData) bool {
 		usages[item.AccId] += item.Size
+		return true
+	})
+
+	return
+}
+
+func (c *StorageUsageCache) GatherObjectAbstractForAccounts() (abstract map[uint64]ObjectAbstract) {
+	abstract = make(map[uint64]ObjectAbstract)
+	c.data.Scan(func(item UsageData) bool {
+		a := abstract[item.AccId]
+		a.TotalObjCnt += item.TotalObjCnt
+		a.TotalObjSize += item.TotalObjSize
+		a.TotalBlkCnt += item.TotalBlkCnt
+		a.TotalRowCnt += item.TotalRowCnt
+		abstract[item.AccId] = a
 		return true
 	})
 
@@ -424,6 +479,10 @@ func (m *TNUsageMemo) gatherAccountSizeHelper(cache *StorageUsageCache, id uint6
 	return cache.GatherAccountSize(id)
 }
 
+func (m *TNUsageMemo) GatherObjectAbstractForAllAccount() map[uint64]ObjectAbstract {
+	return m.cache.GatherObjectAbstractForAccounts()
+}
+
 func (m *TNUsageMemo) GatherAccountSize(id uint64) (size uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.cache, id)
 }
@@ -526,6 +585,8 @@ func (m *TNUsageMemo) updateHelper(cache *StorageUsageCache, usage UsageData, de
 	if old, found := cache.Get(usage); found {
 		size = old.Size
 		special = old.special
+
+		usage.ObjectAbstract = old.ObjectAbstract
 	}
 	usage.special = special
 
@@ -576,8 +637,10 @@ func (m *TNUsageMemo) applyDeletes(
 			dbs = append(dbs, e)
 		case *catalog.TableEntry:
 			piovt := UsageData{
-				uint64(e.GetDB().GetTenantID()),
-				e.GetDB().GetID(), e.GetID(), 0, unknown}
+				AccId:   uint64(e.GetDB().GetTenantID()),
+				DbId:    e.GetDB().GetID(),
+				TblId:   e.GetID(),
+				special: unknown}
 			if usage, exist := m.cache.Get(piovt); exist {
 				appendToStorageUsageBat(ckpData, usage, true, mp)
 				m.Delete(usage)
@@ -594,7 +657,10 @@ func (m *TNUsageMemo) applyDeletes(
 	usages := make([]UsageData, 0)
 	for _, db := range dbs {
 		iter := m.cache.Iter()
-		iter.Seek(UsageData{uint64(db.GetTenantID()), db.ID, 0, 0, unknown})
+		iter.Seek(UsageData{
+			AccId:   uint64(db.GetTenantID()),
+			DbId:    db.ID,
+			special: unknown})
 
 		if !isSameDBFunc(iter.Item(), db) {
 			iter.Release()
@@ -689,7 +755,12 @@ func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, string
 
 func (m *TNUsageMemo) deleteAccount(accId uint64) (size uint64) {
 	trash := make([]UsageData, 0)
-	povit := UsageData{accId, 0, 0, 0, unknown}
+	povit := UsageData{
+		AccId:   accId,
+		DbId:    0,
+		TblId:   0,
+		Size:    0,
+		special: unknown}
 
 	iter := m.cache.Iter()
 
@@ -768,7 +839,12 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		var skip bool
 		var log string
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y], unknown}
+			usage := UsageData{
+				AccId:   accCol[y],
+				DbId:    dbCol[y],
+				TblId:   tblCol[y],
+				Size:    sizeCol[y],
+				special: unknown}
 
 			// these ckps, older than version 11, haven't del bat, we need clear the
 			// usage data which belongs the deleted databases or tables.
@@ -805,7 +881,7 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
 
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y], unknown}
+			usage := UsageData{AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y], Size: sizeCol[y], special: unknown}
 			m.DeltaUpdate(usage, true)
 		}
 	}
@@ -904,14 +980,26 @@ func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp
 	}
 }
 
-func objects2Usages(objs []*catalog.ObjectEntry) (usages []UsageData) {
+func Objects2Usages(objs []*catalog.ObjectEntry, isGlobal bool) (usages []UsageData) {
 	toUsage := func(obj *catalog.ObjectEntry) UsageData {
-		return UsageData{
+		usage := UsageData{
 			DbId:  obj.GetTable().GetDB().GetID(),
 			Size:  uint64(obj.GetCompSize()),
 			TblId: obj.GetTable().GetID(),
 			AccId: uint64(obj.GetTable().GetDB().GetTenantID()),
 		}
+
+		if isGlobal {
+			stats := obj.GetObjectStats()
+			usage.ObjectAbstract = ObjectAbstract{
+				TotalBlkCnt:  int(stats.BlkCnt()),
+				TotalObjCnt:  1,
+				TotalObjSize: int(obj.GetCompSize()),
+				TotalRowCnt:  int(stats.Rows()),
+			}
+		}
+
+		return usage
 	}
 
 	for idx := range objs {
@@ -936,18 +1024,22 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 
 	var buf bytes.Buffer
 
-	tblChanges := make(map[[3]uint64]int64)
+	tblChanges := make(map[[3]uint64]UsageData)
 
-	usages := objects2Usages(collector.Usage.ObjDeletes)
+	usages := Objects2Usages(collector.Usage.ObjInserts, true)
 	for idx := range usages {
 		uniqueTbl := [3]uint64{usages[idx].AccId, usages[idx].DbId, usages[idx].TblId}
-		tblChanges[uniqueTbl] -= int64(usages[idx].Size)
+		final := tblChanges[uniqueTbl]
+		final.Merge(usages[idx], false)
+		tblChanges[uniqueTbl] = final
 	}
 
-	usages = objects2Usages(collector.Usage.ObjInserts)
+	usages = Objects2Usages(collector.Usage.ObjDeletes, true)
 	for idx := range usages {
 		uniqueTbl := [3]uint64{usages[idx].AccId, usages[idx].DbId, usages[idx].TblId}
-		tblChanges[uniqueTbl] += int64(usages[idx].Size)
+		final := tblChanges[uniqueTbl]
+		final.Merge(usages[idx], true)
+		tblChanges[uniqueTbl] = final
 	}
 
 	delDbs := make(map[uint64]struct{})
@@ -967,9 +1059,9 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 
 	memo.GetCache().ClearForUpdate()
 
-	for uniqueTbl, size := range tblChanges {
-		if size <= 0 {
-			size = 0
+	for uniqueTbl, usage := range tblChanges {
+		if usage.Size <= 0 {
+			usage.Size = 0
 		}
 
 		if _, ok := delDbs[uniqueTbl[1]]; ok {
@@ -981,19 +1073,20 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 		}
 
 		memo.Replace(UsageData{
-			Size:  uint64(size),
-			TblId: uniqueTbl[2],
-			DbId:  uniqueTbl[1],
-			AccId: uniqueTbl[0],
+			Size:           uint64(usage.Size),
+			TblId:          uniqueTbl[2],
+			DbId:           uniqueTbl[1],
+			AccId:          uniqueTbl[0],
+			ObjectAbstract: usage.ObjectAbstract,
 		})
 
 		if len(memo.pendingReplay.delayed) == 0 {
 			continue
 		}
 
-		if usage, ok := memo.pendingReplay.delayed[uniqueTbl[2]]; ok {
+		if uu, ok := memo.pendingReplay.delayed[uniqueTbl[2]]; ok {
 			buf.WriteString(fmt.Sprintf("[u-tbl]%d_%d_%d_(o)%d_(n)%d; ",
-				usage.AccId, usage.DbId, usage.TblId, usage.Size, size))
+				uu.AccId, uu.DbId, uu.TblId, uu.Size, usage.Size))
 
 			delete(memo.pendingReplay.delayed, uniqueTbl[2])
 		}
@@ -1007,14 +1100,14 @@ func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 
 	// must apply seg insert first
 	// step 1: apply seg insert (non-appendable, committed)
-	usage := objects2Usages(collector.Usage.ObjInserts)
+	usage := Objects2Usages(collector.Usage.ObjInserts, false)
 	tnUsageMemo.applySegInserts(usage, collector.data, collector.Allocator())
 
 	// step 2: apply db, tbl deletes
 	log := tnUsageMemo.applyDeletes(collector.Usage.Deletes, collector.data, collector.Allocator())
 
 	// step 3: apply seg deletes
-	usage = objects2Usages(collector.Usage.ObjDeletes)
+	usage = Objects2Usages(collector.Usage.ObjDeletes, false)
 	tnUsageMemo.applySegDeletes(usage, collector.data, collector.Allocator())
 
 	return log
@@ -1070,26 +1163,26 @@ func doSummary(ckp string, fields ...zap.Field) {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("\nCKP[%s]\t%s\n", ckp, time.Now().UTC().String()))
 
-	format := "\t%19d\t%19d\t%19d\t%19.6fmb"
+	//format := "\t%19d\t%19d\t%19d\t%19.6fmb"
 	accumulated := int64(0)
 
 	for idx := range summaryLog[0] {
-		buf.WriteString(fmt.Sprintf(format+" -> i\n",
-			summaryLog[0][idx].AccId,
-			summaryLog[0][idx].DbId,
-			summaryLog[0][idx].TblId,
-			float64(summaryLog[0][idx].Size)/(1024*1024)))
+		//buf.WriteString(fmt.Sprintf(format+" -> i\n",
+		//	summaryLog[0][idx].AccId,
+		//	summaryLog[0][idx].DbId,
+		//	summaryLog[0][idx].TblId,
+		//	float64(summaryLog[0][idx].Size)/(1024*1024)))
 
 		accumulated += int64(summaryLog[0][idx].Size)
 	}
 
 	for idx := range summaryLog[1] {
-		buf.WriteString(fmt.Sprintf(format+" -> d\n",
-			summaryLog[1][idx].AccId,
-			summaryLog[1][idx].DbId,
-			summaryLog[1][idx].TblId,
-			float64(summaryLog[1][idx].Size)/(1024*1024)))
-
+		//buf.WriteString(fmt.Sprintf(format+" -> d\n",
+		//	summaryLog[1][idx].AccId,
+		//	summaryLog[1][idx].DbId,
+		//	summaryLog[1][idx].TblId,
+		//	float64(summaryLog[1][idx].Size)/(1024*1024)))
+		//
 		accumulated -= int64(summaryLog[1][idx].Size)
 	}
 
@@ -1226,11 +1319,11 @@ func cnBatchToUsageDatas(bat *batch.Batch) []UsageData {
 
 	for idx := range accCol {
 		usages = append(usages, UsageData{
-			accCol[idx],
-			dbCol[idx],
-			tblCol[idx],
-			sizeCol[idx],
-			unknown,
+			AccId:   accCol[idx],
+			DbId:    dbCol[idx],
+			TblId:   tblCol[idx],
+			Size:    sizeCol[idx],
+			special: unknown,
 		})
 	}
 	return usages

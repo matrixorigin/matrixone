@@ -62,11 +62,11 @@ type TxnCompilerContext struct {
 }
 
 func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
-	lower := int64(0)
-	if val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names"); err != nil {
-		lower = val.(int64)
+	val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		val = int64(1)
 	}
-	return lower
+	return val.(int64)
 }
 
 func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
@@ -152,6 +152,12 @@ func (tcc *TxnCompilerContext) SetDatabase(db string) {
 	tcc.dbName = db
 }
 
+func (tcc *TxnCompilerContext) GetDatabase() string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.dbName
+}
+
 func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
@@ -221,7 +227,7 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot plan2.Snaps
 	}
 	databaseId, err := strconv.ParseUint(database.GetDatabaseId(tempCtx), 10, 64)
 	if err != nil {
-		return 0, moerr.NewInternalError(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
+		return 0, moerr.NewInternalErrorf(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
 }
@@ -610,7 +616,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 
 		return nil, err
 	} else {
-		return nil, moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+		return nil, moerr.NewNotSupportedf(ctx, "function or operator '%s'", name)
 	}
 }
 
@@ -700,7 +706,7 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 			}
 			accountIds = append(accountIds, uint32(targetAccountId))
 		} else {
-			return nil, moerr.NewInternalError(ctx, "there is no account %s", name)
+			return nil, moerr.NewInternalErrorf(ctx, "there is no account %s", name)
 		}
 	}
 	return accountIds, err

@@ -348,7 +348,7 @@ func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 		op := p.UuidsToRegIdx[i]
 		uid, err := uuid.FromBytes(op.GetUuid())
 		if err != nil {
-			return moerr.NewInternalErrorNoCtx("decode uuid failed: %s\n", err)
+			return moerr.NewInternalErrorNoCtxf("decode uuid failed: %s\n", err)
 		}
 		s.RemoteReceivRegInfos[i] = RemoteReceivRegInfo{
 			Idx:      int(op.GetIdx()),
@@ -526,9 +526,11 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *fuzzyfilter.Argument:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
-			N:      float32(t.N),
-			PkName: t.PkName,
-			PkTyp:  t.PkTyp,
+			N:                  float32(t.N),
+			PkName:             t.PkName,
+			PkTyp:              t.PkTyp,
+			BuildIdx:           int32(t.BuildIdx),
+			IfInsertFromUnique: t.IfInsertFromUnique,
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
@@ -957,6 +959,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.N = float64(t.N)
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
+		arg.IfInsertFromUnique = t.IfInsertFromUnique
 		v.Arg = arg
 	case vm.Anti:
 		t := opr.GetAnti()

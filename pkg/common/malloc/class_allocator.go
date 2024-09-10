@@ -16,7 +16,6 @@ package malloc
 
 import (
 	"math/bits"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -52,7 +51,7 @@ func NewClassAllocator[T FixedSizeAllocator](
 
 var _ Allocator = new(ClassAllocator[*fixedSizeMmapAllocator])
 
-func (c *ClassAllocator[T]) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
+func (c *ClassAllocator[T]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	if size == 0 {
 		return nil, nil, moerr.NewInternalErrorNoCtx("invalid allocate size: 0")
 	}
@@ -66,7 +65,12 @@ func (c *ClassAllocator[T]) Allocate(size uint64, hints Hints) (unsafe.Pointer, 
 		i = bits.Len64(size) - 1
 	}
 	if i >= len(c.classes) {
-		return nil, nil, moerr.NewInternalErrorNoCtx("cannot allocate %v bytes: too large", size)
+		return nil, nil, moerr.NewInternalErrorNoCtxf("cannot allocate %v bytes: too large", size)
 	}
-	return c.classes[i].allocator.Allocate(hints)
+	slice, dec, err := c.classes[i].allocator.Allocate(hints)
+	if err != nil {
+		return nil, nil, err
+	}
+	slice = slice[:size]
+	return slice, dec, nil
 }

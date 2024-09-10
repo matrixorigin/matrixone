@@ -54,6 +54,8 @@ func init() {
 	registry.MustRegister(HeartbeatFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
+	registry.MustRegister(statsTriggerCounter)
+	registry.MustRegister(StatsUpdateBlockCounter)
 }
 
 func initMemMetrics() {
@@ -186,6 +188,7 @@ func initFrontendMetrics() {
 	registry.MustRegister(requestCounter)
 	registry.MustRegister(resolveDurationHistogram)
 	registry.MustRegister(createAccountDurationHistogram)
+	registry.MustRegister(sqlLengthHistogram)
 }
 
 func initPipelineMetrics() {

@@ -375,4 +375,6 @@ message TxnOptions {
     bool inRollback = 13;
     bool byBegin = 14;//created by the BEGIN statement
     bool autocommit = 15;//AUTOCOMMIT
+    bool inIncrStmt = 16;
+    bool inRollbackStmt = 17;
 }

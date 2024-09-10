@@ -17,7 +17,6 @@ package lockop
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -70,7 +69,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		arg.rt.fetchers = append(arg.rt.fetchers,
 			GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
 	}
-	arg.rt.parker = types.NewPacker(proc.Mp())
+	arg.rt.parker = types.NewPacker()
 	arg.rt.retryError = nil
 	arg.rt.step = stepLock
 	if arg.block {
@@ -301,8 +300,8 @@ func LockTable(
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(true, changeDef).
@@ -346,8 +345,8 @@ func LockRows(
 		return nil
 	}
 
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
@@ -463,6 +462,11 @@ func doLock(
 	key := txnOp.AddWaitLock(tableID, rows, options)
 	defer txnOp.RemoveWaitLock(key)
 
+	table := tableID
+	if opts.sharding == lock.Sharding_ByRow {
+		table = lockservice.ShardingByRow(rows[0])
+	}
+
 	var err error
 	var result lock.Result
 	for {
@@ -472,7 +476,7 @@ func doLock(
 			rows,
 			txn.ID,
 			options)
-		if !canRetryLock(txnOp, err) {
+		if !canRetryLock(table, txnOp, err) {
 			break
 		}
 	}
@@ -518,9 +522,9 @@ func doLock(
 	lockedTS := result.Timestamp
 
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
-	if !result.HasConflict &&
+	if result.NewLockAdd && // only check when new lock added, reentrant lock can skip check
+		!result.HasConflict &&
 		snapshotTS.LessEq(lockedTS) && // only retry when snapshotTS <= lockedTS, means lost some update in rc mode.
-		!txnOp.IsRetry() &&
 		txnOp.Txn().IsRCIsolation() {
 
 		// wait last committed logtail applied
@@ -592,12 +596,13 @@ func doLock(
 
 const defaultWaitTimeOnRetryLock = time.Second
 
-func canRetryLock(txn client.TxnOperator, err error) bool {
+func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
-	if txn.LockTableCount() > 0 {
+	if txn.LockTableCount() > 0 &&
+		txn.HasLockTable(table) {
 		return false
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
@@ -606,8 +611,7 @@ func canRetryLock(txn client.TxnOperator, err error) bool {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
-		errors.Is(err, context.DeadlineExceeded) {
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
@@ -844,7 +848,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		return
 	}
 	if arg.rt.parker != nil {
-		arg.rt.parker.FreeMem()
+		arg.rt.parker.Close()
 	}
 	arg.rt.retryError = nil
 	arg.cleanCachedBatch(proc)

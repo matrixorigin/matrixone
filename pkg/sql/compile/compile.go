@@ -505,7 +505,12 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	v2.TxnStatementTotalCounter.Inc()
 	runC = c
 	for {
+		// Before compile.runOnce, reset `StatsInfo` IO resources which in sql context
+		stats.ResetIOAccessTimeConsumption()
+		stats.ResetIOMergerTimeConsumption()
+
 		if err = runC.runOnce(); err == nil {
+			c.fillS3ToNodeAnalyzeInfo(runC)
 			break
 		}
 
@@ -547,11 +552,41 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		return nil, c.proc.Ctx.Err()
 	}
 	result.AffectRows = runC.getAffectedRows()
+	if c.uid != "mo_logger" && strings.Contains(strings.ToLower(c.sql), "insert") && (strings.Contains(c.sql, "{MO_TS =") || strings.Contains(c.sql, "{SNAPSHOT =")) {
+		getLogger().Info("insert into with snapshot", zap.String("sql", c.sql), zap.Uint64("affectRows", result.AffectRows))
+	}
 
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 	return result, nil
+}
+
+// hasValidQueryPlan Check if SQL has a query plan
+func (c *Compile) hasValidQueryPlan() bool {
+	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
+		if qry.Query.StmtType != plan.Query_REPLACE {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Compile) fillS3ToNodeAnalyzeInfo(runC *Compile) {
+	if !c.hasValidQueryPlan() {
+		return
+	}
+	// record the number of s3 requests
+	c.anal.S3IOInputCount(c.anal.curr, runC.counterSet.FileService.S3.Put.Load())
+	c.anal.S3IOInputCount(c.anal.curr, runC.counterSet.FileService.S3.List.Load())
+
+	c.anal.S3IOOutputCount(c.anal.curr, runC.counterSet.FileService.S3.Head.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, runC.counterSet.FileService.S3.Get.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, runC.counterSet.FileService.S3.Delete.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, runC.counterSet.FileService.S3.DeleteMulti.Load())
+
+	atomic.StoreInt64(&c.anal.qry.Nodes[c.anal.curr].AnalyzeInfo.S3IOInputCount, atomic.LoadInt64(&c.anal.S3IOInputCountV1))
+	atomic.StoreInt64(&c.anal.qry.Nodes[c.anal.curr].AnalyzeInfo.S3IOOutputCount, atomic.LoadInt64(&c.anal.S3IOOutputCountV1))
 }
 
 func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
@@ -669,16 +704,14 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if len(c.fuzzys) > 0 {
-		for _, f := range c.fuzzys {
-			if f != nil && f.cnt > 0 {
-				if f.cnt > 10 {
-					c.proc.Warnf(c.proc.Ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
-				}
-				err = f.backgroundSQLCheck(c)
-				if err != nil {
-					return err
-				}
+	for _, f := range c.fuzzys {
+		if f != nil && f.cnt > 0 {
+			if f.cnt > 10 {
+				c.proc.Debugf(c.proc.Ctx, "double check dup for `%s`.`%s`:collision cnt is %d, may be too high", f.db, f.tbl, f.cnt)
+			}
+			err = f.backgroundSQLCheck(c)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -1225,6 +1258,21 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 	}()
 	n := ns[curNodeIdx]
+
+	if n.Limit != nil {
+		if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
+			if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				if cval.U64Val == 0 {
+					// optimize for limit 0
+					rs := newScope(Merge)
+					rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+					rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+					return c.compileLimit(n, []*Scope{rs}), nil
+				}
+			}
+		}
+	}
+
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := newScope(Normal)
@@ -2968,7 +3016,6 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
-
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
@@ -3001,7 +3048,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(c, n, ns[n.Children[1]])
+	arg := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
@@ -3759,13 +3806,13 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 
 func (c *Compile) fillAnalyzeInfo() {
 	// record the number of s3 requests
-	c.anal.S3IOInputCount(c.anal.curr, c.counterSet.FileService.S3.Put.Load())
-	c.anal.S3IOInputCount(c.anal.curr, c.counterSet.FileService.S3.List.Load())
-
-	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Head.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Get.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Delete.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.DeleteMulti.Load())
+	//c.anal.S3IOInputCount(c.anal.curr, c.counterSet.FileService.S3.Put.Load())
+	//c.anal.S3IOInputCount(c.anal.curr, c.counterSet.FileService.S3.List.Load())
+	//
+	//c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Head.Load())
+	//c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Get.Load())
+	//c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Delete.Load())
+	//c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.DeleteMulti.Load())
 
 	for i, anal := range c.anal.analInfos {
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputRows, atomic.LoadInt64(&anal.InputRows))
@@ -4013,7 +4060,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		if len(n.AggList) == 1 && n.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
 			for i := 1; i < ranges.Len(); i++ {
 				blk := ranges.(*objectio.BlockInfoSlice).Get(i)
-				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
+				if blk.EntryState || !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 					newranges = append(newranges, ranges.(*objectio.BlockInfoSlice).GetBytes(i)...)
 					continue
 				}

@@ -53,6 +53,10 @@ type Router interface {
 	// SelectByConnID selects the CN server which has the connection ID.
 	SelectByConnID(connID uint32) (*CNServer, error)
 
+	// AllServers returns all CN servers. Note that the request user have to be
+	// sys tenant.
+	AllServers() ([]*CNServer, error)
+
 	// Connect connects to the CN server and returns the connection.
 	// It should take a handshakeResp as a parameter, which is the auth
 	// request from client including tenant, username, database and others.
@@ -132,6 +136,7 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 type router struct {
 	rebalancer *rebalancer
 	moCluster  clusterservice.MOCluster
+	sqlRouter  SQLRouter
 	test       bool
 
 	// timeout configs.
@@ -159,12 +164,14 @@ func withAuthTimeout(t time.Duration) routeOption {
 func newRouter(
 	mc clusterservice.MOCluster,
 	r *rebalancer,
+	sqlRouter SQLRouter,
 	test bool,
 	opts ...routeOption,
 ) Router {
 	rt := &router{
 		rebalancer: r,
 		moCluster:  mc,
+		sqlRouter:  sqlRouter,
 		test:       test,
 	}
 	for _, opt := range opts {
@@ -178,7 +185,11 @@ func newRouter(
 
 // SelectByConnID implements the Router interface.
 func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
-	cn := r.rebalancer.connManager.getCNServerByConnID(connID)
+	cn, err := r.sqlRouter.GetCNServerByConnID(connID)
+	if err != nil {
+		logutil.Errorf("failed to get cn server by conn id %d: %v", connID, err)
+		return nil, err
+	}
 	if cn == nil {
 		return nil, noCNServerErr
 	}
@@ -189,6 +200,20 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 		uuid:   cn.uuid,
 		addr:   cn.addr,
 	}, nil
+}
+
+// AllServers implements the Router interface.
+func (r *router) AllServers() ([]*CNServer, error) {
+	var cns []*CNServer
+	route.RouteForSuperTenant(
+		clusterservice.NewSelectAll(), "dump", nil,
+		func(s *metadata.CNService) {
+			cns = append(cns, &CNServer{
+				uuid: s.ServiceID,
+				addr: s.SQLAddress,
+			})
+		})
+	return cns, nil
 }
 
 // selectForSuperTenant is used to select CN servers for sys tenant.

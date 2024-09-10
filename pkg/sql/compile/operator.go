@@ -506,6 +506,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.N = t.N
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
+		arg.BuildIdx = t.BuildIdx
 		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -574,7 +575,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	return arg
 }
 
-func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument {
+func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
@@ -591,9 +592,34 @@ func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
-	arg.N = right.Stats.Outcnt
-	if len(n.RuntimeFilterBuildList) > 0 {
-		arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+	arg.IfInsertFromUnique = n.IfInsertFromUnique
+
+	if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.3 {
+		// build on tableScan, because the existing data is significantly less than the data to be inserted
+		// this will happend
+		arg.BuildIdx = 0
+		if arg.IfInsertFromUnique {
+			// probe on sinkScan with test
+			arg.N = tableScan.Stats.Cost
+		} else {
+			// probe on sinkScan with test and add
+			arg.N = sinkScan.Stats.Cost + tableScan.Stats.Cost
+		}
+	} else {
+		// build on sinkScan, as tableScan can guarantee uniqueness, probe on tableScan with test
+		arg.BuildIdx = 1
+		arg.N = sinkScan.Stats.Cost
+	}
+
+	// currently can not build runtime filter on table scan and probe it on sink scan
+	// so only use runtime filter when build on sink scan
+	if arg.BuildIdx == 1 {
+		if len(n.RuntimeFilterBuildList) > 0 {
+			arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+		}
+	} else {
+		tableScan.RuntimeFilterProbeList = nil
+		n.RuntimeFilterBuildList = nil
 	}
 	return arg
 }
@@ -829,7 +855,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "semi result '%s'", expr))
+			panic(moerr.NewNYIf(proc.Ctx, "semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -947,7 +973,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "anti result '%s'", expr))
+			panic(moerr.NewNYIf(proc.Ctx, "anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1464,7 +1490,7 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
+			panic(moerr.NewNYIf(proc.Ctx, "loop semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1492,7 +1518,7 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
+			panic(moerr.NewNYIf(proc.Ctx, "loop semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1532,7 +1558,7 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "loop anti result '%s'", expr))
+			panic(moerr.NewNYIf(proc.Ctx, "loop anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1552,7 +1578,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 		} else if rel == -1 {
 			result[i] = -1
 		} else {
-			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
+			panic(moerr.NewNYIf(proc.Ctx, "loop mark result '%s'", expr))
 		}
 	}
 	arg := loopmark.NewArgument()
@@ -1783,7 +1809,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 
 	default:
 		ret.Release()
-		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", in.Op))
+		panic(moerr.NewInternalErrorf(proc.Ctx, "unsupport join type '%v'", in.Op))
 	}
 	return ret
 }
@@ -1791,7 +1817,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 func constructJoinResult(expr *plan.Expr, proc *process.Process) (int32, int32) {
 	e, ok := expr.Expr.(*plan.Expr_Col)
 	if !ok {
-		panic(moerr.NewNYI(proc.Ctx, "join result '%s'", expr))
+		panic(moerr.NewNYIf(proc.Ctx, "join result '%s'", expr))
 	}
 	return e.Col.RelPos, e.Col.ColPos
 }
@@ -1810,7 +1836,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	if e, ok := expr.Expr.(*plan.Expr_Lit); ok { // constant bool
 		b, ok := e.Lit.Value.(*plan.Literal_Bval)
 		if !ok {
-			panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
+			panic(moerr.NewNYIf(proc.Ctx, "join condition '%s'", expr))
 		}
 		if b.Bval {
 			return expr, expr
@@ -1826,7 +1852,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !plan2.IsEqualFunc(e.F.Func.GetObj()) {
-		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
+		panic(moerr.NewNYIf(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
 		return e.F.Args[1], e.F.Args[0]

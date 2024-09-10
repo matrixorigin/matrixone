@@ -1384,7 +1384,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			mp[v] = true
 		}
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
+		panic(moerr.NewInternalErrorNoCtxf("%s not supported", pk.GetType().String()))
 	}
 
 	return func(vec *vector.Vector) []int32 {
@@ -1585,7 +1585,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 				}
 			}
 		default:
-			panic(moerr.NewInternalErrorNoCtx("%s not supported", vec.GetType().String()))
+			panic(moerr.NewInternalErrorNoCtxf("%s not supported", vec.GetType().String()))
 		}
 		return sels
 	}
@@ -1747,8 +1747,8 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 			types.T_array_float32, types.T_array_float64:
-			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.MustBytesCol(vec))
-			unSortedSearchFunc = vector.VarlenLinearSearchOffsetByValFactory(vector.MustBytesCol(vec))
+			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
+			unSortedSearchFunc = vector.VarlenLinearSearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
 		case types.T_enum:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Enum](vec))
 			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Enum](vec), nil)

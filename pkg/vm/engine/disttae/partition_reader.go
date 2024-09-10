@@ -125,6 +125,8 @@ func (p *PartitionReader) prepare() error {
 	return nil
 }
 
+// PartitionReader.Read reads memory data which comes from partitionState.rows and txn.writes,
+// and load its tombstones.
 func (p *PartitionReader) Read(
 	_ context.Context,
 	colNames []string,
@@ -134,7 +136,7 @@ func (p *PartitionReader) Read(
 	if p == nil {
 		return
 	}
-	// prepare the data for read.
+	// prepare the memory data and its tombstones for read.
 	if err = p.prepare(); err != nil {
 		return nil, err
 	}

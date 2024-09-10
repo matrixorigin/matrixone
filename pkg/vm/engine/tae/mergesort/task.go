@@ -47,6 +47,8 @@ type MergeTaskHost interface {
 	Name() string
 	HostHintName() string
 	GetCommitEntry() *api.MergeCommitEntry
+	InitTransferMaps(blkCnt int)
+	GetTransferMaps() *api.TransferMaps
 	PrepareNewWriter() *blockio.BlockWriter
 	DoTransfer() bool
 	GetObjectCnt() int
@@ -59,10 +61,6 @@ type MergeTaskHost interface {
 	GetBlockMaxRows() uint32
 	GetObjectMaxBlocks() uint16
 	GetTargetObjSize() uint32
-}
-
-func initTransferMapping(e *api.MergeCommitEntry, blkcnt int) {
-	e.Booking = NewBlkTransferBooking(blkcnt)
 }
 
 func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*batch.Batch, func()) {

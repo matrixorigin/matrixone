@@ -184,7 +184,7 @@ func (c *CompilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (
 	}
 	databaseId, err := strconv.ParseUint(database.GetDatabaseId(ctx), 10, 64)
 	if err != nil {
-		return 0, moerr.NewInternalError(ctx, "The databaseid of '%s' is not a valid number", dbName)
+		return 0, moerr.NewInternalErrorf(ctx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
 }

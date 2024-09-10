@@ -638,28 +638,19 @@ func (ses *Session) IsBackgroundSession() bool {
 	return false
 }
 
-func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
-	if len(sql) == 0 {
-		return
-	}
+func (ses *Session) cachePlan(sql [32]byte, stmts []tree.Statement, plans []*plan.Plan) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.cache(sql, stmts, plans)
 }
 
-func (ses *Session) getCachedPlan(sql string) *cachedPlan {
-	if len(sql) == 0 {
-		return nil
-	}
+func (ses *Session) getCachedPlan(sql [32]byte) *cachedPlan {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.planCache.get(sql)
 }
 
-func (ses *Session) isCached(sql string) bool {
-	if len(sql) == 0 {
-		return false
-	}
+func (ses *Session) isCached(sql [32]byte) bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.planCache.isCached(sql)
@@ -901,7 +892,7 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
-			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
+			return moerr.NewInvalidStatef(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
 		}
 	} else {
 		stmt.Close()
@@ -930,7 +921,7 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 		connID = ses.respr.GetU32(CONNID)
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
-	return nil, moerr.NewInvalidState(ctx, "prepared statement '%s' does not exist", name)
+	return nil, moerr.NewInvalidStatef(ctx, "prepared statement '%s' does not exist", name)
 }
 
 func (ses *Session) GetPrepareStmts() []*PrepareStmt {
@@ -1052,7 +1043,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError(sysTenantCtx, "there is no tenant %s", tenant.GetTenant())
+		return nil, moerr.NewInternalErrorf(sysTenantCtx, "there is no tenant %s", tenant.GetTenant())
 	}
 
 	//account id
@@ -1074,10 +1065,11 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
-		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
+		return nil, moerr.NewInternalErrorf(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
+		logutil.Infof("[set restricted] init session, init account id %d, connection id %d restricted", tenantID, ses.GetConnectionID())
 		ses.getRoutine().setResricted(true)
 	} else {
 		ses.getRoutine().setResricted(false)
@@ -1104,7 +1096,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError(tenantCtx, "there is no user %s", tenant.GetUser())
+		return nil, moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser())
 	}
 
 	userID, err = rsset[0].GetInt64(tenantCtx, 0, 0)
@@ -1154,7 +1146,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
+			return nil, moerr.NewInternalErrorf(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
 		}
 
 		ses.Debugf(tenantCtx, "check granted role of user %s.", tenant)
@@ -1168,7 +1160,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(tenantCtx, "the role %s has not been granted to the user %s",
+			return nil, moerr.NewInternalErrorf(tenantCtx, "the role %s has not been granted to the user %s",
 				tenant.GetDefaultRole(), tenant.GetUser())
 		}
 
@@ -1189,7 +1181,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
+			return nil, moerr.NewInternalErrorf(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
 		}
 
 		defaultRole, err = rsset[0].GetString(tenantCtx, 0, 0)
@@ -1432,7 +1424,7 @@ func (ses *Session) SetSessionRoutineStatus(status string) error {
 	} else if status == tree.AccountStatusOpen.String() {
 		ses.getRoutine().setResricted(false)
 	} else {
-		err = moerr.NewInternalErrorNoCtx("SetSessionRoutineStatus have invalid status : %s", status)
+		err = moerr.NewInternalErrorNoCtxf("SetSessionRoutineStatus have invalid status : %s", status)
 	}
 	return err
 }
@@ -1519,6 +1511,7 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 		inMigration: true,
 		ses:         ses,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use `" + d.db + "`"})
 }
 
@@ -1551,6 +1544,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 		ses:               ses,
 		executeParamTypes: p.paramTypes,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
 }
 

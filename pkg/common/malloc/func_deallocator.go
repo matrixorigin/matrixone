@@ -14,27 +14,14 @@
 
 package malloc
 
-import "unsafe"
-
-type FuncDeallocator func(ptr unsafe.Pointer)
+type FuncDeallocator func(hints Hints)
 
 var _ Deallocator = FuncDeallocator(nil)
 
-func (f FuncDeallocator) Deallocate(ptr unsafe.Pointer, hints Hints) {
-	f(ptr)
+func (f FuncDeallocator) Deallocate(hints Hints) {
+	f(hints)
 }
 
-type argumentedFuncDeallocator[T any] struct {
-	argument T
-	fn       func(unsafe.Pointer, Hints, T)
-}
-
-func (a *argumentedFuncDeallocator[T]) SetArgument(arg T) {
-	a.argument = arg
-}
-
-var _ Deallocator = &argumentedFuncDeallocator[int]{}
-
-func (a *argumentedFuncDeallocator[T]) Deallocate(ptr unsafe.Pointer, hints Hints) {
-	a.fn(ptr, hints, a.argument)
+func (FuncDeallocator) As(target Trait) bool {
+	return false
 }

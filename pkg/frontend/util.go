@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"math/rand"
@@ -27,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
@@ -307,6 +310,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
 	}
+	defer tempExecCtx.Close()
 	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
 	if err != nil {
 		return nil, err
@@ -314,11 +318,11 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 
 	batches := ses.GetResultBatches()
 	if len(batches) == 0 {
-		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	if batches[0].VectorCount() > 1 {
-		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
+		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
 	}
 
 	//evaluate the count of rows, the count of columns
@@ -330,7 +334,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 		}
 		count += b.RowCount()
 		if count > 1 {
-			return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
+			return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
 		}
 		if resultVec == nil && b.GetVector(0).Length() != 0 {
 			resultVec = b.GetVector(0)
@@ -338,7 +342,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	}
 
 	if resultVec == nil {
-		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	// for the decimal type, we need the type of expr
@@ -910,7 +914,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 						return nil, nil, err
 					}
 				default:
-					return nil, nil, moerr.NewInternalErrorNoCtx("%v can't convert to timestamp type", val)
+					return nil, nil, moerr.NewInternalErrorNoCtxf("%v can't convert to timestamp type", val)
 				}
 			}
 			err := vector.AppendFixedList[types.Timestamp](bat.Vecs[colIdx], vData, nil, pool)
@@ -931,7 +935,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				return nil, nil, err
 			}
 		default:
-			return nil, nil, moerr.NewInternalErrorNoCtx("unsupported type %d", typ.Oid)
+			return nil, nil, moerr.NewInternalErrorNoCtxf("unsupported type %d", typ.Oid)
 		}
 
 		bat.Vecs[colIdx].SetNulls(nsp)
@@ -1014,7 +1018,7 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 			}
 			tType = types.New(types.T_timestamp, 0, 0)
 		default:
-			return nil, nil, nil, moerr.NewInternalErrorNoCtx("unsupported mysql type %d", col.ColumnType())
+			return nil, nil, nil, moerr.NewInternalErrorNoCtxf("unsupported mysql type %d", col.ColumnType())
 		}
 		resultCols[i].Typ = pType
 		resultColTypes[i] = tType
@@ -1082,6 +1086,7 @@ func skipClientQuit(info string) bool {
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
 	sql           string
+	hash          [32]byte
 	stmt          tree.Statement
 	sqlSourceType []string
 	isRestore     bool
@@ -1093,6 +1098,14 @@ type UserInput struct {
 
 func (ui *UserInput) getSql() string {
 	return ui.sql
+}
+
+func (ui *UserInput) genHash() {
+	ui.hash = hashString(ui.sql)
+}
+
+func (ui *UserInput) getHash() [32]byte {
+	return ui.hash
 }
 
 // getStmt if the stmt is not nil, we neglect the sql.
@@ -1205,7 +1218,7 @@ func (b *strParamBinder) bind(e tree.Expr) string {
 	case *tree.ParamExpr:
 		return b.params.GetStringAt(val.Offset - 1)
 	default:
-		b.err = moerr.NewInternalError(b.ctx, "invalid params type %T", e)
+		b.err = moerr.NewInternalErrorf(b.ctx, "invalid params type %T", e)
 		return ""
 	}
 }
@@ -1334,12 +1347,6 @@ func (g *topsort) sort() (ans []string, err error) {
 	return
 }
 
-func setFPrints(txnOp TxnOperator, fprints footPrints) {
-	if txnOp != nil {
-		txnOp.SetFootPrints(fprints.prints[:])
-	}
-}
-
 type footPrints struct {
 	prints [256][2]uint32
 }
@@ -1415,4 +1422,9 @@ func Copy[T any](src []T) []T {
 	dst := make([]T, len(src))
 	copy(dst, src)
 	return dst
+}
+
+func hashString(s string) [32]byte {
+	hash := sha256.Sum256(util.UnsafeStringToBytes(s))
+	return hash
 }

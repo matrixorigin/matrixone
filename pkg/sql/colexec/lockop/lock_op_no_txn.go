@@ -51,8 +51,8 @@ func LockTableWithUniqueID(
 		return err
 	}
 
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockMode(mode).

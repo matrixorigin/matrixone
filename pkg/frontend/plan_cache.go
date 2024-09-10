@@ -22,7 +22,7 @@ import (
 )
 
 type cachedPlan struct {
-	sql   string
+	sql   [32]byte
 	stmts []tree.Statement
 	plans []*plan.Plan
 }
@@ -31,7 +31,7 @@ type cachedPlan struct {
 type planCache struct {
 	capacity  int
 	lruList   *list.List
-	cachePool map[string]*list.Element
+	cachePool map[[32]byte]*list.Element
 }
 
 func newPlanCache(capacity int) *planCache {
@@ -40,9 +40,9 @@ func newPlanCache(capacity int) *planCache {
 	}
 }
 
-func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Plan) {
+func (pc *planCache) cache(sql [32]byte, stmts []tree.Statement, plans []*plan.Plan) {
 	if pc.cachePool == nil {
-		pc.cachePool = make(map[string]*list.Element)
+		pc.cachePool = make(map[[32]byte]*list.Element)
 		pc.lruList = list.New()
 	}
 	for i := range stmts {
@@ -71,7 +71,7 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 }
 
 // get gets a cached plan by its sql
-func (pc *planCache) get(sql string) *cachedPlan {
+func (pc *planCache) get(sql [32]byte) *cachedPlan {
 	if pc.cachePool == nil {
 		return nil
 	}
@@ -83,7 +83,7 @@ func (pc *planCache) get(sql string) *cachedPlan {
 	return nil
 }
 
-func (pc *planCache) isCached(sql string) bool {
+func (pc *planCache) isCached(sql [32]byte) bool {
 	if pc.cachePool == nil {
 		return false
 	}

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"math/bits"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,6 +30,20 @@ const (
 	increasingHint
 	decreasingHint
 )
+
+type sortType interface {
+	struct {
+		data []types.Varlena
+		area []byte
+	} | ~[]bool | ~[]int | ~[]int8 | ~[]int16 | ~[]int32 | ~[]int64 |
+		~[]uint | ~[]uint8 | ~[]uint16 | ~[]uint32 | ~[]uint64 | ~[]uintptr |
+		~[]float32 | ~[]float64 |
+		~[]types.Date | ~[]types.Datetime | ~[]types.Timestamp |
+		~[]types.Time | ~[]types.Enum | ~[]types.TS |
+		~[]types.Decimal64 | ~[]types.Decimal128 |
+		~[]types.Rowid | ~[]types.Blockid | ~[]types.Uuid |
+		~[][]float32 | ~[][]float64
+}
 
 type xorshift uint64
 type sortedHint int // hint for pdqsort when choosing the pivot
@@ -54,7 +69,7 @@ func TsLess(a, b types.TS) bool           { return bytes.Compare(a[:], b[:]) < 0
 func RowidLess(a, b types.Rowid) bool     { return bytes.Compare(a[:], b[:]) < 0 }
 func BlockidLess(a, b types.Blockid) bool { return bytes.Compare(a[:], b[:]) < 0 }
 
-func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol []string) {
+func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 	if hasNull {
 		sz := len(os)
 		if nullsLast { // move null rows to the tail
@@ -232,13 +247,15 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 			genericSort(col, os, uuidGreater)
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
-		if strCol == nil {
-			strCol = vector.MustStrCol(vec)
-		}
+		data, area := vector.MustVarlenaRawData(vec)
+		col := struct {
+			data []types.Varlena
+			area []byte
+		}{data: data, area: area}
 		if !desc {
-			genericSort(strCol, os, genericLess[string])
+			genericSort(col, os, varlenaLess)
 		} else {
-			genericSort(strCol, os, genericGreater[string])
+			genericSort(col, os, varlenaGreater)
 		}
 	case types.T_array_float32:
 		col := vector.MustArrayCol[float32](vec)
@@ -274,6 +291,17 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 			genericSort(col, os, blockidLess)
 		} else {
 			genericSort(col, os, blockidGreater)
+		}
+	case types.T_json:
+		data, area := vector.MustVarlenaRawData(vec)
+		col := struct {
+			data []types.Varlena
+			area []byte
+		}{data: data, area: area}
+		if !desc {
+			genericSort(col, os, jsonLess)
+		} else {
+			genericSort(col, os, jsonGreater)
 		}
 	}
 }
@@ -350,6 +378,47 @@ func genericGreater[T types.OrderedT](data []T, i, j int64) bool {
 	return data[i] > data[j]
 }
 
+func varlenaLess(vs struct {
+	data []types.Varlena
+	area []byte
+}, i, j int64) bool {
+	return vs.data[i].UnsafeGetString(vs.area) < vs.data[j].UnsafeGetString(vs.area)
+}
+
+func jsonLess(vs struct {
+	data []types.Varlena
+	area []byte
+}, i, j int64) bool {
+	left := types.DecodeJson(vs.data[i].GetByteSlice(vs.area))
+	right := types.DecodeJson(vs.data[j].GetByteSlice(vs.area))
+
+	cmp := bytejson.CompareByteJson(left, right)
+	if cmp != 0 {
+		return cmp < 0
+	}
+	return false
+}
+
+func jsonGreater(vs struct {
+	data []types.Varlena
+	area []byte
+}, i, j int64) bool {
+	left := types.DecodeJson(vs.data[i].GetByteSlice(vs.area))
+	right := types.DecodeJson(vs.data[j].GetByteSlice(vs.area))
+	cmp := bytejson.CompareByteJson(left, right)
+	if cmp != 0 {
+		return cmp > 0
+	}
+	return false
+}
+
+func varlenaGreater(vs struct {
+	data []types.Varlena
+	area []byte
+}, i, j int64) bool {
+	return vs.data[i].UnsafeGetString(vs.area) > vs.data[j].UnsafeGetString(vs.area)
+}
+
 func (r *xorshift) Next() uint64 {
 	*r ^= *r << 13
 	*r ^= *r >> 17
@@ -365,7 +434,7 @@ func nextPowerOfTwo(length int) uint {
 // Sort sorts data in ascending order as determined by the Less method.
 // It makes one call to data.Len to determine n and O(n*log(n)) calls to
 // data.Less and data.Swap. The sort is not guaranteed to be stable.
-func genericSort[T any](data []T, os []int64, fn func([]T, int64, int64) bool) {
+func genericSort[S sortType](data S, os []int64, fn func(S, int64, int64) bool) {
 	n := len(os)
 	if n <= 1 {
 		return
@@ -380,7 +449,7 @@ func genericSort[T any](data []T, os []int64, fn func([]T, int64, int64) bool) {
 // C++ implementation: https://github.com/orlp/pdqsort
 // Rust implementation: https://docs.rs/pdqsort/latest/pdqsort/
 // limit is the number of allowed bad (very unbalanced) pivots before falling back to heapsort.
-func pdqsort[T any](data []T, a, b, limit int, os []int64, fn func([]T, int64, int64) bool) {
+func pdqsort[S sortType](data S, a, b, limit int, os []int64, fn func(S, int64, int64) bool) {
 	const maxInsertion = 12
 
 	var (
@@ -404,13 +473,13 @@ func pdqsort[T any](data []T, a, b, limit int, os []int64, fn func([]T, int64, i
 
 		// If the last partitioning was imbalanced, we need to breaking patterns.
 		if !wasBalanced {
-			breakPatterns(data, a, b, os)
+			breakPatterns(a, b, os)
 			limit--
 		}
 
 		pivot, hint := choosePivot(data, a, b, os, fn)
 		if hint == decreasingHint {
-			reverseRange(data, a, b, os, fn)
+			reverseRange(a, b, os)
 			// The chosen pivot was pivot-a elements after the start of the array.
 			// After reversing it is pivot-a elements before the end of the array.
 			// The idea came from Rust's implementation.
@@ -451,7 +520,7 @@ func pdqsort[T any](data []T, a, b, limit int, os []int64, fn func([]T, int64, i
 }
 
 // insertionSort sorts data[a:b] using insertion sort.
-func insertionSort[T any](data []T, a, b int, os []int64, fn func([]T, int64, int64) bool) {
+func insertionSort[S sortType](data S, a, b int, os []int64, fn func(S, int64, int64) bool) {
 	for i := a + 1; i < b; i++ {
 		for j := i; j > a && fn(data, os[j], os[j-1]); j-- {
 			os[j], os[j-1] = os[j-1], os[j]
@@ -461,7 +530,7 @@ func insertionSort[T any](data []T, a, b int, os []int64, fn func([]T, int64, in
 
 // siftDown implements the heap property on data[lo:hi].
 // first is an offset into the array where the root of the heap lies.
-func siftDown[T any](data []T, lo, hi, first int, os []int64, fn func([]T, int64, int64) bool) {
+func siftDown[S sortType](data S, lo, hi, first int, os []int64, fn func(S, int64, int64) bool) {
 	root := lo
 	for {
 		child := 2*root + 1
@@ -479,7 +548,7 @@ func siftDown[T any](data []T, lo, hi, first int, os []int64, fn func([]T, int64
 	}
 }
 
-func heapSort[T any](data []T, a, b int, os []int64, fn func([]T, int64, int64) bool) {
+func heapSort[S sortType](data S, a, b int, os []int64, fn func(S, int64, int64) bool) {
 	first := a
 	lo := 0
 	hi := b - a
@@ -500,7 +569,7 @@ func heapSort[T any](data []T, a, b int, os []int64, fn func([]T, int64, int64) 
 // Let p = data[pivot]
 // Moves elements in data[a:b] around, so that data[i]<p and data[j]>=p for i<newpivot and j>newpivot.
 // On return, data[newpivot] = p
-func partition[T any](data []T, a, b, pivot int, os []int64, fn func([]T, int64, int64) bool) (newpivot int, alreadyPartitioned bool) {
+func partition[S sortType](data S, a, b, pivot int, os []int64, fn func(S, int64, int64) bool) (newpivot int, alreadyPartitioned bool) {
 	os[a], os[pivot] = os[pivot], os[a]
 	i, j := a+1, b-1 // i and j are inclusive of the elements remaining to be partitioned
 
@@ -538,7 +607,7 @@ func partition[T any](data []T, a, b, pivot int, os []int64, fn func([]T, int64,
 
 // partitionEqual partitions data[a:b] into elements equal to data[pivot] followed by elements greater than data[pivot].
 // It assumed that data[a:b] does not contain elements smaller than the data[pivot].
-func partitionEqual[T any](data []T, a, b, pivot int, os []int64, fn func([]T, int64, int64) bool) (newpivot int) {
+func partitionEqual[S sortType](data S, a, b, pivot int, os []int64, fn func(S, int64, int64) bool) (newpivot int) {
 	os[a], os[pivot] = os[pivot], os[a]
 	i, j := a+1, b-1 // i and j are inclusive of the elements remaining to be partitioned
 
@@ -560,7 +629,7 @@ func partitionEqual[T any](data []T, a, b, pivot int, os []int64, fn func([]T, i
 }
 
 // partialInsertionSort partially sorts a slice, returns true if the slice is sorted at the end.
-func partialInsertionSort[T any](data []T, a, b int, os []int64, fn func([]T, int64, int64) bool) bool {
+func partialInsertionSort[S sortType](data S, a, b int, os []int64, fn func(S, int64, int64) bool) bool {
 	const (
 		maxSteps         = 5  // maximum number of adjacent out-of-order pairs that will get shifted
 		shortestShifting = 50 // don't shift any elements on short arrays
@@ -605,7 +674,7 @@ func partialInsertionSort[T any](data []T, a, b int, os []int64, fn func([]T, in
 
 // breakPatterns scatters some elements around in an attempt to break some patterns
 // that might cause imbalanced partitions in quicksort.
-func breakPatterns[T any](data []T, a, b int, os []int64) {
+func breakPatterns(a, b int, os []int64) {
 	length := b - a
 	if length >= 8 {
 		random := xorshift(length)
@@ -626,7 +695,7 @@ func breakPatterns[T any](data []T, a, b int, os []int64) {
 // [0,8): chooses a static pivot.
 // [8,shortestNinther): uses the simple median-of-three method.
 // [shortestNinther,∞): uses the Tukey ninther method.
-func choosePivot[T any](data []T, a, b int, os []int64, fn func([]T, int64, int64) bool) (pivot int, hint sortedHint) {
+func choosePivot[S sortType](data S, a, b int, os []int64, fn func(S, int64, int64) bool) (pivot int, hint sortedHint) {
 	const (
 		shortestNinther = 50
 		maxSwaps        = 4 * 3
@@ -663,7 +732,7 @@ func choosePivot[T any](data []T, a, b int, os []int64, fn func([]T, int64, int6
 }
 
 // order2 returns x,y where data[x] <= data[y], where x,y=a,b or x,y=b,a.
-func order2[T any](data []T, a, b int, swaps *int, os []int64, fn func([]T, int64, int64) bool) (int, int) {
+func order2[S sortType](data S, a, b int, swaps *int, os []int64, fn func(S, int64, int64) bool) (int, int) {
 	if fn(data, os[b], os[a]) {
 		*swaps++
 		return b, a
@@ -672,7 +741,7 @@ func order2[T any](data []T, a, b int, swaps *int, os []int64, fn func([]T, int6
 }
 
 // median returns x where data[x] is the median of data[a],data[b],data[c], where x is a, b, or c.
-func median[T any](data []T, a, b, c int, swaps *int, os []int64, fn func([]T, int64, int64) bool) int {
+func median[S sortType](data S, a, b, c int, swaps *int, os []int64, fn func(S, int64, int64) bool) int {
 	a, b = order2(data, a, b, swaps, os, fn)
 	b, _ = order2(data, b, c, swaps, os, fn)
 	_, b = order2(data, a, b, swaps, os, fn)
@@ -680,11 +749,11 @@ func median[T any](data []T, a, b, c int, swaps *int, os []int64, fn func([]T, i
 }
 
 // medianAdjacent finds the median of data[a - 1], data[a], data[a + 1] and stores the index into a.
-func medianAdjacent[T any](data []T, a int, swaps *int, os []int64, fn func([]T, int64, int64) bool) int {
+func medianAdjacent[S sortType](data S, a int, swaps *int, os []int64, fn func(S, int64, int64) bool) int {
 	return median(data, a-1, a, a+1, swaps, os, fn)
 }
 
-func reverseRange[T any](data []T, a, b int, os []int64, fn func([]T, int64, int64) bool) {
+func reverseRange(a, b int, os []int64) {
 	i := a
 	j := b - 1
 	for i < j {

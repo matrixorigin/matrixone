@@ -119,7 +119,10 @@ type deleteNodeInfo struct {
 // buildInsertPlans  build insert plan.
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert,
-	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, ifExistAutoPkCol bool, insertWithoutUniqueKeyMap map[string]bool) error {
+	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, ifExistAutoPkCol bool,
+	insertWithoutUniqueKeyMap map[string]bool,
+	ifInsertFromUniqueColMap map[string]bool,
+) error {
 
 	var err error
 	var insertColsNameFromStmt []string
@@ -160,7 +163,7 @@ func buildInsertPlans(
 	var fuzzymessage *OriginTableMessageForFuzzy
 	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExpr,
-		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, insertWithoutUniqueKeyMap)
+		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)
 }
 
 // buildUpdatePlans  build update plan.
@@ -244,7 +247,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	var fuzzymessage *OriginTableMessageForFuzzy
 	return buildInsertPlansWithRelatedHiddenTable(nil, ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef,
 		updatePlanCtx.updateColLength, sourceStep, addAffectedRows, updatePlanCtx.isFkRecursionCall, updatePlanCtx.updatePkCol,
-		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil)
+		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil, nil)
 }
 
 func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
@@ -480,13 +483,14 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						isFkRecursionCall := false
 						updatePkCol := true
 						ifExistAutoPkCol := false
+						ifInsertFromUnique := false
 						var pkFilterExprs []*Expr
 						var partitionExpr *Expr
 						var indexSourceColTypes []*Type
 						var fuzzymessage *OriginTableMessageForFuzzy
 						err = makeOneInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef,
 							updateColLength, preUKStep, addAffectedRows, isFkRecursionCall, updatePkCol,
-							pkFilterExprs, partitionExpr, ifExistAutoPkCol, _checkPKDupForHiddenIndexTable,
+							pkFilterExprs, partitionExpr, ifExistAutoPkCol, _checkPKDupForHiddenIndexTable, ifInsertFromUnique,
 							indexSourceColTypes, fuzzymessage)
 						if err != nil {
 							return err
@@ -615,13 +619,14 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						updatePkCol := true
 						ifExistAutoPkCol := false
 						ifCheckPkDup := false
+						ifInsertFromUnique := false
 						var pkFilterExprs []*Expr
 						var partitionExpr *Expr
 						var indexSourceColTypes []*Type
 						var fuzzymessage *OriginTableMessageForFuzzy
 						err = makeOneInsertPlan(ctx, builder, bindCtx, masterObjRef, insertEntriesTableDef,
 							updateColLength, preUKStep, addAffectedRows, isFkRecursionCall, updatePkCol,
-							pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup,
+							pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup, ifInsertFromUnique,
 							indexSourceColTypes, fuzzymessage)
 
 						if err != nil {
@@ -761,13 +766,14 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						updatePkCol := true
 						ifExistAutoPkCol := false
 						ifCheckPkDup := false
+						ifInsertFromUnique := false
 						var pkFilterExprs []*Expr
 						var partitionExpr *Expr
 						var indexSourceColTypes []*Type
 						var fuzzymessage *OriginTableMessageForFuzzy
 						err = makeOneInsertPlan(ctx, builder, bindCtx, entriesObjRef, insertEntriesTableDef,
 							updateColLength, preUKStep, addAffectedRows, isFkRecursionCall, updatePkCol,
-							pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup,
+							pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup, ifInsertFromUnique,
 							indexSourceColTypes, fuzzymessage)
 
 						if err != nil {
@@ -786,7 +792,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					builder.appendStep(lastNodeId)
 				}
 			default:
-				return moerr.NewNYINoCtx("unsupported index algorithm %s", multiTableIndex.IndexAlgo)
+				return moerr.NewNYINoCtxf("unsupported index algorithm %s", multiTableIndex.IndexAlgo)
 			}
 		}
 	}
@@ -1261,10 +1267,14 @@ func buildInsertPlansWithRelatedHiddenTable(
 	tableDef *TableDef, updateColLength int, sourceStep int32, addAffectedRows bool, isFkRecursionCall bool,
 	updatePkCol bool, pkFilterExprs []*Expr, partitionExpr *Expr, ifExistAutoPkCol bool,
 	checkInsertPkDupForHiddenIndexTable bool, indexSourceColTypes []*plan.Type, fuzzymessage *OriginTableMessageForFuzzy,
-	insertWithoutUniqueKeyMap map[string]bool,
+	insertWithoutUniqueKeyMap map[string]bool, ifInsertFromUniqueColMap map[string]bool,
 ) error {
 	var lastNodeId int32
 	var err error
+
+	if builder.isRestore {
+		checkInsertPkDupForHiddenIndexTable = false
+	}
 
 	multiTableIndexes := make(map[string]*MultiTableIndex)
 	if updateColLength == 0 {
@@ -1296,6 +1306,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				var insertColsNameFromStmt []string
 				var pkFilterExprForHiddenTable []*Expr
 				var originTableMessageForFuzzy *OriginTableMessageForFuzzy
+				var ifInsertFromUnique bool
 
 				// The way to guarantee the uniqueness of the unique key is to create a hidden table,
 				// with the primary key of the hidden table as the unique key.
@@ -1312,9 +1323,16 @@ func buildInsertPlansWithRelatedHiddenTable(
 
 					uniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
 					uniqueColsMap := make(map[string]int)
+
 					for i, n := range indexdef.Parts {
 						uniqueColsMap[n] = i
+
+						if _, exists := ifInsertFromUniqueColMap[n]; exists {
+							ifInsertFromUnique = true
+							break
+						}
 					}
+
 					for _, c := range tableDef.Cols { // sort
 						if i, ok := uniqueColsMap[c.Name]; ok {
 							uniqueCols[i] = c
@@ -1366,7 +1384,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				var partitionExpr *Expr
 				err = makeOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef,
 					updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
-					pkFilterExprForHiddenTable, partitionExpr, ifExistAutoPkCol, needCheckPkDupForHiddenTable,
+					pkFilterExprForHiddenTable, partitionExpr, ifExistAutoPkCol, needCheckPkDupForHiddenTable, ifInsertFromUnique,
 					colTypes, originTableMessageForFuzzy)
 
 				if err != nil {
@@ -1410,12 +1428,13 @@ func buildInsertPlansWithRelatedHiddenTable(
 				updatePkCol := true
 				ifExistAutoPkCol := false
 				ifCheckPkDup := false
+				ifInsertFromUnique := false
 				var pkFilterExprs []*Expr
 				var partitionExpr *Expr
 				var fuzzymessage *OriginTableMessageForFuzzy
 				err = makeOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef,
 					updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
-					pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup,
+					pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup, ifInsertFromUnique,
 					colTypes, fuzzymessage)
 
 				if err != nil {
@@ -1473,26 +1492,41 @@ func buildInsertPlansWithRelatedHiddenTable(
 			var pkFilterExprs []*Expr
 			var partitionExpr *Expr
 			var fuzzymessage *OriginTableMessageForFuzzy
+			var ifInsertFromUnique bool
 			err = makeOneInsertPlan(ctx, builder, bindCtx, idxRefs[2], idxTableDefs[2],
 				updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
-				pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup,
+				pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup, ifInsertFromUnique,
 				colTypes, fuzzymessage)
 
 			if err != nil {
 				return err
 			}
 		default:
-			return moerr.NewInvalidInputNoCtx("Unsupported index algorithm: %s", multiTableIndex.IndexAlgo)
+			return moerr.NewInvalidInputNoCtxf("Unsupported index algorithm: %s", multiTableIndex.IndexAlgo)
 		}
 		if err != nil {
 			return err
 		}
 	}
 
+	if stmt != nil && stmt.IsRestore {
+		checkInsertPkDupForHiddenIndexTable = false
+	}
+
+	ifInsertFromUnique := false
+	if tableDef.Pkey != nil && ifInsertFromUniqueColMap != nil {
+		for _, colName := range tableDef.Pkey.Names {
+			if _, exists := ifInsertFromUniqueColMap[colName]; exists {
+				ifInsertFromUnique = true
+				break
+			}
+		}
+	}
+
 	return makeOneInsertPlan(ctx, builder, bindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
 		pkFilterExprs, partitionExpr, ifExistAutoPkCol, checkInsertPkDupForHiddenIndexTable,
-		indexSourceColTypes, fuzzymessage)
+		ifInsertFromUnique, indexSourceColTypes, fuzzymessage)
 }
 
 // makeOneInsertPlan generates plan branch for insert one table
@@ -1503,7 +1537,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 func makeOneInsertPlan(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	updateColLength int, sourceStep int32, addAffectedRows bool, isFkRecursionCall bool, updatePkCol bool,
-	pkFilterExprs []*Expr, partitionExpr *Expr, ifExistAutoPkCol bool, ifCheckPkDup bool,
+	pkFilterExprs []*Expr, partitionExpr *Expr, ifExistAutoPkCol bool, ifCheckPkDup bool, ifInsertFromUnique bool,
 	indexSourceColTypes []*plan.Type, fuzzymessage *OriginTableMessageForFuzzy,
 ) (err error) {
 
@@ -1528,7 +1562,7 @@ func makeOneInsertPlan(
 
 	if ifCheckPkDup && !ifExistAutoPkCol {
 		if err = appendPrimaryConstraintPlan(builder, bindCtx, tableDef, objRef, partitionExpr, pkFilterExprs,
-			indexSourceColTypes, sourceStep, updateColLength > 0, updatePkCol, fuzzymessage); err != nil {
+			indexSourceColTypes, sourceStep, updateColLength > 0, updatePkCol, ifInsertFromUnique, fuzzymessage); err != nil {
 			return err
 		}
 	}
@@ -2161,7 +2195,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
 		if parentTableDef == nil {
-			return -1, moerr.NewInternalError(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
+			return -1, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 		}
 		newTableDef := DeepCopyTableDef(parentTableDef, false)
 		joinConds := make([]*plan.Expr, 0)
@@ -4183,6 +4217,6 @@ func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
 	} else if v1, ok := value.(int8); ok {
 		return v1 == 1, nil
 	} else {
-		return false, moerr.NewInternalError(ctx.GetContext(), "invalid  %v ", value)
+		return false, moerr.NewInternalErrorf(ctx.GetContext(), "invalid  %v ", value)
 	}
 }

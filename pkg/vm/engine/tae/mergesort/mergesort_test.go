@@ -91,7 +91,7 @@ func TestSortBlockColumns(t *testing.T) {
 	columns, err := SortBlockColumns(vecSlice, 0, mocks.GetTestVectorPool())
 	require.NoError(t, err)
 	require.Equal(t, []int64{2, 0, 1}, columns)
-	require.Equal(t, []string{"a", "b", "c"}, vector.MustStrCol(vec.GetDownstreamVector()))
+	require.Equal(t, []string{"a", "b", "c"}, vector.InefficientMustStrCol(vec.GetDownstreamVector()))
 
 	vecWithNull := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	vecWithNull.Append(int32(1), false)
@@ -216,7 +216,7 @@ func TestAObjMergeAllTypes(t *testing.T) {
 func testAObjMerger(t types.Type, vpool DisposableVecPool) func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
 	if t.IsVarlen() {
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[string], sortKeyPos, vector.MustStrCol, toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[string], sortKeyPos, vector.InefficientMustStrCol, toLayout)
 		}
 	}
 	switch t.Oid {

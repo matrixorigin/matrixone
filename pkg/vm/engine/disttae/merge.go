@@ -61,7 +61,8 @@ type cnMergeTask struct {
 	targets []logtailreplay.ObjectInfo
 
 	// commit things
-	commitEntry *api.MergeCommitEntry
+	commitEntry  *api.MergeCommitEntry
+	transferMaps api.TransferMaps
 
 	// auxiliaries
 	fs fileservice.FileService
@@ -195,6 +196,17 @@ func (t *cnMergeTask) GetCommitEntry() *api.MergeCommitEntry {
 		return t.prepareCommitEntry()
 	}
 	return t.commitEntry
+}
+
+func (t *cnMergeTask) InitTransferMaps(blkCnt int) {
+	t.transferMaps = make(api.TransferMaps, blkCnt)
+	for i := range t.transferMaps {
+		t.transferMaps[i] = make(api.TransferMap)
+	}
+}
+
+func (t *cnMergeTask) GetTransferMaps() *api.TransferMaps {
+	return &t.transferMaps
 }
 
 // impl DisposableVecPool

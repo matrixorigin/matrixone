@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
-	"sync"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
@@ -99,12 +101,12 @@ func shardMetaCacheKey(key mataCacheKey) uint8 {
 }
 
 func init() {
-	metaCache = fifocache.New[mataCacheKey, []byte](int(metaCacheSize()), nil, shardMetaCacheKey)
+	metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(metaCacheSize()), shardMetaCacheKey, nil, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = fifocache.New[mataCacheKey, []byte](int(size), nil, shardMetaCacheKey)
+		metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(size), shardMetaCacheKey, nil, nil, nil)
 	})
 }
 
@@ -167,7 +169,7 @@ func LoadObjectMetaByExtent(
 		return
 	}
 	meta = obj.(ObjectMeta)
-	metaCache.Set(key, v[:], len(v))
+	metaCache.Set(key, v[:], int64(len(v)))
 	// metaCacheStats.Record(0, 1)
 	// if !prefetch {
 	// 	metaCacheHitStats.Record(0, 1)
@@ -207,11 +209,11 @@ func LoadBFWithMeta(
 		return v, nil
 	}
 	extent := meta.BlockHeader().BFExtent()
-	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipMemoryCache|fileservice.SkipFullFilePreloads, fs)
+	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipFullFilePreloads, fs)
 	if err != nil {
 		return nil, err
 	}
-	metaCache.Set(key, bf, len(bf))
+	metaCache.Set(key, bf, int64(len(bf)))
 	// metaCacheStats.Record(0, 1)
 	return bf, nil
 }
@@ -224,8 +226,5 @@ func FastLoadObjectMeta(
 ) (ObjectMeta, error) {
 	extent := location.Extent()
 	name := location.Name()
-	var metaReadPolicy fileservice.Policy
-	metaReadPolicy = fileservice.SkipMemoryCache
-	metaReadPolicy |= fileservice.SkipFullFilePreloads
-	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, metaReadPolicy, fs)
+	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, fileservice.SkipFullFilePreloads, fs)
 }
