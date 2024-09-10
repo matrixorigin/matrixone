@@ -128,6 +128,12 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (bat *batc
 }
 
 func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
+	if valueScan.OpAnalyzer == nil {
+		valueScan.OpAnalyzer = process.NewAnalyzer(valueScan.GetIdx(), valueScan.IsFirst, valueScan.IsLast, "value_scan")
+	} else {
+		valueScan.OpAnalyzer.Reset()
+	}
+
 	err = valueScan.PrepareProjection(proc)
 	if err != nil {
 		return err
@@ -152,11 +158,9 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(valueScan.GetIdx(), valueScan.GetParallelIdx(), valueScan.GetParallelMajor())
-	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
+	analyzer := valueScan.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 
@@ -168,11 +172,11 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		valueScan.ctr.idx += 1
 	}
-
-	anal.Input(result.Batch, valueScan.IsFirst)
 	var err error
 	result.Batch, err = valueScan.EvalProjection(result.Batch, proc)
 
+	analyzer.Input(result.Batch)
+	analyzer.Output(result.Batch)
 	return result, err
 
 }
