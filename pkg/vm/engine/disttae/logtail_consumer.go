@@ -165,7 +165,7 @@ type delayedCacheApply struct {
 
 func (c *PushClient) dcaTryDelay(isSub bool, f func()) (delayed bool) {
 	c.dca.Lock()
-	c.dca.Unlock()
+	defer c.dca.Unlock()
 	if c.dca.replayed {
 		// replay finished, no need to delay
 		return false
@@ -179,7 +179,7 @@ func (c *PushClient) dcaTryDelay(isSub bool, f func()) (delayed bool) {
 
 func (c *PushClient) dcaConfirmAndApply() {
 	c.dca.Lock()
-	c.dca.Unlock()
+	defer c.dca.Unlock()
 	c.dca.replayed = true
 	for _, f := range c.dca.flist {
 		f()
