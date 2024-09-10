@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.uber.org/zap"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -9391,28 +9390,38 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaEnhanced(1, 0, 2)
-	schema.BlockMaxRows = 2
-	schema.ObjectMaxBlocks = 5
+	schema.BlockMaxRows = 4
+	schema.ObjectMaxBlocks = 10000
 	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 2)
+	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
 	tae.CreateRelAndAppend(bat, true)
 	//tae.DeleteAll(true)
 	txn, rel := tae.GetRelation()
 	assert.NoError(t, txn.Commit(ctx))
 
-	dataObj := testutil.GetOneBlockMeta(rel)
-	for i := 0; i < bat.Length(); i++ {
-		txn, rel = tae.GetRelation()
-		dataObj = testutil.GetOneBlockMeta(rel)
-		id := dataObj.AsCommonID()
-		err := rel.RangeDelete(id, uint32(i), uint32(i), handle.DT_Normal)
-		require.NoError(t, err)
-		require.NoError(t, txn.Commit(ctx))
-		time.Sleep(time.Millisecond * 1)
+	blks := testutil.GetAllBlockMetas(rel, false)
+
+	//var realMax, realMin []types.TS
+	var dts []types.TS
+
+	for i := 0; i < bat.Length()/int(schema.BlockMaxRows); i++ {
+		for j := range schema.BlockMaxRows {
+			id := blks[i].AsCommonID()
+			txn, rel = tae.GetRelation()
+			err := rel.RangeDelete(id, uint32(j), uint32(j), handle.DT_Normal)
+			require.NoError(t, err)
+			require.NoError(t, txn.Commit(ctx))
+			cs := txn.GetCommitTS()
+			dts = append(dts, cs)
+
+			time.Sleep(time.Millisecond * 1)
+			tae.CompactBlocks(true)
+		}
 	}
 
 	txn, rel = tae.GetRelation()
+	dataObj := testutil.GetOneBlockMeta(rel)
 	dataObj = testutil.GetOneBlockMeta(rel)
 	atombstone := testutil.GetOneTombstoneMeta(rel)
 	assert.NoError(t, txn.Commit(ctx))
@@ -9438,45 +9447,52 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 	stats := obj.GetObjectStats()
 	objLoc := stats.ObjectLocation()
 
+	require.False(t, stats.GetAppendable())
+
 	meta, err := objectio.FastLoadObjectMeta(ctx, &objLoc, false, tae.Runtime.Fs.Service)
 	require.NoError(t, err)
 
 	id := obj.AsCommonID()
 	dataMeta := meta.MustDataMeta()
+	dataMeta.Length()
 	colIdxes := catalog.TombstoneBatchIdxes
 	colIdxes = append(colIdxes, catalog.COLIDX_COMMITS)
 
-	for idx := 0; idx < int(stats.BlkCnt()); idx++ {
-		tsZM := dataMeta.GetColumnMeta(uint32(idx), 2).ZoneMap()
-		maxv := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
-		minv := types.DecodeFixed[types.TS](tsZM.GetMinBuf())
+	for _, ts := range dts {
+		contain := false
+		for idx := 0; idx < int(stats.BlkCnt()); idx++ {
+			//tsZM := dataMeta.GetColumnMeta(uint32(idx), 2).ZoneMap()
+			//zmMax := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
+			//zmMin := types.DecodeFixed[types.TS](tsZM.GetMinBuf())
 
-		loc := stats.BlockLocation(uint16(idx), 8192)
-		id.SetBlockOffset(uint16(idx))
-		vecs, err := tables.LoadPersistedColumnDatas(
-			ctx, obj.GetTable().GetLastestSchema(true), tae.Runtime, id,
-			colIdxes, loc, nil)
-		require.NoError(t, err)
+			//if tsZM.Contains(ts) {
+			//	continue
+			//}
 
-		commitTSs := vector.MustFixedCol[types.TS](vecs[2].GetDownstreamVector())
-		for i := 0; i < len(commitTSs); i++ {
-			fmt.Println(commitTSs[i].ToString())
+			loc := stats.BlockLocation(uint16(idx), 8192)
+			id.SetBlockOffset(uint16(idx))
+
+			loaded, f, err := blockio.ReadDeletes(ctx, loc, tae.Runtime.Fs.Service, false)
+			require.NoError(t, err)
+
+			committs := vector.MustFixedColNoTypeCheck[types.TS](loaded.Vecs[1])
+			for _, x := range committs {
+				if x.Equal(&ts) {
+					contain = true
+					fmt.Println("found")
+					break
+				}
+			}
+
+			if contain {
+				break
+			}
+
+			f()
 		}
 
-		fmt.Println("maxv", maxv.ToString(), tsZM.GetMaxBuf())
-		fmt.Println("minv", minv.ToString(), tsZM.GetMinBuf())
-		if maxv.Less(&minv) {
-			logutil.Fatal("???",
-				zap.Int("blkIdx", idx),
-				zap.String("max", maxv.ToString()),
-				zap.String("min", minv.ToString()))
+		if !contain {
+			panic("????")
 		}
 	}
-
-}
-
-func TestX(t *testing.T) {
-	a, b := 19961121, 19981121
-
-	fmt.Printf("%b\n%b\n", a, b)
 }

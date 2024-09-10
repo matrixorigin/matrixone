@@ -1157,8 +1157,8 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		//bfIndex  index.StaticFilter
 		location objectio.Location
 
-		loaded        *batch.Batch
-		release       func()
+		loaded  *batch.Batch
+		release func()
 
 		//encodedMinTS = types.EncodeFixed(minTS)
 	)

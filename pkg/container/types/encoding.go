@@ -20,7 +20,6 @@ package types
 import (
 	"bytes"
 	"encoding"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"unsafe"
@@ -100,26 +99,6 @@ func EncodeType(v *Type) []byte {
 
 func DecodeType(v []byte) Type {
 	return *(*Type)(unsafe.Pointer(&v[0]))
-}
-
-func encodeTS(v TS) []byte {
-	//                     logic   physic
-	// ts = bytes[12] => [ xxxx  xxxxxxxx]
-	var ret [12]byte
-	binary.BigEndian.PutUint64(ret[0:8], uint64(v.Physical()))
-	binary.BigEndian.PutUint32(ret[8:12], uint32(v.Logical()))
-	return ret[:]
-}
-
-func decodeTS(v []byte) *TS {
-	var ret TS
-
-	p := binary.BigEndian.Uint64(v[0:8])
-	l := binary.BigEndian.Uint32(v[8:12])
-
-	ret = BuildTS(int64(p), l)
-
-	return &ret
 }
 
 func EncodeFixed[T FixedSizeT](v T) []byte {

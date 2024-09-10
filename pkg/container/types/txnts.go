@@ -131,6 +131,10 @@ func (ts TS) ToString() string {
 	return fmt.Sprintf("%d-%d", ts.Physical(), ts.Logical())
 }
 
+func (ts TS) String() string {
+	return ts.ToString()
+}
+
 func StringToTS(s string) (ts TS) {
 	tmp := strings.Split(s, "-")
 	if len(tmp) != 2 {
