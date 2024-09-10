@@ -455,6 +455,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsUpdate:          t.IsUpdate,
 			Attrs:             t.Attrs,
 			EstimatedRowCount: int64(t.EstimatedRowCount),
+			CompPkeyExpr:      t.CompPkeyExpr,
+			ClusterByExpr:     t.ClusterByExpr,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
@@ -868,6 +870,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsUpdate = t.GetIsUpdate()
 		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
+		arg.CompPkeyExpr = t.CompPkeyExpr
+		arg.ClusterByExpr = t.ClusterByExpr
 		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()

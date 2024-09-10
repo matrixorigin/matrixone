@@ -240,23 +240,26 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	delCtx := deletion.DeleteCtx
 
 	if len(delCtx.PartitionTableIDs) > 0 {
-		//@todo need reuse delBatches
-		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch,
-			len(delCtx.PartitionTableIDs), delCtx.PrimaryKeyIdx)
-		if err != nil {
-			return result, err
-		}
+		pkTyp := bat.Vecs[delCtx.PrimaryKeyIdx].GetType()
+		deletion.ctr.resBat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+		deletion.ctr.resBat.SetVector(1, vector.NewVec(*pkTyp))
 
-		for i, delBatch := range delBatches {
-			tempRows := uint64(delBatch.RowCount())
+		for partIdx := range len(delCtx.PartitionTableIDs) {
+			deletion.ctr.resBat.CleanOnlyData()
+			expect := int32(partIdx)
+			err = colexec.FillPartitionBatchForDelete(proc, bat, deletion.ctr.resBat, expect, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, delCtx.PrimaryKeyIdx)
+			if err != nil {
+				deletion.ctr.resBat.Clean(proc.Mp())
+				return result, err
+			}
+			tempRows := uint64(deletion.ctr.resBat.RowCount())
 			if tempRows > 0 {
 				affectedRows += tempRows
-				err = deletion.ctr.partitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+				err = deletion.ctr.partitionSources[partIdx].Delete(proc.Ctx, deletion.ctr.resBat, catalog.Row_ID)
 				if err != nil {
-					delBatch.Clean(proc.Mp())
+					deletion.ctr.resBat.Clean(proc.Mp())
 					return result, err
 				}
-				delBatch.Clean(proc.Mp())
 			}
 		}
 	} else {

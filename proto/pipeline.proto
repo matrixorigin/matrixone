@@ -163,6 +163,8 @@ message PreInsert {
   bool has_auto_col          = 5;
   bool is_update             = 6;
   int64 estimated_row_count  = 7;
+  plan.Expr comp_pkey_expr   = 8;
+  plan.Expr cluster_by_expr  = 9;
 }
 
 message LockTarget {
