@@ -15,8 +15,11 @@
 package pipeline
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"sync"
 )
 
 type Pipeline struct {
@@ -107,10 +110,39 @@ func (p *Pipeline) cleanupInOrder(proc *process.Process, pipelineFailed bool, is
 // pipelineA send data to pipelineB and pipelineC, pipelineB send data to pipelineA.
 // pipelineA and pipelineB is a pipeline-loop.
 func (p *Pipeline) cleanupLoopPipeline(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
-	p.rootOp.Reset(proc, pipelineFailed, err)
-	if !isPrepare {
-		p.rootOp.Free(proc, pipelineFailed, err)
+
+	// get Merge and Dispatch operators from pipeline.
+	var mergeOperator *merge.Merge
+	var dispatchOperator *dispatch.Dispatch
+	{
+		dispatchOperator = p.rootOp.(*dispatch.Dispatch)
+
+		root := p.rootOp
+		for len(root.GetOperatorBase().Children) > 0 {
+			root = root.GetOperatorBase().Children[0]
+		}
+		mergeOperator = root.(*merge.Merge)
 	}
+
+	// listen to Dispatch and Merge at the same time.
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		mergeOperator.Reset(proc, pipelineFailed, err)
+		if !isPrepare {
+			mergeOperator.Free(proc, pipelineFailed, err)
+		}
+		wg.Done()
+	}()
+
+	dispatchOperator.Reset(proc, pipelineFailed, err)
+	if !isPrepare {
+		dispatchOperator.Free(proc, pipelineFailed, err)
+	}
+	wg.Wait()
+
+	// from first to last to clean up the left operators.
 
 	for _, child := range p.rootOp.GetOperatorBase().Children {
 		_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
