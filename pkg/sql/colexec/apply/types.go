@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -48,7 +49,9 @@ type container struct {
 type Apply struct {
 	ctr       container
 	ApplyType int
+	Result    []colexec.ResultPos
 
+	table_function.TableFunction
 	vm.OperatorBase
 	colexec.Projection
 }

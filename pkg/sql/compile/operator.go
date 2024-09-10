@@ -1834,9 +1834,16 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
-func constructApply(applyType int) *apply.Apply {
+func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+	}
 	arg := apply.NewArgument()
 	arg.ApplyType = applyType
+	arg.Result = result
+	arg.Args = plan2.DeepCopyExprList(right.TblFuncExprList)
+	arg.FuncName = right.TableDef.TblFunc.Name
 	return arg
 }
 
