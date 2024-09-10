@@ -1193,6 +1193,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		dataMeta.Length()
 
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
+			shouldSkip := false
 			if !obj.GetCNCreated() {
 				tsZM := dataMeta.GetColumnMeta(uint32(idx), uint16(2)).ZoneMap()
 				ub := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
@@ -1212,7 +1213,8 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 							zap.Int("blk", idx),
 							zap.String("zonemap", tsZM.String()))
 					}
-					continue
+					shouldSkip = true
+					//continue
 				}
 			}
 
@@ -1234,6 +1236,10 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				s, e := blockio.FindIntervalForBlock(deletedRowIds, rowIds[i].BorrowBlockID())
 				for j := s; j < e; j++ {
 					if rowIds[i].EQ(&deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
+						if shouldSkip {
+							logutil.Fatal("this blk should skip by ts",
+								zap.String("obj", obj.String()))
+						}
 						deleted = append(deleted, int64(i))
 						break
 					}
