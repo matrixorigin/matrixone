@@ -19,15 +19,13 @@ import (
 	"math"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -43,6 +41,12 @@ func (productl2 *Productl2) OpType() vm.OpType {
 }
 
 func (productl2 *Productl2) Prepare(proc *process.Process) error {
+	if productl2.OpAnalyzer == nil {
+		productl2.OpAnalyzer = process.NewAnalyzer(productl2.GetIdx(), productl2.IsFirst, productl2.IsLast, "product_l2")
+	} else {
+		productl2.OpAnalyzer.Reset()
+	}
+
 	if productl2.ProjectList != nil {
 		return productl2.PrepareProjection(proc)
 	}
@@ -54,9 +58,10 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := productl2.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ap := productl2
 	ctr := &ap.ctr
 	result := vm.NewCallResult()
@@ -64,14 +69,14 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := productl2.build(proc, anal); err != nil {
+			if err := productl2.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			if ctr.inBat == nil {
-				result, err = productl2.Children[0].Call(proc)
+				result, err = vm.ChildrenCall(productl2.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -89,7 +94,6 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.inBat = nil
 					continue
 				}
-				anal.Input(ctr.inBat, productl2.GetIsFirst())
 			}
 
 			if ctr.rbat == nil {
@@ -116,7 +120,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 			}
-			anal.Output(result.Batch, productl2.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -127,10 +131,10 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) error {
+func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &productl2.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	mp, err := message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if err != nil {
 		return err
