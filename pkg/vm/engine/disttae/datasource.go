@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 	"slices"
 	"sort"
@@ -1194,12 +1195,13 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
 			shouldSkip := false
+			var maxv, minv types.TS
 			if !obj.GetCNCreated() {
 				tsZM := dataMeta.GetColumnMeta(uint32(idx), uint16(2)).ZoneMap()
 				ub := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
 				if minTS.Greater(&ub) {
-					maxv := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
-					minv := types.DecodeFixed[types.TS](tsZM.GetMinBuf())
+					maxv = types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
+					minv = types.DecodeFixed[types.TS](tsZM.GetMinBuf())
 					//fmt.Println("zm filtered",
 					//	maxv.ToString(),
 					//	minv.ToString(),
@@ -1237,8 +1239,16 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				for j := s; j < e; j++ {
 					if rowIds[i].EQ(&deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
 						if shouldSkip {
+							loaded.Vecs[1].InplaceSort()
+
 							logutil.Fatal("this blk should skip by ts",
-								zap.String("obj", obj.String()))
+								zap.String("obj", obj.String()),
+								zap.String("min", minv.ToString()),
+								zap.String("max", maxv.ToString()),
+								zap.String("ts", minTS.ToString()),
+								zap.String("commits",
+									fmt.Sprintf(
+										common.MoVectorToString(loaded.Vecs[1], loaded.Vecs[1].Length()))))
 						}
 						deleted = append(deleted, int64(i))
 						break
