@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"math"
 	"runtime/debug"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -145,12 +146,17 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			return nil, err
 		}
 
+		xxx := time.Now().Add(time.Hour * 24 * 365).UnixNano()
 		// check ts zm
 		{
 			if zm.GetType() == types.T_TS {
 				tss := vector.MustFixedColNoTypeCheck[types.TS](columnData.GetDownstreamVector())
 				var minTS, maxTS types.TS = tss[0], tss[0]
 				for x := range tss {
+					if tss[x].Physical() > xxx {
+						logutil.Fatal("???")
+					}
+
 					if tss[x].Less(&minTS) {
 						minTS = tss[x]
 					}

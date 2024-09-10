@@ -1196,8 +1196,9 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
 			shouldSkip := false
 			var maxv, minv types.TS
+			var tsZM index.ZM
 			if !obj.GetCNCreated() {
-				tsZM := dataMeta.GetColumnMeta(uint32(idx), uint16(2)).ZoneMap()
+				tsZM = dataMeta.GetColumnMeta(uint32(idx), uint16(2)).ZoneMap()
 				ub := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
 				if minTS.Greater(&ub) {
 					maxv = types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
@@ -1246,6 +1247,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 								zap.String("min", minv.ToString()),
 								zap.String("max", maxv.ToString()),
 								zap.String("ts", minTS.ToString()),
+								zap.String("zm", tsZM.DebugString()),
 								zap.String("commits",
 									fmt.Sprintf(
 										common.MoVectorToString(loaded.Vecs[1], loaded.Vecs[1].Length()))))
