@@ -1656,9 +1656,26 @@ func UpdateZM(zm ZM, v []byte) {
 	}
 	t := zm.GetType()
 	scale := zm.GetScale()
-	if compute.Compare(v, zm.GetMinBuf(), t, scale, scale) < 0 {
+
+	maxv := zm.GetMaxBuf()
+	minv := zm.GetMinBuf()
+
+	if t == types.T_TS {
+		minTS := types.TS(minv)
+		maxTS := types.TS(maxv)
+
+		kk := types.TS(v)
+		if minTS.Greater(&kk) {
+			zm.updateMinFixed(v)
+		} else if maxTS.Less(&kk) {
+			zm.updateMaxFixed(v)
+		}
+		return
+	}
+
+	if compute.Compare(v, minv, t, scale, scale) < 0 {
 		zm.updateMinFixed(v)
-	} else if compute.Compare(v, zm.GetMaxBuf(), t, scale, scale) > 0 {
+	} else if compute.Compare(v, maxv, t, scale, scale) > 0 {
 		zm.updateMaxFixed(v)
 	}
 }

@@ -124,19 +124,11 @@ func decodeTS(v []byte) *TS {
 
 func EncodeFixed[T FixedSizeT](v T) []byte {
 	sz := unsafe.Sizeof(v)
-	if sz == TxnTsSize {
-		return encodeTS(any(v).(TS))
-	}
-
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), sz)
 }
 
 func DecodeFixed[T FixedSizeT](v []byte) T {
-	if len(v) == TxnTsSize {
-		return *(*T)(unsafe.Pointer(decodeTS(v)))
-	}
-	x := *(*T)(unsafe.Pointer(&v[0]))
-	return x
+	return *(*T)(unsafe.Pointer(&v[0]))
 }
 
 func DecodeBool(v []byte) bool {
