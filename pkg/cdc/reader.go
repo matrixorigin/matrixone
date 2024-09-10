@@ -185,7 +185,6 @@ func (reader *tableReader) readTableWithTxn(
 	//	from = last wmark
 	//  to = txn operator snapshot ts
 	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblId)
-	//fromTs := types.StringToTS("1-1")
 	toTs := types.TimestampToTS(txnOp.SnapshotTS())
 	fmt.Fprintln(os.Stderr, reader.info, "from", fromTs.ToString(), "to", toTs.ToString())
 	changes, err = rel.CollectChanges(ctx, fromTs, toTs, reader.mp)

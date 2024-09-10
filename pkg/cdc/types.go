@@ -30,6 +30,21 @@ import (
 	"github.com/tidwall/btree"
 )
 
+const (
+	AccountLevel      = "account"
+	ClusterLevel      = "cluster"
+	MysqlSink         = "mysql"
+	MatrixoneSink     = "matrixone"
+	ConsoleSink       = "console"
+	SourceUriPrefix   = "mysql://"
+	SinkUriPrefix     = "mysql://"
+	ConsolePrefix     = "console://" //only used in testing stage
+	EnableConsoleSink = true
+
+	SASCommon = "common"
+	SASError  = "error"
+)
+
 type Reader interface {
 	Run(ctx context.Context, ar *ActiveRoutine)
 	Close()
@@ -298,6 +313,10 @@ func (info *UriInfo) GetEncodedPassword() (string, error) {
 	return AesCFBEncode([]byte(info.Password))
 }
 
+func (info *UriInfo) String() string {
+	return fmt.Sprintf("%s%s:%s@%s:%d", SourceUriPrefix, info.User, "******", info.Ip, info.Port)
+}
+
 // EncodeUriInfo encodes the UriInfo
 func EncodeUriInfo(info *UriInfo) (string, error) {
 	jsonUri, err := json.Marshal(info)
@@ -315,11 +334,7 @@ func DecodeUriInfo(uri string, uriInfo *UriInfo) error {
 		return err
 	}
 
-	err = json.Unmarshal(jsonSinkUriBytes, uriInfo)
-	if err != nil {
-		return err
-	}
-	return nil
+	return json.Unmarshal(jsonSinkUriBytes, uriInfo)
 }
 
 type PatternTable struct {

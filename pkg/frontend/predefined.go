@@ -240,14 +240,14 @@ var (
     			state varchar(20),
     			checkpoint bigint unsigned,
     			checkpoint_str varchar(1000),
-    			full_config varchar(1000),
+    			no_full bool,
     			incr_config varchar(1000),
     			reserved0 text,
     			reserved1 text,
     			reserved2 text,
     			reserved3 text,
     			reserved4 text,
-    			primary key(account_id,task_id),
+    			primary key(account_id, task_id),
     			unique key(account_id, task_name)
 			)`
 

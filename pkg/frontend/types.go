@@ -176,6 +176,13 @@ const (
 	FPInternalExecutorExec
 	FPInternalExecutorQuery
 	FPHandleAnalyzeStmt
+	FPShowPublications
+	FPCreateCDC
+	FPPauseCDC
+	FPDropCDC
+	FPRestartCDC
+	FPResumeCDC
+	FPShowCDC
 )
 
 type (

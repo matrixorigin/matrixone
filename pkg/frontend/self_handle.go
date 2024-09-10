@@ -201,8 +201,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.ShowPublications:
-		//ses.EnterFPrint(32)
-		//defer ses.ExitFPrint(32)
+		ses.EnterFPrint(FPShowPublications)
+		defer ses.ExitFPrint(FPShowPublications)
 		if err = handleShowPublications(ses, execCtx, st); err != nil {
 			return
 		}
@@ -465,33 +465,39 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		defer ses.ExitFPrint(FPSetConnectionID)
 		ses.SetConnectionID(st.ConnectionID)
 	case *tree.CreateCDC:
-		ses.EnterFPrint(124)
-		defer ses.ExitFPrint(124)
+		ses.EnterFPrint(FPCreateCDC)
+		defer ses.ExitFPrint(FPCreateCDC)
 		if err = handleCreateCdc(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.PauseCDC:
-		ses.EnterFPrint(125)
-		defer ses.ExitFPrint(125)
+		ses.EnterFPrint(FPPauseCDC)
+		defer ses.ExitFPrint(FPPauseCDC)
 		if err = handlePauseCdc(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropCDC:
-		ses.EnterFPrint(126)
-		defer ses.ExitFPrint(126)
+		ses.EnterFPrint(FPDropCDC)
+		defer ses.ExitFPrint(FPDropCDC)
 		if err = handleDropCdc(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.RestartCDC:
-		ses.EnterFPrint(127)
-		defer ses.ExitFPrint(127)
+		ses.EnterFPrint(FPRestartCDC)
+		defer ses.ExitFPrint(FPRestartCDC)
 		if err = handleRestartCdc(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ResumeCDC:
-		ses.EnterFPrint(128)
-		defer ses.ExitFPrint(128)
+		ses.EnterFPrint(FPResumeCDC)
+		defer ses.ExitFPrint(FPResumeCDC)
 		if err = handleResumeCdc(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowCDC:
+		ses.EnterFPrint(FPShowCDC)
+		defer ses.ExitFPrint(FPShowCDC)
+		if err = handleShowCdc(ses, execCtx, st); err != nil {
 			return
 		}
 	}

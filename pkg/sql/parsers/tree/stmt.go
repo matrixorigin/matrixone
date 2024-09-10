@@ -638,7 +638,7 @@ func (node *DropPitr) StmtKind() StmtKind {
 func (node *CreateCDC) StmtKind() StmtKind { return frontendStatusTyp }
 
 func (node *ShowCDC) StmtKind() StmtKind {
-	return defaultResRowTyp
+	return compositeResRowType
 }
 
 func (node *PauseCDC) StmtKind() StmtKind {

@@ -418,34 +418,27 @@ func tryConn(dsn string) (*sql.DB, error) {
 	return db, err
 }
 
-func GetTableDef(
+func GetTxnOp(
 	ctx context.Context,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
-	tblId uint64,
-) (*plan.TableDef, error) {
+) (client.TxnOperator, error) {
 	nowTs := cnEngine.LatestLogtailAppliedTime()
 	createByOpt := client.WithTxnCreateBy(
 		0,
 		"",
 		"readMultipleTables",
 		0)
-	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		//same timeout value as it in frontend
-		ctx2, cancel := context.WithTimeout(ctx, cnEngine.Hints().CommitOrRollbackTimeout)
-		defer cancel()
-		if err != nil {
-			_ = txnOp.Rollback(ctx2)
-		} else {
-			_ = txnOp.Commit(ctx2)
-		}
-	}()
+	return cnTxnClient.New(ctx, nowTs, createByOpt)
+}
 
-	if err = cnEngine.New(ctx, txnOp); err != nil {
+func GetTableDef(
+	ctx context.Context,
+	txnOp client.TxnOperator,
+	cnEngine engine.Engine,
+	tblId uint64,
+) (*plan.TableDef, error) {
+	if err := cnEngine.New(ctx, txnOp); err != nil {
 		return nil, err
 	}
 
