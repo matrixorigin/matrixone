@@ -22,14 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
 var ErrNoMore = moerr.NewInternalErrorNoCtx("no more")
 
 func ForeachObjectsExecute(
 	onObject func(*objectio.ObjectStats) error,
-	nextObjectFn func() (logtailreplay.ObjectEntry, error),
+	nextObjectFn func() (*objectio.ObjectStats, error),
 	latestObjects []objectio.ObjectStats,
 	extraObjects []objectio.ObjectStats,
 ) (err error) {
@@ -44,9 +43,9 @@ func ForeachObjectsExecute(
 		}
 	}
 	if nextObjectFn != nil {
-		var obj logtailreplay.ObjectEntry
+		var obj *objectio.ObjectStats
 		for obj, err = nextObjectFn(); err == nil; obj, err = nextObjectFn() {
-			if err = onObject(&obj.ObjectStats); err != nil {
+			if err = onObject(obj); err != nil {
 				return
 			}
 		}
@@ -64,7 +63,7 @@ func FilterObjects(
 	objectFilterOp ObjectFilterOp,
 	blockFilterOp BlockFilterOp,
 	seekOp SeekFirstBlockOp,
-	nextObjectFn func() (logtailreplay.ObjectEntry, error),
+	nextObjectFn func() (*objectio.ObjectStats, error),
 	latestObjects []objectio.ObjectStats,
 	extraObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
