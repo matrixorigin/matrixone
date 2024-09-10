@@ -583,6 +583,7 @@ func dumpCommonConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
 }
 
 func (c *Config) setFileserviceDefaultValues() {
+
 	for i := 0; i < len(c.FileServices); i++ {
 		config := &c.FileServices[i]
 
@@ -603,12 +604,6 @@ func (c *Config) setFileserviceDefaultValues() {
 			} else {
 				config.DataDir = c.defaultFileServiceDataDir(config.Name)
 			}
-		}
-
-		// set default disk cache dir
-		if config.Cache.DiskPath == nil {
-			path := config.DataDir + "-cache"
-			config.Cache.DiskPath = &path
 		}
 
 	}
@@ -662,6 +657,43 @@ func (c *Config) setFileserviceDefaultValues() {
 			Backend: "DISK-ETL", // must be ETL
 			DataDir: c.defaultFileServiceDataDir(defines.ETLFileServiceName),
 		})
+	}
+
+	for i := 0; i < len(c.FileServices); i++ {
+		config := &c.FileServices[i]
+
+		// cache configs
+		switch config.Name {
+
+		case defines.LocalFileServiceName:
+			// memory
+			if config.Cache.MemoryCapacity == nil {
+				capacity := tomlutil.ByteSize(512 * (1 << 20))
+				config.Cache.MemoryCapacity = &capacity
+			}
+			// no disk
+
+		case defines.SharedFileServiceName:
+			// memory
+			if config.Cache.MemoryCapacity == nil {
+				capacity := tomlutil.ByteSize(512 * (1 << 20))
+				config.Cache.MemoryCapacity = &capacity
+			}
+			// disk
+			if config.Cache.DiskPath == nil {
+				path := config.DataDir + "-cache"
+				config.Cache.DiskPath = &path
+			}
+			if config.Cache.DiskCapacity == nil {
+				capacity := tomlutil.ByteSize(8 * (1 << 30))
+				config.Cache.DiskCapacity = &capacity
+			}
+
+		case defines.ETLFileServiceName:
+			// no caches
+
+		}
+
 	}
 
 }
