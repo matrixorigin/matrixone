@@ -58,7 +58,7 @@ func IsPrepareStatement(stmt tree.Statement) bool {
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
-		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
+		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.RenameTable,
 		*tree.CreateDatabase, *tree.DropDatabase, *tree.CreateSequence, *tree.DropSequence,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
 		return true

@@ -27,4 +27,10 @@ select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 555555 order b
 -- @separator:table
 explain select * from t1,t2 where t1.c1=t2.c1  order by t1.c1 desc limit 10 offset 10;
 select * from t1,t2 where t1.c1=t2.c1 and t2.c2  order by t1.c1 desc limit 10 offset 10;
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+insert into t1 select result, result from generate_series (1, 800000)g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t1');
+select a from t1 order by abs(b) limit 2;
 drop database if exists d1;

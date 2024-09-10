@@ -16,6 +16,7 @@ package types
 
 import (
 	"math"
+	"sort"
 	"testing"
 
 	"golang.org/x/exp/constraints"
@@ -264,4 +265,120 @@ func TestType_DescString(t *testing.T) {
 		Oid:   T_bit,
 		Width: 10,
 	}.DescString(), "BIT(10)")
+}
+
+func TestTypeCompare(t *testing.T) {
+	obj1 := NewObjectid()
+	blockId_1_1291 := NewBlockidWithObjectID(obj1, 1291)
+	blockId_1_1036 := NewBlockidWithObjectID(obj1, 1036)
+	var blocks []Blockid
+	blocks = append(blocks, *blockId_1_1291)
+	blocks = append(blocks, *blockId_1_1036)
+
+	sort.Slice(blocks, func(i, j int) bool {
+		return blocks[i].LT(&blocks[j])
+	})
+	require.Equal(t, uint16(1036), blocks[0].Sequence())
+	require.Equal(t, uint16(1291), blocks[1].Sequence())
+
+	var blocks2 []Blockid
+	blocks2 = append(blocks2, blocks...)
+	sort.Slice(blocks2, func(i, j int) bool {
+		return blocks[j].LT(&blocks[i])
+	})
+	require.Equal(t, uint16(1291), blocks2[0].Sequence())
+	require.Equal(t, uint16(1036), blocks2[1].Sequence())
+
+	// Blockid LT
+	require.True(t, blockId_1_1036.LT(blockId_1_1291))
+	require.False(t, blockId_1_1291.LT(blockId_1_1036))
+	require.False(t, blockId_1_1291.LT(blockId_1_1291))
+	require.True(t, blockId_1_1036.LT(blockId_1_1291))
+	require.False(t, blockId_1_1291.LT(blockId_1_1036))
+	require.False(t, blockId_1_1291.LT(blockId_1_1291))
+
+	// Blockid GT
+	require.False(t, blockId_1_1036.GT(blockId_1_1291))
+	require.True(t, blockId_1_1291.GT(blockId_1_1036))
+	require.False(t, blockId_1_1291.GT(blockId_1_1291))
+
+	rowid_1_1291_1036 := NewRowid(blockId_1_1291, 1036)
+	rowid_1_1291_1291 := NewRowid(blockId_1_1291, 1291)
+
+	// LT
+	require.True(t, rowid_1_1291_1036.LT(rowid_1_1291_1291))
+	require.False(t, rowid_1_1291_1291.LT(rowid_1_1291_1036))
+	require.False(t, rowid_1_1291_1291.LT(rowid_1_1291_1291))
+
+	// GT
+	require.False(t, rowid_1_1291_1036.GT(rowid_1_1291_1291))
+	require.True(t, rowid_1_1291_1291.GT(rowid_1_1291_1036))
+	require.False(t, rowid_1_1291_1291.GT(rowid_1_1291_1291))
+
+	// LE
+	require.True(t, rowid_1_1291_1036.LE(rowid_1_1291_1291))
+	require.False(t, rowid_1_1291_1291.LE(rowid_1_1291_1036))
+	require.True(t, rowid_1_1291_1291.LE(rowid_1_1291_1291))
+
+	// GE
+	require.False(t, rowid_1_1291_1036.GE(rowid_1_1291_1291))
+	require.True(t, rowid_1_1291_1291.GE(rowid_1_1291_1036))
+	require.True(t, rowid_1_1291_1291.GE(rowid_1_1291_1291))
+
+	// EQ
+	require.False(t, rowid_1_1291_1036.EQ(rowid_1_1291_1291))
+	require.False(t, rowid_1_1291_1291.EQ(rowid_1_1291_1036))
+	require.True(t, rowid_1_1291_1291.EQ(rowid_1_1291_1291))
+
+	// ComparePrefix
+	require.True(t, rowid_1_1291_1036.ComparePrefix(rowid_1_1291_1291[:]) < 0)
+	require.True(t, rowid_1_1291_1291.ComparePrefix(rowid_1_1291_1036[:]) > 0)
+	require.True(t, rowid_1_1291_1291.ComparePrefix(rowid_1_1291_1291[:]) == 0)
+	require.True(t, rowid_1_1291_1291.ComparePrefix(blockId_1_1291[:]) == 0)
+	require.True(t, rowid_1_1291_1291.ComparePrefix(blockId_1_1036[:]) > 0)
+	require.True(t, rowid_1_1291_1036.ComparePrefix(blockId_1_1291[:]) == 0)
+	require.True(t, rowid_1_1291_1036.ComparePrefix(blockId_1_1036[:]) > 0)
+	require.True(t, rowid_1_1291_1036.ComparePrefix(obj1[:]) == 0)
+
+}
+
+func BenchmarkTypesCompare(b *testing.B) {
+	obj1 := NewObjectid()
+	obj2 := NewObjectid()
+	blockId_1_1291 := NewBlockidWithObjectID(obj1, 1291)
+	blockId_1_1036 := NewBlockidWithObjectID(obj1, 1036)
+	blockId_2_1291 := NewBlockidWithObjectID(obj2, 1291)
+	b.Run("blockid-compare-same-obj", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			blockId_1_1291.Compare(blockId_1_1036)
+		}
+	})
+	b.Run("blockid-compare-diff-obj", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			blockId_1_1291.Compare(blockId_2_1291)
+		}
+	})
+	b.Run("blockid-compare-same-block", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			blockId_1_1291.Compare(blockId_1_1291)
+		}
+	})
+	b.Run("blockid-less", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			blockId_1_1291.LT(blockId_1_1291)
+		}
+	})
+
+	rowid_1_1291_1291 := NewRowid(blockId_1_1291, 1291)
+	rowid_1_1291_1036 := NewRowid(blockId_1_1291, 1036)
+	b.Run("rowid-compare", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			rowid_1_1291_1291.Compare(rowid_1_1291_1036)
+		}
+	})
 }

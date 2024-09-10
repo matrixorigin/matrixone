@@ -86,39 +86,81 @@ func NewRowIDWithObjectIDBlkNumAndRowID(id Objectid, blknum uint16, offset uint3
 }
 
 func CompareRowidRowidAligned(a, b Rowid) int {
-	return bytes.Compare(a[:], b[:])
+	return a.Compare(&b)
 }
 
 func CompareBlockidBlockidAligned(a, b Blockid) int {
-	return bytes.Compare(a[:], b[:])
+	return a.Compare(&b)
 }
 
-func (r Rowid) Compare(other Rowid) int {
-	return bytes.Compare(r[:], other[:])
+func (r *Rowid) ComparePrefix(to []byte) int {
+	toLen := len(to)
+	if toLen == BlockidSize {
+		v1 := (*Blockid)(unsafe.Pointer(&r[0]))
+		v2 := (*Blockid)(unsafe.Pointer(&to[0]))
+		return v1.Compare(v2)
+	}
+	if toLen == RowidSize {
+		toId := (*Rowid)(unsafe.Pointer(&to[0]))
+		return r.Compare(toId)
+	}
+	if toLen == ObjectidSize {
+		v1 := (*Objectid)(unsafe.Pointer(&r[0]))
+		v2 := (*Objectid)(unsafe.Pointer(&to[0]))
+		return v1.Compare(v2)
+	}
+	if toLen == SegmentidSize {
+		return bytes.Compare(r[:toLen], to)
+	}
+	panic(fmt.Sprintf("invalid prefix length %d:%X", toLen, to))
 }
 
-func (r Rowid) Less(than Rowid) bool {
-	return bytes.Compare(r[:], than[:]) < 0
+func (r *Rowid) Compare(other *Rowid) int {
+	if v := bytes.Compare(r[:SegmentidSize], other[:SegmentidSize]); v != 0 {
+		return v
+	}
+	filen1 := *(*uint16)(unsafe.Pointer(&r[SegmentidSize]))
+	filen2 := *(*uint16)(unsafe.Pointer(&other[SegmentidSize]))
+	if filen1 < filen2 {
+		return -1
+	} else if filen1 > filen2 {
+		return 1
+	}
+	blk1 := *(*uint16)(unsafe.Pointer(&r[ObjectidSize]))
+	blk2 := *(*uint16)(unsafe.Pointer(&other[ObjectidSize]))
+	if blk1 < blk2 {
+		return -1
+	} else if blk1 > blk2 {
+		return 1
+	}
+	row1 := *(*uint32)(unsafe.Pointer(&r[BlockidSize]))
+	row2 := *(*uint32)(unsafe.Pointer(&other[BlockidSize]))
+	if row1 < row2 {
+		return -1
+	} else if row1 > row2 {
+		return 1
+	}
+	return 0
 }
 
-func (r Rowid) Le(than Rowid) bool {
-	return r.Less(than) || r.Equal(than)
+func (r *Rowid) LT(than *Rowid) bool {
+	return r.Compare(than) < 0
 }
 
-func (r Rowid) Equal(to Rowid) bool {
-	return bytes.Equal(r[:], to[:])
+func (r *Rowid) LE(than *Rowid) bool {
+	return r.Compare(than) <= 0
 }
 
-func (r Rowid) NotEqual(to Rowid) bool {
-	return !r.Equal(to)
+func (r *Rowid) EQ(to *Rowid) bool {
+	return r.Compare(to) == 0
 }
 
-func (r Rowid) Great(than Rowid) bool {
-	return !r.Less(than)
+func (r *Rowid) GT(than *Rowid) bool {
+	return r.Compare(than) > 0
 }
 
-func (r Rowid) Ge(than Rowid) bool {
-	return r.Great(than) || r.Equal(than)
+func (r *Rowid) GE(than *Rowid) bool {
+	return r.Compare(than) >= 0
 }
 
 // CloneBlockID clones the block id from row id.
@@ -184,11 +226,11 @@ func (r *Rowid) ShortStringEx() string {
 	return fmt.Sprintf("%s-%d", b.ShortStringEx(), s)
 }
 
-func (b Blockid) Less(than Blockid) bool {
+func (b *Blockid) LT(than *Blockid) bool {
 	return b.Compare(than) < 0
 }
 
-func (b Blockid) Great(than Blockid) bool {
+func (b *Blockid) GT(than *Blockid) bool {
 	return b.Compare(than) > 0
 }
 
@@ -199,8 +241,25 @@ func RandomRowid() Rowid {
 	return r
 }
 
-func (b Blockid) Compare(other Blockid) int {
-	return bytes.Compare(b[:], other[:])
+func (b *Blockid) Compare(other *Blockid) int {
+	if r := bytes.Compare(b[:SegmentidSize], other[:SegmentidSize]); r != 0 {
+		return r
+	}
+	filen1 := *(*uint16)(unsafe.Pointer(&b[SegmentidSize]))
+	filen2 := *(*uint16)(unsafe.Pointer(&other[SegmentidSize]))
+	if filen1 < filen2 {
+		return -1
+	} else if filen1 > filen2 {
+		return 1
+	}
+	blk1 := *(*uint16)(unsafe.Pointer(&b[ObjectidSize]))
+	blk2 := *(*uint16)(unsafe.Pointer(&other[ObjectidSize]))
+	if blk1 < blk2 {
+		return -1
+	} else if blk1 > blk2 {
+		return 1
+	}
+	return 0
 }
 
 func (b *Blockid) IsEmpty() bool {
@@ -268,19 +327,33 @@ func (o *Objectid) Offset() uint16 {
 	return filen
 }
 
+func (o *Objectid) Compare(other *Objectid) int {
+	if v := bytes.Compare(o[:SegmentidSize], other[:SegmentidSize]); v != 0 {
+		return v
+	}
+	filen1 := *(*uint16)(unsafe.Pointer(&o[SegmentidSize]))
+	filen2 := *(*uint16)(unsafe.Pointer(&other[SegmentidSize]))
+	if filen1 < filen2 {
+		return -1
+	} else if filen1 > filen2 {
+		return 1
+	}
+	return 0
+}
+
 func (o *Objectid) Eq(other Objectid) bool {
-	return bytes.Equal(o[:], other[:])
+	return o.Compare(&other) == 0
 }
 
 func (o *Objectid) Le(other Objectid) bool {
-	return bytes.Compare(o[:], other[:]) <= 0
+	return o.Compare(&other) <= 0
 }
 func (o *Objectid) Ge(other Objectid) bool {
-	return bytes.Compare(o[:], other[:]) >= 0
+	return o.Compare(&other) >= 0
 }
 func (o *Objectid) Lt(other Objectid) bool {
-	return bytes.Compare(o[:], other[:]) < 0
+	return o.Compare(&other) < 0
 }
 func (o *Objectid) Gt(other Objectid) bool {
-	return bytes.Compare(o[:], other[:]) > 0
+	return o.Compare(&other) > 0
 }

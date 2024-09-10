@@ -73,7 +73,7 @@ func (p *rowsIter) Next() bool {
 			// not visible
 			continue
 		}
-		if entry.RowID.Equal(p.lastRowID) {
+		if entry.RowID.EQ(&p.lastRowID) {
 			// already met
 			continue
 		}
@@ -461,7 +461,7 @@ func (p *primaryKeyDelIter) Next() bool {
 
 		entry := p.iter.Item()
 
-		if entry.BlockID.Compare(p.bid) != 0 {
+		if entry.BlockID.Compare(&p.bid) != 0 {
 			continue
 		}
 
