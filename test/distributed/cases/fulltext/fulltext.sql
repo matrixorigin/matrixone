@@ -11,6 +11,8 @@ insert into src values (0, 'red', 't1'), (1, 'yellow', 't2'), (2, 'blue', 't3'),
 
 create fulltext index ftidx on src (body, title);
 
+alter table add fulltext index ftidx2 on src (body);
+
 -- match in WHERE clause
 select * from src where match(body, title) against('red');
 
