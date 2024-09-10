@@ -171,6 +171,9 @@ func (tbl *txnTable) TransferDeleteIntent(
 	return
 }
 
+func (tbl *txnTable) approxSize() int {
+	return tbl.dataTable.approxSize() + tbl.tombstoneTable.approxSize()
+}
 func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 	if tbl.store.rt.TransferTable == nil {
 		return
