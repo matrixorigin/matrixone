@@ -11,8 +11,14 @@ insert into src values (0, 'red', 't1'), (1, 'yellow', 't2'), (2, 'blue', 't3'),
 
 create fulltext index ftidx on src (body, title);
 
+-- match in WHERE clause
 select * from src where match(body, title) against('red');
+
+-- match in projection
 select src.*, match(body, title) against('blue') from src;
+
+-- match with Aggregate
+select count(*) from src where match(title, body) against('red');
 
 drop table src;
 

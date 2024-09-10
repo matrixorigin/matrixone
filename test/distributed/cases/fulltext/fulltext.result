@@ -12,6 +12,9 @@ select src.*, match(body, title) against('blue') from src;
 id    body    title    score
 2    blue    t3    0.32660624
 3    blue red    t4    0.21773751
+select count(*) from src where match(title, body) against('red');
+count(*)
+2
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
