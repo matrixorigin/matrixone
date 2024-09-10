@@ -78,7 +78,8 @@ const (
 	Label_Unique            = "Unique"
 	Label_Replace           = "Replace"
 	Label_Unknown           = "Unknown"
-	Label_Meterial          = "Meterial"
+	Label_Material          = "Material"
+	Label_Dedup_Join        = "Dedup join"
 )
 
 const (

@@ -115,8 +115,9 @@ func (dedupJoin *DedupJoin) Release() {
 
 func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
-	anal := proc.GetAnalyze(dedupJoin.GetIdx(), dedupJoin.GetParallelIdx(), dedupJoin.GetParallelMajor())
-	anal.Alloc(ctr.maxAllocSize)
+	if dedupJoin.OpAnalyzer != nil {
+		dedupJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+	}
 	ctr.maxAllocSize = 0
 
 	ctr.cleanBuf(proc)

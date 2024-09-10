@@ -61,16 +61,16 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(dedupJoin.GetIdx(), dedupJoin.GetParallelIdx(), dedupJoin.GetParallelMajor())
-	analyze.Start()
-	defer analyze.Stop()
+	analyzer := dedupJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 	ctr := &dedupJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			err = dedupJoin.build(analyze, proc)
+			err = dedupJoin.build(analyzer, proc)
 			if err != nil {
 				return result, err
 			}
@@ -95,7 +95,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			if err := ctr.probe(bat, dedupJoin, proc, analyze, dedupJoin.GetIsFirst(), dedupJoin.GetIsLast()); err != nil {
+			if err := ctr.probe(bat, dedupJoin, proc, analyzer); err != nil {
 				return result, err
 			}
 
@@ -104,7 +104,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case SendResult:
 			if dedupJoin.ctr.buf == nil {
 				dedupJoin.ctr.lastPos = 0
-				setNil, err := ctr.sendResult(dedupJoin, proc, analyze, dedupJoin.GetIsFirst(), dedupJoin.GetIsLast())
+				setNil, err := ctr.sendResult(dedupJoin, proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -132,10 +132,10 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (dedupJoin *DedupJoin) build(anal process.Analyze, proc *process.Process) (err error) {
+func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &dedupJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	ctr.mp, err = message.ReceiveJoinMap(dedupJoin.JoinMapTag, dedupJoin.IsShuffle, dedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if err != nil {
 		return
@@ -148,14 +148,14 @@ func (dedupJoin *DedupJoin) build(anal process.Analyze, proc *process.Process) (
 	return
 }
 
-func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {
+func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyzer process.Analyzer) (bool, error) {
 	ctr.handledLast = true
 
 	if ctr.matched.Count() == 0 {
 		ap.ctr.buf = ctr.batches
 		ctr.batches = nil
 		for k := range ap.ctr.buf {
-			analyze.Output(ap.ctr.buf[k], isLast)
+			analyzer.Output(ap.ctr.buf[k])
 		}
 		return false, nil
 	}
@@ -191,13 +191,13 @@ func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyze p
 			}
 		}
 		ap.ctr.buf[k].SetRowCount(len(newsels))
-		analyze.Output(ap.ctr.buf[k], isLast)
+		analyzer.Output(ap.ctr.buf[k])
 	}
 	return false, nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Process, analyze process.Analyze, isFirst bool, _ bool) error {
-	analyze.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Process, analyzer process.Analyzer) error {
+	analyzer.Input(bat)
 
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		return err

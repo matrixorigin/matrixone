@@ -633,11 +633,11 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		})
 	case plan.Node_MATERIAL:
 		labels = append(labels, models.Label{
-			Name:  Label_Meterial,
+			Name:  Label_Material,
 			Value: []string{},
 		})
 	case plan.Node_DEDUP_JOIN:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Dedup_Join,
 			Value: []string{},
 		})
