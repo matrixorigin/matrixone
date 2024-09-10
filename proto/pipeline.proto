@@ -130,9 +130,11 @@ message Insert{
 }
 
 message MultiUpdate {
-  uint64 affected              = 1;
+  uint64 affected_rows = 1;
   bool ToWriteS3 = 2;
-  repeated plan.UpdateCtx update_ctx = 3;
+  uint32 IBucket = 3;
+  uint32 NBucket = 4;
+  repeated plan.UpdateCtx update_ctx = 5;
 }
 
 message Array{
