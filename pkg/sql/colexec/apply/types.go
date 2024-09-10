@@ -90,8 +90,7 @@ func (apply *Apply) Reset(proc *process.Process, pipelineFailed bool, err error)
 	ctr.state = Build
 
 	if apply.ProjectList != nil {
-		anal := proc.GetAnalyze(apply.GetIdx(), apply.GetParallelIdx(), apply.GetParallelMajor())
-		anal.Alloc(apply.ProjectAllocSize)
+		apply.OpAnalyzer.Alloc(apply.ProjectAllocSize)
 		apply.ResetProjection(proc)
 	}
 }

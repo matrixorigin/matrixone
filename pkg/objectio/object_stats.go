@@ -23,7 +23,7 @@ import (
 )
 
 type ObjectDescriber interface {
-	DescribeObject() ([]ObjectStats, error)
+	DescribeObject() (ObjectStats, error)
 }
 
 const (
@@ -44,6 +44,12 @@ const (
 	ObjectStatsLen         = reservedOffset + reservedLen
 )
 
+const (
+	ObjectFlag_Appendable = 1 << iota
+	ObjectFlag_Sorted
+	ObjectFlag_CNCreated
+)
+
 var ZeroObjectStats ObjectStats
 
 // ObjectStats has format:
@@ -51,6 +57,26 @@ var ZeroObjectStats ObjectStats
 // |object_name(60B)|extent(13B)|row_cnt(4B)|block_cnt(4B)|zone_map(64B)|objectSize|objectOriginSize|reserved|
 // +------------------------------------------------------------------------------------------------+--------+
 type ObjectStats [ObjectStatsLen]byte
+
+type ObjectStatsOptions func(*ObjectStats)
+
+func WithCNCreated() ObjectStatsOptions {
+	return func(o *ObjectStats) {
+		o[reservedOffset] |= ObjectFlag_CNCreated
+	}
+}
+
+func WithSorted() ObjectStatsOptions {
+	return func(o *ObjectStats) {
+		o[reservedOffset] |= ObjectFlag_Sorted
+	}
+}
+
+func WithAppendable() ObjectStatsOptions {
+	return func(o *ObjectStats) {
+		o[reservedOffset] |= ObjectFlag_Appendable
+	}
+}
 
 func NewObjectStats() *ObjectStats {
 	return new(ObjectStats)
@@ -60,14 +86,17 @@ func NewObjectStatsWithObjectID(id *ObjectId, appendable, sorted, cnCreated bool
 	stats := new(ObjectStats)
 	SetObjectStatsObjectName(stats, BuildObjectNameWithObjectID(id))
 	if appendable {
-		stats.setAppendable()
+		stats[reservedOffset] = stats[reservedOffset] | ObjectFlag_Appendable
 	}
+
 	if sorted {
-		stats.SetSorted()
+		stats[reservedOffset] = stats[reservedOffset] | ObjectFlag_Sorted
 	}
+
 	if cnCreated {
-		stats.SetCNCreated()
+		stats[reservedOffset] = stats[reservedOffset] | ObjectFlag_CNCreated
 	}
+
 	return stats
 }
 func (des *ObjectStats) Marshal() []byte {
@@ -78,29 +107,27 @@ func (des *ObjectStats) UnMarshal(data []byte) {
 	copy(des[:], data)
 }
 
+func (des *ObjectStats) GetFlag() int8 {
+	return int8(des[reservedOffset])
+}
+
 // Clone deep copies the stats and returns its pointer
 func (des *ObjectStats) Clone() *ObjectStats {
 	copied := NewObjectStats()
 	copy(copied[:], des[:])
 	return copied
 }
-func (des *ObjectStats) setAppendable() {
-	des[reservedOffset] = des[reservedOffset] | 0x1
-}
+
 func (des *ObjectStats) GetAppendable() bool {
-	return des[reservedOffset]&0x1 != 0
+	return des[reservedOffset]&ObjectFlag_Appendable != 0
 }
-func (des *ObjectStats) SetSorted() {
-	des[reservedOffset] = des[reservedOffset] | 0x2
-}
+
 func (des *ObjectStats) GetSorted() bool {
-	return des[reservedOffset]&0x2 != 0
+	return des[reservedOffset]&ObjectFlag_Sorted != 0
 }
-func (des *ObjectStats) SetCNCreated() {
-	des[reservedOffset] = des[reservedOffset] | 0x4
-}
+
 func (des *ObjectStats) GetCNCreated() bool {
-	return des[reservedOffset]&0x4 != 0
+	return des[reservedOffset]&ObjectFlag_CNCreated != 0
 }
 func (des *ObjectStats) IsZero() bool {
 	return bytes.Equal(des[:], ZeroObjectStats[:])

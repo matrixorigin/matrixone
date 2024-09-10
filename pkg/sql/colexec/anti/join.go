@@ -40,6 +40,12 @@ func (antiJoin *AntiJoin) OpType() vm.OpType {
 }
 
 func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
+	if antiJoin.OpAnalyzer == nil {
+		antiJoin.OpAnalyzer = process.NewAnalyzer(antiJoin.GetIdx(), antiJoin.IsFirst, antiJoin.IsLast, "anti join")
+	} else {
+		antiJoin.OpAnalyzer.Reset()
+	}
+
 	if antiJoin.ctr.vecs == nil {
 		antiJoin.ctr.vecs = make([]*vector.Vector, len(antiJoin.Conditions[0]))
 		antiJoin.ctr.executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, antiJoin.Conditions[0])
@@ -64,9 +70,10 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := antiJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ap := antiJoin
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -76,14 +83,14 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			err = antiJoin.build(anal, proc)
+			err = antiJoin.build(analyzer, proc)
 			if err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
-			input, err = antiJoin.Children[0].Call(proc)
+			input, err = vm.ChildrenCall(antiJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -94,12 +101,12 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if inbat.Last() {
 				result.Batch = inbat
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
 			if inbat.IsEmpty() {
 				continue
 			}
-			anal.Input(inbat, antiJoin.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(ap.Result))
@@ -129,7 +136,7 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, antiJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -140,10 +147,10 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (antiJoin *AntiJoin) build(anal process.Analyze, proc *process.Process) (err error) {
+func (antiJoin *AntiJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &antiJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	ctr.mp, err = message.ReceiveJoinMap(antiJoin.JoinMapTag, antiJoin.IsShuffle, antiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if err != nil {
 		return err
@@ -230,7 +237,7 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					}
-					bs := vector.MustFixedCol[bool](vec)
+					bs := vector.MustFixedColWithTypeCheck[bool](vec)
 					if bs[0] {
 						continue
 					}
@@ -254,7 +261,7 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						}
-						bs := vector.MustFixedCol[bool](vec)
+						bs := vector.MustFixedColWithTypeCheck[bool](vec)
 						if bs[0] {
 							matched = true
 							break

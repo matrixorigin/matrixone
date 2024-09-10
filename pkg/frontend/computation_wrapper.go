@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mohae/deepcopy"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -35,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/mohae/deepcopy"
 )
 
 var (
@@ -267,7 +269,7 @@ func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage
 	}
 }
 
-func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
+func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		waitActiveCost := time.Duration(0)
 		if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
@@ -276,7 +278,7 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 				waitActiveCost = txn.GetWaitActiveCost()
 			}
 		}
-		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, WithWaitActiveCost(waitActiveCost)))
+		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, WithWaitActiveCost(waitActiveCost)))
 	}
 	return nil
 }

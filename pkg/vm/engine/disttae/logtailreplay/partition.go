@@ -15,7 +15,6 @@
 package logtailreplay
 
 import (
-	"bytes"
 	"context"
 	"sync"
 	"sync/atomic"
@@ -70,12 +69,6 @@ func NewPartition(
 	ret.mu.start = types.MaxTs()
 	ret.state.Store(NewPartitionState(service, false, id))
 	return ret
-}
-
-type RowID types.Rowid
-
-func (r RowID) Less(than RowID) bool {
-	return bytes.Compare(r[:], than[:]) < 0
 }
 
 func (p *Partition) Snapshot() *PartitionState {

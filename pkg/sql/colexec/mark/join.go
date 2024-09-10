@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -28,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,6 +43,11 @@ func (markJoin *MarkJoin) OpType() vm.OpType {
 
 func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 	var err error
+	if markJoin.OpAnalyzer == nil {
+		markJoin.OpAnalyzer = process.NewAnalyzer(markJoin.GetIdx(), markJoin.IsFirst, markJoin.IsLast, "mark join")
+	} else {
+		markJoin.OpAnalyzer.Reset()
+	}
 
 	if markJoin.ctr.vecs == nil {
 		markJoin.ctr.vecs = make([]*vector.Vector, len(markJoin.Conditions[0]))
@@ -104,9 +108,10 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := markJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &markJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -115,13 +120,13 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := markJoin.build(markJoin, proc, anal); err != nil {
+			if err := markJoin.build(markJoin, proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
-			input, err = markJoin.Children[0].Call(proc)
+			input, err = vm.ChildrenCall(markJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -133,7 +138,6 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			anal.Input(bat, markJoin.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(markJoin.Result))
@@ -174,7 +178,7 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, markJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -185,10 +189,10 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (markJoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
+func (markJoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &markJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	mp, err := message.ReceiveJoinMap(markJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if err != nil {
 		return err
@@ -252,7 +256,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *MarkJoin, proc *process.Proces
 		return err
 	}
 	markVec.SetLength(bat.RowCount())
-	ctr.markVals = vector.MustFixedCol[bool](markVec)
+	ctr.markVals = vector.MustFixedColWithTypeCheck[bool](markVec)
 	ctr.markNulls = nulls.NewWithSize(bat.RowCount())
 
 	if err = ctr.evalJoinProbeCondition(bat, proc); err != nil {
@@ -368,7 +372,7 @@ func (ctr *container) nonEqJoinInMap(ap *MarkJoin, mSels [][]int32, vals []uint6
 			if vec.GetNulls().Contains(0) {
 				condState = condUnkown
 			}
-			bs := vector.MustFixedCol[bool](vec)
+			bs := vector.MustFixedColWithTypeCheck[bool](vec)
 			if bs[0] {
 				condState = condTrue
 			}
@@ -396,7 +400,7 @@ func (ctr *container) nonEqJoinInMap(ap *MarkJoin, mSels [][]int32, vals []uint6
 				if vec.GetNulls().Contains(0) {
 					condState = condUnkown
 				}
-				bs := vector.MustFixedCol[bool](vec)
+				bs := vector.MustFixedColWithTypeCheck[bool](vec)
 				if bs[0] {
 					condState = condTrue
 					break

@@ -16,14 +16,12 @@ package blockio
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
@@ -346,18 +344,8 @@ func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 	return r.reader
 }
 
-// The caller has merged the block information that needs to be prefetched
-func PrefetchWithMerged(
-	sid string,
-	params PrefetchParams,
-) error {
-	return MustGetPipeline(sid).Prefetch(params)
-}
-
 func Prefetch(
 	sid string,
-	idxes []uint16,
-	ids []uint16,
 	service fileservice.FileService,
 	key objectio.Location,
 ) error {
@@ -365,38 +353,19 @@ func Prefetch(
 	if err != nil {
 		return err
 	}
-	params.AddBlock(idxes, ids)
+	params.typ = PrefetchFileType
 	return MustGetPipeline(sid).Prefetch(params)
 }
 
-func PrefetchMeta(sid string, service fileservice.FileService, key objectio.Location) error {
+func PrefetchMeta(
+	sid string,
+	service fileservice.FileService,
+	key objectio.Location,
+) error {
 	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
+	params.typ = PrefetchMetaType
 	return MustGetPipeline(sid).Prefetch(params)
-}
-
-func PrefetchFile(
-	sid string,
-	service fileservice.FileService,
-	name string,
-) error {
-	reader, err := NewFileReader(sid, service, name)
-	if err != nil {
-		return err
-	}
-	bs, err := reader.LoadAllBlocks(context.Background(), common.DefaultAllocator)
-	if err != nil {
-		return err
-	}
-	params := buildPrefetchParamsByReader(reader)
-	for i := range bs {
-		idxes := make([]uint16, bs[i].GetColumnCount())
-		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
-			idxes[a] = a
-		}
-		params.AddBlock(idxes, []uint16{bs[i].GetID()})
-	}
-	return PrefetchWithMerged(sid, params)
 }

@@ -45,6 +45,11 @@ func (timeWin *TimeWin) OpType() vm.OpType {
 
 func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	ctr := &timeWin.ctr
+	if timeWin.OpAnalyzer == nil {
+		timeWin.OpAnalyzer = process.NewAnalyzer(timeWin.GetIdx(), timeWin.IsFirst, timeWin.IsLast, "time_window")
+	} else {
+		timeWin.OpAnalyzer.Reset()
+	}
 
 	if len(ctr.aggExe) == 0 {
 		ctr.aggExe = make([]colexec.ExpressionExecutor, len(timeWin.Aggs))
@@ -100,19 +105,18 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(timeWin.GetIdx(), timeWin.GetParallelIdx(), timeWin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := timeWin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	ctr := &timeWin.ctr
 	var err error
 
 	result := vm.NewCallResult()
 	for {
-
 		switch ctr.status {
 		case dataTag:
-			result, err := timeWin.GetChildren(0).Call(proc)
+			result, err := vm.ChildrenCall(timeWin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -138,11 +142,11 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
+				analyzer.Alloc(int64(appBat.Size()))
 				ctr.bats = append(ctr.bats, appBat)
 			}
 			ctr.i++
 
-			anal.Input(ctr.bats[ctr.i], timeWin.GetIsFirst())
 			if err = ctr.evalVecs(proc); err != nil {
 				return result, err
 			}
@@ -155,7 +159,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = evalTag
 		case initTag:
-			result, err := timeWin.GetChildren(0).Call(proc)
+			result, err := vm.ChildrenCall(timeWin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -177,6 +181,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
+				analyzer.Alloc(int64(appBat.Size()))
 				ctr.bats = append(ctr.bats, appBat)
 			}
 			ctr.i++
@@ -212,7 +217,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = nextTag
 			result.Batch = ctr.rbat
-			anal.Output(result.Batch, timeWin.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case evalLastCur:
@@ -229,7 +234,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Batch = ctr.rbat
-			anal.Output(result.Batch, timeWin.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case evalLastPre:
@@ -271,13 +276,13 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = endTag
 			result.Batch = ctr.rbat
-			anal.Output(result.Batch, timeWin.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case endTag:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			anal.Output(result.Batch, timeWin.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 
@@ -288,7 +293,7 @@ const maxTimeWindowRows = 8192
 
 func eval[T constraints.Integer](ctr *container, ap *TimeWin, proc *process.Process) (err error) {
 	end := T(ctr.end)
-	ts := vector.MustFixedCol[T](ctr.tsVec[ctr.curIdx])
+	ts := vector.MustFixedColNoTypeCheck[T](ctr.tsVec[ctr.curIdx])
 	for ; ctr.curRow < len(ts); ctr.curRow++ {
 		if ts[ctr.curRow] >= T(ctr.nextStart) && ctr.pre == withoutPre {
 			ctr.preRow = ctr.curRow
@@ -538,7 +543,7 @@ func (ctr *container) firstWindow(ap *TimeWin, proc *process.Process) (err error
 	vec := ctr.tsVec[ctr.curIdx]
 	switch ctr.tsOid {
 	case types.T_date:
-		ts := vector.MustFixedCol[types.Date](vec)[0]
+		ts := vector.MustFixedColNoTypeCheck[types.Date](vec)[0]
 		start, err := doDateSub(ts, ap.Interval.Val/2, ap.Interval.Typ)
 		if err != nil {
 			return err
@@ -552,7 +557,7 @@ func (ctr *container) firstWindow(ap *TimeWin, proc *process.Process) (err error
 		ctr.start = int64(start)
 		ctr.end = int64(end)
 	case types.T_datetime:
-		ts := vector.MustFixedCol[types.Datetime](vec)[0]
+		ts := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[0]
 		start, err := doDatetimeSub(ts, ap.Interval.Val/2, ap.Interval.Typ)
 		if err != nil {
 			return err
@@ -566,7 +571,7 @@ func (ctr *container) firstWindow(ap *TimeWin, proc *process.Process) (err error
 		ctr.start = int64(start)
 		ctr.end = int64(end)
 	case types.T_time:
-		ts := vector.MustFixedCol[types.Time](vec)[0]
+		ts := vector.MustFixedColNoTypeCheck[types.Time](vec)[0]
 		start, err := doTimeSub(ts, ap.Interval.Val/2, ap.Interval.Typ)
 		if err != nil {
 			return err
@@ -580,7 +585,7 @@ func (ctr *container) firstWindow(ap *TimeWin, proc *process.Process) (err error
 		ctr.start = int64(start)
 		ctr.end = int64(end)
 	case types.T_timestamp:
-		ts := vector.MustFixedCol[types.Timestamp](vec)[0]
+		ts := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
 
 		itv, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, ts, ap.Interval.Val, ap.Interval.Typ)
 		if err != nil {

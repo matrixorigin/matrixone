@@ -221,7 +221,7 @@ func (e *Engine) loadDatabaseFromStorage(
 				zap.String("sql", sql), zap.Duration("cost", time.Since(now)))
 		}
 	}()
-	res, err := execReadSql(ctx, op, sql, false)
+	res, err := execReadSql(ctx, op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -256,9 +256,19 @@ func (e *Engine) loadDatabaseFromStorage(
 	return ret, nil
 }
 
-func (e *Engine) Database(ctx context.Context, name string,
-	op client.TxnOperator) (engine.Database, error) {
-	logDebugf(op.Txn(), "Engine.Database %s", name)
+func (e *Engine) Database(
+	ctx context.Context,
+	name string,
+	op client.TxnOperator,
+) (engine.Database, error) {
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug(
+			"Transaction.Database",
+			zap.String("txn", op.Txn().DebugString()),
+			zap.String("name", name),
+		)
+	})
+
 	txn, err := txnIsValid(op)
 	if err != nil {
 		return nil, err
@@ -324,7 +334,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 	}
 	sql := fmt.Sprintf(catalog.MoDatabasesInEngineQueryFormat, aid)
 
-	res, err := execReadSql(ctx, op, sql, false)
+	res, err := execReadSql(ctx, op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +404,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			// not found in cache, try storage
 			sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
 			tblanmes, dbnames := []string{}, []string{}
-			result, err := execReadSql(ctx, op, sql, false)
+			result, err := execReadSql(ctx, op, sql, true)
 			if err != nil {
 				return "", "", nil, err
 			}
@@ -498,7 +508,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 			zap.String("workspace", op.GetWorkspace().PPString()))
 		panic("delete table failed: query failed")
 	}
-	rowId := vector.GetFixedAt[types.Rowid](res.Batches[0].Vecs[0], 0)
+	rowId := vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// write the batch to delete the database
 	var packer *types.Packer
@@ -526,7 +536,12 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 }
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
-	logDebugf(op.Txn(), "Engine.New")
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug(
+			"Transaction.New",
+			zap.String("txn", op.Txn().DebugString()),
+		)
+	})
 	proc := process.NewTopProcess(
 		ctx,
 		e.mp,

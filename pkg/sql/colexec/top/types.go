@@ -41,6 +41,7 @@ type container struct {
 	desc                    bool
 	topValueZM              objectio.ZoneMap
 	bat                     *batch.Batch
+	buildBat                *batch.Batch //temp batch, do not need free or reset
 }
 
 type Top struct {

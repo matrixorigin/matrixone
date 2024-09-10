@@ -77,7 +77,7 @@ func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, res
 		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
 			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
 		}
-		digits = vector.MustFixedCol[int64](ivecs[1])[0]
+		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
 	return opUnaryFixedToFixed[T, T](ivecs, result, proc, length, func(x T) T {
@@ -91,7 +91,7 @@ func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
 			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "ceil"), "not const")
 		}
-		digits = vector.MustFixedCol[int64](ivecs[1])[0]
+		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
 	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
@@ -188,7 +188,7 @@ func ceilDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool)
 func CeilDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	if len(ivecs) > 1 {
-		digit := vector.MustFixedCol[int64](ivecs[1])
+		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
 			return moerr.NewOutOfRangef(proc.Ctx, "decimal64", "ceil(decimal64(18,%v),%v)", scale, digit[0])
 		}
@@ -202,7 +202,7 @@ func CeilDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 func CeilDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	if len(ivecs) > 1 {
-		digit := vector.MustFixedCol[int64](ivecs[1])
+		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
 			return moerr.NewOutOfRangef(proc.Ctx, "decimal128", "ceil(decimal128(38,%v),%v)", scale, digit[0])
 		}
@@ -323,7 +323,7 @@ func floorDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool
 func FloorDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	if len(ivecs) > 1 {
-		digit := vector.MustFixedCol[int64](ivecs[1])
+		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
 			return moerr.NewOutOfRangef(proc.Ctx, "decimal64", "floor(decimal64(18,%v),%v)", scale, digit[0])
 		}
@@ -338,7 +338,7 @@ func FloorDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 func FloorDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	if len(ivecs) > 1 {
-		digit := vector.MustFixedCol[int64](ivecs[1])
+		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
 			return moerr.NewOutOfRangef(proc.Ctx, "decimal128", "floor(decimal128(38,%v),%v)", scale, digit[0])
 		}
@@ -356,7 +356,7 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
 			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "ceil"), "not const")
 		}
-		digits = vector.MustFixedCol[int64](ivecs[1])[0]
+		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
 	rs := vector.MustFunctionResult[float64](result)

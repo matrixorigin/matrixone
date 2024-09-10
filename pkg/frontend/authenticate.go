@@ -954,6 +954,8 @@ var (
 		"mo_foreign_keys":             0,
 		"mo_snapshots":                0,
 		"mo_subs":                     0,
+		"mo_shards":                   0,
+		"mo_shards_metadata":          0,
 		catalog.MO_RETENTION:          0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
@@ -5178,6 +5180,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
+	case *tree.RenameTable:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeAlterTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
 	case *tree.CreateProcedure:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)

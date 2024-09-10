@@ -169,7 +169,7 @@ func (u *unnestState) start(tf *TableFunction, proc *process.Process, nthRow int
 			return err
 		}
 
-		u.outer = vector.MustFixedCol[bool](outerVec)[0]
+		u.outer = vector.MustFixedColWithTypeCheck[bool](outerVec)[0]
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}

@@ -97,7 +97,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 
 	fileListTmp := make([]string, 0)
 	fileSizeTmp := make([]int64, 0)
-	bs := vector.MustFixedCol[bool](vec)
+	bs := vector.MustFixedColWithTypeCheck[bool](vec)
 	for i := 0; i < len(bs); i++ {
 		if bs[i] {
 			fileListTmp = append(fileListTmp, fileList[i])
@@ -176,7 +176,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(node.TableDef.Createsql), param)
-	if err != nil || param.Local || param.ScanType == tree.S3 {
+	if err != nil || param.Local {
 		return DefaultHugeStats()
 	}
 

@@ -18,14 +18,13 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -41,6 +40,12 @@ func (leftJoin *LeftJoin) OpType() vm.OpType {
 }
 
 func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
+	if leftJoin.OpAnalyzer == nil {
+		leftJoin.OpAnalyzer = process.NewAnalyzer(leftJoin.GetIdx(), leftJoin.IsFirst, leftJoin.IsLast, "left join")
+	} else {
+		leftJoin.OpAnalyzer.Reset()
+	}
+
 	if leftJoin.ctr.vecs == nil {
 		leftJoin.ctr.vecs = make([]*vector.Vector, len(leftJoin.Conditions[0]))
 		leftJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(leftJoin.Conditions[0]))
@@ -66,9 +71,10 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := leftJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &leftJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -77,7 +83,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			err = leftJoin.build(anal, proc)
+			err = leftJoin.build(analyzer, proc)
 			if err != nil {
 				return result, err
 			}
@@ -85,7 +91,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if leftJoin.ctr.inbat == nil {
-				input, err = leftJoin.Children[0].Call(proc)
+				input, err = vm.ChildrenCall(leftJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 
@@ -100,7 +106,6 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				ctr.inbat = bat
 				ctr.lastrow = 0
-				anal.Input(bat, leftJoin.GetIsFirst())
 			}
 
 			if ctr.rbat == nil {
@@ -142,7 +147,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
-			anal.Output(result.Batch, leftJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -153,10 +158,10 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (leftJoin *LeftJoin) build(anal process.Analyze, proc *process.Process) (err error) {
+func (leftJoin *LeftJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &leftJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	ctr.mp, err = message.ReceiveJoinMap(leftJoin.JoinMapTag, leftJoin.IsShuffle, leftJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if err != nil {
 		return err
@@ -254,7 +259,7 @@ func (ctr *container) probe(ap *LeftJoin, proc *process.Process, result *vm.Call
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					}
-					bs := vector.MustFixedCol[bool](vec)
+					bs := vector.MustFixedColWithTypeCheck[bool](vec)
 					if bs[0] {
 						matched = true
 						for j, rp := range ap.Result {
@@ -306,7 +311,7 @@ func (ctr *container) probe(ap *LeftJoin, proc *process.Process, result *vm.Call
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						}
-						bs := vector.MustFixedCol[bool](vec)
+						bs := vector.MustFixedColWithTypeCheck[bool](vec)
 						if !bs[0] {
 							continue
 						}

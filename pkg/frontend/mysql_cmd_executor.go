@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -871,7 +872,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			return err
 		}
 
-		bs := vector.MustFixedCol[bool](vec)
+		bs := vector.MustFixedColWithTypeCheck[bool](vec)
 		sels := execCtx.proc.Mp().GetSels()
 		for i, b := range bs {
 			if b {
@@ -1565,7 +1566,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 			return err
 		}
 
-		bs := vector.MustFixedCol[bool](vec)
+		bs := vector.MustFixedColWithTypeCheck[bool](vec)
 		sels := proc.Mp().GetSels()
 		for i, b := range bs {
 			if b {
@@ -1578,10 +1579,10 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		proc.Mp().PutSels(sels)
 		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
 		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
-		v2 := vector.MustFixedCol[int64](bat.Vecs[2])
+		v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])
 		v3, area3 := vector.MustVarlenaRawData(bat.Vecs[3])
 		v4, area4 := vector.MustVarlenaRawData(bat.Vecs[4])
-		v5 := vector.MustFixedCol[int32](bat.Vecs[5])
+		v5 := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[5])
 		v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
 		rows = rows[:len(v0)]
 		for i := range v0 {
@@ -2609,11 +2610,6 @@ func executeStmt(ses *Session,
 		}
 	}
 
-	defer func() {
-		// Serialize the execution plan as json
-		_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx)
-	}()
-
 	cmpBegin = time.Now()
 
 	ses.EnterFPrint(FPExecStmtBeforeCompile)
@@ -2624,6 +2620,13 @@ func executeStmt(ses *Session,
 
 	defer func() {
 		if c, ok := ret.(*compile.Compile); ok {
+			var phyPlan *models.PhyPlan
+			analyzeModule := c.GetAnalyzeModule()
+			if analyzeModule != nil {
+				phyPlan = analyzeModule.GetPhyPlan()
+			}
+			// Serialize the execution plan as json
+			_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx, phyPlan)
 			c.Release()
 		}
 	}()
@@ -3259,7 +3262,7 @@ func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, msg string) []byte {
 	var bytes [36]byte
 	util.EncodeUUIDHex(bytes[:], uuid[:])
-	explainData := explain.ExplainData{
+	explainData := models.ExplainData{
 		Code:    errcode,
 		Message: msg,
 		Uuid:    util.UnsafeBytesToString(bytes[:]),
@@ -3277,8 +3280,8 @@ type jsonPlanHandler struct {
 	buffer     *bytes.Buffer
 }
 
-func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, opts ...marshalPlanOptions) *jsonPlanHandler {
-	h := NewMarshalPlanHandler(ctx, stmt, plan, opts...)
+func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
+	h := NewMarshalPlanHandler(ctx, stmt, plan, phyPlan, opts...)
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx, ses)
 	return &jsonPlanHandler{
@@ -3319,7 +3322,7 @@ func WithWaitActiveCost(cost time.Duration) marshalPlanOptions {
 
 type marshalPlanHandler struct {
 	query       *plan.Query
-	marshalPlan *explain.ExplainData
+	marshalPlan *models.ExplainData
 	stmt        *motrace.StatementInfo
 	uuid        uuid.UUID
 	buffer      *bytes.Buffer
@@ -3327,7 +3330,7 @@ type marshalPlanHandler struct {
 	marshalPlanConfig
 }
 
-func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, opts ...marshalPlanOptions) *marshalPlanHandler {
+func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
 	stmt.MarkResponseAt()
@@ -3357,6 +3360,9 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 	if h.needMarshalPlan() {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
+		if phyPlan != nil {
+			h.marshalPlan.PhyPlan = *phyPlan
+		}
 	}
 	return h
 }

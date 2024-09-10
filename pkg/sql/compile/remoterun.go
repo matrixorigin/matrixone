@@ -28,7 +28,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -110,7 +109,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, proc.Base.AnalInfos, isRemote)
+	s, err := generateScope(proc, p, ctx, isRemote)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +170,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineType = pipeline.Pipeline_PipelineType(s.Magic)
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
-	p.IsJoin = s.IsJoin
 	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
 
@@ -217,13 +215,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
 		}
-		if s.DataSource.Bat != nil {
-			data, err := types.Encode(s.DataSource.Bat)
-			if err != nil {
-				return nil, -1, err
-			}
-			p.DataSource.Block = string(data)
-		}
 	}
 	// PreScope
 	p.Children = make([]*pipeline.Pipeline, len(s.PreScopes))
@@ -255,7 +246,7 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	// Instructions
 	var ins *pipeline.Instruction
 	err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
-		if ctxId, ins, err = convertToPipelineInstruction(op, ctx, ctxId); err != nil {
+		if ctxId, ins, err = convertToPipelineInstruction(op, s.Proc, ctx, ctxId); err != nil {
 			return err
 		}
 		p.InstructionList = append(p.InstructionList, ins)
@@ -301,8 +292,7 @@ func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
 }
 
 // generateScope generate a scope from scope context and pipeline.
-func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext,
-	analNodes []*process.AnalyzeInfo, isRemote bool) (*Scope, error) {
+func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext, isRemote bool) (*Scope, error) {
 	var err error
 	var s *Scope
 	defer func() {
@@ -317,7 +307,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 
 	s = newScope(magicType(p.GetPipelineType()))
 	s.IsEnd = p.IsEnd
-	s.IsJoin = p.IsJoin
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
 	if err = convertPipelineUuid(p, s); err != nil {
@@ -336,14 +325,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 			isConst:            dsc.IsConst,
-		}
-		if len(dsc.Block) > 0 {
-			bat := new(batch.Batch)
-			if err = types.Decode([]byte(dsc.Block), bat); err != nil {
-				return nil, err
-			}
-			bat.Cnt = 1
-			s.DataSource.Bat = bat
 		}
 	}
 	//var relData engine.RelData
@@ -378,7 +359,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			id:     p.Children[i].PipelineId,
 			regs:   make(map[*process.WaitRegister]int32),
 		}
-		if s.PreScopes[i], err = generateScope(s.Proc, p.Children[i], ctx.children[i], analNodes, isRemote); err != nil {
+		if s.PreScopes[i], err = generateScope(s.Proc, p.Children[i], ctx.children[i], isRemote); err != nil {
 			return nil, err
 		}
 	}
@@ -406,7 +387,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
-func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
 	opBase := op.GetOperatorBase()
 	in := &pipeline.Instruction{
 		Op:      int32(op.OpType()),
@@ -472,6 +453,8 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			IsUpdate:          t.IsUpdate,
 			Attrs:             t.Attrs,
 			EstimatedRowCount: int64(t.EstimatedRowCount),
+			CompPkeyExpr:      t.CompPkeyExpr,
+			ClusterByExpr:     t.ClusterByExpr,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
@@ -783,7 +766,18 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.TableScan.Types = t.Types
 		in.ProjectList = t.ProjectList
 	case *value_scan.ValueScan:
+		if err := op.Prepare(proc); err != nil {
+			return -1, nil, err
+		}
 		in.ValueScan = &pipeline.ValueScan{}
+		if t.Batchs != nil {
+			data, err := types.Encode(t.Batchs[0])
+			if err != nil {
+				return -1, nil, err
+			}
+			in.ValueScan.BatchBlock = string(data)
+		}
+
 		in.ProjectList = t.ProjectList
 	case *unionall.UnionAll:
 		in.UnionAll = &pipeline.UnionAll{}
@@ -864,6 +858,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsUpdate = t.GetIsUpdate()
 		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
+		arg.CompPkeyExpr = t.CompPkeyExpr
+		arg.ClusterByExpr = t.ClusterByExpr
 		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
@@ -1227,6 +1223,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.ValueScan:
 		op = value_scan.NewArgument()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
+		if len(opr.ValueScan.BatchBlock) > 0 {
+			bat := new(batch.Batch)
+			if err := types.Decode([]byte(opr.ValueScan.BatchBlock), bat); err != nil {
+				return nil, err
+			}
+			bat.Cnt = 1
+			op.(*value_scan.ValueScan).Batchs = append(op.(*value_scan.ValueScan).Batchs, bat)
+		}
 	case vm.UnionAll:
 		op = unionall.NewArgument()
 	case vm.HashBuild:
@@ -1334,34 +1338,6 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 		res[i].Rel, res[i].Pos = relList[i], colList[i]
 	}
 	return res
-}
-
-func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
-	a := &plan.AnalyzeInfo{
-		InputBlocks:      info.InputBlocks,
-		InputRows:        info.InputRows,
-		OutputRows:       info.OutputRows,
-		InputSize:        info.InputSize,
-		OutputSize:       info.OutputSize,
-		TimeConsumed:     info.TimeConsumed,
-		MemorySize:       info.MemorySize,
-		WaitTimeConsumed: info.WaitTimeConsumed,
-		DiskIO:           info.DiskIO,
-		S3IOByte:         info.S3IOByte,
-		S3IOInputCount:   info.S3IOInputCount,
-		S3IOOutputCount:  info.S3IOOutputCount,
-		NetworkIO:        info.NetworkIO,
-		ScanTime:         info.ScanTime,
-		InsertTime:       info.InsertTime,
-	}
-	info.DeepCopyArray(a)
-	// there are 3 situations to release analyzeInfo
-	// 1 is free analyzeInfo of Local CN when release analyze
-	// 2 is free analyzeInfo of remote CN before transfer back
-	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-	// this is situation 2
-	reuse.Free[process.AnalyzeInfo](info, nil)
-	return a
 }
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {

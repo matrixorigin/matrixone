@@ -457,12 +457,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	txn.Lock()
 	defer txn.Unlock()
 	//free batches
-	for key := range txn.toFreeBatches {
-		for _, bat := range txn.toFreeBatches[key] {
-			txn.proc.PutBatch(bat)
-		}
-		delete(txn.toFreeBatches, key)
-	}
+	txn.CleanToFreeBatches()
 	//merge writes for the last statement
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
@@ -652,6 +647,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
 	}
+
+	txn.CleanToFreeBatches()
 
 	for i := len(txn.restoreTxnTableFunc) - 1; i >= 0; i-- {
 		txn.restoreTxnTableFunc[i]()
@@ -854,21 +851,17 @@ type withFilterMixin struct {
 	columns struct {
 		seqnums  []uint16
 		colTypes []types.Type
-		// colNulls []bool
 
 		pkPos                    int // -1 means no primary key in columns
 		indexOfFirstSortedColumn int
 	}
 
 	filterState struct {
-		evaluated bool
 		//point select for primary key
 		expr     *plan.Expr
-		filter   blockio.BlockReadFilter
+		filter   objectio.BlockReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
-		hasNull  bool
-		record   bool
 	}
 }
 

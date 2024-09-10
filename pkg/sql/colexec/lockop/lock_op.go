@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -37,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 var (
@@ -68,6 +69,12 @@ func (lockOp *LockOp) OpType() vm.OpType {
 }
 
 func (lockOp *LockOp) Prepare(proc *process.Process) error {
+	if lockOp.OpAnalyzer == nil {
+		lockOp.OpAnalyzer = process.NewAnalyzer(lockOp.GetIdx(), lockOp.IsFirst, lockOp.IsLast, "lock_op")
+	} else {
+		lockOp.OpAnalyzer.Reset()
+	}
+
 	if len(lockOp.ctr.fetchers) == 0 {
 		lockOp.logger = getLogger(proc.GetService())
 		lockOp.ctr.fetchers = make([]FetchLockRowsFunc, 0, len(lockOp.targets))
@@ -108,30 +115,29 @@ func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 func callNonBlocking(
 	proc *process.Process,
 	lockOp *LockOp) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := lockOp.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, anal)
+	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
 
-	anal.Input(result.Batch, lockOp.IsFirst)
 	if result.Batch == nil {
 		return result, lockOp.ctr.retryError
 	}
 	bat := result.Batch
 	if bat.IsEmpty() {
-		anal.Output(result.Batch, lockOp.IsLast)
+		analyzer.Output(result.Batch)
 		return result, err
 	}
 
-	if err = performLock(bat, proc, lockOp, anal); err != nil {
+	if err = performLock(bat, proc, lockOp, analyzer); err != nil {
 		return result, err
 	}
 
-	anal.Output(result.Batch, lockOp.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -140,15 +146,14 @@ func callBlocking(
 	lockOp *LockOp,
 	isFirst bool,
 	_ bool) (vm.CallResult, error) {
-
-	anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := lockOp.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	if lockOp.ctr.step == stepLock {
 		for {
-			bat, err := lockOp.getBatch(proc, anal, isFirst)
+			bat, err := lockOp.getBatch(proc, analyzer, isFirst)
 			if err != nil {
 				return result, err
 			}
@@ -167,7 +172,7 @@ func callBlocking(
 				continue
 			}
 
-			if err = performLock(bat, proc, lockOp, anal); err != nil {
+			if err = performLock(bat, proc, lockOp, analyzer); err != nil {
 				return result, err
 			}
 
@@ -177,6 +182,7 @@ func callBlocking(
 			if err != nil {
 				return result, err
 			}
+			analyzer.Alloc(int64(appendBat.Size()))
 			lockOp.ctr.cachedBatches = append(lockOp.ctr.cachedBatches, appendBat)
 		}
 	}
@@ -197,7 +203,7 @@ func callBlocking(
 			lockOp.ctr.buf = lockOp.ctr.cachedBatches[0]
 			lockOp.ctr.cachedBatches = lockOp.ctr.cachedBatches[1:]
 			result.Batch = lockOp.ctr.buf
-			anal.Output(result.Batch, lockOp.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
@@ -205,7 +211,7 @@ func callBlocking(
 	if lockOp.ctr.step == stepEnd {
 		result.Status = vm.ExecStop
 		lockOp.cleanCachedBatch(proc)
-		anal.Output(result.Batch, lockOp.IsLast)
+		analyzer.Output(result.Batch)
 		return result, lockOp.ctr.retryError
 	}
 
@@ -216,7 +222,7 @@ func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
 	lockOp *LockOp,
-	analyze process.Analyze,
+	analyzer process.Analyzer,
 ) error {
 	needRetry := false
 	for idx, target := range lockOp.targets {
@@ -232,7 +238,7 @@ func performLock(
 		priVec := bat.GetVector(target.primaryColumnIndexInBatch)
 		// For partitioned tables, filter is not nil
 		if target.filter != nil {
-			filterCols = vector.MustFixedCol[int32](bat.GetVector(target.filterColIndexInBatch))
+			filterCols = vector.MustFixedColWithTypeCheck[int32](bat.GetVector(target.filterColIndexInBatch))
 			for _, value := range filterCols {
 				// has Illegal Partition index
 				if value == -1 {
@@ -243,7 +249,7 @@ func performLock(
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
-			analyze,
+			analyzer,
 			nil,
 			target.tableID,
 			proc,
@@ -403,7 +409,7 @@ func LockRows(
 func doLock(
 	ctx context.Context,
 	eng engine.Engine,
-	analyze process.Analyze,
+	analyzer process.Analyzer,
 	rel engine.Relation,
 	tableID uint64,
 	proc *process.Process,
@@ -490,6 +496,11 @@ func doLock(
 	key := txnOp.AddWaitLock(tableID, rows, options)
 	defer txnOp.RemoveWaitLock(key)
 
+	table := tableID
+	if opts.sharding == lock.Sharding_ByRow {
+		table = lockservice.ShardingByRow(rows[0])
+	}
+
 	var err error
 	var result lock.Result
 	for {
@@ -499,7 +510,7 @@ func doLock(
 			rows,
 			txn.ID,
 			options)
-		if !canRetryLock(txnOp, err) {
+		if !canRetryLock(table, txnOp, err) {
 			break
 		}
 	}
@@ -507,7 +518,7 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	// Record lock waiting time
-	analyzeLockWaitTime(analyze, start)
+	analyzeLockWaitTime(analyzer, start)
 
 	if runtime.InTesting(proc.GetService()) {
 		tc := runtime.MustGetTestingContext(proc.GetService())
@@ -564,7 +575,7 @@ func doLock(
 			return false, false, timestamp.Timestamp{}, err
 		}
 		// Record logtail waiting time
-		analyzeLockWaitTime(analyze, start)
+		analyzeLockWaitTime(analyzer, start)
 
 		fn := opts.hasNewVersionInRangeFunc
 		if fn == nil {
@@ -629,12 +640,13 @@ func doLock(
 
 const defaultWaitTimeOnRetryLock = time.Second
 
-func canRetryLock(txn client.TxnOperator, err error) bool {
+func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
-	if txn.LockTableCount() > 0 {
+	if txn.LockTableCount() > 0 &&
+		txn.HasLockTable(table) {
 		return false
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
@@ -914,18 +926,20 @@ func (lockOp *LockOp) cleanParker() {
 
 func (lockOp *LockOp) getBatch(
 	proc *process.Process,
-	anal process.Analyze,
+	analyzer process.Analyzer,
 	isFirst bool) (*batch.Batch, error) {
 	fn := lockOp.ctr.batchFetchFunc
 	if fn == nil {
 		fn = lockOp.GetChildren(0).Call
 	}
 
+	beforeChildrenCall := time.Now()
 	input, err := fn(proc)
+	analyzer.ChildrenCallStop(beforeChildrenCall)
 	if err != nil {
 		return nil, err
 	}
-	anal.Input(input.Batch, isFirst)
+	analyzer.Input(input.Batch)
 	return input.Batch, nil
 }
 
@@ -970,8 +984,8 @@ func hasNewVersionInRange(
 	return rel.PrimaryKeysMayBeModified(proc.Ctx, fromTS, toTS, vec)
 }
 
-func analyzeLockWaitTime(analyze process.Analyze, start time.Time) {
-	if analyze != nil {
-		analyze.WaitStop(start)
+func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
+	if analyzer != nil {
+		analyzer.WaitStop(start)
 	}
 }

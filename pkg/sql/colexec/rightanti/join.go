@@ -18,15 +18,13 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -42,6 +40,12 @@ func (rightAnti *RightAnti) OpType() vm.OpType {
 }
 
 func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
+	if rightAnti.OpAnalyzer == nil {
+		rightAnti.OpAnalyzer = process.NewAnalyzer(rightAnti.GetIdx(), rightAnti.IsFirst, rightAnti.IsLast, "right anti join")
+	} else {
+		rightAnti.OpAnalyzer.Reset()
+	}
+
 	if len(rightAnti.ctr.tmpBatches) == 0 {
 		rightAnti.ctr.vecs = make([]*vector.Vector, len(rightAnti.Conditions[0]))
 		rightAnti.ctr.evecs = make([]evalVector, len(rightAnti.Conditions[0]))
@@ -66,16 +70,17 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
-	analyze.Start()
-	defer analyze.Stop()
+	analyzer := rightAnti.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &rightAnti.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			err = rightAnti.build(analyze, proc)
+			err = rightAnti.build(analyzer, proc)
 			if err != nil {
 				return result, err
 			}
@@ -88,7 +93,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			result, err = rightAnti.Children[0].Call(proc)
+			result, err = vm.ChildrenCall(rightAnti.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -106,7 +111,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			if err := ctr.probe(bat, rightAnti, proc, analyze, rightAnti.GetIsFirst(), rightAnti.GetIsLast()); err != nil {
+			if err := ctr.probe(bat, rightAnti, proc, analyzer); err != nil {
 				return result, err
 			}
 
@@ -115,7 +120,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		case SendLast:
 			if rightAnti.ctr.buf == nil {
 				rightAnti.ctr.lastpos = 0
-				setNil, err := ctr.sendLast(rightAnti, proc, analyze, rightAnti.GetIsFirst(), rightAnti.GetIsLast())
+				setNil, err := ctr.sendLast(rightAnti, proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -131,6 +136,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Batch = rightAnti.ctr.buf[rightAnti.ctr.lastpos]
 				rightAnti.ctr.lastpos++
 				result.Status = vm.ExecHasMore
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
 
@@ -142,10 +148,10 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (rightAnti *RightAnti) build(anal process.Analyze, proc *process.Process) (err error) {
+func (rightAnti *RightAnti) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &rightAnti.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	ctr.mp, err = message.ReceiveJoinMap(rightAnti.JoinMapTag, rightAnti.IsShuffle, rightAnti.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if err != nil {
 		return err
@@ -162,7 +168,7 @@ func (rightAnti *RightAnti) build(anal process.Analyze, proc *process.Process) (
 	return nil
 }
 
-func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {
+func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyzer process.Analyzer) (bool, error) {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {
@@ -215,7 +221,6 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze pro
 			}
 		}
 		ctr.rbat.AddRowCount(len(sels))
-		analyze.Output(ctr.rbat, isLast)
 		ap.ctr.buf = []*batch.Batch{ctr.rbat}
 		return false, nil
 	} else {
@@ -241,16 +246,13 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze pro
 				}
 			}
 			ap.ctr.buf[k].SetRowCount(len(newsels))
-			analyze.Output(ap.ctr.buf[k], isLast)
 		}
 		return false, nil
 	}
 
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Process, analyze process.Analyze, isFirst bool, _ bool) error {
-	analyze.Input(bat, isFirst)
-
+func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Process, analyzer process.Analyzer) error {
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		return err
 	}
@@ -296,7 +298,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					} else {
-						vcol := vector.MustFixedCol[bool](vec)
+						vcol := vector.MustFixedColWithTypeCheck[bool](vec)
 						if !vcol[0] {
 							continue
 						}
@@ -328,7 +330,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						} else {
-							vcol := vector.MustFixedCol[bool](vec)
+							vcol := vector.MustFixedColWithTypeCheck[bool](vec)
 							if !vcol[0] {
 								continue
 							}

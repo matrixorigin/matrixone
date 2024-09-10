@@ -67,6 +67,7 @@ func (ba *BufferAllocator) Free(buf []byte) {
 type ListBlock struct {
 	data       []byte
 	writeIndex int
+	readIndex  int
 }
 type Conn struct {
 	id                    uint64
@@ -95,7 +96,7 @@ type Conn struct {
 	timeout           time.Duration
 	allocator         *BufferAllocator
 	ses               *Session
-	closeConnFunc     sync.Once
+	mu                sync.Mutex
 	closeFunc         sync.Once
 }
 
@@ -110,8 +111,8 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 
 	c := &Conn{
 		conn:              conn,
-		localAddr:         conn.RemoteAddr().String(),
-		remoteAddr:        conn.LocalAddr().String(),
+		localAddr:         conn.LocalAddr().String(),
+		remoteAddr:        conn.RemoteAddr().String(),
 		fixBuf:            &ListBlock{},
 		dynamicBuf:        list.New(),
 		allocator:         &BufferAllocator{allocator: getGlobalSessionAlloc()},
@@ -194,7 +195,7 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 			c.loadLocalBuf = nil
 		}
 	}()
-	err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
+	err = c.ReadIntoSlices(c.header[:], HeaderLengthOfTheProtocol)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +217,7 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 		}
 	}
 
-	err = c.ReadBytes(c.loadLocalBuf, packetLength)
+	err = c.ReadIntoSlices(c.loadLocalBuf, packetLength)
 	if err != nil {
 		return nil, err
 	}
@@ -225,29 +226,77 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 
 // Read reads the complete packet including process the > 16MB packet. return the payload
 func (c *Conn) Read() ([]byte, error) {
-
 	// Requests > 16MB
 	payloads := make([][]byte, 0)
-	totalLength := 0
+	var firstPayload []byte
 	var finalPayload []byte
 	var payload []byte
 	var err error
-	defer func(payloads [][]byte, payload []byte, err error) {
-		c.allocator.Free(payload)
-		for _, eachPayload := range payloads {
-			c.allocator.Free(eachPayload)
+	var packetLength, totalLength int
+	var headerPrepared bool
+	defer func() {
+		for i := range payloads {
+			c.allocator.Free(payloads[i])
 		}
-	}(payloads, payload, err)
+	}()
+	packetLength, headerPrepared = c.GetPacketLengthFromReadBuf()
 
+	if c.ReadBufLen() < HeaderLengthOfTheProtocol+packetLength {
+		c.CleanConsumedPacket()
+	}
+
+	// Read at least 1 packet or until there is no space in the buffer
+	for c.ReadBufLen() < HeaderLengthOfTheProtocol+packetLength && !c.ReadBufIsFull() {
+		err = c.ReadIntoBuf()
+		if err != nil {
+			return nil, err
+		}
+		// Check if the packet header has been read into buffer
+		if !headerPrepared {
+			packetLength, headerPrepared = c.GetPacketLengthFromReadBuf()
+		}
+	}
+
+	totalLength += packetLength
+	err = c.CheckAllowedPacketSize(totalLength)
+	if err != nil {
+		return nil, err
+	}
+
+	firstPayload = c.CopyFromBuf(packetLength)
+
+	if packetLength+HeaderLengthOfTheProtocol < c.ReadBufLen() {
+		// CASE 1: packet length < 1MB, fixBuf have more than 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol + packetLength
+		// So we keep next packet data
+		c.IncReadIndex(packetLength + HeaderLengthOfTheProtocol)
+	} else if packetLength+HeaderLengthOfTheProtocol == c.ReadBufLen() {
+		// CASE 2: packet length < 1MB, fixBuf just have 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol = packetLength
+		// indicates that fixBuf have no data, clean it
+		c.ResetReadBufIndex()
+	} else {
+		// CASE 3: packet length > 1MB, c.fixBuf.writeIndex < HeaderLengthOfTheProtocol + packetLength
+		// NOTE: only read the remaining bytes of the current packet, do not read the next packet
+		hasPayloadLen := c.ReadBufLen() - HeaderLengthOfTheProtocol
+		err = c.ReadIntoSlices(firstPayload[hasPayloadLen:], packetLength-hasPayloadLen)
+		if err != nil {
+			return nil, err
+		}
+		c.ResetReadBufIndex()
+	}
+
+	if packetLength != int(MaxPayloadSize) {
+		return firstPayload, nil
+	}
+
+	// ======================== Packet > 16MB ========================
 	for {
-		var packetLength int
-		err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
+		// If total package length > 16MB, only one package will be read each iter
+		err = c.ReadIntoSlices(c.header[:], HeaderLengthOfTheProtocol)
 		if err != nil {
 			return nil, err
 		}
 		packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
-		sequenceId := c.header[3]
-		c.sequenceId = sequenceId + 1
+		c.sequenceId = c.header[3] + 1
 
 		if packetLength == 0 {
 			break
@@ -256,15 +305,6 @@ func (c *Conn) Read() ([]byte, error) {
 		err = c.CheckAllowedPacketSize(totalLength)
 		if err != nil {
 			return nil, err
-		}
-
-		if totalLength != int(MaxPayloadSize) && len(payloads) == 0 {
-			signalPayload := make([]byte, totalLength)
-			err = c.ReadBytes(signalPayload, totalLength)
-			if err != nil {
-				return nil, err
-			}
-			return signalPayload, nil
 		}
 
 		payload, err = c.ReadOnePayload(packetLength)
@@ -284,11 +324,61 @@ func (c *Conn) Read() ([]byte, error) {
 	}
 
 	copyIndex := 0
+	copy(finalPayload[copyIndex:], firstPayload)
+	copyIndex += len(firstPayload)
 	for _, eachPayload := range payloads {
 		copy(finalPayload[copyIndex:], eachPayload)
 		copyIndex += len(eachPayload)
 	}
 	return finalPayload, nil
+}
+
+// IncReadIndex increase the read index of read buffer
+func (c *Conn) IncReadIndex(n int) {
+	c.fixBuf.readIndex += n
+}
+
+// ReadBufLen get unconsumed byte from the read buf
+func (c *Conn) ReadBufLen() int {
+	return c.fixBuf.writeIndex - c.fixBuf.readIndex
+}
+
+// GetPacketLengthFromReadBuf try to get packet header from read buf
+func (c *Conn) GetPacketLengthFromReadBuf() (int, bool) {
+	if c.ReadBufLen() < HeaderLengthOfTheProtocol {
+		return int(MaxPayloadSize), false
+	}
+	header := c.fixBuf.data[c.fixBuf.readIndex : c.fixBuf.readIndex+HeaderLengthOfTheProtocol]
+	packetLength := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+	c.sequenceId = header[3] + 1
+	return packetLength, true
+}
+
+// CleanConsumedPacket clean up the packet that have been consumed and move that have not been consumed forward
+func (c *Conn) CleanConsumedPacket() {
+	if c.fixBuf.readIndex != 0 {
+		copy(c.fixBuf.data, c.fixBuf.data[c.fixBuf.readIndex:c.fixBuf.writeIndex])
+		c.fixBuf.writeIndex -= c.fixBuf.readIndex
+		c.fixBuf.readIndex = 0
+	}
+}
+
+// ResetReadBufIndex set read and write index = 0
+func (c *Conn) ResetReadBufIndex() {
+	c.fixBuf.readIndex = 0
+	c.fixBuf.writeIndex = 0
+}
+
+// ReadBufIsFull check read buf full or not
+func (c *Conn) ReadBufIsFull() bool {
+	return c.fixBuf.writeIndex == fixBufferSize
+}
+
+// CopyFromBuf make memory for a payload and copy from read buf
+func (c *Conn) CopyFromBuf(packetLength int) []byte {
+	data := make([]byte, packetLength)
+	copy(data, c.fixBuf.data[c.fixBuf.readIndex+HeaderLengthOfTheProtocol:])
+	return data
 }
 
 // ReadOnePayload allocates memory for a payload and reads it
@@ -310,7 +400,7 @@ func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 		return nil, err
 	}
 
-	err = c.ReadBytes(payload, packetLength)
+	err = c.ReadIntoSlices(payload, packetLength)
 	if err != nil {
 		return nil, err
 	}
@@ -318,8 +408,8 @@ func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 	return payload, nil
 }
 
-// ReadBytes reads specified bytes from the network
-func (c *Conn) ReadBytes(buf []byte, Length int) error {
+// ReadIntoSlices reads specified bytes from the network
+func (c *Conn) ReadIntoSlices(buf []byte, Length int) error {
 	var err error
 	var n int
 	var readLength int
@@ -332,6 +422,15 @@ func (c *Conn) ReadBytes(buf []byte, Length int) error {
 
 	}
 	return err
+}
+
+func (c *Conn) ReadIntoBuf() error {
+	n, err := c.ReadFromConn(c.fixBuf.data[c.fixBuf.writeIndex:])
+	if err != nil {
+		return err
+	}
+	c.fixBuf.writeIndex += n
+	return nil
 }
 
 // ReadFromConn is the base method for receiving from network, calling net.Conn.Read().
@@ -557,14 +656,14 @@ func (c *Conn) RemoteAddress() string {
 }
 
 func (c *Conn) closeConn() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var err error
-	c.closeConnFunc.Do(func() {
-		if c.conn != nil {
-			if err = c.conn.Close(); err != nil {
-				return
-			}
+	if c.conn != nil {
+		if err = c.conn.Close(); err != nil {
+			return err
 		}
-	})
+	}
 	return err
 }
 
@@ -573,6 +672,7 @@ func (c *Conn) Reset() {
 	c.packetLength = 0
 	c.curBuf = c.fixBuf
 	c.fixBuf.writeIndex = 0
+	c.fixBuf.readIndex = 0
 	for node := c.dynamicBuf.Front(); node != nil; node = node.Next() {
 		c.allocator.Free(node.Value.(*ListBlock).data)
 	}
