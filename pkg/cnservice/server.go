@@ -130,6 +130,7 @@ func NewService(
 	}
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
+	srv.registerServices()
 	pu := config.NewParameterUnit(
 		&cfg.Frontend,
 		nil,
@@ -139,7 +140,6 @@ func NewService(
 		}})
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	srv.pu = pu
-	srv.registerServices()
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
