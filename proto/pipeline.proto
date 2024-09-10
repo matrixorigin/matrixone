@@ -547,9 +547,8 @@ message ProcessInfo {
   uint32 account_id = 5;
   txn.CNTxnSnapshot snapshot = 6 [(gogoproto.nullable) = false];
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
-  repeated int32 analysis_node_list = 8;
-  SessionLoggerInfo session_logger = 9 [(gogoproto.nullable) = false];
-  PrepareParamInfo prepare_params = 10 [(gogoproto.nullable) = false];
+  SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
+  PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
 }
 
 message SessionInfo {

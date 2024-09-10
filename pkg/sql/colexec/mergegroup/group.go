@@ -37,6 +37,12 @@ func (mergeGroup *MergeGroup) OpType() vm.OpType {
 }
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
+	if mergeGroup.OpAnalyzer == nil {
+		mergeGroup.OpAnalyzer = process.NewAnalyzer(mergeGroup.GetIdx(), mergeGroup.IsFirst, mergeGroup.IsLast, "merge_group")
+	} else {
+		mergeGroup.OpAnalyzer.Reset()
+	}
+
 	if mergeGroup.ProjectList != nil {
 		err := mergeGroup.PrepareProjection(proc)
 		if err != nil {
@@ -51,16 +57,17 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
+	analyzer := mergeGroup.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &mergeGroup.ctr
-	anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
 			for {
-				result, err := mergeGroup.GetChildren(0).Call(proc)
+				result, err := vm.ChildrenCall(mergeGroup.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -70,7 +77,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 				}
 
 				bat := result.Batch
-				anal.Input(bat, mergeGroup.GetIsFirst())
 				if err = ctr.process(bat, proc); err != nil {
 					return result, err
 				}
@@ -94,7 +100,7 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 						ctr.bat.Aggs[i] = nil
 						ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 						if vec != nil {
-							anal.Alloc(int64(vec.Size()))
+							analyzer.Alloc(int64(vec.Size()))
 						}
 
 						agg.Free()
@@ -110,9 +116,9 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 						return result, err
 					}
 				}
-				anal.Output(result.Batch, mergeGroup.GetIsLast())
 			}
 			ctr.state = End
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case End:
