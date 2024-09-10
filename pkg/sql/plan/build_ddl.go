@@ -1783,6 +1783,8 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		}
 		tableDef.Cols = append(tableDef.Cols, colDef)
 
+		tableDef.Pkey = &PrimaryKeyDef{Names: []string{catalog.FakePrimaryKeyColName}, PkeyColName: catalog.FakePrimaryKeyColName}
+
 		logutil.Infof("indexDef %s", indexDef.String())
 		logutil.Infof("index columns = %v", indexParts)
 
