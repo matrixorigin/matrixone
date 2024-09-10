@@ -375,5 +375,77 @@ drop database sub01;
 
 drop publication pub01;
 drop database db02;
-
 drop account acc01;
+
+
+
+
+-- privilege
+drop role if exists intern;
+drop user if exists anne;
+create role intern;
+create user anne identified by '111';
+
+grant connect on account * to intern;
+grant create table on database * to intern with grant option;
+grant create database on account * to intern;
+grant drop database on account * to intern with grant option;
+grant drop table on database * to intern with grant option;
+grant select,insert ,update on table *.* to intern;
+grant intern to anne;
+
+-- @session:id=2&user=sys:anne:intern&password=111
+drop database if exists anne_db;
+create database anne_db;
+use anne_db;
+drop table if exists t1;
+create table t1(col1 int, col2 char) with retention period 1 second;
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+select sleep(2);
+-- @session
+-- @ignore:0
+select mo_ctl('cn', 'task', ':retention');
+select sleep(1);
+-- @session:id=2&user=sys:anne:intern&password=111
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+use anne_db;
+show tables;
+drop database anne_db;
+-- @session
+drop user anne;
+drop role intern;
+
+
+
+
+-- create retention table with period minute, year, day, month, hour
+drop database if exists test02;
+create database test02;
+use test02;
+drop table if exists table01;
+drop table if exists table02;
+drop table if exists table03;
+drop table if exists table04;
+drop table if exists table05;
+create table table01 (col1 int unique key, col2 enum ('a','b','c')) with retention period 100 minute;
+insert into table01 values(1,'a');
+insert into table01 values(2, 'b');
+create table table02(col1 int auto_increment, key key1(col1)) with retention period 2 week;
+insert into table02 values (1);
+insert into table02 values (2);
+create table table03 (a text) with retention period 365 day;
+insert into table03 values('abcdef'),('_bcdef'),('a_cdef'),('ab_def'),('abcd_f'),('abcde_');
+create table table04 (a datetime(0) not null, primary key(a)) with retention period 13 month;
+insert into table04 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+create table table05(col1 datetime) with retention period 200 hour;
+insert into table05 values('2020-01-13 12:20:59.1234586153121');
+insert into table05 values('2023-04-17 01:01:45');
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+-- @ignore:0
+select mo_ctl('cn', 'task', ':retention');
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+drop database test02;

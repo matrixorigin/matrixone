@@ -15,7 +15,7 @@ col1    col2
 3    null
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test    retention01    1725953589
+test    retention01    1725959667
 select sleep(5);
 sleep(5)
 0
@@ -37,7 +37,7 @@ insert into retention02 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324)
 insert into retention02 values (2, 3, 'b', '32r32r', 'database', 1111111);
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test    retention02    1725953594
+test    retention02    1725959671
 select sleep(3);
 sleep(3)
 0
@@ -70,7 +70,7 @@ insert into retention03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test    retention03    1725953605
+test    retention03    1725959682
 drop table retention03;
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
@@ -85,7 +85,7 @@ status enum('Pending', 'Processing', 'Completed', 'Cancelled')
 insert into retention04 values(1,'111',1),(2,'222',2),(3,'333',3),(4,'444','Cancelled');
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test    retention04    1725953600
+test    retention04    1725959677
 drop database test;
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
@@ -96,7 +96,7 @@ insert into retention05 values(0, 0),(1, 0),(2, 0),(3, 0);
 insert into retention05 values(0, 1),(1, 1),(2, 1),(3, 1);
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-mo_catalog    retention05    1725953598
+mo_catalog    retention05    1725959676
 select sleep(3);
 sleep(3)
 0
@@ -131,7 +131,7 @@ col1    col2    col3
 3    null    database management system
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test01    retention06    1725953600
+test01    retention06    1725959678
 select sleep(2);
 sleep(2)
 0
@@ -160,7 +160,7 @@ create table retention09(t1 time,t2 time,t3 time);
 insert into retention09 select * from retention08;
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test01    retention08    1725953604
+test01    retention08    1725959682
 select sleep(2);
 sleep(2)
 0
@@ -216,7 +216,7 @@ insert into pri01 values (1,1), (2,2), (3,3);
 insert into aff01 values (1,1), (2,2), (3,3);
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test01    aff01    1725953610
+test01    aff01    1725959687
 select sleep(2);
 sleep(2)
 0
@@ -249,7 +249,7 @@ col1    INT(32)    NO    PRI    null
 col2    CHAR(1)    YES        'a'        
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test01    prepare01    1725953613
+test01    prepare01    1725959690
 drop table prepare01;
 drop table if exists back01;
 create table back01 (a json,b int) with retention period 10 minute;
@@ -263,7 +263,7 @@ Tables_in_test01
 back01
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test01    back01    1725954211
+test01    back01    1725960289
 select sleep(2);
 sleep(2)
 0
@@ -275,7 +275,7 @@ sleep(1)
 0
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test01    back01    1725954211
+test01    back01    1725960289
 drop snapshot sp01;
 drop table back01;
 drop table if exists t1;
@@ -361,10 +361,10 @@ drop publication if exists pub01;
 create publication pub01 database db01 table table01 account acc01 comment 'publish to acc01';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    db01    table01    acc01        2024-09-10 15:33:39    null    publish to acc01
+pub01    db01    table01    acc01        2024-09-10 17:14:57    null    publish to acc01
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-db01    table01    1725953621
+db01    table01    1725959699
 select sleep(2);
 sleep(2)
 0
@@ -376,7 +376,7 @@ sleep(1)
 0
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    db01        acc01        2024-09-10 15:33:39    null    publish to acc01
+pub01    db01        acc01        2024-09-10 17:14:57    null    publish to acc01
 drop publication pub01;
 drop database db01;
 drop database if exists db02;
@@ -390,18 +390,18 @@ drop publication if exists pub01;
 create publication pub01 database db02 table table01 account acc01 comment 'publish to acc01';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    db02    table01    acc01        2024-09-10 15:33:42    null    publish to acc01
+pub01    db02    table01    acc01        2024-09-10 17:15:00    null    publish to acc01
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    db02    table01    publish to acc01    2024-09-10 15:33:42    null    null    0
+pub01    sys    db02    table01    publish to acc01    2024-09-10 17:15:00    null    null    0
 drop database if exists sub01;
 create database sub01 from sys publication pub01;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    db02    table01    publish to acc01    2024-09-10 15:33:42    sub01    2024-09-10 15:33:42    0
+pub01    sys    db02    table01    publish to acc01    2024-09-10 17:15:00    sub01    2024-09-10 17:15:00    0
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-db02    table01    1725953624
+db02    table01    1725959702
 select sleep(2);
 sleep(2)
 0
@@ -413,11 +413,86 @@ sleep(1)
 0
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    db02        acc01    acc01    2024-09-10 15:33:42    null    publish to acc01
+pub01    db02        acc01    acc01    2024-09-10 17:15:00    null    publish to acc01
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    db02        publish to acc01    2024-09-10 15:33:42    sub01    2024-09-10 15:33:42    0
+pub01    sys    db02        publish to acc01    2024-09-10 17:15:00    sub01    2024-09-10 17:15:00    0
 drop database sub01;
 drop publication pub01;
 drop database db02;
 drop account acc01;
+drop role if exists intern;
+drop user if exists anne;
+create role intern;
+create user anne identified by '111';
+grant connect on account * to intern;
+grant create table on database * to intern with grant option;
+grant create database on account * to intern;
+grant drop database on account * to intern with grant option;
+grant drop table on database * to intern with grant option;
+grant select,insert ,update on table *.* to intern;
+grant intern to anne;
+drop database if exists anne_db;
+create database anne_db;
+use anne_db;
+drop table if exists t1;
+create table t1(col1 int, col2 char) with retention period 1 second;
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+anne_db    t1    1725959706
+select sleep(2);
+sleep(2)
+0
+select mo_ctl('cn', 'task', ':retention');
+mo_ctl(cn, task, :retention)
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 12,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
+select sleep(1);
+sleep(1)
+0
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+use anne_db;
+show tables;
+Tables_in_anne_db
+drop database anne_db;
+drop user anne;
+drop role intern;
+drop database if exists test02;
+create database test02;
+use test02;
+drop table if exists table01;
+drop table if exists table02;
+drop table if exists table03;
+drop table if exists table04;
+drop table if exists table05;
+create table table01 (col1 int unique key, col2 enum ('a','b','c')) with retention period 100 minute;
+insert into table01 values(1,'a');
+insert into table01 values(2, 'b');
+create table table02(col1 int auto_increment, key key1(col1)) with retention period 2 week;
+insert into table02 values (1);
+insert into table02 values (2);
+create table table03 (a text) with retention period 365 day;
+insert into table03 values('abcdef'),('_bcdef'),('a_cdef'),('ab_def'),('abcd_f'),('abcde_');
+create table table04 (a datetime(0) not null, primary key(a)) with retention period 13 month;
+insert into table04 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+create table table05(col1 datetime) with retention period 200 hour;
+insert into table05 values('2020-01-13 12:20:59.1234586153121');
+insert into table05 values('2023-04-17 01:01:45');
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+test02    table01    1725965708
+test02    table02    1727169308
+test02    table03    1757495708
+test02    table04    1759655708
+test02    table05    1726679708
+select mo_ctl('cn', 'task', ':retention');
+mo_ctl(cn, task, :retention)
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 13,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+test02    table01    1725965708
+test02    table02    1727169308
+test02    table03    1757495708
+test02    table04    1759655708
+test02    table05    1726679708
+drop database test02;
