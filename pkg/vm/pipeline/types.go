@@ -19,65 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// Pipeline contains the information associated with a pipeline in a query execution plan.
-// A query execution plan may contains one or more pipelines.
-// As an example:
-//
-//	 CREATE TABLE order
-//	 (
-//	       order_id    INT,
-//	       uid          INT,
-//	       item_id      INT,
-//	       year         INT,
-//	       nation       VARCHAR(100)
-//	 );
-//
-//	 CREATE TABLE customer
-//	 (
-//	       uid          INT,
-//	       nation       VARCHAR(100),
-//	       city         VARCHAR(100)
-//	 );
-//
-//	 CREATE TABLE supplier
-//	 (
-//	       item_id      INT,
-//	       nation       VARCHAR(100),
-//	       city         VARCHAR(100)
-//	 );
-//
-//		SELECT c.city, s.city, sum(o.revenue) AS revenue
-//	 FROM customer c, order o, supplier s
-//	 WHERE o.uid = c.uid
-//	 AND o.item_id = s.item_id
-//	 AND c.nation = 'CHINA'
-//	 AND s.nation = 'CHINA'
-//	 AND o.year >= 1992 and o.year <= 1997
-//	 GROUP BY c.city, s.city, o.year
-//	 ORDER BY o.year asc, revenue desc;
-//
-//	 AST PLAN:
-//	    order
-//	      |
-//	    group
-//	      |
-//	    filter
-//	      |
-//	    join
-//	    /  \
-//	   s   join
-//	       /  \
-//	      l   c
-//
-// In this example, a possible pipeline is as follows:
-//
-// pipeline:
-// o ⨝ c ⨝ s
-//
-//	-> σ(c.nation = 'CHINA' ∧  o.year >= 1992 ∧  o.year <= 1997 ∧  s.nation = 'CHINA')
-//	-> γ([c.city, s.city, o.year, sum(o.revenue) as revenue], c.city, s.city, o.year)
-//	-> τ(o.year asc, revenue desc)
-//	-> π(c.city, s.city, revenue)
 type Pipeline struct {
 	tableID uint64
 	// attrs, column list.
@@ -92,6 +33,10 @@ func (p *Pipeline) isCtePipelineAtLoop() (isMergeCte bool, atLoop bool) {
 	// 1. it is a linked tree.
 	// 2. it holds `merge-cte` or `merge-recursive`.
 	next := p.rootOp
+	if next.OpType() != vm.Dispatch {
+		return false, false
+	}
+
 	for next != nil {
 		opt := next.OpType()
 		if opt == vm.MergeCTE {
@@ -128,41 +73,20 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare
 	// cancel the context to stop its pre-pipelines.
 	proc.Cancel()
 
-	// If the last operator of this pipeline is a RecSink Operator.
-	// It means this was a pipeline at the `pipeline cycle` (like: a send data to b, and b send data to a)
-	// for deal the deadlock of clean-up,
-	// we need to do a special clean logic for this one.
-	// clean from first operator (data-source operator) to last operator (sender operator).
+	// do special cleanup for the pipeline at a loop.
 	if isMergeCte, isSpecial := p.isCtePipelineAtLoop(); isSpecial {
 		if proc.Base.GetContextBase().DoSpecialCleanUp(isMergeCte) {
-
-			p.rootOp.Reset(proc, pipelineFailed, err)
-			if !isPrepare {
-				p.rootOp.Free(proc, pipelineFailed, err)
-			}
-
-			for _, child := range p.rootOp.GetOperatorBase().Children {
-				_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
-					op.Reset(proc, pipelineFailed, err)
-					return nil
-				})
-				if !isPrepare {
-					_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
-						op.Free(proc, pipelineFailed, err)
-						return nil
-					})
-				}
-			}
-
+			p.cleanupLoopPipeline(proc, pipelineFailed, isPrepare, err)
 			return
 		}
 	}
 
-	// for every pipeline, we clean the last operator first.
-	// and then clean from 0 to n-1.
-	if root := p.rootOp; root != nil {
+	p.cleanupInOrder(proc, pipelineFailed, isPrepare, err)
+}
 
-		// clean operator hold memory.
+// cleanupInOrder call reset and free methods of operator from first index to the last.
+func (p *Pipeline) cleanupInOrder(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
+	if root := p.rootOp; root != nil {
 		_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
 			op.Reset(proc, pipelineFailed, err)
 			return nil
@@ -174,23 +98,30 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare
 				return nil
 			})
 		}
+	}
+}
 
-		//p.rootOp.Reset(proc, pipelineFailed, err)
-		//if !isPrepare {
-		//	p.rootOp.Free(proc, pipelineFailed, err)
-		//}
-		//
-		//for _, child := range p.rootOp.GetOperatorBase().Children {
-		//	_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
-		//		op.Reset(proc, pipelineFailed, err)
-		//		return nil
-		//	})
-		//	if !isPrepare {
-		//		_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
-		//			op.Free(proc, pipelineFailed, err)
-		//			return nil
-		//		})
-		//	}
-		//}
+// cleanupLoopPipeline cleanup pipeline in a special order to avoid pipeline-loop deadlock.
+//
+// pipeline-loop, for example,
+// pipelineA send data to pipelineB and pipelineC, pipelineB send data to pipelineA.
+// pipelineA and pipelineB is a pipeline-loop.
+func (p *Pipeline) cleanupLoopPipeline(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
+	p.rootOp.Reset(proc, pipelineFailed, err)
+	if !isPrepare {
+		p.rootOp.Free(proc, pipelineFailed, err)
+	}
+
+	for _, child := range p.rootOp.GetOperatorBase().Children {
+		_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
+			op.Reset(proc, pipelineFailed, err)
+			return nil
+		})
+		if !isPrepare {
+			_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
+				op.Free(proc, pipelineFailed, err)
+				return nil
+			})
+		}
 	}
 }

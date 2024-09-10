@@ -83,6 +83,11 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) PipelineCommunication
 	return ps2
 }
 
+func OutPutTheWaitingChannelAndFree(c PipelineCommunication) (ch chan struct{}, freeMethod func()) {
+	p2 := c.(*pipelineSpool2)
+	return p2.csDoneSignal, p2.cache.Free
+}
+
 func getBufferLength(cnt int) int {
 	if cnt <= 4 {
 		return 2
