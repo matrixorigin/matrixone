@@ -285,8 +285,8 @@ func NewTAEPrepareNoCtx(msg string) *Error {
 	return newError(Context(), ErrTAEPrepare, msg)
 }
 
-func NewTAEPossibleDuplicateNoCtx() *Error {
-	return newError(Context(), ErrTAEPossibleDuplicate)
+func NewPossibleDuplicateNoCtx() *Error {
+	return newError(Context(), ErrPossibleDuplicate)
 }
 
 func NewTxnRWConflictNoCtx() *Error {
