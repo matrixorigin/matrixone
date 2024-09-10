@@ -171,33 +171,60 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	// FullText
 	{
-		// it is possible that there is a sort node.   i.e. project -> sort -> scan or project -> scan
+		// support the followings:
+		// 1. project -> scan
+		// 2. project -> sort -> scan
+		// 3. project -> aggregate -> scan
 		// try to find scanNode, sortNode from projNode
-		var sortNode *plan.Node
+		var sortNode, aggNode *plan.Node
 		sortNode = nil
+		aggNode = nil
 		scanNode := builder.resolveScanNodeFromProject(projNode, 1)
 		if scanNode == nil {
 			sortNode = builder.resolveSortNode(projNode, 1)
 			if sortNode == nil {
-				goto END0
+				aggNode = builder.resolveAggNode(projNode, 1)
+				if aggNode == nil {
+					goto END0
+				}
 			}
 
-			scanNode = builder.resolveScanNodeWithIndex(sortNode, 1)
-			if scanNode == nil {
-				goto END0
+			if sortNode != nil {
+				scanNode = builder.resolveScanNodeWithIndex(sortNode, 1)
+				if scanNode == nil {
+					goto END0
+				}
+			}
+			if aggNode != nil {
+				scanNode = builder.resolveScanNodeWithIndex(aggNode, 1)
+				if scanNode == nil {
+					goto END0
+				}
 			}
 		}
 
-		// get the list of project that is fulltext_match func
-		projids, proj_ftidxs := builder.getFullTextMatchFromProject(projNode, scanNode)
+		if aggNode != nil {
+			// agg node and scan node present
+			// get the list of filter that is fulltext_match func
+			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
 
-		// get the list of filter that is fulltext_match func
-		filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+			// apply fulltext indices when fulltext_match exists
+			if len(filterids) > 0 {
+				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, aggNode, scanNode,
+					filterids, filter_ftidxs, colRefCnt, idxColMap)
+			}
+		} else {
+			// get the list of project that is fulltext_match func
+			projids, proj_ftidxs := builder.getFullTextMatchFromProject(projNode, scanNode)
 
-		// apply fulltext indices when fulltext_match exists
-		if len(filterids) > 0 || len(projids) > 0 {
-			return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode,
-				filterids, filter_ftidxs, projids, proj_ftidxs, colRefCnt, idxColMap)
+			// get the list of filter that is fulltext_match func
+			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+
+			// apply fulltext indices when fulltext_match exists
+			if len(filterids) > 0 || len(projids) > 0 {
+				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode,
+					filterids, filter_ftidxs, projids, proj_ftidxs, colRefCnt, idxColMap)
+			}
 		}
 	}
 

@@ -125,6 +125,37 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	return nodeID
 }
 
+// mysql> explain select count(*) from src where match(title, body) against('d');
+// +----------------------------------------------------------------+
+// | TP QURERY PLAN                                                 |
+// +----------------------------------------------------------------+
+// | Project                                                        |
+// |   ->  Aggregate                                                |
+// |         Aggregate Functions: starcount(1)                      |
+// |         ->  Join                                               |
+// |               Join Type: INNER                                 |
+// |               Join Cond: (src.id = mo_fulltext_alias_0.doc_id) |
+// |               ->  Table Scan on eric.src                       |
+// |               ->  Table Function on fulltext_index_scan        |
+// |                     ->  Values Scan "*VALUES*"                 |
+// +----------------------------------------------------------------+
+func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, projNode *plan.Node, aggNode *plan.Node, scanNode *plan.Node,
+	filterids []int32, filterIndexDefs []*plan.IndexDef,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+
+	projids := make([]int32, 0)
+	projIndexDefs := make([]*plan.IndexDef, 0)
+
+	//ctx := builder.ctxByNode[nodeID]
+
+	idxID, _, _ := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
+		filterids, filterIndexDefs, projids, projIndexDefs, colRefCnt, idxColMap)
+
+	aggNode.Children[0] = idxID
+
+	return nodeID
+}
+
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
 	projids []int32, proj_indexDefs []*plan.IndexDef,
@@ -444,6 +475,21 @@ func (builder *QueryBuilder) resolveFullTextIndexScanNode(node *plan.Node) *plan
 		if node != nil {
 			return node
 		}
+	}
+
+	return nil
+}
+
+func (builder *QueryBuilder) resolveAggNode(node *plan.Node, depth int32) *plan.Node {
+	if depth == 0 {
+		if node.NodeType == plan.Node_AGG {
+			return node
+		}
+		return nil
+	}
+
+	if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
+		return builder.resolveAggNode(builder.qry.Nodes[node.Children[0]], depth-1)
 	}
 
 	return nil

@@ -564,7 +564,7 @@ func (builder *QueryBuilder) resolveScanNodeWithIndex(node *plan.Node, depth int
 		return nil
 	}
 
-	if node.NodeType == plan.Node_SORT && len(node.Children) == 1 {
+	if (node.NodeType == plan.Node_SORT || node.NodeType == plan.Node_AGG) && len(node.Children) == 1 {
 		return builder.resolveScanNodeWithIndex(builder.qry.Nodes[node.Children[0]], depth-1)
 	}
 
