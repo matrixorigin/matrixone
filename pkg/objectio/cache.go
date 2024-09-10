@@ -15,9 +15,7 @@
 package objectio
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -74,8 +72,6 @@ type mataCacheKey [cacheKeyLen]byte
 
 var metaCache *fifocache.Cache[mataCacheKey, []byte]
 var onceInit sync.Once
-var metaCacheStats hitStats
-var metaCacheHitStats hitStats
 
 func metaCacheSize() int64 {
 	v, err := mem.VirtualMemory()
@@ -101,12 +97,12 @@ func shardMetaCacheKey(key mataCacheKey) uint8 {
 }
 
 func init() {
-	metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(metaCacheSize()), nil, shardMetaCacheKey)
+	metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(metaCacheSize()), shardMetaCacheKey, nil, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(size), nil, shardMetaCacheKey)
+		metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(size), shardMetaCacheKey, nil, nil, nil)
 	})
 }
 
@@ -115,21 +111,6 @@ func encodeCacheKey(name ObjectNameShort, cacheKeyType uint16) mataCacheKey {
 	copy(key[:], name[:])
 	copy(key[ObjectNameShortLen:], types.EncodeUint16(&cacheKeyType))
 	return key
-}
-
-func ExportCacheStats() string {
-	var buf bytes.Buffer
-	hw, hwt := metaCacheHitStats.ExportW()
-	ht, htt := metaCacheHitStats.Export()
-	w, wt := metaCacheStats.ExportW()
-	t, tt := metaCacheStats.Export()
-
-	fmt.Fprintf(
-		&buf,
-		"MetaCacheWindow: %d/%d | %d/%d, MetaCacheTotal: %d/%d | %d/%d", hw, hwt, w, wt, ht, htt, t, tt,
-	)
-
-	return buf.String()
 }
 
 func LoadObjectMetaByExtent(
@@ -149,10 +130,6 @@ func LoadObjectMetaByExtent(
 			return
 		}
 		meta = obj.(ObjectMeta)
-		// metaCacheStats.Record(1, 1)
-		// if !prefetch {
-		// 	metaCacheHitStats.Record(1, 1)
-		// }
 		return
 	}
 	if extent.Length() == 0 {
@@ -170,10 +147,6 @@ func LoadObjectMetaByExtent(
 	}
 	meta = obj.(ObjectMeta)
 	metaCache.Set(key, v[:], int64(len(v)))
-	// metaCacheStats.Record(0, 1)
-	// if !prefetch {
-	// 	metaCacheHitStats.Record(0, 1)
-	// }
 	return
 }
 
@@ -186,7 +159,6 @@ func FastLoadBF(
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 	v, ok := metaCache.Get(key)
 	if ok {
-		// metaCacheStats.Record(1, 1)
 		return v, nil
 	}
 	meta, err := FastLoadObjectMeta(ctx, &location, isPrefetch, fs)
@@ -205,7 +177,6 @@ func LoadBFWithMeta(
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 	v, ok := metaCache.Get(key)
 	if ok {
-		// metaCacheStats.Record(1, 1)
 		return v, nil
 	}
 	extent := meta.BlockHeader().BFExtent()
@@ -214,7 +185,6 @@ func LoadBFWithMeta(
 		return nil, err
 	}
 	metaCache.Set(key, bf, int64(len(bf)))
-	// metaCacheStats.Record(0, 1)
 	return bf, nil
 }
 

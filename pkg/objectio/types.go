@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -37,6 +38,15 @@ var BuildZM = index.BuildZM
 
 type ColumnMetaFetcher interface {
 	MustGetColumn(seqnum uint16) ColumnMeta
+}
+
+type ReadFilterSearchFuncType func([]*vector.Vector) []int64
+
+type BlockReadFilter struct {
+	HasFakePK          bool
+	Valid              bool
+	SortedSearchFunc   ReadFilterSearchFuncType
+	UnSortedSearchFunc ReadFilterSearchFuncType
 }
 
 type WriteOptions struct {

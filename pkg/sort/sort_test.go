@@ -15,6 +15,7 @@
 package sort
 
 import (
+	"slices"
 	"sort"
 	"testing"
 
@@ -27,7 +28,7 @@ import (
 )
 
 const (
-	Rows          = 1000
+	Rows          = 15
 	BenchmarkRows = 100000
 )
 
@@ -97,6 +98,12 @@ func init() {
 
 		newTestCase(true, mp, types.New(types.T_array_float64, types.MaxArrayDimension, 0)),
 		newTestCase(false, mp, types.New(types.T_array_float64, types.MaxArrayDimension, 0)),
+
+		newTestCase(true, mp, types.T_Blockid.ToType()),
+		newTestCase(false, mp, types.T_Blockid.ToType()),
+
+		newTestCase(true, mp, types.T_Rowid.ToType()),
+		newTestCase(false, mp, types.T_Rowid.ToType()),
 	}
 }
 
@@ -227,6 +234,53 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		} else {
 			for i, v := range vs {
 				require.Equal(t, v, float64(col[os[i]]))
+			}
+		}
+	case types.T_Blockid:
+		col := vector.MustFixedColWithTypeCheck[types.Blockid](vec)
+		vs := make([]types.Blockid, len(os))
+
+		for i := range vs {
+			vs[i] = col[i]
+		}
+
+		slices.SortFunc(vs, func(a, b types.Blockid) int {
+			return a.Compare(&b)
+		})
+
+		if desc {
+			j := len(vs) - 1
+			for _, v := range vs {
+				require.Equal(t, v, col[os[j]])
+				j--
+			}
+		} else {
+			for i, v := range vs {
+				require.Equal(t, v, col[os[i]])
+			}
+		}
+
+	case types.T_Rowid:
+		col := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
+		vs := make([]types.Rowid, len(os))
+
+		for i := range vs {
+			vs[i] = col[i]
+		}
+
+		slices.SortFunc(vs, func(a, b types.Rowid) int {
+			return a.Compare(&b)
+		})
+
+		if desc {
+			j := len(vs) - 1
+			for _, v := range vs {
+				require.Equal(t, v, col[os[j]])
+				j--
+			}
+		} else {
+			for i, v := range vs {
+				require.Equal(t, v, col[os[i]])
 			}
 		}
 	}

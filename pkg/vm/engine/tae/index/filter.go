@@ -49,6 +49,8 @@ func NewEmptyBloomFilterWithType(t uint8) StaticFilter {
 	}
 }
 
+type BloomFilter = bloomFilter
+
 func NewEmptyBloomFilter() StaticFilter {
 	return &bloomFilter{}
 }

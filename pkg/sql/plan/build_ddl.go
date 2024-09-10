@@ -3085,6 +3085,91 @@ func getTableComment(tableDef *plan.TableDef) string {
 	}
 	return comment
 }
+func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error) {
+
+	alterTables := stmt.AlterTables
+	renameTables := make([]*plan.AlterTable, 0)
+	for _, alterTable := range alterTables {
+		schemaName, tableName := string(alterTable.Table.Schema()), string(alterTable.Table.Name())
+		if schemaName == "" {
+			schemaName = ctx.DefaultDatabase()
+		}
+		objRef, tableDef := ctx.Resolve(schemaName, tableName, nil)
+		if tableDef == nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+		}
+
+		if tableDef.IsTemporary {
+			return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
+		}
+
+		if tableDef.ViewSql != nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
+		}
+		if objRef.PubInfo != nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
+		}
+		isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
+		accountId, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		if isClusterTable && accountId != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
+		}
+
+		alterTablePlan := &plan.AlterTable{
+			Actions:        make([]*plan.AlterTable_Action, len(alterTable.Options)),
+			AlgorithmType:  plan.AlterTable_INPLACE,
+			Database:       schemaName,
+			TableDef:       tableDef,
+			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		}
+
+		var updateSqls []string
+		for i, option := range alterTable.Options {
+			switch opt := option.(type) {
+			case *tree.AlterOptionTableName:
+				oldName := tableDef.Name
+				newName := string(opt.Name.ToTableName().ObjectName)
+				if oldName != newName {
+					_, tableDef := ctx.Resolve(schemaName, newName, nil)
+					if tableDef != nil {
+						return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+					}
+				}
+				alterTablePlan.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AlterName{
+						AlterName: &plan.AlterTableName{
+							OldName: oldName,
+							NewName: newName,
+						},
+					},
+				}
+				updateSqls = append(updateSqls, getSqlForRenameTable(schemaName, oldName, newName)...)
+
+			default:
+				// return err
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
+			}
+			alterTablePlan.UpdateFkSqls = updateSqls
+		}
+		renameTables = append(renameTables, alterTablePlan)
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_RENAME_TABLE,
+				Definition: &plan.DataDefinition_RenameTable{
+					RenameTable: &plan.RenameTable{
+						AlterTables: renameTables,
+					},
+				},
+			},
+		},
+	}, nil
+}
 
 func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)

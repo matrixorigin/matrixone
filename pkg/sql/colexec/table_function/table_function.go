@@ -39,9 +39,9 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := tableFunction.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	// we know this cannot be true but check anyway
 	if tableFunction.ctr.state == nil {
@@ -52,14 +52,14 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 	for {
 		if tableFunction.ctr.inputBatch.IsDone() || tableFunction.ctr.nextRow >= tableFunction.ctr.inputBatch.RowCount() {
 			// get to next input batch
-			input, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, anal)
+			input, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return input, err
 			}
-			anal.Input(input.Batch, tableFunction.IsFirst)
 
 			tableFunction.ctr.inputBatch = input.Batch
 			if input.Batch.IsDone() {
+				analyzer.Output(input.Batch)
 				return input, nil
 			}
 
@@ -93,7 +93,7 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 			}
 			continue
 		}
-
+		analyzer.Output(res.Batch)
 		return res, nil
 	} // end of loop
 }
@@ -108,6 +108,12 @@ func (tableFunction *TableFunction) OpType() vm.OpType {
 }
 
 func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
+	if tableFunction.OpAnalyzer == nil {
+		tableFunction.OpAnalyzer = process.NewAnalyzer(tableFunction.GetIdx(), tableFunction.IsFirst, tableFunction.IsLast, "tableFunction")
+	} else {
+		tableFunction.OpAnalyzer.Reset()
+	}
+
 	var err error
 	tblArg := tableFunction
 
