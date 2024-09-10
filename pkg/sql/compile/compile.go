@@ -3859,7 +3859,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			}
 		}
 
-		relData, err = c.expandRanges(n, rel, n.BlockFilterList)
+		relData, err = c.expandRanges(n, rel, filterExpr)
 		if err != nil {
 			return nil, nil, nil, err
 		}
