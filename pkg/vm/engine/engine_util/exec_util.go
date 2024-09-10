@@ -79,13 +79,12 @@ func FilterObjects(
 	fastFilterHit int,
 	err error,
 ) {
-	onObject := func(obj *objectio.ObjectStats) (err error) {
+	onObject := func(objStats *objectio.ObjectStats) (err error) {
 		var ok bool
-		objStats := *obj
 		totalBlocks += int(objStats.BlkCnt())
 		if fastFilterOp != nil {
 			fastFilterTotal++
-			if ok, err = fastFilterOp(&objStats); err != nil || !ok {
+			if ok, err = fastFilterOp(objStats); err != nil || !ok {
 				fastFilterHit++
 				return
 			}
@@ -98,7 +97,7 @@ func FilterObjects(
 		if loadOp != nil {
 			loadHit++
 			if meta, bf, err = loadOp(
-				ctx, &objStats, meta, bf,
+				ctx, objStats, meta, bf,
 			); err != nil {
 				return
 			}
@@ -163,7 +162,7 @@ func FilterObjects(
 				MetaLoc: objectio.ObjectLocation(loc),
 			}
 
-			blk.SetFlagByObjStats(&objStats)
+			blk.SetFlagByObjStats(objStats)
 			outBlocks.AppendBlockInfo(blk)
 		}
 
