@@ -19,9 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
@@ -87,7 +85,7 @@ func FilterObjects(
 		totalBlocks += int(objStats.BlkCnt())
 		if fastFilterOp != nil {
 			fastFilterTotal++
-			if ok, err = fastFilterOp(objStats); err != nil || !ok {
+			if ok, err = fastFilterOp(&objStats); err != nil || !ok {
 				fastFilterHit++
 				return
 			}
@@ -100,7 +98,7 @@ func FilterObjects(
 		if loadOp != nil {
 			loadHit++
 			if meta, bf, err = loadOp(
-				ctx, objStats, meta, bf,
+				ctx, &objStats, meta, bf,
 			); err != nil {
 				return
 			}
@@ -131,11 +129,11 @@ func FilterObjects(
 			pos = seekOp(dataMeta)
 		}
 
-		if objStats.Rows() == 0 {
-			logutil.Errorf("object stats has zero rows: %s", objStats.ObjectName().String())
-			util.EnableCoreDump()
-			util.CoreDump()
-		}
+		// if objStats.Rows() == 0 {
+		// 	logutil.Errorf("object stats has zero rows: %s", objStats.ObjectName().String())
+		// 	util.EnableCoreDump()
+		// 	util.CoreDump()
+		// }
 
 		for ; pos < blockCnt; pos++ {
 			var blkMeta objectio.BlockObject
@@ -165,7 +163,7 @@ func FilterObjects(
 				MetaLoc: objectio.ObjectLocation(loc),
 			}
 
-			blk.SetFlagByObjStats(objStats)
+			blk.SetFlagByObjStats(&objStats)
 			outBlocks.AppendBlockInfo(blk)
 		}
 
