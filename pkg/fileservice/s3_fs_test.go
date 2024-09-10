@@ -968,7 +968,8 @@ func TestS3PrefetchFile(t *testing.T) {
 			RoleARN:   config.RoleARN,
 		},
 		CacheConfig{
-			DiskPath: ptrTo(cacheDir),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+			DiskPath:     ptrTo(cacheDir),
 		},
 		nil,
 		false,
