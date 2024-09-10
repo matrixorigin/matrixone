@@ -55,28 +55,28 @@ const (
 )
 
 type BlockInfo struct {
-	BlockID   types.Blockid
-	MetaLoc   ObjectLocation
-	StateFlag int8
+	BlockID     types.Blockid
+	MetaLoc     ObjectLocation
+	ObjectFlags int8
 
 	//TODO:: remove it.
 	PartitionNum int16
 }
 
 func (b *BlockInfo) SetFlagByObjStats(stats ObjectStats) {
-	b.StateFlag = stats.GetFlag()
+	b.ObjectFlags = stats.GetFlag()
 }
 
 func (b *BlockInfo) IsAppendable() bool {
-	return b.StateFlag&AppendableFlag != 0
+	return b.ObjectFlags&ObjectFlag_Appendable != 0
 }
 
 func (b *BlockInfo) IsSorted() bool {
-	return b.StateFlag&SortedFlag != 0
+	return b.ObjectFlags&ObjectFlag_Sorted != 0
 }
 
 func (b *BlockInfo) IsCNCreated() bool {
-	return b.StateFlag&CNCreatedFlag != 0
+	return b.ObjectFlags&ObjectFlag_CNCreated != 0
 }
 
 func (b *BlockInfo) String() string {
@@ -111,7 +111,7 @@ func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 	}
 	space += uint32(LocationLen)
 
-	if _, err := w.Write(types.EncodeInt8(&b.StateFlag)); err != nil {
+	if _, err := w.Write(types.EncodeInt8(&b.ObjectFlags)); err != nil {
 		return 0, err
 	}
 	space++
@@ -131,7 +131,7 @@ func (b *BlockInfo) Unmarshal(buf []byte) error {
 	copy(b.MetaLoc[:], buf[:LocationLen])
 	buf = buf[LocationLen:]
 
-	b.StateFlag = types.DecodeInt8(buf[:1])
+	b.ObjectFlags = types.DecodeInt8(buf[:1])
 	buf = buf[1:]
 
 	b.PartitionNum = types.DecodeFixed[int16](buf[:2])
