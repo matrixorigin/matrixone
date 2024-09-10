@@ -22,30 +22,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
 var ErrNoMore = moerr.NewInternalErrorNoCtx("no more")
 
 func ForeachObjectsExecute(
-	onObject func(objectio.ObjectStats) error,
-	nextObjectFn func() (objectio.ObjectStats, error),
+	onObject func(*objectio.ObjectStats) error,
+	nextObjectFn func() (logtailreplay.ObjectEntry, error),
 	latestObjects []objectio.ObjectStats,
 	extraObjects []objectio.ObjectStats,
 ) (err error) {
-	var obj objectio.ObjectStats
-	for _, obj = range latestObjects {
-		if err = onObject(obj); err != nil {
+	for _, obj := range latestObjects {
+		if err = onObject(&obj); err != nil {
 			return
 		}
 	}
 	for _, obj := range extraObjects {
-		if err = onObject(obj); err != nil {
+		if err = onObject(&obj); err != nil {
 			return
 		}
 	}
 	if nextObjectFn != nil {
+		var obj logtailreplay.ObjectEntry
 		for obj, err = nextObjectFn(); err == nil; obj, err = nextObjectFn() {
-			if err = onObject(obj); err != nil {
+			if err = onObject(&obj.ObjectStats); err != nil {
 				return
 			}
 		}
@@ -63,7 +64,7 @@ func FilterObjects(
 	objectFilterOp ObjectFilterOp,
 	blockFilterOp BlockFilterOp,
 	seekOp SeekFirstBlockOp,
-	nextObjectFn func() (objectio.ObjectStats, error),
+	nextObjectFn func() (logtailreplay.ObjectEntry, error),
 	latestObjects []objectio.ObjectStats,
 	extraObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
@@ -80,8 +81,9 @@ func FilterObjects(
 	fastFilterHit int,
 	err error,
 ) {
-	onObject := func(objStats objectio.ObjectStats) (err error) {
+	onObject := func(obj *objectio.ObjectStats) (err error) {
 		var ok bool
+		objStats := *obj
 		totalBlocks += int(objStats.BlkCnt())
 		if fastFilterOp != nil {
 			fastFilterTotal++
