@@ -16,6 +16,7 @@ package vector
 
 // SetVecData is dangerous and should be used with caution.
 func SetVecData(v *Vector, data []byte) {
+	data = data[:cap(data)]
 	v.data = data
 }
 

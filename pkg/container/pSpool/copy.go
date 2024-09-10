@@ -133,6 +133,9 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 		if cap(dst.Vecs) >= len(src.Vecs) {
 			dst.Vecs = dst.Vecs[:len(src.Vecs)]
+			for i := range dst.Vecs {
+				dst.Vecs[i] = nil
+			}
 		} else {
 			dst.Vecs = make([]*vector.Vector, len(src.Vecs))
 		}
@@ -141,6 +144,10 @@ func (cb *cachedBatch) GetCopiedBatch(
 			dst.Attrs = dst.Attrs[:len(src.Attrs)]
 		} else {
 			dst.Attrs = make([]string, len(src.Attrs))
+		}
+		// copy attrs.
+		for i := range dst.Attrs {
+			dst.Attrs[i] = src.Attrs[i]
 		}
 
 		// copy vectors.
@@ -167,11 +174,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 					dst.Vecs[j] = dst.Vecs[i]
 				}
 			}
-		}
-
-		// copy attrs.
-		for i := range dst.Attrs {
-			dst.Attrs[i] = src.Attrs[i]
 		}
 
 		dst.Aggs = src.Aggs
@@ -219,7 +221,7 @@ func (cb *cachedBatch) getSuitableVector(
 	if second > 0 {
 		for i, bs := range cb.bytesCache {
 			if cap(bs) >= second {
-				if !setDataFirst {
+				if setDataFirst {
 					vector.SetVecArea(vec, bs)
 				} else {
 					vector.SetVecData(vec, bs)
@@ -230,11 +232,11 @@ func (cb *cachedBatch) getSuitableVector(
 		}
 	}
 
-	if len(cb.bytesCache) > 0 && len(vec.GetData()) == 0 && dataSize > 0 {
+	if len(cb.bytesCache) > 0 && cap(vec.GetData()) == 0 && dataSize > 0 {
 		vector.SetVecData(vec, cb.bytesCache[len(cb.bytesCache)-1])
 		cb.bytesCache = cb.bytesCache[:len(cb.bytesCache)-1]
 	}
-	if len(cb.bytesCache) > 0 && len(vec.GetArea()) == 0 && areaSize > 0 {
+	if len(cb.bytesCache) > 0 && cap(vec.GetArea()) == 0 && areaSize > 0 {
 		vector.SetVecArea(vec, cb.bytesCache[len(cb.bytesCache)-1])
 		cb.bytesCache = cb.bytesCache[:len(cb.bytesCache)-1]
 	}
