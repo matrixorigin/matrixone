@@ -33,6 +33,12 @@ func (output *Output) OpType() vm.OpType {
 }
 
 func (output *Output) Prepare(_ *process.Process) error {
+	if output.OpAnalyzer == nil {
+		output.OpAnalyzer = process.NewAnalyzer(output.GetIdx(), output.IsFirst, output.IsLast, "output")
+	} else {
+		output.OpAnalyzer.Reset()
+	}
+
 	return nil
 }
 
@@ -41,11 +47,11 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(output.GetIdx(), output.GetParallelIdx(), output.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := output.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCall(output.GetChildren(0), proc, anal)
+	result, err := vm.ChildrenCall(output.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -64,5 +70,6 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, err
 	}
+	//TODO: analyzer.Output(result.Batch)
 	return result, nil
 }
