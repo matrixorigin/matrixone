@@ -13,13 +13,13 @@ col1    col2
 3    null
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test    retention01    1725952294
+test    retention01    1725952884
 select sleep(5);
 sleep(5)
 0
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
-{\n  "method": "TASK",\n  "result": {\n    "RequestID": 14,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 9,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
 select sleep(1);
 sleep(1)
 0
@@ -35,13 +35,13 @@ insert into retention02 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324)
 insert into retention02 values (2, 3, 'b', '32r32r', 'database', 1111111);
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test    retention02    1725952298
+test    retention02    1725952888
 select sleep(3);
 sleep(3)
 0
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
-{\n  "method": "TASK",\n  "result": {\n    "RequestID": 15,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 10,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
 select sleep(1);
 sleep(1)
 0
@@ -68,7 +68,7 @@ insert into retention03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test    retention03    1725952309
+test    retention03    1725952899
 drop table retention03;
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
@@ -83,7 +83,7 @@ status enum('Pending', 'Processing', 'Completed', 'Cancelled')
 insert into retention04 values(1,'111',1),(2,'222',2),(3,'333',3),(4,'444','Cancelled');
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test    retention04    1725952304
+test    retention04    1725952894
 drop database test;
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
@@ -94,13 +94,13 @@ insert into retention05 values(0, 0),(1, 0),(2, 0),(3, 0);
 insert into retention05 values(0, 1),(1, 1),(2, 1),(3, 1);
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-mo_catalog    retention05    1725952302
+mo_catalog    retention05    1725952893
 select sleep(3);
 sleep(3)
 0
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
-{\n  "method": "TASK",\n  "result": {\n    "RequestID": 16,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 11,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
 select sleep(1);
 sleep(1)
 0
@@ -129,13 +129,13 @@ col1    col2    col3
 3    null    database management system
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test01    retention06    1725952305
+test01    retention06    1725952895
 select sleep(2);
 sleep(2)
 0
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
-{\n  "method": "TASK",\n  "result": {\n    "RequestID": 17,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 12,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
 select sleep(2);
 sleep(2)
 0
@@ -158,13 +158,13 @@ create table retention09(t1 time,t2 time,t3 time);
 insert into retention09 select * from retention08;
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test01    retention08    1725952309
+test01    retention08    1725952899
 select sleep(2);
 sleep(2)
 0
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
-{\n  "method": "TASK",\n  "result": {\n    "RequestID": 18,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 13,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
 select sleep(2);
 sleep(2)
 0
@@ -214,13 +214,13 @@ insert into pri01 values (1,1), (2,2), (3,3);
 insert into aff01 values (1,1), (2,2), (3,3);
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
-test01    aff01    1725952314
+test01    aff01    1725952905
 select sleep(2);
 sleep(2)
 0
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
-{\n  "method": "TASK",\n  "result": {\n    "RequestID": 19,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 14,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
 select sleep(1);
 sleep(1)
 0
@@ -235,3 +235,84 @@ a    b
 2    2
 3    3
 drop table pri01;
+drop table if exists prepare01;
+prepare s1 from "create table prepare01(col1 int primary key , col2 char default 'a') with retention period 2 second";
+execute s1;
+show create table prepare01;
+Table    Create Table
+prepare01    CREATE TABLE `prepare01` (\n  `col1` int NOT NULL,\n  `col2` char(1) DEFAULT 'a',\n  PRIMARY KEY (`col1`)\n)
+show columns from prepare01;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    INT(32)    NO    PRI    null        
+col2    CHAR(1)    YES        'a'        
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+test01    prepare01    1725952908
+drop table prepare01;
+drop table if exists back01;
+create table back01 (a json,b int) with retention period 10 minute;
+insert into back01 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
+drop snapshot if exists sp01;
+create snapshot sp01 for account sys;
+drop table back01;
+restore account sys from snapshot sp01;
+show tables;
+Tables_in_test01
+back01
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+test01    back01    1725953506
+select sleep(2);
+sleep(2)
+0
+select mo_ctl('cn', 'task', ':retention');
+mo_ctl(cn, task, :retention)
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 15,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
+select sleep(1);
+sleep(1)
+0
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+test01    back01    1725953506
+drop snapshot sp01;
+drop table back01;
+drop table if exists t1;
+create table t1 (a text) with retention period 2 second;
+insert into t1 values('abcdef');
+insert into t1 values('_bcdef');
+insert into t1 values('a_cdef');
+select sleep(2);
+sleep(2)
+0
+select mo_ctl('cn', 'task', ':retention');
+mo_ctl(cn, task, :retention)
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 16,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
+select sleep(1);
+sleep(1)
+0
+drop snapshot if exists sp02;
+create snapshot sp02 for account sys;
+restore account sys from snapshot sp02;
+show tables;
+Tables_in_test01
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+drop snapshot sp02;
+drop table if exists abnormal01;
+create table abnormal01 (col1 int, col3 char) with retention period 0.1 day;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 71 near " 0.1 day;";
+create table abnormal01 (col1 int, col3 char) with retention period 0.5 second;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 71 near " 0.5 second;";
+create table abnormal01 (col1 int, col3 char) with retention period 100.1 minute;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 73 near " 100.1 minute;";
+create table abnormal01 (col1 int, col3 char) with retention period 0.5 hour;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 71 near " 0.5 hour;";
+create table abnormal01 (col1 int, col3 char) with retention period 0.4 week;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 71 near " 0.4 week;";
+create table abnormal01 (col1 int, col3 char) with retention period 0.1 month;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 71 near " 0.1 month;";
+create table abnormal01 (col1 int, col3 char) with retention period 10 years;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 76 near " years;";
+create table abnormal01 (col1 int, col3 char) with retention period 10 minutes;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 78 near " minutes;";
+drop database test01;

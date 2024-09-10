@@ -199,3 +199,75 @@ select * from mo_catalog.mo_retention;
 show tables;
 select * from pri01;
 drop table pri01;
+
+
+
+
+-- prepare
+drop table if exists prepare01;
+prepare s1 from "create table prepare01(col1 int primary key , col2 char default 'a') with retention period 2 second";
+execute s1;
+show create table prepare01;
+show columns from prepare01;
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+drop table prepare01;
+
+
+
+
+-- backup restore, not reach retention time
+drop table if exists back01;
+create table back01 (a json,b int) with retention period 10 minute;
+insert into back01 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
+drop snapshot if exists sp01;
+create snapshot sp01 for account sys;
+drop table back01;
+restore account sys from snapshot sp01;
+show tables;
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+select sleep(2);
+-- @ignore:0
+select mo_ctl('cn', 'task', ':retention');
+select sleep(1);
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+drop snapshot sp01;
+drop table back01;
+
+
+
+
+-- backup restore, reach retention time
+drop table if exists t1;
+create table t1 (a text) with retention period 2 second;
+insert into t1 values('abcdef');
+insert into t1 values('_bcdef');
+insert into t1 values('a_cdef');
+select sleep(2);
+-- @ignore:0
+select mo_ctl('cn', 'task', ':retention');
+select sleep(1);
+drop snapshot if exists sp02;
+create snapshot sp02 for account sys;
+restore account sys from snapshot sp02;
+show tables;
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+drop snapshot sp02;
+
+
+
+
+-- abnormal test
+drop table if exists abnormal01;
+create table abnormal01 (col1 int, col3 char) with retention period 0.1 day;
+create table abnormal01 (col1 int, col3 char) with retention period 0.5 second;
+create table abnormal01 (col1 int, col3 char) with retention period 100.1 minute;
+create table abnormal01 (col1 int, col3 char) with retention period 0.5 hour;
+create table abnormal01 (col1 int, col3 char) with retention period 0.4 week;
+create table abnormal01 (col1 int, col3 char) with retention period 0.1 month;
+create table abnormal01 (col1 int, col3 char) with retention period 10 years;
+create table abnormal01 (col1 int, col3 char) with retention period 10 minutes;
+drop database test01;
