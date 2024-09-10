@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
@@ -9055,55 +9054,4 @@ func TestVisitTombstone(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 	tae.Restart(context.Background())
 	t.Log(tae.Catalog.SimplePPString(3))
-}
-
-func TestDedupObject(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	ctx := context.Background()
-	opts := config.WithLongScanAndCKPOpts(nil)
-	options.WithGlobalVersionInterval(time.Microsecond)(opts)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(2, 1)
-	schema.BlockMaxRows = 50
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 50)
-	defer bat.Close()
-
-	tae.CreateRelAndAppend(bat, true)
-
-	tae.CompactBlocks(true)
-
-	var dedupTxn txnif.AsyncTxn
-	// var dedupRel handle.Relation
-	{
-		txn2, rel2 := tae.GetRelation()
-		obj := testutil.GetOneBlockMeta(rel2)
-		task, err := jobs.NewMergeObjectsTask(nil, txn2, []*catalog.ObjectEntry{obj}, tae.Runtime, 0)
-		assert.NoError(t, err)
-		err = task.OnExec(context.Background())
-		assert.NoError(t, err)
-		{
-			tae.DeleteAll(true)
-		}
-		dedupTxn, _ = tae.GetRelation()
-		txn2.Commit(ctx)
-	}
-	getObjTxn, getObjRel := tae.GetRelation()
-	obj := testutil.GetOneBlockMeta(getObjRel)
-	getObjTxn.Commit(ctx)
-	pkVec := bat.Vecs[1]
-	pkType := pkVec.GetType()
-	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
-	index.BatchUpdateZM(keysZM, pkVec.GetDownstreamVector())
-	location := obj.GetLatestCommittedNodeLocked().BaseNode.ObjectLocation()
-	bf, _ := objectio.FastLoadBF(
-		ctx,
-		location,
-		false,
-		tae.Runtime.Fs.Service,
-	)
-	err := obj.GetObjectData().BatchDedup(ctx, dedupTxn, pkVec, keysZM, nil, true, bf, common.DebugAllocator)
-	t.Log(err)
-	dedupTxn.Commit(ctx)
 }

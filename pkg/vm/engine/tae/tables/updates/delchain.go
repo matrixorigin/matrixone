@@ -396,8 +396,8 @@ func (chain *DeleteChain) CollectDeletesLocked(
 					blockID := *objectio.NewBlockidWithObjectID(&chain.mvcc.meta.ID, chain.mvcc.blkID)
 					delsMap := rt.TransferDelsMap.GetDelsForBlk(blockID)
 					if delsMap == nil {
-						err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("deletes for block %v not found", blockID.String()))
-						return true
+						err = moerr.NewTAEPossibleDuplicateNoCtx()
+						return false
 					}
 					tsMapping := delsMap.Mapping
 					if tsMapping == nil {
