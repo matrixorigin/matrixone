@@ -1441,7 +1441,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-		for idx, expr := range node.TblFuncExprList {
+		for idx, expr := range right.TblFuncExprList {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
 			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
@@ -3765,12 +3765,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		if ok {
 			return builder.buildApplyTable(tbl, ctx)
 		} else {
-			newtbl := &tree.JoinTableExpr{
-				JoinType: tree.JOIN_TYPE_INNER,
-				Left:     tbl.Left,
-				Right:    tbl.Right,
-			}
-			return builder.buildJoinTable(newtbl, ctx)
+			return 0, moerr.NewInternalError(builder.GetContext(), "must apply a table function")
 		}
 
 	case *tree.TableFunction:
@@ -4181,10 +4176,9 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 		return 0, err
 	}
 	nodeID := builder.appendNode(&plan.Node{
-		NodeType:        plan.Node_APPLY,
-		Children:        []int32{leftChildID, rightChildID},
-		JoinType:        applyType,
-		TblFuncExprList: builder.qry.Nodes[rightChildID].TblFuncExprList,
+		NodeType: plan.Node_APPLY,
+		Children: []int32{leftChildID, rightChildID},
+		JoinType: applyType,
 	}, ctx)
 	return nodeID, nil
 }
