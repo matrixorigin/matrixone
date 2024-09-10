@@ -2729,6 +2729,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	resper := ses.GetResponser()
 	ses.SetSql(input.getSql())
 	input.genHash()
+	version := ses.GetCreateVersion()
+	if len(version) == 0 {
+		version = serverVersion.Load().(string)
+	}
 
 	sqlLen := len(input.getSql())
 	if sqlLen != 0 {
@@ -2766,7 +2770,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		Host:                 getGlobalPu().SV.Host,
 		ConnectionID:         uint64(resper.GetU32(CONNID)),
 		Database:             ses.GetDatabaseName(),
-		Version:              makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
+		Version:              makeServerVersion(getGlobalPu(), version),
 		TimeZone:             ses.GetTimeZone(),
 		StorageEngine:        getGlobalPu().StorageEngine,
 		LastInsertID:         ses.GetLastInsertID(),
