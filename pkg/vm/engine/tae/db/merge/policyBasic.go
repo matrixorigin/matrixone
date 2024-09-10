@@ -54,7 +54,7 @@ func (g *policyGroup) revise(cpu, mem int64) []reviseResult {
 	for _, p := range g.policies {
 		pResult := p.revise(cpu, mem, g.config)
 		for _, r := range pResult {
-			if len(r.objs) > 1 {
+			if len(r.objs) > 0 {
 				results = append(results, r)
 			}
 		}
