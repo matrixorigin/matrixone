@@ -59,6 +59,7 @@ const (
 	TruncateTable
 	AlterView
 	AlterTable
+	RenameTable
 	MergeInsert
 	MergeDelete
 	CreateSequence

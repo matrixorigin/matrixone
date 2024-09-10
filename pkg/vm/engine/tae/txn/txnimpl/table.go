@@ -1375,7 +1375,9 @@ func (tbl *txnTable) RangeDelete(
 func (tbl *txnTable) contains(
 	ctx context.Context,
 	keys containers.Vector,
-	keysZM index.ZM, mp *mpool.MPool) (err error) {
+	keysZM index.ZM,
+	mp *mpool.MPool,
+) (err error) {
 	if tbl.tombstoneTable == nil || tbl.tombstoneTable.tableSpace == nil {
 		return
 	}
