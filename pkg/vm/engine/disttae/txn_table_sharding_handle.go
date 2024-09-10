@@ -272,7 +272,7 @@ func HandleShardingReadBuildReader(
 		ctx,
 		0,
 		relData,
-		engine.DataSourceReadPolicy(param.ReaderBuildParam.ReadPolicy),
+		//engine.DataSourceReadPolicy(param.ReaderBuildParam.ReadPolicy),
 		engine.TombstoneApplyPolicy(param.ReaderBuildParam.TombstoneApplyPolicy),
 	)
 	if err != nil {

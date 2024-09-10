@@ -584,17 +584,17 @@ func buildShardingReaders(
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
 	var shard engine.RelData
-	var localReadPolicy engine.DataSourceReadPolicy
-	var remoteReadPolicy engine.DataSourceReadPolicy
+	//var localReadPolicy engine.DataSourceReadPolicy
+	//var remoteReadPolicy engine.DataSourceReadPolicy
 	for i := 0; i < newNum; i++ {
 		if i == 0 {
 			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
-			localReadPolicy = engine.Policy_SkipReadCommittedInMem
-			remoteReadPolicy = engine.Policy_SkipReadUncommittedInMem
+			//localReadPolicy = engine.Policy_SkipReadCommittedInMem
+			//remoteReadPolicy = engine.Policy_SkipReadUncommittedInMem
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
-			localReadPolicy = engine.Policy_SkipReadInMem
-			remoteReadPolicy = engine.Policy_SkipReadInMem
+			//localReadPolicy = engine.Policy_SkipReadInMem
+			//remoteReadPolicy = engine.Policy_SkipReadInMem
 		}
 
 		localRelData, remoteRelData := group(shard)
@@ -602,7 +602,6 @@ func buildShardingReaders(
 			ctx,
 			txnOffset,
 			localRelData,
-			localReadPolicy,
 			policy|engine.Policy_SkipCommittedInMemory|engine.Policy_SkipCommittedS3)
 		if err != nil {
 			return nil, err
@@ -622,10 +621,10 @@ func buildShardingReaders(
 		lrd.scanType = scanType
 
 		srd := &shardingReader{
-			lrd:                   lrd,
-			tblDelegate:           tbl,
-			remoteRelData:         remoteRelData,
-			remoteReadPolicy:      remoteReadPolicy,
+			lrd:           lrd,
+			tblDelegate:   tbl,
+			remoteRelData: remoteRelData,
+			//remoteReadPolicy:      remoteReadPolicy,
 			remoteTombApplyPolicy: engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3,
 			remoteScanType:        scanType,
 		}

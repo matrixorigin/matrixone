@@ -1652,7 +1652,6 @@ func BuildLocalDataSource(
 		ctx,
 		txnOffset,
 		ranges,
-		engine.Policy_SkipNone,
 		engine.Policy_CheckAll)
 }
 
@@ -1660,13 +1659,14 @@ func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
 	relData engine.RelData,
-	readPolicy engine.DataSourceReadPolicy,
 	policy engine.TombstoneApplyPolicy,
 ) (source engine.DataSource, err error) {
 
 	switch relData.GetType() {
 	case engine.RelDataBlockList:
 		ranges := relData.GetBlockInfoSlice()
+		skipReadMem := !bytes.Equal(
+			objectio.EncodeBlockInfo(*ranges.Get(0)), objectio.EmptyBlockInfoBytes)
 
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
@@ -1680,7 +1680,7 @@ func (tbl *txnTable) buildLocalDataSource(
 				}
 			}
 		}
-		if readPolicy == engine.Policy_SkipReadInMem && forceBuildRemoteDS {
+		if skipReadMem && forceBuildRemoteDS {
 			source, err = buildRemoteDS(ctx, tbl, txnOffset, relData)
 		} else {
 			source, err = NewLocalDataSource(
@@ -1688,8 +1688,7 @@ func (tbl *txnTable) buildLocalDataSource(
 				tbl,
 				txnOffset,
 				ranges,
-				relData.GetTombstones(),
-				readPolicy,
+				skipReadMem,
 				policy,
 			)
 		}
@@ -1749,15 +1748,13 @@ func (tbl *txnTable) BuildReaders(
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
 	var shard engine.RelData
-	var readPolicy engine.DataSourceReadPolicy
 	for i := 0; i < newNum; i++ {
 		if i == 0 {
 			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
-			readPolicy = engine.Policy_SkipReadInMem
 		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, readPolicy, tombstonePolicy)
+		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, tombstonePolicy)
 		if err != nil {
 			return nil, err
 		}

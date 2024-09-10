@@ -90,7 +90,6 @@ func newCNMergeTask(
 		ctx,
 		0,
 		relData,
-		engine.Policy_SkipNone,
 		engine.Policy_CheckAll)
 	if err != nil {
 		return nil, err
