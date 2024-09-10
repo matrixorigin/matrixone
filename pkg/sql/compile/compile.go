@@ -2283,130 +2283,153 @@ func (c *Compile) compileProbeSideForBoradcastJoin(node, left, right *plan.Node,
 	switch node.JoinType {
 	case plan.Node_INNER:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+		currentFirstFlag := c.anal.isFirst
 		if len(node.OnList) == 0 {
 			for i := range rs {
 				op := constructProduct(node, rightTyps, c.proc)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
 		} else {
 			for i := range rs {
 				if isEq {
 					op := constructJoin(node, rightTyps, c.proc)
-					op.SetIdx(c.anal.curNodeIdx)
+					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				} else {
 					op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopInner)
-					op.SetIdx(c.anal.curNodeIdx)
+					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				}
 			}
 		}
+		c.anal.isFirst = false
 	case plan.Node_L2:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructProductL2(node, rightTyps, c.proc)
-			op.SetIdx(c.anal.curNodeIdx)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 		}
-
+		c.anal.isFirst = false
 	case plan.Node_INDEX:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructIndexJoin(node, rightTyps, c.proc)
-			op.SetIdx(c.anal.curNodeIdx)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 		}
-
+		c.anal.isFirst = false
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
 				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+				currentFirstFlag := c.anal.isFirst
 				for i := range rs {
 					op := constructRightSemi(node, rightTyps, c.proc)
-					op.SetIdx(c.anal.curNodeIdx)
+					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				}
+				c.anal.isFirst = false
 			} else {
 				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+				currentFirstFlag := c.anal.isFirst
 				for i := range rs {
 					op := constructSemi(node, rightTyps, c.proc)
-					op.SetIdx(c.anal.curNodeIdx)
+					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				}
+				c.anal.isFirst = false
 			}
 		} else {
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopSemi)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
+			c.anal.isFirst = false
 		}
 	case plan.Node_LEFT:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			if isEq {
 				op := constructLeft(node, rightTyps, c.proc)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			} else {
 				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopLeft)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
 		}
+		c.anal.isFirst = false
 	case plan.Node_RIGHT:
 		if isEq {
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructRight(node, leftTyps, rightTyps, c.proc)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
+			c.anal.isFirst = false
 		} else {
 			panic("dont pass any no-equal right join plan to this function,it should be changed to left join by the planner")
 		}
 	case plan.Node_SINGLE:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			if isEq {
 				op := constructSingle(node, rightTyps, c.proc)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			} else {
 				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopSingle)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
 		}
+		c.anal.isFirst = false
 	case plan.Node_ANTI:
 		if isEq {
 			if node.BuildOnLeft {
 				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+				currentFirstFlag := c.anal.isFirst
 				for i := range rs {
 					op := constructRightAnti(node, rightTyps, c.proc)
-					op.SetIdx(c.anal.curNodeIdx)
+					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				}
+				c.anal.isFirst = false
 			} else {
 				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+				currentFirstFlag := c.anal.isFirst
 				for i := range rs {
 					op := constructAnti(node, rightTyps, c.proc)
-					op.SetIdx(c.anal.curNodeIdx)
+					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				}
+				c.anal.isFirst = false
 			}
 		} else {
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopAnti)
-				op.SetIdx(c.anal.curNodeIdx)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
+			c.anal.isFirst = false
 		}
 	case plan.Node_MARK:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			//if isEq {
 			//	rs[i].appendInstruction(vm.Instruction{
@@ -2416,10 +2439,11 @@ func (c *Compile) compileProbeSideForBoradcastJoin(node, left, right *plan.Node,
 			//	})
 			//} else {
 			op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopMark)
-			op.SetIdx(c.anal.curNodeIdx)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 			//}
 		}
+		c.anal.isFirst = false
 	default:
 		panic(moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("join typ '%v'", node.JoinType)))
 	}
@@ -2460,7 +2484,10 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 			bs.Proc = c.proc.NewNoContextChildProc(0)
 			w := &process.WaitRegister{Ch: make(chan *process.RegisterMessage, 10)}
 			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
-			bs.setRootOperator(merge.NewArgument())
+
+			mergeOp := merge.NewArgument()
+			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			bs.setRootOperator(mergeOp)
 			bs.setRootOperator(constructJoinBuildOperator(c, tmp[0].RootOp, int32(len(tmp))))
 			tmp[0].PreScopes = append(tmp[0].PreScopes, bs)
 			buildOpScopes = append(buildOpScopes, bs)
@@ -2479,7 +2506,10 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 		bs.Proc = c.proc.NewNoContextChildProc(0)
 		w := &process.WaitRegister{Ch: make(chan *process.RegisterMessage, 10)}
 		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
-		bs.setRootOperator(merge.NewArgument())
+
+		mergeOp := merge.NewArgument()
+		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		bs.setRootOperator(mergeOp)
 		bs.setRootOperator(constructJoinBuildOperator(c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu)))
 		rs[i].PreScopes = append(rs[i].PreScopes, bs)
 		buildOpScopes = append(buildOpScopes, bs)
