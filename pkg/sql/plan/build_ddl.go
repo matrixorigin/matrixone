@@ -1596,8 +1596,17 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
 	}
 
-	// TODO: check variable ngram_token_size. Default is 2.
-	ngram_token_size := 2
+	//get variable ngram_token_size. Default is 2.
+	val, err := ctx.GetProcess().GetResolveVariableFunc()("ngram_token_size", true, true)
+	if err != nil {
+		return err
+	}
+
+	ngram_token_size, ok := val.(int64)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("ngram_token_size is not an int64")
+	}
+
 	logutil.Infof("FT: primary key name  %s, ngram =%d", pkeyName, ngram_token_size)
 
 	for _, indexInfo := range indexInfos {
@@ -1666,12 +1675,11 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		}
 
 		// create fulltext index hidden table definition
-		// fk_id, pos, word, doc_count, first_doc_id, last_doc_id where (fk_id, pos) is primary key
+		// doc_id, pos, word, doc_count, first_doc_id, last_doc_id
 		tableDef := &TableDef{
 			Name: indexTableName,
 		}
 
-		// ERIC TODO: handle composite primary key (using serial(pk1, pk2,...)?
 		// foreign primary key column
 		keyName := catalog.FullTextIndex_TabCol_Id
 		colDef := &ColDef{
