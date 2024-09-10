@@ -91,10 +91,10 @@ func FilterTxnObjects(
 		}
 	}()
 
-	var getNextStats func() (*objectio.ObjectStats, error)
+	var getNextStats func() (objectio.ObjectStats, error)
 
 	if snapshot != nil {
-		getNextStats = func() (*objectio.ObjectStats, error) {
+		getNextStats = func() (objectio.ObjectStats, error) {
 			if iter == nil {
 				iter, err = snapshot.NewObjectsIter(
 					types.TimestampToTS(snapshotTS),
@@ -102,14 +102,13 @@ func FilterTxnObjects(
 					false,
 				)
 				if err != nil {
-					return nil, err
+					return objectio.ZeroObjectStats, err
 				}
 			}
 			if !iter.Next() {
-				return nil, engine_util.ErrNoMore
+				return objectio.ZeroObjectStats, engine_util.ErrNoMore
 			}
-			e := iter.Entry()
-			return &e.ObjectStats, nil
+			return iter.Entry().ObjectStats, nil
 		}
 	}
 

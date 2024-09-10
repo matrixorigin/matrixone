@@ -28,7 +28,7 @@ var ErrNoMore = moerr.NewInternalErrorNoCtx("no more")
 
 func ForeachObjectsExecute(
 	onObject func(*objectio.ObjectStats) error,
-	nextObjectFn func() (*objectio.ObjectStats, error),
+	nextObjectFn func() (objectio.ObjectStats, error),
 	latestObjects []objectio.ObjectStats,
 	extraObjects []objectio.ObjectStats,
 ) (err error) {
@@ -43,9 +43,9 @@ func ForeachObjectsExecute(
 		}
 	}
 	if nextObjectFn != nil {
-		var obj *objectio.ObjectStats
+		var obj objectio.ObjectStats
 		for obj, err = nextObjectFn(); err == nil; obj, err = nextObjectFn() {
-			if err = onObject(obj); err != nil {
+			if err = onObject(&obj); err != nil {
 				return
 			}
 		}
@@ -63,7 +63,7 @@ func FilterObjects(
 	objectFilterOp ObjectFilterOp,
 	blockFilterOp BlockFilterOp,
 	seekOp SeekFirstBlockOp,
-	nextObjectFn func() (*objectio.ObjectStats, error),
+	nextObjectFn func() (objectio.ObjectStats, error),
 	latestObjects []objectio.ObjectStats,
 	extraObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
