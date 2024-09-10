@@ -19,7 +19,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
@@ -128,11 +130,11 @@ func FilterObjects(
 			pos = seekOp(dataMeta)
 		}
 
-		// if objStats.Rows() == 0 {
-		// 	logutil.Errorf("object stats has zero rows: %s", objStats.ObjectName().String())
-		// 	util.EnableCoreDump()
-		// 	util.CoreDump()
-		// }
+		if objStats.Rows() == 0 {
+			logutil.Errorf("object stats has zero rows: %s", objStats.ObjectName().String())
+			util.EnableCoreDump()
+			util.CoreDump()
+		}
 
 		for ; pos < blockCnt; pos++ {
 			var blkMeta objectio.BlockObject
