@@ -204,8 +204,8 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error)
 		return
 	}
 
-	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%s, %s) ckpBatSize() = %d, insertBatSize() = %d, deleteBatSize() = %d\n",
-		data.fromTs.ToString(), data.toTs.ToString(), data.ckpBatSize(), data.insertBatSize(), data.deleteBatSize())
+	//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%s, %s) ckpBatSize() = %d, insertBatSize() = %d, deleteBatSize() = %d\n",
+	//	data.fromTs.ToString(), data.toTs.ToString(), data.ckpBatSize(), data.insertBatSize(), data.deleteBatSize())
 
 	tsPrefix := fmt.Sprintf("/* [%s, %s) */", data.fromTs.ToString(), data.toTs.ToString())
 	s.tsInsertPrefix = s.tsInsertPrefix[:0]

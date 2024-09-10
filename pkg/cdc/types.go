@@ -138,11 +138,10 @@ type RowIterator interface {
 }
 
 type DbTableInfo struct {
-	OriginString string
-
 	SourceAccountName string
 	SourceDbName      string
 	SourceTblName     string
+	SourceAccountId   uint64
 	SourceDbId        uint64
 	SourceTblId       uint64
 
@@ -338,6 +337,7 @@ func DecodeUriInfo(uri string, uriInfo *UriInfo) error {
 }
 
 type PatternTable struct {
+	AccountId     uint64 `json:"account_id"`
 	Account       string `json:"account"`
 	Database      string `json:"database"`
 	Table         string `json:"table"`

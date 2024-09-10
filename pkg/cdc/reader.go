@@ -68,7 +68,7 @@ func NewTableReader(
 		info:         info,
 		sinker:       sinker,
 		wMarkUpdater: wMarkUpdater,
-		tick:         time.NewTicker(time.Second * 1), //test interval
+		tick:         time.NewTicker(200 * time.Millisecond),
 		restartFunc:  restartFunc,
 	}
 
@@ -186,7 +186,7 @@ func (reader *tableReader) readTableWithTxn(
 	//  to = txn operator snapshot ts
 	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblId)
 	toTs := types.TimestampToTS(txnOp.SnapshotTS())
-	fmt.Fprintln(os.Stderr, reader.info, "from", fromTs.ToString(), "to", toTs.ToString())
+	//fmt.Fprintln(os.Stderr, reader.info, "from", fromTs.ToString(), "to", toTs.ToString())
 	changes, err = rel.CollectChanges(ctx, fromTs, toTs, reader.mp)
 	if err != nil {
 		return
@@ -207,12 +207,12 @@ func (reader *tableReader) readTableWithTxn(
 		return atmBatch
 	}
 
-	batchSize := func(bat *batch.Batch) int {
-		if bat == nil {
-			return 0
-		}
-		return bat.Vecs[0].Length()
-	}
+	//batchSize := func(bat *batch.Batch) int {
+	//	if bat == nil {
+	//		return 0
+	//	}
+	//	return bat.Vecs[0].Length()
+	//}
 
 	var curHint engine.ChangesHandle_Hint
 	for {
@@ -226,13 +226,13 @@ func (reader *tableReader) readTableWithTxn(
 			return
 		}
 
-		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Reader: [%s, %s), "+
-			"curHint: %v, insertData is nil: %v, deleteData is nil: %v, "+
-			"insertDataSize() = %d, deleteDataSize() = %d\n",
-			fromTs.ToString(), toTs.ToString(),
-			curHint, insertData == nil, deleteData == nil,
-			batchSize(insertData), batchSize(deleteData),
-		)
+		//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Reader: [%s, %s), "+
+		//	"curHint: %v, insertData is nil: %v, deleteData is nil: %v, "+
+		//	"insertDataSize() = %d, deleteDataSize() = %d\n",
+		//	fromTs.ToString(), toTs.ToString(),
+		//	curHint, insertData == nil, deleteData == nil,
+		//	batchSize(insertData), batchSize(deleteData),
+		//)
 
 		//both nil denote no more data
 		if insertData == nil && deleteData == nil {

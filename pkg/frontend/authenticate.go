@@ -1013,7 +1013,6 @@ var (
 		`drop view if exists mo_catalog.mo_transactions;`,
 		`drop view if exists mo_catalog.mo_cache;`,
 		`drop table if exists mo_catalog.mo_snapshots;`,
-		`drop table if exists mo_catalog.mo_cdc_task;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropMoPubsSql                   = `drop table if exists mo_catalog.mo_pubs;`
@@ -7310,19 +7309,31 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
 	defer span.End()
 
+	isSysOnlyDb := func(sql string) bool {
+		// only the SYS tenant has the table mo_account/mo_subs
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
+			return true
+		}
+		return false
+	}
+
 	start1 := time.Now()
 
 	//create tables for the tenant
 	for _, sql := range createSqls {
-		// only the SYS tenant has the table mo_account/mo_subs
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
+		if isSysOnlyDb(sql) {
 			continue
 		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
-			continue
-		}
-		err = bh.Exec(newTenantCtx, sql)
-		if err != nil {
+		if err = bh.Exec(newTenantCtx, sql); err != nil {
 			return err
 		}
 	}

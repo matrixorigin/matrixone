@@ -93,6 +93,8 @@ const (
 	showTables = "show tables from `%s`"
 
 	showIndex = "show index from `%s`.`%s`"
+
+	getAccountIdNameSql = `select account_id,account_name from mo_catalog.mo_account;`
 )
 
 var showCdcOutputColumns = [6]Column{
@@ -224,8 +226,20 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		cdcTaskOptionsMap[create.Option[i]] = create.Option[i+1]
 	}
 
+	accNameIdMap, err := getAccNameIdMap(ctx, ses)
+	if err != nil {
+		return err
+	}
+
 	//step 1 : handle tables
-	jsonTables, tablePts, err := preprocessTables(ctx, ses, cdcTaskOptionsMap["Level"], cdcTaskOptionsMap["Account"], create.Tables)
+	jsonTables, tablePts, err := preprocessTables(
+		ctx,
+		ses,
+		cdcTaskOptionsMap["Level"],
+		cdcTaskOptionsMap["Account"],
+		create.Tables,
+		accNameIdMap,
+	)
 	if err != nil {
 		return err
 	}
@@ -340,13 +354,13 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 	)
 
 	addCdcTaskCallback := func(ctx context.Context, tx taskservice.DBExecutor) (ret int, err error) {
-
 		ret, err = checkTableState(ctx, tx, tablePts, filterPts)
 		if err != nil {
 			return 0, err
 		}
 
 		//insert cdc record into the mo_cdc_task
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		exec, err := tx.ExecContext(ctx, insertSql)
 		if err != nil {
 			return 0, err
@@ -467,10 +481,7 @@ func checkTableExists(ctx context.Context, tx taskservice.DBExecutor, db, table 
 		if err = rows.Scan(&tableName); err != nil {
 			return false, err
 		}
-		if tableName == table {
-			return true, nil
-		}
-		return false, nil
+		return tableName == table, nil
 	})
 
 	return ret, err
@@ -571,7 +582,7 @@ func cdcTaskMetadata(cdcId string) pb.TaskMetadata {
 // extract source:sink pair from the pattern
 //
 //	There must be no special characters (','  '.'  ':' '`') in account name & database name & table name.
-func extractTablePair(ctx context.Context, pattern string) (*cdc2.PatternTuple, error) {
+func extractTablePair(ctx context.Context, pattern string, defaultAcc string, accNameIdMap map[string]uint64) (*cdc2.PatternTuple, error) {
 	var err error
 	pattern = strings.TrimSpace(pattern)
 	//step1 : split table pair by ':' => table0 table1
@@ -579,7 +590,7 @@ func extractTablePair(ctx context.Context, pattern string) (*cdc2.PatternTuple, 
 	//step3 : check table accord with regular expression
 	pt := &cdc2.PatternTuple{OriginString: pattern}
 	if strings.Contains(pattern, ":") {
-		//Format: account.db.table:db:table
+		//Format: account.db.table:db.table
 		splitRes := strings.Split(pattern, ":")
 		if len(splitRes) != 2 {
 			return nil, moerr.NewInternalErrorf(ctx, "must be source : sink. invalid format")
@@ -590,12 +601,20 @@ func extractTablePair(ctx context.Context, pattern string) (*cdc2.PatternTuple, 
 		if err != nil {
 			return nil, err
 		}
+		if pt.Source.Account == "" {
+			pt.Source.Account = defaultAcc
+		}
+		pt.Source.AccountId = accNameIdMap[pt.Source.Account]
 
 		//handle sink part
 		pt.Sink.Account, pt.Sink.Database, pt.Sink.Table, pt.Sink.TableIsRegexp, err = extractTableInfo(ctx, splitRes[1], false)
 		if err != nil {
 			return nil, err
 		}
+		if pt.Sink.Account == "" {
+			pt.Sink.Account = defaultAcc
+		}
+		pt.Sink.AccountId = accNameIdMap[pt.Sink.Account]
 		return pt, nil
 	}
 
@@ -605,6 +624,12 @@ func extractTablePair(ctx context.Context, pattern string) (*cdc2.PatternTuple, 
 	if err != nil {
 		return nil, err
 	}
+	if pt.Source.Account == "" {
+		pt.Source.Account = defaultAcc
+	}
+	pt.Source.AccountId = accNameIdMap[pt.Source.Account]
+
+	pt.Sink.AccountId = pt.Source.AccountId
 	pt.Sink.Account = pt.Source.Account
 	pt.Sink.Database = pt.Source.Database
 	pt.Sink.Table = pt.Source.Table
@@ -625,7 +650,8 @@ func extractTablePair(ctx context.Context, pattern string) (*cdc2.PatternTuple, 
 func extractTableInfo(ctx context.Context, input string, mustBeConcreteTable bool) (account string, db string, table string, isRegexpTable bool, err error) {
 	parts := strings.Split(strings.TrimSpace(input), ".")
 	if len(parts) != 2 && len(parts) != 3 {
-		return "", "", "", false, moerr.NewInternalErrorf(ctx, "needs account.database.table or database.table. invalid format.")
+		err = moerr.NewInternalErrorf(ctx, "needs account.database.table or database.table. invalid format.")
+		return
 	}
 
 	if len(parts) == 2 {
@@ -634,16 +660,19 @@ func extractTableInfo(ctx context.Context, input string, mustBeConcreteTable boo
 		account, db, table = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
 
 		if !accountNameIsLegal(account) {
-			return "", "", "", false, moerr.NewInternalErrorf(ctx, "invalid account name")
+			err = moerr.NewInternalErrorf(ctx, "invalid account name")
+			return
 		}
 	}
 
 	if !dbNameIsLegal(db) {
-		return "", "", "", false, moerr.NewInternalErrorf(ctx, "invalid database name")
+		err = moerr.NewInternalErrorf(ctx, "invalid database name")
+		return
 	}
 
 	if !tableNameIsLegal(table) {
-		return "", "", "", false, moerr.NewInternalErrorf(ctx, "invalid table name")
+		err = moerr.NewInternalErrorf(ctx, "invalid table name")
+		return
 	}
 
 	return
@@ -655,8 +684,15 @@ func preprocessTables(
 	ses *Session,
 	level string,
 	account string,
-	tables string) (string, *cdc2.PatternTuples, error) {
-	tablesPts, err := extractTablePairs(ctx, tables)
+	tables string,
+	accNameIdMap map[string]uint64,
+) (string, *cdc2.PatternTuples, error) {
+	defaultAcc := ses.GetTenantName()
+	if level == cdc2.AccountLevel {
+		defaultAcc = account
+	}
+
+	tablesPts, err := extractTablePairs(ctx, tables, defaultAcc, accNameIdMap)
 	if err != nil {
 		return "", nil, err
 	}
@@ -677,7 +713,7 @@ func preprocessTables(
 extractTablePairs extracts all source:sink pairs from the pattern
 There must be no special characters (','  '.'  ':' '`') in account name & database name & table name.
 */
-func extractTablePairs(ctx context.Context, pattern string) (*cdc2.PatternTuples, error) {
+func extractTablePairs(ctx context.Context, pattern string, defaultAcc string, accNameIdMap map[string]uint64) (*cdc2.PatternTuples, error) {
 	pattern = strings.TrimSpace(pattern)
 	pts := &cdc2.PatternTuples{}
 
@@ -688,7 +724,7 @@ func extractTablePairs(ctx context.Context, pattern string) (*cdc2.PatternTuples
 
 	//step1 : split pattern by ',' => table pair
 	for _, pair := range tablePairs {
-		pt, err := extractTablePair(ctx, pair)
+		pt, err := extractTablePair(ctx, pair, defaultAcc, accNameIdMap)
 		if err != nil {
 			return nil, err
 		}
@@ -747,9 +783,6 @@ func canCreateCdcTask(ctx context.Context, ses *Session, level string, account s
 			return moerr.NewInternalError(ctx, "Only sys account administrator are allowed to create cluster level task")
 		}
 		for _, pt := range pts.Pts {
-			if pt.Source.Account == "" {
-				pt.Source.Account = ses.GetTenantName()
-			}
 			if isBannedDatabase(pt.Source.Database) {
 				return moerr.NewInternalError(ctx, "The system database cannot be subscribed to")
 			}
@@ -759,9 +792,6 @@ func canCreateCdcTask(ctx context.Context, ses *Session, level string, account s
 			return moerr.NewInternalErrorf(ctx, "No privilege to create task on %s", account)
 		}
 		for _, pt := range pts.Pts {
-			if pt.Source.Account == "" {
-				pt.Source.Account = account
-			}
 			if account != pt.Source.Account {
 				return moerr.NewInternalErrorf(ctx, "No privilege to create task on table %s", pt.OriginString)
 			}
@@ -919,12 +949,13 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	var info *cdc2.DbTableInfo
 	dbTableInfos := make([]*cdc2.DbTableInfo, 0, len(cdc.tables.Pts))
 	for _, tuple := range cdc.tables.Pts {
-		if needSkipThisTable(tuple.Source.Database, tuple.Source.Table, &cdc.filters) {
-			logutil.Infof("cdc skip table %s:%s by filter", tuple.Source.Database, tuple.Source.Table)
+		accId, accName, dbName, tblName := tuple.Source.AccountId, tuple.Source.Account, tuple.Source.Database, tuple.Source.Table
+		if needSkipThisTable(dbName, tblName, &cdc.filters) {
+			logutil.Infof("cdc skip table %s:%s by filter", dbName, tblName)
 			continue
 		}
 		//get dbid tableid for the source table
-		info, err = cdc.retrieveTable(ctx, tuple.Source.Database, tuple.Source.Table)
+		info, err = cdc.retrieveTable(ctx, accId, accName, dbName, tblName)
 		if err != nil {
 			return err
 		}
@@ -968,6 +999,8 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 }
 
 func (cdc *CdcTask) retrieveCdcTask(ctx context.Context, txnOp client.TxnOperator) error {
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
 	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
 	sql := getSqlForRetrievingCdcTask(cdc.cdcTask.AccountId, cdcTaskId)
 	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
@@ -1058,10 +1091,11 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context, txnOp client.TxnOperato
 	return nil
 }
 
-func (cdc *CdcTask) retrieveTable(ctx context.Context, dbName, tblName string) (*cdc2.DbTableInfo, error) {
+func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, dbName, tblName string) (*cdc2.DbTableInfo, error) {
 	var dbId, tblId uint64
 	var err error
-	sql := getSqlForDbIdAndTableId(cdc.cdcTask.AccountId, dbName, tblName)
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	sql := getSqlForDbIdAndTableId(accId, dbName, tblName)
 	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return nil, res.Error()
@@ -1071,7 +1105,6 @@ func (cdc *CdcTask) retrieveTable(ctx context.Context, dbName, tblName string) (
 		missing table will be handled in the future.
 	*/
 	if res.RowCount() < 1 {
-
 		return nil, moerr.NewInternalErrorf(ctx, "no table %s:%s", dbName, tblName)
 	} else if res.RowCount() > 1 {
 		return nil, moerr.NewInternalErrorf(ctx, "duplicate table %s:%s", dbName, tblName)
@@ -1086,10 +1119,12 @@ func (cdc *CdcTask) retrieveTable(ctx context.Context, dbName, tblName string) (
 	}
 
 	return &cdc2.DbTableInfo{
-		SourceDbName:  dbName,
-		SourceTblName: tblName,
-		SourceDbId:    dbId,
-		SourceTblId:   tblId,
+		SourceAccountName: accName,
+		SourceDbName:      dbName,
+		SourceTblName:     tblName,
+		SourceAccountId:   accId,
+		SourceDbId:        dbId,
+		SourceTblId:       tblId,
 	}, err
 }
 
@@ -1376,6 +1411,39 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 				state,
 				ckp,
 			})
+		}
+	}
+	return
+}
+
+func getAccNameIdMap(ctx context.Context, ses *Session) (mp map[string]uint64, err error) {
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, getAccountIdNameSql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	var accId uint64
+	var accName string
+	mp = make(map[string]uint64)
+	for _, result := range erArray {
+		for i := uint64(0); i < result.GetRowCount(); i++ {
+			if accId, err = result.GetUint64(ctx, i, 0); err != nil {
+				return
+			}
+			if accName, err = result.GetString(ctx, i, 1); err != nil {
+				return
+			}
+			mp[accName] = accId
 		}
 	}
 	return

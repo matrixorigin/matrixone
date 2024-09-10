@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -83,7 +84,7 @@ func (u *WatermarkUpdater) Run(ar *ActiveRoutine) {
 
 func (u *WatermarkUpdater) InsertIntoDb(tableId uint64, watermark types.TS) error {
 	sql := fmt.Sprintf(insertWatermarkFormat, u.accountId, u.taskId, tableId, watermark.ToString())
-	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
 
@@ -96,7 +97,7 @@ func (u *WatermarkUpdater) GetFromMem(tableId uint64) types.TS {
 
 func (u *WatermarkUpdater) GetFromDb(tableId uint64) (watermark types.TS, err error) {
 	sql := fmt.Sprintf(getWatermarkFormat, u.accountId, u.taskId, tableId)
-	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	res := u.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		err = res.Error()
@@ -118,7 +119,7 @@ func (u *WatermarkUpdater) GetFromDb(tableId uint64) (watermark types.TS, err er
 
 func (u *WatermarkUpdater) GetCountFromDb() (uint64, error) {
 	sql := fmt.Sprintf(getWatermarkCountFormat, u.accountId, u.taskId)
-	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	res := u.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return 0, res.Error()
@@ -136,13 +137,13 @@ func (u *WatermarkUpdater) DeleteFromMem(tableId uint64) {
 
 func (u *WatermarkUpdater) DeleteFromDb(tableId uint64) error {
 	sql := fmt.Sprintf(deleteWatermarkByTableFormat, u.accountId, u.taskId, tableId)
-	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
 
 func (u *WatermarkUpdater) DeleteAllFromDb() error {
 	sql := fmt.Sprintf(deleteWatermarkFormat, u.accountId, u.taskId)
-	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
 
@@ -159,6 +160,6 @@ func (u *WatermarkUpdater) flushAll() {
 
 func (u *WatermarkUpdater) updateDb(tableId uint64, watermark types.TS) error {
 	sql := fmt.Sprintf(updateWatermarkFormat, watermark.ToString(), u.accountId, u.taskId, tableId)
-	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
