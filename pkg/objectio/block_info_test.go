@@ -83,7 +83,7 @@ func TestBlockInfoSliceTraverse(t *testing.T) {
 		blkInfo := s.Get(i)
 		require.Equal(t, intToBlockid(int32(i)), blkInfo.BlockID)
 		require.Equal(t, false, blkInfo.IsAppendable())
-		blkInfo.StateFlag |= AppendableFlag
+		blkInfo.ObjectFlags |= ObjectFlag_Appendable
 	}
 
 	for i := 0; i < s.Len(); i++ {
@@ -91,7 +91,7 @@ func TestBlockInfoSliceTraverse(t *testing.T) {
 	}
 
 	blk := BlockInfo{BlockID: intToBlockid(1000)}
-	blk.StateFlag |= AppendableFlag
+	blk.ObjectFlags |= ObjectFlag_Appendable
 
 	s.AppendBlockInfo(blk)
 
@@ -113,11 +113,11 @@ func TestBytesToBlockInfoSlice(t *testing.T) {
 		blkInfo := s.Get(i)
 		require.Equal(t, intToBlockid(int32(i)), blkInfo.BlockID)
 		require.Equal(t, false, blkInfo.IsAppendable())
-		blkInfo.StateFlag |= AppendableFlag
+		blkInfo.ObjectFlags |= ObjectFlag_Appendable
 	}
 
 	blk := BlockInfo{BlockID: intToBlockid(1000)}
-	blk.StateFlag |= AppendableFlag
+	blk.ObjectFlags |= ObjectFlag_Appendable
 	s.AppendBlockInfo(blk)
 
 	for i := 0; i < s.Len(); i++ {
@@ -130,7 +130,7 @@ func TestBytesToBlockInfoSlice(t *testing.T) {
 	require.Equal(t, 1001*BlockInfoSize, len(bs))
 	require.Equal(t, s.GetAllBytes(), bs)
 
-	s.Get(999).StateFlag &= ^AppendableFlag
+	s.Get(999).ObjectFlags &= ^ObjectFlag_Appendable
 	require.Equal(t, false, s.Get(999).IsAppendable())
 	blkInfo := DecodeBlockInfo(bs[999*BlockInfoSize:])
 	require.Equal(t, false, blkInfo.IsAppendable())

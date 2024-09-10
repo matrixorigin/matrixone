@@ -187,7 +187,7 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.Equal(b)
+			return a.EQ(&b)
 		}, selectList)
 	case types.T_enum:
 		return opBinaryFixedFixedToFixed[types.Enum, types.Enum, bool](parameters, rs, proc, length, func(a, b types.Enum) bool {
@@ -679,7 +679,7 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.Great(b)
+			return a.GT(&b)
 		}, selectList)
 	}
 	panic("unreached code")
@@ -789,7 +789,7 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.Ge(b)
+			return a.GE(&b)
 		}, selectList)
 	}
 	panic("unreached code")
@@ -899,7 +899,7 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.NotEqual(b)
+			return !a.EQ(&b)
 		}, selectList)
 	}
 	panic("unreached code")
@@ -1009,7 +1009,7 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.Less(b)
+			return a.LT(&b)
 		}, selectList)
 	}
 	panic("unreached code")
@@ -1119,7 +1119,7 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.Le(b)
+			return a.LE(&b)
 		}, selectList)
 	}
 	panic("unreached code")

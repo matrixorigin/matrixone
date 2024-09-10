@@ -587,12 +587,12 @@ func (tbl *txnTable) doRanges(
 			traceFilterExprInterval.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
-		if traceFilterExprInterval2.Add(slowStep) >= 20 {
+		if traceFilterExprInterval2.Add(slowStep) >= 50 {
 			traceFilterExprInterval2.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
-		if rangesLen >= 50 {
+		if rangesLen >= 60 {
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
