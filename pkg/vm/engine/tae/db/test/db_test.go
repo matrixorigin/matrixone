@@ -9091,6 +9091,7 @@ func TestDedupObject(t *testing.T) {
 	}
 	getObjTxn, getObjRel := tae.GetRelation()
 	obj := testutil.GetOneBlockMeta(getObjRel)
+	mergeBlockID := *objectio.NewBlockidWithObjectID(&obj.ID, 0)
 	getObjTxn.Commit(ctx)
 	pkVec := bat.Vecs[1]
 	pkType := pkVec.GetType()
@@ -9103,6 +9104,9 @@ func TestDedupObject(t *testing.T) {
 		false,
 		tae.Runtime.Fs.Service,
 	)
+	{
+		tae.Runtime.TransferDelsMap.Delete(mergeBlockID)
+	}
 	err := obj.GetObjectData().BatchDedup(ctx, dedupTxn, pkVec, keysZM, nil, true, bf, common.DebugAllocator)
 	t.Log(err)
 	dedupTxn.Commit(ctx)
