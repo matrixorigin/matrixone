@@ -17,19 +17,17 @@ package blockio
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"math"
-	"runtime/debug"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"math"
+	"runtime/debug"
 )
 
 type BlockWriter struct {
@@ -145,18 +143,12 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
 			return nil, err
 		}
-
-		xxx := time.Now().Add(time.Hour * 24 * 365).UnixNano()
 		// check ts zm
 		{
 			if zm.GetType() == types.T_TS {
 				tss := vector.MustFixedColNoTypeCheck[types.TS](columnData.GetDownstreamVector())
 				var minTS, maxTS types.TS = tss[0], tss[0]
 				for x := range tss {
-					if tss[x].Physical() > xxx {
-						logutil.Fatal("???")
-					}
-
 					if tss[x].Less(&minTS) {
 						minTS = tss[x]
 					}
