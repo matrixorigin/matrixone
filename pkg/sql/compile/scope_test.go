@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/golang/mock/gomock"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
@@ -318,7 +319,7 @@ func TestCompileExternValueScan(t *testing.T) {
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
-	testCompile.anal = &analyzeModule{qry: &plan.Query{}}
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	param := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: "test.csv",
@@ -339,7 +340,7 @@ func TestCompileExternScanParallel(t *testing.T) {
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
-	testCompile.anal = &analyzeModule{qry: &plan.Query{}}
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	param := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: "test.csv",
