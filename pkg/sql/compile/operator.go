@@ -461,25 +461,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.SetInfo(&info)
 		return op
-	case vm.Dispatch:
-		sourceArg := sourceOp.(*dispatch.Dispatch)
-		op := dispatch.NewArgument()
-		op.IsSink = sourceArg.IsSink
-		op.RecSink = sourceArg.RecSink
-		op.ShuffleType = sourceArg.ShuffleType
-		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
-		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote
-		op.FuncId = sourceArg.FuncId
-		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
-		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
-		for j := range op.LocalRegs {
-			op.LocalRegs[j] = sourceArg.LocalRegs[j]
-		}
-		for j := range op.RemoteRegs {
-			op.RemoteRegs[j] = sourceArg.RemoteRegs[j]
-		}
-		op.SetInfo(&info)
-		return op
 	case vm.Insert:
 		t := sourceOp.(*insert.Insert)
 		op := insert.NewArgument()
@@ -1326,7 +1307,8 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 			break
 		}
 	}
-	if hasRemote && source.NodeInfo.Mcpu > 1 {
+
+	if source.NodeInfo.Mcpu > 1 {
 		panic("pipeline end with dispatch should have been merged in multi CN!")
 	}
 
@@ -1334,7 +1316,6 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 		if isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
-			s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = source.NodeInfo.Mcpu
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
