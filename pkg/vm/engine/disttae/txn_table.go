@@ -815,7 +815,7 @@ func (tbl *txnTable) rangesOnePart(
 					}
 				}
 
-				blk.SetFlagByObjStats(obj.ObjectStats)
+				blk.SetFlagByObjStats(&obj.ObjectStats)
 
 				outBlocks.AppendBlockInfo(blk)
 
@@ -1888,7 +1888,7 @@ func (tbl *txnTable) PKPersistedBetween(
 						}
 					}
 
-					blk.SetFlagByObjStats(obj.ObjectStats)
+					blk.SetFlagByObjStats(&obj.ObjectStats)
 
 					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
