@@ -46,7 +46,7 @@ type Scheduler struct {
 func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
 	op := &Scheduler{
 		LoopProcessor: new(catalog.LoopProcessor),
-		policies:      newPolicyGroup(newBasicPolicy(), newTombstonePolicy()),
+		policies:      newPolicyGroup(newBasicPolicy(), newObjCompactPolicy(rt.Fs.Service), newTombstonePolicy()),
 		executor:      newMergeExecutor(rt, sched),
 		stoppedTables: struct {
 			sync.RWMutex

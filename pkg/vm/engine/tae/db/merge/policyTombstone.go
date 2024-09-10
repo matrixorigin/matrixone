@@ -23,11 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-type tombstone struct {
+type tombstonePolicy struct {
 	tombstones []*catalog.ObjectEntry
 }
 
-func (t *tombstone) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) {
+func (t *tombstonePolicy) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) {
 	if len(t.tombstones) == config.MergeMaxOneRun {
 		return
 	}
@@ -36,7 +36,7 @@ func (t *tombstone) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConf
 	}
 }
 
-func (t *tombstone) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (t *tombstonePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
 	tombstones := t.tombstones
 	slices.SortFunc(tombstones, func(a, b *catalog.ObjectEntry) int {
 		return cmp.Compare(a.GetRows(), b.GetRows())
@@ -48,19 +48,22 @@ func (t *tombstone) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalo
 	dnobjs := controlMem(tombstones, mem)
 	dnosize, _ := estimateMergeConsume(dnobjs)
 
-	schedDN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
+	schedDN := func() []reviseResult {
 		if cpu > 85 {
 			if dnosize > 25*common.Const1MBytes {
 				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
-				return nil, TaskHostDN
+				return nil
 			}
 		}
-		return dnobjs, TaskHostDN
+		if len(dnobjs) > 1 {
+			return []reviseResult{{dnobjs, TaskHostDN}}
+		}
+		return nil
 	}
 
-	schedCN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
+	schedCN := func() []reviseResult {
 		cnobjs := controlMem(tombstones, int64(common.RuntimeCNMergeMemControl.Load()))
-		return cnobjs, TaskHostCN
+		return []reviseResult{{cnobjs, TaskHostCN}}
 	}
 
 	if isStandalone && mergeOnDNIfStandalone {
@@ -78,12 +81,12 @@ func (t *tombstone) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalo
 	return schedDN()
 }
 
-func (t *tombstone) resetForTable(*catalog.TableEntry) {
+func (t *tombstonePolicy) resetForTable(*catalog.TableEntry) {
 	t.tombstones = t.tombstones[:0]
 }
 
 func newTombstonePolicy() policy {
-	return &tombstone{
+	return &tombstonePolicy{
 		tombstones: make([]*catalog.ObjectEntry, 0),
 	}
 }

@@ -53,19 +53,19 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	m.objects = append(m.objects, obj)
 }
 
-func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
 	if len(m.objects) < 2 {
-		return nil, TaskHostDN
+		return nil
 	}
 	if cpu > 90 {
-		return nil, TaskHostDN
+		return nil
 	}
 	objs, taskHostKind := m.reviseDataObjs(config)
 	objs = controlMem(objs, mem)
 	if len(objs) > 1 {
-		return objs, taskHostKind
+		return []reviseResult{{objs, taskHostKind}}
 	}
-	return nil, TaskHostDN
+	return nil
 }
 
 func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {

@@ -197,7 +197,7 @@ const (
 
 type policy interface {
 	onObject(*catalog.ObjectEntry, *BasicPolicyConfig)
-	revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind)
+	revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 	resetForTable(*catalog.TableEntry)
 }
 

@@ -52,9 +52,11 @@ func (g *policyGroup) onObject(obj *catalog.ObjectEntry) {
 func (g *policyGroup) revise(cpu, mem int64) []reviseResult {
 	results := make([]reviseResult, 0, len(g.policies))
 	for _, p := range g.policies {
-		objs, kind := p.revise(cpu, mem, g.config)
-		if len(objs) > 1 {
-			results = append(results, reviseResult{objs, kind})
+		pResult := p.revise(cpu, mem, g.config)
+		for _, r := range pResult {
+			if len(r.objs) > 1 {
+				results = append(results, r)
+			}
 		}
 	}
 	return results
@@ -147,7 +149,7 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) {
 	}
 }
 
-func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
 	objs := o.objHeap.finish()
 
 	isStandalone := common.IsStandaloneBoost.Load()
@@ -158,20 +160,23 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.Ob
 
 	dnosize, _ := estimateMergeConsume(dnobjs)
 
-	schedDN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
+	schedDN := func() []reviseResult {
 		if cpu > 85 {
 			if dnosize > 25*common.Const1MBytes {
 				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
-				return nil, TaskHostDN
+				return nil
 			}
 		}
-		return dnobjs, TaskHostDN
+		if len(dnobjs) > 1 {
+			return []reviseResult{{dnobjs, TaskHostDN}}
+		}
+		return nil
 	}
 
-	schedCN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
+	schedCN := func() []reviseResult {
 		cnobjs := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
 		cnobjs = o.optimize(cnobjs, config)
-		return cnobjs, TaskHostCN
+		return []reviseResult{{cnobjs, TaskHostCN}}
 	}
 
 	if isStandalone && mergeOnDNIfStandalone {

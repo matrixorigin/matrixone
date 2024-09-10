@@ -62,9 +62,10 @@ func TestPolicyBasic(t *testing.T) {
 	p.onObject(newTestObjectEntry(t, 10, false), cfg)
 	p.onObject(newTestObjectEntry(t, 20, false), cfg)
 	p.onObject(newTestObjectEntry(t, 120, false), cfg)
-	result, kind := p.revise(0, math.MaxInt64, cfg)
-	require.Equal(t, 2, len(result))
-	require.Equal(t, TaskHostDN, kind)
+	result := p.revise(0, math.MaxInt64, cfg)
+	require.Equal(t, 1, len(result))
+	require.Equal(t, 2, len(result[0].objs))
+	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// only schedule objects less than cfg.maxOneRun
 	p.resetForTable(catalog.MockStaloneTableEntry(1, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
@@ -72,18 +73,18 @@ func TestPolicyBasic(t *testing.T) {
 	p.onObject(newTestObjectEntry(t, 10, false), cfg)
 	p.onObject(newTestObjectEntry(t, 20, false), cfg)
 	p.onObject(newTestObjectEntry(t, 30, false), cfg)
-	result, kind = p.revise(0, math.MaxInt64, cfg)
-	require.Equal(t, 2, len(result))
-	require.Equal(t, TaskHostDN, kind)
+	result = p.revise(0, math.MaxInt64, cfg)
+	require.Equal(t, 1, len(result))
+	require.Equal(t, 2, len(result[0].objs))
+	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// basic policy do not schedule tombstones
 	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
 	cfg = testConfig(100, 2)
 	p.onObject(newTestObjectEntry(t, 10, true), cfg)
 	p.onObject(newTestObjectEntry(t, 20, true), cfg)
-	result, kind = p.revise(0, math.MaxInt64, cfg)
+	result = p.revise(0, math.MaxInt64, cfg)
 	require.Equal(t, 0, len(result))
-	require.Equal(t, TaskHostDN, kind)
 
 	// memory limit
 	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
@@ -91,9 +92,10 @@ func TestPolicyBasic(t *testing.T) {
 	p.onObject(newTestObjectEntryWithRowCnt(t, 10, 1, false), cfg)
 	p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg)
 	p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg)
-	result, kind = p.revise(0, 36, cfg)
-	require.Equal(t, 2, len(result))
-	require.Equal(t, TaskHostDN, kind)
+	result = p.revise(0, 36, cfg)
+	require.Equal(t, 1, len(result))
+	require.Equal(t, 2, len(result[0].objs))
+	require.Equal(t, TaskHostDN, result[0].kind)
 }
 
 func TestPolicyTombstone(t *testing.T) {
@@ -105,17 +107,17 @@ func TestPolicyTombstone(t *testing.T) {
 	cfg := testConfig(100, 2)
 	p.onObject(newTestObjectEntry(t, 10, false), cfg)
 	p.onObject(newTestObjectEntry(t, 20, false), cfg)
-	result, kind := p.revise(0, math.MaxInt64, cfg)
+	result := p.revise(0, math.MaxInt64, cfg)
 	require.Equal(t, 0, len(result))
-	require.Equal(t, TaskHostDN, kind)
 
 	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
 	cfg = testConfig(100, 2)
 	p.onObject(newTestObjectEntry(t, 10, true), cfg)
 	p.onObject(newTestObjectEntry(t, 20, true), cfg)
-	result, kind = p.revise(0, math.MaxInt64, cfg)
-	require.Equal(t, 2, len(result))
-	require.Equal(t, TaskHostDN, kind)
+	result = p.revise(0, math.MaxInt64, cfg)
+	require.Equal(t, 1, len(result))
+	require.Equal(t, 2, len(result[0].objs))
+	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// only schedule objects less than cfg.maxOneRun
 	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
@@ -123,9 +125,10 @@ func TestPolicyTombstone(t *testing.T) {
 	p.onObject(newTestObjectEntry(t, 10, true), cfg)
 	p.onObject(newTestObjectEntry(t, 20, true), cfg)
 	p.onObject(newTestObjectEntry(t, 30, true), cfg)
-	result, kind = p.revise(0, math.MaxInt64, cfg)
-	require.Equal(t, 2, len(result))
-	require.Equal(t, TaskHostDN, kind)
+	result = p.revise(0, math.MaxInt64, cfg)
+	require.Equal(t, 1, len(result))
+	require.Equal(t, 2, len(result[0].objs))
+	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// tombstone do not consider size limit
 	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
@@ -133,9 +136,10 @@ func TestPolicyTombstone(t *testing.T) {
 	p.onObject(newTestObjectEntry(t, 10, true), cfg)
 	p.onObject(newTestObjectEntry(t, 20, true), cfg)
 	p.onObject(newTestObjectEntry(t, 120, true), cfg)
-	result, kind = p.revise(0, math.MaxInt64, cfg)
-	require.Equal(t, 3, len(result))
-	require.Equal(t, TaskHostDN, kind)
+	result = p.revise(0, math.MaxInt64, cfg)
+	require.Equal(t, 1, len(result))
+	require.Equal(t, 3, len(result[0].objs))
+	require.Equal(t, TaskHostDN, result[0].kind)
 }
 
 func TestPolicyGroup(t *testing.T) {
