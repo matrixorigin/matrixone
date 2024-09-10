@@ -43,7 +43,7 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	{
 		require.Equal(t, 10, vec.Length())
 		require.Equal(t, types.T_int64.ToType(), *vec.GetType())
-		require.Equal(t, int64(218311), vector.MustFixedCol[int64](vec)[0])
+		require.Equal(t, int64(218311), vector.MustFixedColWithTypeCheck[int64](vec)[0])
 		require.Equal(t, false, vec.GetNulls().Contains(0))
 	}
 	_, err = conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
@@ -173,8 +173,8 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		{
 			require.Equal(t, 2, vec.Length())
 			require.Equal(t, types.T_int64.ToType(), *vec.GetType())
-			require.Equal(t, int64(101), vector.MustFixedCol[int64](vec)[0]) // 1+100
-			require.Equal(t, int64(102), vector.MustFixedCol[int64](vec)[1]) // 2+100
+			require.Equal(t, int64(101), vector.MustFixedColWithTypeCheck[int64](vec)[0]) // 1+100
+			require.Equal(t, int64(102), vector.MustFixedColWithTypeCheck[int64](vec)[1]) // 2+100
 		}
 		_, err = fExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
 		require.NoError(t, err)

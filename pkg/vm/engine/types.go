@@ -736,7 +736,6 @@ type DataSource interface {
 		seqNums []uint16,
 		memFilter any,
 		mp *mpool.MPool,
-		vp VectorPool,
 		bat *batch.Batch,
 	) (*objectio.BlockInfo, DataState, error)
 
@@ -868,7 +867,7 @@ type Relation interface {
 
 type Reader interface {
 	Close() error
-	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool, *batch.Batch) (bool, error)
+	Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
 	SetFilterZM(objectio.ZoneMap)

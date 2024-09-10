@@ -37,7 +37,7 @@ func (minus *Minus) OpType() vm.OpType {
 
 func (minus *Minus) Prepare(proc *process.Process) error {
 	var err error
-	minus.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
+	minus.ctr.hashTable, err = hashmap.NewStrMap(true)
 	if err != nil {
 		return err
 	}

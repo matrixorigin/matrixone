@@ -99,9 +99,27 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 	case types.T_enum:
 		return CompareOrdered(types.DecodeEnum(a), types.DecodeEnum(b))
 	case types.T_TS:
+		// PXU FIXME
 		return CompareBytes(a, b)
 	case types.T_Rowid:
-		return CompareBytes(a, b)
+		// Row id is very special. it is not valena type but always be
+		// compared with prefix: Objectid or Blockid
+		if len(a) == types.RowidSize {
+			v1 := (*types.Rowid)(unsafe.Pointer(&a[0]))
+			return v1.ComparePrefix(b)
+		} else {
+			v2 := (*types.Rowid)(unsafe.Pointer(&b[0]))
+			if ret := v2.ComparePrefix(a); ret < 0 {
+				return 1
+			} else if ret > 0 {
+				return -1
+			}
+			return 0
+		}
+	case types.T_Blockid:
+		v1 := (*types.Blockid)(unsafe.Pointer(&a[0]))
+		v2 := (*types.Blockid)(unsafe.Pointer(&b[0]))
+		return v1.Compare(v2)
 	case types.T_uuid:
 		return types.CompareUuid(types.DecodeUuid(a), types.DecodeUuid(b))
 	case types.T_char, types.T_varchar, types.T_blob,
@@ -162,13 +180,17 @@ func CompareGeneric(a, b any, t types.T) int {
 	case types.T_enum:
 		return CompareOrdered(a.(types.Enum), b.(types.Enum))
 	case types.T_TS:
-		ts1 := b.(types.TS)
-		ts2 := a.(types.TS)
-		return ts2.Compare(&ts1)
+		ts1 := a.(types.TS)
+		ts2 := b.(types.TS)
+		return ts1.Compare(&ts2)
 	case types.T_Rowid:
-		return CompareBytes(a.([]byte), b.([]byte))
+		v1 := a.(types.Rowid)
+		v2 := b.(types.Rowid)
+		return v1.Compare(&v2)
 	case types.T_Blockid:
-		return CompareBytes(a.([]byte), b.([]byte))
+		v1 := a.(types.Blockid)
+		v2 := b.(types.Blockid)
+		return v1.Compare(&v2)
 	case types.T_uuid:
 		return types.CompareUuid(a.(types.Uuid), b.(types.Uuid))
 	case types.T_char, types.T_varchar, types.T_blob,

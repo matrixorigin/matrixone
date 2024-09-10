@@ -42,6 +42,8 @@ import (
     alterColPosition *tree.ColumnPosition
     alterColumnOrderBy []*tree.AlterColumnOrder
     alterColumnOrder *tree.AlterColumnOrder
+    renameTableOptions []*tree.AlterTable
+    renameTableOption *tree.AlterTable
 
     PartitionNames tree.IdentifierList
 
@@ -77,7 +79,7 @@ import (
 
     from *tree.From
     where *tree.Where
-    groupBy tree.GroupBy
+    groupBy *tree.GroupByClause
     aliasedTableExpr *tree.AliasedTableExpr
     direction tree.Direction
     nullsPosition tree.NullsPosition
@@ -483,6 +485,9 @@ import (
 // CDC
 %token <str> CDC
 
+// ROLLUP
+%token <str> ROLLUP
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
@@ -498,7 +503,7 @@ import (
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt show_connectors_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt rename_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt
@@ -600,6 +605,8 @@ import (
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
+%type <renameTableOptions> rename_table_list
+%type <renameTableOption> rename_option
 %type <alterPartitionOption> alter_partition_option partition_option
 %type <alterColPosition> column_position
 %type <alterColumnOrder> alter_column_order
@@ -722,7 +729,7 @@ import (
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt header_opt parallel_opt strict_opt
 %type <zeroFillOpt> zero_fill_opt
-%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
+%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt rollup_opt
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword separator_opt kmeans_opt
 %type <insert> insert_data
@@ -1563,7 +1570,7 @@ parallel_opt:
     }
 strict_opt:
     {
-        $$ = false
+        $$ = true
     }
 |   STRICT STRING
     {
@@ -3165,6 +3172,7 @@ alter_stmt:
 |   alter_stage_stmt
 |   alter_sequence_stmt
 |   alter_pitr_stmt
+|   rename_stmt
 // |    alter_ddl_stmt
 
 alter_sequence_stmt:
@@ -3215,14 +3223,35 @@ alter_table_stmt:
         alterTable.PartitionOption = $4
         $$ = alterTable
     }
-|   RENAME TABLE table_name TO alter_table_rename
+
+rename_stmt:
+    RENAME TABLE rename_table_list
     {
-        var table = $3
+        alterTables := $3
+        renameTables := tree.NewRenameTable(alterTables)
+        $$ = renameTables
+    }
+
+rename_table_list:
+    rename_option
+    {
+        $$ = []*tree.AlterTable{$1}
+    }
+|   rename_table_list ',' rename_option
+    {
+        $$ = append($1, $3)
+    }
+
+rename_option:
+    table_name TO alter_table_rename
+    {
+        var table = $1
         alterTable := tree.NewAlterTable(table)
-        opt := tree.AlterTableOption($5)
+        opt := tree.AlterTableOption($3)
         alterTable.Options = []tree.AlterTableOption{opt}
         $$ = alterTable
     }
+
 
 alter_option_list:
     alter_option
@@ -3708,7 +3737,7 @@ alter_database_config_stmt:
 |   ALTER ACCOUNT CONFIG SET MYSQL_COMPATIBILITY_MODE  var_name equal_or_assignment set_expr
     {
         assignments := []*tree.VarAssignmentExpr{
-            &tree.VarAssignmentExpr{
+            {
                 System: true,
                 Global: true,
                 Name: $6,
@@ -3965,7 +3994,7 @@ show_grants_stmt:
     {
         s := &tree.ShowGrants{}
         roles := []*tree.Role{
-            &tree.Role{UserName: $5.Compare()},
+            {UserName: $5.Compare()},
         }
         s.Roles = roles
         s.ShowGrantType = tree.GrantForRole
@@ -5581,9 +5610,21 @@ group_by_opt:
     {
         $$ = nil
     }
-|   GROUP BY expression_list
+|   GROUP BY expression_list rollup_opt
     {
-        $$ = tree.GroupBy($3)
+        $$ = &tree.GroupByClause{
+            GroupByExprs: $3,
+            RollUp:       $4,
+        }
+    }
+
+rollup_opt:
+    {
+        $$ = false
+    }
+|   WITH ROLLUP
+    {
+        $$ = true
     }
 
 where_expression_opt:
@@ -12365,6 +12406,7 @@ non_reserved_keyword:
 |	PERCENT
 |	OWNERSHIP
 |   MO_TS
+|   ROLLUP
 
 func_not_keyword:
     DATE_ADD

@@ -199,10 +199,10 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 		return nil, nil, nil, mergesort.ErrNoMoreBlocks
 	}
 	var err error
-	var view *containers.Batch
+	var data *containers.Batch
 	releaseF := func() {
-		if view != nil {
-			view.Close()
+		if data != nil {
+			data.Close()
 		}
 	}
 	defer func() {
@@ -213,35 +213,35 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 
 	obj := task.mergedObjsHandle[objIdx]
 	if task.isTombstone {
-		err = obj.Scan(ctx, &view, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
+		err = obj.Scan(ctx, &data, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
 	} else {
-		err = obj.HybridScan(ctx, &view, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
+		err = obj.HybridScan(ctx, &data, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
 	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if task.isTombstone {
-		rowIDs := view.Vecs[0]
+		rowIDs := data.Vecs[0]
 		tbl := task.rel.GetMeta().(*catalog.TableEntry)
 		rowIDs.Foreach(func(v any, isNull bool, row int) error {
 			rowID := v.(types.Rowid)
 			objectID := rowID.BorrowObjectID()
 			obj, err := tbl.GetObjectByID(objectID, false)
 			if err != nil {
-				view.Deletes.Add(uint64(row))
+				data.Deletes.Add(uint64(row))
 				return nil
 			}
 			if obj.HasDropCommitted() {
-				if view.Deletes == nil {
-					view.Deletes = &nulls.Nulls{}
+				if data.Deletes == nil {
+					data.Deletes = &nulls.Nulls{}
 				}
-				view.Deletes.Add(uint64(row))
+				data.Deletes.Add(uint64(row))
 			}
 			return nil
 		}, nil)
 	}
-	if len(task.attrs) != len(view.Vecs) {
-		panic(fmt.Sprintf("mismatch %v, %v, %v", task.attrs, len(task.attrs), len(view.Vecs)))
+	if len(task.attrs) != len(data.Vecs) {
+		panic(fmt.Sprintf("mismatch %v, %v, %v", task.attrs, len(task.attrs), len(data.Vecs)))
 	}
 	task.nMergedBlk[objIdx]++
 
@@ -254,14 +254,14 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 					id = i
 				}
 			}
-			bat.Vecs[id] = view.Vecs[i].GetDownstreamVector()
+			bat.Vecs[id] = data.Vecs[i].GetDownstreamVector()
 		} else {
 
-			bat.Vecs[idx] = view.Vecs[i].GetDownstreamVector()
+			bat.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
 		}
 	}
-	bat.SetRowCount(view.Length())
-	return bat, view.Deletes, releaseF, nil
+	bat.SetRowCount(data.Length())
+	return bat, data.Deletes, releaseF, nil
 }
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {

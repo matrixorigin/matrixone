@@ -61,9 +61,6 @@ type S3Writer struct {
 	// An intermediate cache after the merge sort of all `batches` data
 	buffer *batch.Batch
 
-	//for memory multiplexing.
-	tableBatchPool []*batch.Batch
-
 	// batches[i] used to store the batches of table
 	// Each batch in batches will be sorted internally, and all batches correspond to only one table
 	// when the batches' size is over 64M, we will use merge sort, and then write a segment in s3
@@ -74,7 +71,7 @@ type S3Writer struct {
 	batSize uint64
 
 	typs []types.Type
-	ufs  []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
+	ufs  []func(*vector.Vector, *vector.Vector) error // functions for vector union
 }
 
 const (
@@ -94,10 +91,6 @@ func (w *S3Writer) Free(proc *process.Process) {
 		w.buffer.Clean(proc.Mp())
 		w.buffer = nil
 	}
-	for _, bat := range w.tableBatchPool {
-		bat.Clean(proc.Mp())
-	}
-	w.tableBatchPool = nil
 	for _, bat := range w.batches {
 		bat.Clean(proc.Mp())
 	}
@@ -116,7 +109,7 @@ func NewS3TombstoneWriter() (*S3Writer, error) {
 	}, nil
 }
 
-func NewS3Writer(proc *process.Process, tableDef *plan.TableDef, partitionIdx int16) (*S3Writer, error) {
+func NewS3Writer(tableDef *plan.TableDef, partitionIdx int16) (*S3Writer, error) {
 	writer := &S3Writer{
 		tablename:      tableDef.GetName(),
 		seqnums:        make([]uint16, 0, len(tableDef.Cols)),
@@ -126,7 +119,7 @@ func NewS3Writer(proc *process.Process, tableDef *plan.TableDef, partitionIdx in
 		partitionIndex: partitionIdx,
 	}
 
-	writer.ResetBlockInfoBat(proc)
+	writer.ResetBlockInfoBat()
 	for i, colDef := range tableDef.Cols {
 		if colDef.Name != catalog.Row_ID {
 			writer.seqnums = append(writer.seqnums, uint16(colDef.Seqnum))
@@ -165,11 +158,11 @@ func NewS3Writer(proc *process.Process, tableDef *plan.TableDef, partitionIdx in
 }
 
 // NewPartitionS3Writer Alloc S3 writers for partitioned table.
-func NewPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*S3Writer, error) {
+func NewPartitionS3Writer(tableDef *plan.TableDef) ([]*S3Writer, error) {
 	partitionNum := len(tableDef.Partition.PartitionTableNames)
 	writers := make([]*S3Writer, partitionNum)
 	for i := range writers {
-		writer, err := NewS3Writer(proc, tableDef, int16(i))
+		writer, err := NewS3Writer(tableDef, int16(i))
 		if err != nil {
 			return nil, err
 		}
@@ -178,7 +171,7 @@ func NewPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*S3
 	return writers, nil
 }
 
-func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
+func (w *S3Writer) ResetBlockInfoBat() {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
@@ -202,7 +195,7 @@ func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
 	if err != nil {
 		return err
 	}
-	w.ResetBlockInfoBat(proc)
+	w.ResetBlockInfoBat()
 	return nil
 }
 
@@ -231,7 +224,7 @@ func (w *S3Writer) initBuffers(proc *process.Process, bat *batch.Batch) {
 	if w.buffer != nil {
 		return
 	}
-	buffer, err := proc.NewBatchFromSrc(bat, int(options.DefaultBlockMaxRows))
+	buffer, err := proc.NewBatchFromSrc(bat, options.DefaultBlockMaxRows)
 	if err != nil {
 		panic(err)
 	}
@@ -248,44 +241,39 @@ func (w *S3Writer) StashBatch(proc *process.Process, bat *batch.Batch) bool {
 		for i := 0; i < bat.VectorCount(); i++ {
 			typ := *bat.GetVector(int32(i)).GetType()
 			w.typs = append(w.typs, typ)
-			w.ufs = append(w.ufs, vector.GetUnionOneFunction(typ, proc.Mp()))
+			w.ufs = append(w.ufs, vector.GetUnionAllFunction(typ, proc.Mp()))
 		}
 	}
 	res := false
 	start, end := 0, bat.RowCount()
 	for start < end {
 		n := len(w.batches)
-		if n != 0 && w.batches[n-1].RowCount() < int(options.DefaultBlockMaxRows) {
+		if n != 0 && w.batches[n-1].RowCount() < options.DefaultBlockMaxRows {
 			// w.batches[n-1] is not full.
 			rbat = w.batches[n-1]
 		} else {
 			// w.batches[n-1] is full, use a new batch.
-			if len(w.tableBatchPool) > 0 {
-				rbat = w.tableBatchPool[0]
-				w.tableBatchPool = w.tableBatchPool[1:]
-				rbat.CleanOnlyData()
-			} else {
-				var err error
-				rbat, err = proc.NewBatchFromSrc(bat, int(options.DefaultBlockMaxRows))
-				if err != nil {
-					panic(err)
-				}
+			var err error
+			rbat, err = proc.NewBatchFromSrc(bat, options.DefaultBlockMaxRows)
+			if err != nil {
+				panic(err)
 			}
 			w.batches = append(w.batches, rbat)
 		}
 		rows := end - start
-		if left := int(options.DefaultBlockMaxRows) - rbat.RowCount(); rows > left {
+		if left := options.DefaultBlockMaxRows - rbat.RowCount(); rows > left {
 			rows = left
 		}
 
-		var err error
 		for i := 0; i < bat.VectorCount(); i++ {
 			vec := rbat.GetVector(int32(i))
-			srcVec := bat.GetVector(int32(i))
-			for j := 0; j < rows; j++ {
-				if err = w.ufs[i](vec, srcVec, int64(j+start)); err != nil {
-					panic(err)
-				}
+			srcVec, err := bat.GetVector(int32(i)).Window(start, start+rows)
+			if err != nil {
+				panic(err)
+			}
+			err = w.ufs[i](vec, srcVec)
+			if err != nil {
+				panic(err)
 			}
 		}
 		rbat.AddRowCount(rows)
@@ -301,7 +289,7 @@ func (w *S3Writer) StashBatch(proc *process.Process, bat *batch.Batch) bool {
 func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
 	cols = make([][]T, 0, len(bats))
 	for i := range bats {
-		cols = append(cols, vector.MustFixedCol[T](bats[i].Vecs[idx]))
+		cols = append(cols, vector.MustFixedColWithTypeCheck[T](bats[i].Vecs[idx]))
 	}
 	return
 }
@@ -328,10 +316,6 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 
 	defer func() {
 		// clean
-		for i := range w.batches {
-			//recycle the batch
-			w.putBatch(w.batches[i])
-		}
 		w.batches = w.batches[:0]
 		w.batSize = 0
 	}()
@@ -345,6 +329,7 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 			if _, err := w.writer.WriteBatch(w.batches[i]); err != nil {
 				return nil, objectio.ObjectStats{}, err
 			}
+			w.batches[i].Clean(proc.GetMPool())
 		}
 		return w.sync(proc)
 	}
@@ -431,10 +416,14 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 				return nil, objectio.ObjectStats{}, err
 			}
 		}
+		// all data in w.batches[batchIndex] are used. Clean it.
+		if rowIndex+1 == w.batches[batchIndex].RowCount() {
+			w.batches[batchIndex].Clean(proc.GetMPool())
+		}
 		lens++
-		if lens == int(options.DefaultBlockMaxRows) {
+		if lens == options.DefaultBlockMaxRows {
 			lens = 0
-			w.buffer.SetRowCount(int(options.DefaultBlockMaxRows))
+			w.buffer.SetRowCount(options.DefaultBlockMaxRows)
 			if _, err := w.writer.WriteBatch(w.buffer); err != nil {
 				return nil, objectio.ObjectStats{}, err
 			}
@@ -450,10 +439,6 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 		w.buffer.CleanOnlyData()
 	}
 	return w.sync(proc)
-}
-
-func (w *S3Writer) putBatch(bat *batch.Batch) {
-	w.tableBatchPool = append(w.tableBatchPool, bat)
 }
 
 func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
@@ -562,18 +547,12 @@ func (w *S3Writer) sync(proc *process.Process) ([]objectio.BlockInfo, objectio.O
 		)
 	}
 
-	stats := w.writer.GetObjectStats()
-
-	var i int = -1
-	for i = range stats {
-		if !stats[i].IsZero() {
-			stats[i].SetCNCreated()
-			if w.sortIndex != -1 {
-				stats[i].SetSorted()
-			}
-			break
-		}
+	var stats objectio.ObjectStats
+	if w.sortIndex != -1 {
+		stats = w.writer.GetObjectStats(objectio.WithCNCreated(), objectio.WithSorted())
+	} else {
+		stats = w.writer.GetObjectStats(objectio.WithCNCreated())
 	}
 
-	return blkInfos, stats[i], err
+	return blkInfos, stats, err
 }

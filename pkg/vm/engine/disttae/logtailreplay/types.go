@@ -26,9 +26,6 @@ import (
 
 type ObjectInfo struct {
 	objectio.ObjectStats
-
-	Appendable bool
-	Sorted     bool
 	CreateTime types.TS
 	DeleteTime types.TS
 }
@@ -36,8 +33,11 @@ type ObjectInfo struct {
 func (o ObjectInfo) String() string {
 	return fmt.Sprintf(
 		"%s; appendable: %v; sorted: %v; createTS: %s; deleteTS: %s",
-		o.ObjectStats.String(), o.Appendable, o.Sorted,
-		o.CreateTime.ToString(), o.DeleteTime.ToString())
+		o.ObjectStats.String(),
+		o.ObjectStats.GetAppendable(),
+		o.ObjectStats.GetSorted(),
+		o.CreateTime.ToString(),
+		o.DeleteTime.ToString())
 }
 
 func (o ObjectInfo) Location() objectio.Location {
@@ -78,8 +78,8 @@ type sharedStates struct {
 
 // RowEntry represents a version of a row
 type RowEntry struct {
-	BlockID types.Blockid // we need to iter by block id, so put it first to allow faster iteration
-	RowID   types.Rowid
+	BlockID objectio.Blockid // we need to iter by block id, so put it first to allow faster iteration
+	RowID   objectio.Rowid
 	Time    types.TS
 
 	ID                int64 // a unique version id, for primary index building and validating
@@ -91,7 +91,7 @@ type RowEntry struct {
 
 func (r RowEntry) Less(than RowEntry) bool {
 	// asc
-	cmp := r.BlockID.Compare(than.BlockID)
+	cmp := r.BlockID.Compare(&than.BlockID)
 	if cmp < 0 {
 		return true
 	}
@@ -99,10 +99,10 @@ func (r RowEntry) Less(than RowEntry) bool {
 		return false
 	}
 	// asc
-	if r.RowID.Less(than.RowID) {
+	if r.RowID.LT(&than.RowID) {
 		return true
 	}
-	if than.RowID.Less(r.RowID) {
+	if than.RowID.LT(&r.RowID) {
 		return false
 	}
 	// desc
@@ -120,8 +120,8 @@ type PrimaryIndexEntry struct {
 	RowEntryID int64
 
 	// fields for validating
-	BlockID types.Blockid
-	RowID   types.Rowid
+	BlockID objectio.Blockid
+	RowID   objectio.Rowid
 	Time    types.TS
 }
 

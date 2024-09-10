@@ -219,7 +219,7 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch) error {
 	// meta loc and object stats
 	mergeBlock.GetMetaLocBat(bat, proc)
-	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
+	tblIdx := vector.MustFixedColWithTypeCheck[int16](bat.GetVector(0))
 	blkInfosVec := bat.GetVector(1)
 
 	hasObject := false

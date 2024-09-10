@@ -115,10 +115,22 @@ message StorageUsageReq {
     repeated int64 AccIds = 1;
 }
 
-message StorageUsageResp {
+message StorageUsageResp_V1 {
     option (gogoproto.typedecl)     = false;
     bool Succeed                    = 1;
     repeated int64 AccIds           = 2;
     repeated uint64 Sizes            = 3;
     uint64 Magic                    = 4;
+}
+
+message StorageUsageResp_V2 {
+    option (gogoproto.typedecl)     = false;
+    bool Succeed                    = 1;
+    repeated int64 AccIds           = 2;
+    repeated uint64 Sizes           = 3;
+    uint64 Magic                     = 4;
+
+    repeated uint64 ObjCnts      = 5;
+    repeated uint64 BlkCnts      = 6;
+    repeated uint64 RowCnts      = 7;
 }

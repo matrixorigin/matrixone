@@ -49,7 +49,7 @@ func (limit *Limit) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	limit.ctr.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
+	limit.ctr.limit = uint64(vector.MustFixedColWithTypeCheck[uint64](vec)[0])
 	// do not free the vector from executor.Eval after used.
 	// should use executor.Free to free it in Operator.Free()
 

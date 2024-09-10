@@ -216,21 +216,23 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 	delCtx := deletion.DeleteCtx
 	// If the target table is a partition table, group and split the batch data
 	if len(deletion.ctr.partitionSources) != 0 {
-		delBatches, err := colexec.GroupByPartitionForDelete(
-			proc,
-			srcBat,
-			delCtx.RowIdIdx,
-			delCtx.PartitionIndexInBatch,
-			len(delCtx.PartitionTableIDs),
-			delCtx.PrimaryKeyIdx,
-		)
-		if err != nil {
-			return err
+		pkTyp := srcBat.Vecs[delCtx.PrimaryKeyIdx].GetType()
+		deletion.ctr.resBat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+		deletion.ctr.resBat.SetVector(1, vector.NewVec(*pkTyp))
+		var err error
+
+		for partIdx := range len(delCtx.PartitionTableIDs) {
+			deletion.ctr.resBat.CleanOnlyData()
+			expect := int32(partIdx)
+			err = colexec.FillPartitionBatchForDelete(proc, srcBat, deletion.ctr.resBat, expect, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, delCtx.PrimaryKeyIdx)
+			if err != nil {
+				deletion.ctr.resBat.Clean(proc.Mp())
+				return err
+			}
+
+			collectBatchInfo(proc, deletion, deletion.ctr.resBat, 0, partIdx, 1)
 		}
-		for i, delBatch := range delBatches {
-			collectBatchInfo(proc, deletion, delBatch, 0, i, 1)
-			delBatch.Clean(proc.GetMPool())
-		}
+		deletion.ctr.resBat.CleanOnlyData()
 	} else {
 		collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
 	}
@@ -261,7 +263,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			blkids = append(blkids, blkid)
 		}
 		slices.SortFunc(blkids, func(a, b types.Blockid) int {
-			return a.Compare(b)
+			return a.Compare(&b)
 		})
 		for _, blkid := range blkids {
 			bat := blockId_rowIdBatch[blkid]
@@ -294,7 +296,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 
 // Collect relevant information about intermediate batche
 func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int) {
-	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
+	vs := vector.MustFixedColWithTypeCheck[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
 	var bitmap *nulls.Nulls
 	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()
@@ -386,51 +388,51 @@ func makeDelRemoteBatch() *batch.Batch {
 func getNonNullValue(col *vector.Vector, row uint32) any {
 	switch col.GetType().Oid {
 	case types.T_bool:
-		return vector.GetFixedAt[bool](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[bool](col, int(row))
 	case types.T_bit:
-		return vector.GetFixedAt[uint64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
 	case types.T_int8:
-		return vector.GetFixedAt[int8](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int8](col, int(row))
 	case types.T_int16:
-		return vector.GetFixedAt[int16](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int16](col, int(row))
 	case types.T_int32:
-		return vector.GetFixedAt[int32](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int32](col, int(row))
 	case types.T_int64:
-		return vector.GetFixedAt[int64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int64](col, int(row))
 	case types.T_uint8:
-		return vector.GetFixedAt[uint8](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint8](col, int(row))
 	case types.T_uint16:
-		return vector.GetFixedAt[uint16](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint16](col, int(row))
 	case types.T_uint32:
-		return vector.GetFixedAt[uint32](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint32](col, int(row))
 	case types.T_uint64:
-		return vector.GetFixedAt[uint64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
 	case types.T_decimal64:
-		return vector.GetFixedAt[types.Decimal64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](col, int(row))
 	case types.T_decimal128:
-		return vector.GetFixedAt[types.Decimal128](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](col, int(row))
 	case types.T_uuid:
-		return vector.GetFixedAt[types.Uuid](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Uuid](col, int(row))
 	case types.T_float32:
-		return vector.GetFixedAt[float32](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[float32](col, int(row))
 	case types.T_float64:
-		return vector.GetFixedAt[float64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[float64](col, int(row))
 	case types.T_date:
-		return vector.GetFixedAt[types.Date](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Date](col, int(row))
 	case types.T_time:
-		return vector.GetFixedAt[types.Time](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Time](col, int(row))
 	case types.T_datetime:
-		return vector.GetFixedAt[types.Datetime](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Datetime](col, int(row))
 	case types.T_timestamp:
-		return vector.GetFixedAt[types.Timestamp](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
 	case types.T_enum:
-		return vector.GetFixedAt[types.Enum](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
 	case types.T_TS:
-		return vector.GetFixedAt[types.TS](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.TS](col, int(row))
 	case types.T_Rowid:
-		return vector.GetFixedAt[types.Rowid](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Rowid](col, int(row))
 	case types.T_Blockid:
-		return vector.GetFixedAt[types.Blockid](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return col.GetBytesAt(int(row))

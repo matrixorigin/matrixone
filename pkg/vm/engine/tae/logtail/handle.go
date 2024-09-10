@@ -549,19 +549,19 @@ func LoadCheckpointEntries(
 	}
 
 	closeCBs := make([]func(), 0)
-	bats := make([][]*batch.Batch, len(locationsAndVersions)/2)
+	dataBats := make([][]*batch.Batch, len(locationsAndVersions)/2)
 	var err error
 	for i, data := range datas {
 		if shouldSkip(i) {
 			continue
 		}
-		var bat []*batch.Batch
-		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
+		var bats []*batch.Batch
+		bats, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
 		cb := data.GetCloseCB(versions[i], mp)
 		closeCBs = append(closeCBs, func() {
-			for _, b := range bat {
-				if b != nil {
-					b.Clean(mp)
+			for _, bat := range bats {
+				if bat != nil {
+					bat.Clean(mp)
 				}
 			}
 			cb()
@@ -574,7 +574,7 @@ func LoadCheckpointEntries(
 			}
 			return nil, nil, err
 		}
-		bats[i] = bat
+		dataBats[i] = bats
 	}
 
 	entries := make([]*api.Entry, 0)
@@ -583,7 +583,7 @@ func LoadCheckpointEntries(
 			continue
 		}
 		data := datas[i]
-		ins, del, dataObj, tombstoneObj, err := data.GetTableDataFromBats(tableID, bats[i])
+		ins, del, dataObj, tombstoneObj, err := data.GetTableDataFromBats(tableID, dataBats[i])
 		if err != nil {
 			for j := range closeCBs {
 				if closeCBs[j] != nil {
