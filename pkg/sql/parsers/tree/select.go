@@ -516,6 +516,30 @@ func NewUsingJoinCond(c IdentifierList) *UsingJoinCond {
 	return &UsingJoinCond{Cols: c}
 }
 
+const (
+	APPLY_TYPE_CROSS = "CROSS APPLY"
+	APPLY_TYPE_OUTER = "OUTER APPLY"
+)
+
+type ApplyTableExpr struct {
+	TableExpr
+	ApplyType string
+	Left      TableExpr
+	Right     TableExpr
+}
+
+type ApplyCond interface {
+	NodeFormatter
+}
+
+func (node *ApplyTableExpr) Format(ctx *FmtCtx) {
+	node.Left.Format(ctx)
+	ctx.WriteByte(' ')
+	ctx.WriteString(strings.ToLower(node.ApplyType))
+	ctx.WriteByte(' ')
+	node.Right.Format(ctx)
+}
+
 // the parenthesized TableExpr.
 type ParenTableExpr struct {
 	TableExpr

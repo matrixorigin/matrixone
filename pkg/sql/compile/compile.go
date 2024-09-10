@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -1295,6 +1296,16 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileSinkNode(n, ss, step)
+	case plan.Node_APPLY:
+		left, err = c.compilePlanScope(step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
+		ss = c.compileSort(n, c.compileApply(n, ns[n.Children[0]], ns[n.Children[1]], left, right))
+		return ss, nil
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -2477,6 +2488,33 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes
 		panic(moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("join typ '%v'", node.JoinType)))
 	}
 	return rs, buildScopes
+}
+
+func (c *Compile) compileApply(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	rs := c.mergeScopesByCN(probeScopes)
+
+	rightTyps := make([]types.Type, len(right.ProjectList))
+	for i, expr := range right.ProjectList {
+		rightTyps[i] = dupType(&expr.Typ)
+	}
+
+	leftTyps := make([]types.Type, len(left.ProjectList))
+	for i, expr := range left.ProjectList {
+		leftTyps[i] = dupType(&expr.Typ)
+	}
+
+	switch node.JoinType {
+	case plan.Node_INNER:
+		for i := range rs {
+			op := constructApply(apply.CROSS)
+			op.SetIdx(c.anal.curNodeIdx)
+			rs[i].setRootOperator(op)
+		}
+	default:
+		panic("unknown apply")
+	}
+
+	return rs
 }
 
 func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {

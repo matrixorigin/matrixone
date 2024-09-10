@@ -954,6 +954,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
 		}
 
+	case plan.Node_APPLY:
+		node.Stats.Outcnt = leftStats.Outcnt
+		node.Stats.Cost = leftStats.Outcnt
+		node.Stats.Selectivity = leftStats.Selectivity
+		node.Stats.BlockNum = leftStats.BlockNum
+
 	default:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.Outcnt = childStats.Outcnt

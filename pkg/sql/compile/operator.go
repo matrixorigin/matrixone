@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -533,6 +534,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.ValueScan:
 		t := sourceOp.(*value_scan.ValueScan)
 		op := value_scan.NewArgument()
+		op.ProjectList = t.ProjectList
+		op.SetInfo(&info)
+		return op
+	case vm.Apply:
+		t := sourceOp.(*apply.Apply)
+		op := apply.NewArgument()
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -1840,6 +1847,12 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		return e.F.Args[1], e.F.Args[0]
 	}
 	return e.F.Args[0], e.F.Args[1]
+}
+
+func constructApply(applyType int) *apply.Apply {
+	arg := apply.NewArgument()
+	arg.ApplyType = applyType
+	return arg
 }
 
 func constructTableScan(n *plan.Node) *table_scan.TableScan {
