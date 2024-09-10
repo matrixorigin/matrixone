@@ -40,17 +40,18 @@ func newObjOverlapPolicy() *objOverlapPolicy {
 	}
 }
 
-func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) {
+func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
 	if obj.IsTombstone {
-		return
+		return false
 	}
 	if obj.OriginSize() < config.ObjectMinOsize {
-		return
+		return false
 	}
 	if !obj.GetSortKeyZonemap().IsInited() {
-		return
+		return false
 	}
 	m.objects = append(m.objects, obj)
+	return true
 }
 
 func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {

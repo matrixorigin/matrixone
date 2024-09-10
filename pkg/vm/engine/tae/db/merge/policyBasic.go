@@ -45,7 +45,9 @@ func newPolicyGroup(policies ...policy) *policyGroup {
 
 func (g *policyGroup) onObject(obj *catalog.ObjectEntry) {
 	for _, p := range g.policies {
-		p.onObject(obj, g.config)
+		if p.onObject(obj, g.config) {
+			return
+		}
 	}
 }
 
@@ -120,9 +122,9 @@ func newBasicPolicy() policy {
 }
 
 // impl policy for Basic
-func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) {
+func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
 	if obj.IsTombstone {
-		return
+		return false
 	}
 
 	osize := obj.GetOriginSize()
@@ -144,7 +146,9 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) {
 			row:   obj.GetRows(),
 			entry: obj,
 		}, config.MergeMaxOneRun)
+		return true
 	}
+	return false
 }
 
 func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {

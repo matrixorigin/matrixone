@@ -27,13 +27,15 @@ type tombstone struct {
 	tombstones []*catalog.ObjectEntry
 }
 
-func (t *tombstone) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) {
+func (t *tombstone) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
 	if len(t.tombstones) == config.MergeMaxOneRun {
-		return
+		return false
 	}
 	if entry.IsTombstone {
 		t.tombstones = append(t.tombstones, entry)
+		return true
 	}
+	return false
 }
 
 func (t *tombstone) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
