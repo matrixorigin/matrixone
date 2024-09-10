@@ -15,26 +15,31 @@
 package logtailreplay
 
 import (
-	"regexp"
-
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"regexp"
+	"strings"
 )
 
-var metaTableMatchRegexp = regexp.MustCompile(`\_\d+\_(meta|seg)`)
-var blkTableMatchRegexp = regexp.MustCompile(`\_\d+\_meta`)
-var objTableMatchRegexp = regexp.MustCompile(`\_\d+\_obj`)
+var (
+	dataObjectListPattern      = regexp.MustCompile(`_\d+_data_meta`)
+	tombstoneObjectListPattern = regexp.MustCompile(`_\d+_tombstone_meta`)
+)
 
-func IsMetaTable(name string) bool {
-	return metaTableMatchRegexp.MatchString(name)
+func IsMetaEntry(tblName string) bool {
+	return IsDataObjectList(tblName) || IsTombstoneObjectList(tblName)
 }
 
-func IsBlkTable(name string) bool {
-	return blkTableMatchRegexp.MatchString(name)
+func IsDataObjectList(tblName string) bool {
+	return dataObjectListPattern.MatchString(tblName)
 }
 
-func IsObjTable(name string) bool {
-	return objTableMatchRegexp.MatchString(name)
+func IsTombstoneObjectList(tblName string) bool {
+	return tombstoneObjectListPattern.MatchString(tblName)
+}
+
+func IsTransferredDels(name string) bool {
+	return strings.HasPrefix(name, "trans_del")
 }
 
 func mustVectorFromProto(v api.Vector) *vector.Vector {

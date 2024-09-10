@@ -55,18 +55,87 @@ const (
 )
 
 type BlockInfo struct {
-	BlockID    types.Blockid
-	EntryState bool
-	Sorted     bool
-	MetaLoc    ObjectLocation
-	DeltaLoc   ObjectLocation
-	CommitTs   types.TS
-	SegmentID  types.Uuid
+	BlockID     types.Blockid
+	MetaLoc     ObjectLocation
+	ObjectFlags int8
 
-	//TODO:: putting them here is a bad idea, remove
-	//this block can be distributed to remote nodes.
-	CanRemote    bool
-	PartitionNum int
+	//TODO:: remove it.
+	PartitionNum int16
+}
+
+func (b *BlockInfo) SetFlagByObjStats(stats ObjectStats) {
+	b.ObjectFlags = stats.GetFlag()
+}
+
+func (b *BlockInfo) IsAppendable() bool {
+	return b.ObjectFlags&ObjectFlag_Appendable != 0
+}
+
+func (b *BlockInfo) IsSorted() bool {
+	return b.ObjectFlags&ObjectFlag_Sorted != 0
+}
+
+func (b *BlockInfo) IsCNCreated() bool {
+	return b.ObjectFlags&ObjectFlag_CNCreated != 0
+}
+
+func (b *BlockInfo) String() string {
+	flag := ""
+	if b.IsAppendable() {
+		flag = flag + "A"
+	}
+	if b.IsSorted() {
+		flag = flag + "S"
+	}
+	if b.IsCNCreated() {
+		flag = flag + "C"
+	}
+
+	return fmt.Sprintf(
+		"[%s]ID-%s, MetaLoc: %s, PartitionNum: %d",
+		flag,
+		b.BlockID.ShortStringEx(),
+		b.MetaLocation().String(),
+		b.PartitionNum)
+}
+
+func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
+	var space uint32
+	if _, err := w.Write(types.EncodeFixed(b.BlockID)); err != nil {
+		return 0, err
+	}
+	space += uint32(types.BlockidSize)
+
+	if _, err := w.Write(types.EncodeSlice(b.MetaLoc[:])); err != nil {
+		return 0, err
+	}
+	space += uint32(LocationLen)
+
+	if _, err := w.Write(types.EncodeInt8(&b.ObjectFlags)); err != nil {
+		return 0, err
+	}
+	space++
+
+	if _, err := w.Write(types.EncodeInt16(&b.PartitionNum)); err != nil {
+		return 0, err
+	}
+	space += 2
+
+	return space, nil
+}
+
+func (b *BlockInfo) Unmarshal(buf []byte) error {
+	b.BlockID = types.DecodeFixed[types.Blockid](buf[:types.BlockidSize])
+	buf = buf[types.BlockidSize:]
+
+	copy(b.MetaLoc[:], buf[:LocationLen])
+	buf = buf[LocationLen:]
+
+	b.ObjectFlags = types.DecodeInt8(buf[:1])
+	buf = buf[1:]
+
+	b.PartitionNum = types.DecodeFixed[int16](buf[:2])
+	return nil
 }
 
 func (b *BlockInfo) MetaLocation() Location {
@@ -77,19 +146,10 @@ func (b *BlockInfo) SetMetaLocation(metaLoc Location) {
 	b.MetaLoc = *(*[LocationLen]byte)(unsafe.Pointer(&metaLoc[0]))
 }
 
-func (b *BlockInfo) DeltaLocation() Location {
-	return b.DeltaLoc[:]
+func (b *BlockInfo) IsMemBlk() bool {
+	return bytes.Equal(EncodeBlockInfo(*b), EmptyBlockInfoBytes)
 }
 
-func (b *BlockInfo) SetDeltaLocation(deltaLoc Location) {
-	b.DeltaLoc = *(*[LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
-}
-
-// XXX info is passed in by value.   The use of unsafe here will cost
-// an allocation and copy.  BlockInfo is not small therefore this is
-// not exactly cheap.   However, caller of this function will keep a
-// reference to the buffer.  See txnTable.rangesOnePart.
-// ranges is *[][]byte.
 func EncodeBlockInfo(info BlockInfo) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
 }

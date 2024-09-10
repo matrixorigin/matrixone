@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -82,7 +83,6 @@ func TestBackupData(t *testing.T) {
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
-	db.ForceLongCheckpoint()
 
 	dir := path.Join(db.Dir, "/local")
 	c := fileservice.Config{
@@ -123,7 +123,7 @@ func TestBackupData(t *testing.T) {
 	for _, location := range files {
 		locations = append(locations, location)
 	}
-	err = execBackup(ctx, db.Opts.Fs, service, locations, 1, types.TS{}, "full")
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full")
 	assert.Nil(t, err)
 	db.Opts.Fs = service
 	db.Restart(ctx)
@@ -628,7 +628,12 @@ func TestBackup(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.wantErr(t, Backup(tt.args.ctx, tt.args.bs, tt.args.cfg), tt.args.cfg, fmt.Sprintf("Backup(%v, %v, %v)", tt.args.ctx, tt.args.bs, tt.args.cfg))
+			runtime.RunTest(
+				"",
+				func(rt runtime.Runtime) {
+					tt.wantErr(t, Backup(tt.args.ctx, "", tt.args.bs, tt.args.cfg), tt.args.cfg, fmt.Sprintf("Backup(%v, %v, %v)", tt.args.ctx, tt.args.bs, tt.args.cfg))
+				},
+			)
 		})
 	}
 }

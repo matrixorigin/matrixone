@@ -16,43 +16,28 @@ package frontend
 
 import (
 	"context"
-	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/stretchr/testify/require"
 	"net"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
 )
-
-func create_test_server() *MOServer {
-	//before anything using the configuration
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-	if err != nil {
-		panic(err)
-	}
-	pu.SV.SetDefaultValues()
-	setGlobalPu(pu)
-
-	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
-	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-	// A mock autoincrcache manager.
-	aicm := &defines.AutoIncrCacheManager{}
-	return NewMOServer(moServerCtx, address, pu, aicm, nil)
-}
 
 func Test_Closed(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
 	registerConn(clientConn)
-
-	mo := create_test_server()
-	getGlobalPu().SV.SkipCheckUser = true
+	pu, _ := getParameterUnit("test/system_vars_config.toml", nil, nil)
+	pu.SV.SkipCheckUser = true
+	setGlobalPu(pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	temp, _ := NewRoutineManager(ctx)
+	setGlobalRtMgr(temp)
+	mo := createInnerServer()
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	cf := &CloseFlag{}
@@ -67,9 +52,10 @@ func Test_Closed(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	cf.Close()
 
+	closeDbConn(t, db)
+	wg.Wait()
 	err = mo.Stop()
 	require.NoError(t, err)
-	closeDbConn(t, db)
 	serverConn.Close()
 	clientConn.Close()
 	wg.Wait()

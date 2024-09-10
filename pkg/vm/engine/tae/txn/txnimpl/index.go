@@ -98,7 +98,7 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	vec := makeWorkspaceVector(kType)
 	switch kType.Oid {
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		for k := range idx.tree {
 			vec.Append([]byte(k.(string)), false)
 		}
@@ -120,7 +120,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 	var vecs []containers.Vector
 	switch kType.Oid {
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		for k := range idx.tree {
 			if vec.Length() > int(MaxNodeRows) {
 				vecs = append(vecs, vec)
@@ -221,76 +221,76 @@ func (idx *simpleTableIndex) BatchInsert(
 	colType := col.GetType()
 	switch colType.Oid {
 	case types.T_bool:
-		vs := vector.MustFixedCol[bool](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[bool](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_bit:
-		vs := vector.MustFixedCol[uint64](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[uint64](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_int8:
-		vs := vector.MustFixedCol[int8](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[int8](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_int16:
-		vs := vector.MustFixedCol[int16](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[int16](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_int32:
-		vs := vector.MustFixedCol[int32](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[int32](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_int64:
-		vs := vector.MustFixedCol[int64](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[int64](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_uint8:
-		vs := vector.MustFixedCol[uint8](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[uint8](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_uint16:
-		vs := vector.MustFixedCol[uint16](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[uint16](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_uint32:
-		vs := vector.MustFixedCol[uint32](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[uint32](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_uint64:
-		vs := vector.MustFixedCol[uint64](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[uint64](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_decimal64:
-		vs := vector.MustFixedCol[types.Decimal64](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.Decimal64](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_decimal128:
-		vs := vector.MustFixedCol[types.Decimal128](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_uuid:
-		vs := vector.MustFixedCol[types.Uuid](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.Uuid](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_float32:
-		vs := vector.MustFixedCol[float32](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[float32](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_float64:
-		vs := vector.MustFixedCol[float64](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[float64](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_date:
-		vs := vector.MustFixedCol[types.Date](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.Date](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_timestamp:
-		vs := vector.MustFixedCol[types.Timestamp](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.Timestamp](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_time:
-		vs := vector.MustFixedCol[types.Time](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.Time](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_datetime:
-		vs := vector.MustFixedCol[types.Datetime](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.Datetime](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_enum:
-		vs := vector.MustFixedCol[types.Enum](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.Enum](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_TS:
-		vs := vector.MustFixedCol[types.TS](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.TS](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_Rowid:
-		vs := vector.MustFixedCol[types.Rowid](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.Rowid](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_Blockid:
-		vs := vector.MustFixedCol[types.Blockid](col.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[types.Blockid](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		vec := col.GetDownstreamVector()
 		if dedupInput {
 			set := make(map[string]bool)
@@ -360,7 +360,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			row++
 		}
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%s not supported", col.GetType().String()))
+		panic(moerr.NewInternalErrorNoCtxf("%s not supported", col.GetType().String()))
 	}
 	return nil
 }
@@ -372,73 +372,73 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 	colType := col.GetType()
 	switch colType.Oid {
 	case types.T_bool:
-		vals := vector.MustFixedCol[bool](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[bool](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_bit:
-		vals := vector.MustFixedCol[uint64](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[uint64](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_int8:
-		vals := vector.MustFixedCol[int8](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[int8](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_int16:
-		vals := vector.MustFixedCol[int16](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[int16](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_int32:
-		vals := vector.MustFixedCol[int32](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[int32](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_int64:
-		vals := vector.MustFixedCol[int64](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[int64](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_uint8:
-		vals := vector.MustFixedCol[uint8](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[uint8](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_uint16:
-		vals := vector.MustFixedCol[uint16](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[uint16](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_uint32:
-		vals := vector.MustFixedCol[uint32](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[uint32](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_uint64:
-		vals := vector.MustFixedCol[uint64](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[uint64](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_decimal64:
-		vals := vector.MustFixedCol[types.Decimal64](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[types.Decimal64](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_decimal128:
-		vals := vector.MustFixedCol[types.Decimal128](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[types.Decimal128](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_float32:
-		vals := vector.MustFixedCol[float32](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[float32](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_float64:
-		vals := vector.MustFixedCol[float64](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[float64](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_date:
-		vals := vector.MustFixedCol[types.Date](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[types.Date](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_time:
-		vals := vector.MustFixedCol[types.Time](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[types.Time](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_datetime:
-		vals := vector.MustFixedCol[types.Datetime](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[types.Datetime](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_timestamp:
-		vals := vector.MustFixedCol[types.Timestamp](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[types.Timestamp](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_enum:
-		vals := vector.MustFixedCol[types.Enum](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[types.Enum](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_TS:
-		vals := vector.MustFixedCol[types.TS](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[types.TS](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_Rowid:
-		vals := vector.MustFixedCol[types.Rowid](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[types.Rowid](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_Blockid:
-		vals := vector.MustFixedCol[types.Blockid](col.GetDownstreamVector())
+		vals := vector.MustFixedColNoTypeCheck[types.Blockid](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		vec := col.GetDownstreamVector()
 		for i := 0; i < col.Length(); i++ {
 			bs := vec.GetBytesAt(i)
@@ -469,7 +469,7 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 			}
 		}
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%s not supported", col.GetType().String()))
+		panic(moerr.NewInternalErrorNoCtxf("%s not supported", col.GetType().String()))
 	}
 	return nil
 }

@@ -472,6 +472,14 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 drop snapshot if exists sp06;
 create snapshot sp06 for account sys;
 restore account sys from snapshot sp05;
+select * from partition01;
+emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
+select * from partition01 {snapshot = 'sp05'};
+emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 select * from view01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
@@ -489,6 +497,16 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 restore account sys from snapshot sp06;
 select * from view01;
+emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
+9003    1999-02-20    BOB    DOCTOR    F    2009-02-20
+select * from partition01;
+emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
+9003    1999-02-20    BOB    DOCTOR    F    2009-02-20
+select * from partition01 {snapshot = 'sp06'};
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
@@ -847,3 +865,5 @@ drop database test03;
 drop database test05;
 drop snapshot sp100;
 drop snapshot sp101;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

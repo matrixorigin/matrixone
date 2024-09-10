@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -93,7 +93,7 @@ func TestOrder(t *testing.T) {
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -125,7 +125,7 @@ func BenchmarkOrder(b *testing.B) {
 func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 	return orderTestCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		proc:  testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 		arg: &Order{
 			OrderBySpec: fs,
 			OperatorBase: vm.OperatorBase{
@@ -158,13 +158,7 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 
 func resetChildren(arg *Order, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
-	arg.ctr.state = vm.Build
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 }

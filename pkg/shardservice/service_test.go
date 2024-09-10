@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -316,7 +317,7 @@ func TestShardCanBeAllocatedToMultiCN(t *testing.T) {
 			s2 := services[1]
 			table := uint64(1)
 			shards := uint32(2)
-			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1, s2)
 
 			waitReplicaCount(table, s1, 1)
 			waitReplicaCount(table, s2, 1)
@@ -707,7 +708,7 @@ func runServicesTest(
 	if adjustConfigFunc != nil {
 		adjustConfigFunc(&cfg)
 	}
-	server := NewShardServer(cfg).(*server)
+	server := NewShardServer(cfg, runtime.ServiceRuntime(sid).Logger()).(*server)
 
 	services := make([]*service, 0, len(cns))
 	for _, cn := range cns {
@@ -728,7 +729,7 @@ func runServicesTest(
 			opts = adjustConfigFunc(&cfg)
 		}
 
-		s := NewService(cfg, NewMemShardStorage(), opts...)
+		s := NewService(cfg, NewMemShardStorage(runtime.ServiceRuntime(sid).Logger()), opts...)
 		services = append(services, s.(*service))
 	}
 

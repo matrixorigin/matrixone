@@ -353,3 +353,40 @@ a	a
 12124	14124
 drop table t1;
 drop table t2;
+select round(1.000,2);
+round(1.000,2)
+1.00
+drop table if exists t1;
+create table t1(a int ,b decimal(10,5));
+insert into t1 values(1,0.5);
+insert into t1 values(2,0.499);
+insert into t1 values(3,0.501);
+insert into t1 values(4,20.5);
+insert into t1 values(5,20.499);
+insert into t1 values(6,13.500);
+insert into t1 values(7,-0.500);
+insert into t1 values(8,-0.499);
+insert into t1 values(9,-0.501);
+insert into t1 values(10,-20.499);
+insert into t1 values(11,-20.500);
+insert into t1 values(12,-13.500);
+insert into t1 values (13, 20.89123);
+insert into t1 values (14, 23.40123);
+insert into t1 values (15, 123.45678);
+select a, b, round(b,2) from t1;
+a    b    round(b, 2)
+1    0.50000    0.50
+2    0.49900    0.50
+3    0.50100    0.50
+4    20.50000    20.50
+5    20.49900    20.50
+6    13.50000    13.50
+7    -0.50000    -0.50
+8    -0.49900    -0.50
+9    -0.50100    -0.50
+10    -20.49900    -20.50
+11    -20.50000    -20.50
+12    -13.50000    -13.50
+13    20.89123    20.89
+14    23.40123    23.40
+15    123.45678    123.46

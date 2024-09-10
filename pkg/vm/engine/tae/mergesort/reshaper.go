@@ -19,7 +19,6 @@ import (
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
@@ -31,7 +30,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		for _, cnt := range objBlkCnts {
 			totalBlkCnt += cnt
 		}
-		initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
+		host.InitTransferMaps(totalBlkCnt)
 	}
 	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	stats := mergeStats{
@@ -43,7 +42,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	originalObjCnt := host.GetObjectCnt()
 	maxRowCnt := host.GetBlockMaxRows()
 	accObjBlkCnts := host.GetAccBlkCnts()
-	commitEntry := host.GetCommitEntry()
+	transferMaps := host.GetTransferMaps()
 
 	var writer *blockio.BlockWriter
 	var buffer *batch.Batch
@@ -75,10 +74,10 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 				}
 
 				if host.DoTransfer() {
-					commitEntry.Booking.Mappings[accObjBlkCnts[i]+loadedBlkCnt-1].M[int32(j)] = api.TransDestPos{
-						ObjIdx: int32(stats.objCnt),
-						BlkIdx: int32(uint32(stats.objBlkCnt)),
-						RowIdx: int32(stats.blkRowCnt),
+					transferMaps[accObjBlkCnts[i]+loadedBlkCnt-1][uint32(j)] = api.TransferDestPos{
+						ObjIdx: uint8(stats.objCnt),
+						BlkIdx: uint16(stats.objBlkCnt),
+						RowIdx: uint32(stats.blkRowCnt),
 					}
 				}
 
@@ -101,7 +100,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 					buffer.CleanOnlyData()
 
 					if stats.needNewObject() {
-						if err := syncObject(ctx, writer, commitEntry); err != nil {
+						if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
 							return err
 						}
 						writer = nil
@@ -133,7 +132,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		buffer.CleanOnlyData()
 	}
 	if stats.objBlkCnt > 0 {
-		if err := syncObject(ctx, writer, commitEntry); err != nil {
+		if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
 			return err
 		}
 		writer = nil
@@ -146,9 +145,7 @@ func syncObject(ctx context.Context, writer *blockio.BlockWriter, commitEntry *a
 	if _, _, err := writer.Sync(ctx); err != nil {
 		return err
 	}
-	cobjstats := writer.GetObjectStats()[:objectio.SchemaTombstone]
-	for _, cobj := range cobjstats {
-		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
-	}
+	cobjstats := writer.GetObjectStats()
+	commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobjstats.Clone().Marshal())
 	return nil
 }

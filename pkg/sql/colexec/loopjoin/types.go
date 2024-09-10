@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,25 +35,38 @@ const (
 	End
 )
 
-type container struct {
-	colexec.ReceiverOperator
+const (
+	LoopInner = iota
+	LoopAnti
+	LoopLeft
+	LoopMark
+	LoopSemi
+	LoopSingle
+)
 
+type container struct {
 	state    int
 	probeIdx int
-	bat      *batch.Batch
+	batIdx   int
+	inbat    *batch.Batch
 	rbat     *batch.Batch
-	inBat    *batch.Batch
 	joinBat  *batch.Batch
 	expr     colexec.ExpressionExecutor
 	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
+	mp       *message.JoinMap
 }
 
 type LoopJoin struct {
-	ctr    *container
-	Cond   *plan.Expr
-	Result []colexec.ResultPos
-	Typs   []types.Type
+	ctr        container
+	Typs       []types.Type
+	Cond       *plan.Expr
+	Result     []colexec.ResultPos
+	JoinMapTag int32
+	JoinType   int
+	MarkPos    int
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopJoin *LoopJoin) GetOperatorBase() *vm.OperatorBase {
@@ -87,24 +101,32 @@ func (loopJoin *LoopJoin) Release() {
 }
 
 func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	loopJoin.Free(proc, pipelineFailed, err)
+	ctr := &loopJoin.ctr
+
+	ctr.resetExprExecutor()
+	ctr.cleanHashMap()
+	ctr.state = Build
+	ctr.inbat = nil
+
+	if loopJoin.ProjectList != nil {
+		anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
+		anal.Alloc(loopJoin.ProjectAllocSize)
+		loopJoin.ResetProjection(proc)
+	}
 }
 
 func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := loopJoin.ctr
-	if ctr != nil {
-		ctr.FreeAllReg()
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExprExecutor()
-		loopJoin.ctr = nil
+	ctr := &loopJoin.ctr
+
+	ctr.cleanBatch(proc.Mp())
+	ctr.cleanExprExecutor()
+
+	if loopJoin.ProjectList != nil {
+		loopJoin.FreeProjection(proc)
 	}
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)
 		ctr.rbat = nil
@@ -113,9 +135,11 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
 	}
-	if ctr.inBat != nil {
-		ctr.inBat.Clean(mp)
-		ctr.inBat = nil
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 
@@ -125,4 +149,11 @@ func (ctr *container) cleanExprExecutor() {
 		ctr.expr = nil
 	}
 	ctr.expr = nil
+}
+
+func (ctr *container) cleanHashMap() {
+	if ctr.mp != nil {
+		ctr.mp.Free()
+		ctr.mp = nil
+	}
 }

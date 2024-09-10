@@ -18,6 +18,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
@@ -29,13 +30,18 @@ import (
 // Shards and CNs, and so on.
 type rt struct {
 	sync.RWMutex
+	logger *log.MOLogger
 	env    Env
 	tables map[uint64]*table
 	cns    map[string]*cn
 }
 
-func newRuntime(env Env) *rt {
+func newRuntime(
+	env Env,
+	logger *log.MOLogger,
+) *rt {
 	return &rt{
+		logger: logger,
 		env:    env,
 		tables: make(map[uint64]*table, 256),
 		cns:    make(map[string]*cn, 256),
@@ -62,7 +68,6 @@ func (r *rt) heartbeat(
 	if !r.env.HasCN(cn) {
 		return []pb.Operator{newDeleteAllOp()}
 	}
-
 	r.Lock()
 	defer r.Unlock()
 
@@ -70,6 +75,7 @@ func (r *rt) heartbeat(
 	if !ok {
 		c = r.newCN(cn)
 		r.cns[cn] = c
+		r.logger.Info("cn added", zap.String("cn", cn))
 	}
 	if c.isDown() {
 		return []pb.Operator{newDeleteAllOp()}
@@ -142,6 +148,7 @@ func (r *rt) add(
 
 	r.deleteTableLocked(old)
 	r.tables[t.id] = t
+	r.logger.Info("new shard table added", zap.String("metadata", t.metadata.String()))
 }
 
 func (r *rt) delete(id uint64) {
@@ -177,7 +184,7 @@ func (r *rt) get(
 }
 
 func (r *rt) deleteTableLocked(t *table) {
-	getLogger().Info("remove table shards",
+	r.logger.Info("remove table shards",
 		zap.Uint64("table", t.id),
 		tableShardsField("shards", t.metadata),
 		tableShardSliceField("binds", t.shards))
@@ -266,6 +273,7 @@ func (r *rt) getDownCNsLocked(downCNs map[string]struct{}) {
 		cn.down()
 		delete(r.cns, cn.id)
 		downCNs[cn.id] = struct{}{}
+		r.logger.Info("cn removed", zap.String("cn", cn.id))
 	}
 }
 

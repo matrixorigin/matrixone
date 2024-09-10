@@ -38,4 +38,12 @@ use db;
 invalid database db
 select * from db.t1;
 invalid database db
+show table status from system;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+error_info    null    null    null    null    null    null    null    null    null    2024-08-29 16:04:58    null    null    null    null    null    VIEW    0    moadmin
+log_info    null    null    null    null    null    null    null    null    null    2024-08-29 16:04:58    null    null    null    null    null    VIEW    0    moadmin
+rawlog    Tae    Dynamic    1577    0    335906    0    0    NULL    0    2024-08-29 16:04:58    NULL    NULL    utf-8    NULL        read merge data from log, error, span[mo_no_del_hint]    0    moadmin
+span_info    null    null    null    null    null    null    null    null    null    2024-08-29 16:04:58    null    null    null    null    null    VIEW    0    moadmin
+sql_statement_hotspot    null    null    null    null    null    null    null    null    null    2024-08-29 16:04:58    null    null    null    null    null    VIEW    0    moadmin
+statement_info    Tae    Dynamic    116    0    102892    0    0    NULL    0    2024-08-29 16:04:58    NULL    NULL    utf-8    NULL        record each statement and stats info[mo_no_del_hint]    0    moadmin
 set global enable_privilege_cache = on;

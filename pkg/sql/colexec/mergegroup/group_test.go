@@ -15,201 +15,307 @@
 package mergegroup
 
 import (
-	"bytes"
-	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
-)
-
-// add unit tests for cases
-
-type groupTestCase struct {
-	arg    *MergeGroup
-	flgs   []bool // flgs[i] == true: nullable
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
-}
-
-var (
-	tcs []groupTestCase
-)
-
-func init() {
-	tcs = []groupTestCase{
-		newTestCase([]bool{false}, false, []types.Type{types.T_int8.ToType()}),
-		newTestCase([]bool{false}, true, []types.Type{types.T_int8.ToType()}),
-		newTestCase([]bool{false, true}, false, []types.Type{
-			types.T_int8.ToType(),
-			types.T_int16.ToType(),
-		}),
-		newTestCase([]bool{false, true}, true, []types.Type{
-			types.T_int16.ToType(),
-			types.T_int64.ToType(),
-		}),
-		newTestCase([]bool{false, true}, false, []types.Type{
-			types.T_int64.ToType(),
-			types.T_decimal128.ToType(),
-		}),
-		newTestCase([]bool{true, false, true}, false, []types.Type{
-			types.T_int64.ToType(),
-			types.T_int64.ToType(),
-			types.T_decimal128.ToType(),
-		}),
-		newTestCase([]bool{true, false, true}, false, []types.Type{
-			types.T_int64.ToType(),
-			types.New(types.T_varchar, 2, 0),
-			types.T_decimal128.ToType(),
-		}),
-		newTestCase([]bool{true, true, true}, false, []types.Type{
-			types.T_int64.ToType(),
-			types.New(types.T_varchar, 2, 0),
-			types.T_decimal128.ToType(),
-		}),
-		newTestCase([]bool{true, true, true}, false, []types.Type{
-			types.T_int64.ToType(),
-			types.T_varchar.ToType(),
-			types.T_decimal128.ToType(),
-		}),
-		newTestCase([]bool{false, false, false}, false, []types.Type{
-			types.T_int64.ToType(),
-			types.T_varchar.ToType(),
-			types.T_decimal128.ToType(),
-		}),
+// generateInputData return an input batch for mergeGroup operator.
+//
+// the input data for mergeGroup operator is always a batch with Agg field.
+// batch's vectors is the group by columns.
+// batch's Agg field is the aggregate middle result.
+// and we use sum function to do the test.
+//
+// todo: only support one group by column now.
+func generateInputData(proc *process.Process, groupValues []int64, sumResult []int64) *batch.Batch {
+	if len(groupValues) == 0 && len(sumResult) != 1 {
+		panic("bad input data")
 	}
-}
 
-func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
-		tc.arg.String(buf)
+	bat := batch.NewWithSize(0)
+	if len(groupValues) > 0 {
+		bat.Vecs = make([]*vector.Vector, 1)
+		bat.Vecs[0] = testutil.NewInt64Vector(
+			len(groupValues), types.T_int64.ToType(), proc.Mp(), false, groupValues)
 	}
+
+	bat.Aggs = []aggexec.AggFuncExec{
+		aggexec.MakeAgg(proc, function.AggSumOverloadID, false, types.T_int64.ToType()),
+	}
+
+	if err := bat.Aggs[0].GroupGrow(len(sumResult)); err != nil {
+		panic(err)
+	}
+
+	vec := testutil.NewInt64Vector(len(sumResult), types.T_int64.ToType(), proc.Mp(), false, sumResult)
+	input := []*vector.Vector{vec}
+	for i := 0; i < len(sumResult); i++ {
+		groupRow := i
+		if len(groupValues) == 0 {
+			groupRow = 0
+		}
+
+		if err := bat.Aggs[0].Fill(groupRow, i, input); err != nil {
+			panic(err)
+		}
+	}
+	vec.Free(proc.Mp())
+
+	bat.SetRowCount(len(sumResult))
+	return bat
 }
 
-func TestGroup(t *testing.T) {
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
-		for {
-			ok, err := tc.arg.Call(tc.proc)
-			if ok.Status == vm.ExecStop || err != nil {
-				break
+// TestMergeGroupBehavior1 test the merge group operator should Evaluate the result immediately.
+func TestMergeGroupBehavior1(t *testing.T) {
+	// Test Case 1: merge from [3, sum = 6] and [3, sum = 5]
+	// the result should be [3, 11]
+	{
+		proc := testutil.NewProcess()
+
+		OperatorArgument := &MergeGroup{
+			NeedEval: true,
+		}
+		OperatorArgument.ctr.hashKeyWidth = NeedCalculationForKeyWidth
+
+		for k := 2; k > 0; k-- {
+			inputs := []*batch.Batch{
+				generateInputData(proc, []int64{3}, []int64{6}),
+				generateInputData(proc, []int64{3}, []int64{5}),
+				nil,
 			}
-		}
+			resetChildren(OperatorArgument, inputs)
 
-		tc.arg.Reset(tc.proc, false, nil)
+			require.NoError(t, OperatorArgument.Prepare(proc))
 
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
-		for {
-			ok, err := tc.arg.Call(tc.proc)
-			if ok.Status == vm.ExecStop || err != nil {
-				break
-			}
-		}
-		// for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-		// 	for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-		// 		bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-		// 		if bat != nil {
-		// 			bat.Clean(tc.proc.Mp())
-		// 		}
-		// 	}
-		// }
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-	}
-}
+			var outputBatch *batch.Batch
+			outputTime := 0
 
-func BenchmarkGroup(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs = []groupTestCase{
-			newTestCase([]bool{false}, true, []types.Type{types.T_int8.ToType()}),
-			newTestCase([]bool{false}, true, []types.Type{types.T_int8.ToType()}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
-				ok, err := tc.arg.Call(tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
+				result, err := OperatorArgument.Call(proc)
+				require.NoError(t, err)
+
+				if result.Status == vm.ExecStop || result.Batch == nil {
 					break
 				}
+				outputTime++
+				outputBatch = result.Batch
 			}
-			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					msg := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if msg.Batch != nil {
-						msg.Batch.Clean(tc.proc.Mp())
-					}
+			require.True(t, outputTime == 1, "merge group operator should have and only 1 result out.")
+
+			{
+				// check the output batch
+				if outputBatch != nil {
+					require.Equal(t, 2, len(outputBatch.Vecs))
+					require.Equal(t, 0, len(outputBatch.Aggs))
+					require.Equal(t, int64(3), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])[0])
+					require.Equal(t, int64(11), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[1])[0])
+				} else {
+					require.Fail(t, "output batch should not be nil.")
 				}
 			}
+			OperatorArgument.Reset(proc, false, nil)
+			OperatorArgument.GetChildren(0).Free(proc, false, nil)
 		}
+
+		OperatorArgument.Free(proc, false, nil)
+		OperatorArgument.GetChildren(0).Free(proc, false, nil)
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}
+
+	// Test Case 2: merge from [sum = 10] and [sum = 5]
+	// the result should be [15]
+	{
+		proc := testutil.NewProcess()
+
+		OperatorArgument := &MergeGroup{
+			NeedEval: true,
+		}
+		OperatorArgument.ctr.hashKeyWidth = NeedCalculationForKeyWidth
+
+		for k := 2; k > 0; k-- {
+			inputs := []*batch.Batch{
+				generateInputData(proc, nil, []int64{10}),
+				generateInputData(proc, nil, []int64{5}),
+				nil,
+			}
+			resetChildren(OperatorArgument, inputs)
+
+			require.NoError(t, OperatorArgument.Prepare(proc))
+
+			var outputBatch *batch.Batch
+			outputTime := 0
+
+			for {
+				result, err := OperatorArgument.Call(proc)
+				require.NoError(t, err)
+
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				outputTime++
+				outputBatch = result.Batch
+			}
+			require.True(t, outputTime == 1, "merge group operator should have and only 1 result out.")
+
+			{
+				// check the output batch
+				if outputBatch != nil {
+					require.Equal(t, 1, len(outputBatch.Vecs))
+					require.Equal(t, 0, len(outputBatch.Aggs))
+					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])[0])
+				} else {
+					require.Fail(t, "output batch should not be nil.")
+				}
+			}
+			OperatorArgument.Reset(proc, false, nil)
+			OperatorArgument.GetChildren(0).Free(proc, false, nil)
+		}
+
+		OperatorArgument.Free(proc, false, nil)
+		OperatorArgument.GetChildren(0).Free(proc, false, nil)
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
 	}
 }
 
-func newTestCase(flgs []bool, needEval bool, ts []types.Type) groupTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *process.RegisterMessage, 3),
+// TestMergeGroupBehavior2 test the merge group operator has no need to Evaluate the result immediately,
+// but return the middle result.
+func TestMergeGroupBehavior2(t *testing.T) {
+	// Test Case 1: merge from [3, sum = 6] and [3, sum = 5]
+	// the result should be [3, sum = 11]
+	{
+		proc := testutil.NewProcess()
+
+		OperatorArgument := &MergeGroup{
+			NeedEval: false,
+		}
+		OperatorArgument.ctr.hashKeyWidth = NeedCalculationForKeyWidth
+
+		for k := 2; k > 0; k-- {
+			inputs := []*batch.Batch{
+				generateInputData(proc, []int64{3}, []int64{6}),
+				generateInputData(proc, []int64{3}, []int64{5}),
+				nil,
+			}
+			resetChildren(OperatorArgument, inputs)
+
+			require.NoError(t, OperatorArgument.Prepare(proc))
+
+			var outputBatch *batch.Batch
+			outputTime := 0
+
+			for {
+				result, err := OperatorArgument.Call(proc)
+				require.NoError(t, err)
+
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				outputTime++
+				outputBatch = result.Batch
+			}
+			require.True(t, outputTime == 1, "merge group operator should have and only 1 result out.")
+
+			{
+				// check the output batch
+				if outputBatch != nil {
+					require.Equal(t, 1, len(outputBatch.Vecs))
+					require.Equal(t, 1, len(outputBatch.Aggs))
+					require.Equal(t, int64(3), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])[0])
+
+					// flush to check the result
+					vec, err := outputBatch.Aggs[0].Flush()
+					require.NoError(t, err)
+					require.Equal(t, int64(11), vector.MustFixedColWithTypeCheck[int64](vec)[0])
+					vec.Free(proc.Mp())
+				} else {
+					require.Fail(t, "output batch should not be nil.")
+				}
+			}
+			OperatorArgument.Reset(proc, false, nil)
+			OperatorArgument.GetChildren(0).Free(proc, false, nil)
+		}
+
+		OperatorArgument.Free(proc, false, nil)
+		OperatorArgument.GetChildren(0).Free(proc, false, nil)
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
 	}
-	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *process.RegisterMessage, 3),
-	}
-	return groupTestCase{
-		types:  ts,
-		flgs:   flgs,
-		proc:   proc,
-		cancel: cancel,
-		arg: &MergeGroup{
-			NeedEval: needEval,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
-		},
+
+	// Test Case 2: merge from [sum = 10] and [sum = 5]
+	// the result should be [sum = 15]
+	{
+		proc := testutil.NewProcess()
+
+		OperatorArgument := &MergeGroup{
+			NeedEval: false,
+		}
+		OperatorArgument.ctr.hashKeyWidth = NeedCalculationForKeyWidth
+
+		for k := 2; k > 0; k-- {
+			inputs := []*batch.Batch{
+				generateInputData(proc, nil, []int64{10}),
+				generateInputData(proc, nil, []int64{5}),
+				nil,
+			}
+			resetChildren(OperatorArgument, inputs)
+
+			require.NoError(t, OperatorArgument.Prepare(proc))
+
+			var outputBatch *batch.Batch
+			outputTime := 0
+
+			for {
+				result, err := OperatorArgument.Call(proc)
+				require.NoError(t, err)
+
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				outputTime++
+				outputBatch = result.Batch
+			}
+			require.True(t, outputTime == 1, "merge group operator should have and only 1 result out.")
+
+			{
+				// check the output batch
+				if outputBatch != nil {
+					require.Equal(t, 0, len(outputBatch.Vecs))
+					require.Equal(t, 1, len(outputBatch.Aggs))
+
+					// flush to check the result
+					vec, err := outputBatch.Aggs[0].Flush()
+					require.NoError(t, err)
+					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](vec)[0])
+					vec.Free(proc.Mp())
+				} else {
+					require.Fail(t, "output batch should not be nil.")
+				}
+			}
+			OperatorArgument.Reset(proc, false, nil)
+			OperatorArgument.GetChildren(0).Free(proc, false, nil)
+		}
+
+		OperatorArgument.Free(proc, false, nil)
+		OperatorArgument.GetChildren(0).Free(proc, false, nil)
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
 	}
 }
 
-// create a new block based on the type information, flgs[i] == ture: has null
-func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+func resetChildren(arg *MergeGroup, bats []*batch.Batch) {
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 }

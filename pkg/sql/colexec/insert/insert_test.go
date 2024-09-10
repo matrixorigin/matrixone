@@ -20,12 +20,13 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -60,6 +61,14 @@ func TestInsertOperator(t *testing.T) {
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
+	database := mock_frontend.NewMockDatabase(ctrl)
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
+
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+
 	proc := testutil.NewProc()
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
@@ -82,6 +91,7 @@ func TestInsertOperator(t *testing.T) {
 				SchemaName: "testDb",
 				ObjName:    "testTable",
 			},
+			Engine:          eng,
 			AddAffectedRows: true,
 			Attrs:           []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 		},
@@ -92,35 +102,59 @@ func TestInsertOperator(t *testing.T) {
 				IsLast:  false,
 			},
 		},
-		ctr: &container{
+		ctr: container{
 			state:  vm.Build,
 			source: &mockRelation{},
 		},
 	}
 	resetChildren(&argument1, batch1)
-	// err := argument1.Prepare(proc)
-	// require.NoError(t, err)
-	_, err := argument1.Call(proc)
+	err := argument1.Prepare(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(3), argument1.affectedRows)
-	// result := argument1.InsertCtx.Rel.(*mockRelation).result
-	// require.Equal(t, result.Batch, batch.EmptyBatch)
+	_, err = argument1.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
 
+	argument1.Reset(proc, false, nil)
+
+	resetChildren(&argument1, batch1)
+	err = argument1.Prepare(proc)
+	require.NoError(t, err)
+	_, err = argument1.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
+
+	argument1.Reset(proc, false, nil)
 	argument1.Free(proc, false, nil)
 	argument1.GetChildren(0).Free(proc, false, nil)
-	proc.FreeVectors()
+	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func resetChildren(arg *Insert, bat *batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: []*batch.Batch{bat},
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
-
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 	arg.ctr.state = vm.Build
+}
+
+func TestInsert_initBufForS3(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "initialize buffer for S3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			insert := &Insert{}
+			insert.initBufForS3()
+			require.NotNil(t, insert.ctr.buf)
+			require.Equal(t, 3, len(insert.ctr.buf.Attrs))
+			require.Equal(t, catalog.BlockMeta_TableIdx_Insert, insert.ctr.buf.Attrs[0])
+			require.Equal(t, catalog.BlockMeta_BlockInfo, insert.ctr.buf.Attrs[1])
+			require.Equal(t, catalog.ObjectMeta_ObjectStats, insert.ctr.buf.Attrs[2])
+			require.Equal(t, types.T_int16, insert.ctr.buf.Vecs[0].GetType().Oid)
+			require.Equal(t, types.T_text, insert.ctr.buf.Vecs[1].GetType().Oid)
+			require.Equal(t, types.T_binary, insert.ctr.buf.Vecs[2].GetType().Oid)
+		})
+	}
 }

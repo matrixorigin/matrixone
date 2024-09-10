@@ -37,7 +37,6 @@ func (mergeDelete *MergeDelete) OpType() vm.OpType {
 }
 
 func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
-	mergeDelete.ctr = new(container)
 	ref := mergeDelete.Ref
 	eng := mergeDelete.Engine
 	partitionNames := mergeDelete.PartitionTableNames
@@ -47,6 +46,8 @@ func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
 	}
 	mergeDelete.ctr.delSource = rel
 	mergeDelete.ctr.partitionSources = partitionRels
+	mergeDelete.ctr.affectedRows = 0
+	mergeDelete.ctr.bat = new(batch.Batch)
 	return nil
 }
 
@@ -55,23 +56,23 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
-	var err error
-	var name string
-	ap := mergeDelete
-
-	result, err := mergeDelete.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
 	anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
-	if result.Batch == nil || result.Batch.IsEmpty() {
-		return result, nil
+	var err error
+	var name string
+
+	input, err := vm.ChildrenCall(mergeDelete.Children[0], proc, anal)
+	if err != nil {
+		return vm.CancelResult, err
 	}
-	bat := result.Batch
+
+	if input.Batch == nil || input.Batch.IsEmpty() {
+		return input, nil
+	}
+
+	resBat := input.Batch
 
 	// 	  blkId           deltaLoc                        type                                 partitionIdx
 	// |----------|-----------------------------|-------------------------------------------|---------------------
@@ -79,42 +80,49 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	// |  blk_id  | batch.Marshal(int64 offset) | CNBlockOffset (CN Block )                 |  partitionIdx
 	// |  blk_id  | batch.Marshal(rowId)        | RawRowIdBatch (DN Blcok )                 |  partitionIdx
 	// |  blk_id  | batch.Marshal(int64 offset) | RawBatchOffset(RawBatch[in txn workspace])|  partitionIdx
-	blkIds, area0 := vector.MustVarlenaRawData(bat.GetVector(0))
-	deltaLocs, area1 := vector.MustVarlenaRawData(bat.GetVector(1))
-	typs := vector.MustFixedCol[int8](bat.GetVector(2))
+	blkIds, area0 := vector.MustVarlenaRawData(resBat.GetVector(0))
+	deltaLocs, area1 := vector.MustVarlenaRawData(resBat.GetVector(1))
+	typs := vector.MustFixedColWithTypeCheck[int8](resBat.GetVector(2))
+
+	bat := mergeDelete.ctr.bat
+	bat.CleanOnlyData()
 
 	// If the target table is a partition table, Traverse partition subtables for separate processing
-	if len(ap.ctr.partitionSources) > 0 {
-		partitionIdxs := vector.MustFixedCol[int32](bat.GetVector(3))
-		for i := 0; i < bat.RowCount(); i++ {
+
+	if len(mergeDelete.ctr.partitionSources) > 0 {
+		partitionIdxs := vector.MustFixedColWithTypeCheck[int32](resBat.GetVector(3))
+		for i := 0; i < resBat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i].UnsafeGetString(area0), typs[i])
-			bat := &batch.Batch{}
+
 			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
-				return result, err
+				return input, err
 			}
 			bat.Cnt = 1
 			pIndex := partitionIdxs[i]
-			err = ap.ctr.partitionSources[pIndex].Delete(proc.Ctx, bat, name)
+			err = mergeDelete.ctr.partitionSources[pIndex].Delete(proc.Ctx, bat, name)
 			if err != nil {
-				return result, err
+				return input, err
 			}
+			bat.CleanOnlyData()
 		}
 	} else {
 		// If the target table is a general table
-		for i := 0; i < bat.RowCount(); i++ {
+		for i := 0; i < resBat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
-			bat := &batch.Batch{}
 			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
-				return result, err
+				return input, err
 			}
 			bat.Cnt = 1
-			err = ap.ctr.delSource.Delete(proc.Ctx, bat, name)
+			err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, name)
 			if err != nil {
-				return result, err
+				return input, err
 			}
+			bat.CleanOnlyData()
 		}
 	}
 	// and there are another attr used to record how many rows are deleted
-	ap.AffectedRows += uint64(vector.GetFixedAt[uint32](bat.GetVector(4), 0))
-	return result, nil
+	if mergeDelete.AddAffectedRows {
+		mergeDelete.ctr.affectedRows += uint64(vector.GetFixedAtWithTypeCheck[uint32](resBat.GetVector(4), 0))
+	}
+	return input, nil
 }

@@ -17,8 +17,10 @@ package compile
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -40,7 +42,7 @@ func GetCompileService() *ServiceOfCompile {
 //
 // It also tracks the currently active complies within a single CN.
 type ServiceOfCompile struct {
-	sync.RWMutex
+	sync.Mutex
 
 	// ongoing compiles with additional information.
 	aliveCompiles map[*Compile]compileAdditionalInformation
@@ -93,59 +95,67 @@ func InitCompileService() *ServiceOfCompile {
 	return srv
 }
 
-func (srv *ServiceOfCompile) getCompile(
-	proc *process.Process) *Compile {
-	// make sure the process has a cancel function.
-	if proc.Cancel == nil {
-		proc.Ctx, proc.Cancel = context.WithCancel(proc.Ctx)
-	}
-
+func (srv *ServiceOfCompile) getCompile(proc *process.Process) *Compile {
 	runningCompile := reuse.Alloc[Compile](nil)
 	// runningCompile.AllocMsg = time.Now().String() + " : " + string(debug.Stack())
 	runningCompile.proc = proc
+	return runningCompile
+}
 
+func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error {
 	if runningCompile.queryStatus == nil {
 		runningCompile.queryStatus = newQueryDoneWaiter()
 	} else {
 		runningCompile.queryStatus.clear()
 	}
 
+	queryCtx, queryCancel := process.GetQueryCtxFromProc(runningCompile.proc)
+
 	srv.Lock()
 	srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
 		mustReturnError: nil,
-		queryCancel:     proc.Cancel,
+		queryCancel:     queryCancel,
 		queryDone:       runningCompile.queryStatus,
 	}
 	srv.Unlock()
 
-	return runningCompile
+	err := queryCtx.Err()
+	if err != nil {
+		_, _ = srv.removeRunningCompile(runningCompile)
+	}
+	return err
 }
 
-func (srv *ServiceOfCompile) putCompile(c *Compile) (mustReturnError bool, err error) {
+func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) (mustReturnError bool, err error) {
 	c.queryStatus.noticeQueryCompleted()
+	c.proc.SetBaseProcessRunningStatus(false)
 
 	srv.Lock()
 
-	if item, ok := srv.aliveCompiles[c]; ok {
-		err = item.mustReturnError
-	}
+	// todo: because we don't deal with the mustReturnError now, I just ignore it.
+	//if item, ok := srv.aliveCompiles[c]; ok {
+	//	err = item.mustReturnError
+	//}
 	delete(srv.aliveCompiles, c)
-	c.queryStatus.clear()
 	srv.Unlock()
 
+	c.queryStatus.clear()
+	//return err != nil, err
+	return false, nil
+}
+
+func (srv *ServiceOfCompile) putCompile(c *Compile) {
 	if !c.isPrepare {
 		// c.FreeMsg = time.Now().String() + " : " + string(debug.Stack())
 		reuse.Free[Compile](c, nil)
 	}
-
-	return err != nil, err
 }
 
 func (srv *ServiceOfCompile) aliveCompile() int {
 	srv.Lock()
-	defer srv.Unlock()
-
-	return len(srv.aliveCompiles)
+	l := len(srv.aliveCompiles)
+	srv.Unlock()
+	return l
 }
 
 func (srv *ServiceOfCompile) PauseService() {
@@ -157,6 +167,12 @@ func (srv *ServiceOfCompile) ResumeService() {
 }
 
 func (srv *ServiceOfCompile) KillAllQueriesWithError(err error) {
+	logutil.Infof("compile service starts to kill all running queries.")
+	start := time.Now()
+	defer func() {
+		logutil.Infof("compile service has killed all running queries, time cost: %.2f s", time.Since(start).Seconds())
+	}()
+
 	for _, v := range srv.aliveCompiles {
 		v.kill(err)
 	}

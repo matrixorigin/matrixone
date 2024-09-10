@@ -28,13 +28,17 @@ func (s *showImpl) Free() {
 // SHOW CREATE TABLE statement
 type ShowCreateTable struct {
 	showImpl
-	Name         *UnresolvedObjectName
-	SnapshotName string
+	Name     *UnresolvedObjectName
+	AtTsExpr *AtTimeStamp
 }
 
 func (node *ShowCreateTable) Format(ctx *FmtCtx) {
 	ctx.WriteString("show create table ")
 	node.Name.ToTableName().Format(ctx)
+	if node.AtTsExpr != nil {
+		ctx.WriteString(" ")
+		node.AtTsExpr.Format(ctx)
+	}
 }
 
 func (node *ShowCreateTable) GetStatementType() string { return "Show Create Table" }
@@ -47,13 +51,17 @@ func NewShowCreate(n *UnresolvedObjectName) *ShowCreateTable {
 // SHOW CREATE VIEW statement
 type ShowCreateView struct {
 	showImpl
-	Name         *UnresolvedObjectName
-	SnapshotName string
+	Name     *UnresolvedObjectName
+	AtTsExpr *AtTimeStamp
 }
 
 func (node *ShowCreateView) Format(ctx *FmtCtx) {
 	ctx.WriteString("show create view ")
 	node.Name.ToTableName().Format(ctx)
+	if node.AtTsExpr != nil {
+		ctx.WriteString(" ")
+		node.AtTsExpr.Format(ctx)
+	}
 }
 func (node *ShowCreateView) GetStatementType() string { return "Show Create View" }
 func (node *ShowCreateView) GetQueryType() string     { return QueryTypeOth }
@@ -67,6 +75,7 @@ type ShowCreateDatabase struct {
 	showImpl
 	IfNotExists bool
 	Name        string
+	AtTsExpr    *AtTimeStamp
 }
 
 func (node *ShowCreateDatabase) Format(ctx *FmtCtx) {
@@ -76,6 +85,10 @@ func (node *ShowCreateDatabase) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteByte(' ')
 	ctx.WriteString(string(node.Name))
+	if node.AtTsExpr != nil {
+		ctx.WriteString(" ")
+		node.AtTsExpr.Format(ctx)
+	}
 }
 func (node *ShowCreateDatabase) GetStatementType() string { return "Show Create View" }
 func (node *ShowCreateDatabase) GetQueryType() string     { return QueryTypeOth }
@@ -140,9 +153,9 @@ func NewShowColumns(e bool, f bool, t *UnresolvedObjectName, d string, l *Compar
 // the SHOW DATABASES statement.
 type ShowDatabases struct {
 	showImpl
-	Like         *ComparisonExpr
-	Where        *Where
-	SnapshotName string
+	Like     *ComparisonExpr
+	Where    *Where
+	AtTsExpr *AtTimeStamp
 }
 
 func (node *ShowDatabases) Format(ctx *FmtCtx) {
@@ -154,6 +167,10 @@ func (node *ShowDatabases) Format(ctx *FmtCtx) {
 	if node.Where != nil {
 		ctx.WriteByte(' ')
 		node.Where.Format(ctx)
+	}
+	if node.AtTsExpr != nil {
+		ctx.WriteByte(' ')
+		node.AtTsExpr.Format(ctx)
 	}
 }
 func (node *ShowDatabases) GetStatementType() string { return "Show Databases" }
@@ -334,13 +351,13 @@ func (node *ShowSequences) GetQueryType() string     { return QueryTypeOth }
 // SHOW TABLES statement.
 type ShowTables struct {
 	showImpl
-	Ext          bool
-	Open         bool
-	Full         bool
-	DBName       string
-	Like         *ComparisonExpr
-	Where        *Where
-	SnapshotName string
+	Ext      bool
+	Open     bool
+	Full     bool
+	DBName   string
+	Like     *ComparisonExpr
+	Where    *Where
+	AtTsExpr *AtTimeStamp
 }
 
 func (node *ShowTables) Format(ctx *FmtCtx) {
@@ -363,6 +380,10 @@ func (node *ShowTables) Format(ctx *FmtCtx) {
 	if node.Where != nil {
 		ctx.WriteByte(' ')
 		node.Where.Format(ctx)
+	}
+	if node.AtTsExpr != nil {
+		ctx.WriteByte(' ')
+		node.AtTsExpr.Format(ctx)
 	}
 }
 func (node *ShowTables) GetStatementType() string { return "Show Tables" }

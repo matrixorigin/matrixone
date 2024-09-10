@@ -8,7 +8,7 @@ col1    col2
 234    -3923
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+pri01    CREATE TABLE `pri01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 alter table pri01 add constraint primary key(col1);
 insert into pri01 values (23423, 32432543.3242);
 insert into pri01 values (234, -3923.2342342);
@@ -18,7 +18,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
 col2    DECIMAL(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri01    col1    INT    NO
 pri01    col2    DECIMAL    YES
 drop table pri01;
@@ -36,13 +36,13 @@ alter table pri02 add constraint primary key (col1);
 Duplicate entry '*' for key 'col1'
 show create table pri02;
 Table    Create Table
-pri02    CREATE TABLE `pri02` (\n  `col1` CHAR(1) DEFAULT NULL,\n  `col2` BIGINT UNSIGNED DEFAULT NULL\n)
+pri02    CREATE TABLE `pri02` (\n  `col1` char(1) DEFAULT NULL,\n  `col2` bigint unsigned DEFAULT NULL\n)
 show columns from pri02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    CHAR(1)    YES        null        
 col2    BIGINT UNSIGNED(64)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri02    col1    CHAR    YES
 pri02    col2    BIGINT UNSIGNED    YES
 drop table pri02;
@@ -57,13 +57,13 @@ a    327349284903284032
 alter table pri03 add constraint primary key (col1);
 show create table pri03;
 Table    Create Table
-pri03    CREATE TABLE `pri03` (\n  `col1` CHAR(1) NOT NULL,\n  `col2` BIGINT UNSIGNED DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri03    CREATE TABLE `pri03` (\n  `col1` char(1) NOT NULL,\n  `col2` bigint unsigned DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from pri03;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    CHAR(1)    NO    PRI    null        
 col2    BIGINT UNSIGNED(64)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri03    col1    CHAR    NO
 pri03    col2    BIGINT UNSIGNED    YES
 drop table pri03;
@@ -81,13 +81,13 @@ alter table pri04 add constraint primary key (col1);
 constraint violation: Column 'col1' cannot be null
 show create table pri04;
 Table    Create Table
-pri04    CREATE TABLE `pri04` (\n  `col1` VARCHAR(100) DEFAULT NULL,\n  `col2` FLOAT DEFAULT NULL\n)
+pri04    CREATE TABLE `pri04` (\n  `col1` varchar(100) DEFAULT NULL,\n  `col2` float DEFAULT NULL\n)
 show columns from pri04;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    VARCHAR(100)    YES        null        
 col2    FLOAT(0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri04' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri04    col1    VARCHAR    YES
 pri04    col2    FLOAT    YES
 drop table pri04;
@@ -102,13 +102,13 @@ col1    col2
 alter table pri05 add constraint primary key (col1);
 show create table pri05;
 Table    Create Table
-pri05    CREATE TABLE `pri05` (\n  `col1` DATE NOT NULL,\n  `col2` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri05    CREATE TABLE `pri05` (\n  `col1` date NOT NULL,\n  `col2` double DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from pri05;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    DATE(0)    NO    PRI    null        
 col2    DOUBLE(0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri05' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri05    col1    DATE    NO
 pri05    col2    DOUBLE    YES
 drop table pri05;
@@ -123,9 +123,9 @@ col1    col2
 alter table pri06 add constraint primary key (col1);
 show create table pri06;
 Table    Create Table
-pri06    CREATE TABLE `pri06` (\n  `col1` SMALLINT NOT NULL,\n  `col2` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri06    CREATE TABLE `pri06` (\n  `col1` smallint NOT NULL,\n  `col2` double DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri06' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri06    col1    SMALLINT    NO
 pri06    col2    DOUBLE    YES
 show columns from pri06;
@@ -144,7 +144,7 @@ col1    col2
 alter table pri07 add constraint primary key (col1);
 show create table pri07;
 Table    Create Table
-pri07    CREATE TABLE `pri07` (\n  `col1` DECIMAL(38,0) NOT NULL,\n  `col2` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri07    CREATE TABLE `pri07` (\n  `col1` decimal(38,0) NOT NULL,\n  `col2` double DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from pri07;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    DECIMAL(38)    NO    PRI    null        
@@ -158,7 +158,7 @@ col1    col2
 12    -3.2734928490328403E10
 1000000    3.289323423E9
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri07' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri07    col1    DECIMAL    NO
 pri07    col2    DOUBLE    YES
 drop table pri07;
@@ -173,7 +173,7 @@ ew8u3ejkfcwev    2147483647
 alter table pri08 add constraint primary key (col1);
 show create table pri08;
 Table    Create Table
-pri08    CREATE TABLE `pri08` (\n  `col1` BINARY(1) NOT NULL,\n  `col2` INT UNSIGNED DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri08    CREATE TABLE `pri08` (\n  `col1` binary(1) NOT NULL,\n  `col2` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from pri08;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    BINARY(1)    NO    PRI    null        
@@ -182,13 +182,13 @@ alter table pri08 add constraint primary key (col2);
 Multiple primary key defined
 show create table pri08;
 Table    Create Table
-pri08    CREATE TABLE `pri08` (\n  `col1` BINARY(1) NOT NULL,\n  `col2` INT UNSIGNED DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri08    CREATE TABLE `pri08` (\n  `col1` binary(1) NOT NULL,\n  `col2` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from pri08;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    BINARY(1)    NO    PRI    null        
 col2    INT UNSIGNED(32)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri08' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri08    col1    BINARY    NO
 pri08    col2    INT UNSIGNED    YES
 drop table pri08;
@@ -204,13 +204,13 @@ alter table pri09 add constraint primary key (col1, col2);
 constraint violation: Column 'col1' cannot be null
 show create table pri09;
 Table    Create Table
-pri09    CREATE TABLE `pri09` (\n  `col1` BINARY(1) DEFAULT NULL,\n  `col2` INT UNSIGNED DEFAULT NULL\n)
+pri09    CREATE TABLE `pri09` (\n  `col1` binary(1) DEFAULT NULL,\n  `col2` int unsigned DEFAULT NULL\n)
 show columns from pri09;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    BINARY(1)    YES        null        
 col2    INT UNSIGNED(32)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri09' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri09    col1    BINARY    YES
 pri09    col2    INT UNSIGNED    YES
 drop table pri09;
@@ -225,7 +225,7 @@ col1    col2
 alter table pri10 add constraint primary key (col1, col2);
 show create table pri10;
 Table    Create Table
-pri10    CREATE TABLE `pri10` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(1) NOT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
+pri10    CREATE TABLE `pri10` (\n  `col1` int NOT NULL,\n  `col2` char(1) NOT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
 show columns from pri10;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
@@ -234,14 +234,14 @@ insert into pri10 (col1, col2) values (1, null);
 constraint violation: Column 'col2' cannot be null
 insert into pri10 values (-2, 'p');
 insert into pri10 (col1, col2) values (1, 'a');
-Duplicate entry ('\(\d\,\w\)'|'\d\w\d{12}') for key '__mo_cpkey_col'
+Duplicate entry ('\(1\,a\)'|'\d\w\d{12}') for key '__mo_cpkey_col'
 select * from pri10;
 col1    col2
 1    a
 -2    *
 -2    p
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri10' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri10    col1    INT    NO
 pri10    col2    CHAR    NO
 drop table pri10;
@@ -253,7 +253,7 @@ alter table pri11 add constraint primary key (col1, col2);
 Multiple primary key defined
 show create table pri11;
 Table    Create Table
-pri11    CREATE TABLE `pri11` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` CHAR(1) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri11    CREATE TABLE `pri11` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` char(1) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from pri11;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
@@ -264,7 +264,7 @@ col1    col2    col3
 1    3289034    q
 2    3829    a
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri11' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri11    col1    INT    NO
 pri11    col2    DECIMAL    YES
 pri11    col3    CHAR    YES
@@ -285,19 +285,19 @@ col1    col2
 2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 show create table temp01;
 Table    Create Table
-temp01    CREATE TABLE `temp01` (\n  `col1` DATETIME DEFAULT NULL,\n  `col2` BLOB DEFAULT NULL\n)
+temp01    CREATE TABLE `temp01` (\n  `col1` datetime DEFAULT NULL,\n  `col2` blob DEFAULT NULL\n)
 show columns from temp01;
 Field    Type    Null    Key    Default    Extra    Comment
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temp01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 drop table temp01;
 drop table if exists ex_table_2_1;
 create external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 alter table ex_table_2_1 add constraint primary key (num_col1, num_col2);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. error field terminator at line 14 column 109 near " '""' LINES TERMINATED BY '\\n'";
+invalid input: cannot insert/update/delete from external table
 show create table ex_table_2_1;
 Table    Create Table
-ex_table_2_1    CREATE EXTERNAL TABLE `ex_table_2_1` (\n  `num_col1` TINYINT DEFAULT NULL,\n  `num_col2` SMALLINT DEFAULT NULL,\n  `num_col3` INT DEFAULT NULL,\n  `num_col4` BIGINT DEFAULT NULL,\n  `num_col5` TINYINT UNSIGNED DEFAULT NULL,\n  `num_col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `num_col7` INT UNSIGNED DEFAULT NULL,\n  `num_col8` BIGINT UNSIGNED DEFAULT NULL,\n  `num_col9` FLOAT(5,3) DEFAULT NULL,\n  `num_col10` DOUBLE(6,5) DEFAULT NULL,\n  `num_col11` DECIMAL(38,19) DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n'
+ex_table_2_1    CREATE EXTERNAL TABLE `ex_table_2_1` (\n  `num_col1` tinyint DEFAULT NULL,\n  `num_col2` smallint DEFAULT NULL,\n  `num_col3` int DEFAULT NULL,\n  `num_col4` bigint DEFAULT NULL,\n  `num_col5` tinyint unsigned DEFAULT NULL,\n  `num_col6` smallint unsigned DEFAULT NULL,\n  `num_col7` int unsigned DEFAULT NULL,\n  `num_col8` bigint unsigned DEFAULT NULL,\n  `num_col9` float(5,3) DEFAULT NULL,\n  `num_col10` double(6,5) DEFAULT NULL,\n  `num_col11` decimal(38,19) DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n'
 select * from ex_table_2_1;
 internal error: the input value 'abc' is not int8 type for column 0
 drop table if exists droppri01;
@@ -307,7 +307,7 @@ insert into droppri01 values (32894324,4234294023.4324324234);
 alter table droppri01 drop primary key;
 show create table droppri01;
 Table    Create Table
-droppri01    CREATE TABLE `droppri01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+droppri01    CREATE TABLE `droppri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 show columns from droppri01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
@@ -317,11 +317,11 @@ truncate table droppri01;
 alter table droppri01 add constraint primary key (col2);
 show create table droppri01;
 Table    Create Table
-droppri01    CREATE TABLE `droppri01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) NOT NULL,\n  PRIMARY KEY (`col2`)\n)
+droppri01    CREATE TABLE `droppri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) NOT NULL,\n  PRIMARY KEY (`col2`)\n)
 alter table droppri01 drop primary key;
 show create table droppri01;
 Table    Create Table
-droppri01    CREATE TABLE `droppri01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) NOT NULL\n)
+droppri01    CREATE TABLE `droppri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) NOT NULL\n)
 show columns from droppri01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
@@ -329,7 +329,7 @@ col2    DECIMAL(38)    NO        null
 select * from droppri01;
 col1    col2
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'droppri01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 droppri01    col1    INT    NO
 droppri01    col2    DECIMAL    NO
 drop table droppri01;
@@ -338,21 +338,21 @@ create table pri01(col1 int, col2 decimal);
 alter table pri01 add constraint primary key(col1);
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 alter table pri01 drop primary key;
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 alter table pri01 add constraint primary key(col2);
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) NOT NULL,\n  PRIMARY KEY (`col2`)\n)
+pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) NOT NULL,\n  PRIMARY KEY (`col2`)\n)
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
 col2    DECIMAL(38)    NO    PRI    null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri01    col1    INT    NO
 pri01    col2    DECIMAL    NO
 drop table pri01;
@@ -360,7 +360,7 @@ drop table if exists droppri02;
 create table droppri02 (col1 int auto_increment, col2 decimal, col3 char, col4 varchar not null, col5 float, primary key (col1, col2, col3));
 show create table droppri02;
 Table    Create Table
-droppri02    CREATE TABLE `droppri02` (\n  `col1` INT NOT NULL AUTO_INCREMENT,\n  `col2` DECIMAL(38,0) NOT NULL,\n  `col3` CHAR(1) NOT NULL,\n  `col4` VARCHAR(65535) NOT NULL,\n  `col5` FLOAT DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`,`col3`)\n)
+droppri02    CREATE TABLE `droppri02` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` decimal(38,0) NOT NULL,\n  `col3` char(1) NOT NULL,\n  `col4` varchar(65535) NOT NULL,\n  `col5` float DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`,`col3`)\n)
 show columns from droppri02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null    auto_increment    
@@ -371,7 +371,7 @@ col5    FLOAT(0)    YES        null
 alter table droppri02 drop primary key;
 show create table droppri02;
 Table    Create Table
-droppri02    CREATE TABLE `droppri02` (\n  `col1` INT NOT NULL AUTO_INCREMENT,\n  `col2` DECIMAL(38,0) NOT NULL,\n  `col3` CHAR(1) NOT NULL,\n  `col4` VARCHAR(65535) NOT NULL,\n  `col5` FLOAT DEFAULT NULL\n)
+droppri02    CREATE TABLE `droppri02` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` decimal(38,0) NOT NULL,\n  `col3` char(1) NOT NULL,\n  `col4` varchar(65535) NOT NULL,\n  `col5` float DEFAULT NULL\n)
 show columns from droppri02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null    auto_increment    
@@ -385,7 +385,7 @@ create table prepare01(col1 int primary key , col2 char);
 insert into prepare01 values (1,'a'),(2,'b'),(3,'c');
 show create table prepare01;
 Table    Create Table
-prepare01    CREATE TABLE `prepare01` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(1) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+prepare01    CREATE TABLE `prepare01` (\n  `col1` int NOT NULL,\n  `col2` char(1) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from prepare01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
@@ -394,7 +394,7 @@ prepare s1 from 'alter table prepare01 drop primary key';
 execute s1;
 show create table prepare01;
 Table    Create Table
-prepare01    CREATE TABLE `prepare01` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(1) DEFAULT NULL\n)
+prepare01    CREATE TABLE `prepare01` (\n  `col1` int NOT NULL,\n  `col2` char(1) DEFAULT NULL\n)
 show columns from prepare01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
@@ -403,7 +403,7 @@ prepare s2 from 'alter table prepare01 add constraint primary key(col2) ';
 execute s2;
 show create table prepare01;
 Table    Create Table
-prepare01    CREATE TABLE `prepare01` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(1) NOT NULL,\n  PRIMARY KEY (`col2`)\n)
+prepare01    CREATE TABLE `prepare01` (\n  `col1` int NOT NULL,\n  `col2` char(1) NOT NULL,\n  PRIMARY KEY (`col2`)\n)
 show columns from prepare01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
@@ -430,7 +430,7 @@ use alter_table_add_drop_primary_key;
 alter table test01 add constraint primary key(col1);
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` INT NOT NULL,\n  `col2` VARCHAR(10) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+test01    CREATE TABLE `test01` (\n  `col1` int NOT NULL,\n  `col2` varchar(10) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from test01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
@@ -438,14 +438,14 @@ col2    VARCHAR(10)    YES        null
 alter table test01 drop primary key;
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` INT NOT NULL,\n  `col2` VARCHAR(10) DEFAULT NULL\n)
+test01    CREATE TABLE `test01` (\n  `col1` int NOT NULL,\n  `col2` varchar(10) DEFAULT NULL\n)
 show columns from test01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
 col2    VARCHAR(10)    YES        null        
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` INT NOT NULL,\n  `col2` VARCHAR(10) DEFAULT NULL\n)
+test01    CREATE TABLE `test01` (\n  `col1` int NOT NULL,\n  `col2` varchar(10) DEFAULT NULL\n)
 show columns from test01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
@@ -469,7 +469,7 @@ alter table mix01 rename column col2new to newnewCol2, drop primary key;
 Unknown column 'col2new' in 'mix01'
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n  `newnewcol2` DOUBLE DEFAULT NULL,\n  `newcol3` CHAR(1) DEFAULT NULL,\n  `col1` FLOAT NOT NULL,\n  `col5` INT DEFAULT NULL,\n  `col4` VARCHAR(100) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+mix01    CREATE TABLE `mix01` (\n  `newnewCol2` double DEFAULT NULL,\n  `newCol3` char(1) DEFAULT NULL,\n  `col1` float NOT NULL,\n  `col5` int DEFAULT NULL,\n  `col4` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 delete from mix01 where newnewcol2 = 2;
 update mix01 set newnewcol2 = 8290432.324 where newcol3 = 'd';
 select * from mix01;
@@ -477,11 +477,11 @@ newnewcol2    newcol3    col1    col5    col4
 8290432.324    d    2.0    null    3289u3ji2dff43
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n  `newnewcol2` DOUBLE DEFAULT NULL,\n  `newcol3` CHAR(1) DEFAULT NULL,\n  `col1` FLOAT NOT NULL,\n  `col5` INT DEFAULT NULL,\n  `col4` VARCHAR(100) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+mix01    CREATE TABLE `mix01` (\n  `newnewCol2` double DEFAULT NULL,\n  `newCol3` char(1) DEFAULT NULL,\n  `col1` float NOT NULL,\n  `col5` int DEFAULT NULL,\n  `col4` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from mix01;
 Field    Type    Null    Key    Default    Extra    Comment
-newnewcol2    DOUBLE(0)    YES        null        
-newcol3    CHAR(1)    YES        null        
+newnewCol2    DOUBLE(0)    YES        null        
+newCol3    CHAR(1)    YES        null        
 col1    FLOAT(0)    NO    PRI    null        
 col5    INT(32)    YES        null        
 col4    VARCHAR(100)    YES        null        

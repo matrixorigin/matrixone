@@ -16,11 +16,12 @@ package checkpoint
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"time"
 )
 
 type RunnerReader interface {
@@ -36,6 +37,7 @@ type RunnerReader interface {
 	GetCatalog() *catalog.Catalog
 	GetCheckpointMetaFiles() map[string]struct{}
 	RemoveCheckpointMetaFile(string)
+	AddCheckpointMetaFile(string)
 }
 
 func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncateLSN uint64) *containers.Batch {
@@ -115,7 +117,7 @@ func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 	tree := r.storage.entries.Copy()
 	r.storage.Unlock()
 	it := tree.Iter()
-	ok := it.Seek(NewCheckpointEntry(ts, ts, ET_Incremental))
+	ok := it.Seek(NewCheckpointEntry(r.rt.SID(), ts, ts, ET_Incremental))
 	incrementals := make([]*CheckpointEntry, 0)
 	if ok {
 		for len(incrementals) < cnt {
@@ -209,7 +211,7 @@ func (r *runner) GetAllCheckpoints() []*CheckpointEntry {
 		ts = g.GetEnd()
 		ckps = append(ckps, g)
 	}
-	pivot := NewCheckpointEntry(ts.Next(), ts.Next(), ET_Incremental)
+	pivot := NewCheckpointEntry(r.rt.SID(), ts.Next(), ts.Next(), ET_Incremental)
 	iter := tree.Iter()
 	defer iter.Release()
 	if ok := iter.Seek(pivot); ok {

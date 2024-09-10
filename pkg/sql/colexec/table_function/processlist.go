@@ -21,150 +21,129 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func processlistPrepare(proc *process.Process, tableFunction *TableFunction) error {
-	tableFunction.ctr.state = dataProducing
-	if len(tableFunction.Args) > 0 {
-		return moerr.NewInvalidInput(proc.Ctx, "processlist: no argument is required")
-	}
-	for i := range tableFunction.Attrs {
-		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
-	}
-	return nil
+type processlistState struct {
+	simpleOneBatchState
 }
 
-func processlist(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
-	switch tableFunction.ctr.state {
-	case dataProducing:
-		sessions, err := fetchSessions(proc.Ctx, proc.GetSessionInfo().Account, proc.Base.QueryClient)
-		if err != nil {
-			return false, err
-		}
-		bat := batch.NewWithSize(len(tableFunction.Attrs))
-		for i, a := range tableFunction.Attrs {
-			idx, ok := status.SessionField_value[a]
-			if !ok {
-				return false, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", a)
-			}
+func processlistPrepare(_ *process.Process, _ *TableFunction) (tvfState, error) {
+	var st processlistState
+	return &st, nil
+}
 
-			tp := plan2.SessionsColTypes[idx]
-			bat.Vecs[i] = proc.GetVector(tp)
-		}
-		bat.Attrs = tableFunction.Attrs
+func (s *processlistState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+	s.startPreamble(tf, proc, nthRow)
+	bat := s.batch
 
-		mp := proc.GetMPool()
-		for _, session := range sessions {
-			for i, col := range tableFunction.Attrs {
-				switch status.SessionField(status.SessionField_value[col]) {
-				case status.SessionField_NODE_ID:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.NodeID), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_CONN_ID:
-					if err := vector.AppendFixed(bat.Vecs[i], session.ConnID, false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_SESSION_ID:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.SessionID), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_ACCOUNT:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.Account), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_USER:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.User), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_HOST:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.Host), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_DB:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.DB), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_SESSION_START:
-					if err := vector.AppendBytes(bat.Vecs[i],
-						[]byte(session.SessionStart.Format("2006-01-02 15:04:05.000000")),
-						false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_COMMAND:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.Command), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_INFO:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.Info), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_TXN_ID:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.TxnID), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_STATEMENT_ID:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.StatementID), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_STATEMENT_TYPE:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.StatementType), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_QUERY_TYPE:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.QueryType), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_SQL_SOURCE_TYPE:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.SQLSourceType), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_QUERY_START:
-					var queryStart string
-					if !session.QueryStart.Equal(time.Time{}) {
-						queryStart = session.QueryStart.Format("2006-01-02 15:04:05.000000")
-					}
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(queryStart),
-						false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_CLIENT_HOST:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.GetClientHost()), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_ROLE:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.GetRole()), false, mp); err != nil {
-						return false, err
-					}
-				case status.SessionField_PROXY_HOST:
-					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.GetProxyHost()), false, mp); err != nil {
-						return false, err
-					}
+	// get all sessions
+	sessions, err := fetchSessions(proc.Ctx, proc.GetSessionInfo().Account, proc.Base.QueryClient)
+	if err != nil {
+		return err
+	}
+
+	mp := proc.GetMPool()
+
+	for _, session := range sessions {
+		for i, col := range tf.Attrs {
+			colName := strings.ToUpper(col)
+			switch status.SessionField(status.SessionField_value[colName]) {
+			case status.SessionField_NODE_ID:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.NodeID), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_CONN_ID:
+				if err := vector.AppendFixed(bat.Vecs[i], session.ConnID, false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_SESSION_ID:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.SessionID), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_ACCOUNT:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.Account), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_USER:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.User), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_HOST:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.Host), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_DB:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.DB), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_SESSION_START:
+				if err := vector.AppendBytes(bat.Vecs[i],
+					[]byte(session.SessionStart.Format("2006-01-02 15:04:05.000000")),
+					false, proc.Mp()); err != nil {
+					return err
+				}
+			case status.SessionField_COMMAND:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.Command), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_INFO:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.Info), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_TXN_ID:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.TxnID), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_STATEMENT_ID:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.StatementID), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_STATEMENT_TYPE:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.StatementType), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_QUERY_TYPE:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.QueryType), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_SQL_SOURCE_TYPE:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.SQLSourceType), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_QUERY_START:
+				var queryStart string
+				if !session.QueryStart.Equal(time.Time{}) {
+					queryStart = session.QueryStart.Format("2006-01-02 15:04:05.000000")
+				}
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(queryStart),
+					false, proc.Mp()); err != nil {
+					return err
+				}
+			case status.SessionField_CLIENT_HOST:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.GetClientHost()), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_ROLE:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.GetRole()), false, mp); err != nil {
+					return err
+				}
+			case status.SessionField_PROXY_HOST:
+				if err := vector.AppendBytes(bat.Vecs[i], []byte(session.GetProxyHost()), false, mp); err != nil {
+					return err
 				}
 			}
 		}
-		bat.SetRowCount(bat.Vecs[0].Length())
-		result.Batch = bat
-		tableFunction.ctr.state = dataFinished
-		return false, nil
-
-	case dataFinished:
-		result.Batch = nil
-		return true, nil
-	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", tableFunction.ctr.state)
 	}
+
+	bat.SetRowCount(len(sessions))
+	return nil
 }
 
 // isSysTenant return true if the tenant is sys.
@@ -173,10 +152,14 @@ func isSysTenant(tenant string) bool {
 }
 
 // fetchSessions get sessions all nodes which the tenant has privilege to access.
-func fetchSessions(ctx context.Context, tenant string, qc qclient.QueryClient) ([]*status.Session, error) {
+func fetchSessions(
+	ctx context.Context,
+	tenant string,
+	qc qclient.QueryClient,
+) ([]*status.Session, error) {
 	var nodes []string
 	sysTenant := isSysTenant(tenant)
-	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelector(),
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(clusterservice.NewSelectAll(),
 		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
 			return true

@@ -29,6 +29,12 @@ func init() {
 		reuse.DefaultOptions[CreateOptionCharset](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[RetentionOption](
+		func() *RetentionOption { return &RetentionOption{} },
+		func(option *RetentionOption) { option.reset() },
+		reuse.DefaultOptions[RetentionOption](),
+	)
+
 	reuse.CreatePool[ClusterByOption](
 		func() *ClusterByOption { return &ClusterByOption{} },
 		func(c *ClusterByOption) { c.reset() },
@@ -1189,6 +1195,8 @@ func (node *CreateTable) reset() {
 			case *TableOptionUnion:
 				opt.Free()
 			case *TableOptionEncryption:
+				opt.Free()
+			case *RetentionOption:
 				opt.Free()
 			default:
 				if opt != nil {
@@ -3985,6 +3993,34 @@ func (node *ClusterByOption) Free() {
 	reuse.Free[ClusterByOption](node, nil)
 }
 
+type RetentionOption struct {
+	Period uint64
+	Unit   string
+}
+
+func NewRetentionOption(period uint64, unit string) *RetentionOption {
+	cb := reuse.Alloc[RetentionOption](nil)
+	cb.Period = period
+	cb.Unit = unit
+	return cb
+}
+
+func (node RetentionOption) TypeName() string { return "tree.ClusterByOption" }
+
+func (node *RetentionOption) Free() {
+	reuse.Free[RetentionOption](node, nil)
+}
+
+func (node RetentionOption) Format(ctx *FmtCtx) {
+	ctx.WriteString("with retention period ")
+	ctx.WriteString(strconv.FormatUint(node.Period, 10))
+	ctx.WriteString(" " + node.Unit)
+}
+
+func (node *RetentionOption) reset() {
+	*node = RetentionOption{}
+}
+
 type PartitionOption struct {
 	statementImpl
 	PartBy     *PartitionBy
@@ -5317,17 +5353,17 @@ type CreatePublication struct {
 	IfNotExists bool
 	Name        Identifier
 	Database    Identifier
-	Table       Identifier
+	Table       TableNames
 	AccountsSet *AccountsSetOption
 	Comment     string
 }
 
-func NewCreatePublication(ife bool, n Identifier, db Identifier, table Identifier, as *AccountsSetOption, c string) *CreatePublication {
+func NewCreatePublication(ife bool, n Identifier, db Identifier, tables TableNames, as *AccountsSetOption, c string) *CreatePublication {
 	cp := reuse.Alloc[CreatePublication](nil)
 	cp.IfNotExists = ife
 	cp.Name = n
 	cp.Database = db
-	cp.Table = table
+	cp.Table = tables
 	cp.AccountsSet = as
 	cp.Comment = c
 	return cp
@@ -5342,17 +5378,23 @@ func (node *CreatePublication) Format(ctx *FmtCtx) {
 	if node.Database != "" {
 		ctx.WriteString(" database ")
 		node.Database.Format(ctx)
-	} else {
-		ctx.WriteString(" table ")
-		node.Table.Format(ctx)
+
+		if len(node.Table) > 0 {
+			ctx.WriteString(" table ")
+			node.Table.Format(ctx)
+		}
 	}
-	if node.AccountsSet != nil && len(node.AccountsSet.SetAccounts) > 0 {
+	if node.AccountsSet != nil {
 		ctx.WriteString(" account ")
-		prefix := ""
-		for _, a := range node.AccountsSet.SetAccounts {
-			ctx.WriteString(prefix)
-			a.Format(ctx)
-			prefix = ", "
+		if node.AccountsSet.All {
+			ctx.WriteString("all")
+		} else if len(node.AccountsSet.SetAccounts) > 0 {
+			prefix := ""
+			for _, a := range node.AccountsSet.SetAccounts {
+				ctx.WriteString(prefix)
+				a.Format(ctx)
+				prefix = ", "
+			}
 		}
 	}
 	if len(node.Comment) > 0 {

@@ -157,8 +157,8 @@ func newLogStore(cfg Config,
 	ls := &store{
 		cfg:           cfg,
 		nh:            nh,
-		checker:       checkers.NewCoordinator(hakeeperConfig),
-		taskScheduler: task.NewScheduler(taskServiceGetter, hakeeperConfig),
+		checker:       checkers.NewCoordinator(cfg.UUID, hakeeperConfig),
+		taskScheduler: task.NewScheduler(cfg.UUID, taskServiceGetter, hakeeperConfig),
 		alloc:         newIDAllocator(),
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),
@@ -233,7 +233,7 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 func (l *store) startReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
-		return moerr.NewInvalidInputNoCtx("shardID %d does not match DefaultHAKeeperShardID %d", shardID, hakeeper.DefaultHAKeeperShardID)
+		return moerr.NewInvalidInputNoCtxf("shardID %d does not match DefaultHAKeeperShardID %d", shardID, hakeeper.DefaultHAKeeperShardID)
 	}
 	cfg := getRaftConfig(shardID, replicaID)
 	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
@@ -535,7 +535,7 @@ func (l *store) updateCNLabel(ctx context.Context, label pb.CNStoreLabel) error 
 		return err
 	}
 	if _, ok := state.CNState.Stores[label.UUID]; !ok {
-		return moerr.NewInternalError(ctx, "CN [%s] does not exist", label.UUID)
+		return moerr.NewInternalErrorf(ctx, "CN [%s] does not exist", label.UUID)
 	}
 	cmd := hakeeper.GetUpdateCNLabelCmd(label)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
@@ -557,7 +557,7 @@ func (l *store) updateCNWorkState(ctx context.Context, workState pb.CNWorkState)
 		return err
 	}
 	if _, ok := state.CNState.Stores[workState.UUID]; !ok {
-		return moerr.NewInternalError(ctx, "CN [%s] does not exist", workState.UUID)
+		return moerr.NewInternalErrorf(ctx, "CN [%s] does not exist", workState.UUID)
 	}
 	cmd := hakeeper.GetUpdateCNWorkStateCmd(workState)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
@@ -579,7 +579,7 @@ func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) er
 		return err
 	}
 	if _, ok := state.CNState.Stores[stateLabel.UUID]; !ok {
-		return moerr.NewInternalError(ctx, "CN [%s] does not exist", stateLabel.UUID)
+		return moerr.NewInternalErrorf(ctx, "CN [%s] does not exist", stateLabel.UUID)
 	}
 	cmd := hakeeper.GetPatchCNStoreCmd(stateLabel)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)

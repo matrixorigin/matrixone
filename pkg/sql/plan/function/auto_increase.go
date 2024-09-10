@@ -45,11 +45,11 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 
 		database, err := eng.Database(proc.Ctx, dbName, proc.GetTxnOperator())
 		if err != nil {
-			return moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
+			return moerr.NewInvalidInputf(proc.Ctx, "Database '%s' does not exist", dbName)
 		}
 		relation, err := database.Relation(proc.Ctx, tableName, nil)
 		if err != nil {
-			return moerr.NewInvalidInput(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
+			return moerr.NewInvalidInputf(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
 		}
 		tableId := relation.GetTableID(proc.Ctx)
 		engineDefs, err := relation.TableDefs(proc.Ctx)
@@ -60,8 +60,10 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		if autoIncrCol != "" {
 			autoIncrement, err := getCurrentValue(
 				proc.Ctx,
+				proc.GetService(),
 				tableId,
-				autoIncrCol)
+				autoIncrCol,
+			)
 			if err != nil {
 				return err
 			}
@@ -94,10 +96,12 @@ func getTableAutoIncrCol(engineDefs []engine.TableDef) string {
 
 func getCurrentValue(
 	ctx context.Context,
+	sid string,
 	tableID uint64,
 	col string) (uint64, error) {
-	return incrservice.GetAutoIncrementService(ctx).CurrentValue(
+	return incrservice.GetAutoIncrementService(sid).CurrentValue(
 		ctx,
 		tableID,
-		col)
+		col,
+	)
 }

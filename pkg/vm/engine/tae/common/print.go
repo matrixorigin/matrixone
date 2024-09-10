@@ -116,7 +116,7 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_bit:
 		return fmt.Sprintf("%v", v)
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		buf := v.([]byte)
 		printable := true
 		for _, c := range buf {
@@ -164,7 +164,7 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 		return j.String()
 	case types.T_uuid:
 		val := v.(types.Uuid)
-		return val.ToString()
+		return val.String()
 	case types.T_TS:
 		val := v.(types.TS)
 		return val.ToString()
@@ -206,51 +206,57 @@ func vec2Str[T any](vec []T, v *vector.Vector, opts ...TypePrintOpt) string {
 }
 
 func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string {
+	if v == nil || v.Length() == 0 {
+		return "empty vector"
+	}
+	if printN > v.Length() {
+		printN = v.Length()
+	}
 	switch v.GetType().Oid {
 	case types.T_bool:
-		return vec2Str(vector.MustFixedCol[bool](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[bool](v)[:printN], v)
 	case types.T_int8:
-		return vec2Str(vector.MustFixedCol[int8](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[int8](v)[:printN], v)
 	case types.T_int16:
-		return vec2Str(vector.MustFixedCol[int16](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[int16](v)[:printN], v)
 	case types.T_int32:
-		return vec2Str(vector.MustFixedCol[int32](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[int32](v)[:printN], v)
 	case types.T_int64:
-		return vec2Str(vector.MustFixedCol[int64](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[int64](v)[:printN], v)
 	case types.T_uint8:
-		return vec2Str(vector.MustFixedCol[uint8](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[uint8](v)[:printN], v)
 	case types.T_uint16:
-		return vec2Str(vector.MustFixedCol[uint16](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[uint16](v)[:printN], v)
 	case types.T_uint32:
-		return vec2Str(vector.MustFixedCol[uint32](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[uint32](v)[:printN], v)
 	case types.T_uint64:
-		return vec2Str(vector.MustFixedCol[uint64](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[uint64](v)[:printN], v)
 	case types.T_float32:
-		return vec2Str(vector.MustFixedCol[float32](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[float32](v)[:printN], v)
 	case types.T_float64:
-		return vec2Str(vector.MustFixedCol[float64](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[float64](v)[:printN], v)
 	case types.T_date:
-		return vec2Str(vector.MustFixedCol[types.Date](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.Date](v)[:printN], v)
 	case types.T_datetime:
-		return vec2Str(vector.MustFixedCol[types.Datetime](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.Datetime](v)[:printN], v)
 	case types.T_time:
-		return vec2Str(vector.MustFixedCol[types.Time](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.Time](v)[:printN], v)
 	case types.T_timestamp:
-		return vec2Str(vector.MustFixedCol[types.Timestamp](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.Timestamp](v)[:printN], v)
 	case types.T_enum:
-		return vec2Str(vector.MustFixedCol[types.Enum](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.Enum](v)[:printN], v)
 	case types.T_decimal64:
-		return vec2Str(vector.MustFixedCol[types.Decimal64](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.Decimal64](v)[:printN], v)
 	case types.T_decimal128:
-		return vec2Str(vector.MustFixedCol[types.Decimal128](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.Decimal128](v)[:printN], v)
 	case types.T_uuid:
-		return vec2Str(vector.MustFixedCol[types.Uuid](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.Uuid](v)[:printN], v)
 	case types.T_TS:
-		return vec2Str(vector.MustFixedCol[types.TS](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.TS](v)[:printN], v)
 	case types.T_Rowid:
-		return vec2Str(vector.MustFixedCol[types.Rowid](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.Rowid](v)[:printN], v)
 	case types.T_Blockid:
-		return vec2Str(vector.MustFixedCol[types.Blockid](v)[:printN], v)
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.Blockid](v)[:printN], v)
 	}
 	if v.GetType().IsVarlen() {
 		return vec2Str(vector.InefficientMustBytesCol(v)[:printN], v, opts...)
@@ -259,16 +265,16 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 }
 
 func MoBatchToString(moBat *batch.Batch, printN int) string {
-	n := moBat.RowCount()
-	if n > printN {
-		n = printN
-	}
+	n := 0
 	buf := new(bytes.Buffer)
 	for i, vec := range moBat.Vecs {
+		if n = vec.Length(); n < printN {
+			printN = n
+		}
 		if len(moBat.Attrs) == 0 {
-			fmt.Fprintf(buf, "[col%v] = %v\n", i, MoVectorToString(vec, n))
+			fmt.Fprintf(buf, "[col%v] = %v\n", i, MoVectorToString(vec, printN))
 		} else {
-			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], MoVectorToString(vec, n, WithDoNotPrintBin{}))
+			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], MoVectorToString(vec, printN, WithDoNotPrintBin{}))
 		}
 	}
 	return buf.String()

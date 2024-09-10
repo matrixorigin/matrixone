@@ -133,6 +133,30 @@ var (
 			obj_id bigint unsigned
 			)`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
 
+	MoCatalogMoPitrDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
+			pitr_id uuid unique key,
+			pitr_name varchar(5000),
+			create_account bigint unsigned,
+			create_time timestamp,
+			modified_time timestamp,
+			level varchar(10),
+			account_id bigint unsigned,
+			account_name varchar(300),
+			database_name varchar(5000),
+			table_name varchar(5000),
+			obj_id bigint unsigned,
+			pitr_length tinyint unsigned,
+			pitr_unit varchar(10),
+			primary key(pitr_name, create_account)
+			)`, catalog.MO_CATALOG, catalog.MO_PITR)
+
+	MoCatalogMoRetentionDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
+    		database_name varchar(5000),
+			table_name varchar(5000),
+    		retention_deadline bigint unsigned,
+    		primary key(database_name, table_name)
+    		)`, catalog.MO_CATALOG, catalog.MO_RETENTION)
+
 	MoCatalogMoPubsDDL = `create table mo_catalog.mo_pubs (
     		pub_name varchar(64) primary key,
     		database_name varchar(5000),
@@ -146,6 +170,21 @@ var (
     		creator int unsigned,
     		comment text
     		)`
+
+	MoCatalogMoSubsDDL = `create table mo_catalog.mo_subs (
+			sub_account_id INT NOT NULL, 
+			sub_name VARCHAR(5000) DEFAULT NULL,
+			sub_time TIMESTAMP DEFAULT NULL,
+			pub_account_name VARCHAR(300) NOT NULL,
+			pub_name VARCHAR(64) NOT NULL,
+			pub_database VARCHAR(5000) NOT NULL,
+			pub_tables TEXT NOT NULL,
+			pub_time TIMESTAMP NOT NULL,
+			pub_comment TEXT NOT NULL,
+			status TINYINT(8) NOT NULL,
+			PRIMARY KEY (pub_account_name, pub_name, sub_account_id),
+			UNIQUE KEY (sub_account_id, sub_name)
+	)`
 
 	MoCatalogMoStoredProcedureDDL = `create table mo_catalog.mo_stored_procedure (
 				proc_id int auto_increment,

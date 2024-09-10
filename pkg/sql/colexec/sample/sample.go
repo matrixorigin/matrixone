@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -113,17 +112,18 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	// duplicate code from other operators.
-	result, lastErr := sample.GetChildren(0).Call(proc)
-	if lastErr != nil {
-		return result, lastErr
-	}
 	anal := proc.GetAnalyze(sample.GetIdx(), sample.GetParallelIdx(), sample.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
+	// duplicate code from other operators.
+	result, lastErr := vm.ChildrenCall(sample.Children[0], proc, anal)
+	if lastErr != nil {
+		return result, lastErr
+	}
+
 	if sample.ctr.buf != nil {
-		proc.PutBatch(sample.ctr.buf)
+		sample.ctr.buf.Clean(proc.GetMPool())
 		sample.ctr.buf = nil
 	}
 
@@ -154,7 +154,7 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if ctr.isGroupBy {
-			err = ctr.hashAndSample(bat, proc.Mp())
+			err = ctr.hashAndSample(bat)
 		} else {
 			err = ctr.samplePool.Sample(1, ctr.sampleVectors, nil, bat)
 		}
@@ -217,14 +217,14 @@ func (ctr *container) evaluateSampleAndGroupByColumns(proc *process.Process, bat
 	return nil
 }
 
-func (ctr *container) hashAndSample(bat *batch.Batch, mp *mpool.MPool) (err error) {
+func (ctr *container) hashAndSample(bat *batch.Batch) (err error) {
 	var iterator hashmap.Iterator
 	var groupList []uint64
 	count := bat.RowCount()
 
 	if ctr.useIntHashMap {
 		if ctr.intHashMap == nil {
-			ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVectorsNullable, mp)
+			ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVectorsNullable)
 			if err != nil {
 				return err
 			}
@@ -232,7 +232,7 @@ func (ctr *container) hashAndSample(bat *batch.Batch, mp *mpool.MPool) (err erro
 		iterator = ctr.intHashMap.NewIterator()
 	} else {
 		if ctr.strHashMap == nil {
-			ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVectorsNullable, mp)
+			ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVectorsNullable)
 			if err != nil {
 				return err
 			}

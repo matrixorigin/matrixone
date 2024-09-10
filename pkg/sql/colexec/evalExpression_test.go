@@ -43,7 +43,7 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	{
 		require.Equal(t, 10, vec.Length())
 		require.Equal(t, types.T_int64.ToType(), *vec.GetType())
-		require.Equal(t, int64(218311), vector.MustFixedCol[int64](vec)[0])
+		require.Equal(t, int64(218311), vector.MustFixedColWithTypeCheck[int64](vec)[0])
 		require.Equal(t, false, vec.GetNulls().Contains(0))
 	}
 	_, err = conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
@@ -122,28 +122,29 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 
 		currStart := proc.Mp().CurrNB()
 		fExprExecutor := &FunctionExpressionExecutor{}
-		err := fExprExecutor.Init(proc, 2, types.T_int64.ToType(),
-			func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *function.FunctionSelectList) error {
-				v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
-				v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])
-				rs := vector.MustFunctionResult[int64](result)
-				for i := 0; i < length; i++ {
-					v11, null11 := v1.GetValue(uint64(i))
-					v22, null22 := v2.GetValue(uint64(i))
-					if null11 || null22 {
-						err := rs.Append(0, true)
-						if err != nil {
-							return err
-						}
-					} else {
-						err := rs.Append(v11+v22, false)
-						if err != nil {
-							return err
-						}
+		err := fExprExecutor.Init(proc, 2, types.T_int64.ToType())
+		fExprExecutor.evalFn = func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *function.FunctionSelectList) error {
+			v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
+			v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])
+			rs := vector.MustFunctionResult[int64](result)
+			for i := 0; i < length; i++ {
+				v11, null11 := v1.GetValue(uint64(i))
+				v22, null22 := v2.GetValue(uint64(i))
+				if null11 || null22 {
+					err := rs.Append(0, true)
+					if err != nil {
+						return err
+					}
+				} else {
+					err := rs.Append(v11+v22, false)
+					if err != nil {
+						return err
 					}
 				}
-				return nil
-			}, nil)
+			}
+			return nil
+		}
+		fExprExecutor.freeFn = nil
 		require.NoError(t, err)
 
 		col1 := &plan.Expr{
@@ -172,14 +173,14 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		{
 			require.Equal(t, 2, vec.Length())
 			require.Equal(t, types.T_int64.ToType(), *vec.GetType())
-			require.Equal(t, int64(101), vector.MustFixedCol[int64](vec)[0]) // 1+100
-			require.Equal(t, int64(102), vector.MustFixedCol[int64](vec)[1]) // 2+100
+			require.Equal(t, int64(101), vector.MustFixedColWithTypeCheck[int64](vec)[0]) // 1+100
+			require.Equal(t, int64(102), vector.MustFixedColWithTypeCheck[int64](vec)[1]) // 2+100
 		}
 		_, err = fExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
 		require.NoError(t, err)
 		require.Equal(t, curr3, proc.Mp().CurrNB())
 		fExprExecutor.Free()
-		proc.FreeVectors()
+		proc.Free()
 		require.Equal(t, currStart, proc.Mp().CurrNB())
 	}
 
@@ -189,7 +190,6 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 
 		col1 := makePlan2BoolConstExprWithType(true)
 		col2 := makePlan2BoolConstExprWithType(true)
-
 		fExpr := &plan.Expr{
 			Typ: plan.Type{
 				Id:          int32(types.T_bool),
@@ -208,12 +208,69 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		currNb := proc.Mp().CurrNB()
 		executor, err := NewExpressionExecutor(proc, fExpr)
 		require.NoError(t, err)
-		_, ok := executor.(*FixedVectorExpressionExecutor)
-		require.Equal(t, true, ok)
+		result, err := executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, true, result != nil && result.IsConst())
 		executor.Free()
-		proc.FreeVectors()
+		proc.Free()
 		require.Equal(t, currNb, proc.Mp().CurrNB())
 	}
+}
+
+func TestExpressionReset(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	// functions will be folded.
+	{
+		col1 := makePlan2BoolConstExprWithType(true)
+		col2 := makePlan2BoolConstExprWithType(true)
+		fExpr := &plan.Expr{
+			Typ: plan.Type{
+				Id:          int32(types.T_bool),
+				NotNullable: true,
+			},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{
+						ObjName: function.AndFunctionName,
+						Obj:     function.AndFunctionEncodedID,
+					},
+					Args: []*plan.Expr{col1, col2},
+				},
+			},
+		}
+
+		originNb := proc.Mp().CurrNB()
+
+		executor, err := NewExpressionExecutor(proc, fExpr)
+		require.NoError(t, err)
+
+		result, err := executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, true, result != nil && result.IsConst() && result.Length() == 1)
+
+		inputs := []*batch.Batch{
+			batch.New(true, nil),
+		}
+		inputs[0].SetRowCount(100)
+		result, err = executor.Eval(proc, inputs, nil)
+		require.NoError(t, err)
+		require.Equal(t, true, result != nil && result.IsConst() && result.Length() == 100)
+
+		executor.ResetForNextQuery()
+
+		result, err = executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, true, result != nil && result.IsConst() && result.Length() == 1)
+
+		executor.Free()
+		proc.Free()
+		require.Equal(t, originNb, proc.Mp().CurrNB())
+	}
+}
+
+func TestFunctionFold(t *testing.T) {
+	t.Skip("todo: implement this test")
 }
 
 // some util code copied from package `plan`.

@@ -81,8 +81,8 @@ type Handler interface {
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *apipb.MergeCommitEntry,
-		resp *db.InspectResp,
-	) (func(), error)
+		resp *apipb.TNStringResponse,
+	) error
 
 	HandleForceCheckpoint(
 		ctx context.Context,
@@ -129,7 +129,7 @@ type Handler interface {
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *db.StorageUsageReq,
-		resp *db.StorageUsageResp,
+		resp *db.StorageUsageResp_V2,
 	) (func(), error)
 
 	HandleInterceptCommit(

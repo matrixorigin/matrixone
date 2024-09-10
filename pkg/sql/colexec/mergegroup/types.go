@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(MergeGroup)
@@ -40,27 +39,32 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
+	state int
 
-	state     int
-	typ       int
-	inserted  []uint8
-	zInserted []uint8
+	// should use hash map or not and the hash map type.
+	typ int
 
-	intHashMap *hashmap.IntHashMap
-	strHashMap *hashmap.StrHashMap
+	// hash map related.
+	hashKeyWidth   int
+	groupByCol     int
+	keyNullability bool
+	intHashMap     *hashmap.IntHashMap
+	strHashMap     *hashmap.StrHashMap
+	inserted       []uint8
+	zInserted      []uint8
 
 	bat *batch.Batch
 }
 
 type MergeGroup struct {
 	NeedEval bool // need to projection the aggregate column
-	ctr      *container
+	ctr      container
 
 	PartialResults     []any
 	PartialResultTypes []types.T
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (mergeGroup *MergeGroup) GetOperatorBase() *vm.OperatorBase {
@@ -84,34 +88,9 @@ func (mergeGroup MergeGroup) TypeName() string {
 	return opName
 }
 
-func NewArgument() *MergeGroup {
-	return reuse.Alloc[MergeGroup](nil)
-}
-
 func (mergeGroup *MergeGroup) WithNeedEval(needEval bool) *MergeGroup {
 	mergeGroup.NeedEval = needEval
 	return mergeGroup
-}
-
-func (mergeGroup *MergeGroup) Release() {
-	if mergeGroup != nil {
-		reuse.Free[MergeGroup](mergeGroup, nil)
-	}
-}
-
-func (mergeGroup *MergeGroup) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeGroup.Free(proc, pipelineFailed, err)
-}
-
-func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := mergeGroup.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		ctr.cleanBatch(mp)
-		ctr.cleanHashMap()
-		mergeGroup.ctr = nil
-	}
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -37,18 +37,14 @@ const (
 )
 
 // add unit tests for cases
-type topTestCase struct {
+type testCase struct {
 	arg   *Top
 	types []types.Type
 	proc  *process.Process
 }
 
-var (
-	tcs []topTestCase
-)
-
-func init() {
-	tcs = []topTestCase{
+func genTestCases() []testCase {
+	return []testCase{
 		newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
 		newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
@@ -57,13 +53,13 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range genTestCases() {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range genTestCases() {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
@@ -71,7 +67,7 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestTop(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range genTestCases() {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		bats := []*batch.Batch{
@@ -95,21 +91,20 @@ func TestTop(t *testing.T) {
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func BenchmarkTop(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		tcs = []topTestCase{
+		tcs := []testCase{
 			newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
 			newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		}
-		t := new(testing.T)
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
+			require.NoError(b, err)
 
 			bats := []*batch.Batch{
 				newBatch(tc.types, tc.proc, BenchmarkRows),
@@ -120,15 +115,15 @@ func BenchmarkTop(b *testing.B) {
 			_, _ = tc.arg.Call(tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
+			tc.proc.Free()
 		}
 	}
 }
 
-func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) topTestCase {
-	return topTestCase{
+func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) testCase {
+	return testCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMPool(m),
+		proc:  testutil.NewProcessWithMPool("", m),
 		arg: &Top{
 			Fs:    fs,
 			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),
@@ -160,12 +155,7 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 
 func resetChildren(arg *Top, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 }

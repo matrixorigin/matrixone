@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -53,6 +54,8 @@ func releaseResponse(v morpc.Message) {
 }
 
 type client struct {
+	service string
+	logger  *log.MOLogger
 	cfg     *morpc.Config
 	cluster clusterservice.MOCluster
 	client  morpc.RPCClient
@@ -66,15 +69,21 @@ func WithMOCluster(cluster clusterservice.MOCluster) ClientOption {
 	}
 }
 
-func NewClient(cfg morpc.Config, opts ...ClientOption) (Client, error) {
+func NewClient(
+	service string,
+	cfg morpc.Config,
+	opts ...ClientOption,
+) (Client, error) {
 	c := &client{
-		cfg: &cfg,
+		logger:  getLogger(service),
+		service: service,
+		cfg:     &cfg,
 	}
 	for _, applyFn := range opts {
 		applyFn(c)
 	}
 	if c.cluster == nil {
-		c.cluster = clusterservice.GetMOCluster()
+		c.cluster = clusterservice.GetMOCluster(service)
 	}
 	c.cfg.Adjust()
 	// add read timeout for lockservice client, to avoid remote lock hung and cannot read the lock response
@@ -84,8 +93,8 @@ func NewClient(cfg morpc.Config, opts ...ClientOption) (Client, error) {
 		morpc.WithBackendFreeOrphansResponse(releaseResponse))
 
 	client, err := c.cfg.NewClient(
+		service,
 		"lock-client",
-		getLogger().RawLogger(),
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
 		return nil, err
@@ -95,7 +104,7 @@ func NewClient(cfg morpc.Config, opts ...ClientOption) (Client, error) {
 }
 
 func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, error) {
-	if err := checkMethodVersion(ctx, request); err != nil {
+	if err := checkMethodVersion(ctx, c.service, request); err != nil {
 		return nil, err
 	}
 	f, err := c.AsyncSend(ctx, request)
@@ -120,8 +129,12 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 	return resp, nil
 }
 
-func checkMethodVersion(ctx context.Context, req *pb.Request) error {
-	return runtime.CheckMethodVersion(ctx, methodVersions, req)
+func checkMethodVersion(
+	ctx context.Context,
+	service string,
+	req *pb.Request,
+) error {
+	return runtime.CheckMethodVersion(ctx, service, methodVersions, req)
 }
 
 func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {
@@ -197,7 +210,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				cns = append(cns, s.ServiceID)
 				return true
 			})
-		getLogger().Error("cannot find lockservice address",
+		c.logger.Error("cannot find lockservice address",
 			zap.String("target", sid),
 			zap.Any("cns", cns),
 			zap.String("request", request.DebugString()))
@@ -219,6 +232,7 @@ func WithServerMessageFilter(filter func(*pb.Request) bool) ServerOption {
 }
 
 type server struct {
+	logger   *log.MOLogger
 	address  string
 	cfg      *morpc.Config
 	rpc      morpc.RPCServer
@@ -234,16 +248,20 @@ type server struct {
 
 // NewServer create a lockservice server. One LockService corresponds to one Server
 func NewServer(
+	service string,
 	address string,
 	cfg morpc.Config,
-	opts ...ServerOption) (Server, error) {
+	opts ...ServerOption,
+) (Server, error) {
+	logger := getLogger(service)
 	s := &server{
+		logger:   logger,
 		cfg:      &cfg,
 		address:  address,
 		handlers: make(map[pb.Method]RequestHandleFunc),
 		requests: make(chan requestCtx, 10240),
 		stopper: stopper.NewStopper("lock-service-rpc-server",
-			stopper.WithLogger(getLogger().RawLogger())),
+			stopper.WithLogger(logger.RawLogger())),
 	}
 	s.cfg.Adjust()
 	for _, opt := range opts {
@@ -251,9 +269,9 @@ func NewServer(
 	}
 
 	rpc, err := s.cfg.NewServer(
+		service,
 		"lock-server",
 		address,
-		getLogger().RawLogger(),
 		func() morpc.Message { return acquireRequest() },
 		releaseResponse,
 		morpc.WithServerDisableAutoCancelContext())
@@ -298,19 +316,19 @@ func (s *server) onMessage(
 	request := msg.Message
 	req, ok := request.(*pb.Request)
 	if !ok {
-		getLogger().Fatal("received invalid message",
+		s.logger.Fatal("received invalid message",
 			zap.Any("message", request))
 	}
 
-	if getLogger().Enabled(zap.DebugLevel) {
-		getLogger().Debug("received a request",
+	if s.logger.Enabled(zap.DebugLevel) {
+		s.logger.Debug("received a request",
 			zap.String("request", req.DebugString()))
 	}
 
 	if s.options.filter != nil &&
 		!s.options.filter(req) {
-		if getLogger().Enabled(zap.DebugLevel) {
-			getLogger().Debug("skip request by filter",
+		if s.logger.Enabled(zap.DebugLevel) {
+			s.logger.Debug("skip request by filter",
 				zap.String("request", req.DebugString()))
 		}
 		if msg.Cancel != nil {
@@ -322,24 +340,26 @@ func (s *server) onMessage(
 
 	handler, ok := s.handlers[req.Method]
 	if !ok {
-		err := moerr.NewNotSupportedNoCtx("method [%s], from %s, current %s",
+		err := moerr.NewNotSupportedNoCtxf("method [%s], from %s, current %s",
 			req.Method.String(),
 			cs.RemoteAddress(),
 			s.address)
 		writeResponse(
 			ctx,
+			s.logger,
 			msg.Cancel,
 			getResponse(req),
 			err,
-			cs)
+			cs,
+		)
 		releaseRequest(req)
 		return nil
 	}
 
 	select {
 	case <-ctx.Done():
-		if getLogger().Enabled(zap.DebugLevel) {
-			getLogger().Debug("skip request by timeout",
+		if s.logger.Enabled(zap.DebugLevel) {
+			s.logger.Debug("skip request by timeout",
 				zap.String("request", req.DebugString()))
 		}
 		releaseRequest(req)
@@ -391,10 +411,12 @@ func getResponse(req *pb.Request) *pb.Response {
 
 func writeResponse(
 	ctx context.Context,
+	logger *log.MOLogger,
 	cancel context.CancelFunc,
 	resp *pb.Response,
 	err error,
-	cs morpc.ClientSession) {
+	cs morpc.ClientSession,
+) {
 	if cancel != nil {
 		defer cancel()
 	}
@@ -403,14 +425,14 @@ func writeResponse(
 		resp.WrapError(err)
 	}
 	detail := ""
-	if getLogger().Enabled(zap.DebugLevel) {
+	if logger.Enabled(zap.DebugLevel) {
 		detail = resp.DebugString()
-		getLogger().Debug("handle request completed",
+		logger.Debug("handle request completed",
 			zap.String("response", detail))
 	}
 	// after write, response will be released by rpc
 	if err := cs.AsyncWrite(resp); err != nil {
-		getLogger().Error("write response failed",
+		logger.Error("write response failed",
 			zap.Error(err),
 			zap.String("response", detail))
 	}

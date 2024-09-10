@@ -17,7 +17,6 @@ package util
 import (
 	"bytes"
 	"encoding/hex"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -27,39 +26,19 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	skipLogger *log.MOLogger
-	logger     *log.MOLogger
-	once       sync.Once
-)
-
-// GetLogger get logger
-func GetLogger() *log.MOLogger {
-	once.Do(initLoggers)
-	return logger
-}
-
-func getSkipLogger() *log.MOLogger {
-	once.Do(initLoggers)
-	return skipLogger
-}
-
-func initLoggers() {
-	rt := runtime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = runtime.DefaultRuntime()
-	}
-	logger = rt.Logger().Named("txn")
-	skipLogger = logger.WithOptions(zap.AddCallerSkip(1))
+func GetLogger(sid string) *log.MOLogger {
+	return runtime.ServiceRuntime(sid).Logger()
 }
 
 // LogTxnSnapshotTimestamp log txn snapshot ts use pushed latest commit ts
 func LogTxnSnapshotTimestamp(
+	logger *log.MOLogger,
 	min timestamp.Timestamp,
-	latest timestamp.Timestamp) {
-	logger := getSkipLogger()
+	latest timestamp.Timestamp,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn use pushed latest commit ts",
+		logger.Log("txn use pushed latest commit ts",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
 			zap.String("min-ts", min.DebugString()),
 			zap.String("latest-ts", latest.DebugString()))
 	}
@@ -67,370 +46,522 @@ func LogTxnSnapshotTimestamp(
 
 // LogTxnPushedTimestampUpdated log tn pushed timestamp updated
 func LogTxnPushedTimestampUpdated(
-	value timestamp.Timestamp) {
-	logger := getSkipLogger()
+	logger *log.MOLogger,
+	value timestamp.Timestamp,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn use pushed latest commit ts updated",
+		logger.Log("txn use pushed latest commit ts updated",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
 			zap.String("latest-ts", value.DebugString()))
 	}
 }
 
-func LogTimestampWaiterCanceled() {
-	logger := getSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("timestamp waiter canceled")
-	}
+func LogTimestampWaiterCanceled(
+	logger *log.MOLogger,
+) {
+	logger.Log(
+		"timestamp waiter canceled",
+		log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.InfoLevel),
+	)
 }
 
 // LogTxnRead log txn read
-func LogTxnRead(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
+func LogTxnRead(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn read", zap.String("txn", txnMeta.DebugString()))
+		logger.Log(
+			"txn read",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			zap.String("txn", txnMeta.DebugString()),
+		)
 	}
 }
 
 // LogTxnWrite log txn write
-func LogTxnWrite(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
+func LogTxnWrite(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Info("txn write", zap.String("txn", txnMeta.DebugString()))
+		logger.Log(
+			"txn write",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			zap.String("txn", txnMeta.DebugString()),
+		)
 	}
 }
 
 // LogTxnCommit log txn commit
-func LogTxnCommit(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
+func LogTxnCommit(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Info("txn commit", zap.String("txn", txnMeta.DebugString()))
+		logger.Log(
+			"txn commit",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			zap.String("txn", txnMeta.DebugString()),
+		)
 	}
 }
 
 // LogTxnRollback log txn rollback
-func LogTxnRollback(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
+func LogTxnRollback(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn rollback", zap.String("txn", txnMeta.DebugString()))
+		logger.Log(
+			"txn rollback",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			zap.String("txn", txnMeta.DebugString()),
+		)
 	}
 }
 
 // LogTxnCreated log txn created
-func LogTxnCreated(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
+func LogTxnCreated(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn created", zap.String("txn", txnMeta.DebugString()))
+		logger.Log(
+			"txn created",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			zap.String("txn", txnMeta.DebugString()),
+		)
 	}
 }
 
 // LogTxnUpdated log txn updated
-func LogTxnUpdated(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
+func LogTxnUpdated(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn updated", zap.String("txn", txnMeta.DebugString()))
+		logger.Log(
+			"txn updated",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			zap.String("txn", txnMeta.DebugString()),
+		)
 	}
 }
 
 // LogTxnWaiterAdded log txn waiter added
-func LogTxnWaiterAdded(txnMeta txn.TxnMeta,
-	waitStatus txn.TxnStatus) {
-	logger := getSkipLogger()
+func LogTxnWaiterAdded(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+	waitStatus txn.TxnStatus,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn waiter added", zap.String("txn", txnMeta.DebugString()))
+		logger.Log(
+			"txn waiter added",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			zap.String("txn", txnMeta.DebugString()),
+		)
 	}
 }
 
 // LogTxnHandleRequest log txn handle request
-func LogTxnHandleRequest(request *txn.TxnRequest) {
-	logger := getSkipLogger()
+func LogTxnHandleRequest(
+	logger *log.MOLogger,
+	request *txn.TxnRequest,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn handle request",
+		logger.Log(
+			"txn handle request",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
 			TxnIDFieldWithID(request.Txn.ID),
-			zap.String("request", request.DebugString()))
+			zap.String("request", request.DebugString()),
+		)
 	}
 }
 
 // LogTxnHandleResult log txn handle request
-func LogTxnHandleResult(response *txn.TxnResponse) {
-	logger := getSkipLogger()
+func LogTxnHandleResult(
+	logger *log.MOLogger,
+	response *txn.TxnResponse,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn handle result",
-			zap.String("response", response.DebugString()))
+		logger.Log(
+			"txn handle result",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			zap.String("response", response.DebugString()),
+		)
 	}
 }
 
 // LogTxnSendRequests log txn send txn requests
-func LogTxnSendRequests(requests []txn.TxnRequest) {
-	logger := getSkipLogger()
+func LogTxnSendRequests(
+	logger *log.MOLogger,
+	requests []txn.TxnRequest,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn send requests",
-			zap.String("requests", txn.RequestsDebugString(requests, true)))
+		logger.Log(
+			"txn send requests",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			zap.String("requests", txn.RequestsDebugString(requests, true)),
+		)
 	}
 }
 
 // LogTxnSendRequestsFailed log txn send txn requests failed
-func LogTxnSendRequestsFailed(requests []txn.TxnRequest,
-	err error) {
-	logger := getSkipLogger()
+func LogTxnSendRequestsFailed(
+	logger *log.MOLogger,
+	requests []txn.TxnRequest,
+	err error,
+) {
 
 	// The payload cannot be recorded here because reading the payload field would
 	// cause a DATA RACE, as it is possible that morpc was still processing the send
 	// at the time of the error and would have manipulated the payload field. And logging
 	// the error, the payload field does not need to be logged to the log either, you can
 	// find the previous log to view the paylaod based on the request-id.
-	logger.Error("txn send requests failed",
+	logger.Log(
+		"txn send requests failed",
+		log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.ErrorLevel),
 		zap.String("requests", txn.RequestsDebugString(requests, false)),
-		zap.Error(err))
+		zap.Error(err),
+	)
 }
 
 // LogTxnReceivedResponses log received txn responses
-func LogTxnReceivedResponses(responses []txn.TxnResponse) {
-	logger := getSkipLogger()
-
+func LogTxnReceivedResponses(
+	logger *log.MOLogger,
+	responses []txn.TxnResponse,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn received responses",
-			zap.String("responses", txn.ResponsesDebugString(responses)))
+		logger.Log(
+			"txn received responses",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			zap.String("responses", txn.ResponsesDebugString(responses)),
+		)
 	}
 }
 
 // LogTxnCreateOn log Txn create on tn shard.
-func LogTxnCreateOn(txnMeta txn.TxnMeta,
-	tn metadata.TNShard) {
-	logger := getSkipLogger()
-
+func LogTxnCreateOn(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+	tn metadata.TNShard,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn created on DNShard",
+		logger.Log(
+			"txn created on DNShard",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
 			TxnField(txnMeta),
-			TxnTNShardField(tn))
+			TxnTNShardField(tn),
+		)
 	}
 }
 
 // LogTxnReadBlockedByUncommittedTxns log Txn read blocked by other txns
-func LogTxnReadBlockedByUncommittedTxns(txnMeta txn.TxnMeta,
-	waitTxns [][]byte) {
-	logger := getSkipLogger()
-
+func LogTxnReadBlockedByUncommittedTxns(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+	waitTxns [][]byte,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn read blocked by other uncommitted txns",
+		logger.Log(
+			"txn read blocked by other uncommitted txns",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
 			TxnField(txnMeta),
-			TxnIDsField(waitTxns))
+			TxnIDsField(waitTxns),
+		)
 	}
 }
 
-// LogTxnWaitUncommittedTxnsFailed log Txn wait other uncommitted txns change to committed or abortted
+// LogTxnWaitUncommittedTxnsFailed log Txn wait other uncommitted txns change to committed or aborted
 // failed.
-func LogTxnWaitUncommittedTxnsFailed(txnMeta txn.TxnMeta,
+func LogTxnWaitUncommittedTxnsFailed(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
 	waitTxns [][]byte,
-	err error) {
-	logger := getSkipLogger()
-
-	logger.Error("txn wait other uncommitted txns failed",
+	err error,
+) {
+	logger.Log(
+		"txn wait other uncommitted txns failed",
+		log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.ErrorLevel),
 		TxnField(txnMeta),
 		TxnIDsField(waitTxns),
-		zap.Error(err))
+		zap.Error(err),
+	)
 }
 
 // LogTxnReadFailed log Txn read failed.
-func LogTxnNotFoundOn(txnMeta txn.TxnMeta,
-	tn metadata.TNShard) {
-	logger := getSkipLogger()
-
+func LogTxnNotFoundOn(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+	tn metadata.TNShard,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn not found on DNShard",
+		logger.Log(
+			"txn not found on DNShard",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
 			TxnField(txnMeta),
-			TxnTNShardField(tn))
+			TxnTNShardField(tn),
+		)
 	}
 }
 
 // LogTxnWriteOnInvalidStatus log Txn write on invalid txn status.
-func LogTxnWriteOnInvalidStatus(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
-
+func LogTxnWriteOnInvalidStatus(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn write on invalid status",
-			TxnField(txnMeta))
+		logger.Log(
+			"txn write on invalid status",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			TxnField(txnMeta),
+		)
 	}
 }
 
 // LogTxnCommitOnInvalidStatus log Txn commit on invalid txn status.
-func LogTxnCommitOnInvalidStatus(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
-
+func LogTxnCommitOnInvalidStatus(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn commit on invalid status",
-			TxnField(txnMeta))
+		logger.Log(
+			"txn commit on invalid status",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			TxnField(txnMeta),
+		)
 	}
 }
 
 // LogTxnReadFailed log Txn read failed.
 func LogTxnReadFailed(
+	logger *log.MOLogger,
 	txnMeta txn.TxnMeta,
-	err error) {
-	logger := getSkipLogger()
-
-	logger.Error("txn read failed",
+	err error,
+) {
+	logger.Log(
+		"txn read failed",
+		log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.ErrorLevel),
 		TxnField(txnMeta),
-		zap.Error(err))
+		zap.Error(err),
+	)
 }
 
 // LogTxnWriteFailed log Txn write failed.
 func LogTxnWriteFailed(
+	logger *log.MOLogger,
 	txnMeta txn.TxnMeta,
-	err error) {
-	logger := getSkipLogger()
-
-	logger.Error("txn write failed",
+	err error,
+) {
+	logger.Log(
+		"txn write failed",
+		log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.ErrorLevel),
 		TxnField(txnMeta),
-		zap.Error(err))
+		zap.Error(err),
+	)
 }
 
 // LogTxnParallelPrepareFailed log Txn parallel prepare failed
 func LogTxnParallelPrepareFailed(
+	logger *log.MOLogger,
 	txnMeta txn.TxnMeta,
-	err error) {
-	logger := getSkipLogger()
-
-	logger.Error("txn parallel prepare failed",
+	err error,
+) {
+	logger.Log(
+		"txn parallel prepare failed",
+		log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.ErrorLevel),
 		TxnField(txnMeta),
-		zap.Error(err))
+		zap.Error(err),
+	)
 }
 
 // LogTxnParallelPrepareCompleted log Txn parallel prepare completed
-func LogTxnParallelPrepareCompleted(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
-
+func LogTxnParallelPrepareCompleted(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn parallel prepare completed",
-			TxnField(txnMeta))
+		logger.Log(
+			"txn parallel prepare completed",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			TxnField(txnMeta),
+		)
 	}
 }
 
 // LogTxnPrepareFailedOn log Tx prepare failed on DNShard
 func LogTxnPrepareFailedOn(
+	logger *log.MOLogger,
 	txnMeta txn.TxnMeta,
 	tn metadata.TNShard,
-	err *txn.TxnError) {
-	logger := getSkipLogger()
-
-	logger.Error("txn prepare failed on DNShard",
+	err *txn.TxnError,
+) {
+	logger.Log(
+		"txn prepare failed on DNShard",
+		log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
 		TxnField(txnMeta),
 		TxnTNShardField(tn),
-		zap.String("error", err.DebugString()))
+		zap.String("error", err.DebugString()),
+	)
 }
 
 // LogTxnPrepareCompletedOn log Tx prepare completed on DNShard
 func LogTxnPrepareCompletedOn(
+	logger *log.MOLogger,
 	txnMeta txn.TxnMeta,
 	tn metadata.TNShard,
-	preparedTS timestamp.Timestamp) {
-	logger := getSkipLogger()
-
+	preparedTS timestamp.Timestamp,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn prepare completed on DNShard",
+		logger.Log(
+			"txn prepare completed on DNShard",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
 			TxnField(txnMeta),
 			TxnTNShardField(tn),
-			zap.String("prepared-ts", preparedTS.DebugString()))
+			zap.String("prepared-ts", preparedTS.DebugString()),
+		)
 	}
 }
 
 // LogTxnStartAsyncCommit log start async commit distributed txn task
-func LogTxnStartAsyncCommit(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
-
+func LogTxnStartAsyncCommit(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("async commit task started",
-			TxnField(txnMeta))
+		logger.Log(
+			"async commit task started",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			TxnField(txnMeta),
+		)
 	}
 }
 
 // LogTxnStartAsyncRollback log start async rollback txn task
-func LogTxnStartAsyncRollback(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
-
+func LogTxnStartAsyncRollback(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("async rollback task started",
-			TxnField(txnMeta))
+		logger.Log(
+			"async rollback task started",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			TxnField(txnMeta),
+		)
 	}
 }
 
 // LogTxnRollbackCompleted log Txn rollback completed
-func LogTxnRollbackCompleted(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
-
+func LogTxnRollbackCompleted(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn rollback completed",
-			TxnField(txnMeta))
+		logger.Log(
+			"txn rollback completed",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			TxnField(txnMeta),
+		)
 	}
 }
 
 // LogTxnCommittingFailed log Txn Committing failed on coordinator failed
 func LogTxnCommittingFailed(
+	logger *log.MOLogger,
 	txnMeta txn.TxnMeta,
-	err error) {
-	logger := getSkipLogger()
-
-	logger.Error("txn committing failed, retry later",
+	err error,
+) {
+	logger.Log(
+		"txn committing failed, retry later",
+		log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.ErrorLevel),
 		TxnTNShardField(txnMeta.TNShards[0]),
 		TxnField(txnMeta),
-		zap.Error(err))
+		zap.Error(err),
+	)
 }
 
 // LogTxnStart1PCCommit log Txn start 1pc commit
-func LogTxnStart1PCCommit(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
-
+func LogTxnStart1PCCommit(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn commit with 1 PC",
-			TxnField(txnMeta))
+		logger.Log(
+			"txn commit with 1 PC",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			TxnField(txnMeta),
+		)
 	}
 }
 
 // LogTxn1PCCommitCompleted log Txn 1pc commit completed
-func LogTxn1PCCommitCompleted(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
-
+func LogTxn1PCCommitCompleted(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn commit with 1 PC completed",
-			TxnField(txnMeta))
+		logger.Log(
+			"txn commit with 1 PC completed",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			TxnField(txnMeta),
+		)
 	}
 }
 
 // LogTxnStart1PCCommitFailed log Txn 1pc commit failed
 func LogTxnStart1PCCommitFailed(
+	logger *log.MOLogger,
 	txnMeta txn.TxnMeta,
-	err error) {
-	logger := getSkipLogger()
-
-	logger.Error("txn commit with 1 PC failed",
-		TxnField(txnMeta), zap.Error(err))
+	err error,
+) {
+	logger.Log(
+		"txn commit with 1 PC failed",
+		log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.ErrorLevel),
+		TxnField(txnMeta),
+		zap.Error(err),
+	)
 }
 
 // LogTxnStart2PCCommit log Txn start 2pc commit
-func LogTxnStart2PCCommit(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
-
+func LogTxnStart2PCCommit(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn commit with 2 PC",
-			TxnField(txnMeta))
+		logger.Log(
+			"txn commit with 2 PC",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			TxnField(txnMeta),
+		)
 	}
 }
 
 // LogTxnCommittingCompleted log Txn Committing completed on coordinator failed
-func LogTxnCommittingCompleted(txnMeta txn.TxnMeta) {
-	logger := getSkipLogger()
-
+func LogTxnCommittingCompleted(
+	logger *log.MOLogger,
+	txnMeta txn.TxnMeta,
+) {
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn committing completed",
-			TxnField(txnMeta))
+		logger.Log(
+			"txn committing completed",
+			log.DefaultLogOptions().AddCallerSkip(1).WithLevel(zap.DebugLevel),
+			TxnField(txnMeta),
+		)
 	}
 }
 
 // TxnIDField returns a txn id field
-func TxnIDField(txnMeta txn.TxnMeta) zap.Field {
+func TxnIDField(
+	txnMeta txn.TxnMeta,
+) zap.Field {
 	return TxnIDFieldWithID(txnMeta.ID)
 }
 
 // TxnIDsField returns a txn ids field
-func TxnIDsField(txnIDs [][]byte) zap.Field {
+func TxnIDsField(
+	txnIDs [][]byte,
+) zap.Field {
 	var buf bytes.Buffer
 	n := len(txnIDs) - 1
 	buf.WriteString("[")

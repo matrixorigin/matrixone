@@ -254,6 +254,8 @@ type StatsInfo struct {
 	PlanDuration      time.Duration `json:"PlanDuration"`
 	CompileDuration   time.Duration `json:"CompileDuration"`
 	ExecutionDuration time.Duration `json:"ExecutionDuration"`
+	// Statistics on the time consumption of the output operator in generating data for query statements
+	OutputDuration int64 `json:"OutputDuration"`
 
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
@@ -262,12 +264,12 @@ type StatsInfo struct {
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
 
-	LocalFSReadIOMergerTimeConsumption      int64
-	LocalFSReadCacheIOMergerTimeConsumption int64
+	// Local FileService blocking wait time
+	LocalFSReadIOMergerTimeConsumption int64
 
+	// S3 FileService blocking wait time
 	S3FSPrefetchFileIOMergerTimeConsumption int64
 	S3FSReadIOMergerTimeConsumption         int64
-	S3FSReadCacheIOMergerTimeConsumption    int64
 
 	ParseStartTime     time.Time `json:"ParseStartTime"`
 	PlanStartTime      time.Time `json:"PlanStartTime"`
@@ -324,6 +326,13 @@ func (stats *StatsInfo) ExecutionEnd() {
 	stats.ExecutionDuration = stats.ExecutionEndTime.Sub(stats.ExecutionStartTime)
 }
 
+func (stats *StatsInfo) AddOutputTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.OutputDuration, int64(d))
+}
+
 func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
@@ -331,12 +340,6 @@ func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.IOAccessTimeConsumption, int64(d))
 }
 
-func (stats *StatsInfo) AddLocalFSReadCacheIOMergerTimeConsumption(d time.Duration) {
-	if stats == nil {
-		return
-	}
-	atomic.AddInt64(&stats.LocalFSReadCacheIOMergerTimeConsumption, int64(d))
-}
 func (stats *StatsInfo) AddLocalFSReadIOMergerTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
@@ -355,21 +358,13 @@ func (stats *StatsInfo) AddS3FSReadIOMergerTimeConsumption(d time.Duration) {
 	}
 	atomic.AddInt64(&stats.S3FSReadIOMergerTimeConsumption, int64(d))
 }
-func (stats *StatsInfo) AddS3FSReadCacheIOMergerTimeConsumption(d time.Duration) {
-	if stats == nil {
-		return
-	}
-	atomic.AddInt64(&stats.S3FSReadCacheIOMergerTimeConsumption, int64(d))
-}
 
 func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
 	if stats == nil {
 		return 0
 	}
-	return stats.LocalFSReadCacheIOMergerTimeConsumption +
-		stats.LocalFSReadIOMergerTimeConsumption +
+	return stats.LocalFSReadIOMergerTimeConsumption +
 		stats.S3FSPrefetchFileIOMergerTimeConsumption +
-		stats.S3FSReadCacheIOMergerTimeConsumption +
 		stats.S3FSReadIOMergerTimeConsumption
 }
 

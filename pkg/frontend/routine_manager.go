@@ -25,8 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -36,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 type RoutineManager struct {
@@ -79,6 +78,7 @@ func (ar *AccountRoutineManager) recordRoutine(tenantID int64, rt *Routine, vers
 
 	ar.accountRoutineMu.Lock()
 	defer ar.accountRoutineMu.Unlock()
+	logutil.Infof("[init account] set account id %d, connection id %d to account routine map", tenantID, rt.getConnectionID())
 	if _, ok := ar.accountId2Routine[tenantID]; !ok {
 		ar.accountId2Routine[tenantID] = make(map[*Routine]uint64)
 	}
@@ -109,6 +109,7 @@ func (ar *AccountRoutineManager) EnKillQueue(tenantID int64, version uint64) {
 	KillRecord := NewKillRecord(time.Now(), version)
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
+	logutil.Infof("[set suspend] set account id %d, version %d to kill queue at time %v, ", tenantID, version, KillRecord.killTime)
 	ar.killIdQueue[tenantID] = KillRecord
 
 }
@@ -123,6 +124,7 @@ func (ar *AccountRoutineManager) AlterRoutineStatue(tenantID int64, status strin
 	if rts, ok := ar.accountId2Routine[tenantID]; ok {
 		for rt := range rts {
 			if status == "restricted" {
+				logutil.Infof("[set restricted] alter routine, set account id %d, connection id %d restricted", tenantID, rt.getConnectionID())
 				rt.setResricted(true)
 			} else {
 				rt.setResricted(false)
@@ -236,15 +238,19 @@ func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
 	return rm.accountRoutine
 }
 
-func (rm *RoutineManager) Created(rs *Conn) {
+func (rm *RoutineManager) Created(rs *Conn) error {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
 	createdStart := time.Now()
 	connID, err := rm.getConnID()
 	if err != nil {
 		logutil.Errorf("failed to get connection ID from HAKeeper: %v", err)
-		return
+		return err
 	}
-	pro := NewMysqlClientProtocol(connID, rs, int(getGlobalPu().SV.MaxBytesInOutbufToFlush), getGlobalPu().SV)
+	sid := ""
+	if rm.baseService != nil {
+		sid = rm.baseService.ID()
+	}
+	pro := NewMysqlClientProtocol(sid, connID, rs, int(getGlobalPu().SV.MaxBytesInOutbufToFlush), getGlobalPu().SV)
 	routine := NewRoutine(rm.getCtx(), pro, getGlobalPu().SV)
 	v2.CreatedRoutineCounter.Inc()
 
@@ -256,7 +262,7 @@ func (rm *RoutineManager) Created(rs *Conn) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(cancelCtx, routine.getProtocol(), nil)
+	ses := NewSession(cancelCtx, sid, routine.getProtocol(), nil)
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
@@ -278,6 +284,8 @@ func (rm *RoutineManager) Created(rs *Conn) {
 		pro.receiveExtraInfo(rs)
 	}
 	rm.setRoutine(rs, pro.connectionID, routine)
+	ses.UpdateDebugString()
+	return nil
 }
 
 /*
@@ -334,7 +342,7 @@ func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatK
 			rt.killQuery(killMyself, statementId)
 		}
 	} else {
-		return moerr.NewInternalError(ctx, "Unknown connection id %d", id)
+		return moerr.NewInternalErrorf(ctx, "Unknown connection id %d", id)
 	}
 	return nil
 }
@@ -356,9 +364,9 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
-	connectionInfo := getConnectionInfo(rs)
 	routine := rm.getRoutine(rs)
 	if routine == nil {
+		connectionInfo := getConnectionInfo(rs)
 		err = moerr.NewInternalError(ctx, "routine does not exist")
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
@@ -415,6 +423,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 			for rt, version := range rtMap {
 				if rt != nil && ((version+1)%math.MaxUint64)-1 <= killRecord.version {
 					//kill connect of this routine
+					logutil.Infof("[kill connection] do kill connection account id %d, version %d, connection id %d, ", account, killRecord.version, rt.getConnectionID())
 					rt.killConnection(false)
 					ar.deleteRoutine(account, rt)
 				}
@@ -428,7 +437,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 func (rm *RoutineManager) MigrateConnectionTo(ctx context.Context, req *query.MigrateConnToRequest) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
-		return moerr.NewInternalError(ctx, "cannot get routine to migrate connection %d", req.ConnID)
+		return moerr.NewInternalErrorf(ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
 	return routine.migrateConnectionTo(ctx, req)
 }
@@ -436,9 +445,17 @@ func (rm *RoutineManager) MigrateConnectionTo(ctx context.Context, req *query.Mi
 func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromRequest, resp *query.MigrateConnFromResponse) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
-		return moerr.NewInternalError(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
+		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
 	return routine.migrateConnectionFrom(resp)
+}
+
+func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
+	}
+	return routine.resetSession(rm.baseService.ID(), resp)
 }
 
 func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
@@ -485,7 +502,7 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 
 	cfg, err := ConstructTLSConfig(rm.ctx, SV.TlsCaFile, SV.TlsCertFile, SV.TlsKeyFile)
 	if err != nil {
-		return moerr.NewInternalError(rm.ctx, "init TLS config error: %v", err)
+		return moerr.NewInternalErrorf(rm.ctx, "init TLS config error: %v", err)
 	}
 
 	rm.tlsConfig = cfg

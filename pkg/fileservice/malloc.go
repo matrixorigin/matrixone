@@ -21,53 +21,48 @@ import (
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-var getMemoryCacheAllocator = func() func() malloc.Allocator {
-	var allocator malloc.Allocator
-	var initOnce sync.Once
-	return func() malloc.Allocator {
-		initOnce.Do(func() {
-			allocator = malloc.NewMetricsAllocator(
-				malloc.GetDefault(nil),
-				metric.MallocCounterMemoryCacheAllocateBytes,
-				metric.MallocGaugeMemoryCacheInuseBytes,
-				metric.MallocCounterMemoryCacheAllocateObjects,
-				metric.MallocGaugeMemoryCacheInuseObjects,
-			)
-		})
-		return allocator
-	}
-}()
+const (
+	// 1/freezeFraction of allocations may be frozen to detect wrong mutation such as mutating the memory cache objects
+	freezeFraction = 100
+)
 
-var getBytesAllocator = func() func() malloc.Allocator {
-	var allocator malloc.Allocator
-	var initOnce sync.Once
-	return func() malloc.Allocator {
-		initOnce.Do(func() {
-			allocator = malloc.NewMetricsAllocator(
-				malloc.GetDefault(nil),
-				metric.MallocCounterBytesAllocateBytes,
-				metric.MallocGaugeBytesInuseBytes,
-				metric.MallocCounterBytesAllocateObjects,
-				metric.MallocGaugeBytesInuseObjects,
-			)
-		})
-		return allocator
-	}
-}()
+func decorateAllocator(allocator malloc.Allocator) malloc.Allocator {
+	// freeze randomly to detect wrong mutation
+	// this makes the allocator randomly freezable, whether to freeze is decided by the callers of Allocate method
+	allocator = malloc.NewRandomAllocator(
+		allocator,
+		malloc.NewReadOnlyAllocator(allocator),
+		freezeFraction,
+	)
+	return allocator
+}
 
-var getIOAllocator = func() func() malloc.Allocator {
-	var allocator malloc.Allocator
-	var initOnce sync.Once
-	return func() malloc.Allocator {
-		initOnce.Do(func() {
-			allocator = malloc.NewMetricsAllocator(
-				malloc.GetDefault(nil),
-				metric.MallocCounterIOAllocateBytes,
-				metric.MallocGaugeIOInuseBytes,
-				metric.MallocCounterIOAllocateObjects,
-				metric.MallocGaugeIOInuseObjects,
-			)
-		})
-		return allocator
-	}
-}()
+var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
+	allocator := malloc.GetDefault(nil)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounterMemoryCacheAllocateBytes,
+		metric.MallocGaugeMemoryCacheInuseBytes,
+		metric.MallocCounterMemoryCacheAllocateObjects,
+		metric.MallocGaugeMemoryCacheInuseObjects,
+	)
+	// decorate
+	allocator = decorateAllocator(allocator)
+	return allocator
+})
+
+var ioAllocator = sync.OnceValue(func() malloc.Allocator {
+	allocator := malloc.GetDefault(nil)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounterIOAllocateBytes,
+		metric.MallocGaugeIOInuseBytes,
+		metric.MallocCounterIOAllocateObjects,
+		metric.MallocGaugeIOInuseObjects,
+	)
+	// decorate
+	allocator = decorateAllocator(allocator)
+	return allocator
+})

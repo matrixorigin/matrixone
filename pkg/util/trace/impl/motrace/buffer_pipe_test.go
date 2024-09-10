@@ -52,8 +52,9 @@ func noopReportError(context.Context, error, int) {}
 var dummyBaseTime time.Time
 
 func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	dummyBaseTime = time.Unix(0, 0)
+	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
+
+	dummyBaseTime = time.Unix(0, 0).UTC()
 	SV := config.ObservabilityParameters{}
 	SV.SetDefaultValues("v0.test.0")
 	SV.TraceExportInterval = 15
@@ -79,13 +80,17 @@ func init() {
 	traceIDSpanIDCsvStr = fmt.Sprintf(`%s,%s`, sc.TraceID.String(), sc.SpanID.String())
 
 	if err := agent.Listen(agent.Options{}); err != nil {
-		_ = moerr.NewInternalError(DefaultContext(), "listen gops agent failed: %s", err)
+		_ = moerr.NewInternalErrorf(DefaultContext(), "listen gops agent failed: %s", err)
 		panic(err)
 	}
 	fmt.Println("Finish tests init.")
 }
 
-type dummyStringWriter struct{}
+type dummyStringWriter struct {
+	buf      *bytes.Buffer
+	callback func(*bytes.Buffer)
+	backoff  table.BackOff
+}
 
 func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 	return fmt.Printf("dummyStringWriter: %s\n", s)
@@ -94,7 +99,23 @@ func (w *dummyStringWriter) WriteRow(row *table.Row) error {
 	fmt.Printf("dummyStringWriter: %v\n", row.ToStrings())
 	return nil
 }
+func (w *dummyStringWriter) SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes.Buffer)) {
+	w.buf = buf
+	w.callback = callback
+}
+
+// NeedBuffer implements table.BufferSettable
+func (w *dummyStringWriter) NeedBuffer() bool { return true }
+func (w *dummyStringWriter) SetupBackOff(backoff table.BackOff) {
+	w.backoff = backoff
+}
 func (w *dummyStringWriter) FlushAndClose() (int, error) {
+	if w.backoff != nil {
+		_ = w.backoff.Count()
+	}
+	if w.callback != nil {
+		w.callback(w.buf)
+	}
 	return 0, nil
 }
 func (w *dummyStringWriter) GetContent() string    { return "" }
@@ -132,7 +153,7 @@ func Test_buffer2Sql_IsEmpty(t *testing.T) {
 	type fields struct {
 		Reminder      batchpipe.Reminder
 		buf           []IBuffer2SqlItem
-		sizeThreshold int64
+		sizeThreshold int
 		batchFunc     genBatchFunc
 	}
 	tests := []struct {
@@ -164,10 +185,12 @@ func Test_buffer2Sql_IsEmpty(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b := &itemBuffer{
-				Reminder:      tt.fields.Reminder,
-				buf:           tt.fields.buf,
-				sizeThreshold: tt.fields.sizeThreshold,
-				genBatchFunc:  tt.fields.batchFunc,
+				buf: tt.fields.buf,
+				BufferConfig: BufferConfig{
+					Reminder:      tt.fields.Reminder,
+					sizeThreshold: tt.fields.sizeThreshold,
+					genBatchFunc:  tt.fields.batchFunc,
+				},
 			}
 			if got := b.IsEmpty(); got != tt.want {
 				t.Errorf("IsEmpty() = %v, want %v", got, tt.want)
@@ -180,7 +203,7 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 	type fields struct {
 		Reminder      batchpipe.Reminder
 		buf           []IBuffer2SqlItem
-		sizeThreshold int64
+		sizeThreshold int
 		batchFunc     genBatchFunc
 	}
 	tests := []struct {
@@ -212,10 +235,12 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b := &itemBuffer{
-				Reminder:      tt.fields.Reminder,
-				buf:           tt.fields.buf,
-				sizeThreshold: tt.fields.sizeThreshold,
-				genBatchFunc:  tt.fields.batchFunc,
+				buf: tt.fields.buf,
+				BufferConfig: BufferConfig{
+					Reminder:      tt.fields.Reminder,
+					sizeThreshold: tt.fields.sizeThreshold,
+					genBatchFunc:  tt.fields.batchFunc,
+				},
 			}
 			b.Reset()
 			if got := b.IsEmpty(); got != tt.want {
@@ -232,7 +257,7 @@ func Test_withSizeThreshold(t *testing.T) {
 	tests := []struct {
 		name string
 		args args
-		want int64
+		want int
 	}{
 		{name: "1  B", args: args{size: 1}, want: 1},
 		{name: "1 KB", args: args{size: mpool.KB}, want: 1 << 10},
@@ -243,7 +268,7 @@ func Test_withSizeThreshold(t *testing.T) {
 	buf := &itemBuffer{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			BufferWithSizeThreshold(tt.args.size).apply(buf)
+			BufferWithSizeThreshold(tt.args.size).apply(&buf.BufferConfig)
 			if got := buf.sizeThreshold; got != tt.want {
 				t.Errorf("BufferWithSizeThreshold() = %v, want %v", got, tt.want)
 			}

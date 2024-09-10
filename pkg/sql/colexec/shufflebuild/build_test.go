@@ -19,17 +19,19 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -81,20 +83,15 @@ func TestBuild(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		for {
-			ok, err := tc.arg.Call(tc.proc)
-			require.NoError(t, err)
-			require.Equal(t, false, ok.Status == vm.ExecStop)
-			mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			mp.Free()
-			ok.Batch.Clean(tc.proc.Mp())
-			break
-		}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+
+		ok, err := tc.arg.Call(tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, true, ok.Status == vm.ExecStop)
+
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
-		tc.proc.Base.MessageBoard = tc.proc.Base.MessageBoard.Reset()
+		tc.marg.Reset(tc.proc, false, nil)
+		require.Less(t, int64(0), tc.proc.Mp().CurrNB()) //hashbuild operator can not release hashmap
+		tc.proc.GetMessageBoard().Reset()
 	}
 }
 
@@ -117,9 +114,7 @@ func BenchmarkBuild(b *testing.B) {
 				ok, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
-				mp := ok.Batch.AuxData.(*hashmap.JoinMap)
 				tc.proc.Reg.MergeReceivers[0].Ch <- nil
-				mp.Free()
 				ok.Batch.Clean(tc.proc.Mp())
 				break
 			}
@@ -143,28 +138,27 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
 		Ch:  make(chan *process.RegisterMessage, 10),
 	}
-	proc.Base.MessageBoard = process.NewMessageBoard()
+	proc.SetMessageBoard(message.NewMessageBoard())
 	return buildTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
 		arg: &ShuffleBuild{
-			Typs:       ts,
+			JoinMapTag: 1,
 			Conditions: cs,
 			RuntimeFilterSpec: &plan.RuntimeFilterSpec{
 				Tag:         0,
 				MatchPrefix: false,
 				UpperLimit:  0,
 				Expr:        nil,
-				Handled:     false,
 			},
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{

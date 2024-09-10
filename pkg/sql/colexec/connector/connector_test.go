@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -92,7 +92,7 @@ func TestConnector(t *testing.T) {
 			}
 			msg.Batch.Clean(tc.proc.Mp())
 		}
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
 
 		tc.arg.Reset(tc.proc, false, nil)
 
@@ -102,10 +102,6 @@ func TestConnector(t *testing.T) {
 		}
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		bats = []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
-		}
 		resetChildren(tc.arg, bats)
 		/*{
 			for _, vec := range bat.Vecs {
@@ -125,15 +121,17 @@ func TestConnector(t *testing.T) {
 			}
 			msg.Batch.Clean(tc.proc.Mp())
 		}
-		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func newTestCase() connectorTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	return connectorTestCase{
@@ -163,13 +161,7 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 
 func resetChildren(arg *Connector, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	valueScanArg.Prepare(nil)
-	arg.GetOperatorBase().SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		},
-	)
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 }

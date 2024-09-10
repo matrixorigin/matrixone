@@ -292,13 +292,14 @@ load data infile '$resources/load_data/test_escaped_by02.csv' into table test05 
 select * from test05;
 drop table test05;
 
--- @bvt:issue#15110
+
 drop table if exists test06;
 create table test06(col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
+load data local infile '$resources_local/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test06;
 drop table test06;
--- @bvt:issue
 
 drop table if exists test07;
 create table test07(col1 varchar(20), col2 varchar(20));
@@ -306,13 +307,12 @@ load data infile '$resources/load_data/test_enclosed_by02.csv' into table test07
 select * from test07;
 drop table test07;
 
--- @bvt:issue#15110
 drop table if exists test08;
 create table test08 (col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table test08 fields terminated by ',' enclosed by '`' lines terminated by '\n';
 select * from test08;
 drop table test08;
--- @bvt:issue
+
 
 drop table if exists test09;
 create table test09(col1 varchar(20), col2 varchar(20));
@@ -337,10 +337,143 @@ CREATE TABLE load_data_t1 (
 );
 load data inline format='csv', data=$XXX$ zhangsan,26,XiAn $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age,name);
 select * from load_data_t1;
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
+select * from load_data_t1;
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (@name, city,age);
+select * from load_data_t1;
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (@aa, city,age);
+select * from load_data_t1;
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
+load data inline format='csv', data=$XXX$ zhangsan $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
 drop table load_data_t1;
 
 drop table if exists load_data_t2;
 create table load_data_t2(id int, name varchar(20), age int);
 LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age);
 select * from load_data_t2 order by id;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (name, id, age);
+
+
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name );
+select * from load_data_t2 order by id;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age, address);
+
+
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id, name, age);
+select * from load_data_t2;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id, name);
+select * from load_data_t2 order by id;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (age, name);
+select * from load_data_t2 order by id;
 drop table load_data_t2;
+
+drop table if exists load_data_t3;
+create table load_data_t3(col1 int not null, col2 varchar(20) default "jane", col3 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t3 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col3, col2);
+
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t3 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col3);
+select * from load_data_t3 order by id;
+drop table load_data_t3;
+
+drop table if exists load_data_t4;
+create table load_data_t4(col1 int default 22, col2 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, @col2);
+select * from load_data_t4;
+delete from load_data_t4;
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+select * from load_data_t4;
+delete from load_data_t4;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+drop table load_data_t4;
+
+drop table if exists load_data_t5;
+create table load_data_t5(col1 int, col2 int, col3 int);
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+select * from load_data_t5;
+delete from load_data_t5;
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col2);
+select * from load_data_t5;
+delete from load_data_t5;
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select * from load_data_t5;
+delete from load_data_t5;
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(col1, @col2);
+select * from load_data_t5;
+delete from load_data_t5;
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select * from load_data_t5;
+delete from load_data_t5;
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(@col1, col2);
+select * from load_data_t5;
+drop table load_data_t5;
+
+drop table if exists load_data_t6;
+create table load_data_t6(col1 int);
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t6 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select * from load_data_t6;
+drop table load_data_t6;
+
+drop table if exists load_data_t7;
+create table load_data_t7 (col1 varchar(20), col2 varchar(20), col3 varchar(20));
+load data local infile '$resources_local/load_data/test_escaped_by03.csv' into table load_data_t7 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from load_data_t7;
+delete from load_data_t7;
+load data infile '$resources/load_data/test_escaped_by03.csv' into table load_data_t7 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from load_data_t7;
+drop table load_data_t7;
+
+drop account if exists test_load;
+create account test_load ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=5&user=test_load:admin&password=123456
+show session variables like 'sql_mode';
+set session sql_mode = "NO_ENGINE_SUBSTITUTION";
+show session variables like 'sql_mode';
+create database test_load_db;
+use test_load_db;
+drop table if exists load_data_t8;
+create table load_data_t8(col1 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select * from load_data_t8;
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+drop table load_data_t8;
+drop database test_load_db;
+
+-- @session
+drop account test_load;
+
+drop table if exists load_data_t9;
+create table load_data_t9(col1 int, col2 varchar(100), col3 varchar(100));
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true';
+select count(*) from load_data_t9;
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' ignore 99999 lines parallel 'true';
+select count(*) from load_data_t9;
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' ignore 9999 lines parallel 'true';
+select count(*) from load_data_t9;
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' enclosed by '"' LINES TERMINATED BY '\n' parallel 'true';
+select count(*) from load_data_t9;
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true' strict 'true';
+select count(*) from load_data_t9;
+delete from load_data_t9;
+drop table load_data_t9;
+
+
+
+

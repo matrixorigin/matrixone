@@ -19,7 +19,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -60,13 +60,13 @@ func testCachingFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
+					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						cacheData := allocator.Alloc(len(bs))
+						cacheData := allocator.AllocateCacheData(len(bs))
 						copy(cacheData.Bytes(), bs)
 						return cacheData, nil
 					},

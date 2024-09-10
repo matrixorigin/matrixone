@@ -21,7 +21,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
@@ -100,8 +100,8 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 	var counter perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counter)
 	const (
-		n       = 128
-		dataLen = 128
+		n       = 32
+		dataLen = 32
 	)
 
 	// new fs
@@ -172,11 +172,11 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 // only memory obtained through memcache.Alloc can be set to memcache
 func TestLocalFSWithIOVectorCache(t *testing.T) {
 	memCache1 := NewMemCache(
-		NewMemoryCache(1<<20, false, nil),
+		fscache.ConstCapacity(1<<20), nil,
 		nil,
 	)
 	memCache2 := NewMemCache(
-		NewMemoryCache(1<<20, false, nil),
+		fscache.ConstCapacity(1<<20), nil,
 		nil,
 	)
 	caches := []IOVectorCache{memCache1, memCache2}
@@ -206,8 +206,8 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 8,
-				ToCacheData: func(r io.Reader, _ []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
-					cacheData := allocator.Alloc(8)
+				ToCacheData: func(r io.Reader, _ []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+					cacheData := allocator.AllocateCacheData(8)
 					_, err := io.ReadFull(r, cacheData.Bytes())
 					if err != nil {
 						return nil, err

@@ -29,20 +29,23 @@ const (
 	InFilterSelectivityLimit = 0.05
 )
 
-func GetInFilterCardLimit() int32 {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
+func GetInFilterCardLimit(sid string) int32 {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables("runtime_filter_limit_in")
 	if ok {
 		return int32(v.(int64))
 	}
 	return InFilterCardLimitNonPK
 }
 
-func GetInFilterCardLimitOnPK(tableCnt float64) int32 {
+func GetInFilterCardLimitOnPK(
+	sid string,
+	tableCnt float64,
+) int32 {
 	upper := tableCnt * InFilterSelectivityLimit
 	if upper > InFilterCardLimitPK {
 		upper = InFilterCardLimitPK
 	}
-	lower := float64(GetInFilterCardLimit())
+	lower := float64(GetInFilterCardLimit(sid))
 	if upper < lower {
 		upper = lower
 	}
@@ -51,6 +54,7 @@ func GetInFilterCardLimitOnPK(tableCnt float64) int32 {
 
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
+	sid := builder.compCtx.GetProcess().GetService()
 
 	for _, childID := range node.Children {
 		builder.generateRuntimeFilters(childID)
@@ -93,7 +97,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
-	if node.JoinType != plan.Node_INDEX && rightChild.Stats.Selectivity > 0.5 {
+	if node.JoinType != plan.Node_INDEX && rightChild.Stats.Outcnt > 5000000 {
 		return
 	}
 
@@ -171,9 +175,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0])))
 		col := probeExprs[0].GetCol()
-		inLimit := GetInFilterCardLimit()
+		inLimit := GetInFilterCardLimit(sid)
 		if leftChild.TableDef.Pkey != nil && leftChild.TableDef.Cols[col.ColPos].Name == leftChild.TableDef.Pkey.PkeyColName {
-			inLimit = GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)
+			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
 		}
 		buildExpr := &plan.Expr{
 			Typ: buildExprs[0].Typ,
@@ -261,7 +265,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
 
-	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), buildExpr))
+	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), buildExpr))
 	recalcStatsByRuntimeFilter(leftChild, node, builder)
 }
 

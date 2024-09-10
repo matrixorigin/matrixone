@@ -25,6 +25,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -44,8 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/google/uuid"
 )
 
 func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -74,7 +73,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	// TODO: not a good way to solve this problem. and will be fixed by file `specialRule.go`
 	scale := int32(6)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
@@ -93,7 +92,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 	scale := int32(6)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
@@ -220,7 +219,7 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, err
 		}
 		if typ.Oid != types.T_enum {
-			return nil, moerr.NewNotSupported(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
+			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
 		}
 
 		// get enum values
@@ -395,7 +394,7 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 				return err
 			}
 			if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-				typ.Oid == types.T_blob || typ.Oid == types.T_text {
+				typ.Oid == types.T_blob || typ.Oid == types.T_text || typ.Oid == types.T_datalink {
 				if err := rs.Append(int64(typ.Scale), false); err != nil {
 					return err
 				}
@@ -532,7 +531,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
 	}
 
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
 	}
@@ -622,7 +621,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 			break
 		}
 		if !found {
-			return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
+			return moerr.NewNotSupportedf(proc.Ctx, "purge '%s'", tblName)
 		}
 
 	}
@@ -712,13 +711,11 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-const MaxTgtLen = int64(16 * 1024 * 1024)
-
 func doLpad(src string, tgtLen int64, pad string) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
-	if tgtLen < 0 || tgtLen > MaxTgtLen {
+	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
 		return "", true
 	} else if int(tgtLen) < srcLen {
 		return string(srcRune[:tgtLen]), false
@@ -737,7 +734,7 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
-	if tgtLen < 0 || tgtLen > MaxTgtLen {
+	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
 		return "", true
 	} else if int(tgtLen) < srcLen {
 		return string(srcRune[:tgtLen]), false
@@ -763,7 +760,7 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
 		// and there is no documentation about the limit of the result length.
 		sourceLen := int64(len(base))
-		if sourceLen*n > MaxTgtLen {
+		if sourceLen*n > types.MaxVarcharLen {
 			return "", true
 		}
 		return strings.Repeat(base, int(n)), false
@@ -980,7 +977,7 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	fillStringGroupStr := func(keys [][]byte, vec *vector.Vector, n int, start int) {
 		area := vec.GetArea()
-		vs := vector.MustFixedCol[types.Varlena](vec)
+		vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
 		if !vec.GetNulls().Any() {
 			for i := 0; i < n; i++ {
 				keys[i] = append(keys[i], byte(0))
@@ -1431,7 +1428,7 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 			}
 		}
 	case types.T_enum:
-		s := vector.MustFixedCol[types.Enum](v)
+		s := vector.MustFixedColWithTypeCheck[types.Enum](v)
 		if hasNull {
 			for i, b := range s {
 				if nulls.Contains(v.GetNulls(), uint64(i)) {
@@ -1487,11 +1484,10 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 				ps[i].EncodeDecimal128(b)
 			}
 		}
-	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
-		vs := vector.ExpandStrCol(v)
+	case types.T_uuid:
+		s := vector.ExpandFixedCol[types.Uuid](v)
 		if hasNull {
-			for i := range vs {
+			for i, b := range s {
 				if v.IsNull(uint64(i)) {
 					if isFull {
 						ps[i].EncodeNull()
@@ -1499,12 +1495,34 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 						nulls.Add(bitMap, uint64(i))
 					}
 				} else {
-					ps[i].EncodeStringType([]byte(vs[i]))
+					ps[i].EncodeUuid(b)
 				}
 			}
 		} else {
+			for i, b := range s {
+				ps[i].EncodeUuid(b)
+			}
+		}
+	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		if hasNull {
+			fv := vector.GenerateFunctionStrParameter(v)
+			for i, j := uint64(0), uint64(v.Length()); i < j; i++ {
+				value, null := fv.GetStrValue(i)
+				if null {
+					if isFull {
+						ps[i].EncodeNull()
+					} else {
+						nulls.Add(bitMap, i)
+					}
+					continue
+				}
+				ps[i].EncodeStringType(value)
+			}
+		} else {
+			vs := vector.ExpandBytesCol(v)
 			for i := range vs {
-				ps[i].EncodeStringType([]byte(vs[i]))
+				ps[i].EncodeStringType(vs[i])
 			}
 		}
 	}
@@ -1577,11 +1595,11 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 
 	case types.T_json, types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}
-	return moerr.NewInternalError(proc.Ctx, "not supported type %s", resTyp.String())
+	return moerr.NewInternalErrorf(proc.Ctx, "not supported type %s", resTyp.String())
 
 }
 

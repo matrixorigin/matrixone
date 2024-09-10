@@ -47,7 +47,7 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 		}
 
 		if _, ok := pksMap[colName]; ok {
-			return moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name '%s' in primary key", colName)
+			return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate column name '%s' in primary key", colName)
 		}
 
 		primaryKeys = append(primaryKeys, colName)

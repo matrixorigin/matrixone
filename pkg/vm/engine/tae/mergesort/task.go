@@ -30,7 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
 )
 
@@ -47,6 +49,8 @@ type MergeTaskHost interface {
 	Name() string
 	HostHintName() string
 	GetCommitEntry() *api.MergeCommitEntry
+	InitTransferMaps(blkCnt int)
+	GetTransferMaps() api.TransferMaps
 	PrepareNewWriter() *blockio.BlockWriter
 	DoTransfer() bool
 	GetObjectCnt() int
@@ -59,10 +63,6 @@ type MergeTaskHost interface {
 	GetBlockMaxRows() uint32
 	GetObjectMaxBlocks() uint16
 	GetTargetObjSize() uint32
-}
-
-func initTransferMapping(e *api.MergeCommitEntry, blkcnt int) {
-	e.Booking = NewBlkTransferBooking(blkcnt)
 }
 
 func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*batch.Batch, func()) {
@@ -88,7 +88,7 @@ func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*
 func GetNewWriter(
 	fs fileservice.FileService,
 	ver uint32, seqnums []uint16,
-	sortkeyPos int, sortkeyIsPK bool,
+	sortkeyPos int, sortkeyIsPK bool, isTombstone bool,
 ) *blockio.BlockWriter {
 	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
 	writer, err := blockio.NewBlockWriterNew(fs, name, ver, seqnums)
@@ -98,7 +98,16 @@ func GetNewWriter(
 	// has sortkey
 	if sortkeyPos >= 0 {
 		if sortkeyIsPK {
-			writer.SetPrimaryKey(uint16(sortkeyPos))
+			if isTombstone {
+				writer.SetPrimaryKeyWithType(
+					uint16(catalog.TombstonePrimaryKeyIdx),
+					index.HBF,
+					index.ObjectPrefixFn,
+					index.BlockPrefixFn,
+				)
+			} else {
+				writer.SetPrimaryKey(uint16(sortkeyPos))
+			}
 		} else { // cluster by
 			writer.SetSortKey(uint16(sortkeyPos))
 		}
@@ -111,6 +120,7 @@ func DoMergeAndWrite(
 	txnInfo string,
 	sortkeyPos int,
 	mergehost MergeTaskHost,
+	isTombstone bool,
 ) (err error) {
 	now := time.Now()
 	/*out args, keep the transfer information*/
@@ -118,7 +128,7 @@ func DoMergeAndWrite(
 	fromObjsDesc := ""
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
-		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, common.ShortObjId(*obj.ObjectName().ObjectId()))
+		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, obj.ObjectName().ObjectId().ShortStringEx())
 	}
 	logutil.Info(
 		"[MERGE-START]",
@@ -144,7 +154,7 @@ func DoMergeAndWrite(
 	}
 
 	if hasSortKey {
-		if err = mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
+		if err = mergeObjs(ctx, mergehost, sortkeyPos, isTombstone); err != nil {
 			return err
 		}
 	} else {
@@ -157,7 +167,7 @@ func DoMergeAndWrite(
 	for _, o := range commitEntry.CreatedObjs {
 		obj := objectio.ObjectStats(o)
 		toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
-			common.ShortObjId(*obj.ObjectName().ObjectId()),
+			obj.ObjectName().ObjectId().ShortStringEx(),
 			obj.BlkCnt(),
 			obj.Rows())
 	}
@@ -173,55 +183,40 @@ func DoMergeAndWrite(
 
 // not defined in api.go to avoid import cycle
 
-func NewBlkTransferBooking(size int) *api.BlkTransferBooking {
-	mappings := make([]api.BlkTransMap, size)
-	for i := 0; i < size; i++ {
-		mappings[i] = api.BlkTransMap{
-			M: make(map[int32]api.TransDestPos),
-		}
-	}
-	return &api.BlkTransferBooking{
-		Mappings: mappings,
+func CleanTransMapping(b api.TransferMaps) {
+	for i := 0; i < len(b); i++ {
+		b[i] = make(api.TransferMap)
 	}
 }
 
-func CleanTransMapping(b *api.BlkTransferBooking) {
-	for i := 0; i < len(b.Mappings); i++ {
-		b.Mappings[i] = api.BlkTransMap{
-			M: make(map[int32]api.TransDestPos),
+func AddSortPhaseMapping(m api.TransferMap, rowCnt int, mapping []int64) {
+	if mapping == nil {
+		for i := range rowCnt {
+			m[uint32(i)] = api.TransferDestPos{RowIdx: uint32(i)}
 		}
+		return
+	}
+
+	if len(mapping) != rowCnt {
+		panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), rowCnt))
+	}
+
+	// mapping sortedVec[i] = originalVec[sortMapping[i]]
+	// transpose it, sortedVec[sortMapping[i]] = originalVec[i]
+	// [9 4 8 5 2 6 0 7 3 1](originalVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
+	// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
+	// TODO: use a more efficient way to transpose, in place
+	transposedMapping := make([]uint32, len(mapping))
+	for sortedPos, originalPos := range mapping {
+		transposedMapping[originalPos] = uint32(sortedPos)
+	}
+
+	for i := range rowCnt {
+		m[uint32(i)] = api.TransferDestPos{RowIdx: transposedMapping[i]}
 	}
 }
 
-func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, mapping []int64) {
-	// TODO: remove panic check
-	if mapping != nil {
-		if len(mapping) != originRowCnt {
-			panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), originRowCnt))
-		}
-		// mapping sortedVec[i] = originalVec[sortMapping[i]]
-		// transpose it, originalVec[sortMapping[i]] = sortedVec[i]
-		// [9 4 8 5 2 6 0 7 3 1](originalVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
-		// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
-		// TODO: use a more efficient way to transpose, in place
-		transposedMapping := make([]int64, len(mapping))
-		for sortedPos, originalPos := range mapping {
-			transposedMapping[originalPos] = int64(sortedPos)
-		}
-		mapping = transposedMapping
-	}
-	targetMapping := b.Mappings[idx].M
-	for origRow := 0; origRow < originRowCnt; origRow++ {
-		if mapping == nil {
-			// no sort phase, the mapping is 1:1, just use posInVecApplyDeletes
-			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(origRow)}
-		} else {
-			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(mapping[origRow])}
-		}
-	}
-}
-
-func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping []int, toLayout []uint32) {
+func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint32) {
 	bisectHaystack := make([]uint32, 0, len(toLayout)+1)
 	bisectHaystack = append(bisectHaystack, 0)
 	for _, x := range toLayout {
@@ -246,12 +241,11 @@ func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping []int, toLayout 
 		return blkIdx, rows
 	}
 
-	var totalHandledRows int32
+	var totalHandledRows uint32
 
-	for _, mcontainer := range b.Mappings {
-		m := mcontainer.M
+	for _, m := range b {
 		size := len(m)
-		var curTotal int32 // index in the flatten src array
+		var curTotal uint32 // index in the flatten src array
 		for srcRow := range m {
 			curTotal = totalHandledRows + m[srcRow].RowIdx
 			destTotal := mapping[curTotal]
@@ -259,9 +253,9 @@ func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping []int, toLayout 
 				delete(m, srcRow)
 			} else {
 				destBlkIdx, destRowIdx := bisectPinpoint(uint32(destTotal))
-				m[srcRow] = api.TransDestPos{BlkIdx: int32(destBlkIdx), RowIdx: int32(destRowIdx)}
+				m[srcRow] = api.TransferDestPos{BlkIdx: uint16(destBlkIdx), RowIdx: destRowIdx}
 			}
 		}
-		totalHandledRows += int32(size)
+		totalHandledRows += uint32(size)
 	}
 }

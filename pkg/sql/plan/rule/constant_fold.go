@@ -278,77 +278,77 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 	case types.T_bool:
 		return &plan.Literal{
 			Value: &plan.Literal_Bval{
-				Bval: vector.MustFixedCol[bool](vec)[row],
+				Bval: vector.MustFixedColNoTypeCheck[bool](vec)[row],
 			},
 		}
 	case types.T_bit:
 		return &plan.Literal{
 			Value: &plan.Literal_U64Val{
-				U64Val: vector.MustFixedCol[uint64](vec)[row],
+				U64Val: vector.MustFixedColNoTypeCheck[uint64](vec)[row],
 			},
 		}
 	case types.T_int8:
 		return &plan.Literal{
 			Value: &plan.Literal_I8Val{
-				I8Val: int32(vector.MustFixedCol[int8](vec)[row]),
+				I8Val: int32(vector.MustFixedColNoTypeCheck[int8](vec)[row]),
 			},
 		}
 	case types.T_int16:
 		return &plan.Literal{
 			Value: &plan.Literal_I16Val{
-				I16Val: int32(vector.MustFixedCol[int16](vec)[row]),
+				I16Val: int32(vector.MustFixedColNoTypeCheck[int16](vec)[row]),
 			},
 		}
 	case types.T_int32:
 		return &plan.Literal{
 			Value: &plan.Literal_I32Val{
-				I32Val: vector.MustFixedCol[int32](vec)[row],
+				I32Val: vector.MustFixedColNoTypeCheck[int32](vec)[row],
 			},
 		}
 	case types.T_int64:
 		return &plan.Literal{
 			Value: &plan.Literal_I64Val{
-				I64Val: vector.MustFixedCol[int64](vec)[row],
+				I64Val: vector.MustFixedColNoTypeCheck[int64](vec)[row],
 			},
 		}
 	case types.T_uint8:
 		return &plan.Literal{
 			Value: &plan.Literal_U8Val{
-				U8Val: uint32(vector.MustFixedCol[uint8](vec)[row]),
+				U8Val: uint32(vector.MustFixedColNoTypeCheck[uint8](vec)[row]),
 			},
 		}
 	case types.T_uint16:
 		return &plan.Literal{
 			Value: &plan.Literal_U16Val{
-				U16Val: uint32(vector.MustFixedCol[uint16](vec)[row]),
+				U16Val: uint32(vector.MustFixedColNoTypeCheck[uint16](vec)[row]),
 			},
 		}
 	case types.T_uint32:
 		return &plan.Literal{
 			Value: &plan.Literal_U32Val{
-				U32Val: vector.MustFixedCol[uint32](vec)[row],
+				U32Val: vector.MustFixedColNoTypeCheck[uint32](vec)[row],
 			},
 		}
 	case types.T_uint64:
 		return &plan.Literal{
 			Value: &plan.Literal_U64Val{
-				U64Val: vector.MustFixedCol[uint64](vec)[row],
+				U64Val: vector.MustFixedColNoTypeCheck[uint64](vec)[row],
 			},
 		}
 	case types.T_float32:
 		return &plan.Literal{
 			Value: &plan.Literal_Fval{
-				Fval: vector.MustFixedCol[float32](vec)[row],
+				Fval: vector.MustFixedColNoTypeCheck[float32](vec)[row],
 			},
 		}
 	case types.T_float64:
 		return &plan.Literal{
 			Value: &plan.Literal_Dval{
-				Dval: vector.MustFixedCol[float64](vec)[row],
+				Dval: vector.MustFixedColNoTypeCheck[float64](vec)[row],
 			},
 		}
 	case types.T_varchar, types.T_char,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return &plan.Literal{
 			Value: &plan.Literal_Sval{
 				Sval: vec.GetStringAt(int(row)),
@@ -366,25 +366,25 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 	case types.T_timestamp:
 		return &plan.Literal{
 			Value: &plan.Literal_Timestampval{
-				Timestampval: int64(vector.MustFixedCol[types.Timestamp](vec)[row]),
+				Timestampval: int64(vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[row]),
 			},
 		}
 	case types.T_date:
 		return &plan.Literal{
 			Value: &plan.Literal_Dateval{
-				Dateval: int32(vector.MustFixedCol[types.Date](vec)[row]),
+				Dateval: int32(vector.MustFixedColNoTypeCheck[types.Date](vec)[row]),
 			},
 		}
 	case types.T_time:
 		return &plan.Literal{
 			Value: &plan.Literal_Timeval{
-				Timeval: int64(vector.MustFixedCol[types.Time](vec)[row]),
+				Timeval: int64(vector.MustFixedColNoTypeCheck[types.Time](vec)[row]),
 			},
 		}
 	case types.T_datetime:
 		return &plan.Literal{
 			Value: &plan.Literal_Datetimeval{
-				Datetimeval: int64(vector.MustFixedCol[types.Datetime](vec)[row]),
+				Datetimeval: int64(vector.MustFixedColNoTypeCheck[types.Datetime](vec)[row]),
 			},
 		}
 	case types.T_enum:
@@ -393,19 +393,19 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		}
 		return &plan.Literal{
 			Value: &plan.Literal_EnumVal{
-				EnumVal: uint32(vector.MustFixedCol[types.Enum](vec)[row]),
+				EnumVal: uint32(vector.MustFixedColNoTypeCheck[types.Enum](vec)[row]),
 			},
 		}
 	case types.T_decimal64:
 		return &plan.Literal{
 			Value: &plan.Literal_Decimal64Val{
-				Decimal64Val: &plan.Decimal64{A: int64(vector.MustFixedCol[types.Decimal64](vec)[row])},
+				Decimal64Val: &plan.Decimal64{A: int64(vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row])},
 			},
 		}
 	case types.T_decimal128:
 		decimalValue := &plan.Decimal128{}
-		decimalValue.A = int64(vector.MustFixedCol[types.Decimal128](vec)[row].B0_63)
-		decimalValue.B = int64(vector.MustFixedCol[types.Decimal128](vec)[row].B64_127)
+		decimalValue.A = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B0_63)
+		decimalValue.B = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B64_127)
 		return &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: decimalValue}}
 	default:
 		return nil

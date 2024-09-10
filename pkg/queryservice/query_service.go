@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -65,7 +66,7 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryS
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} })
 
-	h, err := morpc.NewMessageHandler(serviceName, address, cfg, pool,
+	h, err := morpc.NewMessageHandler(serviceID, serviceName, address, cfg, pool,
 		morpc.WithHandlerRespReleaseFunc[*pb.Request, *pb.Response](func(m morpc.Message) {
 			resp := m.(*pb.Response)
 			if resp.CmdMethod == pb.CmdMethod_GetCacheData {
@@ -101,8 +102,8 @@ func (s *queryService) SetReleaseFunc(resp *pb.Response, f func()) {
 }
 
 func (s *queryService) initHandleFunc() {
-	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, handleGetProtocolVersion, false)
-	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, handleSetProtocolVersion, false)
+	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, s.handleGetProtocolVersion(), false)
+	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion(), false)
 	s.AddHandleFunc(pb.CmdMethod_CoreDumpConfig, handleCoreDumpConfig, false)
 }
 
@@ -163,6 +164,7 @@ func RequestMultipleCn(ctx context.Context,
 			// gen request and send it
 			if genRequest != nil {
 				req := genRequest()
+				logger.GetLogger("RequestMultipleCn").Infof("[send request]%s send request %s to %s", qc.ServiceID(), req.CmdMethod.String(), node)
 				resp, err := qc.SendMessage(ctx, addr, req)
 				responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
 			}
@@ -179,9 +181,7 @@ func RequestMultipleCn(ctx context.Context,
 				queryResp, ok := res.response.(*pb.Response)
 				if ok {
 					//save response
-					if handleValidResponse != nil {
-						handleValidResponse(res.nodeAddr, queryResp)
-					}
+					handleValidResponse(res.nodeAddr, queryResp)
 					if queryResp != nil {
 						qc.Release(queryResp)
 					}

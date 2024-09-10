@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	json2 "github.com/segmentio/encoding/json"
 )
 
 func (bj ByteJson) String() string {
@@ -151,7 +152,7 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeString:
 		buf, err = bj.toString(buf)
 	default:
-		err = moerr.NewInvalidInputNoCtx("invalid json type '%v'", bj.Type)
+		err = moerr.NewInvalidInputNoCtxf("invalid json type '%v'", bj.Type)
 	}
 	return buf, err
 }
@@ -278,12 +279,7 @@ func (bj ByteJson) queryValByKey(key []byte) ByteJson {
 		return bytes.Compare(bj.getObjectKey(i), key) >= 0
 	})
 	if idx >= cnt || !bytes.Equal(bj.getObjectKey(idx), key) {
-		dt := make([]byte, 1)
-		dt[0] = LiteralNull
-		return ByteJson{
-			Type: TpCodeLiteral,
-			Data: dt,
-		}
+		return Null
 	}
 	return bj.getObjectVal(idx)
 }
@@ -369,7 +365,7 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 	return cur
 }
 
-func (bj ByteJson) Query(paths []*Path) *ByteJson {
+func (bj ByteJson) Query(paths []*Path) ByteJson {
 	out := make([]ByteJson, 0, len(paths))
 	for _, path := range paths {
 		tmp := bj.query(nil, path)
@@ -381,16 +377,86 @@ func (bj ByteJson) Query(paths []*Path) *ByteJson {
 		}
 	}
 	if len(out) == 0 {
-		return &ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+		return ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 	}
 	if len(out) == 1 && len(paths) == 1 {
-		return &out[0]
+		return out[0]
 	}
 	allNull := checkAllNull(out)
 	if allNull {
-		return &ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+		return ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 	}
 	return mergeToArray(out)
+}
+
+func (bj ByteJson) querySimple(path *Path) ByteJson {
+	cur := bj
+	// don't go through th step(), recursive call route.  We know
+	// we have a simple path, each step will bring us to ONE SINGLE next value.
+
+	for _, sub := range path.paths {
+		if cur.Type == TpCodeObject {
+			switch sub.tp {
+			case subPathIdx:
+				start, _, _ := sub.idx.genIndex(1)
+				if start != 0 {
+					return Null
+				}
+				// obj[0] is itself, continue
+			case subPathKey:
+				if sub.key == "*" {
+					panic("bytejson simple path should not contain *")
+				} else {
+					cur = cur.queryValByKey(util.UnsafeStringToBytes(sub.key))
+				}
+			default:
+				return Null
+			}
+		} else if cur.Type == TpCodeArray {
+			if sub.tp != subPathIdx {
+				return Null
+			}
+			cnt := cur.GetElemCnt()
+			idx, _, _ := sub.idx.genIndex(cnt)
+			// don't bother checking last -- idx < 0 and not last means the path
+			// is not valid, we should have caught this earlier.
+			// if (last && idx < 0) || cnt <= idx {
+			if idx < 0 || cnt <= idx {
+				// out of range
+				return Null
+			} else {
+				cur = cur.getArrayElem(idx)
+			}
+		} else {
+			return Null
+		}
+	}
+	return cur
+}
+
+func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
+	if len(paths) == 0 {
+		// not retrieve anything
+		return Null
+	} else if len(paths) == 1 {
+		// only retrieve one path
+		return bj.querySimple(paths[0])
+	} else {
+		// retrieve multiple paths, merge them into an array
+		out := make([]ByteJson, 0, len(paths))
+		for _, path := range paths {
+			tmp := bj.querySimple(path)
+			// strange behavior, skipping Null value.
+			if !tmp.IsNull() {
+				out = append(out, tmp)
+			}
+		}
+		// strange behavior, we actually return Null instead of an array of nulls.
+		if checkAllNull(out) {
+			return Null
+		}
+		return mergeToArray(out)
+	}
 }
 
 func (bj ByteJson) canUnnest() bool {
@@ -532,7 +598,7 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 	vals := make([]ByteJson, 0, 1)
 	keys, vals = bj.queryWithSubPath(keys, vals, path, "$")
 	if len(keys) != len(vals) {
-		return nil, moerr.NewInvalidInputNoCtx("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
+		return nil, moerr.NewInvalidInputNoCtxf("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
 	}
 	for i := 0; i < len(keys); i++ {
 		if vals[i].canUnnest() {
@@ -619,93 +685,183 @@ func ParseNodeString(s string) (Node, error) {
 }
 
 func ParseNode(data []byte) (Node, error) {
-	p := parser{
-		src:   data,
-		stack: make([]*Group, 0, 2),
-	}
+	p := parser{src: data}
 	return p.do()
 }
 
 type parser struct {
 	src   []byte
 	stack []*Group
+	tz    *json2.Tokenizer
+	state func(*parser) int
+	top   Node
 }
 
 func (p *parser) do() (Node, error) {
+	p.stack = make([]*Group, 0, 2)
+	p.tz = json2.NewTokenizer(p.src)
+	p.state = (*parser).stateBeginValue
 	var z Node
-	de := json.NewDecoder(bytes.NewReader(p.src))
-	de.UseNumber()
-	checkEOF := func(v any) (Node, error) {
-		_, err := de.Token()
-		if !errors.Is(err, io.EOF) {
-			if g, ok := v.(*Group); ok {
+	for {
+		if !p.tz.Next() {
+			for _, g := range p.stack {
 				g.free()
 			}
-			return z, moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
+			return z, io.ErrUnexpectedEOF
 		}
-		return Node{v}, nil
-	}
-	var tk json.Token
-	var err error
-	for {
-		tk, err = de.Token()
-		if err != nil {
-			break
-		}
-		switch tk := tk.(type) {
-		case json.Delim:
-			g := p.addDelim(tk)
-			if g != nil {
-				return checkEOF(g)
+		switch p.state(p) {
+		case scanError:
+			for _, g := range p.stack {
+				g.free()
 			}
-		case string:
-			if len(p.stack) == 0 {
-				return checkEOF(tk)
+			if errors.Is(p.tz.Err, io.EOF) {
+				return z, io.ErrUnexpectedEOF
 			}
-			p.addString(tk)
-		case json.Number, bool, nil:
-			if len(p.stack) == 0 {
-				return checkEOF(tk)
+			var se *json.SyntaxError
+			if p.tz.Remaining() == 0 && errors.As(p.tz.Err, &se) {
+				return z, io.ErrUnexpectedEOF
 			}
-			p.appendToLastGroup(Node{tk})
+			return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
+		case scanEnd:
+			if p.tz.Next() {
+				p.top.Free()
+				return z, moerr.NewInvalidInputNoCtxf("invalid json: %s", p.src)
+			}
+			if p.tz.Err != nil {
+				return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
+			}
+			return p.top, nil
 		}
 	}
-
-	for _, g := range p.stack {
-		g.free()
-	}
-	if errors.Is(err, io.EOF) {
-		return z, io.ErrUnexpectedEOF
-	}
-	if strings.HasSuffix(err.Error(), "unexpected end of JSON input") {
-		return z, io.ErrUnexpectedEOF
-	}
-	return z, err
 }
 
-func (p *parser) addDelim(r json.Delim) *Group {
-	switch r {
-	case '[', '{':
-		g := reuse.Alloc[Group](nil)
-		g.Obj = r == '{'
-		p.stack = append(p.stack, g)
-	case ']', '}':
-		n := len(p.stack) - 1
-		g := p.stack[n]
-		p.stack = p.stack[:n]
+const (
+	scanContinue = iota
+	scanEnd      // top-level value ended *before* this byte; known to be first "stop" result
+	scanError    // hit an error, scanner.err.
+)
 
-		if g.Obj {
-			g.sortKeys()
-		}
+func (p *parser) stateBeginValue() int {
+	k := p.tz.Kind()
 
-		if len(p.stack) == 0 {
-			return g
-		}
-		p.appendToLastGroup(Node{g})
-	default:
-		panic("unknown Delim " + string(r))
+	switch k.Class() {
+	case json2.Array:
+		p.openGroup(k)
+		p.state = (*parser).stateBeginValueOrEmpty
+		return scanContinue
+	case json2.Object:
+		p.openGroup(k)
+		p.state = (*parser).stateObjectKeyOrEmpty
+		return scanContinue
 	}
-	return nil
+
+	var n Node
+	switch k.Class() {
+	case json2.String:
+		n = Node{string(p.tz.String())}
+	case json2.Num:
+		n = Node{json.Number(p.tz.Value)}
+	case json2.Bool:
+		n = Node{p.tz.Bool()}
+	case json2.Null:
+		n = Node{nil}
+	default:
+		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: looking for beginning of value")
+		return scanError
+	}
+	if p.tz.Depth != 0 {
+		p.appendToLastGroup(n)
+		p.state = (*parser).stateEndValue
+		return scanContinue
+	}
+
+	p.top = n
+	p.state = nil
+	return scanEnd
+}
+
+func (p *parser) stateBeginValueOrEmpty() int {
+	if p.tz.Delim == ']' {
+		return p.stateEndValue()
+	}
+
+	return p.stateBeginValue()
+}
+
+func (p *parser) stateObjectKey() int {
+	if p.tz.Kind().Class() != json2.String || !p.tz.IsKey {
+		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: object key")
+		return scanError
+	}
+
+	g := p.stack[len(p.stack)-1]
+	g.Keys = append(g.Keys, string(p.tz.String()))
+	p.state = (*parser).stateColon
+	return scanContinue
+}
+
+func (p *parser) stateObjectKeyOrEmpty() int {
+	if p.tz.Delim == '}' {
+		return p.stateEndValue()
+	}
+
+	return p.stateObjectKey()
+}
+
+func (p *parser) stateColon() int {
+	if p.tz.Delim != ':' {
+		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: after object key")
+		return scanError
+	}
+	p.state = (*parser).stateBeginValue
+	return scanContinue
+}
+
+func (p *parser) stateEndValue() int {
+	if p.tz.Delim == ']' || p.tz.Delim == '}' {
+		p.closeGroup()
+		if p.tz.Depth == 0 {
+			p.state = nil
+			return scanEnd
+		}
+		p.state = (*parser).stateEndValue
+		return scanContinue
+	}
+
+	if p.tz.Delim == ',' {
+		g := p.stack[len(p.stack)-1]
+		if g.Obj {
+			p.state = (*parser).stateObjectKey
+		} else {
+			p.state = (*parser).stateBeginValue
+		}
+		return scanContinue
+	}
+
+	p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: end value")
+	return scanError
+}
+
+func (p *parser) openGroup(k json2.Kind) {
+	g := reuse.Alloc[Group](nil)
+	g.Obj = k == json2.Object
+	p.stack = append(p.stack, g)
+}
+
+func (p *parser) closeGroup() {
+	n := len(p.stack) - 1
+	g := p.stack[n]
+	p.stack = p.stack[:n]
+
+	if g.Obj {
+		g.sortKeys()
+	}
+
+	if len(p.stack) == 0 {
+		p.top = Node{g}
+		return
+	}
+	p.appendToLastGroup(Node{g})
 }
 
 func (p *parser) appendToLastGroup(n Node) {
@@ -725,15 +881,6 @@ func (p *parser) appendToLastGroup(n Node) {
 	old.Free()
 	g.Keys = g.Keys[:last]
 	g.Values[dupIdx] = n
-}
-
-func (p *parser) addString(s string) {
-	g := p.stack[len(p.stack)-1]
-	if g.Obj && len(g.Keys) <= len(g.Values) {
-		g.Keys = append(g.Keys, s)
-		return
-	}
-	p.appendToLastGroup(Node{s})
 }
 
 func init() {
@@ -818,7 +965,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 				o := baseOffset + headerSize + i*keyEntrySize
 				length := uint32(len(k))
 				if length > math.MaxUint16 {
-					return 0, 0, moerr.NewInvalidInputNoCtx("json key %s", k)
+					return 0, 0, moerr.NewInvalidInputNoCtxf("json key %s", k)
 				}
 				endian.PutUint32(w.buf[o:], loc)
 				endian.PutUint16(w.buf[o+keyOriginOff:], uint16(length))
@@ -905,7 +1052,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 		w.buf = addString(w.buf, val)
 		return TpCodeString, uint32(len(w.buf) - start), nil
 	default:
-		return 0, 0, moerr.NewInvalidInputNoCtx("unknown type %T", node)
+		return 0, 0, moerr.NewInvalidInputNoCtxf("unknown type %T", node)
 	}
 }
 
@@ -915,7 +1062,7 @@ func (w *byteJsonWriter) parseNumber(in json.Number) (TpCode, []byte, error) {
 	if strings.ContainsAny(string(in), "Ee.") {
 		val, err := in.Float64()
 		if err != nil {
-			return TpCodeFloat64, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+			return TpCodeFloat64, nil, moerr.NewInvalidInputNoCtxf("json number %v", in)
 		}
 		if err = checkFloat64(val); err != nil {
 			return TpCodeFloat64, nil, err
@@ -939,7 +1086,7 @@ func (w *byteJsonWriter) parseNumber(in json.Number) (TpCode, []byte, error) {
 		return TpCodeFloat64, data[:], nil
 	}
 	var tpCode TpCode
-	return tpCode, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+	return tpCode, nil, moerr.NewInvalidInputNoCtxf("json number %v", in)
 }
 
 type Node struct {

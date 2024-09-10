@@ -31,8 +31,10 @@ const (
 	defaultTimeout = time.Second * 10
 )
 
-func GetService() ShardService {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ShardService)
+func GetService(
+	sid string,
+) ShardService {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.ShardService)
 	if !ok {
 		return &service{}
 	}
@@ -65,6 +67,8 @@ type ShardServer interface {
 type ShardService interface {
 	// GetConfig returns the configuration of the shard service.
 	Config() Config
+	// GetStorage returns the storage of the shard service.
+	GetStorage() ShardStorage
 	// Read read data from shards.
 	Read(ctx context.Context, req ReadRequest, opts ReadOptions) error
 	// HasLocalReplica returns whether the shard has a local replica.
@@ -83,6 +87,8 @@ type ShardService interface {
 	Delete(ctx context.Context, table uint64, txnOp client.TxnOperator) error
 	// ReplicaCount returns the number of running replicas on current cn.
 	ReplicaCount() int64
+	// TableReplicaCount returns the number of running replicas of the special table on current cn.
+	TableReplicaCount(tableID uint64) int64
 	// Close close the service
 	Close() error
 }
@@ -152,11 +158,17 @@ type ReadOptions struct {
 }
 
 const (
-	ReadData   = 0
-	ReadRanges = 1
-	ReadStats  = 2
-	ReadRows   = 3
-	ReadSize   = 4
+	ReadData                     = 0
+	ReadRanges                   = 1
+	ReadStats                    = 2
+	ReadRows                     = 3
+	ReadSize                     = 4
+	ReadApproxObjectsNum         = 5
+	ReadPrimaryKeysMayBeModified = 6
+	ReadGetColumMetadataScanInfo = 7
+	ReadReader                   = 8
+	ReadMergeObjects             = 9
+	ReadVisibleObjectStats       = 10
 )
 
 type ReadRequest struct {

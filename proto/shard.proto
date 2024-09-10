@@ -229,6 +229,8 @@ message ReadParam {
     GetColumMetadataScanInfoParam  GetColumMetadataScanInfoParam = 6 [(gogoproto.nullable) = false];
     MergeObjectsParam              MergeObjectsParam             = 7 [(gogoproto.nullable) = false];
     KeyParam                       KeyParam                      = 8 [(gogoproto.nullable) = false];
+    ReaderParam                    ReaderParam                   = 9 [(gogoproto.nullable) = false];
+    PrimaryKeysMayBeModifiedParam   PrimaryKeysMayBeModifiedParam  = 10 [(gogoproto.nullable) = false];
 }
 
 message TxnTable {
@@ -247,19 +249,33 @@ message SizeParam {
 }
 
 message RangesParam {
-    plan.Expr Exprs = 1 [(gogoproto.nullable) = false];
+    repeated plan.Expr Exprs = 1;
+    bytes UncommittedObjects = 2;
 }
 
 message GetColumMetadataScanInfoParam {
     string columnName = 1;
 }
 
-message MergeObjectsParam {
-    bytes  ObjectStats   = 1;
-	string PolicyName    = 2;
-    uint32 TargetObjSize = 3;
-}
-
 message KeyParam {
     bytes Key = 1;
+}
+
+message ReaderParam {
+    int32 num        = 1;
+    plan.Expr expr   = 2 [(gogoproto.nullable) = false];
+    bytes ranges     = 3;
+    bool orderedScan = 4;
+    int32 txnOffset  = 5;
+}
+
+message PrimaryKeysMayBeModifiedParam {
+    bytes from      = 1;
+    bytes to        = 2;
+    bytes keyVector = 3;
+}
+
+message MergeObjectsParam {
+    repeated bytes objstats  = 1;
+    uint32 targetObjSize     = 3;
 }

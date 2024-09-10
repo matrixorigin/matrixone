@@ -44,7 +44,7 @@ func TestMain(m *testing.M) {
 		Format: "console",
 	})
 
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
 	m.Run()
 }
 
@@ -77,6 +77,13 @@ func getStoreTestConfig() Config {
 	cfg.DeploymentID = 1
 	cfg.FS = vfs.NewStrictMem()
 	cfg.UseTeeLogDB = true
+
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
+		},
+	)
 	return cfg
 }
 

@@ -35,7 +35,7 @@ var (
 		types.T_uuid,
 		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
 		types.T_decimal64, types.T_decimal128,
-		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json,
+		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json, types.T_datalink,
 	}
 )
 
@@ -190,7 +190,7 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return strCaseFn(parameters, result, proc, length, selectList)
 	case types.T_blob:
 		return strCaseFn(parameters, result, proc, length, selectList)
-	case types.T_text:
+	case types.T_text, types.T_datalink:
 		return strCaseFn(parameters, result, proc, length, selectList)
 	case types.T_json:
 		return strCaseFn(parameters, result, proc, length, selectList)
@@ -323,7 +323,7 @@ var (
 		types.T_bit,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json,
 		types.T_decimal64, types.T_decimal128,
-		types.T_timestamp, types.T_time,
+		types.T_timestamp, types.T_time, types.T_datalink,
 	}
 )
 
@@ -415,7 +415,7 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return generalIffFn[types.Timestamp](parameters, result, proc, length, selectList)
 	case types.T_enum:
 		return generalIffFn[types.Enum](parameters, result, proc, length, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink, types.T_json:
 		return strIffFn(parameters, result, proc, length, selectList)
 	}
 	panic("unreached code")

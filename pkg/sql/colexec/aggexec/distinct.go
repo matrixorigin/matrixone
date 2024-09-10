@@ -24,6 +24,7 @@ import (
 type distinctHash struct {
 	mp          *mpool.MPool
 	maps        []*hashmap.StrHashMap
+	itrs        []hashmap.Iterator
 	hashHasNull bool
 
 	// optimized for bulk and batch insertions.
@@ -35,6 +36,7 @@ func newDistinctHash(mp *mpool.MPool, containNullValue bool) distinctHash {
 	return distinctHash{
 		mp:          mp,
 		maps:        nil,
+		itrs:        nil,
 		hashHasNull: containNullValue,
 	}
 }
@@ -42,12 +44,14 @@ func newDistinctHash(mp *mpool.MPool, containNullValue bool) distinctHash {
 func (d *distinctHash) grows(more int) error {
 	oldLen, newLen := len(d.maps), len(d.maps)+more
 	d.maps = append(d.maps, make([]*hashmap.StrHashMap, more)...)
+	d.itrs = append(d.itrs, make([]hashmap.Iterator, more)...)
 
 	var err error
 	for i := oldLen; i < newLen; i++ {
-		if d.maps[i], err = hashmap.NewStrMap(true, d.mp); err != nil {
+		if d.maps[i], err = hashmap.NewStrMap(true); err != nil {
 			return err
 		}
+		d.itrs[i] = d.maps[i].NewIterator()
 	}
 	return nil
 }
@@ -55,7 +59,7 @@ func (d *distinctHash) grows(more int) error {
 // fill inserts the row into the hash map.
 // return true if this is a new value.
 func (d *distinctHash) fill(group int, vs []*vector.Vector, row int) (bool, error) {
-	return d.maps[group].Insert(vs, row)
+	return d.itrs[group].DetectDup(vs, row)
 }
 
 func (d *distinctHash) bulkFill(group int, vs []*vector.Vector) ([]bool, error) {
@@ -70,7 +74,7 @@ func (d *distinctHash) bulkFill(group int, vs []*vector.Vector) ([]bool, error) 
 	d.bs = d.bs[:rowCount]
 	d.bs1 = d.bs1[:hashmap.UnitLimit]
 
-	iterator := d.maps[group].NewIterator()
+	iterator := d.itrs[group]
 
 	for i := 0; i < rowCount; i += hashmap.UnitLimit {
 		n := rowCount - i

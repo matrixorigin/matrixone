@@ -19,6 +19,16 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"path"
+	runtime2 "runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,16 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"sort"
-
-	"io"
-	"os"
-	"path"
-	runtime2 "runtime"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
 )
 
 func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
@@ -73,8 +73,14 @@ func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
 	return fileName, err
 }
 
-func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string, config *Config) error {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+func BackupData(
+	ctx context.Context,
+	sid string,
+	srcFs, dstFs fileservice.FileService,
+	dir string,
+	config *Config,
+) error {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewNotSupported(ctx, "no implement sqlExecutor")
 	}
@@ -98,7 +104,7 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 		return err
 	}
 	count := config.Parallelism
-	return execBackup(ctx, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
+	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
 }
 
 func getParallelCount(count int) int {
@@ -256,6 +262,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 
 func execBackup(
 	ctx context.Context,
+	sid string,
 	srcFs, dstFs fileservice.FileService,
 	names []string,
 	count int,
@@ -303,9 +310,9 @@ func execBackup(
 		var oneNames []*objectio.BackupObject
 		var data *logtail.CheckpointData
 		if i == 0 {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil, &baseTS)
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), nil, &baseTS)
 		} else {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes, &baseTS)
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), &softDeletes, &baseTS)
 		}
 		if err != nil {
 			return err
@@ -322,7 +329,7 @@ func execBackup(
 	}
 
 	// trim checkpoint and block
-	var cnLoc, tnLoc, mergeStart, mergeEnd string
+	var cnLoc, mergeStart, mergeEnd string
 	var end, start types.TS
 	var version uint64
 	if trimInfo != "" {
@@ -333,7 +340,7 @@ func execBackup(
 		}
 		cnLoc = ckpStr[0]
 		mergeEnd = ckpStr[2]
-		tnLoc = ckpStr[3]
+		// tnLoc = ckpStr[3]
 		mergeStart = ckpStr[4]
 		end = types.StringToTS(mergeEnd)
 		start = types.StringToTS(mergeStart)
@@ -367,13 +374,12 @@ func execBackup(
 		if err != nil {
 			return err
 		}
-		tnLocation, err := blockio.EncodeLocationFromString(tnLoc)
-		if err != nil {
-			return err
-		}
-		var checkpointFiles []string
-		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
-			cnLocation, tnLocation, uint32(version), start, softDeletes)
+		var (
+			checkpointFiles []string
+			tnLocation      objectio.Location
+		)
+		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, sid, srcFs, dstFs,
+			cnLocation, uint32(version), start)
 		for _, name := range checkpointFiles {
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {
@@ -389,7 +395,7 @@ func execBackup(
 		if err != nil {
 			return err
 		}
-		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, cnLocation, tnLocation, start, end)
+		file, err := checkpoint.MergeCkpMeta(ctx, sid, dstFs, cnLocation, tnLocation, start, end)
 		if err != nil {
 			return err
 		}

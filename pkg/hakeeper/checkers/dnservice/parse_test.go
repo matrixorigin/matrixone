@@ -18,17 +18,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCheckInitiatingShards(t *testing.T) {
 	// clear all records, or other test would fail
 	defer func() {
-		waitingShards.clear()
+		getCheckState("").waitingShards.clear()
 	}()
 
 	nextReplicaID := uint64(100)
@@ -66,15 +65,15 @@ func TestCheckInitiatingShards(t *testing.T) {
 	expiredTick := config.ExpiredTick(earliestTick, config.TNStoreTimeout) + 1
 
 	// discover an initial shard => no operators generated
-	ops := checkInitiatingShards(rs, mapper, workingStores, idAlloc, cluster, config, earliestTick)
+	ops := checkInitiatingShards("", rs, mapper, workingStores, idAlloc, cluster, config, earliestTick)
 	require.Equal(t, 0, len(ops))
 
 	// waiting some time, but not long enough
-	ops = checkInitiatingShards(rs, mapper, workingStores, idAlloc, cluster, config, expiredTick-1)
+	ops = checkInitiatingShards("", rs, mapper, workingStores, idAlloc, cluster, config, expiredTick-1)
 	require.Equal(t, 0, len(ops))
 
 	// waiting long enough
-	ops = checkInitiatingShards(rs, mapper, workingStores, idAlloc, cluster, config, expiredTick)
+	ops = checkInitiatingShards("", rs, mapper, workingStores, idAlloc, cluster, config, expiredTick)
 	require.Equal(t, 1, len(ops))
 }
 
@@ -95,19 +94,19 @@ func TestCheckReportedState(t *testing.T) {
 	// register an expired replica => should add a new replica
 	rs := newReportedShards()
 	rs.registerReplica(newReplica(11, shardID, "store11"), true)
-	ops := checkReportedState(rs, mapper, workingStores, idAlloc)
+	ops := checkReportedState("", rs, mapper, workingStores, idAlloc)
 	require.Equal(t, 1, len(ops))
 	require.Equal(t, shardID, ops[0].ShardID())
 
 	// register a working replica => no more step
 	rs = newReportedShards()
 	rs.registerReplica(newReplica(12, shardID, "store12"), false)
-	ops = checkReportedState(rs, mapper, workingStores, idAlloc)
+	ops = checkReportedState("", rs, mapper, workingStores, idAlloc)
 	require.Equal(t, 0, len(ops))
 }
 
 func TestInitialShards(t *testing.T) {
-	waitingShards := newInitialShards()
+	waitingShards := newInitialShards("")
 
 	// list all shard id
 	ids := waitingShards.listEligibleShards(func(tick uint64) bool {

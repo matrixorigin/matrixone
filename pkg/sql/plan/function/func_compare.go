@@ -39,7 +39,7 @@ func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_char, types.T_varchar:
 	case types.T_date, types.T_datetime:
 	case types.T_timestamp, types.T_time:
-	case types.T_blob, types.T_text:
+	case types.T_blob, types.T_text, types.T_datalink:
 	case types.T_binary, types.T_varbinary:
 	case types.T_uuid:
 	case types.T_Rowid:
@@ -64,7 +64,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_char, types.T_varchar:
 	case types.T_date, types.T_datetime:
 	case types.T_timestamp, types.T_time:
-	case types.T_blob, types.T_text:
+	case types.T_blob, types.T_text, types.T_datalink:
 	case types.T_binary, types.T_varbinary:
 	case types.T_json:
 	case types.T_uuid:
@@ -134,7 +134,7 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a == b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
 			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
 		}
@@ -187,7 +187,7 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.Equal(b)
+			return a.EQ(&b)
 		}, selectList)
 	case types.T_enum:
 		return opBinaryFixedFixedToFixed[types.Enum, types.Enum, bool](parameters, rs, proc, length, func(a, b types.Enum) bool {
@@ -206,7 +206,7 @@ func valueDec64Compare(
 	m := p2.GetType().Scale - p1.GetType().Scale
 
 	rsVec := result.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -395,7 +395,7 @@ func valueDec128Compare(
 	m := p2.GetType().Scale - p1.GetType().Scale
 
 	rsVec := result.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -631,7 +631,7 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a > b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) > 0
 		}, selectList)
@@ -679,7 +679,7 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.Great(b)
+			return a.GT(&b)
 		}, selectList)
 	}
 	panic("unreached code")
@@ -741,7 +741,7 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a >= b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) >= 0
 		}, selectList)
@@ -789,7 +789,7 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.Ge(b)
+			return a.GE(&b)
 		}, selectList)
 	}
 	panic("unreached code")
@@ -851,7 +851,7 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a != b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_datalink:
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
 			return a != b
 		}, selectList)
@@ -899,7 +899,7 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.NotEqual(b)
+			return !a.EQ(&b)
 		}, selectList)
 	}
 	panic("unreached code")
@@ -961,7 +961,7 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a < b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) < 0
 		}, selectList)
@@ -1009,7 +1009,7 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.Less(b)
+			return a.LT(&b)
 		}, selectList)
 	}
 	panic("unreached code")
@@ -1071,7 +1071,7 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a <= b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) <= 0
 		}, selectList)
@@ -1119,7 +1119,7 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}, selectList)
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
-			return a.Le(b)
+			return a.LE(&b)
 		}, selectList)
 	}
 	panic("unreached code")

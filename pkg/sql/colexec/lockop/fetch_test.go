@@ -1148,9 +1148,13 @@ func TestFetchCharRows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[][]byte{{0}, {math.MaxUint8, math.MaxUint8}},
+		[][]byte{{0}, nil},
 		func(packer *types.Packer, v []byte) {
-			packer.EncodeStringType(v)
+			if v == nil {
+				packer.EncodeStringTypeMax()
+			} else {
+				packer.EncodeStringType(v)
+			}
 		},
 		nil,
 		nil,
@@ -1167,9 +1171,13 @@ func TestFetchCharRowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[][]byte{{0}, {math.MaxUint8, math.MaxUint8}},
+		[][]byte{{0}, nil},
 		func(packer *types.Packer, v []byte) {
-			packer.EncodeStringType(v)
+			if v == nil {
+				packer.EncodeStringTypeMax()
+			} else {
+				packer.EncodeStringType(v)
+			}
 		},
 		getRowsFilter(1, []uint64{1, 2}),
 		[]int32{0, 0, 1},
@@ -1186,9 +1194,13 @@ func TestFetchVarcharRows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[][]byte{{0}, {math.MaxUint8, math.MaxUint8}},
+		[][]byte{{0}, nil},
 		func(packer *types.Packer, v []byte) {
-			packer.EncodeStringType(v)
+			if v == nil {
+				packer.EncodeStringTypeMax()
+			} else {
+				packer.EncodeStringType(v)
+			}
 		},
 		nil,
 		nil,
@@ -1205,9 +1217,13 @@ func TestFetchVarcharRowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[][]byte{{0}, {math.MaxUint8, math.MaxUint8}},
+		[][]byte{{0}, nil},
 		func(packer *types.Packer, v []byte) {
-			packer.EncodeStringType(v)
+			if v == nil {
+				packer.EncodeStringTypeMax()
+			} else {
+				packer.EncodeStringType(v)
+			}
 		},
 		getRowsFilter(1, []uint64{1, 2}),
 		[]int32{0, 0, 1},
@@ -1311,7 +1327,7 @@ func runFetchRowsTestWithAppendFunc[T any](
 	vec := vector.NewVec(tp)
 	appendFunc(vec, mp)
 
-	packer := types.NewPacker(mpool.MustNew("test"))
+	packer := types.NewPacker()
 	fetcher := GetFetchRowsFunc(tp)
 	assertFN := func(values []T, rows [][]byte) {
 		for idx, v := range values {
@@ -1358,7 +1374,7 @@ func runFetchRowsTestWithAppendFunc[T any](
 }
 
 func TestDecimal128(t *testing.T) {
-	packer := types.NewPacker(mpool.MustNew("test"))
+	packer := types.NewPacker()
 	decimal128Fn := func(v types.Decimal128) []byte {
 		packer.Reset()
 		packer.EncodeDecimal128(v)

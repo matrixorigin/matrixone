@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -35,8 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -65,7 +63,7 @@ func NewTestEngineWithDir(
 	t *testing.T,
 	opts *options.Options,
 ) *TestEngine {
-	blockio.Start()
+	blockio.Start("")
 	db := InitTestDBWithDir(ctx, dir, t, opts)
 	return &TestEngine{
 		DB: db,
@@ -79,7 +77,7 @@ func NewTestEngine(
 	t *testing.T,
 	opts *options.Options,
 ) *TestEngine {
-	blockio.Start()
+	blockio.Start("")
 	db := InitTestDB(ctx, moduleName, t, opts)
 	return &TestEngine{
 		DB: db,
@@ -125,8 +123,6 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 
 func (e *TestEngine) Close() error {
 	err := e.DB.Close()
-	blockio.Stop()
-	blockio.ResetPipeline()
 	return err
 }
 
@@ -228,24 +224,21 @@ func (e *TestEngine) TryAppend(bat *containers.Batch) {
 }
 func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	txn, rel := e.GetRelation()
-	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked()
-	pkName := schema.GetPrimaryKey().Name
-	it := rel.MakeObjectIt()
-	defer it.Close()
+	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked(false)
+	pkIdx := schema.GetPrimaryKey().Idx
+	rowIDIdx := schema.GetColIdx(catalog.PhyAddrColumnName)
+	it := rel.MakeObjectIt(false)
 	for it.Next() {
 		blk := it.GetObject()
 		defer blk.Close()
 		blkCnt := uint16(blk.BlkCnt())
 		for i := uint16(0); i < blkCnt; i++ {
-			view, err := blk.GetColumnDataByName(context.Background(), i, catalog.PhyAddrColumnName, common.DefaultAllocator)
+			var view *containers.Batch
+			err := blk.HybridScan(context.Background(), &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
 			assert.NoError(e.T, err)
 			defer view.Close()
 			view.Compact()
-			pkView, err := blk.GetColumnDataByName(context.Background(), i, pkName, common.DefaultAllocator)
-			assert.NoError(e.T, err)
-			defer pkView.Close()
-			pkView.Compact()
-			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], pkView.Vecs[0])
+			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1])
 			assert.NoError(e.T, err)
 		}
 	}
@@ -335,30 +328,32 @@ func (e *TestEngine) TryDeleteByDeltaloc(vals []any) (ok bool, err error) {
 func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) (ok bool, err error) {
 	rel := e.GetRelationWithTxn(txn)
 
-	idOffsetsMap := make(map[common.ID][]uint32)
-	for _, val := range vals {
+	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	pks := containers.MakeVector(e.schema.GetPrimaryKey().Type, common.DebugAllocator)
+	var firstID *common.ID // TODO use table.AsCommonID
+	for i, val := range vals {
 		filter := handle.NewEQFilter(val)
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
-		assert.NoError(e.T, err)
-		offsets, ok := idOffsetsMap[*id]
-		if !ok {
-			offsets = make([]uint32, 0)
+		if i == 0 {
+			firstID = id
 		}
-		offsets = append(offsets, offset)
-		idOffsetsMap[*id] = offsets
+		assert.NoError(e.T, err)
+		objID := id.ObjectID()
+		_, blkOffset := id.BlockID.Offsets()
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*objID, blkOffset, offset)
+		rowIDs.Append(rowID, false)
+		pks.Append(val, false)
 	}
 
-	for id, offsets := range idOffsetsMap {
-		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
-		assert.NoError(e.T, err)
-		_, blkOffset := id.BlockID.Offsets()
-		deltaLoc, err := MockCNDeleteInS3(e.Runtime.Fs, obj.GetObjectData(), blkOffset, e.schema, txn, offsets)
-		assert.NoError(e.T, err)
-		ok, err = rel.TryDeleteByDeltaloc(&id, deltaLoc)
-		assert.NoError(e.T, err)
-		if !ok {
-			return ok, err
-		}
+	stats, err := MockCNDeleteInS3(e.Runtime.Fs, rowIDs, pks, e.schema, txn)
+	pks.Close()
+	rowIDs.Close()
+	assert.NoError(e.T, err)
+	require.False(e.T, stats.IsZero())
+	ok, err = rel.TryDeleteByStats(firstID, stats)
+	assert.NoError(e.T, err)
+	if !ok {
+		return ok, err
 	}
 	ok = true
 	return
@@ -411,7 +406,7 @@ func writeIncrementalCheckpoint(
 	checkpointSize int,
 	fs fileservice.FileService,
 ) (objectio.Location, objectio.Location) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end, false, false)
+	factory := logtail.IncrementalCheckpointDataFactory("", start, end, false)
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
@@ -421,9 +416,9 @@ func writeIncrementalCheckpoint(
 }
 
 func tnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.FileService) *logtail.CheckpointData {
-	reader, err := blockio.NewObjectReader(fs, location)
+	reader, err := blockio.NewObjectReader("", fs, location)
 	assert.NoError(t, err)
-	data := logtail.NewCheckpointData(common.CheckpointAllocator)
+	data := logtail.NewCheckpointData("", common.CheckpointAllocator)
 	err = data.ReadFrom(
 		context.Background(),
 		logtail.CheckpointCurrentVersion,
@@ -444,13 +439,14 @@ func ReadSnapshotCheckpoint(t *testing.T, tid uint64, location objectio.Location
 	return
 }
 
-func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService, ver uint32) (ins, del, cnIns, segDel *api.Batch, cb []func()) {
+func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService, ver uint32) (ins, del, dataObj, tombstoneObj *api.Batch, cb []func()) {
 	locs := make([]string, 0)
 	locs = append(locs, location.String())
 	locs = append(locs, strconv.Itoa(int(ver)))
 	locations := strings.Join(locs, ";")
 	entries, cb, err := logtail.LoadCheckpointEntries(
 		context.Background(),
+		"",
 		locations,
 		tid,
 		"tbl",
@@ -462,27 +458,27 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 	assert.NoError(t, err)
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
-		if e.TableName == fmt.Sprintf("_%d_obj", tid) {
-			segDel = e.Bat
-		} else if e.EntryType == api.Entry_Delete {
-			del = e.Bat
-			if tid != pkgcatalog.MO_DATABASE_ID && tid != pkgcatalog.MO_TABLES_ID && tid != pkgcatalog.MO_COLUMNS_ID {
-				cnIns = entries[i-1].Bat
-				i--
-			}
-		} else {
+		if e.TableName == fmt.Sprintf("_%d_data_meta", tid) {
+			dataObj = e.Bat
+		} else if e.TableName == fmt.Sprintf("_%d_tombstone_meta", tid) {
+			tombstoneObj = e.Bat
+		} else if e.EntryType == api.Entry_Insert {
 			ins = e.Bat
+		} else {
+			del = e.Bat
 		}
 	}
 	for _, c := range cb {
-		c()
+		if c != nil {
+			c()
+		}
 	}
 	return
 }
 
 func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData,
 	start, end types.TS, c *catalog.Catalog) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end, false, false)
+	factory := logtail.IncrementalCheckpointDataFactory("", start, end, false)
 	data2, err := factory(c)
 	assert.NoError(t, err)
 	defer data2.Close()
@@ -512,10 +508,6 @@ func getBatchLength(bat *containers.Batch) int {
 }
 
 func isBatchEqual(ctx context.Context, t *testing.T, bat1, bat2 *containers.Batch) {
-	oldver := -1
-	if ver := ctx.Value(CtxOldVersion{}); ver != nil {
-		oldver = ver.(int)
-	}
 	require.Equal(t, getBatchLength(bat1), getBatchLength(bat2))
 	require.Equal(t, len(bat1.Vecs), len(bat2.Vecs))
 	for i := 0; i < getBatchLength(bat1); i++ {
@@ -524,14 +516,6 @@ func isBatchEqual(ctx context.Context, t *testing.T, bat1, bat2 *containers.Batc
 			if vec1.Length() == 0 || vec2.Length() == 0 {
 				// for commitTS and rowid in checkpoint
 				// logutil.Warnf("empty vec attr %v", bat1.Attrs[j])
-				continue
-			}
-			if oldver >= 0 && oldver <= int(logtail.CheckpointVersion5) && // read old version checkpoint
-				logtail.CheckpointCurrentVersion > logtail.CheckpointVersion5 && // check on new version
-				bat1.Attrs[j] == pkgcatalog.BlockMeta_MemTruncPoint {
-				// memTruncatePoint vector is committs vec in old checkpoint
-				// it can't be the same with newly collected on new version checkpoint, just skip it
-				logutil.Infof("isBatchEqual skip attr %v for ver.%d on ver.%d", bat1.Attrs[j], oldver, logtail.CheckpointCurrentVersion)
 				continue
 			}
 			// t.Logf("attr %v, row %d", bat1.Attrs[j], i)
@@ -567,7 +551,7 @@ func checkCNCheckpointData(ctx context.Context, t *testing.T, tid uint64, ins, d
 }
 
 func checkMODatabase(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end, false)
+	collector := logtail.NewIncrementalCollector("", start, end)
 	p := &catalog.LoopProcessor{}
 	p.DatabaseFn = collector.VisitDB
 	err := c.RecurLoop(p)
@@ -583,7 +567,7 @@ func checkMODatabase(ctx context.Context, t *testing.T, ins, del, cnIns, segDel 
 }
 
 func checkMOTables(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end, false)
+	collector := logtail.NewIncrementalCollector("", start, end)
 	p := &catalog.LoopProcessor{}
 	p.TableFn = collector.VisitTable
 	err := c.RecurLoop(p)
@@ -599,7 +583,7 @@ func checkMOTables(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *a
 }
 
 func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end, false)
+	collector := logtail.NewIncrementalCollector("", start, end)
 	p := &catalog.LoopProcessor{}
 	p.TableFn = collector.VisitTable
 	err := c.RecurLoop(p)
@@ -615,14 +599,14 @@ func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *
 	assert.Nil(t, segDel)
 }
 
-func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, seg *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end, false)
+func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, dataObject, tombstoneObject *api.Batch, start, end types.TS, c *catalog.Catalog) {
+	collector := logtail.NewIncrementalCollector("", start, end)
 	p := &catalog.LoopProcessor{}
-	p.TombstoneFn = func(be data.Tombstone) error {
-		if be.GetObject().(*catalog.ObjectEntry).GetTable().ID != tid {
+	p.TombstoneFn = func(be *catalog.ObjectEntry) error {
+		if be.GetTable().ID != tid {
 			return nil
 		}
-		return collector.VisitTombstone(be)
+		return collector.VisitObj(be)
 	}
 	p.ObjectFn = func(se *catalog.ObjectEntry) error {
 		if se.GetTable().ID != tid {
@@ -632,32 +616,23 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	}
 	err := c.RecurLoop(p)
 	assert.NoError(t, err)
-	collector.LoadAndCollectObject(c, collector.VisitObj)
 	data2 := collector.OrphanData()
 	bats := data2.GetBatches()
-	ins2 := bats[logtail.BLKMetaInsertIDX]
-	// del2 := bats[logtail.BLKMetaDeleteIDX]
-	// cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
 	seg2 := bats[logtail.ObjectInfoIDX]
+	tombstone2 := bats[logtail.TombstoneObjectInfoIDX]
 
-	isProtoTNBatchEqual(ctx, t, ins, ins2)
-	// isProtoTNBatchEqual(ctx, t, del, del2)// del is always empty after block is removed
-	// isProtoTNBatchEqual(ctx, t, cnIns, cnIns2)
-
-	// seg batch doesn't exist before ckp V9
-	if seg != nil {
-		isProtoTNBatchEqual(ctx, t, seg, seg2)
-	}
+	isProtoTNBatchEqual(ctx, t, dataObject, seg2)
+	isProtoTNBatchEqual(ctx, t, tombstoneObject, tombstone2)
 }
 
-func GetUserTablesInsBatch(t *testing.T, tid uint64, start, end types.TS, c *catalog.Catalog) (*containers.Batch, *containers.Batch) {
-	collector := logtail.NewIncrementalCollector(start, end, false)
+func GetUserTablesInsBatch(t *testing.T, tid uint64, start, end types.TS, c *catalog.Catalog) (dataObject, tombstoneObject *containers.Batch) {
+	collector := logtail.NewIncrementalCollector("", start, end)
 	p := &catalog.LoopProcessor{}
-	p.TombstoneFn = func(be data.Tombstone) error {
-		if be.GetObject().(*catalog.ObjectEntry).GetTable().ID != tid {
+	p.TombstoneFn = func(be *catalog.ObjectEntry) error {
+		if be.GetTable().ID != tid {
 			return nil
 		}
-		return collector.VisitTombstone(be)
+		return collector.VisitObj(be)
 	}
 	p.ObjectFn = func(se *catalog.ObjectEntry) error {
 		if se.GetTable().ID != tid {
@@ -667,10 +642,9 @@ func GetUserTablesInsBatch(t *testing.T, tid uint64, start, end types.TS, c *cat
 	}
 	err := c.RecurLoop(p)
 	assert.NoError(t, err)
-	collector.LoadAndCollectObject(c, collector.VisitObj)
 	data := collector.OrphanData()
 	bats := data.GetBatches()
-	return bats[logtail.BLKMetaInsertIDX], bats[logtail.ObjectInfoIDX]
+	return bats[logtail.ObjectInfoIDX], bats[logtail.TombstoneObjectInfoIDX]
 }
 
 func CheckCheckpointReadWrite(
@@ -746,33 +720,30 @@ func (e *TestEngine) CheckReadCNCheckpoint() {
 	}
 }
 
-func (e *TestEngine) CheckCollectDeleteInRange() {
+func (e *TestEngine) CheckCollectTombstoneInRange() {
 	txn, rel := e.GetRelation()
-	ForEachObject(rel, func(obj handle.Object) error {
+	ForEachTombstone(e.T, rel, func(obj handle.Object) error {
 		meta := obj.GetMeta().(*catalog.ObjectEntry)
-		deleteBat, _, err := meta.GetObjectData().CollectDeleteInRange(
-			context.Background(), types.TS{}, txn.GetStartTS(), false, common.DefaultAllocator,
-		)
-		assert.NoError(e.T, err)
-		pkDef := e.schema.GetPrimaryKey()
-		deleteRowIDs := deleteBat.GetVectorByName(catalog.AttrRowID)
-		deletePKs := deleteBat.GetVectorByName(catalog.AttrPKVal)
 		blkCnt := obj.BlkCnt()
-		pkVectors := make([]*containers.Batch, blkCnt)
-		rowIDVectors := make([]*containers.Batch, blkCnt)
-		for i := uint16(0); i < uint16(blkCnt); i++ {
-			pkVectors[i], err = meta.GetObjectData().GetColumnDataById(context.Background(), txn, e.schema, i, pkDef.Idx, common.DefaultAllocator)
+		for i := 0; i < blkCnt; i++ {
+			var deleteBatch *containers.Batch
+			err := meta.GetObjectData().Scan(
+				context.Background(), &deleteBatch, txn, e.schema, uint16(i), []int{0, 1}, common.DefaultAllocator,
+			)
 			assert.NoError(e.T, err)
-			rowIDVectors[i], err = meta.GetObjectData().GetColumnDataById(context.Background(), txn, e.schema, i, e.schema.PhyAddrKey.Idx, common.DefaultAllocator)
-			assert.NoError(e.T, err)
-		}
-		for i := 0; i < deleteBat.Length(); i++ {
-			rowID := deleteRowIDs.Get(i).(types.Rowid)
-			offset := rowID.GetRowOffset()
-			_, blkOffset := rowID.BorrowBlockID().Offsets()
-			appendRowID := rowIDVectors[blkOffset].Vecs[0].Get(int(offset)).(types.Rowid)
-			e.T.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), deletePKs.Get(i), appendRowID.String(), pkVectors[blkOffset].Vecs[0].Get(int(offset)))
-			assert.Equal(e.T, pkVectors[blkOffset].Vecs[0].Get(int(offset)), deletePKs.Get(i))
+			pkDef := e.schema.GetPrimaryKey()
+			deleteRowIDs := deleteBatch.Vecs[0]
+			deletePKs := deleteBatch.Vecs[1]
+			for i := 0; i < deleteRowIDs.Length(); i++ {
+				rowID := deleteRowIDs.Get(i).(types.Rowid)
+				offset := rowID.GetRowOffset()
+				id := obj.Fingerprint()
+				id.BlockID = *rowID.BorrowBlockID()
+				val, _, err := rel.GetValue(id, offset, uint16(pkDef.Idx), true)
+				assert.NoError(e.T, err)
+				e.T.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), deletePKs.Get(i), rowID.String(), val)
+				assert.Equal(e.T, val, deletePKs.Get(i))
+			}
 		}
 		return nil
 	})

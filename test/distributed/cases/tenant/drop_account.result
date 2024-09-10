@@ -1,0 +1,13 @@
+drop account if exists account_test;
+create account account_test admin_name = 'root' identified by '111' open comment 'account_test';
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    comments
+sys    root    2024-08-27 09:56:34    open    null    8    102    0.101875    system account
+account_test    root    2024-08-27 09:58:28    open    null    5    66    0.0    account_test
+create database db1;
+use db1;
+create table t1 (a int primary key);
+create database db2;
+use db2;
+create table t2 (a int primary key, b int, FOREIGN KEY (b) REFERENCES db1.t1(a));
+drop account account_test;

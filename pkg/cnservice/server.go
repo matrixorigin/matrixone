@@ -23,10 +23,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/fagongzi/goetty/v2"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -53,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -67,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func NewService(
@@ -139,13 +139,11 @@ func NewService(
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	if err := srv.initQueryService(); err != nil {
+	if err = srv.initQueryService(); err != nil {
 		return nil, err
 	}
 
-	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
-
-	if err := srv.initMetadata(); err != nil {
+	if err = srv.initMetadata(); err != nil {
 		return nil, err
 	}
 
@@ -176,7 +174,8 @@ func NewService(
 	var udfServices []udf.Service
 	// add python client to handle python udf
 	if srv.cfg.PythonUdfClient.ServerAddress != "" {
-		pc, err := pythonservice.NewClient(srv.cfg.PythonUdfClient)
+		var pc *pythonservice.Client
+		pc, err = pythonservice.NewClient(srv.cfg.PythonUdfClient)
 		if err != nil {
 			panic(err)
 		}
@@ -198,9 +197,14 @@ func NewService(
 		return nil, err
 	}
 
-	server, err := morpc.NewRPCServer("pipeline-server", srv.pipelineServiceListenAddr(),
-		morpc.NewMessageCodec(srv.acquireMessage,
-			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize))),
+	server, err := morpc.NewRPCServer(
+		"pipeline-server",
+		srv.pipelineServiceListenAddr(),
+		morpc.NewMessageCodec(
+			cfg.UUID,
+			srv.acquireMessage,
+			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)),
+		),
 		morpc.WithServerLogger(srv.logger),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
@@ -219,34 +223,17 @@ func NewService(
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
 
-	srv.requestHandler = func(ctx context.Context,
-		cnAddr string,
-		message morpc.Message,
-		cs morpc.ClientSession,
-		engine engine.Engine,
-		fService fileservice.FileService,
-		lockService lockservice.LockService,
-		queryClient qclient.QueryClient,
-		hakeeper logservice.CNHAKeeperClient,
-		udfService udf.Service,
-		cli client.TxnClient,
-		aicm *defines.AutoIncrCacheManager,
-		messageAcquirer func() morpc.Message) error {
-		return nil
-	}
-	for _, opt := range options {
-		opt(srv)
-	}
-
 	// TODO: global client need to refactor
 	c, err := cnclient.NewPipelineClient(
+		cfg.UUID,
 		srv.pipelineServiceServiceAddr(),
-		&cnclient.PipelineConfig{RPC: cfg.RPC})
+		&cnclient.PipelineConfig{RPC: cfg.RPC},
+	)
 	if err != nil {
 		panic(err)
 	}
 	srv.pipelines.client = c
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.PipelineClient, c)
+	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.PipelineClient, c)
 	return srv, nil
 }
 
@@ -282,7 +269,7 @@ func (s *service) Close() error {
 		return err
 	}
 	// stop I/O pipeline
-	blockio.Stop()
+	blockio.Stop(s.cfg.UUID)
 
 	if s.gossipNode != nil {
 		if err := s.gossipNode.Leave(time.Second); err != nil {
@@ -443,7 +430,8 @@ func (s *service) handleRequest(
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
 
-		err := s.requestHandler(ctx,
+		// there is no need to handle the return error, because the error will be logged in the function.
+		_ = s.requestHandler(ctx,
 			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
@@ -456,11 +444,6 @@ func (s *service) handleRequest(
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
-		if err != nil {
-			logutil.Infof("error occurred while handling the pipeline message, "+
-				"msg is %v, error is %v",
-				req, err)
-		}
 	}()
 	return nil
 }
@@ -507,7 +490,7 @@ func (s *service) initEngine(
 		}
 
 	default:
-		return moerr.NewInternalError(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
+		return moerr.NewInternalErrorf(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
 
 	}
 
@@ -541,7 +524,7 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 			s.cfg.HAKeeper.DiscoveryTimeout.Duration,
 		)
 		defer cancel()
-		client, err = logservice.NewCNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
+		client, err = logservice.NewCNHAKeeperClient(ctx, s.cfg.UUID, s.cfg.HAKeeper.ClientConfig)
 		if err != nil {
 			return
 		}
@@ -549,7 +532,7 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 		s.initClusterService()
 		s.initLockService()
 
-		ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+		ss, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(runtime.StatusServer)
 		if ok {
 			ss.(*status.Server).SetHAKeeperClient(client)
 		}
@@ -563,9 +546,12 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 }
 
 func (s *service) initClusterService() {
-	s.moCluster = clusterservice.NewMOCluster(s._hakeeperClient,
-		s.cfg.Cluster.RefreshInterval.Duration)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, s.moCluster)
+	s.moCluster = clusterservice.NewMOCluster(
+		s.cfg.UUID,
+		s._hakeeperClient,
+		s.cfg.Cluster.RefreshInterval.Duration,
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.ClusterService, s.moCluster)
 }
 
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
@@ -629,7 +615,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.Txn.Status = txn.TxnStatus_Aborted
 				}
 			default:
-				return moerr.NewNotSupported(ctx, "unknown txn request method: %s", req.Method.String())
+				return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", req.Method.String())
 			}
 			return err
 		}
@@ -638,7 +624,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 	s.initTxnSenderOnce.Do(func() {
 		sender, err = rpc.NewSender(
 			s.cfg.RPC,
-			runtime.ProcessLevelRuntime(),
+			runtime.ServiceRuntime(s.cfg.UUID),
 			rpc.WithSenderLocalDispatch(handleTemp),
 		)
 		if err != nil {
@@ -652,9 +638,9 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 
 func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	s.initTxnClientOnce.Do(func() {
-		s.timestampWaiter = client.NewTimestampWaiter()
+		s.timestampWaiter = client.NewTimestampWaiter(runtime.ServiceRuntime(s.cfg.UUID).Logger())
 
-		rt := runtime.ProcessLevelRuntime()
+		rt := runtime.ServiceRuntime(s.cfg.UUID)
 		client.SetupRuntimeTxnOptions(
 			rt,
 			txn.GetTxnMode(s.cfg.Txn.Mode),
@@ -724,18 +710,21 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.PkDedupCount > 0 {
 			opts = append(opts, client.WithCheckDup())
 		}
+		traceService := trace.GetService(s.cfg.UUID)
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
 			client.WithTxnOpenedCallback([]func(op client.TxnOperator){
 				func(op client.TxnOperator) {
-					trace.GetService().TxnCreated(op)
+					traceService.TxnCreated(op)
 				},
 			}),
 		)
 		c = client.NewTxnClient(
+			s.cfg.UUID,
 			sender,
-			opts...)
+			opts...,
+		)
 		s._txnClient = c
 	})
 	c = s._txnClient
@@ -749,10 +738,10 @@ func (s *service) initLockService() {
 		lockservice.WithWait(func() {
 			<-s.hakeeperConnected
 		}))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
-	lockservice.SetLockServiceByServiceID(s.lockService.GetServiceID(), s.lockService)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.LockService, s.lockService)
+	lockservice.SetLockServiceByServiceID(s.cfg.UUID, s.lockService)
 
-	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	ss, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(runtime.StatusServer)
 	if ok {
 		ss.(*status.Server).SetLockService(s.cfg.UUID, s.lockService)
 	}
@@ -765,20 +754,29 @@ func (s *service) initShardService() {
 	}
 
 	store := shardservice.NewShardStorage(
-		runtime.ProcessLevelRuntime().Clock(),
+		runtime.ServiceRuntime(s.cfg.UUID).Clock(),
 		s.sqlExecutor,
 		s.timestampWaiter,
 		map[int]shardservice.ReadFunc{
-			shardservice.ReadRows: disttae.HandleShardingReadRows,
-			shardservice.ReadSize: disttae.HandleShardingReadSize,
+			shardservice.ReadRows:                     disttae.HandleShardingReadRows,
+			shardservice.ReadSize:                     disttae.HandleShardingReadSize,
+			shardservice.ReadStats:                    disttae.HandleShardingReadStatus,
+			shardservice.ReadApproxObjectsNum:         disttae.HandleShardingReadApproxObjectsNum,
+			shardservice.ReadRanges:                   disttae.HandleShardingReadRanges,
+			shardservice.ReadGetColumMetadataScanInfo: disttae.HandleShardingReadGetColumMetadataScanInfo,
+			shardservice.ReadReader:                   disttae.HandleShardingReadReader,
+			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
+			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
+			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
 		},
 		s.storeEngine,
 	)
 	s.shardService = shardservice.NewService(
 		cfg,
 		store,
+		shardservice.WithWaitCNReported(),
 	)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
 		runtime.ShardService,
 		s.shardService,
 	)
@@ -790,6 +788,17 @@ func (s *service) GetSQLExecutor() executor.SQLExecutor {
 
 func (s *service) GetBootstrapService() bootstrap.Service {
 	return s.bootstrapService
+}
+
+func (s *service) GetTimestampWaiter() client.TimestampWaiter {
+	return s.timestampWaiter
+}
+func (s *service) GetEngine() engine.Engine {
+	return s.storeEngine
+}
+
+func (s *service) GetClock() clock.Clock {
+	return runtime.ServiceRuntime(s.cfg.UUID).Clock()
 }
 
 // put the waiting-next type msg into client session's cache and return directly
@@ -840,8 +849,8 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s.queryClient,
 		s._hakeeperClient,
 		s.udfService,
-		s.aicm)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
 }
 
 func (s *service) initIncrService() {
@@ -856,7 +865,7 @@ func (s *service) initIncrService() {
 		s.cfg.UUID,
 		store,
 		s.cfg.AutoIncrement)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
 		runtime.AutoIncrementService,
 		s.incrservice)
 	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, s.incrservice)
@@ -866,13 +875,15 @@ func (s *service) bootstrap() error {
 	s.initIncrService()
 	s.initTxnTraceService()
 
-	rt := runtime.ProcessLevelRuntime()
+	rt := runtime.ServiceRuntime(s.cfg.UUID)
 	s.bootstrapService = bootstrap.NewService(
+		s.cfg.UUID,
 		&locker{hakeeperClient: s._hakeeperClient},
 		rt.Clock(),
 		s._txnClient,
 		s.sqlExecutor,
-		s.options.bootstrapOptions...)
+		s.options.bootstrapOptions...,
+	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
@@ -884,7 +895,7 @@ func (s *service) bootstrap() error {
 		panic(err)
 	}
 
-	trace.GetService().EnableFlush()
+	trace.GetService(s.cfg.UUID).EnableFlush()
 
 	if s.cfg.AutomaticUpgrade {
 		return s.stopper.RunTask(func(ctx context.Context) {
@@ -902,7 +913,7 @@ func (s *service) bootstrap() error {
 }
 
 func (s *service) initTxnTraceService() {
-	rt := runtime.ProcessLevelRuntime()
+	rt := runtime.ServiceRuntime(s.cfg.UUID)
 	ts, err := trace.NewService(
 		s.options.traceDataPath,
 		s.cfg.UUID,
@@ -981,7 +992,7 @@ func (l *locker) Get(
 }
 
 func (s *service) initProcessCodecService() {
-	runtime.ProcessLevelRuntime().SetGlobalVariables(
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
 		runtime.ProcessCodecService,
 		process.NewCodecService(
 			s._txnClient,

@@ -132,7 +132,7 @@ type UpgradeEntry struct {
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
 	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {
-		getLogger().Error("execute upgrade entry check error", zap.Error(err), zap.String("upgrade entry", u.String()))
+		getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry check error", zap.Error(err), zap.String("upgrade entry", u.String()))
 		return err
 	}
 
@@ -143,7 +143,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		if u.PreSql != "" {
 			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId))
 			if err != nil {
-				getLogger().Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
 			}
 			res.Close()
@@ -152,7 +152,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		// 2. Second, Execute upgrade sql
 		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId))
 		if err != nil {
-			getLogger().Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err
 		}
 		res.Close()
@@ -161,7 +161,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		if u.PostSql != "" {
 			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId))
 			if err != nil {
-				getLogger().Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
 			}
 			res.Close()
@@ -239,16 +239,16 @@ func CheckTableColumn(txn executor.TxnExecutor,
 	defer res.Close()
 
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		data_type := cols[0].UnsafeGetStringAt(0)
-		is_nullable := cols[1].UnsafeGetStringAt(0)
-		character_length := vector.GetFixedAt[int64](cols[2], 0)
-		numeric_precision := vector.GetFixedAt[int64](cols[3], 0)
-		numeric_scale := vector.GetFixedAt[int64](cols[4], 0)
-		datetime_precision := vector.GetFixedAt[int64](cols[5], 0)
-		ordinal_position := vector.GetFixedAt[int32](cols[6], 0)
-		column_default := cols[7].UnsafeGetStringAt(0)
-		extra := cols[8].UnsafeGetStringAt(0)
-		column_comment := cols[9].UnsafeGetStringAt(0)
+		data_type := cols[0].GetStringAt(0)
+		is_nullable := cols[1].GetStringAt(0)
+		character_length := vector.GetFixedAtWithTypeCheck[int64](cols[2], 0)
+		numeric_precision := vector.GetFixedAtWithTypeCheck[int64](cols[3], 0)
+		numeric_scale := vector.GetFixedAtWithTypeCheck[int64](cols[4], 0)
+		datetime_precision := vector.GetFixedAtWithTypeCheck[int64](cols[5], 0)
+		ordinal_position := vector.GetFixedAtWithTypeCheck[int32](cols[6], 0)
+		column_default := cols[7].GetStringAt(0)
+		extra := cols[8].GetStringAt(0)
+		column_comment := cols[9].GetStringAt(0)
 
 		colInfo.IsExits = true
 		colInfo.ColType = data_type
@@ -284,7 +284,7 @@ func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema stri
 	loaded := false
 	n := 0
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		view_def = cols[0].UnsafeGetStringAt(0)
+		view_def = cols[0].GetStringAt(0)
 		n++
 		loaded = true
 		return false
@@ -353,7 +353,7 @@ func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string
 	comment := ""
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		loaded = true
-		comment = cols[3].UnsafeGetStringAt(0)
+		comment = cols[3].GetStringAt(0)
 		return false
 	})
 

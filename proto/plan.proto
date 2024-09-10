@@ -162,6 +162,7 @@ message SubscriptionMeta{
 	string db_name = 3; // pubDbName
 	string account_name = 4;// pubAccountName
 	string sub_name = 5; // subName(subscription side db name)
+	string tables = 6; // pubTables (separated by ',')
 }
 
 message Function {
@@ -245,6 +246,7 @@ message ResultColDef {
 
 message ColDef {
 	uint64 col_id		= 1;
+	// letter case: lower
 	string name 		= 2;
 	bool hidden			= 3;
 	CompressType alg 	= 4;
@@ -265,6 +267,8 @@ message ColDef {
 
 	string tbl_name = 17;
 	string db_name = 18;
+	// get origin_name by ColDef.GetOriginCaseName(), letter case: origin
+	string origin_name = 19;
 }
 
 message Default {
@@ -292,9 +296,9 @@ message PrimaryKeyDef {
 	// currently not used
 	IndexOption option		= 3;
 
-	// Composed primary key column name: __mo_cpkey
+	// Composed primary key column name: __mo_cpkey, letter case: lower
 	string pkey_col_name = 4;
-	// XXX: Deprecated and to be removed soon.
+	// XXX: Deprecated and to be removed soon. letter case: lower
 	repeated string names = 5;
 	// Composite primary key column definition
 	ColDef comp_pkey_col = 6;
@@ -303,8 +307,9 @@ message PrimaryKeyDef {
 message IndexDef {
 	// Generate UUID for each index, currently not used
 	string idx_id			       = 1;
+	// letter case: lower
 	string index_name        = 2;
-	// The constituent columns of the index
+	// The constituent columns of the index, letter case: lower
 	repeated string parts    = 3;
 	bool unique				       = 4;
 	string index_table_name  = 5;
@@ -328,6 +333,7 @@ message ForeignKeyDef {
 		NO_ACTION	= 4;
 	}
 
+	// letter case: lower
 	string name						= 1;
 	repeated uint64 cols			= 2;
 	// Foreign key parent table Id
@@ -345,7 +351,7 @@ message CheckDef {
 }
 
 message ClusterByDef {
-	// XXX: Deprecated and to be removed soon.
+	// XXX: Deprecated and to be removed soon. letter case: lower ?
 	string name = 1;
 	// Composite cluster by column definition
 	ColDef comp_cbkey_col = 2;
@@ -398,6 +404,7 @@ message PartitionExpr {
 
 message PartitionColumns {
 	repeated Expr columns = 1;
+	// letter case: lower ?
 	repeated string partition_columns = 2;
 	// repeated string partition_fmt_columns = 3;
 }
@@ -447,6 +454,7 @@ message TableDef {
 
 	// XXX: Deprecated and to be removed soon.
 	repeated DefType defs	= 25;
+	// letter case: lower
 	map<string, int32> name2col_index = 26;
 	bool isLocked = 27;
 	TableLockType tableLockType = 28;
@@ -471,7 +479,6 @@ enum ShuffleType {
 enum ShuffleMethod {
 	Normal = 0;
 	Reuse = 1;
-	Reshuffle = 2;
 }
 
 enum ShuffleTypeForMultiCN {
@@ -584,6 +591,7 @@ message FrameBound {
 }
 
 message OnDuplicateKeyCtx {
+	// letter case: origin
 	repeated string attrs = 1;
 	int32 insert_col_count = 2;
 	repeated Expr unique_col_check_expr = 3;
@@ -871,6 +879,7 @@ message ExternScan {
     string terminated = 6;
 	string json_type = 7;
     bytes  escaped_by = 8;
+	map<string, int32> TbColToDataCol = 9;
 }
 
 message LockTarget {
@@ -904,6 +913,8 @@ message PreInsertCtx {
 	TableDef table_def 		= 2;
 	bool has_auto_col		= 3;
 	bool is_update			= 4;
+	Expr comp_pkey_expr     = 5;
+	Expr cluster_by_expr    = 6;
 }
 
 message RuntimeFilterSpec {
@@ -911,7 +922,6 @@ message RuntimeFilterSpec {
 	bool match_prefix = 2;
 	int32 upper_limit = 3;
 	Expr expr = 4;
-	bool handled = 5;
 }
 
 message IdList {
@@ -973,8 +983,11 @@ message Query {
 	// load Tag
 	bool loadTag = 6;
 
+	// load write S3
+	bool loadWriteS3 = 7;
+
 	//detectSqls are sqls detect fk self refer constraint
-	repeated string detectSqls= 7;
+	repeated string detectSqls= 8;
 }
 
 message TransationControl {
@@ -1089,6 +1102,7 @@ message DataDefinition {
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
 		SHOW_UPGRADE = 34;
+		RENAME_TABLE = 35;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -1117,6 +1131,7 @@ message DataDefinition {
 		DropSequence   drop_sequence    = 18;
 		AlterSequence  alter_sequence   = 19;
 		CreateView  create_view         = 20;
+		RenameTable rename_table 	    = 21;
 	}
 }
 
@@ -1151,6 +1166,7 @@ message DropDatabase {
 }
 
 message FkColName {
+	// letter case: lower
 	repeated string cols = 1;
 }
 
@@ -1197,6 +1213,8 @@ message CreateTable {
 	repeated string updateFkSqls = 12;
 	// fks forward reference to me
 	repeated ForeignKeyInfo fksReferToMe = 13;
+
+	int64 retention_deadline = 14;
 }
 
 message AlterTableDrop {
@@ -1215,6 +1233,7 @@ message AlterTableDrop {
 message AlterTableAddFk {
 	string db_name 			= 1;
 	string table_name		= 2;
+	// letter case: lower
 	repeated string cols 	= 3;
 	ForeignKeyDef fkey 		= 4;
 }
@@ -1273,6 +1292,10 @@ message AlterAddColumn {
 message AlterDropColumn {
 	uint32 idx = 1;
 	uint32 seq = 2;
+}
+
+message RenameTable {
+	repeated AlterTable alter_tables = 1;
 }
 
 message AlterTable {
@@ -1454,6 +1477,10 @@ message LockTables {
 }
 
 message UnLockTables{}
+
+message MetadataScanInfos {
+	repeated MetadataScanInfo infos = 1;
+}
 
 message MetadataScanInfo {
 	enum MetadataScanInfoType {

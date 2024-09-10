@@ -16,13 +16,14 @@ package checkpoint
 
 import (
 	"context"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"sort"
 )
 
 type GetCheckpointRange = func(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error)
@@ -51,6 +52,7 @@ func AllAfterAndGCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, 
 
 func ListSnapshotCheckpoint(
 	ctx context.Context,
+	sid string,
 	fs fileservice.FileService,
 	snapshot types.TS,
 	tid uint64,
@@ -63,7 +65,7 @@ func ListSnapshotCheckpoint(
 	if len(files) == 0 {
 		return nil, nil
 	}
-	return ListSnapshotCheckpointWithMeta(ctx, fs, files, idx, types.TS{}, false)
+	return ListSnapshotCheckpointWithMeta(ctx, sid, fs, files, idx, types.TS{}, false)
 }
 
 func ListSnapshotMeta(
@@ -108,9 +110,9 @@ func ListSnapshotMetaWithDiskCleaner(
 	snapshot types.TS,
 	listFunc GetCheckpointRange,
 	metas map[string]struct{},
-) ([]*MetaFile, int, error) {
+) ([]*MetaFile, []*MetaFile, int, error) {
 	if len(metas) == 0 {
-		return nil, 0, nil
+		return nil, nil, 0, nil
 	}
 	metaFiles := make([]*MetaFile, 0)
 	idx := 0
@@ -128,26 +130,39 @@ func ListSnapshotMetaWithDiskCleaner(
 		return metaFiles[i].end.Less(&metaFiles[j].end)
 	})
 
+	mergeMetaFiles := make([]*MetaFile, 0)
+	start := 0
 	for i, file := range metaFiles {
 		// TODO: remove log
 		logutil.Infof("metaFiles[%d]: %v", i, file.String())
+		if file.start.IsEmpty() && i < len(metaFiles)-1 && !metaFiles[i+1].start.IsEmpty() {
+			start = i
+			break
+		}
+	}
+
+	if start > 0 {
+		mergeMetaFiles = append(mergeMetaFiles, metaFiles[:start]...)
+		metaFiles = metaFiles[start:]
 	}
 
 	if listFunc == nil {
 		listFunc = AllAfterAndGCheckpoint
 	}
-	return listFunc(snapshot, metaFiles)
+	files, num, err := listFunc(snapshot, metaFiles)
+	return files, mergeMetaFiles, num, err
 }
 
 func ListSnapshotCheckpointWithMeta(
 	ctx context.Context,
+	sid string,
 	fs fileservice.FileService,
 	files []*MetaFile,
 	idx int,
 	gcStage types.TS,
 	isAll bool,
 ) ([]*CheckpointEntry, error) {
-	reader, err := blockio.NewFileReader(fs, CheckpointDir+files[idx].name)
+	reader, err := blockio.NewFileReader(sid, fs, CheckpointDir+files[idx].name)
 	if err != nil {
 		return nil, nil
 	}

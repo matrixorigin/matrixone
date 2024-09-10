@@ -38,11 +38,17 @@ func init() {
 }
 
 type CreateObjOpt struct {
-	Id *types.Objectid
+	Stats       *ObjectStats
+	IsTombstone bool
 }
 
-func (o *CreateObjOpt) WithId(id *types.Objectid) *CreateObjOpt {
-	o.Id = id
+func (o *CreateObjOpt) WithObjectStats(stats *ObjectStats) *CreateObjOpt {
+	o.Stats = stats
+	return o
+}
+
+func (o *CreateObjOpt) WithIsTombstone(tombstone bool) *CreateObjOpt {
+	o.IsTombstone = tombstone
 	return o
 }
 
@@ -225,7 +231,7 @@ func ConstructRowidColumnTo(
 func ConstructRowidColumnToWithSels(
 	vec *vector.Vector,
 	id *Blockid,
-	sels []int32,
+	sels []int64,
 	mp *mpool.MPool,
 ) (err error) {
 	if err = vec.PreExtend(len(sels), mp); err != nil {
@@ -367,7 +373,7 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewDecimal128Vector(n, typ, m, random, nil)
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		if vs, ok := Values.([]string); ok {
 			return NewStringVector(n, typ, m, random, vs)
 		}
@@ -408,7 +414,7 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewEnumVector(n, typ, m, random, nil)
 	default:
-		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalErrorNoCtxf("unsupport vector's type '%v", typ))
 	}
 }
 

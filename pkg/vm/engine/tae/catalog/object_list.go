@@ -35,12 +35,13 @@ const (
 )
 
 type ObjectList struct {
+	isTombstone bool
 	*sync.RWMutex
 	sortHint_objectID map[objectio.ObjectId]uint64
 	tree              atomic.Pointer[btree.BTreeG[*ObjectEntry]]
 }
 
-func NewObjectList() *ObjectList {
+func NewObjectList(isTombstone bool) *ObjectList {
 	opts := btree.Options{
 		Degree:  64,
 		NoLocks: true,
@@ -49,6 +50,7 @@ func NewObjectList() *ObjectList {
 	list := &ObjectList{
 		RWMutex:           &sync.RWMutex{},
 		sortHint_objectID: make(map[types.Objectid]uint64),
+		isTombstone:       isTombstone,
 	}
 	list.tree.Store(tree)
 	return list
@@ -138,6 +140,9 @@ func (l *ObjectList) DropObjectByID(objectID *objectio.ObjectId, txn txnif.TxnRe
 	return
 }
 func (l *ObjectList) Set(object *ObjectEntry, registerSortHint bool) {
+	if object.IsTombstone != l.isTombstone {
+		panic("logic error")
+	}
 	l.Lock()
 	defer l.Unlock()
 	if registerSortHint {
@@ -167,8 +172,11 @@ func (l *ObjectList) Update(new, old *ObjectEntry) {
 	defer l.Unlock()
 	oldTree := l.tree.Load()
 	newTree := oldTree.Copy()
-	newTree.Set(new)
+	if new.IsTombstone != l.isTombstone {
+		panic("logic error")
+	}
 	newTree.Delete(old)
+	newTree.Set(new)
 	ok := l.tree.CompareAndSwap(oldTree, newTree)
 	if !ok {
 		panic("concurrent mutation")
@@ -196,14 +204,4 @@ func (l *ObjectList) UpdateObjectInfo(obj *ObjectEntry, txn txnif.TxnReader, sta
 	newObj, isNew := obj.GetUpdateEntry(txn, stats)
 	l.Set(newObj, false)
 	return
-}
-
-func (l *ObjectList) SetSorted(sortHint uint64) {
-	objs := l.GetAllNodes(sortHint)
-	if len(objs) == 0 {
-		panic("logic error")
-	}
-	obj := objs[len(objs)-1]
-	newObj := obj.GetSortedEntry()
-	l.Set(newObj, false)
 }

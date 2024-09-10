@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -368,7 +370,8 @@ func TestObject1(t *testing.T) {
 	schema.Name = tbName
 	tb, err := db.CreateTableEntry(schema, txn1, nil)
 	assert.Nil(t, err)
-	obj1, err := tb.CreateObject(txn1, ES_Appendable, nil, nil)
+	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
+	obj1, err := tb.CreateObject(txn1, &objectio.CreateObjOpt{Stats: stats, IsTombstone: false}, nil)
 	assert.Nil(t, err)
 	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
@@ -414,4 +417,25 @@ func TestAlterSchema(t *testing.T) {
 	require.Equal(t, uint16(5), schema.GetSingleSortKey().SeqNum)
 	require.Equal(t, 5, schema.GetSingleSortKeyIdx())
 
+}
+
+func randomTxnID(t *testing.T) []byte {
+	bytes := make([]byte, 8)
+	_, err := rand.Read(bytes)
+	require.NoError(t, err)
+	return bytes
+}
+
+func TestTxnManager_GetOrCreateTxnWithMeta(t *testing.T) {
+	mockCatalog := MockCatalog()
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(mockCatalog), MockTxnFactory(mockCatalog), types.NewMockHLCClock(1))
+	txn1 := randomTxnID(t)
+	ts := *types.BuildTSForTest(10, 0)
+	meta, err := txnMgr.GetOrCreateTxnWithMeta(nil, txn1, ts)
+	require.NoError(t, err)
+	require.Equal(t, string(txn1), meta.GetID())
+
+	meta2, err := txnMgr.GetOrCreateTxnWithMeta(nil, txn1, ts)
+	require.NoError(t, err)
+	require.Equal(t, string(txn1), meta2.GetID())
 }

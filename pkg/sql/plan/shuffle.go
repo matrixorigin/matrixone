@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"math"
 	"math/bits"
 	"unsafe"
 
@@ -29,8 +30,9 @@ import (
 )
 
 const (
-	threshHoldForRightJoinShuffle   = 120000
-	threshHoldForRangeShuffle       = 240000
+	threshHoldForShuffleGroup       = 64000
+	threshHoldForRightJoinShuffle   = 8192
+	threshHoldForShuffleJoin        = 120000
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 8000000
 	MAXShuffleDOP                   = 64
@@ -310,16 +312,6 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.BuildOnLeft {
-		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
-			return
-		}
-	} else {
-		if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
-			return
-		}
-	}
-
 	idx := 0
 	if !builder.IsEquiJoin(n) {
 		return
@@ -337,6 +329,19 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		if isEquiCond(n.OnList[i], leftTags, rightTags) {
 			idx = i
 			break
+		}
+	}
+
+	if n.BuildOnLeft {
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
+			return
+		}
+	} else {
+		leftchild := builder.qry.Nodes[n.Children[0]]
+		rightchild := builder.qry.Nodes[n.Children[1]]
+		factor := math.Pow((leftchild.Stats.Outcnt / rightchild.Stats.Outcnt), 0.4)
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForShuffleJoin*factor {
+			return
 		}
 	}
 
@@ -406,9 +411,11 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
+	factor := 1 / math.Pow((n.Stats.Outcnt/n.Stats.Selectivity/child.Stats.Outcnt), 0.8)
+	if n.Stats.HashmapStats.HashmapSize < threshHoldForShuffleGroup*factor {
 		return
 	}
+
 	//find the highest ndv
 	highestNDV := n.GroupBy[0].Ndv
 	idx := 0
@@ -454,8 +461,6 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 					}
 				}
 			}
-			// shuffle group can not follow shuffle join, need to reshuffle
-			n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reshuffle
 		}
 	}
 
@@ -552,7 +557,7 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 		}
 		if node.Stats.HashmapStats.HashmapSize <= threshHoldForHybirdShuffle {
 			node.Stats.HashmapStats.Shuffle = false
-			if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
+			if parent.NodeType == plan.Node_AGG {
 				parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
 			}
 		}
@@ -580,16 +585,4 @@ func shouldUseShuffleRanges(s *pb.ShuffleRange) []float64 {
 		return nil
 	}
 	return s.Result
-}
-
-func IsShuffleChildren(n *plan.Node, ns []*plan.Node) bool {
-	switch n.NodeType {
-	case plan.Node_JOIN:
-		if n.Stats.HashmapStats.Shuffle {
-			return true
-		}
-	case plan.Node_FILTER:
-		return IsShuffleChildren(ns[n.Children[0]], ns)
-	}
-	return false
 }

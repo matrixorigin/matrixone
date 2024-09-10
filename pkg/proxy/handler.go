@@ -23,9 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
@@ -49,6 +51,13 @@ type handler struct {
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
+	// SQLWorker works for the SQL selection. It connects to some
+	// CN server and query for some information.
+	sqlWorker SQLWorker
+	// queryClient is the client which could send RPC request to query server.
+	queryClient client.QueryClient
+	// connCache is the cache of server connections.
+	connCache ConnCache
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -61,9 +70,10 @@ func newProxyHandler(
 	st *stopper.Stopper,
 	cs *counterSet,
 	haKeeperClient logservice.ProxyHAKeeperClient,
+	test bool,
 ) (*handler, error) {
 	// Create the MO cluster.
-	mc := clusterservice.NewMOCluster(haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
+	mc := clusterservice.NewMOCluster(cfg.UUID, haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 	// Create the rebalancer.
@@ -76,22 +86,31 @@ func newProxyHandler(
 		opts = append(opts, withRebalancerDisabled())
 	}
 
-	re, err := newRebalancer(st, rt.Logger(), mc, opts...)
+	re, err := newRebalancer(cfg.UUID, st, rt.Logger(), mc, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	ru := newRouter(mc, re, false,
-		withConnectTimeout(cfg.ConnectTimeout.Duration),
-		withAuthTimeout(cfg.AuthTimeout.Duration),
-	)
+	// The SQL worker is mainly used in router currently.
+	sw := newSQLWorker()
+
+	var ru Router
+	if test {
+		ru = newRouter(mc, re, re.connManager, false)
+	} else {
+		ru = newRouter(mc, re, sw, false,
+			withConnectTimeout(cfg.ConnectTimeout.Duration),
+			withAuthTimeout(cfg.AuthTimeout.Duration),
+		)
+	}
+
 	// Decorate the router if plugin is enabled
 	if cfg.Plugin != nil {
-		p, err := newRPCPlugin(cfg.Plugin.Backend, cfg.Plugin.Timeout)
+		p, err := newRPCPlugin(cfg.UUID, cfg.Plugin.Backend, cfg.Plugin.Timeout)
 		if err != nil {
 			return nil, err
 		}
-		ru = newPluginRouter(ru, p)
+		ru = newPluginRouter(cfg.UUID, ru, p)
 	}
 
 	var ipNetList []*net.IPNet
@@ -105,7 +124,11 @@ func newProxyHandler(
 			ipNetList = append(ipNetList, ipNet)
 		}
 	}
-	return &handler{
+	qc, err := client.NewQueryClient(cfg.UUID, morpc.Config{})
+	if err != nil {
+		return nil, err
+	}
+	h := &handler{
 		ctx:            ctx,
 		logger:         rt.Logger(),
 		config:         cfg,
@@ -116,7 +139,13 @@ func newProxyHandler(
 		rebalancer:     re,
 		haKeeperClient: haKeeperClient,
 		ipNetList:      ipNetList,
-	}, nil
+		sqlWorker:      sw,
+		queryClient:    qc,
+	}
+	if h.config.ConnCacheEnabled {
+		h.connCache = newConnCache(ctx, cfg.UUID, rt.Logger(), withQueryClient(qc))
+	}
+	return h, nil
 }
 
 // handle handles the incoming connection.
@@ -135,6 +164,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 		withRealConn(),
 		withRebalancePolicy(RebalancePolicyMapping[h.config.RebalancePolicy]),
 		withRebalancer(h.rebalancer),
+		withConnCacheEnabled(h.connCache != nil),
 	)
 	defer func() {
 		_ = t.Close()
@@ -151,6 +181,8 @@ func (h *handler) handle(c goetty.IOSession) error {
 		h.router,
 		t,
 		h.ipNetList,
+		h.queryClient,
+		h.connCache,
 	)
 	if err != nil {
 		h.logger.Error("failed to create client conn", zap.Error(err))
@@ -172,7 +204,14 @@ func (h *handler) handle(c goetty.IOSession) error {
 		return err
 	}
 	h.logger.Debug("server conn created")
-	defer func() { _ = sc.Close() }()
+	defer func() {
+		// This Close() function just disconnect from connManager,
+		// but do not close the real raw connection. The raw connection
+		// is closed if the server connection could not be pushed into
+		// the connection cache, which is in (*clientConn).handleQuitEvent()
+		// function.
+		_ = sc.Close()
+	}()
 
 	h.logger.Info("build connection",
 		zap.String("client->proxy", fmt.Sprintf("%s -> %s", cc.RawConn().RemoteAddr(), cc.RawConn().LocalAddr())),
@@ -242,6 +281,12 @@ func (h *handler) Close() error {
 	if h != nil {
 		h.moCluster.Close()
 		_ = h.haKeeperClient.Close()
+		if h.queryClient != nil {
+			_ = h.queryClient.Close()
+		}
+		if h.connCache != nil {
+			_ = h.connCache.Close()
+		}
 	}
 	return nil
 }

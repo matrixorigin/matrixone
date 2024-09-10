@@ -26,7 +26,7 @@ import (
 var _ vm.Operator = new(Filter)
 
 type Filter struct {
-	ctr     *container
+	ctr     container
 	E       *plan.Expr
 	exeExpr *plan.Expr
 	IsEnd   bool
@@ -79,13 +79,14 @@ func (filter *Filter) GetExeExpr() *plan.Expr {
 }
 
 func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	filter.Free(proc, pipelineFailed, err)
+	filter.ctr.cleanExecutor() //todo need fix performance issue for executor mem reuse
+	filter.exeExpr = nil
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if filter.ctr != nil {
-		filter.ctr.cleanExecutor()
-		filter.ctr = nil
+	filter.ctr.cleanExecutor()
+	if filter.ctr.buf != nil {
+		filter.ctr.buf.Clean(proc.Mp())
 	}
 }
 
@@ -97,3 +98,12 @@ func (ctr *container) cleanExecutor() {
 	}
 	ctr.executors = nil
 }
+
+// func (ctr *container) resetExecutor() {
+// 	for i := range ctr.executors {
+// 		if ctr.executors[i] != nil {
+// 			ctr.executors[i].ResetForNextQuery()
+// 		}
+// 	}
+// 	ctr.executors = nil
+// }

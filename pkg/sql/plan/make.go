@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"go/constant"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -373,7 +372,7 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 	}
 
 	astArgs := []tree.Expr{
-		tree.NewNumValWithType(constant.MakeString(targetType.Enumvalues), targetType.Enumvalues, false, tree.P_char),
+		tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
 	}
 
 	// bind ast function's args

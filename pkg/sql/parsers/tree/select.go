@@ -404,10 +404,13 @@ type GroupBy struct {
 
 func (node *GroupBy) Format(ctx *FmtCtx) {
 	prefix := "group by "
-	for _, n := range *&node.Exprs {
+	for _, n := range node.Exprs {
 		ctx.WriteString(prefix)
 		n.Format(ctx)
 		prefix = ", "
+	}
+	if node.WithRollup {
+		ctx.WriteString(" with rollup")
 	}
 }
 

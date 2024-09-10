@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
@@ -47,10 +48,11 @@ func LoadColumnsData(
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
 		return
 	}
+	bat = batch.NewWithSize(len(cols))
 	release = func() {
 		objectio.ReleaseIOVector(ioVectors)
+		bat.Clean(m)
 	}
-	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
 		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
@@ -85,6 +87,7 @@ func LoadColumnsData2(
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
 	}
+	vectors = make([]containers.Vector, len(cols))
 	defer func() {
 		if needCopy {
 			objectio.ReleaseIOVector(ioVectors)
@@ -92,10 +95,12 @@ func LoadColumnsData2(
 		}
 		release = func() {
 			objectio.ReleaseIOVector(ioVectors)
+			for _, vec := range vectors {
+				vec.Close()
+			}
 		}
 	}()
 	var obj any
-	vectors = make([]containers.Vector, len(cols))
 	for i := range cols {
 		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
 		if err != nil {
@@ -127,6 +132,18 @@ func LoadColumnsData2(
 	return
 }
 
+func LoadTombstoneColumns(
+	ctx context.Context,
+	cols []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (bat *batch.Batch, release func(), err error) {
+	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, policy)
+}
+
 func LoadColumns(
 	ctx context.Context,
 	cols []uint16,
@@ -137,17 +154,6 @@ func LoadColumns(
 	policy fileservice.Policy,
 ) (bat *batch.Batch, release func(), err error) {
 	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy)
-}
-
-func LoadTombstoneColumns(
-	ctx context.Context,
-	cols []uint16,
-	typs []types.Type,
-	fs fileservice.FileService,
-	location objectio.Location,
-	m *mpool.MPool,
-) (bat *batch.Batch, release func(), err error) {
-	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0))
 }
 
 // LoadColumns2 load columns data from file service for TN
@@ -165,37 +171,26 @@ func LoadColumns2(
 	return LoadColumnsData2(ctx, objectio.SchemaData, cols, typs, fs, location, policy, needCopy, vPool)
 }
 
-// LoadTombstoneColumns2 load tombstone data from file service for TN
-// need to copy data from vPool to avoid releasing cache
-func LoadTombstoneColumns2(
-	ctx context.Context,
-	cols []uint16,
-	typs []types.Type,
-	fs fileservice.FileService,
-	location objectio.Location,
-	needCopy bool,
-	vPool *containers.VectorPool,
-) (vectors []containers.Vector, release func(), err error) {
-	return LoadColumnsData2(ctx, objectio.SchemaTombstone, cols, typs, fs, location, fileservice.Policy(0), needCopy, vPool)
-}
-
 func LoadOneBlock(
 	ctx context.Context,
 	fs fileservice.FileService,
 	key objectio.Location,
 	metaType objectio.DataMetaType,
-) (*batch.Batch, error) {
+) (*batch.Batch, uint16, error) {
+	sortKey := uint16(math.MaxUint16)
 	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
 	if err != nil {
-		return nil, err
+		return nil, sortKey, err
 	}
 	data := meta.MustGetMeta(metaType)
-
+	if data.BlockHeader().Appendable() {
+		sortKey = data.BlockHeader().SortKey()
+	}
 	idxes := make([]uint16, data.BlockHeader().ColumnCount())
 	for i := range idxes {
 		idxes[i] = uint16(i)
 	}
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
-	return bat, err
+	return bat, sortKey, err
 }

@@ -71,9 +71,15 @@ func (e *EntireEngine) Hints() Hints {
 	return e.Engine.Hints()
 }
 
-func (e *EntireEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, filter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]Reader, error) {
-	return e.Engine.NewBlockReader(ctx, num, ts, expr, filter, ranges, tblDef, proc)
+func (e *EntireEngine) BuildBlockReaders(
+	ctx context.Context,
+	proc any,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData RelData,
+	num int) ([]Reader, error) {
+	return e.Engine.BuildBlockReaders(ctx, proc, ts, expr, def, relData, num)
 }
 
 func (e *EntireEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
@@ -102,4 +108,8 @@ func (e *EntireEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool
 
 func (e *EntireEngine) GetMessageCenter() any {
 	return e.Engine.GetMessageCenter()
+}
+
+func (e *EntireEngine) GetService() string {
+	return e.Engine.GetService()
 }

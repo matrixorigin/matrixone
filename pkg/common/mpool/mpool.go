@@ -409,10 +409,10 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 	if cap > 0 {
 		// simple sanity check
 		if cap < 1024*1024 {
-			return nil, moerr.NewInternalErrorNoCtx("mpool cap %d too small", cap)
+			return nil, moerr.NewInternalErrorNoCtxf("mpool cap %d too small", cap)
 		}
 		if cap > GlobalCap() {
-			return nil, moerr.NewInternalErrorNoCtx("mpool cap %d too big, global cap %d", cap, globalCap)
+			return nil, moerr.NewInternalErrorNoCtxf("mpool cap %d too big, global cap %d", cap, globalCap.Load())
 		}
 	}
 
@@ -467,11 +467,6 @@ func MustNewZeroNoFixed() *MPool {
 	return MustNewNoFixed("must_new_zero_no_fixed")
 }
 
-func (mp *MPool) Report() string {
-	ret := fmt.Sprintf("    mpool stats: %s", mp.Stats().Report("        "))
-	return ret
-}
-
 func (mp *MPool) ReportJson() string {
 	ss := mp.stats.ReportJson()
 	if ss == "" {
@@ -507,16 +502,16 @@ func DeleteMPool(mp *MPool) {
 }
 
 var nextPool int64
-var globalCap int64
+var globalCap atomic.Int64
 var globalStats MPoolStats
 var globalPools sync.Map
 var crossPoolFreeCounter atomic.Int64
 
 func InitCap(cap int64) {
 	if cap < GB {
-		globalCap = GB
+		globalCap.Store(GB)
 	} else {
-		globalCap = cap
+		globalCap.Store(cap)
 	}
 }
 
@@ -527,11 +522,13 @@ func TotalCrossPoolFreeCounter() int64 {
 func GlobalStats() *MPoolStats {
 	return &globalStats
 }
+
 func GlobalCap() int64 {
-	if globalCap == 0 {
+	n := globalCap.Load()
+	if n == 0 {
 		return PB
 	}
-	return globalCap
+	return n
 }
 
 func sizeToIdx(size int) int {
@@ -547,7 +544,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	// reject unexpected alloc size.
 	if sz < 0 || sz > GB {
 		logutil.Errorf("Invalid alloc size %d: %s", sz, string(debug.Stack()))
-		return nil, moerr.NewInternalErrorNoCtx("Invalid alloc size %d", sz)
+		return nil, moerr.NewInternalErrorNoCtxf("Invalid alloc size %d", sz)
 	}
 
 	if sz == 0 {
@@ -555,7 +552,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	}
 
 	if atomic.LoadInt32(&mp.available) == Unavailable {
-		return nil, moerr.NewInternalErrorNoCtx("mpool %s unavailable for alloc", mp.tag)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool %s unavailable for alloc", mp.tag)
 	}
 
 	// update in use count
@@ -581,7 +578,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	if mycurr > mp.Cap() {
 		mp.stats.RecordFree(mp.tag, tempSize)
 		globalStats.RecordFree("global", tempSize)
-		return nil, moerr.NewInternalErrorNoCtx("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 	}
 
 	// from fixed pool
@@ -608,7 +605,7 @@ func (mp *MPool) Free(bs []byte) {
 		panic(moerr.NewInternalErrorNoCtx("invalid free, mp header corruption"))
 	}
 	if atomic.LoadInt32(&mp.available) == Unavailable {
-		panic(moerr.NewInternalErrorNoCtx("mpool %s unavailable for free", mp.tag))
+		panic(moerr.NewInternalErrorNoCtxf("mpool %s unavailable for free", mp.tag))
 	}
 
 	// if cross pool free.
@@ -616,7 +613,7 @@ func (mp *MPool) Free(bs []byte) {
 		crossPoolFreeCounter.Add(1)
 		otherPool, ok := globalPools.Load(pHdr.poolId)
 		if !ok {
-			panic(moerr.NewInternalErrorNoCtx("invalid mpool id %d", pHdr.poolId))
+			panic(moerr.NewInternalErrorNoCtxf("invalid mpool id %d", pHdr.poolId))
 		}
 		(otherPool.(*MPool)).Free(bs)
 		return
@@ -691,7 +688,7 @@ func roundupsize(size int) int {
 // the slice.
 func (mp *MPool) Grow(old []byte, sz int) ([]byte, error) {
 	if sz < len(old) {
-		return nil, moerr.NewInternalErrorNoCtx("mpool grow actually shrinks, %d, %d", len(old), sz)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool grow actually shrinks, %d, %d", len(old), sz)
 	}
 	if sz <= cap(old) {
 		return old[:sz], nil
@@ -732,12 +729,13 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int) ([]byte, error) {
 	len1 := len(old)
 	len2 := len(old2)
 	if sz < len1+len2 {
-		return nil, moerr.NewInternalErrorNoCtx("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
 	}
 	ret, err := mp.Grow(old, sz)
 	if err != nil {
 		return nil, err
 	}
+
 	copy(ret[len1:len1+len2], old2)
 	return ret, nil
 }

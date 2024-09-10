@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
@@ -40,7 +39,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				job_code INT NOT NULL,
 				store_id INT NOT NULL
 			)`,
-			want: "CREATE TABLE `employees` (\n  `id` INT NOT NULL,\n  `fname` VARCHAR(30) DEFAULT NULL,\n  `lname` VARCHAR(30) DEFAULT NULL,\n  `hired` DATE NOT NULL DEFAULT '1970-01-01',\n  `separated` DATE NOT NULL DEFAULT '9999-12-31',\n  `job_code` INT NOT NULL,\n  `store_id` INT NOT NULL\n)",
+			want: "CREATE TABLE `employees` (\n  `id` int NOT NULL,\n  `fname` varchar(30) DEFAULT NULL,\n  `lname` varchar(30) DEFAULT NULL,\n  `hired` date NOT NULL DEFAULT '1970-01-01',\n  `separated` date NOT NULL DEFAULT '9999-12-31',\n  `job_code` int NOT NULL,\n  `store_id` int NOT NULL\n)",
 		},
 		{
 			name: "test2",
@@ -52,7 +51,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				    timestamp_column TIMESTAMP(6),
 				    timestamp_column2 TIMESTAMP
 				);`,
-			want: "CREATE TABLE `t_time` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `date_column` DATE DEFAULT NULL,\n  `time_column` TIME(3) DEFAULT NULL,\n  `datetime_column` DATETIME(6) DEFAULT NULL,\n  `timestamp_column` TIMESTAMP(6) NULL DEFAULT NULL,\n  `timestamp_column2` TIMESTAMP NULL DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)",
+			want: "CREATE TABLE `t_time` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `date_column` date DEFAULT NULL,\n  `time_column` time(3) DEFAULT NULL,\n  `datetime_column` datetime(6) DEFAULT NULL,\n  `timestamp_column` timestamp(6) NULL DEFAULT NULL,\n  `timestamp_column2` timestamp NULL DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)",
 		},
 		{
 			name: "test3",
@@ -64,7 +63,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				timestamp_column TIMESTAMP(6)  NULL DEFAULT NULL,
 				timestamp_column2 TIMESTAMP  NULL DEFAULT NULL
 				)`,
-			want: "CREATE TABLE `t_time` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `date_column` DATE DEFAULT NULL,\n  `time_column` TIME(3) DEFAULT NULL,\n  `datetime_column` DATETIME(6) DEFAULT NULL,\n  `timestamp_column` TIMESTAMP(6) NULL DEFAULT NULL,\n  `timestamp_column2` TIMESTAMP NULL DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)",
+			want: "CREATE TABLE `t_time` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `date_column` date DEFAULT NULL,\n  `time_column` time(3) DEFAULT NULL,\n  `datetime_column` datetime(6) DEFAULT NULL,\n  `timestamp_column` timestamp(6) NULL DEFAULT NULL,\n  `timestamp_column2` timestamp NULL DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)",
 		},
 		{
 			name: "test4",
@@ -81,7 +80,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				KEY IDX_RoundId (ROUND_ID),
 				KEY IDX_UserId_EndTime (USER_ID,END_TIME)
 				)`,
-			want: "CREATE TABLE `t_log` (\n  `log_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `round_id` BIGINT UNSIGNED NOT NULL,\n  `user_id` INT UNSIGNED NOT NULL,\n  `user_ip` INT UNSIGNED DEFAULT NULL,\n  `end_time` DATETIME NOT NULL,\n  `user_type` INT DEFAULT NULL,\n  `app_id` INT DEFAULT NULL,\n  PRIMARY KEY (`log_id`,`end_time`),\n  KEY `idx_endtime` (`end_time`),\n  KEY `idx_roundid` (`round_id`),\n  KEY `idx_userid_endtime` (`user_id`,`end_time`)\n)",
+			want: "CREATE TABLE `t_log` (\n  `LOG_ID` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `ROUND_ID` bigint unsigned NOT NULL,\n  `USER_ID` int unsigned NOT NULL,\n  `USER_IP` int unsigned DEFAULT NULL,\n  `END_TIME` datetime NOT NULL,\n  `USER_TYPE` int DEFAULT NULL,\n  `APP_ID` int DEFAULT NULL,\n  PRIMARY KEY (`LOG_ID`,`END_TIME`),\n  KEY `idx_endtime` (`END_TIME`),\n  KEY `idx_roundid` (`ROUND_ID`),\n  KEY `idx_userid_endtime` (`USER_ID`,`END_TIME`)\n)",
 		},
 		{
 			name: "test5",
@@ -95,7 +94,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				UNIQUE KEY uk1 (name),
 				UNIQUE KEY uk2 (email)
 				);`,
-			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
+			want: "CREATE TABLE `example_table` (\n  `id` int NOT NULL,\n  `name` varchar(255) NOT NULL DEFAULT 'default_name',\n  `email` varchar(255) DEFAULT NULL,\n  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
 		},
 		{
 			name: "test6",
@@ -109,7 +108,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				g timestamp(2) default current_timestamp(2) on update current_timestamp(2),
 				h date default '2024-01-01'
 				)`,
-			want: "CREATE TABLE `t` (\n  `a` TIMESTAMP NOT NULL DEFAULT current_timestamp(),\n  `b` TIMESTAMP(3) DEFAULT current_timestamp(3),\n  `c` DATETIME DEFAULT current_timestamp(),\n  `d` DATETIME(4) DEFAULT current_timestamp(4),\n  `e` VARCHAR(20) DEFAULT 'cUrrent_tImestamp',\n  `f` DATETIME(2) DEFAULT current_timestamp(2) ON UPDATE current_timestamp(2),\n  `g` TIMESTAMP(2) DEFAULT current_timestamp(2) ON UPDATE current_timestamp(2),\n  `h` DATE DEFAULT '2024-01-01'\n)",
+			want: "CREATE TABLE `t` (\n  `a` timestamp NOT NULL DEFAULT current_timestamp(),\n  `b` timestamp(3) DEFAULT current_timestamp(3),\n  `c` datetime DEFAULT current_timestamp(),\n  `d` datetime(4) DEFAULT current_timestamp(4),\n  `e` varchar(20) DEFAULT 'cUrrent_tImestamp',\n  `f` datetime(2) DEFAULT current_timestamp(2) ON UPDATE current_timestamp(2),\n  `g` timestamp(2) DEFAULT current_timestamp(2) ON UPDATE current_timestamp(2),\n  `h` date DEFAULT '2024-01-01'\n)",
 		},
 	}
 	for _, tt := range tests {
@@ -144,7 +143,7 @@ func Test_SingleShowCreateTable(t *testing.T) {
 				UNIQUE KEY uk1 (name),
 				UNIQUE KEY uk2 (email)
 				);`,
-			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
+			want: "CREATE TABLE `example_table` (\n  `id` int NOT NULL,\n  `name` varchar(255) NOT NULL DEFAULT 'default_name',\n  `email` varchar(255) DEFAULT NULL,\n  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
 		},
 	}
 
@@ -188,8 +187,8 @@ func buildTestShowCreateTable(sql string) (string, error) {
 		return "", err
 	}
 
-	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
-	showSQL, err := ConstructCreateTableSQL(nil, tableDef, snapshot, &mock.ctxt)
+	var snapshot *plan.Snapshot
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false)
 	if err != nil {
 		return "", err
 	}

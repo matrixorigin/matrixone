@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -128,12 +127,12 @@ func checkChangeTypeCompatible(ctx context.Context, origin *plan.Type, to *plan.
 	} else {
 		if (origin.Id == int32(types.T_time) || origin.Id == int32(types.T_timestamp) || origin.Id == int32(types.T_date) || origin.Id == int32(types.T_datetime) || origin.Id == int32(types.T_char) || origin.Id == int32(types.T_varchar) || origin.Id == int32(types.T_json) || origin.Id == int32(types.T_uuid)) &&
 			to.Id == int32(types.T_binary) {
-			return moerr.NewNotSupported(ctx, "currently unsupport change from original type %v to %v ", origin.Id, to.Id)
+			return moerr.NewNotSupportedf(ctx, "currently unsupport change from original type %v to %v ", origin.Id, to.Id)
 		}
 
 		if (origin.Id == int32(types.T_binary) || origin.Id == int32(types.T_decimal64) || origin.Id == int32(types.T_decimal128) || origin.Id == int32(types.T_float32) || origin.Id == int32(types.T_float64)) &&
 			(to.Id == int32(types.T_time) || to.Id == int32(types.T_timestamp) || to.Id == int32(types.T_date) || to.Id == int32(types.T_datetime)) {
-			return moerr.NewNotSupported(ctx, "currently unsupport change from original type %v to %v ", origin.Id, to.Id)
+			return moerr.NewNotSupportedf(ctx, "currently unsupport change from original type %v to %v ", origin.Id, to.Id)
 		}
 	}
 	return nil
@@ -152,7 +151,7 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 		for i, colId := range fkInfo.Cols {
 			if colId == originalCol.ColId {
 				// Check if the parent table of the foreign key exists
-				_, referTableDef := ctx.ResolveById(fkInfo.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
+				_, referTableDef := ctx.ResolveById(fkInfo.ForeignTbl, nil)
 				if referTableDef == nil {
 					continue
 				}
@@ -174,9 +173,9 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		refObjRef, refTableDef := ctx.ResolveById(referredTblId, Snapshot{TS: &timestamp.Timestamp{}})
+		refObjRef, refTableDef := ctx.ResolveById(referredTblId, nil)
 		if refTableDef == nil {
-			return moerr.NewInternalError(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
+			return moerr.NewInternalErrorf(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}
 		var referredFK *ForeignKeyDef
 		for _, fkInfo := range refTableDef.Fkeys {

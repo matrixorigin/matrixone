@@ -78,7 +78,7 @@ Tables_in_res_test
 r_test
 show create table r_test;
 Table    Create Table
-r_test    CREATE TABLE `r_test` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
+r_test    CREATE TABLE `r_test` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
 show columns from r_test;
 Field    Type    Null    Key    Default    Extra    Comment
 c1    INT(32)    YES    UNI    null        
@@ -230,6 +230,9 @@ create table r1(c1 int,c2 varchar(20));
 insert into res_test.r_test values(8,'c');
 update res_test.r_test set c1=5 where c2='h';
 delete from res_test.r_test where c1=4;
+select count(*) > 0 from system.statement_info;
+count( * ) > 0
+true
 delete from system.statement_info;
 internal error: do not have privilege to execute the statement
 select * from res_test.r_test;
@@ -255,7 +258,7 @@ Tables_in_res_test
 r_test
 show create table r_test;
 Table    Create Table
-r_test    CREATE TABLE `r_test` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
+r_test    CREATE TABLE `r_test` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
 show columns from r_test;
 Field    Type    Null    Key    Default    Extra    Comment
 c1    INT(32)    YES    UNI    null        

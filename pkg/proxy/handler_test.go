@@ -53,10 +53,10 @@ type testProxyHandler struct {
 
 func newTestProxyHandler(t *testing.T) *testProxyHandler {
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	ctx, cancel := context.WithCancel(context.TODO())
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
@@ -68,7 +68,7 @@ func newTestProxyHandler(t *testing.T) *testProxyHandler {
 		hc:     hc,
 		mc:     mc,
 		re:     re,
-		ru:     newRouter(mc, re, false),
+		ru:     newRouter(mc, re, re.connManager, false),
 		closeFn: func() {
 			mc.Close()
 			st.Stop()
@@ -180,7 +180,7 @@ func TestHandler_Handle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(listenAddr))
 	cfg := Config{
@@ -188,7 +188,7 @@ func TestHandler_Handle(t *testing.T) {
 		RebalanceDisabled: true,
 	}
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
@@ -253,7 +253,7 @@ func TestHandler_HandleErr(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(listenAddr))
 	cfg := Config{
@@ -261,7 +261,7 @@ func TestHandler_HandleErr(t *testing.T) {
 		RebalanceDisabled: true,
 	}
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
@@ -317,7 +317,7 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(listenAddr))
 	cfg := Config{
@@ -325,7 +325,7 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 		RebalanceDisabled: true,
 	}
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
@@ -395,7 +395,7 @@ func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(listenAddr))
 	cfg := Config{
@@ -403,7 +403,7 @@ func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {
 		RebalanceDisabled: true,
 	}
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
@@ -419,7 +419,7 @@ func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {
 
 	// start proxy.
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
-		WithHAKeeperClient(hc))
+		WithHAKeeperClient(hc), WithTest())
 	defer func() {
 		err := s.Close()
 		require.NoError(t, err)
@@ -500,5 +500,21 @@ func TestHandler_HandleTxn(t *testing.T) {
 		}()
 		_, err = db1.Exec("select 1")
 		require.NoError(t, err)
+	})
+}
+
+func TestHandler_HandleEventUpgrade(t *testing.T) {
+	testWithServer(t, func(t *testing.T, addr string, s *Server) {
+		db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
+		// connect to server.
+		require.NoError(t, err)
+		require.NotNil(t, db1)
+		defer func() {
+			_ = db1.Close()
+		}()
+		_, err = db1.Exec("upgrade account all")
+		require.NoError(t, err)
+
+		require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 	})
 }

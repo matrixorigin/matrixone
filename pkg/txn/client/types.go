@@ -158,6 +158,8 @@ type TxnOperator interface {
 	// will be committed to tn to check. If the metadata of the lockservice changes in [lock, commit],
 	// the transaction will be rolled back.
 	AddLockTable(locktable lock.LockTable) error
+	// HasLockTable check if had locked table
+	HasLockTable(table uint64) bool
 	// AddWaitLock add wait lock for current txn
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
@@ -173,9 +175,6 @@ type TxnOperator interface {
 	AddWorkspace(workspace Workspace)
 	// GetWorkspace from the transaction
 	GetWorkspace() Workspace
-
-	ResetRetry(bool)
-	IsRetry() bool
 
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
@@ -238,6 +237,8 @@ type TimestampWaiter interface {
 }
 
 type Workspace interface {
+	Readonly() bool
+
 	// StartStatement tag a statement is running
 	StartStatement()
 	// EndStatement tag end a statement is completed
@@ -268,6 +269,9 @@ type Workspace interface {
 
 	SetHaveDDL(flag bool)
 	GetHaveDDL() bool
+
+	// debug & test
+	PPString() string
 }
 
 // TxnOverview txn overview include meta and status

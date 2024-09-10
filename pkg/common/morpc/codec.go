@@ -23,6 +23,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/fagongzi/goetty/v2/codec/length"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -110,8 +111,14 @@ type messageCodec struct {
 //  3. Message body
 //     3.1. message body, required.
 //     3.2. payload, optional. Set if has paylad flag.
-func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Codec {
+func NewMessageCodec(
+	sid string,
+	messageFactory func() Message,
+	options ...CodecOption,
+) Codec {
 	bc := &baseCodec{
+		sid:            sid,
+		logger:         getLogger(sid).Named("morpc"),
 		messageFactory: messageFactory,
 		maxBodySize:    defaultMaxBodyMessageSize,
 	}
@@ -139,7 +146,7 @@ func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer
 func (c *messageCodec) Valid(msg Message) error {
 	n := msg.ProtoSize()
 	if n >= c.bc.maxBodySize {
-		return moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
+		return moerr.NewInternalErrorNoCtxf("message body %d is too large, max is %d",
 			n,
 			c.bc.maxBodySize)
 	}
@@ -151,6 +158,8 @@ func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {
 }
 
 type baseCodec struct {
+	sid             string
+	logger          *log.MOLogger
 	allocator       malloc.Allocator
 	checksumEnabled bool
 	compressEnabled bool
@@ -200,7 +209,7 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) error {
 	msg, ok := data.(RPCMessage)
 	if !ok {
-		return moerr.NewInternalErrorNoCtx("not support %T %+v", data, data)
+		return moerr.NewInternalErrorNoCtxf("not support %T %+v", data, data)
 	}
 
 	startWriteOffset := out.GetWriteOffset()
@@ -429,7 +438,7 @@ func (c *baseCodec) writeBody(
 		return nil, err
 	}
 	defer dec.Deallocate(malloc.NoHints)
-	if _, err := msg.MarshalTo(origin); err != nil {
+	if _, err = msg.MarshalTo(origin); err != nil {
 		return nil, err
 	}
 
@@ -463,12 +472,12 @@ func (c *baseCodec) readMessage(
 
 	// invalid body packet
 	if offset >= len(data)-payloadSize {
-		getLogger().Warn("invalid body packet",
+		c.logger.Warn("invalid body packet",
 			zap.Int("offset", offset),
 			zap.Int("len", len(data)),
 			zap.Int("payloadSize", payloadSize),
 			zap.String("data-hex", hex.EncodeToString(data)))
-		return moerr.NewInvalidInputNoCtx("invalid body packet, offset %d, len %d, payload size %d",
+		return moerr.NewInvalidInputNoCtxf("invalid body packet, offset %d, len %d, payload size %d",
 			offset, len(data), payloadSize)
 	}
 
@@ -641,7 +650,7 @@ func validChecksum(body, payload []byte, expectChecksum uint64) error {
 	}
 	actulChecksum := checksum.Sum64()
 	if actulChecksum != expectChecksum {
-		return moerr.NewInternalErrorNoCtx("checksum mismatch, expect %d, got %d",
+		return moerr.NewInternalErrorNoCtxf("checksum mismatch, expect %d, got %d",
 			expectChecksum,
 			actulChecksum)
 	}

@@ -18,17 +18,18 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -99,7 +100,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetUserName().Return("sys:dump").AnyTimes()
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot Snapshot) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -191,7 +192,7 @@ func TestBuildLockTables(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot Snapshot) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -245,8 +246,8 @@ func TestBuildLockTables(t *testing.T) {
 func TestBuildCreateTable(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	rt := moruntime.DefaultRuntime()
-	moruntime.SetupProcessLevelRuntime(rt)
-	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		return executor.Result{}, nil
 	}))
 	sqls := []string{
@@ -450,4 +451,39 @@ func TestCreateTableAsSelect(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestParseDuration(t *testing.T) {
+
+	cases := []struct {
+		period      uint64
+		unit        string
+		expected    time.Duration
+		expectedErr error
+	}{
+		// nil input
+		{expectedErr: moerr.NewInvalidArg(context.Background(), "time unit", "")},
+		// 0 second
+		{0, "second", 0, nil},
+		// 1 second
+		{1, "second", time.Second, nil},
+		// 2 minute
+		{2, "minute", 2 * time.Minute, nil},
+		// 3 hour
+		{3, "hour", 3 * time.Hour, nil},
+		// 4 day
+		{4, "day", 4 * 24 * time.Hour, nil},
+		// 5 week
+		{5, "week", 5 * 7 * 24 * time.Hour, nil},
+		// 6 month
+		{6, "month", 6 * 30 * 24 * time.Hour, nil},
+		// invalid time unit: year
+		{7, "year", 0, moerr.NewInvalidArg(context.Background(), "time unit", "year")},
+	}
+
+	for _, c := range cases {
+		duration, err := parseDuration(context.Background(), c.period, c.unit)
+		assert.Equal(t, c.expected, duration)
+		assert.Equal(t, err, c.expectedErr)
+	}
 }

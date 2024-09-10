@@ -1,5 +1,6 @@
 drop account if exists bvt_query_type_part1;
 create account if not exists `bvt_query_type_part1` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+set session disable_agg_statement = on;
 create database statement_query_type;
 begin;
 commit;
@@ -19,7 +20,7 @@ Database    Create Database
 test_db    CREATE DATABASE `test_db`
 show create table test_table;
 Table    Create Table
-test_table    CREATE TABLE `test_table` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(65535) DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
 show create view test_view;
 View    Create View    character_set_client    collation_connection
 test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
@@ -89,7 +90,7 @@ drop table if exists test_01;
 create table test_01(a int, b varchar);
 show create table test_01;
 Table    Create Table
-test_01    CREATE TABLE `test_01` (\n  `a` INT DEFAULT NULL,\n  `b` VARCHAR(65535) DEFAULT NULL\n)
+test_01    CREATE TABLE `test_01` (\n  `a` int DEFAULT NULL,\n  `b` varchar(65535) DEFAULT NULL\n)
 explain select * from test_01;
 QUERY PLAN
 Project
@@ -112,7 +113,7 @@ Database    Create Database
 test_db    CREATE DATABASE `test_db`
 show create table test_table;
 Table    Create Table
-test_table    CREATE TABLE `test_table` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(65535) DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
 show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show procedure status;

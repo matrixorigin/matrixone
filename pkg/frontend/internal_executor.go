@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"sync"
 
@@ -61,17 +62,23 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 
 type internalExecutor struct {
 	sync.Mutex
+	service      string
 	proto        *internalProtocol
 	baseSessOpts ie.SessionOverrideOptions
 }
 
-func NewInternalExecutor() *internalExecutor {
-	return newIe()
+func NewInternalExecutor(
+	service string,
+) *internalExecutor {
+	return newIe(service)
 }
 
-func newIe() *internalExecutor {
+func newIe(
+	service string,
+) *internalExecutor {
 	proto := &internalProtocol{result: &internalExecResult{}}
 	ret := &internalExecutor{
+		service:      service,
 		proto:        proto,
 		baseSessOpts: ie.NewOptsBuilder().Finish(),
 	}
@@ -115,24 +122,12 @@ func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint
 	return res.resultSet.GetValue(ctx, ridx, cidx)
 }
 
-func (res *internalExecResult) ValueByName(ctx context.Context, ridx uint64, col string) (interface{}, error) {
-	return res.resultSet.GetValueByName(ctx, ridx, col)
+func (res *internalExecResult) GetString(ctx context.Context, ridx uint64, cidx uint64) (string, error) {
+	return res.resultSet.GetString(ctx, ridx, cidx)
 }
 
-func (res *internalExecResult) StringValueByName(ctx context.Context, ridx uint64, col string) (string, error) {
-	if cidx, err := res.resultSet.columnName2Index(ctx, col); err != nil {
-		return "", err
-	} else {
-		return res.resultSet.GetString(ctx, ridx, cidx)
-	}
-}
-
-func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint64, col string) (float64, error) {
-	if cidx, err := res.resultSet.columnName2Index(ctx, col); err != nil {
-		return 0.0, err
-	} else {
-		return res.resultSet.GetFloat64(ctx, ridx, cidx)
-	}
+func (res *internalExecResult) GetFloat64(ctx context.Context, ridx uint64, cidx uint64) (float64, error) {
+	return res.resultSet.GetFloat64(ctx, ridx, cidx)
 }
 
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
@@ -145,8 +140,8 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer func() {
 		sess.Close()
 	}()
-	sess.EnterFPrint(112)
-	defer sess.ExitFPrint(112)
+	sess.EnterFPrint(FPInternalExecutorExec)
+	defer sess.ExitFPrint(FPInternalExecutorExec)
 	ie.proto.stashResult = false
 	if sql == "" {
 		return
@@ -155,6 +150,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 		reqCtx: ctx,
 		ses:    sess,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 }
 
@@ -166,14 +162,15 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
-	sess.EnterFPrint(113)
-	defer sess.ExitFPrint(113)
+	sess.EnterFPrint(FPInternalExecutorQuery)
+	defer sess.ExitFPrint(FPInternalExecutorQuery)
 	ie.proto.stashResult = true
 	sess.Info(ctx, "internalExecutor new session")
 	tempExecCtx := ExecCtx{
 		reqCtx: ctx,
 		ses:    sess,
 	}
+	defer tempExecCtx.Close()
 	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
@@ -192,10 +189,10 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//
 	mp, err := mpool.NewMPool("internal_exec_cmd_session", getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
-		getLogger().Fatal("internalExecutor cannot create mpool in newCmdSession")
+		getLogger(ie.service).Fatal("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ctx, ie.proto, mp)
+	sess := NewSession(ctx, ie.service, ie.proto, mp)
 	sess.disableTrace = true
 
 	var t *TenantInfo
@@ -219,7 +216,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	applyOverride(sess, opts)
 
 	//make sure init tasks can see the prev task's data
-	now, _ := runtime.ProcessLevelRuntime().Clock().Now()
+	now, _ := runtime.ServiceRuntime(ie.service).Clock().Now()
 	sess.lastCommitTS = now
 	return sess
 }
@@ -279,7 +276,12 @@ func (ip *internalProtocol) GetBool(PropertyID) bool {
 }
 
 func (ip *internalProtocol) Write(execCtx *ExecCtx, bat *batch.Batch) error {
-	return fillResultSet(execCtx.reqCtx, bat, execCtx.ses, execCtx.ses.GetMysqlResultSet())
+	mrs := execCtx.ses.GetMysqlResultSet()
+	err := fillResultSet(execCtx.reqCtx, bat, execCtx.ses, mrs)
+	if err != nil {
+		return err
+	}
+	return ip.sendRows(mrs, uint64(bat.RowCount()))
 }
 
 func (ip *internalProtocol) WriteHandshake() error {
@@ -300,6 +302,10 @@ func (ip *internalProtocol) WriteEOF(warnings, status uint16) error {
 }
 
 func (ip *internalProtocol) WriteEOFIF(warnings uint16, status uint16) error {
+	return nil
+}
+
+func (ip *internalProtocol) WriteEOFIFAndNoFlush(warnings uint16, status uint16) error {
 	return nil
 }
 
@@ -354,6 +360,11 @@ func (ip *internalProtocol) WritePrepareResponse(ctx context.Context, stmt *Prep
 }
 
 func (ip *internalProtocol) Read() ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) ReadLoadLocalPacket() ([]byte, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -483,6 +494,9 @@ func (ip *internalProtocol) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) e
 	defer ip.Unlock()
 	return ip.sendRows(mrs, cnt)
 }
+func (ip *internalProtocol) WriteColumnDefBytes(payload []byte) error {
+	return nil
+}
 
 func (ip *internalProtocol) ResetStatistics() {
 	ip.result.affectedRows = 0
@@ -491,8 +505,18 @@ func (ip *internalProtocol) ResetStatistics() {
 	ip.result.resultSet = nil
 }
 
+func (ip *internalProtocol) Reset(_ *Session) {
+	ip.ResetStatistics()
+	ip.database = ""
+	ip.username = ""
+}
+
 func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (ip *internalProtocol) WriteLocalInfileRequest(filename string) error {
 	return nil
+}
+
+func (ip *internalProtocol) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	return nil, nil
 }

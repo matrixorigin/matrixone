@@ -19,7 +19,7 @@ e    TIMESTAMP(0)    YES        null
 f    TIMESTAMP(0)    YES        CURRENT_TIMESTAMP()        
 show create table t;
 Table    Create Table
-t    CREATE TABLE `t` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
+t    CREATE TABLE `t` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` int DEFAULT 20,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
 INSERT INTO t (a, b, d) VALUES (1, 15, 'Hello');
 INSERT INTO t (a, b, d) VALUES (2, 25, 'World');
 INSERT INTO t (a, b, d) VALUES (3, 35, 'Dolor Sit');
@@ -35,7 +35,7 @@ f    TIMESTAMP(0)    YES        CURRENT_TIMESTAMP()
 yy    VARCHAR(50)    NO        'foo'        
 show create table t;
 Table    Create Table
-t    CREATE TABLE `t` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  `yy` VARCHAR(50) NOT NULL DEFAULT 'foo',\n  PRIMARY KEY (`a`)\n)
+t    CREATE TABLE `t` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` int DEFAULT 20,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  `yy` varchar(50) NOT NULL DEFAULT 'foo',\n  PRIMARY KEY (`a`)\n)
 INSERT INTO t (a, b, d, yy) VALUES (4, 45, 'Lorem Ipsum', null);
 constraint violation: Column 'yy' cannot be null
 alter table t add column zz varchar(50) not null;
@@ -51,7 +51,7 @@ yy    VARCHAR(50)    NO        'foo'
 zz    VARCHAR(50)    NO        null        
 show create table t;
 Table    Create Table
-t    CREATE TABLE `t` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  `yy` VARCHAR(50) NOT NULL DEFAULT 'foo',\n  `zz` VARCHAR(50) NOT NULL,\n  PRIMARY KEY (`a`)\n)
+t    CREATE TABLE `t` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` int DEFAULT 20,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  `yy` varchar(50) NOT NULL DEFAULT 'foo',\n  `zz` varchar(50) NOT NULL,\n  PRIMARY KEY (`a`)\n)
 INSERT INTO t (a, b, d, yy) VALUES (5, 55, 'Horem Ypsum', 'zzz');
 invalid input: invalid default value for column 'zz'
 CREATE TABLE t1 (
@@ -72,7 +72,7 @@ e    TIMESTAMP(0)    YES        null
 f    TIMESTAMP(0)    YES        CURRENT_TIMESTAMP()        
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
+t1    CREATE TABLE `t1` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` int DEFAULT 20,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
 INSERT INTO t1 (a, b, d) VALUES (1, 15, 'Hello');
 INSERT INTO t1 (a, b, d) VALUES (2, 25, 'World');
 INSERT INTO t1 (a, b, d) VALUES (3, 35, 'Dolor Sit');
@@ -89,7 +89,7 @@ e    TIMESTAMP(0)    YES        null
 f    TIMESTAMP(0)    YES        CURRENT_TIMESTAMP()        
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` BIGINT NOT NULL DEFAULT 100,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
+t1    CREATE TABLE `t1` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` bigint NOT NULL DEFAULT 100,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
 CREATE TABLE t2 (
 a int NOT NULL PRIMARY KEY,
 b int NOT NULL DEFAULT 10,
@@ -108,7 +108,7 @@ e    TIMESTAMP(0)    YES        null
 f    TIMESTAMP(0)    YES        CURRENT_TIMESTAMP()        
 show create table t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
+t2    CREATE TABLE `t2` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` int DEFAULT 20,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
 INSERT INTO t2 (a, b, d) VALUES (1, 15, 'Hello');
 INSERT INTO t2 (a, b, d) VALUES (2, 25, 'World');
 INSERT INTO t2 (a, b, d) VALUES (3, 35, 'Dolor Sit');
@@ -123,7 +123,7 @@ e    TIMESTAMP(0)    YES        null
 f    TIMESTAMP(0)    YES        CURRENT_TIMESTAMP()        
 show create table t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` BIGINT DEFAULT 100,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
+t2    CREATE TABLE `t2` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` bigint DEFAULT 100,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
 INSERT INTO t2 (a, b, d, c) VALUES (4, 45, 'Lorem Ipsum', null);
 alter table t2 modify c bigint not null default 200;
 constraint violation: Column 'c' cannot be null
@@ -137,7 +137,7 @@ e    TIMESTAMP(0)    YES        null
 f    TIMESTAMP(0)    YES        CURRENT_TIMESTAMP()        
 show create table t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` BIGINT DEFAULT 100,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
+t2    CREATE TABLE `t2` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` bigint DEFAULT 100,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
 create table t3(id int not null primary key, i int, j int, t text);
 desc t3;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -147,7 +147,7 @@ j    INT(32)    YES        null
 t    TEXT(0)    YES        null        
 show create table t3;
 Table    Create Table
-t3    CREATE TABLE `t3` (\n  `id` INT NOT NULL,\n  `i` INT DEFAULT NULL,\n  `j` INT DEFAULT NULL,\n  `t` TEXT DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t3    CREATE TABLE `t3` (\n  `id` int NOT NULL,\n  `i` int DEFAULT NULL,\n  `j` int DEFAULT NULL,\n  `t` text DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 INSERT INTO t3 (id, i, j, t) VALUES (1, 10, 20, 'Example text 1');
 INSERT INTO t3 (id, i, j, t) VALUES (2, 30, 40, 'Example text 2');
 INSERT INTO t3 (id, i, j, t) VALUES (3, NULL, 50, 'Example text 3');
@@ -166,7 +166,7 @@ t    TEXT(0)    YES        null
 e    ENUM('Y','N')    NO        'Y'        
 show create table t3;
 Table    Create Table
-t3    CREATE TABLE `t3` (\n  `id` INT NOT NULL,\n  `i` INT DEFAULT NULL,\n  `j` INT DEFAULT NULL,\n  `t` TEXT DEFAULT NULL,\n  `e` ENUM('Y','N') NOT NULL DEFAULT 'Y',\n  PRIMARY KEY (`id`)\n)
+t3    CREATE TABLE `t3` (\n  `id` int NOT NULL,\n  `i` int DEFAULT NULL,\n  `j` int DEFAULT NULL,\n  `t` text DEFAULT NULL,\n  `e` enum('Y','N') NOT NULL DEFAULT 'Y',\n  PRIMARY KEY (`id`)\n)
 INSERT INTO t3 (id, i, j, t, e) VALUES (4, NULL, 50, 'Example text 4', null);
 constraint violation: Column 'e' cannot be null
 select * from t3 order by id;
@@ -190,7 +190,7 @@ c    INT(32)    YES        1000
 d    INT(32)    NO        2000        
 show create table t4;
 Table    Create Table
-t4    CREATE TABLE `t4` (\n  `id` INT NOT NULL,\n  `a` VARCHAR(30) DEFAULT 'foo',\n  `b` VARCHAR(30) NOT NULL DEFAULT 'foo',\n  `c` INT DEFAULT 1000,\n  `d` INT NOT NULL DEFAULT 2000,\n  PRIMARY KEY (`id`)\n)
+t4    CREATE TABLE `t4` (\n  `id` int NOT NULL,\n  `a` varchar(30) DEFAULT 'foo',\n  `b` varchar(30) NOT NULL DEFAULT 'foo',\n  `c` int DEFAULT 1000,\n  `d` int NOT NULL DEFAULT 2000,\n  PRIMARY KEY (`id`)\n)
 CREATE TABLE t5 (
 y datetime NOT NULL DEFAULT '2023-06-21 00:00:00' PRIMARY KEY,
 a int DEFAULT NULL,
@@ -203,12 +203,12 @@ a    INT(32)    YES        null
 b    CHAR(10)    YES        null        
 show create table t5;
 Table    Create Table
-t5    CREATE TABLE `t5` (\n  `y` DATETIME NOT NULL DEFAULT '2023-06-21 00:00:00',\n  `a` INT DEFAULT NULL,\n  `b` CHAR(10) DEFAULT NULL,\n  PRIMARY KEY (`y`)\n)
+t5    CREATE TABLE `t5` (\n  `y` datetime NOT NULL DEFAULT '2023-06-21 00:00:00',\n  `a` int DEFAULT NULL,\n  `b` char(10) DEFAULT NULL,\n  PRIMARY KEY (`y`)\n)
 create external table extable1(n1 int)infile{"filepath"='$resources/external_table_file/extable.csv'} ;
 desc extable1;
 Field    Type    Null    Key    Default    Extra    Comment
 n1    INT(32)    YES        null        
 show create table extable1;
 Table    Create Table
-extable1    CREATE EXTERNAL TABLE `extable1` (\n  `n1` INT DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='','JSONDATA'=''}
+extable1    CREATE EXTERNAL TABLE `extable1` (\n  `n1` int DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'=''}
 drop database if exists db1;

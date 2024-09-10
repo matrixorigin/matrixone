@@ -459,7 +459,7 @@ func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 	unexpectEOF := false
 	value, ok := configs[ValueKey].(string)
 	if !ok {
-		return nil, moerr.NewInternalError(ctx, "expected string value for key: %s", ValueKey)
+		return nil, moerr.NewInternalErrorf(ctx, "expected string value for key: %s", ValueKey)
 	}
 	switch ValueType(value) {
 	case JSON:
@@ -502,7 +502,7 @@ func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 			}
 		}
 	default:
-		return nil, moerr.NewInternalError(ctx, "Unsupported value for key: %s", ValueKey)
+		return nil, moerr.NewInternalErrorf(ctx, "Unsupported value for key: %s", ValueKey)
 	}
 
 	n := b.Vecs[0].Length()
@@ -548,7 +548,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			cols := vector.MustFixedCol[bool](vec)
+			cols := vector.MustFixedColNoTypeCheck[bool](vec)
 			cols[rowIdx] = val
 		case types.T_bit:
 			switch v := fieldValue.(type) {
@@ -559,7 +559,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 					nulls.Add(vec.GetNulls(), uint64(rowIdx))
 					continue
 				}
-				cols := vector.MustFixedCol[uint64](vec)
+				cols := vector.MustFixedColNoTypeCheck[uint64](vec)
 				cols[rowIdx] = val
 			}
 		case types.T_int8:
@@ -586,7 +586,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = int8(parsedValue)
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, val); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, val); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
@@ -614,7 +614,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = int16(parsedValue)
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, val); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, val); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
@@ -642,7 +642,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = int32(parsedValue)
 			}
-			cols := vector.MustFixedCol[int32](vec)
+			cols := vector.MustFixedColNoTypeCheck[int32](vec)
 			cols[rowIdx] = val
 		case types.T_int64:
 			var val int64
@@ -669,7 +669,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = parsedValue
 			}
-			cols := vector.MustFixedCol[int64](vec)
+			cols := vector.MustFixedColNoTypeCheck[int64](vec)
 			cols[rowIdx] = val
 		case types.T_uint8:
 			var val uint8
@@ -695,7 +695,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = uint8(parsedValue)
 			}
-			cols := vector.MustFixedCol[uint8](vec)
+			cols := vector.MustFixedColNoTypeCheck[uint8](vec)
 			cols[rowIdx] = val
 		case types.T_uint16:
 			var val uint16
@@ -721,7 +721,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = uint16(parsedValue)
 			}
-			cols := vector.MustFixedCol[uint16](vec)
+			cols := vector.MustFixedColNoTypeCheck[uint16](vec)
 			cols[rowIdx] = val
 		case types.T_uint32:
 			var val uint32
@@ -747,7 +747,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = uint32(parsedValue)
 			}
-			cols := vector.MustFixedCol[uint32](vec)
+			cols := vector.MustFixedColNoTypeCheck[uint32](vec)
 			cols[rowIdx] = val
 		case types.T_uint64:
 			var val uint64
@@ -773,7 +773,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = uint64(parsedValue)
 			}
-			cols := vector.MustFixedCol[uint64](vec)
+			cols := vector.MustFixedColNoTypeCheck[uint64](vec)
 			cols[rowIdx] = val
 		case types.T_float32:
 			var val float32
@@ -796,7 +796,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = float32(parsedValue)
 			}
-			cols := vector.MustFixedCol[float32](vec)
+			cols := vector.MustFixedColNoTypeCheck[float32](vec)
 			cols[rowIdx] = val
 		case types.T_float64:
 			var val float64
@@ -815,9 +815,9 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = float64(parsedValue)
 			}
-			cols := vector.MustFixedCol[float64](vec)
+			cols := vector.MustFixedColNoTypeCheck[float64](vec)
 			cols[rowIdx] = val
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			var strVal string
 			strVal = fmt.Sprintf("%v", fieldValue)
 			buf.WriteString(strVal)
@@ -853,7 +853,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				return err
 			}
 		case types.T_time:
@@ -863,7 +863,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
@@ -875,7 +875,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
@@ -886,7 +886,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
@@ -895,7 +895,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 
 			d, err := strconv.ParseUint(valueStr, 10, 16)
 			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, uint16(d)); err != nil {
+				if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, uint16(d)); err != nil {
 					nulls.Add(vec.GetNulls(), uint64(rowIdx))
 					continue
 				}
@@ -909,7 +909,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 					nulls.Add(vec.GetNulls(), uint64(rowIdx))
 					continue
 				}
-				if err := vector.SetFixedAt(vec, rowIdx, uint16(f)); err != nil {
+				if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, uint16(f)); err != nil {
 					return err
 				}
 			}
@@ -923,7 +923,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 					continue
 				}
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				return err
 			}
 		case types.T_decimal128:
@@ -936,7 +936,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 					continue
 				}
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				return err
 			}
 		case types.T_uuid:
@@ -948,7 +948,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				return err
 			}
 		default:
@@ -1062,20 +1062,20 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}, factory
 
 	for _, key := range requiredKeys {
 		if _, exists := configs[key]; !exists {
-			return moerr.NewInternalError(ctx, "missing required key: %s", key)
+			return moerr.NewInternalErrorf(ctx, "missing required key: %s", key)
 		}
 	}
 
 	// Validate keys in configs
 	for key := range configs {
 		if _, ok := allowedKeys[key]; !ok {
-			return moerr.NewInternalError(ctx, "invalid key: %s", key)
+			return moerr.NewInternalErrorf(ctx, "invalid key: %s", key)
 		}
 	}
 
 	value, ok := configs[ValueKey].(string)
 	if !ok {
-		return moerr.NewInternalError(ctx, "expected string value for key: %s", ValueKey)
+		return moerr.NewInternalErrorf(ctx, "expected string value for key: %s", ValueKey)
 	}
 
 	switch ValueType(value) {
@@ -1084,20 +1084,20 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}, factory
 	case PROTOBUF:
 		// check the schema and message name has been set or not
 		if _, ok := configs[ProtobufSchemaKey]; !ok {
-			return moerr.NewInternalError(ctx, "missing required key: %s", ProtobufSchemaKey)
+			return moerr.NewInternalErrorf(ctx, "missing required key: %s", ProtobufSchemaKey)
 		}
 		if _, ok := configs[ProtobufMessagekey]; !ok {
-			return moerr.NewInternalError(ctx, "missing required key: %s", ProtobufMessagekey)
+			return moerr.NewInternalErrorf(ctx, "missing required key: %s", ProtobufMessagekey)
 		}
 	case PROTOBUFSR:
 		if _, ok := configs[ProtobufMessagekey]; !ok {
-			return moerr.NewInternalError(ctx, "missing required key: %s", ProtobufMessagekey)
+			return moerr.NewInternalErrorf(ctx, "missing required key: %s", ProtobufMessagekey)
 		}
 		if _, ok := configs[SchemaRegistryKey]; !ok {
-			return moerr.NewInternalError(ctx, "missing required key: %s", SchemaRegistryKey)
+			return moerr.NewInternalErrorf(ctx, "missing required key: %s", SchemaRegistryKey)
 		}
 	default:
-		return moerr.NewInternalError(ctx, "Unsupported value for key: %s", ValueKey)
+		return moerr.NewInternalErrorf(ctx, "Unsupported value for key: %s", ValueKey)
 	}
 	// Convert the configuration to map[string]string for Kafka
 	kafkaConfigs := convertToKafkaConfig(configs)

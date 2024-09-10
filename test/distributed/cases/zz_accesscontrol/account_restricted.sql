@@ -94,6 +94,9 @@ create table r1(c1 int,c2 varchar(20));
 insert into res_test.r_test values(8,'c');
 update res_test.r_test set c1=5 where c2='h';
 delete from res_test.r_test where c1=4;
+-- @bvt:issue#17811
+select count(*) > 0 from system.statement_info;
+-- @bvt:issue
 delete from system.statement_info;
 select * from res_test.r_test;
 truncate table res_test.r_test;

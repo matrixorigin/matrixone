@@ -27,12 +27,13 @@ import (
 type objectStorageMetrics struct {
 	upstream ObjectStorage
 
-	numDelete prometheus.Gauge
-	numExists prometheus.Gauge
-	numList   prometheus.Gauge
-	numRead   prometheus.Gauge
-	numStat   prometheus.Gauge
-	numWrite  prometheus.Gauge
+	numDelete     prometheus.Gauge
+	numExists     prometheus.Gauge
+	numList       prometheus.Gauge
+	numRead       prometheus.Gauge
+	numActiveRead prometheus.Gauge
+	numStat       prometheus.Gauge
+	numWrite      prometheus.Gauge
 }
 
 func newObjectStorageMetrics(
@@ -42,43 +43,55 @@ func newObjectStorageMetrics(
 	return &objectStorageMetrics{
 		upstream: upstream,
 
-		numRead:   metric.FSObjectStorageOperations.WithLabelValues(name, "read"),
-		numWrite:  metric.FSObjectStorageOperations.WithLabelValues(name, "write"),
-		numDelete: metric.FSObjectStorageOperations.WithLabelValues(name, "delete"),
-		numList:   metric.FSObjectStorageOperations.WithLabelValues(name, "list"),
-		numExists: metric.FSObjectStorageOperations.WithLabelValues(name, "exists"),
-		numStat:   metric.FSObjectStorageOperations.WithLabelValues(name, "stat"),
+		numRead:       metric.FSObjectStorageOperations.WithLabelValues(name, "read"),
+		numActiveRead: metric.FSObjectStorageOperations.WithLabelValues(name, "active-read"),
+		numWrite:      metric.FSObjectStorageOperations.WithLabelValues(name, "write"),
+		numDelete:     metric.FSObjectStorageOperations.WithLabelValues(name, "delete"),
+		numList:       metric.FSObjectStorageOperations.WithLabelValues(name, "list"),
+		numExists:     metric.FSObjectStorageOperations.WithLabelValues(name, "exists"),
+		numStat:       metric.FSObjectStorageOperations.WithLabelValues(name, "stat"),
 	}
 }
 
 var _ ObjectStorage = new(objectStorageMetrics)
 
 func (o *objectStorageMetrics) Delete(ctx context.Context, keys ...string) (err error) {
-	o.numDelete.Add(1)
+	o.numDelete.Inc()
 	return o.upstream.Delete(ctx, keys...)
 }
 
 func (o *objectStorageMetrics) Exists(ctx context.Context, key string) (bool, error) {
-	o.numExists.Add(1)
+	o.numExists.Inc()
 	return o.upstream.Exists(ctx, key)
 }
 
 func (o *objectStorageMetrics) List(ctx context.Context, prefix string, fn func(isPrefix bool, key string, size int64) (bool, error)) (err error) {
-	o.numList.Add(1)
+	o.numList.Inc()
 	return o.upstream.List(ctx, prefix, fn)
 }
 
-func (o *objectStorageMetrics) Read(ctx context.Context, key string, min *int64, max *int64) (r io.ReadCloser, err error) {
-	o.numRead.Add(1)
-	return o.upstream.Read(ctx, key, min, max)
+func (o *objectStorageMetrics) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+	o.numRead.Inc()
+	o.numActiveRead.Inc()
+	r, err := o.upstream.Read(ctx, key, min, max)
+	if err != nil {
+		return nil, err
+	}
+	return &readCloser{
+		r: r,
+		closeFunc: func() error {
+			o.numActiveRead.Dec()
+			return r.Close()
+		},
+	}, nil
 }
 
 func (o *objectStorageMetrics) Stat(ctx context.Context, key string) (size int64, err error) {
-	o.numStat.Add(1)
+	o.numStat.Inc()
 	return o.upstream.Stat(ctx, key)
 }
 
 func (o *objectStorageMetrics) Write(ctx context.Context, key string, r io.Reader, size int64, expire *time.Time) (err error) {
-	o.numWrite.Add(1)
+	o.numWrite.Inc()
 	return o.upstream.Write(ctx, key, r, size, expire)
 }

@@ -118,7 +118,7 @@ func (x SampleFunc_SampleType) String() string {
 }
 
 func (SampleFunc_SampleType) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{38, 0}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{42, 0}
 }
 
 type SessionLoggerInfo_LogLevel int32
@@ -155,7 +155,7 @@ func (x SessionLoggerInfo_LogLevel) String() string {
 }
 
 func (SessionLoggerInfo_LogLevel) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{47, 0}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{51, 0}
 }
 
 type Pipeline_PipelineType int32
@@ -186,7 +186,7 @@ func (x Pipeline_PipelineType) String() string {
 }
 
 func (Pipeline_PipelineType) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{48, 0}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{52, 0}
 }
 
 type Message struct {
@@ -563,6 +563,9 @@ func (m *Dispatch) GetRecSink() bool {
 
 type Merge struct {
 	SinkScan             bool     `protobuf:"varint,1,opt,name=sinkScan,proto3" json:"sinkScan,omitempty"`
+	Partial              bool     `protobuf:"varint,2,opt,name=partial,proto3" json:"partial,omitempty"`
+	StartIdx             int32    `protobuf:"varint,3,opt,name=start_idx,json=startIdx,proto3" json:"start_idx,omitempty"`
+	EndIdx               int32    `protobuf:"varint,4,opt,name=end_idx,json=endIdx,proto3" json:"end_idx,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -606,6 +609,27 @@ func (m *Merge) GetSinkScan() bool {
 		return m.SinkScan
 	}
 	return false
+}
+
+func (m *Merge) GetPartial() bool {
+	if m != nil {
+		return m.Partial
+	}
+	return false
+}
+
+func (m *Merge) GetStartIdx() int32 {
+	if m != nil {
+		return m.StartIdx
+	}
+	return 0
+}
+
+func (m *Merge) GetEndIdx() int32 {
+	if m != nil {
+		return m.EndIdx
+	}
+	return 0
 }
 
 type MultiArguemnt struct {
@@ -1251,6 +1275,8 @@ type PreInsert struct {
 	HasAutoCol           bool           `protobuf:"varint,5,opt,name=has_auto_col,json=hasAutoCol,proto3" json:"has_auto_col,omitempty"`
 	IsUpdate             bool           `protobuf:"varint,6,opt,name=is_update,json=isUpdate,proto3" json:"is_update,omitempty"`
 	EstimatedRowCount    int64          `protobuf:"varint,7,opt,name=estimated_row_count,json=estimatedRowCount,proto3" json:"estimated_row_count,omitempty"`
+	CompPkeyExpr         *plan.Expr     `protobuf:"bytes,8,opt,name=comp_pkey_expr,json=compPkeyExpr,proto3" json:"comp_pkey_expr,omitempty"`
+	ClusterByExpr        *plan.Expr     `protobuf:"bytes,9,opt,name=cluster_by_expr,json=clusterByExpr,proto3" json:"cluster_by_expr,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}       `json:"-"`
 	XXX_unrecognized     []byte         `json:"-"`
 	XXX_sizecache        int32          `json:"-"`
@@ -1336,6 +1362,20 @@ func (m *PreInsert) GetEstimatedRowCount() int64 {
 		return m.EstimatedRowCount
 	}
 	return 0
+}
+
+func (m *PreInsert) GetCompPkeyExpr() *plan.Expr {
+	if m != nil {
+		return m.CompPkeyExpr
+	}
+	return nil
+}
+
+func (m *PreInsert) GetClusterByExpr() *plan.Expr {
+	if m != nil {
+		return m.ClusterByExpr
+	}
+	return nil
 }
 
 type LockTarget struct {
@@ -1591,6 +1631,7 @@ func (m *PreInsertSecondaryIndex) GetPreInsertSkCtx() *plan.PreInsertUkCtx {
 }
 
 type OnDuplicateKey struct {
+	// letter case: origin
 	Attrs                []string              `protobuf:"bytes,1,rep,name=attrs,proto3" json:"attrs,omitempty"`
 	InsertColCount       int32                 `protobuf:"varint,2,opt,name=insert_col_count,json=insertColCount,proto3" json:"insert_col_count,omitempty"`
 	UniqueColCheckExpr   []*plan.Expr          `protobuf:"bytes,3,rep,name=unique_col_check_expr,json=uniqueColCheckExpr,proto3" json:"unique_col_check_expr,omitempty"`
@@ -1774,6 +1815,9 @@ type Join struct {
 	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,7,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
 	HashOnPk               bool                      `protobuf:"varint,8,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
 	IsShuffle              bool                      `protobuf:"varint,9,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	JoinMapTag             int32                     `protobuf:"varint,10,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	ShuffleIdx             int32                     `protobuf:"varint,11,opt,name=shuffle_idx,json=shuffleIdx,proto3" json:"shuffle_idx,omitempty"`
+	JoinType               int32                     `protobuf:"varint,12,opt,name=join_type,json=joinType,proto3" json:"join_type,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{}                  `json:"-"`
 	XXX_unrecognized       []byte                    `json:"-"`
 	XXX_sizecache          int32                     `json:"-"`
@@ -1875,15 +1919,37 @@ func (m *Join) GetIsShuffle() bool {
 	return false
 }
 
+func (m *Join) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *Join) GetShuffleIdx() int32 {
+	if m != nil {
+		return m.ShuffleIdx
+	}
+	return 0
+}
+
+func (m *Join) GetJoinType() int32 {
+	if m != nil {
+		return m.JoinType
+	}
+	return 0
+}
+
 type AntiJoin struct {
 	Result                 []int32                   `protobuf:"varint,1,rep,packed,name=result,proto3" json:"result,omitempty"`
 	Expr                   *plan.Expr                `protobuf:"bytes,2,opt,name=expr,proto3" json:"expr,omitempty"`
-	Types                  []plan.Type               `protobuf:"bytes,3,rep,name=types,proto3" json:"types"`
-	LeftCond               []*plan.Expr              `protobuf:"bytes,4,rep,name=left_cond,json=leftCond,proto3" json:"left_cond,omitempty"`
-	RightCond              []*plan.Expr              `protobuf:"bytes,5,rep,name=right_cond,json=rightCond,proto3" json:"right_cond,omitempty"`
-	HashOnPk               bool                      `protobuf:"varint,6,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
-	IsShuffle              bool                      `protobuf:"varint,7,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
-	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,8,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
+	LeftCond               []*plan.Expr              `protobuf:"bytes,3,rep,name=left_cond,json=leftCond,proto3" json:"left_cond,omitempty"`
+	RightCond              []*plan.Expr              `protobuf:"bytes,4,rep,name=right_cond,json=rightCond,proto3" json:"right_cond,omitempty"`
+	HashOnPk               bool                      `protobuf:"varint,5,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
+	IsShuffle              bool                      `protobuf:"varint,6,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,7,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
+	JoinMapTag             int32                     `protobuf:"varint,8,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	ShuffleIdx             int32                     `protobuf:"varint,9,opt,name=shuffle_idx,json=shuffleIdx,proto3" json:"shuffle_idx,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{}                  `json:"-"`
 	XXX_unrecognized       []byte                    `json:"-"`
 	XXX_sizecache          int32                     `json:"-"`
@@ -1936,13 +2002,6 @@ func (m *AntiJoin) GetExpr() *plan.Expr {
 	return nil
 }
 
-func (m *AntiJoin) GetTypes() []plan.Type {
-	if m != nil {
-		return m.Types
-	}
-	return nil
-}
-
 func (m *AntiJoin) GetLeftCond() []*plan.Expr {
 	if m != nil {
 		return m.LeftCond
@@ -1978,6 +2037,20 @@ func (m *AntiJoin) GetRuntimeFilterBuildList() []*plan.RuntimeFilterSpec {
 	return nil
 }
 
+func (m *AntiJoin) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *AntiJoin) GetShuffleIdx() int32 {
+	if m != nil {
+		return m.ShuffleIdx
+	}
+	return 0
+}
+
 type LeftJoin struct {
 	RelList                []int32                   `protobuf:"varint,1,rep,packed,name=rel_list,json=relList,proto3" json:"rel_list,omitempty"`
 	ColList                []int32                   `protobuf:"varint,2,rep,packed,name=col_list,json=colList,proto3" json:"col_list,omitempty"`
@@ -1988,6 +2061,8 @@ type LeftJoin struct {
 	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,7,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
 	HashOnPk               bool                      `protobuf:"varint,8,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
 	IsShuffle              bool                      `protobuf:"varint,9,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	JoinMapTag             int32                     `protobuf:"varint,10,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	ShuffleIdx             int32                     `protobuf:"varint,11,opt,name=shuffle_idx,json=shuffleIdx,proto3" json:"shuffle_idx,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{}                  `json:"-"`
 	XXX_unrecognized       []byte                    `json:"-"`
 	XXX_sizecache          int32                     `json:"-"`
@@ -2089,6 +2164,20 @@ func (m *LeftJoin) GetIsShuffle() bool {
 	return false
 }
 
+func (m *LeftJoin) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *LeftJoin) GetShuffleIdx() int32 {
+	if m != nil {
+		return m.ShuffleIdx
+	}
+	return 0
+}
+
 type RightJoin struct {
 	RelList                []int32                   `protobuf:"varint,1,rep,packed,name=rel_list,json=relList,proto3" json:"rel_list,omitempty"`
 	ColList                []int32                   `protobuf:"varint,2,rep,packed,name=col_list,json=colList,proto3" json:"col_list,omitempty"`
@@ -2100,6 +2189,8 @@ type RightJoin struct {
 	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,8,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
 	HashOnPk               bool                      `protobuf:"varint,9,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
 	IsShuffle              bool                      `protobuf:"varint,10,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	JoinMapTag             int32                     `protobuf:"varint,11,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	ShuffleIdx             int32                     `protobuf:"varint,12,opt,name=shuffle_idx,json=shuffleIdx,proto3" json:"shuffle_idx,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{}                  `json:"-"`
 	XXX_unrecognized       []byte                    `json:"-"`
 	XXX_sizecache          int32                     `json:"-"`
@@ -2208,6 +2299,20 @@ func (m *RightJoin) GetIsShuffle() bool {
 	return false
 }
 
+func (m *RightJoin) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *RightJoin) GetShuffleIdx() int32 {
+	if m != nil {
+		return m.ShuffleIdx
+	}
+	return 0
+}
+
 type RightSemiJoin struct {
 	Result                 []int32                   `protobuf:"varint,1,rep,packed,name=result,proto3" json:"result,omitempty"`
 	Expr                   *plan.Expr                `protobuf:"bytes,2,opt,name=expr,proto3" json:"expr,omitempty"`
@@ -2217,6 +2322,8 @@ type RightSemiJoin struct {
 	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,6,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
 	HashOnPk               bool                      `protobuf:"varint,7,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
 	IsShuffle              bool                      `protobuf:"varint,8,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	JoinMapTag             int32                     `protobuf:"varint,9,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	ShuffleIdx             int32                     `protobuf:"varint,11,opt,name=shuffle_idx,json=shuffleIdx,proto3" json:"shuffle_idx,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{}                  `json:"-"`
 	XXX_unrecognized       []byte                    `json:"-"`
 	XXX_sizecache          int32                     `json:"-"`
@@ -2311,6 +2418,20 @@ func (m *RightSemiJoin) GetIsShuffle() bool {
 	return false
 }
 
+func (m *RightSemiJoin) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *RightSemiJoin) GetShuffleIdx() int32 {
+	if m != nil {
+		return m.ShuffleIdx
+	}
+	return 0
+}
+
 type RightAntiJoin struct {
 	Result                 []int32                   `protobuf:"varint,1,rep,packed,name=result,proto3" json:"result,omitempty"`
 	Expr                   *plan.Expr                `protobuf:"bytes,2,opt,name=expr,proto3" json:"expr,omitempty"`
@@ -2320,6 +2441,8 @@ type RightAntiJoin struct {
 	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,6,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
 	HashOnPk               bool                      `protobuf:"varint,7,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
 	IsShuffle              bool                      `protobuf:"varint,8,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	JoinMapTag             int32                     `protobuf:"varint,9,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	ShuffleIdx             int32                     `protobuf:"varint,10,opt,name=shuffle_idx,json=shuffleIdx,proto3" json:"shuffle_idx,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{}                  `json:"-"`
 	XXX_unrecognized       []byte                    `json:"-"`
 	XXX_sizecache          int32                     `json:"-"`
@@ -2414,15 +2537,30 @@ func (m *RightAntiJoin) GetIsShuffle() bool {
 	return false
 }
 
+func (m *RightAntiJoin) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *RightAntiJoin) GetShuffleIdx() int32 {
+	if m != nil {
+		return m.ShuffleIdx
+	}
+	return 0
+}
+
 type SemiJoin struct {
 	Result                 []int32                   `protobuf:"varint,1,rep,packed,name=result,proto3" json:"result,omitempty"`
 	Expr                   *plan.Expr                `protobuf:"bytes,2,opt,name=expr,proto3" json:"expr,omitempty"`
-	Types                  []plan.Type               `protobuf:"bytes,3,rep,name=types,proto3" json:"types"`
-	LeftCond               []*plan.Expr              `protobuf:"bytes,4,rep,name=left_cond,json=leftCond,proto3" json:"left_cond,omitempty"`
-	RightCond              []*plan.Expr              `protobuf:"bytes,5,rep,name=right_cond,json=rightCond,proto3" json:"right_cond,omitempty"`
-	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,6,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
-	HashOnPk               bool                      `protobuf:"varint,7,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
-	IsShuffle              bool                      `protobuf:"varint,8,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	LeftCond               []*plan.Expr              `protobuf:"bytes,3,rep,name=left_cond,json=leftCond,proto3" json:"left_cond,omitempty"`
+	RightCond              []*plan.Expr              `protobuf:"bytes,4,rep,name=right_cond,json=rightCond,proto3" json:"right_cond,omitempty"`
+	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,5,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
+	HashOnPk               bool                      `protobuf:"varint,6,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
+	IsShuffle              bool                      `protobuf:"varint,7,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	JoinMapTag             int32                     `protobuf:"varint,8,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	ShuffleIdx             int32                     `protobuf:"varint,9,opt,name=shuffle_idx,json=shuffleIdx,proto3" json:"shuffle_idx,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{}                  `json:"-"`
 	XXX_unrecognized       []byte                    `json:"-"`
 	XXX_sizecache          int32                     `json:"-"`
@@ -2475,13 +2613,6 @@ func (m *SemiJoin) GetExpr() *plan.Expr {
 	return nil
 }
 
-func (m *SemiJoin) GetTypes() []plan.Type {
-	if m != nil {
-		return m.Types
-	}
-	return nil
-}
-
 func (m *SemiJoin) GetLeftCond() []*plan.Expr {
 	if m != nil {
 		return m.LeftCond
@@ -2517,6 +2648,20 @@ func (m *SemiJoin) GetIsShuffle() bool {
 	return false
 }
 
+func (m *SemiJoin) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *SemiJoin) GetShuffleIdx() int32 {
+	if m != nil {
+		return m.ShuffleIdx
+	}
+	return 0
+}
+
 type SingleJoin struct {
 	RelList                []int32                   `protobuf:"varint,1,rep,packed,name=rel_list,json=relList,proto3" json:"rel_list,omitempty"`
 	ColList                []int32                   `protobuf:"varint,2,rep,packed,name=col_list,json=colList,proto3" json:"col_list,omitempty"`
@@ -2527,6 +2672,8 @@ type SingleJoin struct {
 	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,7,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
 	HashOnPk               bool                      `protobuf:"varint,8,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
 	IsShuffle              bool                      `protobuf:"varint,9,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	JoinMapTag             int32                     `protobuf:"varint,10,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	ShuffleIdx             int32                     `protobuf:"varint,11,opt,name=shuffle_idx,json=shuffleIdx,proto3" json:"shuffle_idx,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{}                  `json:"-"`
 	XXX_unrecognized       []byte                    `json:"-"`
 	XXX_sizecache          int32                     `json:"-"`
@@ -2628,15 +2775,30 @@ func (m *SingleJoin) GetIsShuffle() bool {
 	return false
 }
 
+func (m *SingleJoin) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *SingleJoin) GetShuffleIdx() int32 {
+	if m != nil {
+		return m.ShuffleIdx
+	}
+	return 0
+}
+
 type MarkJoin struct {
 	Result               []int32      `protobuf:"varint,1,rep,packed,name=result,proto3" json:"result,omitempty"`
 	Expr                 *plan.Expr   `protobuf:"bytes,2,opt,name=expr,proto3" json:"expr,omitempty"`
-	Types                []plan.Type  `protobuf:"bytes,3,rep,name=types,proto3" json:"types"`
-	LeftCond             []*plan.Expr `protobuf:"bytes,4,rep,name=left_cond,json=leftCond,proto3" json:"left_cond,omitempty"`
-	RightCond            []*plan.Expr `protobuf:"bytes,5,rep,name=right_cond,json=rightCond,proto3" json:"right_cond,omitempty"`
-	OnList               []*plan.Expr `protobuf:"bytes,6,rep,name=on_list,json=onList,proto3" json:"on_list,omitempty"`
-	HashOnPk             bool         `protobuf:"varint,7,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
-	IsShuffle            bool         `protobuf:"varint,8,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	LeftCond             []*plan.Expr `protobuf:"bytes,3,rep,name=left_cond,json=leftCond,proto3" json:"left_cond,omitempty"`
+	RightCond            []*plan.Expr `protobuf:"bytes,4,rep,name=right_cond,json=rightCond,proto3" json:"right_cond,omitempty"`
+	OnList               []*plan.Expr `protobuf:"bytes,5,rep,name=on_list,json=onList,proto3" json:"on_list,omitempty"`
+	HashOnPk             bool         `protobuf:"varint,6,opt,name=hash_on_pk,json=hashOnPk,proto3" json:"hash_on_pk,omitempty"`
+	IsShuffle            bool         `protobuf:"varint,7,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	JoinMapTag           int32        `protobuf:"varint,8,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	ShuffleIdx           int32        `protobuf:"varint,9,opt,name=shuffle_idx,json=shuffleIdx,proto3" json:"shuffle_idx,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
 	XXX_unrecognized     []byte       `json:"-"`
 	XXX_sizecache        int32        `json:"-"`
@@ -2689,13 +2851,6 @@ func (m *MarkJoin) GetExpr() *plan.Expr {
 	return nil
 }
 
-func (m *MarkJoin) GetTypes() []plan.Type {
-	if m != nil {
-		return m.Types
-	}
-	return nil
-}
-
 func (m *MarkJoin) GetLeftCond() []*plan.Expr {
 	if m != nil {
 		return m.LeftCond
@@ -2731,14 +2886,28 @@ func (m *MarkJoin) GetIsShuffle() bool {
 	return false
 }
 
+func (m *MarkJoin) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *MarkJoin) GetShuffleIdx() int32 {
+	if m != nil {
+		return m.ShuffleIdx
+	}
+	return 0
+}
+
 type Product struct {
-	RelList              []int32     `protobuf:"varint,1,rep,packed,name=rel_list,json=relList,proto3" json:"rel_list,omitempty"`
-	ColList              []int32     `protobuf:"varint,2,rep,packed,name=col_list,json=colList,proto3" json:"col_list,omitempty"`
-	Types                []plan.Type `protobuf:"bytes,3,rep,name=types,proto3" json:"types"`
-	IsShuffle            bool        `protobuf:"varint,4,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}    `json:"-"`
-	XXX_unrecognized     []byte      `json:"-"`
-	XXX_sizecache        int32       `json:"-"`
+	RelList              []int32  `protobuf:"varint,1,rep,packed,name=rel_list,json=relList,proto3" json:"rel_list,omitempty"`
+	ColList              []int32  `protobuf:"varint,2,rep,packed,name=col_list,json=colList,proto3" json:"col_list,omitempty"`
+	IsShuffle            bool     `protobuf:"varint,3,opt,name=is_shuffle,json=isShuffle,proto3" json:"is_shuffle,omitempty"`
+	JoinMapTag           int32    `protobuf:"varint,4,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
 func (m *Product) Reset()         { *m = Product{} }
@@ -2788,13 +2957,6 @@ func (m *Product) GetColList() []int32 {
 	return nil
 }
 
-func (m *Product) GetTypes() []plan.Type {
-	if m != nil {
-		return m.Types
-	}
-	return nil
-}
-
 func (m *Product) GetIsShuffle() bool {
 	if m != nil {
 		return m.IsShuffle
@@ -2802,14 +2964,21 @@ func (m *Product) GetIsShuffle() bool {
 	return false
 }
 
+func (m *Product) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
 type ProductL2 struct {
-	RelList              []int32     `protobuf:"varint,1,rep,packed,name=rel_list,json=relList,proto3" json:"rel_list,omitempty"`
-	ColList              []int32     `protobuf:"varint,2,rep,packed,name=col_list,json=colList,proto3" json:"col_list,omitempty"`
-	Types                []plan.Type `protobuf:"bytes,3,rep,name=types,proto3" json:"types"`
-	Expr                 *plan.Expr  `protobuf:"bytes,4,opt,name=expr,proto3" json:"expr,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}    `json:"-"`
-	XXX_unrecognized     []byte      `json:"-"`
-	XXX_sizecache        int32       `json:"-"`
+	RelList              []int32    `protobuf:"varint,1,rep,packed,name=rel_list,json=relList,proto3" json:"rel_list,omitempty"`
+	ColList              []int32    `protobuf:"varint,2,rep,packed,name=col_list,json=colList,proto3" json:"col_list,omitempty"`
+	Expr                 *plan.Expr `protobuf:"bytes,3,opt,name=expr,proto3" json:"expr,omitempty"`
+	JoinMapTag           int32      `protobuf:"varint,4,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}   `json:"-"`
+	XXX_unrecognized     []byte     `json:"-"`
+	XXX_sizecache        int32      `json:"-"`
 }
 
 func (m *ProductL2) Reset()         { *m = ProductL2{} }
@@ -2859,13 +3028,6 @@ func (m *ProductL2) GetColList() []int32 {
 	return nil
 }
 
-func (m *ProductL2) GetTypes() []plan.Type {
-	if m != nil {
-		return m.Types
-	}
-	return nil
-}
-
 func (m *ProductL2) GetExpr() *plan.Expr {
 	if m != nil {
 		return m.Expr
@@ -2873,10 +3035,16 @@ func (m *ProductL2) GetExpr() *plan.Expr {
 	return nil
 }
 
+func (m *ProductL2) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
 type IndexJoin struct {
 	Result                 []int32                   `protobuf:"varint,1,rep,packed,name=result,proto3" json:"result,omitempty"`
-	Types                  []plan.Type               `protobuf:"bytes,2,rep,name=types,proto3" json:"types"`
-	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,3,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
+	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,2,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{}                  `json:"-"`
 	XXX_unrecognized       []byte                    `json:"-"`
 	XXX_sizecache          int32                     `json:"-"`
@@ -2918,13 +3086,6 @@ var xxx_messageInfo_IndexJoin proto.InternalMessageInfo
 func (m *IndexJoin) GetResult() []int32 {
 	if m != nil {
 		return m.Result
-	}
-	return nil
-}
-
-func (m *IndexJoin) GetTypes() []plan.Type {
-	if m != nil {
-		return m.Types
 	}
 	return nil
 }
@@ -3127,6 +3288,8 @@ type ExternalScan struct {
 	FileList             []string                 `protobuf:"bytes,7,rep,name=file_list,json=fileList,proto3" json:"file_list,omitempty"`
 	OriginCols           []*plan.ColDef           `protobuf:"bytes,8,rep,name=origin_cols,json=originCols,proto3" json:"origin_cols,omitempty"`
 	Filter               *plan.Expr               `protobuf:"bytes,9,opt,name=filter,proto3" json:"filter,omitempty"`
+	TbColToDataCol       map[string]int32         `protobuf:"bytes,10,rep,name=TbColToDataCol,proto3" json:"TbColToDataCol,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	StrictSqlMode        bool                     `protobuf:"varint,11,opt,name=strict_sql_mode,json=strictSqlMode,proto3" json:"strict_sql_mode,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}                 `json:"-"`
 	XXX_unrecognized     []byte                   `json:"-"`
 	XXX_sizecache        int32                    `json:"-"`
@@ -3228,6 +3391,20 @@ func (m *ExternalScan) GetFilter() *plan.Expr {
 	return nil
 }
 
+func (m *ExternalScan) GetTbColToDataCol() map[string]int32 {
+	if m != nil {
+		return m.TbColToDataCol
+	}
+	return nil
+}
+
+func (m *ExternalScan) GetStrictSqlMode() bool {
+	if m != nil {
+		return m.StrictSqlMode
+	}
+	return false
+}
+
 type StreamScan struct {
 	TblDef               *plan.TableDef `protobuf:"bytes,1,opt,name=tbl_def,json=tblDef,proto3" json:"tbl_def,omitempty"`
 	Offset               int64          `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
@@ -3292,9 +3469,10 @@ func (m *StreamScan) GetLimit() int64 {
 }
 
 type TableScan struct {
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	Types                []plan.Type `protobuf:"bytes,1,rep,name=types,proto3" json:"types"`
+	XXX_NoUnkeyedLiteral struct{}    `json:"-"`
+	XXX_unrecognized     []byte      `json:"-"`
+	XXX_sizecache        int32       `json:"-"`
 }
 
 func (m *TableScan) Reset()         { *m = TableScan{} }
@@ -3330,7 +3508,15 @@ func (m *TableScan) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TableScan proto.InternalMessageInfo
 
+func (m *TableScan) GetTypes() []plan.Type {
+	if m != nil {
+		return m.Types
+	}
+	return nil
+}
+
 type ValueScan struct {
+	BatchBlock           string   `protobuf:"bytes,1,opt,name=batch_block,json=batchBlock,proto3" json:"batch_block,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -3369,6 +3555,297 @@ func (m *ValueScan) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_ValueScan proto.InternalMessageInfo
 
+func (m *ValueScan) GetBatchBlock() string {
+	if m != nil {
+		return m.BatchBlock
+	}
+	return ""
+}
+
+type UnionAll struct {
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *UnionAll) Reset()         { *m = UnionAll{} }
+func (m *UnionAll) String() string { return proto.CompactTextString(m) }
+func (*UnionAll) ProtoMessage()    {}
+func (*UnionAll) Descriptor() ([]byte, []int) {
+	return fileDescriptor_7ac67a7adf3df9c7, []int{38}
+}
+func (m *UnionAll) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *UnionAll) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_UnionAll.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *UnionAll) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_UnionAll.Merge(m, src)
+}
+func (m *UnionAll) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *UnionAll) XXX_DiscardUnknown() {
+	xxx_messageInfo_UnionAll.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_UnionAll proto.InternalMessageInfo
+
+type HashBuild struct {
+	NeedHashMap          bool                    `protobuf:"varint,1,opt,name=NeedHashMap,proto3" json:"NeedHashMap,omitempty"`
+	HashOnPK             bool                    `protobuf:"varint,2,opt,name=HashOnPK,proto3" json:"HashOnPK,omitempty"`
+	NeedBatches          bool                    `protobuf:"varint,3,opt,name=NeedBatches,proto3" json:"NeedBatches,omitempty"`
+	NeedAllocateSels     bool                    `protobuf:"varint,4,opt,name=NeedAllocateSels,proto3" json:"NeedAllocateSels,omitempty"`
+	Conditions           []*plan.Expr            `protobuf:"bytes,5,rep,name=Conditions,proto3" json:"Conditions,omitempty"`
+	JoinMapTag           int32                   `protobuf:"varint,6,opt,name=JoinMapTag,proto3" json:"JoinMapTag,omitempty"`
+	JoinMapRefCnt        int32                   `protobuf:"varint,7,opt,name=JoinMapRefCnt,proto3" json:"JoinMapRefCnt,omitempty"`
+	RuntimeFilterSpec    *plan.RuntimeFilterSpec `protobuf:"bytes,8,opt,name=RuntimeFilterSpec,proto3" json:"RuntimeFilterSpec,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}                `json:"-"`
+	XXX_unrecognized     []byte                  `json:"-"`
+	XXX_sizecache        int32                   `json:"-"`
+}
+
+func (m *HashBuild) Reset()         { *m = HashBuild{} }
+func (m *HashBuild) String() string { return proto.CompactTextString(m) }
+func (*HashBuild) ProtoMessage()    {}
+func (*HashBuild) Descriptor() ([]byte, []int) {
+	return fileDescriptor_7ac67a7adf3df9c7, []int{39}
+}
+func (m *HashBuild) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *HashBuild) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_HashBuild.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *HashBuild) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_HashBuild.Merge(m, src)
+}
+func (m *HashBuild) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *HashBuild) XXX_DiscardUnknown() {
+	xxx_messageInfo_HashBuild.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_HashBuild proto.InternalMessageInfo
+
+func (m *HashBuild) GetNeedHashMap() bool {
+	if m != nil {
+		return m.NeedHashMap
+	}
+	return false
+}
+
+func (m *HashBuild) GetHashOnPK() bool {
+	if m != nil {
+		return m.HashOnPK
+	}
+	return false
+}
+
+func (m *HashBuild) GetNeedBatches() bool {
+	if m != nil {
+		return m.NeedBatches
+	}
+	return false
+}
+
+func (m *HashBuild) GetNeedAllocateSels() bool {
+	if m != nil {
+		return m.NeedAllocateSels
+	}
+	return false
+}
+
+func (m *HashBuild) GetConditions() []*plan.Expr {
+	if m != nil {
+		return m.Conditions
+	}
+	return nil
+}
+
+func (m *HashBuild) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *HashBuild) GetJoinMapRefCnt() int32 {
+	if m != nil {
+		return m.JoinMapRefCnt
+	}
+	return 0
+}
+
+func (m *HashBuild) GetRuntimeFilterSpec() *plan.RuntimeFilterSpec {
+	if m != nil {
+		return m.RuntimeFilterSpec
+	}
+	return nil
+}
+
+type Shufflebuild struct {
+	HashOnPK             bool                    `protobuf:"varint,1,opt,name=HashOnPK,proto3" json:"HashOnPK,omitempty"`
+	NeedBatches          bool                    `protobuf:"varint,2,opt,name=NeedBatches,proto3" json:"NeedBatches,omitempty"`
+	NeedAllocateSels     bool                    `protobuf:"varint,3,opt,name=NeedAllocateSels,proto3" json:"NeedAllocateSels,omitempty"`
+	Conditions           []*plan.Expr            `protobuf:"bytes,4,rep,name=Conditions,proto3" json:"Conditions,omitempty"`
+	RuntimeFilterSpec    *plan.RuntimeFilterSpec `protobuf:"bytes,5,opt,name=RuntimeFilterSpec,proto3" json:"RuntimeFilterSpec,omitempty"`
+	JoinMapTag           int32                   `protobuf:"varint,6,opt,name=JoinMapTag,proto3" json:"JoinMapTag,omitempty"`
+	ShuffleIdx           int32                   `protobuf:"varint,7,opt,name=ShuffleIdx,proto3" json:"ShuffleIdx,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}                `json:"-"`
+	XXX_unrecognized     []byte                  `json:"-"`
+	XXX_sizecache        int32                   `json:"-"`
+}
+
+func (m *Shufflebuild) Reset()         { *m = Shufflebuild{} }
+func (m *Shufflebuild) String() string { return proto.CompactTextString(m) }
+func (*Shufflebuild) ProtoMessage()    {}
+func (*Shufflebuild) Descriptor() ([]byte, []int) {
+	return fileDescriptor_7ac67a7adf3df9c7, []int{40}
+}
+func (m *Shufflebuild) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *Shufflebuild) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_Shufflebuild.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *Shufflebuild) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Shufflebuild.Merge(m, src)
+}
+func (m *Shufflebuild) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *Shufflebuild) XXX_DiscardUnknown() {
+	xxx_messageInfo_Shufflebuild.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Shufflebuild proto.InternalMessageInfo
+
+func (m *Shufflebuild) GetHashOnPK() bool {
+	if m != nil {
+		return m.HashOnPK
+	}
+	return false
+}
+
+func (m *Shufflebuild) GetNeedBatches() bool {
+	if m != nil {
+		return m.NeedBatches
+	}
+	return false
+}
+
+func (m *Shufflebuild) GetNeedAllocateSels() bool {
+	if m != nil {
+		return m.NeedAllocateSels
+	}
+	return false
+}
+
+func (m *Shufflebuild) GetConditions() []*plan.Expr {
+	if m != nil {
+		return m.Conditions
+	}
+	return nil
+}
+
+func (m *Shufflebuild) GetRuntimeFilterSpec() *plan.RuntimeFilterSpec {
+	if m != nil {
+		return m.RuntimeFilterSpec
+	}
+	return nil
+}
+
+func (m *Shufflebuild) GetJoinMapTag() int32 {
+	if m != nil {
+		return m.JoinMapTag
+	}
+	return 0
+}
+
+func (m *Shufflebuild) GetShuffleIdx() int32 {
+	if m != nil {
+		return m.ShuffleIdx
+	}
+	return 0
+}
+
+type Indexbuild struct {
+	RuntimeFilterSpec    *plan.RuntimeFilterSpec `protobuf:"bytes,1,opt,name=RuntimeFilterSpec,proto3" json:"RuntimeFilterSpec,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}                `json:"-"`
+	XXX_unrecognized     []byte                  `json:"-"`
+	XXX_sizecache        int32                   `json:"-"`
+}
+
+func (m *Indexbuild) Reset()         { *m = Indexbuild{} }
+func (m *Indexbuild) String() string { return proto.CompactTextString(m) }
+func (*Indexbuild) ProtoMessage()    {}
+func (*Indexbuild) Descriptor() ([]byte, []int) {
+	return fileDescriptor_7ac67a7adf3df9c7, []int{41}
+}
+func (m *Indexbuild) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *Indexbuild) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_Indexbuild.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *Indexbuild) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Indexbuild.Merge(m, src)
+}
+func (m *Indexbuild) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *Indexbuild) XXX_DiscardUnknown() {
+	xxx_messageInfo_Indexbuild.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Indexbuild proto.InternalMessageInfo
+
+func (m *Indexbuild) GetRuntimeFilterSpec() *plan.RuntimeFilterSpec {
+	if m != nil {
+		return m.RuntimeFilterSpec
+	}
+	return nil
+}
+
 type SampleFunc struct {
 	SampleType           SampleFunc_SampleType `protobuf:"varint,1,opt,name=sample_type,json=sampleType,proto3,enum=pipeline.SampleFunc_SampleType" json:"sample_type,omitempty"`
 	SampleRows           int32                 `protobuf:"varint,2,opt,name=sample_rows,json=sampleRows,proto3" json:"sample_rows,omitempty"`
@@ -3383,7 +3860,7 @@ func (m *SampleFunc) Reset()         { *m = SampleFunc{} }
 func (m *SampleFunc) String() string { return proto.CompactTextString(m) }
 func (*SampleFunc) ProtoMessage()    {}
 func (*SampleFunc) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{38}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{42}
 }
 func (m *SampleFunc) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -3489,6 +3966,10 @@ type Instruction struct {
 	ProductL2               *ProductL2               `protobuf:"bytes,44,opt,name=product_l2,json=productL2,proto3" json:"product_l2,omitempty"`
 	TableScan               *TableScan               `protobuf:"bytes,45,opt,name=table_scan,json=tableScan,proto3" json:"table_scan,omitempty"`
 	ValueScan               *ValueScan               `protobuf:"bytes,46,opt,name=value_scan,json=valueScan,proto3" json:"value_scan,omitempty"`
+	UnionAll                *UnionAll                `protobuf:"bytes,47,opt,name=union_all,json=unionAll,proto3" json:"union_all,omitempty"`
+	HashBuild               *HashBuild               `protobuf:"bytes,48,opt,name=hash_build,json=hashBuild,proto3" json:"hash_build,omitempty"`
+	ShuffleBuild            *Shufflebuild            `protobuf:"bytes,49,opt,name=shuffle_build,json=shuffleBuild,proto3" json:"shuffle_build,omitempty"`
+	IndexBuild              *Indexbuild              `protobuf:"bytes,50,opt,name=index_build,json=indexBuild,proto3" json:"index_build,omitempty"`
 	XXX_NoUnkeyedLiteral    struct{}                 `json:"-"`
 	XXX_unrecognized        []byte                   `json:"-"`
 	XXX_sizecache           int32                    `json:"-"`
@@ -3498,7 +3979,7 @@ func (m *Instruction) Reset()         { *m = Instruction{} }
 func (m *Instruction) String() string { return proto.CompactTextString(m) }
 func (*Instruction) ProtoMessage()    {}
 func (*Instruction) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{39}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{43}
 }
 func (m *Instruction) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -3835,6 +4316,34 @@ func (m *Instruction) GetValueScan() *ValueScan {
 	return nil
 }
 
+func (m *Instruction) GetUnionAll() *UnionAll {
+	if m != nil {
+		return m.UnionAll
+	}
+	return nil
+}
+
+func (m *Instruction) GetHashBuild() *HashBuild {
+	if m != nil {
+		return m.HashBuild
+	}
+	return nil
+}
+
+func (m *Instruction) GetShuffleBuild() *Shufflebuild {
+	if m != nil {
+		return m.ShuffleBuild
+	}
+	return nil
+}
+
+func (m *Instruction) GetIndexBuild() *Indexbuild {
+	if m != nil {
+		return m.IndexBuild
+	}
+	return nil
+}
+
 type AnalysisList struct {
 	List                 []*plan.AnalyzeInfo `protobuf:"bytes,1,rep,name=list,proto3" json:"list,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
@@ -3846,7 +4355,7 @@ func (m *AnalysisList) Reset()         { *m = AnalysisList{} }
 func (m *AnalysisList) String() string { return proto.CompactTextString(m) }
 func (*AnalysisList) ProtoMessage()    {}
 func (*AnalysisList) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{40}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{44}
 }
 func (m *AnalysisList) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -3903,7 +4412,7 @@ func (m *Source) Reset()         { *m = Source{} }
 func (m *Source) String() string { return proto.CompactTextString(m) }
 func (*Source) ProtoMessage()    {}
 func (*Source) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{41}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{45}
 }
 func (m *Source) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -4014,7 +4523,6 @@ type NodeInfo struct {
 	Id                   string   `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
 	Addr                 string   `protobuf:"bytes,3,opt,name=addr,proto3" json:"addr,omitempty"`
 	Payload              string   `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
-	Type                 uint32   `protobuf:"varint,5,opt,name=type,proto3" json:"type,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -4024,7 +4532,7 @@ func (m *NodeInfo) Reset()         { *m = NodeInfo{} }
 func (m *NodeInfo) String() string { return proto.CompactTextString(m) }
 func (*NodeInfo) ProtoMessage()    {}
 func (*NodeInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{42}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{46}
 }
 func (m *NodeInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -4081,13 +4589,6 @@ func (m *NodeInfo) GetPayload() string {
 	return ""
 }
 
-func (m *NodeInfo) GetType() uint32 {
-	if m != nil {
-		return m.Type
-	}
-	return 0
-}
-
 type ProcessLimitation struct {
 	Size                 int64    `protobuf:"varint,1,opt,name=size,proto3" json:"size,omitempty"`
 	BatchRows            int64    `protobuf:"varint,2,opt,name=batch_rows,json=batchRows,proto3" json:"batch_rows,omitempty"`
@@ -4103,7 +4604,7 @@ func (m *ProcessLimitation) Reset()         { *m = ProcessLimitation{} }
 func (m *ProcessLimitation) String() string { return proto.CompactTextString(m) }
 func (*ProcessLimitation) ProtoMessage()    {}
 func (*ProcessLimitation) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{43}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{47}
 }
 func (m *ProcessLimitation) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -4181,7 +4682,7 @@ func (m *PrepareParamInfo) Reset()         { *m = PrepareParamInfo{} }
 func (m *PrepareParamInfo) String() string { return proto.CompactTextString(m) }
 func (*PrepareParamInfo) ProtoMessage()    {}
 func (*PrepareParamInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{44}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{48}
 }
 func (m *PrepareParamInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -4258,7 +4759,7 @@ func (m *ProcessInfo) Reset()         { *m = ProcessInfo{} }
 func (m *ProcessInfo) String() string { return proto.CompactTextString(m) }
 func (*ProcessInfo) ProtoMessage()    {}
 func (*ProcessInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{45}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{49}
 }
 func (m *ProcessInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -4376,7 +4877,7 @@ func (m *SessionInfo) Reset()         { *m = SessionInfo{} }
 func (m *SessionInfo) String() string { return proto.CompactTextString(m) }
 func (*SessionInfo) ProtoMessage()    {}
 func (*SessionInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{46}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{50}
 }
 func (m *SessionInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -4482,7 +4983,7 @@ func (m *SessionLoggerInfo) Reset()         { *m = SessionLoggerInfo{} }
 func (m *SessionLoggerInfo) String() string { return proto.CompactTextString(m) }
 func (*SessionLoggerInfo) ProtoMessage()    {}
 func (*SessionLoggerInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{47}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{51}
 }
 func (m *SessionLoggerInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -4547,14 +5048,13 @@ type Pipeline struct {
 	Children             []*Pipeline           `protobuf:"bytes,5,rep,name=children,proto3" json:"children,omitempty"`
 	InstructionList      []*Instruction        `protobuf:"bytes,6,rep,name=instruction_list,json=instructionList,proto3" json:"instruction_list,omitempty"`
 	IsEnd                bool                  `protobuf:"varint,7,opt,name=is_end,json=isEnd,proto3" json:"is_end,omitempty"`
-	IsJoin               bool                  `protobuf:"varint,8,opt,name=is_join,json=isJoin,proto3" json:"is_join,omitempty"`
-	IsLoad               bool                  `protobuf:"varint,9,opt,name=is_load,json=isLoad,proto3" json:"is_load,omitempty"`
-	Node                 *NodeInfo             `protobuf:"bytes,10,opt,name=node,proto3" json:"node,omitempty"`
-	PushDownInfo         int32                 `protobuf:"varint,11,opt,name=push_down_info,json=pushDownInfo,proto3" json:"push_down_info,omitempty"`
-	ChildrenCount        int32                 `protobuf:"varint,12,opt,name=children_count,json=childrenCount,proto3" json:"children_count,omitempty"`
-	UuidsToRegIdx        []*UuidToRegIdx       `protobuf:"bytes,13,rep,name=uuids_to_reg_idx,json=uuidsToRegIdx,proto3" json:"uuids_to_reg_idx,omitempty"`
-	BuildIdx             int32                 `protobuf:"varint,14,opt,name=build_idx,json=buildIdx,proto3" json:"build_idx,omitempty"`
-	ShuffleCnt           int32                 `protobuf:"varint,15,opt,name=shuffle_cnt,json=shuffleCnt,proto3" json:"shuffle_cnt,omitempty"`
+	IsLoad               bool                  `protobuf:"varint,8,opt,name=is_load,json=isLoad,proto3" json:"is_load,omitempty"`
+	Node                 *NodeInfo             `protobuf:"bytes,9,opt,name=node,proto3" json:"node,omitempty"`
+	PushDownInfo         int32                 `protobuf:"varint,10,opt,name=push_down_info,json=pushDownInfo,proto3" json:"push_down_info,omitempty"`
+	ChildrenCount        int32                 `protobuf:"varint,11,opt,name=children_count,json=childrenCount,proto3" json:"children_count,omitempty"`
+	ChannelBufferSize    []int32               `protobuf:"varint,12,rep,packed,name=channel_buffer_size,json=channelBufferSize,proto3" json:"channel_buffer_size,omitempty"`
+	NilBatchCnt          []int32               `protobuf:"varint,13,rep,packed,name=nil_batch_cnt,json=nilBatchCnt,proto3" json:"nil_batch_cnt,omitempty"`
+	UuidsToRegIdx        []*UuidToRegIdx       `protobuf:"bytes,14,rep,name=uuids_to_reg_idx,json=uuidsToRegIdx,proto3" json:"uuids_to_reg_idx,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}              `json:"-"`
 	XXX_unrecognized     []byte                `json:"-"`
 	XXX_sizecache        int32                 `json:"-"`
@@ -4564,7 +5064,7 @@ func (m *Pipeline) Reset()         { *m = Pipeline{} }
 func (m *Pipeline) String() string { return proto.CompactTextString(m) }
 func (*Pipeline) ProtoMessage()    {}
 func (*Pipeline) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{48}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{52}
 }
 func (m *Pipeline) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -4642,13 +5142,6 @@ func (m *Pipeline) GetIsEnd() bool {
 	return false
 }
 
-func (m *Pipeline) GetIsJoin() bool {
-	if m != nil {
-		return m.IsJoin
-	}
-	return false
-}
-
 func (m *Pipeline) GetIsLoad() bool {
 	if m != nil {
 		return m.IsLoad
@@ -4677,25 +5170,25 @@ func (m *Pipeline) GetChildrenCount() int32 {
 	return 0
 }
 
+func (m *Pipeline) GetChannelBufferSize() []int32 {
+	if m != nil {
+		return m.ChannelBufferSize
+	}
+	return nil
+}
+
+func (m *Pipeline) GetNilBatchCnt() []int32 {
+	if m != nil {
+		return m.NilBatchCnt
+	}
+	return nil
+}
+
 func (m *Pipeline) GetUuidsToRegIdx() []*UuidToRegIdx {
 	if m != nil {
 		return m.UuidsToRegIdx
 	}
 	return nil
-}
-
-func (m *Pipeline) GetBuildIdx() int32 {
-	if m != nil {
-		return m.BuildIdx
-	}
-	return 0
-}
-
-func (m *Pipeline) GetShuffleCnt() int32 {
-	if m != nil {
-		return m.ShuffleCnt
-	}
-	return 0
 }
 
 type WrapNode struct {
@@ -4710,7 +5203,7 @@ func (m *WrapNode) Reset()         { *m = WrapNode{} }
 func (m *WrapNode) String() string { return proto.CompactTextString(m) }
 func (*WrapNode) ProtoMessage()    {}
 func (*WrapNode) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{49}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{53}
 }
 func (m *WrapNode) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -4766,7 +5259,7 @@ func (m *UuidToRegIdx) Reset()         { *m = UuidToRegIdx{} }
 func (m *UuidToRegIdx) String() string { return proto.CompactTextString(m) }
 func (*UuidToRegIdx) ProtoMessage()    {}
 func (*UuidToRegIdx) Descriptor() ([]byte, []int) {
-	return fileDescriptor_7ac67a7adf3df9c7, []int{50}
+	return fileDescriptor_7ac67a7adf3df9c7, []int{54}
 }
 func (m *UuidToRegIdx) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -4860,9 +5353,14 @@ func init() {
 	proto.RegisterType((*ExternalName2ColIndex)(nil), "pipeline.ExternalName2ColIndex")
 	proto.RegisterType((*FileOffset)(nil), "pipeline.file_offset")
 	proto.RegisterType((*ExternalScan)(nil), "pipeline.ExternalScan")
+	proto.RegisterMapType((map[string]int32)(nil), "pipeline.ExternalScan.TbColToDataColEntry")
 	proto.RegisterType((*StreamScan)(nil), "pipeline.StreamScan")
 	proto.RegisterType((*TableScan)(nil), "pipeline.TableScan")
 	proto.RegisterType((*ValueScan)(nil), "pipeline.ValueScan")
+	proto.RegisterType((*UnionAll)(nil), "pipeline.UnionAll")
+	proto.RegisterType((*HashBuild)(nil), "pipeline.HashBuild")
+	proto.RegisterType((*Shufflebuild)(nil), "pipeline.Shufflebuild")
+	proto.RegisterType((*Indexbuild)(nil), "pipeline.Indexbuild")
 	proto.RegisterType((*SampleFunc)(nil), "pipeline.SampleFunc")
 	proto.RegisterType((*Instruction)(nil), "pipeline.Instruction")
 	proto.RegisterType((*AnalysisList)(nil), "pipeline.AnalysisList")
@@ -5555,6 +6053,26 @@ func (m *Merge) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.EndIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.EndIdx))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.StartIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.StartIdx))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.Partial {
+		i--
+		if m.Partial {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x10
+	}
 	if m.SinkScan {
 		i--
 		if m.SinkScan {
@@ -6245,6 +6763,30 @@ func (m *PreInsert) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.ClusterByExpr != nil {
+		{
+			size, err := m.ClusterByExpr.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPipeline(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x4a
+	}
+	if m.CompPkeyExpr != nil {
+		{
+			size, err := m.CompPkeyExpr.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPipeline(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x42
+	}
 	if m.EstimatedRowCount != 0 {
 		i = encodeVarintPipeline(dAtA, i, uint64(m.EstimatedRowCount))
 		i--
@@ -6280,21 +6822,21 @@ func (m *PreInsert) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.Idx) > 0 {
-		dAtA22 := make([]byte, len(m.Idx)*10)
-		var j21 int
+		dAtA24 := make([]byte, len(m.Idx)*10)
+		var j23 int
 		for _, num1 := range m.Idx {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA22[j21] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA24[j23] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j21++
+				j23++
 			}
-			dAtA22[j21] = uint8(num)
-			j21++
+			dAtA24[j23] = uint8(num)
+			j23++
 		}
-		i -= j21
-		copy(dAtA[i:], dAtA22[:j21])
-		i = encodeVarintPipeline(dAtA, i, uint64(j21))
+		i -= j23
+		copy(dAtA[i:], dAtA24[:j23])
+		i = encodeVarintPipeline(dAtA, i, uint64(j23))
 		i--
 		dAtA[i] = 0x1a
 	}
@@ -6592,21 +7134,21 @@ func (m *OnDuplicateKey) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.OnDuplicateIdx) > 0 {
-		dAtA29 := make([]byte, len(m.OnDuplicateIdx)*10)
-		var j28 int
+		dAtA31 := make([]byte, len(m.OnDuplicateIdx)*10)
+		var j30 int
 		for _, num1 := range m.OnDuplicateIdx {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA29[j28] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA31[j30] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j28++
+				j30++
 			}
-			dAtA29[j28] = uint8(num)
-			j28++
+			dAtA31[j30] = uint8(num)
+			j30++
 		}
-		i -= j28
-		copy(dAtA[i:], dAtA29[:j28])
-		i = encodeVarintPipeline(dAtA, i, uint64(j28))
+		i -= j30
+		copy(dAtA[i:], dAtA31[:j30])
+		i = encodeVarintPipeline(dAtA, i, uint64(j30))
 		i--
 		dAtA[i] = 0x2a
 	}
@@ -6739,6 +7281,21 @@ func (m *Join) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.JoinType != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinType))
+		i--
+		dAtA[i] = 0x60
+	}
+	if m.ShuffleIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleIdx))
+		i--
+		dAtA[i] = 0x58
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x50
+	}
 	if m.IsShuffle {
 		i--
 		if m.IsShuffle {
@@ -6828,28 +7385,9 @@ func (m *Join) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x1a
 	}
 	if len(m.ColList) > 0 {
-		dAtA33 := make([]byte, len(m.ColList)*10)
-		var j32 int
-		for _, num1 := range m.ColList {
-			num := uint64(num1)
-			for num >= 1<<7 {
-				dAtA33[j32] = uint8(uint64(num)&0x7f | 0x80)
-				num >>= 7
-				j32++
-			}
-			dAtA33[j32] = uint8(num)
-			j32++
-		}
-		i -= j32
-		copy(dAtA[i:], dAtA33[:j32])
-		i = encodeVarintPipeline(dAtA, i, uint64(j32))
-		i--
-		dAtA[i] = 0x12
-	}
-	if len(m.RelList) > 0 {
-		dAtA35 := make([]byte, len(m.RelList)*10)
+		dAtA35 := make([]byte, len(m.ColList)*10)
 		var j34 int
-		for _, num1 := range m.RelList {
+		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA35[j34] = uint8(uint64(num)&0x7f | 0x80)
@@ -6862,6 +7400,25 @@ func (m *Join) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= j34
 		copy(dAtA[i:], dAtA35[:j34])
 		i = encodeVarintPipeline(dAtA, i, uint64(j34))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.RelList) > 0 {
+		dAtA37 := make([]byte, len(m.RelList)*10)
+		var j36 int
+		for _, num1 := range m.RelList {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA37[j36] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j36++
+			}
+			dAtA37[j36] = uint8(num)
+			j36++
+		}
+		i -= j36
+		copy(dAtA[i:], dAtA37[:j36])
+		i = encodeVarintPipeline(dAtA, i, uint64(j36))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -6892,6 +7449,16 @@ func (m *AntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.ShuffleIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleIdx))
+		i--
+		dAtA[i] = 0x48
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x40
+	}
 	if len(m.RuntimeFilterBuildList) > 0 {
 		for iNdEx := len(m.RuntimeFilterBuildList) - 1; iNdEx >= 0; iNdEx-- {
 			{
@@ -6903,7 +7470,7 @@ func (m *AntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 				i = encodeVarintPipeline(dAtA, i, uint64(size))
 			}
 			i--
-			dAtA[i] = 0x42
+			dAtA[i] = 0x3a
 		}
 	}
 	if m.IsShuffle {
@@ -6914,7 +7481,7 @@ func (m *AntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x38
+		dAtA[i] = 0x30
 	}
 	if m.HashOnPk {
 		i--
@@ -6924,7 +7491,7 @@ func (m *AntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x30
+		dAtA[i] = 0x28
 	}
 	if len(m.RightCond) > 0 {
 		for iNdEx := len(m.RightCond) - 1; iNdEx >= 0; iNdEx-- {
@@ -6937,27 +7504,13 @@ func (m *AntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 				i = encodeVarintPipeline(dAtA, i, uint64(size))
 			}
 			i--
-			dAtA[i] = 0x2a
+			dAtA[i] = 0x22
 		}
 	}
 	if len(m.LeftCond) > 0 {
 		for iNdEx := len(m.LeftCond) - 1; iNdEx >= 0; iNdEx-- {
 			{
 				size, err := m.LeftCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x22
-		}
-	}
-	if len(m.Types) > 0 {
-		for iNdEx := len(m.Types) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Types[iNdEx].MarshalToSizedBuffer(dAtA[:i])
 				if err != nil {
 					return 0, err
 				}
@@ -6981,21 +7534,21 @@ func (m *AntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.Result) > 0 {
-		dAtA38 := make([]byte, len(m.Result)*10)
-		var j37 int
+		dAtA40 := make([]byte, len(m.Result)*10)
+		var j39 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA38[j37] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA40[j39] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j37++
+				j39++
 			}
-			dAtA38[j37] = uint8(num)
-			j37++
+			dAtA40[j39] = uint8(num)
+			j39++
 		}
-		i -= j37
-		copy(dAtA[i:], dAtA38[:j37])
-		i = encodeVarintPipeline(dAtA, i, uint64(j37))
+		i -= j39
+		copy(dAtA[i:], dAtA40[:j39])
+		i = encodeVarintPipeline(dAtA, i, uint64(j39))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -7025,6 +7578,16 @@ func (m *LeftJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.ShuffleIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleIdx))
+		i--
+		dAtA[i] = 0x58
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x50
 	}
 	if m.IsShuffle {
 		i--
@@ -7115,28 +7678,9 @@ func (m *LeftJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x1a
 	}
 	if len(m.ColList) > 0 {
-		dAtA41 := make([]byte, len(m.ColList)*10)
-		var j40 int
-		for _, num1 := range m.ColList {
-			num := uint64(num1)
-			for num >= 1<<7 {
-				dAtA41[j40] = uint8(uint64(num)&0x7f | 0x80)
-				num >>= 7
-				j40++
-			}
-			dAtA41[j40] = uint8(num)
-			j40++
-		}
-		i -= j40
-		copy(dAtA[i:], dAtA41[:j40])
-		i = encodeVarintPipeline(dAtA, i, uint64(j40))
-		i--
-		dAtA[i] = 0x12
-	}
-	if len(m.RelList) > 0 {
-		dAtA43 := make([]byte, len(m.RelList)*10)
+		dAtA43 := make([]byte, len(m.ColList)*10)
 		var j42 int
-		for _, num1 := range m.RelList {
+		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA43[j42] = uint8(uint64(num)&0x7f | 0x80)
@@ -7149,6 +7693,25 @@ func (m *LeftJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= j42
 		copy(dAtA[i:], dAtA43[:j42])
 		i = encodeVarintPipeline(dAtA, i, uint64(j42))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.RelList) > 0 {
+		dAtA45 := make([]byte, len(m.RelList)*10)
+		var j44 int
+		for _, num1 := range m.RelList {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA45[j44] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j44++
+			}
+			dAtA45[j44] = uint8(num)
+			j44++
+		}
+		i -= j44
+		copy(dAtA[i:], dAtA45[:j44])
+		i = encodeVarintPipeline(dAtA, i, uint64(j44))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -7178,6 +7741,16 @@ func (m *RightJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.ShuffleIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleIdx))
+		i--
+		dAtA[i] = 0x60
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x58
 	}
 	if m.IsShuffle {
 		i--
@@ -7282,28 +7855,9 @@ func (m *RightJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x1a
 	}
 	if len(m.ColList) > 0 {
-		dAtA46 := make([]byte, len(m.ColList)*10)
-		var j45 int
-		for _, num1 := range m.ColList {
-			num := uint64(num1)
-			for num >= 1<<7 {
-				dAtA46[j45] = uint8(uint64(num)&0x7f | 0x80)
-				num >>= 7
-				j45++
-			}
-			dAtA46[j45] = uint8(num)
-			j45++
-		}
-		i -= j45
-		copy(dAtA[i:], dAtA46[:j45])
-		i = encodeVarintPipeline(dAtA, i, uint64(j45))
-		i--
-		dAtA[i] = 0x12
-	}
-	if len(m.RelList) > 0 {
-		dAtA48 := make([]byte, len(m.RelList)*10)
+		dAtA48 := make([]byte, len(m.ColList)*10)
 		var j47 int
-		for _, num1 := range m.RelList {
+		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA48[j47] = uint8(uint64(num)&0x7f | 0x80)
@@ -7316,6 +7870,25 @@ func (m *RightJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= j47
 		copy(dAtA[i:], dAtA48[:j47])
 		i = encodeVarintPipeline(dAtA, i, uint64(j47))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.RelList) > 0 {
+		dAtA50 := make([]byte, len(m.RelList)*10)
+		var j49 int
+		for _, num1 := range m.RelList {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA50[j49] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j49++
+			}
+			dAtA50[j49] = uint8(num)
+			j49++
+		}
+		i -= j49
+		copy(dAtA[i:], dAtA50[:j49])
+		i = encodeVarintPipeline(dAtA, i, uint64(j49))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -7346,6 +7919,16 @@ func (m *RightSemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.ShuffleIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleIdx))
+		i--
+		dAtA[i] = 0x58
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x48
+	}
 	if m.IsShuffle {
 		i--
 		if m.IsShuffle {
@@ -7435,21 +8018,21 @@ func (m *RightSemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.Result) > 0 {
-		dAtA51 := make([]byte, len(m.Result)*10)
-		var j50 int
+		dAtA53 := make([]byte, len(m.Result)*10)
+		var j52 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA51[j50] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA53[j52] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j50++
+				j52++
 			}
-			dAtA51[j50] = uint8(num)
-			j50++
+			dAtA53[j52] = uint8(num)
+			j52++
 		}
-		i -= j50
-		copy(dAtA[i:], dAtA51[:j50])
-		i = encodeVarintPipeline(dAtA, i, uint64(j50))
+		i -= j52
+		copy(dAtA[i:], dAtA53[:j52])
+		i = encodeVarintPipeline(dAtA, i, uint64(j52))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -7480,6 +8063,16 @@ func (m *RightAntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.ShuffleIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleIdx))
+		i--
+		dAtA[i] = 0x50
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x48
+	}
 	if m.IsShuffle {
 		i--
 		if m.IsShuffle {
@@ -7569,21 +8162,21 @@ func (m *RightAntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.Result) > 0 {
-		dAtA54 := make([]byte, len(m.Result)*10)
-		var j53 int
+		dAtA56 := make([]byte, len(m.Result)*10)
+		var j55 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA54[j53] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA56[j55] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j53++
+				j55++
 			}
-			dAtA54[j53] = uint8(num)
-			j53++
+			dAtA56[j55] = uint8(num)
+			j55++
 		}
-		i -= j53
-		copy(dAtA[i:], dAtA54[:j53])
-		i = encodeVarintPipeline(dAtA, i, uint64(j53))
+		i -= j55
+		copy(dAtA[i:], dAtA56[:j55])
+		i = encodeVarintPipeline(dAtA, i, uint64(j55))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -7614,6 +8207,16 @@ func (m *SemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.ShuffleIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleIdx))
+		i--
+		dAtA[i] = 0x48
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x40
+	}
 	if m.IsShuffle {
 		i--
 		if m.IsShuffle {
@@ -7622,7 +8225,7 @@ func (m *SemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x40
+		dAtA[i] = 0x38
 	}
 	if m.HashOnPk {
 		i--
@@ -7632,7 +8235,7 @@ func (m *SemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x38
+		dAtA[i] = 0x30
 	}
 	if len(m.RuntimeFilterBuildList) > 0 {
 		for iNdEx := len(m.RuntimeFilterBuildList) - 1; iNdEx >= 0; iNdEx-- {
@@ -7645,7 +8248,7 @@ func (m *SemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 				i = encodeVarintPipeline(dAtA, i, uint64(size))
 			}
 			i--
-			dAtA[i] = 0x32
+			dAtA[i] = 0x2a
 		}
 	}
 	if len(m.RightCond) > 0 {
@@ -7659,27 +8262,13 @@ func (m *SemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 				i = encodeVarintPipeline(dAtA, i, uint64(size))
 			}
 			i--
-			dAtA[i] = 0x2a
+			dAtA[i] = 0x22
 		}
 	}
 	if len(m.LeftCond) > 0 {
 		for iNdEx := len(m.LeftCond) - 1; iNdEx >= 0; iNdEx-- {
 			{
 				size, err := m.LeftCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x22
-		}
-	}
-	if len(m.Types) > 0 {
-		for iNdEx := len(m.Types) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Types[iNdEx].MarshalToSizedBuffer(dAtA[:i])
 				if err != nil {
 					return 0, err
 				}
@@ -7703,21 +8292,21 @@ func (m *SemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.Result) > 0 {
-		dAtA57 := make([]byte, len(m.Result)*10)
-		var j56 int
+		dAtA59 := make([]byte, len(m.Result)*10)
+		var j58 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA57[j56] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA59[j58] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j56++
+				j58++
 			}
-			dAtA57[j56] = uint8(num)
-			j56++
+			dAtA59[j58] = uint8(num)
+			j58++
 		}
-		i -= j56
-		copy(dAtA[i:], dAtA57[:j56])
-		i = encodeVarintPipeline(dAtA, i, uint64(j56))
+		i -= j58
+		copy(dAtA[i:], dAtA59[:j58])
+		i = encodeVarintPipeline(dAtA, i, uint64(j58))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -7747,6 +8336,16 @@ func (m *SingleJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.ShuffleIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleIdx))
+		i--
+		dAtA[i] = 0x58
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x50
 	}
 	if m.IsShuffle {
 		i--
@@ -7837,28 +8436,9 @@ func (m *SingleJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x1a
 	}
 	if len(m.ColList) > 0 {
-		dAtA60 := make([]byte, len(m.ColList)*10)
-		var j59 int
-		for _, num1 := range m.ColList {
-			num := uint64(num1)
-			for num >= 1<<7 {
-				dAtA60[j59] = uint8(uint64(num)&0x7f | 0x80)
-				num >>= 7
-				j59++
-			}
-			dAtA60[j59] = uint8(num)
-			j59++
-		}
-		i -= j59
-		copy(dAtA[i:], dAtA60[:j59])
-		i = encodeVarintPipeline(dAtA, i, uint64(j59))
-		i--
-		dAtA[i] = 0x12
-	}
-	if len(m.RelList) > 0 {
-		dAtA62 := make([]byte, len(m.RelList)*10)
+		dAtA62 := make([]byte, len(m.ColList)*10)
 		var j61 int
-		for _, num1 := range m.RelList {
+		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA62[j61] = uint8(uint64(num)&0x7f | 0x80)
@@ -7871,6 +8451,25 @@ func (m *SingleJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= j61
 		copy(dAtA[i:], dAtA62[:j61])
 		i = encodeVarintPipeline(dAtA, i, uint64(j61))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.RelList) > 0 {
+		dAtA64 := make([]byte, len(m.RelList)*10)
+		var j63 int
+		for _, num1 := range m.RelList {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA64[j63] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j63++
+			}
+			dAtA64[j63] = uint8(num)
+			j63++
+		}
+		i -= j63
+		copy(dAtA[i:], dAtA64[:j63])
+		i = encodeVarintPipeline(dAtA, i, uint64(j63))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -7901,6 +8500,16 @@ func (m *MarkJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.ShuffleIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleIdx))
+		i--
+		dAtA[i] = 0x48
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x40
+	}
 	if m.IsShuffle {
 		i--
 		if m.IsShuffle {
@@ -7909,7 +8518,7 @@ func (m *MarkJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x40
+		dAtA[i] = 0x38
 	}
 	if m.HashOnPk {
 		i--
@@ -7919,7 +8528,7 @@ func (m *MarkJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x38
+		dAtA[i] = 0x30
 	}
 	if len(m.OnList) > 0 {
 		for iNdEx := len(m.OnList) - 1; iNdEx >= 0; iNdEx-- {
@@ -7932,7 +8541,7 @@ func (m *MarkJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 				i = encodeVarintPipeline(dAtA, i, uint64(size))
 			}
 			i--
-			dAtA[i] = 0x32
+			dAtA[i] = 0x2a
 		}
 	}
 	if len(m.RightCond) > 0 {
@@ -7946,27 +8555,13 @@ func (m *MarkJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 				i = encodeVarintPipeline(dAtA, i, uint64(size))
 			}
 			i--
-			dAtA[i] = 0x2a
+			dAtA[i] = 0x22
 		}
 	}
 	if len(m.LeftCond) > 0 {
 		for iNdEx := len(m.LeftCond) - 1; iNdEx >= 0; iNdEx-- {
 			{
 				size, err := m.LeftCond[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x22
-		}
-	}
-	if len(m.Types) > 0 {
-		for iNdEx := len(m.Types) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Types[iNdEx].MarshalToSizedBuffer(dAtA[:i])
 				if err != nil {
 					return 0, err
 				}
@@ -7990,21 +8585,21 @@ func (m *MarkJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.Result) > 0 {
-		dAtA65 := make([]byte, len(m.Result)*10)
-		var j64 int
+		dAtA67 := make([]byte, len(m.Result)*10)
+		var j66 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA65[j64] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA67[j66] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j64++
+				j66++
 			}
-			dAtA65[j64] = uint8(num)
-			j64++
+			dAtA67[j66] = uint8(num)
+			j66++
 		}
-		i -= j64
-		copy(dAtA[i:], dAtA65[:j64])
-		i = encodeVarintPipeline(dAtA, i, uint64(j64))
+		i -= j66
+		copy(dAtA[i:], dAtA67[:j66])
+		i = encodeVarintPipeline(dAtA, i, uint64(j66))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -8035,6 +8630,11 @@ func (m *Product) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x20
+	}
 	if m.IsShuffle {
 		i--
 		if m.IsShuffle {
@@ -8043,45 +8643,12 @@ func (m *Product) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x20
-	}
-	if len(m.Types) > 0 {
-		for iNdEx := len(m.Types) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Types[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x1a
-		}
+		dAtA[i] = 0x18
 	}
 	if len(m.ColList) > 0 {
-		dAtA67 := make([]byte, len(m.ColList)*10)
-		var j66 int
-		for _, num1 := range m.ColList {
-			num := uint64(num1)
-			for num >= 1<<7 {
-				dAtA67[j66] = uint8(uint64(num)&0x7f | 0x80)
-				num >>= 7
-				j66++
-			}
-			dAtA67[j66] = uint8(num)
-			j66++
-		}
-		i -= j66
-		copy(dAtA[i:], dAtA67[:j66])
-		i = encodeVarintPipeline(dAtA, i, uint64(j66))
-		i--
-		dAtA[i] = 0x12
-	}
-	if len(m.RelList) > 0 {
-		dAtA69 := make([]byte, len(m.RelList)*10)
+		dAtA69 := make([]byte, len(m.ColList)*10)
 		var j68 int
-		for _, num1 := range m.RelList {
+		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA69[j68] = uint8(uint64(num)&0x7f | 0x80)
@@ -8094,6 +8661,25 @@ func (m *Product) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= j68
 		copy(dAtA[i:], dAtA69[:j68])
 		i = encodeVarintPipeline(dAtA, i, uint64(j68))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.RelList) > 0 {
+		dAtA71 := make([]byte, len(m.RelList)*10)
+		var j70 int
+		for _, num1 := range m.RelList {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA71[j70] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j70++
+			}
+			dAtA71[j70] = uint8(num)
+			j70++
+		}
+		i -= j70
+		copy(dAtA[i:], dAtA71[:j70])
+		i = encodeVarintPipeline(dAtA, i, uint64(j70))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -8124,6 +8710,11 @@ func (m *ProductL2) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x20
+	}
 	if m.Expr != nil {
 		{
 			size, err := m.Expr.MarshalToSizedBuffer(dAtA[:i])
@@ -8134,45 +8725,12 @@ func (m *ProductL2) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			i = encodeVarintPipeline(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0x22
-	}
-	if len(m.Types) > 0 {
-		for iNdEx := len(m.Types) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Types[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0x1a
-		}
+		dAtA[i] = 0x1a
 	}
 	if len(m.ColList) > 0 {
-		dAtA72 := make([]byte, len(m.ColList)*10)
-		var j71 int
-		for _, num1 := range m.ColList {
-			num := uint64(num1)
-			for num >= 1<<7 {
-				dAtA72[j71] = uint8(uint64(num)&0x7f | 0x80)
-				num >>= 7
-				j71++
-			}
-			dAtA72[j71] = uint8(num)
-			j71++
-		}
-		i -= j71
-		copy(dAtA[i:], dAtA72[:j71])
-		i = encodeVarintPipeline(dAtA, i, uint64(j71))
-		i--
-		dAtA[i] = 0x12
-	}
-	if len(m.RelList) > 0 {
-		dAtA74 := make([]byte, len(m.RelList)*10)
+		dAtA74 := make([]byte, len(m.ColList)*10)
 		var j73 int
-		for _, num1 := range m.RelList {
+		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA74[j73] = uint8(uint64(num)&0x7f | 0x80)
@@ -8185,6 +8743,25 @@ func (m *ProductL2) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= j73
 		copy(dAtA[i:], dAtA74[:j73])
 		i = encodeVarintPipeline(dAtA, i, uint64(j73))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.RelList) > 0 {
+		dAtA76 := make([]byte, len(m.RelList)*10)
+		var j75 int
+		for _, num1 := range m.RelList {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA76[j75] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j75++
+			}
+			dAtA76[j75] = uint8(num)
+			j75++
+		}
+		i -= j75
+		copy(dAtA[i:], dAtA76[:j75])
+		i = encodeVarintPipeline(dAtA, i, uint64(j75))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -8226,39 +8803,25 @@ func (m *IndexJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 				i = encodeVarintPipeline(dAtA, i, uint64(size))
 			}
 			i--
-			dAtA[i] = 0x1a
-		}
-	}
-	if len(m.Types) > 0 {
-		for iNdEx := len(m.Types) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.Types[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintPipeline(dAtA, i, uint64(size))
-			}
-			i--
 			dAtA[i] = 0x12
 		}
 	}
 	if len(m.Result) > 0 {
-		dAtA76 := make([]byte, len(m.Result)*10)
-		var j75 int
+		dAtA78 := make([]byte, len(m.Result)*10)
+		var j77 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA76[j75] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA78[j77] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j75++
+				j77++
 			}
-			dAtA76[j75] = uint8(num)
-			j75++
+			dAtA78[j77] = uint8(num)
+			j77++
 		}
-		i -= j75
-		copy(dAtA[i:], dAtA76[:j75])
-		i = encodeVarintPipeline(dAtA, i, uint64(j75))
+		i -= j77
+		copy(dAtA[i:], dAtA78[:j77])
+		i = encodeVarintPipeline(dAtA, i, uint64(j77))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -8407,21 +8970,21 @@ func (m *FileOffset) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Offset) > 0 {
-		dAtA78 := make([]byte, len(m.Offset)*10)
-		var j77 int
+		dAtA80 := make([]byte, len(m.Offset)*10)
+		var j79 int
 		for _, num1 := range m.Offset {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA78[j77] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA80[j79] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j77++
+				j79++
 			}
-			dAtA78[j77] = uint8(num)
-			j77++
+			dAtA80[j79] = uint8(num)
+			j79++
 		}
-		i -= j77
-		copy(dAtA[i:], dAtA78[:j77])
-		i = encodeVarintPipeline(dAtA, i, uint64(j77))
+		i -= j79
+		copy(dAtA[i:], dAtA80[:j79])
+		i = encodeVarintPipeline(dAtA, i, uint64(j79))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -8451,6 +9014,33 @@ func (m *ExternalScan) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.StrictSqlMode {
+		i--
+		if m.StrictSqlMode {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x58
+	}
+	if len(m.TbColToDataCol) > 0 {
+		for k := range m.TbColToDataCol {
+			v := m.TbColToDataCol[k]
+			baseI := i
+			i = encodeVarintPipeline(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0x10
+			i -= len(k)
+			copy(dAtA[i:], k)
+			i = encodeVarintPipeline(dAtA, i, uint64(len(k)))
+			i--
+			dAtA[i] = 0xa
+			i = encodeVarintPipeline(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x52
+		}
 	}
 	if m.Filter != nil {
 		{
@@ -8537,21 +9127,21 @@ func (m *ExternalScan) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.FileSize) > 0 {
-		dAtA81 := make([]byte, len(m.FileSize)*10)
-		var j80 int
+		dAtA83 := make([]byte, len(m.FileSize)*10)
+		var j82 int
 		for _, num1 := range m.FileSize {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA81[j80] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA83[j82] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j80++
+				j82++
 			}
-			dAtA81[j80] = uint8(num)
-			j80++
+			dAtA83[j82] = uint8(num)
+			j82++
 		}
-		i -= j80
-		copy(dAtA[i:], dAtA81[:j80])
-		i = encodeVarintPipeline(dAtA, i, uint64(j80))
+		i -= j82
+		copy(dAtA[i:], dAtA83[:j82])
+		i = encodeVarintPipeline(dAtA, i, uint64(j82))
 		i--
 		dAtA[i] = 0x12
 	}
@@ -8640,6 +9230,20 @@ func (m *TableScan) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if len(m.Types) > 0 {
+		for iNdEx := len(m.Types) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Types[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintPipeline(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0xa
+		}
+	}
 	return len(dAtA) - i, nil
 }
 
@@ -8666,6 +9270,275 @@ func (m *ValueScan) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.BatchBlock) > 0 {
+		i -= len(m.BatchBlock)
+		copy(dAtA[i:], m.BatchBlock)
+		i = encodeVarintPipeline(dAtA, i, uint64(len(m.BatchBlock)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *UnionAll) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *UnionAll) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *UnionAll) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *HashBuild) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *HashBuild) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *HashBuild) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.RuntimeFilterSpec != nil {
+		{
+			size, err := m.RuntimeFilterSpec.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPipeline(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x42
+	}
+	if m.JoinMapRefCnt != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapRefCnt))
+		i--
+		dAtA[i] = 0x38
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x30
+	}
+	if len(m.Conditions) > 0 {
+		for iNdEx := len(m.Conditions) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Conditions[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintPipeline(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x2a
+		}
+	}
+	if m.NeedAllocateSels {
+		i--
+		if m.NeedAllocateSels {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.NeedBatches {
+		i--
+		if m.NeedBatches {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.HashOnPK {
+		i--
+		if m.HashOnPK {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.NeedHashMap {
+		i--
+		if m.NeedHashMap {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *Shufflebuild) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *Shufflebuild) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Shufflebuild) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.ShuffleIdx != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleIdx))
+		i--
+		dAtA[i] = 0x38
+	}
+	if m.JoinMapTag != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.JoinMapTag))
+		i--
+		dAtA[i] = 0x30
+	}
+	if m.RuntimeFilterSpec != nil {
+		{
+			size, err := m.RuntimeFilterSpec.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPipeline(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x2a
+	}
+	if len(m.Conditions) > 0 {
+		for iNdEx := len(m.Conditions) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Conditions[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintPipeline(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x22
+		}
+	}
+	if m.NeedAllocateSels {
+		i--
+		if m.NeedAllocateSels {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.NeedBatches {
+		i--
+		if m.NeedBatches {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.HashOnPK {
+		i--
+		if m.HashOnPK {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *Indexbuild) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *Indexbuild) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Indexbuild) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.RuntimeFilterSpec != nil {
+		{
+			size, err := m.RuntimeFilterSpec.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPipeline(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -8750,6 +9623,62 @@ func (m *Instruction) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.IndexBuild != nil {
+		{
+			size, err := m.IndexBuild.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPipeline(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x3
+		i--
+		dAtA[i] = 0x92
+	}
+	if m.ShuffleBuild != nil {
+		{
+			size, err := m.ShuffleBuild.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPipeline(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x3
+		i--
+		dAtA[i] = 0x8a
+	}
+	if m.HashBuild != nil {
+		{
+			size, err := m.HashBuild.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPipeline(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x3
+		i--
+		dAtA[i] = 0x82
+	}
+	if m.UnionAll != nil {
+		{
+			size, err := m.UnionAll.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPipeline(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x2
+		i--
+		dAtA[i] = 0xfa
 	}
 	if m.ValueScan != nil {
 		{
@@ -9498,11 +10427,6 @@ func (m *NodeInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if m.Type != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.Type))
-		i--
-		dAtA[i] = 0x28
-	}
 	if len(m.Payload) > 0 {
 		i -= len(m.Payload)
 		copy(dAtA[i:], m.Payload)
@@ -9688,21 +10612,21 @@ func (m *ProcessInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i--
 	dAtA[i] = 0x4a
 	if len(m.AnalysisNodeList) > 0 {
-		dAtA123 := make([]byte, len(m.AnalysisNodeList)*10)
-		var j122 int
+		dAtA132 := make([]byte, len(m.AnalysisNodeList)*10)
+		var j131 int
 		for _, num1 := range m.AnalysisNodeList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA123[j122] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA132[j131] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j122++
+				j131++
 			}
-			dAtA123[j122] = uint8(num)
-			j122++
+			dAtA132[j131] = uint8(num)
+			j131++
 		}
-		i -= j122
-		copy(dAtA[i:], dAtA123[:j122])
-		i = encodeVarintPipeline(dAtA, i, uint64(j122))
+		i -= j131
+		copy(dAtA[i:], dAtA132[:j131])
+		i = encodeVarintPipeline(dAtA, i, uint64(j131))
 		i--
 		dAtA[i] = 0x42
 	}
@@ -9930,16 +10854,6 @@ func (m *Pipeline) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if m.ShuffleCnt != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.ShuffleCnt))
-		i--
-		dAtA[i] = 0x78
-	}
-	if m.BuildIdx != 0 {
-		i = encodeVarintPipeline(dAtA, i, uint64(m.BuildIdx))
-		i--
-		dAtA[i] = 0x70
-	}
 	if len(m.UuidsToRegIdx) > 0 {
 		for iNdEx := len(m.UuidsToRegIdx) - 1; iNdEx >= 0; iNdEx-- {
 			{
@@ -9951,18 +10865,56 @@ func (m *Pipeline) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 				i = encodeVarintPipeline(dAtA, i, uint64(size))
 			}
 			i--
-			dAtA[i] = 0x6a
+			dAtA[i] = 0x72
 		}
+	}
+	if len(m.NilBatchCnt) > 0 {
+		dAtA137 := make([]byte, len(m.NilBatchCnt)*10)
+		var j136 int
+		for _, num1 := range m.NilBatchCnt {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA137[j136] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j136++
+			}
+			dAtA137[j136] = uint8(num)
+			j136++
+		}
+		i -= j136
+		copy(dAtA[i:], dAtA137[:j136])
+		i = encodeVarintPipeline(dAtA, i, uint64(j136))
+		i--
+		dAtA[i] = 0x6a
+	}
+	if len(m.ChannelBufferSize) > 0 {
+		dAtA139 := make([]byte, len(m.ChannelBufferSize)*10)
+		var j138 int
+		for _, num1 := range m.ChannelBufferSize {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA139[j138] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j138++
+			}
+			dAtA139[j138] = uint8(num)
+			j138++
+		}
+		i -= j138
+		copy(dAtA[i:], dAtA139[:j138])
+		i = encodeVarintPipeline(dAtA, i, uint64(j138))
+		i--
+		dAtA[i] = 0x62
 	}
 	if m.ChildrenCount != 0 {
 		i = encodeVarintPipeline(dAtA, i, uint64(m.ChildrenCount))
 		i--
-		dAtA[i] = 0x60
+		dAtA[i] = 0x58
 	}
 	if m.PushDownInfo != 0 {
 		i = encodeVarintPipeline(dAtA, i, uint64(m.PushDownInfo))
 		i--
-		dAtA[i] = 0x58
+		dAtA[i] = 0x50
 	}
 	if m.Node != nil {
 		{
@@ -9974,21 +10926,11 @@ func (m *Pipeline) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			i = encodeVarintPipeline(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0x52
+		dAtA[i] = 0x4a
 	}
 	if m.IsLoad {
 		i--
 		if m.IsLoad {
-			dAtA[i] = 1
-		} else {
-			dAtA[i] = 0
-		}
-		i--
-		dAtA[i] = 0x48
-	}
-	if m.IsJoin {
-		i--
-		if m.IsJoin {
 			dAtA[i] = 1
 		} else {
 			dAtA[i] = 0
@@ -10335,6 +11277,15 @@ func (m *Merge) ProtoSize() (n int) {
 	if m.SinkScan {
 		n += 2
 	}
+	if m.Partial {
+		n += 2
+	}
+	if m.StartIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.StartIdx))
+	}
+	if m.EndIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.EndIdx))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -10658,6 +11609,14 @@ func (m *PreInsert) ProtoSize() (n int) {
 	if m.EstimatedRowCount != 0 {
 		n += 1 + sovPipeline(uint64(m.EstimatedRowCount))
 	}
+	if m.CompPkeyExpr != nil {
+		l = m.CompPkeyExpr.ProtoSize()
+		n += 1 + l + sovPipeline(uint64(l))
+	}
+	if m.ClusterByExpr != nil {
+		l = m.ClusterByExpr.ProtoSize()
+		n += 1 + l + sovPipeline(uint64(l))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -10889,6 +11848,15 @@ func (m *Join) ProtoSize() (n int) {
 	if m.IsShuffle {
 		n += 2
 	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.ShuffleIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.ShuffleIdx))
+	}
+	if m.JoinType != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinType))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -10911,12 +11879,6 @@ func (m *AntiJoin) ProtoSize() (n int) {
 	if m.Expr != nil {
 		l = m.Expr.ProtoSize()
 		n += 1 + l + sovPipeline(uint64(l))
-	}
-	if len(m.Types) > 0 {
-		for _, e := range m.Types {
-			l = e.ProtoSize()
-			n += 1 + l + sovPipeline(uint64(l))
-		}
 	}
 	if len(m.LeftCond) > 0 {
 		for _, e := range m.LeftCond {
@@ -10941,6 +11903,12 @@ func (m *AntiJoin) ProtoSize() (n int) {
 			l = e.ProtoSize()
 			n += 1 + l + sovPipeline(uint64(l))
 		}
+	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.ShuffleIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.ShuffleIdx))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -11001,6 +11969,12 @@ func (m *LeftJoin) ProtoSize() (n int) {
 	}
 	if m.IsShuffle {
 		n += 2
+	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.ShuffleIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.ShuffleIdx))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -11068,6 +12042,12 @@ func (m *RightJoin) ProtoSize() (n int) {
 	if m.IsShuffle {
 		n += 2
 	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.ShuffleIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.ShuffleIdx))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -11120,6 +12100,12 @@ func (m *RightSemiJoin) ProtoSize() (n int) {
 	}
 	if m.IsShuffle {
 		n += 2
+	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.ShuffleIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.ShuffleIdx))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -11174,6 +12160,12 @@ func (m *RightAntiJoin) ProtoSize() (n int) {
 	if m.IsShuffle {
 		n += 2
 	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.ShuffleIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.ShuffleIdx))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -11196,12 +12188,6 @@ func (m *SemiJoin) ProtoSize() (n int) {
 	if m.Expr != nil {
 		l = m.Expr.ProtoSize()
 		n += 1 + l + sovPipeline(uint64(l))
-	}
-	if len(m.Types) > 0 {
-		for _, e := range m.Types {
-			l = e.ProtoSize()
-			n += 1 + l + sovPipeline(uint64(l))
-		}
 	}
 	if len(m.LeftCond) > 0 {
 		for _, e := range m.LeftCond {
@@ -11226,6 +12212,12 @@ func (m *SemiJoin) ProtoSize() (n int) {
 	}
 	if m.IsShuffle {
 		n += 2
+	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.ShuffleIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.ShuffleIdx))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -11287,6 +12279,12 @@ func (m *SingleJoin) ProtoSize() (n int) {
 	if m.IsShuffle {
 		n += 2
 	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.ShuffleIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.ShuffleIdx))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -11309,12 +12307,6 @@ func (m *MarkJoin) ProtoSize() (n int) {
 	if m.Expr != nil {
 		l = m.Expr.ProtoSize()
 		n += 1 + l + sovPipeline(uint64(l))
-	}
-	if len(m.Types) > 0 {
-		for _, e := range m.Types {
-			l = e.ProtoSize()
-			n += 1 + l + sovPipeline(uint64(l))
-		}
 	}
 	if len(m.LeftCond) > 0 {
 		for _, e := range m.LeftCond {
@@ -11339,6 +12331,12 @@ func (m *MarkJoin) ProtoSize() (n int) {
 	}
 	if m.IsShuffle {
 		n += 2
+	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.ShuffleIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.ShuffleIdx))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -11366,14 +12364,11 @@ func (m *Product) ProtoSize() (n int) {
 		}
 		n += 1 + sovPipeline(uint64(l)) + l
 	}
-	if len(m.Types) > 0 {
-		for _, e := range m.Types {
-			l = e.ProtoSize()
-			n += 1 + l + sovPipeline(uint64(l))
-		}
-	}
 	if m.IsShuffle {
 		n += 2
+	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -11401,15 +12396,12 @@ func (m *ProductL2) ProtoSize() (n int) {
 		}
 		n += 1 + sovPipeline(uint64(l)) + l
 	}
-	if len(m.Types) > 0 {
-		for _, e := range m.Types {
-			l = e.ProtoSize()
-			n += 1 + l + sovPipeline(uint64(l))
-		}
-	}
 	if m.Expr != nil {
 		l = m.Expr.ProtoSize()
 		n += 1 + l + sovPipeline(uint64(l))
+	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -11429,12 +12421,6 @@ func (m *IndexJoin) ProtoSize() (n int) {
 			l += sovPipeline(uint64(e))
 		}
 		n += 1 + sovPipeline(uint64(l)) + l
-	}
-	if len(m.Types) > 0 {
-		for _, e := range m.Types {
-			l = e.ProtoSize()
-			n += 1 + l + sovPipeline(uint64(l))
-		}
 	}
 	if len(m.RuntimeFilterBuildList) > 0 {
 		for _, e := range m.RuntimeFilterBuildList {
@@ -11581,6 +12567,17 @@ func (m *ExternalScan) ProtoSize() (n int) {
 		l = m.Filter.ProtoSize()
 		n += 1 + l + sovPipeline(uint64(l))
 	}
+	if len(m.TbColToDataCol) > 0 {
+		for k, v := range m.TbColToDataCol {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + len(k) + sovPipeline(uint64(len(k))) + 1 + sovPipeline(uint64(v))
+			n += mapEntrySize + 1 + sovPipeline(uint64(mapEntrySize))
+		}
+	}
+	if m.StrictSqlMode {
+		n += 2
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -11615,6 +12612,12 @@ func (m *TableScan) ProtoSize() (n int) {
 	}
 	var l int
 	_ = l
+	if len(m.Types) > 0 {
+		for _, e := range m.Types {
+			l = e.ProtoSize()
+			n += 1 + l + sovPipeline(uint64(l))
+		}
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -11627,6 +12630,115 @@ func (m *ValueScan) ProtoSize() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BatchBlock)
+	if l > 0 {
+		n += 1 + l + sovPipeline(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *UnionAll) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *HashBuild) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.NeedHashMap {
+		n += 2
+	}
+	if m.HashOnPK {
+		n += 2
+	}
+	if m.NeedBatches {
+		n += 2
+	}
+	if m.NeedAllocateSels {
+		n += 2
+	}
+	if len(m.Conditions) > 0 {
+		for _, e := range m.Conditions {
+			l = e.ProtoSize()
+			n += 1 + l + sovPipeline(uint64(l))
+		}
+	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.JoinMapRefCnt != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapRefCnt))
+	}
+	if m.RuntimeFilterSpec != nil {
+		l = m.RuntimeFilterSpec.ProtoSize()
+		n += 1 + l + sovPipeline(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *Shufflebuild) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.HashOnPK {
+		n += 2
+	}
+	if m.NeedBatches {
+		n += 2
+	}
+	if m.NeedAllocateSels {
+		n += 2
+	}
+	if len(m.Conditions) > 0 {
+		for _, e := range m.Conditions {
+			l = e.ProtoSize()
+			n += 1 + l + sovPipeline(uint64(l))
+		}
+	}
+	if m.RuntimeFilterSpec != nil {
+		l = m.RuntimeFilterSpec.ProtoSize()
+		n += 1 + l + sovPipeline(uint64(l))
+	}
+	if m.JoinMapTag != 0 {
+		n += 1 + sovPipeline(uint64(m.JoinMapTag))
+	}
+	if m.ShuffleIdx != 0 {
+		n += 1 + sovPipeline(uint64(m.ShuffleIdx))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *Indexbuild) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.RuntimeFilterSpec != nil {
+		l = m.RuntimeFilterSpec.ProtoSize()
+		n += 1 + l + sovPipeline(uint64(l))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -11839,6 +12951,22 @@ func (m *Instruction) ProtoSize() (n int) {
 		l = m.ValueScan.ProtoSize()
 		n += 2 + l + sovPipeline(uint64(l))
 	}
+	if m.UnionAll != nil {
+		l = m.UnionAll.ProtoSize()
+		n += 2 + l + sovPipeline(uint64(l))
+	}
+	if m.HashBuild != nil {
+		l = m.HashBuild.ProtoSize()
+		n += 2 + l + sovPipeline(uint64(l))
+	}
+	if m.ShuffleBuild != nil {
+		l = m.ShuffleBuild.ProtoSize()
+		n += 2 + l + sovPipeline(uint64(l))
+	}
+	if m.IndexBuild != nil {
+		l = m.IndexBuild.ProtoSize()
+		n += 2 + l + sovPipeline(uint64(l))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -11941,9 +13069,6 @@ func (m *NodeInfo) ProtoSize() (n int) {
 	l = len(m.Payload)
 	if l > 0 {
 		n += 1 + l + sovPipeline(uint64(l))
-	}
-	if m.Type != 0 {
-		n += 1 + sovPipeline(uint64(m.Type))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -12158,9 +13283,6 @@ func (m *Pipeline) ProtoSize() (n int) {
 	if m.IsEnd {
 		n += 2
 	}
-	if m.IsJoin {
-		n += 2
-	}
 	if m.IsLoad {
 		n += 2
 	}
@@ -12174,17 +13296,25 @@ func (m *Pipeline) ProtoSize() (n int) {
 	if m.ChildrenCount != 0 {
 		n += 1 + sovPipeline(uint64(m.ChildrenCount))
 	}
+	if len(m.ChannelBufferSize) > 0 {
+		l = 0
+		for _, e := range m.ChannelBufferSize {
+			l += sovPipeline(uint64(e))
+		}
+		n += 1 + sovPipeline(uint64(l)) + l
+	}
+	if len(m.NilBatchCnt) > 0 {
+		l = 0
+		for _, e := range m.NilBatchCnt {
+			l += sovPipeline(uint64(e))
+		}
+		n += 1 + sovPipeline(uint64(l)) + l
+	}
 	if len(m.UuidsToRegIdx) > 0 {
 		for _, e := range m.UuidsToRegIdx {
 			l = e.ProtoSize()
 			n += 1 + l + sovPipeline(uint64(l))
 		}
-	}
-	if m.BuildIdx != 0 {
-		n += 1 + sovPipeline(uint64(m.BuildIdx))
-	}
-	if m.ShuffleCnt != 0 {
-		n += 1 + sovPipeline(uint64(m.ShuffleCnt))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -13360,6 +14490,64 @@ func (m *Merge) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.SinkScan = bool(v != 0)
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Partial", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Partial = bool(v != 0)
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field StartIdx", wireType)
+			}
+			m.StartIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.StartIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EndIdx", wireType)
+			}
+			m.EndIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.EndIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -15524,6 +16712,78 @@ func (m *PreInsert) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CompPkeyExpr", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.CompPkeyExpr == nil {
+				m.CompPkeyExpr = &plan.Expr{}
+			}
+			if err := m.CompPkeyExpr.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ClusterByExpr", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.ClusterByExpr == nil {
+				m.ClusterByExpr = &plan.Expr{}
+			}
+			if err := m.ClusterByExpr.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -16996,6 +18256,63 @@ func (m *Join) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsShuffle = bool(v != 0)
+		case 10:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleIdx", wireType)
+			}
+			m.ShuffleIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShuffleIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 12:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinType", wireType)
+			}
+			m.JoinType = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinType |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -17161,40 +18478,6 @@ func (m *AntiJoin) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 3:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Types", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.Types = append(m.Types, plan.Type{})
-			if err := m.Types[len(m.Types)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 4:
-			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LeftCond", wireType)
 			}
 			var msglen int
@@ -17227,7 +18510,7 @@ func (m *AntiJoin) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 5:
+		case 4:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field RightCond", wireType)
 			}
@@ -17261,7 +18544,7 @@ func (m *AntiJoin) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 6:
+		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field HashOnPk", wireType)
 			}
@@ -17281,7 +18564,7 @@ func (m *AntiJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.HashOnPk = bool(v != 0)
-		case 7:
+		case 6:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field IsShuffle", wireType)
 			}
@@ -17301,7 +18584,7 @@ func (m *AntiJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsShuffle = bool(v != 0)
-		case 8:
+		case 7:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field RuntimeFilterBuildList", wireType)
 			}
@@ -17335,6 +18618,44 @@ func (m *AntiJoin) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleIdx", wireType)
+			}
+			m.ShuffleIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShuffleIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -17750,6 +19071,44 @@ func (m *LeftJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsShuffle = bool(v != 0)
+		case 10:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleIdx", wireType)
+			}
+			m.ShuffleIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShuffleIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -18199,6 +19558,44 @@ func (m *RightJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsShuffle = bool(v != 0)
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 12:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleIdx", wireType)
+			}
+			m.ShuffleIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShuffleIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -18538,6 +19935,44 @@ func (m *RightSemiJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsShuffle = bool(v != 0)
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleIdx", wireType)
+			}
+			m.ShuffleIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShuffleIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -18877,6 +20312,44 @@ func (m *RightAntiJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsShuffle = bool(v != 0)
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 10:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleIdx", wireType)
+			}
+			m.ShuffleIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShuffleIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -19042,40 +20515,6 @@ func (m *SemiJoin) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 3:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Types", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.Types = append(m.Types, plan.Type{})
-			if err := m.Types[len(m.Types)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 4:
-			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LeftCond", wireType)
 			}
 			var msglen int
@@ -19108,7 +20547,7 @@ func (m *SemiJoin) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 5:
+		case 4:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field RightCond", wireType)
 			}
@@ -19142,7 +20581,7 @@ func (m *SemiJoin) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 6:
+		case 5:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field RuntimeFilterBuildList", wireType)
 			}
@@ -19176,7 +20615,7 @@ func (m *SemiJoin) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 7:
+		case 6:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field HashOnPk", wireType)
 			}
@@ -19196,7 +20635,7 @@ func (m *SemiJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.HashOnPk = bool(v != 0)
-		case 8:
+		case 7:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field IsShuffle", wireType)
 			}
@@ -19216,6 +20655,44 @@ func (m *SemiJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsShuffle = bool(v != 0)
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleIdx", wireType)
+			}
+			m.ShuffleIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShuffleIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -19631,6 +21108,44 @@ func (m *SingleJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsShuffle = bool(v != 0)
+		case 10:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleIdx", wireType)
+			}
+			m.ShuffleIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShuffleIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -19796,40 +21311,6 @@ func (m *MarkJoin) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 3:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Types", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.Types = append(m.Types, plan.Type{})
-			if err := m.Types[len(m.Types)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 4:
-			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LeftCond", wireType)
 			}
 			var msglen int
@@ -19862,7 +21343,7 @@ func (m *MarkJoin) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 5:
+		case 4:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field RightCond", wireType)
 			}
@@ -19896,7 +21377,7 @@ func (m *MarkJoin) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 6:
+		case 5:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field OnList", wireType)
 			}
@@ -19930,7 +21411,7 @@ func (m *MarkJoin) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 7:
+		case 6:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field HashOnPk", wireType)
 			}
@@ -19950,7 +21431,7 @@ func (m *MarkJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.HashOnPk = bool(v != 0)
-		case 8:
+		case 7:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field IsShuffle", wireType)
 			}
@@ -19970,6 +21451,44 @@ func (m *MarkJoin) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsShuffle = bool(v != 0)
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleIdx", wireType)
+			}
+			m.ShuffleIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShuffleIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -20174,40 +21693,6 @@ func (m *Product) Unmarshal(dAtA []byte) error {
 				return fmt.Errorf("proto: wrong wireType = %d for field ColList", wireType)
 			}
 		case 3:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Types", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.Types = append(m.Types, plan.Type{})
-			if err := m.Types[len(m.Types)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field IsShuffle", wireType)
 			}
@@ -20227,6 +21712,25 @@ func (m *Product) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsShuffle = bool(v != 0)
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -20432,40 +21936,6 @@ func (m *ProductL2) Unmarshal(dAtA []byte) error {
 			}
 		case 3:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Types", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.Types = append(m.Types, plan.Type{})
-			if err := m.Types[len(m.Types)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 4:
-			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Expr", wireType)
 			}
 			var msglen int
@@ -20500,6 +21970,25 @@ func (m *ProductL2) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -20628,40 +22117,6 @@ func (m *IndexJoin) Unmarshal(dAtA []byte) error {
 				return fmt.Errorf("proto: wrong wireType = %d for field Result", wireType)
 			}
 		case 2:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Types", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.Types = append(m.Types, plan.Type{})
-			if err := m.Types[len(m.Types)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 3:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field RuntimeFilterBuildList", wireType)
 			}
@@ -21536,6 +22991,139 @@ func (m *ExternalScan) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 10:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TbColToDataCol", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.TbColToDataCol == nil {
+				m.TbColToDataCol = make(map[string]int32)
+			}
+			var mapkey string
+			var mapvalue int32
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowPipeline
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					var stringLenmapkey uint64
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowPipeline
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						stringLenmapkey |= uint64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					intStringLenmapkey := int(stringLenmapkey)
+					if intStringLenmapkey < 0 {
+						return ErrInvalidLengthPipeline
+					}
+					postStringIndexmapkey := iNdEx + intStringLenmapkey
+					if postStringIndexmapkey < 0 {
+						return ErrInvalidLengthPipeline
+					}
+					if postStringIndexmapkey > l {
+						return io.ErrUnexpectedEOF
+					}
+					mapkey = string(dAtA[iNdEx:postStringIndexmapkey])
+					iNdEx = postStringIndexmapkey
+				} else if fieldNum == 2 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowPipeline
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapvalue |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipPipeline(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthPipeline
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.TbColToDataCol[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field StrictSqlMode", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.StrictSqlMode = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -21712,6 +23300,40 @@ func (m *TableScan) Unmarshal(dAtA []byte) error {
 			return fmt.Errorf("proto: TableScan: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Types", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Types = append(m.Types, plan.Type{})
+			if err := m.Types[len(m.Types)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -21763,6 +23385,634 @@ func (m *ValueScan) Unmarshal(dAtA []byte) error {
 			return fmt.Errorf("proto: ValueScan: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BatchBlock", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BatchBlock = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipPipeline(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *UnionAll) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowPipeline
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: UnionAll: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: UnionAll: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := skipPipeline(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *HashBuild) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowPipeline
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: HashBuild: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: HashBuild: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NeedHashMap", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.NeedHashMap = bool(v != 0)
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field HashOnPK", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.HashOnPK = bool(v != 0)
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NeedBatches", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.NeedBatches = bool(v != 0)
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NeedAllocateSels", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.NeedAllocateSels = bool(v != 0)
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Conditions", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Conditions = append(m.Conditions, &plan.Expr{})
+			if err := m.Conditions[len(m.Conditions)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapRefCnt", wireType)
+			}
+			m.JoinMapRefCnt = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapRefCnt |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RuntimeFilterSpec", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RuntimeFilterSpec == nil {
+				m.RuntimeFilterSpec = &plan.RuntimeFilterSpec{}
+			}
+			if err := m.RuntimeFilterSpec.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipPipeline(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *Shufflebuild) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowPipeline
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: Shufflebuild: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: Shufflebuild: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field HashOnPK", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.HashOnPK = bool(v != 0)
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NeedBatches", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.NeedBatches = bool(v != 0)
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NeedAllocateSels", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.NeedAllocateSels = bool(v != 0)
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Conditions", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Conditions = append(m.Conditions, &plan.Expr{})
+			if err := m.Conditions[len(m.Conditions)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RuntimeFilterSpec", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RuntimeFilterSpec == nil {
+				m.RuntimeFilterSpec = &plan.RuntimeFilterSpec{}
+			}
+			if err := m.RuntimeFilterSpec.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field JoinMapTag", wireType)
+			}
+			m.JoinMapTag = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleIdx", wireType)
+			}
+			m.ShuffleIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShuffleIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipPipeline(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *Indexbuild) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowPipeline
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: Indexbuild: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: Indexbuild: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RuntimeFilterSpec", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RuntimeFilterSpec == nil {
+				m.RuntimeFilterSpec = &plan.RuntimeFilterSpec{}
+			}
+			if err := m.RuntimeFilterSpec.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -23407,6 +25657,150 @@ func (m *Instruction) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 47:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UnionAll", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.UnionAll == nil {
+				m.UnionAll = &UnionAll{}
+			}
+			if err := m.UnionAll.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 48:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field HashBuild", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.HashBuild == nil {
+				m.HashBuild = &HashBuild{}
+			}
+			if err := m.HashBuild.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 49:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleBuild", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.ShuffleBuild == nil {
+				m.ShuffleBuild = &Shufflebuild{}
+			}
+			if err := m.ShuffleBuild.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 50:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field IndexBuild", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.IndexBuild == nil {
+				m.IndexBuild = &Indexbuild{}
+			}
+			if err := m.IndexBuild.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -24050,25 +26444,6 @@ func (m *NodeInfo) Unmarshal(dAtA []byte) error {
 			}
 			m.Payload = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
-		case 5:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Type", wireType)
-			}
-			m.Type = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.Type |= uint32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
@@ -25568,26 +27943,6 @@ func (m *Pipeline) Unmarshal(dAtA []byte) error {
 			m.IsEnd = bool(v != 0)
 		case 8:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field IsJoin", wireType)
-			}
-			var v int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				v |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			m.IsJoin = bool(v != 0)
-		case 9:
-			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field IsLoad", wireType)
 			}
 			var v int
@@ -25606,7 +27961,7 @@ func (m *Pipeline) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IsLoad = bool(v != 0)
-		case 10:
+		case 9:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Node", wireType)
 			}
@@ -25642,7 +27997,7 @@ func (m *Pipeline) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 11:
+		case 10:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field PushDownInfo", wireType)
 			}
@@ -25661,7 +28016,7 @@ func (m *Pipeline) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
-		case 12:
+		case 11:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field ChildrenCount", wireType)
 			}
@@ -25680,7 +28035,159 @@ func (m *Pipeline) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 12:
+			if wireType == 0 {
+				var v int32
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowPipeline
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					v |= int32(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				m.ChannelBufferSize = append(m.ChannelBufferSize, v)
+			} else if wireType == 2 {
+				var packedLen int
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowPipeline
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					packedLen |= int(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				if packedLen < 0 {
+					return ErrInvalidLengthPipeline
+				}
+				postIndex := iNdEx + packedLen
+				if postIndex < 0 {
+					return ErrInvalidLengthPipeline
+				}
+				if postIndex > l {
+					return io.ErrUnexpectedEOF
+				}
+				var elementCount int
+				var count int
+				for _, integer := range dAtA[iNdEx:postIndex] {
+					if integer < 128 {
+						count++
+					}
+				}
+				elementCount = count
+				if elementCount != 0 && len(m.ChannelBufferSize) == 0 {
+					m.ChannelBufferSize = make([]int32, 0, elementCount)
+				}
+				for iNdEx < postIndex {
+					var v int32
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowPipeline
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						v |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					m.ChannelBufferSize = append(m.ChannelBufferSize, v)
+				}
+			} else {
+				return fmt.Errorf("proto: wrong wireType = %d for field ChannelBufferSize", wireType)
+			}
 		case 13:
+			if wireType == 0 {
+				var v int32
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowPipeline
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					v |= int32(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				m.NilBatchCnt = append(m.NilBatchCnt, v)
+			} else if wireType == 2 {
+				var packedLen int
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowPipeline
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					packedLen |= int(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				if packedLen < 0 {
+					return ErrInvalidLengthPipeline
+				}
+				postIndex := iNdEx + packedLen
+				if postIndex < 0 {
+					return ErrInvalidLengthPipeline
+				}
+				if postIndex > l {
+					return io.ErrUnexpectedEOF
+				}
+				var elementCount int
+				var count int
+				for _, integer := range dAtA[iNdEx:postIndex] {
+					if integer < 128 {
+						count++
+					}
+				}
+				elementCount = count
+				if elementCount != 0 && len(m.NilBatchCnt) == 0 {
+					m.NilBatchCnt = make([]int32, 0, elementCount)
+				}
+				for iNdEx < postIndex {
+					var v int32
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowPipeline
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						v |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					m.NilBatchCnt = append(m.NilBatchCnt, v)
+				}
+			} else {
+				return fmt.Errorf("proto: wrong wireType = %d for field NilBatchCnt", wireType)
+			}
+		case 14:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field UuidsToRegIdx", wireType)
 			}
@@ -25714,44 +28221,6 @@ func (m *Pipeline) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 14:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field BuildIdx", wireType)
-			}
-			m.BuildIdx = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.BuildIdx |= int32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 15:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ShuffleCnt", wireType)
-			}
-			m.ShuffleCnt = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.ShuffleCnt |= int32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])

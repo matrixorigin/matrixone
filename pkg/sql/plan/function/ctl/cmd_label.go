@@ -140,11 +140,13 @@ func parseCNLabel(param string) (cnLabel, error) {
 	return p.parseLabel(), nil
 }
 
-func handleSetLabel(proc *process.Process,
+func handleSetLabel(
+	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (Result, error) {
-	cluster := clusterservice.GetMOCluster()
+	sender requestSender,
+) (Result, error) {
+	cluster := clusterservice.GetMOCluster(proc.GetService())
 	c, err := parseCNLabel(parameter)
 	if err != nil {
 		return Result{}, err
@@ -168,11 +170,13 @@ func parseCNWorkState(param string) (cnWorkState, error) {
 	return p.parseWorkState(), nil
 }
 
-func handleSetWorkState(proc *process.Process,
+func handleSetWorkState(
+	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (Result, error) {
-	cluster := clusterservice.GetMOCluster()
+	sender requestSender,
+) (Result, error) {
+	cluster := clusterservice.GetMOCluster(proc.GetService())
 	c, err := parseCNWorkState(parameter)
 	if err != nil {
 		return Result{}, err
@@ -190,9 +194,10 @@ func handleSyncCommit(
 	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (Result, error) {
+	sender requestSender,
+) (Result, error) {
 	qt := proc.GetQueryClient()
-	mc := clusterservice.GetMOCluster()
+	mc := clusterservice.GetMOCluster(proc.GetService())
 	var addrs []string
 	mc.GetCNService(
 		clusterservice.NewSelector(),

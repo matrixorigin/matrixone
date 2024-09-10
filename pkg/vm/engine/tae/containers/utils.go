@@ -81,53 +81,53 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 
 	switch col.GetType().Oid {
 	case types.T_bool:
-		return movec.GetFixedAt[bool](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[bool](col, int(row))
 	case types.T_bit:
-		return movec.GetFixedAt[uint64](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[uint64](col, int(row))
 	case types.T_int8:
-		return movec.GetFixedAt[int8](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[int8](col, int(row))
 	case types.T_int16:
-		return movec.GetFixedAt[int16](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[int16](col, int(row))
 	case types.T_int32:
-		return movec.GetFixedAt[int32](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[int32](col, int(row))
 	case types.T_int64:
-		return movec.GetFixedAt[int64](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[int64](col, int(row))
 	case types.T_uint8:
-		return movec.GetFixedAt[uint8](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[uint8](col, int(row))
 	case types.T_uint16:
-		return movec.GetFixedAt[uint16](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[uint16](col, int(row))
 	case types.T_uint32:
-		return movec.GetFixedAt[uint32](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[uint32](col, int(row))
 	case types.T_uint64:
-		return movec.GetFixedAt[uint64](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[uint64](col, int(row))
 	case types.T_decimal64:
-		return movec.GetFixedAt[types.Decimal64](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Decimal64](col, int(row))
 	case types.T_decimal128:
-		return movec.GetFixedAt[types.Decimal128](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Decimal128](col, int(row))
 	case types.T_uuid:
-		return movec.GetFixedAt[types.Uuid](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Uuid](col, int(row))
 	case types.T_float32:
-		return movec.GetFixedAt[float32](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[float32](col, int(row))
 	case types.T_float64:
-		return movec.GetFixedAt[float64](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[float64](col, int(row))
 	case types.T_date:
-		return movec.GetFixedAt[types.Date](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Date](col, int(row))
 	case types.T_time:
-		return movec.GetFixedAt[types.Time](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Time](col, int(row))
 	case types.T_datetime:
-		return movec.GetFixedAt[types.Datetime](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Datetime](col, int(row))
 	case types.T_timestamp:
-		return movec.GetFixedAt[types.Timestamp](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
 	case types.T_enum:
-		return movec.GetFixedAt[types.Enum](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
 	case types.T_TS:
-		return movec.GetFixedAt[types.TS](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.TS](col, int(row))
 	case types.T_Rowid:
-		return movec.GetFixedAt[types.Rowid](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Rowid](col, int(row))
 	case types.T_Blockid:
-		return movec.GetFixedAt[types.Blockid](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return col.GetBytesAt(int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
@@ -143,7 +143,7 @@ func GenericUpdateFixedValue[T types.FixedSizeT](
 	if isNull {
 		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
-		err := movec.SetFixedAt(vec, int(row), v.(T))
+		err := movec.SetFixedAtNoTypeCheck(vec, int(row), v.(T))
 		if err != nil {
 			panic(err)
 		}
@@ -219,10 +219,10 @@ func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool, mp *mpool.
 		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull, mp)
 	case types.T_varchar, types.T_char, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		GenericUpdateBytes(col, row, val, isNull, mp)
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.GetType()))
+		panic(moerr.NewInternalErrorNoCtxf("%v not supported", col.GetType()))
 	}
 }
 
@@ -307,6 +307,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -321,6 +322,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -333,6 +335,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -345,6 +348,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -357,6 +361,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -369,6 +374,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -381,6 +387,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -393,6 +400,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -405,6 +413,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -417,6 +426,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -429,6 +439,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -441,6 +452,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -453,6 +465,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -465,6 +478,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -477,6 +491,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -489,6 +504,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -501,6 +517,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -513,6 +530,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -525,6 +543,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -537,6 +556,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -549,6 +569,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -561,6 +582,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -573,6 +595,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -585,6 +608,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -597,6 +621,7 @@ func ForeachVectorWindow(
 			col,
 			start,
 			length,
+			false,
 			op,
 			op2,
 			sel)
@@ -613,7 +638,7 @@ func ForeachWindowBytes(
 ) (err error) {
 	typ := vec.GetType()
 	if typ.IsVarlen() {
-		return ForeachWindowVarlen(vec, start, length, op, nil, sels)
+		return ForeachWindowVarlen(vec, start, length, false, op, nil, sels)
 	}
 	tsize := typ.TypeSize()
 	data := vec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
@@ -646,6 +671,7 @@ func ForeachWindowBytes(
 func ForeachWindowFixed[T any](
 	vec *movec.Vector,
 	start, length int,
+	reverse bool,
 	op ItOpT[T],
 	opAny ItOp,
 	sels *nulls.Bitmap,
@@ -656,39 +682,58 @@ func ForeachWindowFixed[T any](
 		if vec.IsConstNull() {
 			isnull = true
 		} else {
-			v = movec.GetFixedAt[T](vec, 0)
+			v = movec.GetFixedAtNoTypeCheck[T](vec, 0)
 		}
 		if sels.IsEmpty() {
-			for i := 0; i < length; i++ {
-				if op != nil {
-					if err = op(v, isnull, i+start); err != nil {
-						break
+			if reverse {
+				for i := length - 1; i >= 0; i-- {
+					if op != nil {
+						if err = op(v, isnull, i+start); err != nil {
+							break
+						}
+					}
+					if opAny != nil {
+						if err = opAny(v, isnull, i+start); err != nil {
+							break
+						}
 					}
 				}
-				if opAny != nil {
-					if err = opAny(v, isnull, i+start); err != nil {
-						break
+			} else {
+				for i := 0; i < length; i++ {
+					if op != nil {
+						if err = op(v, isnull, i+start); err != nil {
+							break
+						}
+					}
+					if opAny != nil {
+						if err = opAny(v, isnull, i+start); err != nil {
+							break
+						}
 					}
 				}
 			}
 		} else {
 			end := start + length
 			it := sels.GetBitmap().Iterator()
-			for it.HasNext() {
-				idx := uint32(it.Next())
-				if int(idx) < start {
-					continue
-				} else if int(idx) >= end {
-					break
-				}
-				if op != nil {
-					if err = op(v, isnull, int(idx)); err != nil {
+			if reverse {
+				panic("not support") // TODO
+			} else {
+				for it.HasNext() {
+					idx := uint32(it.Next())
+					if int(idx) < start {
+						continue
+					} else if int(idx) >= end {
 						break
 					}
-				}
-				if opAny != nil {
-					if err = opAny(v, isnull, int(idx)); err != nil {
-						break
+					if op != nil {
+						if err = op(v, isnull, int(idx)); err != nil {
+							break
+						}
+					}
+					if opAny != nil {
+						if err = opAny(v, isnull, int(idx)); err != nil {
+							break
+						}
 					}
 				}
 			}
@@ -696,23 +741,41 @@ func ForeachWindowFixed[T any](
 
 		return
 	}
-	slice := movec.MustFixedCol[T](vec)[start : start+length]
+	slice := movec.MustFixedColWithTypeCheck[T](vec)[start : start+length]
 	if sels.IsEmpty() {
-		for i, v := range slice {
-			if op != nil {
-				if err = op(v, vec.IsNull(uint64(i+start)), i+start); err != nil {
-					break
+		if reverse {
+			for i := len(slice) - 1; i >= 0; i-- {
+				if op != nil {
+					if err = op(slice[i], vec.IsNull(uint64(i+start)), i+start); err != nil {
+						break
+					}
+				}
+				if opAny != nil {
+					if err = opAny(slice[i], vec.IsNull(uint64(i+start)), i+start); err != nil {
+						break
+					}
 				}
 			}
-			if opAny != nil {
-				if err = opAny(v, vec.IsNull(uint64(i+start)), i+start); err != nil {
-					break
+		} else {
+			for i, v := range slice {
+				if op != nil {
+					if err = op(v, vec.IsNull(uint64(i+start)), i+start); err != nil {
+						break
+					}
+				}
+				if opAny != nil {
+					if err = opAny(v, vec.IsNull(uint64(i+start)), i+start); err != nil {
+						break
+					}
 				}
 			}
 		}
 	} else {
 		end := start + length
 		it := sels.GetBitmap().Iterator()
+		if reverse {
+			panic("not support") //TODO
+		}
 		for it.HasNext() {
 			idx := uint32(it.Next())
 			if int(idx) < start {
@@ -739,6 +802,7 @@ func ForeachWindowFixed[T any](
 func ForeachWindowVarlen(
 	vec *movec.Vector,
 	start, length int,
+	reverse bool,
 	op ItOpT[[]byte],
 	opAny ItOp,
 	sels *nulls.Bitmap,
@@ -751,15 +815,30 @@ func ForeachWindowVarlen(
 		} else {
 			v = vec.GetBytesAt(0)
 		}
-		for i := 0; i < length; i++ {
-			if op != nil {
-				if err = op(v, isnull, i+start); err != nil {
-					break
+		if reverse {
+			for i := length - 1; i >= 0; i-- {
+				if op != nil {
+					if err = op(v, isnull, i+start); err != nil {
+						break
+					}
+				}
+				if opAny != nil {
+					if err = opAny(v, isnull, i+start); err != nil {
+						break
+					}
 				}
 			}
-			if opAny != nil {
-				if err = opAny(v, isnull, i+start); err != nil {
-					break
+		} else {
+			for i := 0; i < length; i++ {
+				if op != nil {
+					if err = op(v, isnull, i+start); err != nil {
+						break
+					}
+				}
+				if opAny != nil {
+					if err = opAny(v, isnull, i+start); err != nil {
+						break
+					}
 				}
 			}
 		}
@@ -768,24 +847,47 @@ func ForeachWindowVarlen(
 	slice, area := movec.MustVarlenaRawData(vec)
 	slice = slice[start : start+length]
 	if sels.IsEmpty() {
-		for i := range slice {
-			var val []byte
-			isNull := vec.IsNull(uint64(i + start))
-			if !isNull {
-				val = slice[i].GetByteSlice(area)
-			}
-			if op != nil {
-				if err = op(val, isNull, i+start); err != nil {
-					break
+		if reverse {
+			for i := len(slice) - 1; i >= 0; i-- {
+				var val []byte
+				isNull := vec.IsNull(uint64(i + start))
+				if !isNull {
+					val = slice[i].GetByteSlice(area)
+				}
+				if op != nil {
+					if err = op(val, isNull, i+start); err != nil {
+						break
+					}
+				}
+				if opAny != nil {
+					if err = opAny(val, isNull, i+start); err != nil {
+						break
+					}
 				}
 			}
-			if opAny != nil {
-				if err = opAny(val, isNull, i+start); err != nil {
-					break
+		} else {
+			for i, v := range slice {
+				var val []byte
+				isNull := vec.IsNull(uint64(i + start))
+				if !isNull {
+					val = v.GetByteSlice(area)
+				}
+				if op != nil {
+					if err = op(val, isNull, i+start); err != nil {
+						break
+					}
+				}
+				if opAny != nil {
+					if err = opAny(val, isNull, i+start); err != nil {
+						break
+					}
 				}
 			}
 		}
 	} else {
+		if reverse {
+			panic("todo")
+		}
 		end := start + length
 		it := sels.GetBitmap().Iterator()
 		for it.HasNext() {

@@ -24,159 +24,166 @@ type MergeInterface interface {
 }
 
 type heapElem[T any] struct {
-	data     *T
+	data     T
 	isNull   bool
 	batIndex int
 	rowIndex int
 }
 
-// we will sort by primary key or
+// Merge we will sort by primary key or
 // clusterby key, so we just need one
 // vector of every batch.
 type Merge[T any] struct {
 	// the number of bacthes
-	size uint64
+	size int
 	// convert the vecotrs which need to sort
 	// into cols data
 	cols [][]T
 	// pointer is used to specify
-	// which postion we have gotten.
-	// for example, pointers[i] means
-	// we are now at the i-th row for
+	// which position we have gotten.
+	// for example, rowIdx[i] means
+	// we are now at the rowIdx[i]-th row for
 	// cols[i]
-	pointers []int
+	rowIdx []int
 
 	nulls []*nulls.Nulls
 
-	heaps *mergeHeap[T]
+	heap *heapSlice[T]
 }
 
-func newMerge[T any](size int, compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) (merge *Merge[T]) {
-	merge = &Merge[T]{
-		size:     uint64(size),
-		cols:     cols,
-		pointers: make([]int, size),
-		nulls:    nulls,
+func newMerge[T any](compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) *Merge[T] {
+	m := &Merge[T]{
+		size:   len(cols),
+		cols:   cols,
+		rowIdx: make([]int, len(cols)),
+		nulls:  nulls,
+		heap:   newHeapSlice(len(cols), compLess),
 	}
-	merge.heaps = newMergeHeap(uint64(size), compLess)
-	merge.initHeap()
-	return
+	m.initHeap()
+	return m
 }
 
-func (merge *Merge[T]) initHeap() {
-	for i := 0; i < int(merge.size); i++ {
-		if len(merge.cols[i]) == 0 {
-			merge.pointers[i] = -1
-			merge.size--
+func (m *Merge[T]) initHeap() {
+	for i := 0; i < len(m.cols); i++ {
+		if len(m.cols[i]) == 0 {
+			m.rowIdx[i] = -1
+			m.size--
 			continue
 		}
-		merge.heaps.push(&heapElem[T]{
-			data:     &merge.cols[i][merge.pointers[i]],
-			isNull:   merge.nulls[i].Contains(uint64(merge.pointers[i])),
+		heapPush(m.heap, heapElem[T]{
+			data:     m.cols[i][m.rowIdx[i]],
+			isNull:   m.nulls[i].Contains(uint64(m.rowIdx[i])),
 			batIndex: i,
-			rowIndex: merge.pointers[i],
+			rowIndex: m.rowIdx[i],
 		})
-		if merge.pointers[i] >= len(merge.cols[i]) {
-			merge.pointers[i] = -1
-			merge.size--
+		if m.rowIdx[i] >= len(m.cols[i]) {
+			m.rowIdx[i] = -1
+			m.size--
 		}
 	}
 }
 
-func (merge *Merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
-	data := merge.pushNext()
+func (m *Merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
+	data := m.pushNext()
 	if data == nil {
-		// now, merge.size is 0
-		return -1, -1, int(merge.size)
+		// now, m.size is 0
+		return -1, -1, m.size
 	}
-	return data.batIndex, data.rowIndex, int(merge.size)
+	return data.batIndex, data.rowIndex, m.size
 }
 
-func (merge *Merge[T]) pushNext() *heapElem[T] {
-	if merge.size == 0 {
+func (m *Merge[T]) pushNext() *heapElem[T] {
+	if m.size == 0 {
 		return nil
 	}
-	data := merge.heaps.pop()
+	data := heapPop(m.heap)
 	batchIndex := data.batIndex
-	merge.pointers[batchIndex]++
-	if merge.pointers[batchIndex] >= len(merge.cols[batchIndex]) {
-		merge.pointers[batchIndex] = -1
-		merge.size--
+	m.rowIdx[batchIndex]++
+	if m.rowIdx[batchIndex] >= len(m.cols[batchIndex]) {
+		m.rowIdx[batchIndex] = -1
+		m.size--
 	}
-	if merge.pointers[batchIndex] != -1 {
-		merge.heaps.push(&heapElem[T]{
-			data:     &merge.cols[batchIndex][merge.pointers[batchIndex]],
-			isNull:   merge.nulls[batchIndex].Contains(uint64(merge.pointers[batchIndex])),
+	if m.rowIdx[batchIndex] != -1 {
+		heapPush(m.heap, heapElem[T]{
+			data:     m.cols[batchIndex][m.rowIdx[batchIndex]],
+			isNull:   m.nulls[batchIndex].Contains(uint64(m.rowIdx[batchIndex])),
 			batIndex: batchIndex,
-			rowIndex: merge.pointers[batchIndex],
+			rowIndex: m.rowIdx[batchIndex],
 		})
 	}
-	return data
+	return &data
 }
 
-// mergeHeap will take null first rule
-type mergeHeap[T any] struct {
-	cmpLess sort.LessFunc[T]
-	datas   []*heapElem[T]
-	size    uint64
+type heapSlice[T any] struct {
+	lessFunc sort.LessFunc[T]
+	s        []heapElem[T]
 }
 
-func newMergeHeap[T any](cap_size uint64, cmp sort.LessFunc[T]) *mergeHeap[T] {
-	return &mergeHeap[T]{
-		cmpLess: cmp,
-		datas:   make([]*heapElem[T], cap_size+1),
-		size:    0,
+func newHeapSlice[T any](n int, lessFunc sort.LessFunc[T]) *heapSlice[T] {
+	return &heapSlice[T]{
+		lessFunc: lessFunc,
+		s:        make([]heapElem[T], 0, n),
 	}
 }
 
-func (heap *mergeHeap[T]) push(data *heapElem[T]) {
-	heap.datas[heap.size+1] = data
-	heap.size++
-	heap.up(int(heap.size))
+// Push pushes the element x onto the heap.
+// The complexity is Operator(log n) where n = len(h).
+func heapPush[T any](h *heapSlice[T], x heapElem[T]) {
+	h.s = append(h.s, x)
+	up(h, len(h.s)-1)
 }
 
-func (heap *mergeHeap[T]) pop() (data *heapElem[T]) {
-	if heap.size < 1 {
-		return nil
+// Pop removes and returns the minimum element (according to Less) from the heap.
+// The complexity is Operator(log n) where n = len(h).
+// Pop is equivalent to Remove(h, 0).
+func heapPop[T any](h *heapSlice[T]) heapElem[T] {
+	n := len(h.s) - 1
+	(h.s)[0], (h.s)[n] = (h.s)[n], (h.s)[0]
+	down(h, 0, n)
+	res := (h.s)[n]
+	h.s = (h.s)[:n]
+	return res
+}
+
+func up[T any](h *heapSlice[T], j int) {
+	for {
+		i := (j - 1) / 2 // parent
+		if i == j || !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		j = i
 	}
-	data = heap.datas[1]
-	heap.datas[1], heap.datas[heap.size] = heap.datas[heap.size], heap.datas[1]
-	heap.size--
-	heap.down(1)
-	return
 }
 
-func (heap *mergeHeap[T]) compLess(i, j int) bool {
-	if heap.datas[i].isNull {
+func down[T any](h *heapSlice[T], i0, n int) bool {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 { // j1 < 0 after int overflow
+			break
+		}
+		j := j1 // left child
+		if j2 := j1 + 1; j2 < n && h.Less(j2, j1) {
+			j = j2 // = 2*i + 2  // right child
+		}
+		if !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		i = j
+	}
+	return i > i0
+}
+
+func (x *heapSlice[T]) Less(i, j int) bool {
+	if x.s[i].isNull {
 		return true
 	}
-	if heap.datas[j].isNull {
+	if x.s[j].isNull {
 		return false
 	}
-	return heap.cmpLess(*heap.datas[i].data, *heap.datas[j].data)
+	return x.lessFunc(x.s[i].data, x.s[j].data)
 }
-
-func (heap *mergeHeap[T]) down(i int) {
-	t := i
-	if i*2 <= int(heap.size) && heap.compLess(i*2, t) {
-		t = i * 2
-	}
-	if i*2+1 <= int(heap.size) && heap.compLess(i*2+1, t) {
-		t = i*2 + 1
-	}
-	if t != i {
-		heap.datas[t], heap.datas[i] = heap.datas[i], heap.datas[t]
-		heap.down(t)
-	}
-}
-
-func (heap *mergeHeap[T]) up(i int) {
-	t := i
-	if i/2 >= 1 && heap.compLess(t, i/2) {
-		t = i / 2
-	}
-	if t != i {
-		heap.datas[t], heap.datas[i] = heap.datas[i], heap.datas[t]
-		heap.up(t)
-	}
-}
+func (x *heapSlice[T]) Swap(i, j int) { x.s[i], x.s[j] = x.s[j], x.s[i] }
+func (x *heapSlice[T]) Len() int      { return len(x.s) }

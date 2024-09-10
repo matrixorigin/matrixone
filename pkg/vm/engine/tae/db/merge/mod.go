@@ -91,7 +91,7 @@ type activeEntry struct {
 	insertAt time.Time
 }
 
-var ActiveCNObj ActiveCNObjMap = ActiveCNObjMap{
+var ActiveCNObj = ActiveCNObjMap{
 	o: make(map[objectio.ObjectId]activeEntry),
 }
 
@@ -177,9 +177,8 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if len(entry.BookingLoc) != 0 {
-		loc := objectio.Location(entry.BookingLoc)
-		_ = fs.Delete(ctx, loc.Name().String())
+	for _, filepath := range entry.BookingLoc {
+		_ = fs.Delete(ctx, filepath)
 	}
 	if len(entry.CreatedObjs) != 0 {
 		for _, obj := range entry.CreatedObjs {
@@ -193,14 +192,12 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 }
 
 const (
-	constMergeMinBlks       = 5
-	constMergeExpansionRate = 6
-	constMaxMemCap          = 4 * constMergeExpansionRate * common.Const1GBytes // max orginal memory for a object
-	constSmallMergeGap      = 3 * time.Minute
+	constMaxMemCap     = 12 * common.Const1GBytes // max original memory for an object
+	constSmallMergeGap = 3 * time.Minute
 )
 
 type Policy interface {
-	OnObject(obj *catalog.ObjectEntry, force bool)
+	OnObject(obj *catalog.ObjectEntry)
 	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
 	ResetForTable(*catalog.TableEntry)
 	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
@@ -212,10 +209,10 @@ func NewUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
 		Kind: api.AlterKind_UpdatePolicy,
 		Operation: &api.AlterTableReq_UpdatePolicy{
 			UpdatePolicy: &api.AlterTablePolicy{
-				MinOsizeQuailifed: uint32(c.ObjectMinOsize),
+				MinOsizeQuailifed: c.ObjectMinOsize,
 				MaxObjOnerun:      uint32(c.MergeMaxOneRun),
-				MaxOsizeMergedObj: uint32(c.MaxOsizeMergedObj),
-				MinCnMergeSize:    uint64(c.MinCNMergeSize),
+				MaxOsizeMergedObj: c.MaxOsizeMergedObj,
+				MinCnMergeSize:    c.MinCNMergeSize,
 				Hints:             c.MergeHints,
 			},
 		},

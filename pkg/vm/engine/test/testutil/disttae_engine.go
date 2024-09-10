@@ -16,12 +16,17 @@ package testutil
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -36,49 +41,74 @@ import (
 	logservice2 "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type TestDisttaeEngine struct {
-	Engine          *disttae.Engine
-	logtailReceiver chan morpc.Message
-	broken          chan struct{}
-	wg              sync.WaitGroup
-	ctx             context.Context
-	cancel          context.CancelFunc
-	txnClient       client.TxnClient
-	txnOperator     client.TxnOperator
-	timestampWaiter client.TimestampWaiter
+	Engine              *disttae.Engine
+	logtailReceiver     chan morpc.Message
+	broken              chan struct{}
+	wg                  sync.WaitGroup
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	txnClient           client.TxnClient
+	txnOperator         client.TxnOperator
+	timestampWaiter     client.TimestampWaiter
+	mp                  *mpool.MPool
+	workspaceThreshold  uint64
+	insertEntryMaxCount int
 }
 
-func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
-	fs fileservice.FileService, rpcAgent *MockRPCAgent, storage *TestTxnStorage) (*TestDisttaeEngine, error) {
+func NewTestDisttaeEngine(
+	ctx context.Context,
+	fs fileservice.FileService,
+	rpcAgent *MockRPCAgent,
+	storage *TestTxnStorage,
+	options ...TestDisttaeEngineOptions,
+) (*TestDisttaeEngine, error) {
 	de := new(TestDisttaeEngine)
-
 	de.logtailReceiver = make(chan morpc.Message)
 	de.broken = make(chan struct{})
+	for _, opt := range options {
+		opt(de)
+	}
+
+	if de.mp == nil {
+		de.mp, _ = mpool.NewMPool("test", 0, mpool.NoFixed)
+	}
+	mp := de.mp
 
 	de.ctx, de.cancel = context.WithCancel(ctx)
 
 	initRuntime()
 
 	wait := make(chan struct{})
-	de.timestampWaiter = client.NewTimestampWaiter()
+	de.timestampWaiter = client.NewTimestampWaiter(runtime.GetLogger(""))
 
 	txnSender := service.NewTestSender(storage)
-	de.txnClient = client.NewTxnClient(txnSender, client.WithTimestampWaiter(de.timestampWaiter))
+	de.txnClient = client.NewTxnClient("", txnSender, client.WithTimestampWaiter(de.timestampWaiter))
 
 	de.txnClient.Resume()
 
 	hakeeper := newTestHAKeeperClient()
 	colexec.NewServer(hakeeper)
 
-	de.Engine = disttae.New(ctx, mp, fs, de.txnClient, hakeeper, nil, 0)
+	var engineOpts []disttae.EngineOptions
+	if de.insertEntryMaxCount != 0 {
+		engineOpts = append(engineOpts, disttae.WithInsertEntryMaxCount(de.insertEntryMaxCount))
+	}
+	if de.workspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithWorkspaceThreshold(de.workspaceThreshold))
+	}
+
+	catalog.SetupDefines("")
+	de.Engine = disttae.New(ctx, "", de.mp, fs, de.txnClient, hakeeper, nil, 1, engineOpts...)
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {
@@ -106,22 +136,40 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 		return nil, err
 	}
 
+	qc, _ := qclient.NewQueryClient("", morpc.Config{})
+	sqlExecutor := compile.NewSQLExecutor(
+		"127.0.0.1:2000",
+		de.Engine,
+		mp,
+		de.txnClient,
+		fs,
+		qc,
+		hakeeper,
+		nil, //s.udfService
+	)
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
+
+	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
 	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)
+	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
+	return de, err
+}
+
+func (de *TestDisttaeEngine) NewTxnOperator(
+	ctx context.Context,
+	commitTS timestamp.Timestamp,
+	opts ...client.TxnOption,
+) (client.TxnOperator, error) {
+	op, err := de.txnClient.New(ctx, commitTS, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
-
-	return de, err
-}
-
-func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
-	commitTS timestamp.Timestamp, opts ...client.TxnOption) (client.TxnOperator, error) {
-	op, err := de.txnClient.New(ctx, commitTS, opts...)
-
-	op.AddWorkspace(de.txnOperator.GetWorkspace())
-	de.txnOperator.GetWorkspace().BindTxnOp(op)
+	ws := de.txnOperator.GetWorkspace().CloneSnapshotWS()
+	ws.BindTxnOp(op)
+	ws.(*disttae.Transaction).GetProc().GetTxnOperator().UpdateSnapshot(ctx, commitTS)
+	ws.(*disttae.Transaction).GetProc().GetTxnOperator().AddWorkspace(ws)
+	op.AddWorkspace(ws)
 
 	return op, err
 }
@@ -129,7 +177,7 @@ func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
 func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 	ts := de.Now()
 	ticker := time.NewTicker(time.Second)
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*60)
 	defer cancel()
 
 	done := false
@@ -139,9 +187,12 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 			return moerr.NewInternalErrorNoCtx("wait partition state waterline timeout")
 		case <-ticker.C:
 			latestAppliedTS := de.Engine.PushClient().LatestLogtailAppliedTime()
-			if latestAppliedTS.GreaterEq(ts) && de.Engine.PushClient().IsSubscriberReady() {
+			ready := de.Engine.PushClient().IsSubscriberReady()
+			if latestAppliedTS.GreaterEq(ts) && ready {
 				done = true
 			}
+			logutil.Infof("wait logtail, latestAppliedTS: %s, targetTS: %s, done: %v, subscriberReady: %v\n",
+				latestAppliedTS.ToStdTime().String(), ts.ToStdTime().String(), done, ready)
 		}
 	}
 
@@ -151,7 +202,7 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (err error) {
 
-	iter, err := state.NewObjectsIter(ts, false)
+	iter, err := state.NewObjectsIter(ts, false, false)
 	if err != nil {
 		return err
 	}
@@ -174,8 +225,11 @@ func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionSt
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionState,
-	stats *PartitionStateStats, ts types.TS) (err error) {
+func (de *TestDisttaeEngine) analyzeInmemRows(
+	state *logtailreplay.PartitionState,
+	stats *PartitionStateStats,
+	ts types.TS,
+) (err error) {
 
 	distinct := make(map[objectio.Blockid]struct{})
 	iter := state.NewRowsIter(ts, nil, false)
@@ -200,8 +254,11 @@ func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionStat
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeCheckpoint(state *logtailreplay.PartitionState,
-	stats *PartitionStateStats, ts types.TS) (err error) {
+func (de *TestDisttaeEngine) analyzeCheckpoint(
+	state *logtailreplay.PartitionState,
+	stats *PartitionStateStats,
+	ts types.TS,
+) (err error) {
 
 	ckps := state.Checkpoints()
 	for x := range ckps {
@@ -216,47 +273,38 @@ func (de *TestDisttaeEngine) analyzeCheckpoint(state *logtailreplay.PartitionSta
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionState,
-	stats *PartitionStateStats, ts types.TS) (outErr error) {
+func (de *TestDisttaeEngine) analyzeTombstone(
+	state *logtailreplay.PartitionState,
+	stats *PartitionStateStats,
+	ts types.TS,
+) (outErr error) {
 
-	iter, err := state.NewObjectsIter(ts, true)
+	iter, err := state.NewObjectsIter(ts, false, true)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	for iter.Next() {
-		disttae.ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-			loc, _, ok := state.GetBockDeltaLoc(blk.BlockID)
-			if ok {
-				bat, _, release, err := blockio.ReadBlockDelete(context.Background(), loc[:], de.Engine.FS())
-				if err != nil {
-					outErr = err
-					return false
-				}
-				stats.DeltaLocationRowsCnt += bat.RowCount()
-				stats.Details.DeletedRows = append(stats.Details.DeletedRows, bat)
-
-				release()
-			}
-			return true
-		}, iter.Entry().ObjectStats)
-
-		if outErr != nil {
-			return
+		item := iter.Entry()
+		if item.Visible(ts) {
+			stats.TombstoneObjectsVisible.ObjCnt += 1
+			stats.TombstoneObjectsVisible.BlkCnt += int(item.BlkCnt())
+			stats.TombstoneObjectsVisible.RowCnt += int(item.Rows())
+			stats.Details.TombstoneObjectList.Visible = append(stats.Details.TombstoneObjectList.Visible, item)
+		} else {
+			stats.TombstoneObjectsInvisible.ObjCnt += 1
+			stats.TombstoneObjectsInvisible.BlkCnt += int(item.BlkCnt())
+			stats.TombstoneObjectsInvisible.RowCnt += int(item.Rows())
+			stats.Details.TombstoneObjectList.Invisible = append(stats.Details.TombstoneObjectList.Invisible, item)
 		}
-	}
-
-	stats.Details.DirtyBlocks = make(map[types.Blockid]struct{})
-	iter2 := state.NewDirtyBlocksIter()
-	for iter2.Next() {
-		item := iter2.Entry()
-		stats.Details.DirtyBlocks[item] = struct{}{}
 	}
 
 	return
 }
 
-func (de *TestDisttaeEngine) SubscribeTable(ctx context.Context, dbID, tbID uint64, setSubscribed bool) (err error) {
+func (de *TestDisttaeEngine) SubscribeTable(
+	ctx context.Context, dbID, tbID uint64, setSubscribed bool,
+) (err error) {
 	ticker := time.NewTicker(time.Second)
 	timeout := 5
 
@@ -283,7 +331,9 @@ func (de *TestDisttaeEngine) SubscribeTable(ctx context.Context, dbID, tbID uint
 	return
 }
 
-func (de *TestDisttaeEngine) GetPartitionStateStats(ctx context.Context, databaseId, tableId uint64) (
+func (de *TestDisttaeEngine) GetPartitionStateStats(
+	ctx context.Context, databaseId, tableId uint64,
+) (
 	stats PartitionStateStats, err error) {
 
 	if err = de.waitLogtail(ctx); err != nil {
@@ -335,10 +385,78 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 	de.wg.Wait()
 }
 
+func (de *TestDisttaeEngine) GetTable(
+	ctx context.Context,
+	databaseName, tableName string,
+) (
+	database engine.Database,
+	relation engine.Relation,
+	txn client.TxnOperator,
+	err error,
+) {
+
+	if txn, err = de.NewTxnOperator(ctx, de.Now()); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if database, err = de.Engine.Database(ctx, databaseName, txn); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if relation, err = database.Relation(ctx, tableName, nil); err != nil {
+		return nil, nil, nil, err
+	}
+
+	return
+}
+
+func (de *TestDisttaeEngine) CreateDatabaseAndTable(
+	ctx context.Context,
+	databaseName, tableName string,
+	schema *catalog2.Schema,
+) (
+	database engine.Database,
+	table engine.Relation,
+	err error,
+) {
+
+	var txn client.TxnOperator
+
+	if txn, err = de.NewTxnOperator(ctx, de.Now()); err != nil {
+		return nil, nil, err
+	}
+
+	if err = de.Engine.Create(ctx, databaseName, txn); err != nil {
+		return nil, nil, err
+	}
+
+	if database, err = de.Engine.Database(ctx, databaseName, txn); err != nil {
+		return nil, nil, err
+	}
+
+	var engineTblDef []engine.TableDef
+	if engineTblDef, err = EngineTableDefBySchema(schema); err != nil {
+		return nil, nil, err
+	}
+
+	if err = database.Create(ctx, tableName, engineTblDef); err != nil {
+		return nil, nil, err
+	}
+
+	if table, err = database.Relation(ctx, tableName, nil); err != nil {
+		return nil, nil, err
+	}
+
+	if err = txn.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+
+	return
+}
+
 func initRuntime() {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, new(mockMOCluster))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, new(mockLockService))
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, new(mockMOCluster))
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.LockService, new(mockLockService))
 }
 
 var _ clusterservice.MOCluster = new(mockMOCluster)

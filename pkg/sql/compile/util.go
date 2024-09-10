@@ -70,12 +70,14 @@ var (
 )
 
 var (
-	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
-	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
-	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
-	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
-	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
-	updateMoIndexesAlgoParams                    = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
+	deleteMoIndexesWithDatabaseIdFormat                 = `delete from mo_catalog.mo_indexes where database_id = %v;`
+	deleteMoIndexesWithTableIdFormat                    = `delete from mo_catalog.mo_indexes where table_id = %v;`
+	deleteMoIndexesWithTableIdAndIndexNameFormat        = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
+	deleteMoRetentionWithDatabaseNameFormat             = `delete from mo_catalog.mo_retention where database_name = '%s';`
+	deleteMoRetentionWithDatabaseNameAndTableNameFormat = `delete from mo_catalog.mo_retention where database_name = '%s' and table_name = '%s';`
+	updateMoIndexesVisibleFormat                        = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
+	updateMoIndexesTruncateTableFormat                  = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
+	updateMoIndexesAlgoParams                           = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
 )
 
 var (
@@ -247,23 +249,30 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 }
 
 // genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
-func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, ct *engine.ConstraintDef) (string, error) {
+func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, ct *engine.ConstraintDef, tableDef *plan.TableDef) (string, error) {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
 	buffer.WriteString("insert into mo_catalog.mo_indexes values")
+
+	getOriginName := func(name string) string {
+		if idx, ok := tableDef.Name2ColIndex[name]; ok {
+			return tableDef.Cols[idx].OriginName
+		}
+		return name
+	}
 
 	isFirst := true
 	for _, constraint := range ct.Cts {
 		switch def := constraint.(type) {
 		case *engine.IndexDef:
-			for _, indexdef := range def.Indexes {
+			for _, indexDef := range def.Indexes {
 				ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
-				index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+				indexId, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 				cancelFunc()
 				if err != nil {
 					return "", err
 				}
 
-				for i, part := range indexdef.Parts {
+				for i, part := range indexDef.Parts {
 					// NOTE: Don't resolve the alias here.
 					// If we resolve it here, it will insert "OriginalPKColumnName" into the "mo_catalog.mo_indexes" table instead of
 					// "AliasPKColumnName". This will result is issues filter "Programmatically added PK" from the output of
@@ -271,10 +280,10 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 
 					//1. index id
 					if isFirst {
-						fmt.Fprintf(buffer, "(%d, ", index_id)
+						fmt.Fprintf(buffer, "(%d, ", indexId)
 						isFirst = false
 					} else {
-						fmt.Fprintf(buffer, ", (%d, ", index_id)
+						fmt.Fprintf(buffer, ", (%d, ", indexId)
 					}
 
 					//2. table_id
@@ -284,11 +293,11 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", databaseId)
 
 					// 4.index.IndexName
-					fmt.Fprintf(buffer, "'%s', ", indexdef.IndexName)
+					fmt.Fprintf(buffer, "'%s', ", indexDef.IndexName)
 
 					// 5. index_type
 					var index_type string
-					if indexdef.Unique {
+					if indexDef.Unique {
 						index_type = INDEX_TYPE_UNIQUE
 					} else {
 						index_type = INDEX_TYPE_MULTIPLE
@@ -296,15 +305,15 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "'%s', ", index_type)
 
 					//6. algorithm
-					var algorithm = indexdef.IndexAlgo
+					var algorithm = indexDef.IndexAlgo
 					fmt.Fprintf(buffer, "'%s', ", algorithm)
 
 					//7. algorithm_table_type
-					var algorithm_table_type = indexdef.IndexAlgoTableType
+					var algorithm_table_type = indexDef.IndexAlgoTableType
 					fmt.Fprintf(buffer, "'%s', ", algorithm_table_type)
 
 					//8. algorithm_params
-					var algorithm_params = indexdef.IndexAlgoParams
+					var algorithm_params = indexDef.IndexAlgoParams
 					fmt.Fprintf(buffer, "'%s', ", algorithm_params)
 
 					// 9. index visible
@@ -314,10 +323,10 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
 
 					// 11. index vec_comment
-					fmt.Fprintf(buffer, "'%s', ", indexdef.Comment)
+					fmt.Fprintf(buffer, "'%s', ", indexDef.Comment)
 
 					// 12. index vec_column_name
-					fmt.Fprintf(buffer, "'%s', ", part)
+					fmt.Fprintf(buffer, "'%s', ", getOriginName(part))
 
 					// 13. index vec_ordinal_position
 					fmt.Fprintf(buffer, "%d, ", i+1)
@@ -326,8 +335,8 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 
 					// 15. index vec_index_table
-					if indexdef.TableExist {
-						fmt.Fprintf(buffer, "'%s')", indexdef.IndexTableName)
+					if indexDef.TableExist {
+						fmt.Fprintf(buffer, "'%s')", indexDef.IndexTableName)
 					} else {
 						fmt.Fprintf(buffer, "%s)", NULL_VALUE)
 					}
@@ -381,7 +390,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
 
 					// 12. index vec_column_name
-					fmt.Fprintf(buffer, "'%s', ", colName)
+					fmt.Fprintf(buffer, "'%s', ", getOriginName(colName))
 
 					// 13. index vec_ordinal_position
 					fmt.Fprintf(buffer, "%d, ", i+1)
@@ -400,7 +409,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 }
 
 // makeInsertSingleIndexSQL: make index metadata information sql for a single index object
-func makeInsertSingleIndexSQL(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, idxdef *plan.IndexDef) (string, error) {
+func makeInsertSingleIndexSQL(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, idxdef *plan.IndexDef, tableDef *plan.TableDef) (string, error) {
 	if idxdef == nil {
 		return "", nil
 	}
@@ -411,7 +420,7 @@ func makeInsertSingleIndexSQL(eg engine.Engine, proc *process.Process, databaseI
 			},
 		},
 	}
-	insertMoIndexesSql, err := genInsertMOIndexesSql(eg, proc, databaseId, tableId, ct)
+	insertMoIndexesSql, err := genInsertMOIndexesSql(eg, proc, databaseId, tableId, ct, tableDef)
 	if err != nil {
 		return "", err
 	}
@@ -450,6 +459,7 @@ func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *proces
 	}
 	databaseId := dbSource.GetDatabaseId(ctx)
 	tableId := relation.GetTableID(ctx)
+	tableDef := relation.GetTableDef(ctx)
 
 	ct, err := GetConstraintDef(ctx, relation)
 	if err != nil {
@@ -476,7 +486,7 @@ func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *proces
 		return "", nil
 	}
 
-	insertMoIndexesSql, err := genInsertMOIndexesSql(eg, proc, databaseId, tableId, ct)
+	insertMoIndexesSql, err := genInsertMOIndexesSql(eg, proc, databaseId, tableId, ct, tableDef)
 	if err != nil {
 		return "", err
 	}
@@ -494,20 +504,6 @@ func partsToColsStr(parts []string) string {
 		}
 	}
 	return temp
-}
-
-func haveSinkScanInPlan(nodes []*plan.Node, curNodeIdx int32) bool {
-	node := nodes[curNodeIdx]
-	if node.NodeType == plan.Node_SINK_SCAN {
-		return true
-	}
-	for _, newIdx := range node.Children {
-		flag := haveSinkScanInPlan(nodes, newIdx)
-		if flag {
-			return flag
-		}
-	}
-	return false
 }
 
 // genInsertMoTablePartitionsSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_table_partitions`

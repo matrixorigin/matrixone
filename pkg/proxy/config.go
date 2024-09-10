@@ -106,6 +106,8 @@ type Config struct {
 	// internal network. The addresses outside the range are external
 	// addresses.
 	InternalCIDRs []string `toml:"internal-cidrs"`
+	// ConnCacheEnabled indicates if the connection cache feature is enabled.
+	ConnCacheEnabled bool `toml:"conn-cache-enabled"`
 
 	// HAKeeper is the configuration of HAKeeper.
 	HAKeeper struct {
@@ -178,6 +180,13 @@ func WithTLSKeyFile(f string) Option {
 func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 	return func(s *Server) {
 		s.configData = util.NewConfigData(data)
+	}
+}
+
+// WithTest set the test field to true.
+func WithTest() Option {
+	return func(s *Server) {
+		s.test = true
 	}
 }
 

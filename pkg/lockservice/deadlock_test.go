@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
@@ -39,6 +40,7 @@ func TestCheckWithDeadlock(t *testing.T) {
 		defer close(abortC)
 
 		d := newDeadlockDetector(
+			runtime.DefaultRuntime().Logger(),
 			func(txn pb.WaitTxn, w *waiters) (bool, error) {
 				for _, v := range m[string(txn.TxnID)] {
 					if !w.add(v) {
@@ -86,6 +88,7 @@ func TestCheckWithDeadlockWith2Txn(t *testing.T) {
 		defer close(abortC)
 
 		d := newDeadlockDetector(
+			runtime.DefaultRuntime().Logger(),
 			func(txn pb.WaitTxn, w *waiters) (bool, error) {
 				for _, v := range depends[string(txn.TxnID)] {
 					if !w.add(v) {

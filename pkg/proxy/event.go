@@ -32,34 +32,49 @@ func (t eventType) String() string {
 		return "KillQuery"
 	case TypeSetVar:
 		return "SetVar"
+	case TypeQuit:
+		return "Quit"
+	case TypeUpgrade:
+		return "Upgrade"
 	}
 	return "Unknown"
 }
 
 const (
-	// TypeMin is the minimal event type.
-	TypeMin eventType = 0
 	// TypeKillQuery indicates the kill query statement.
 	TypeKillQuery eventType = 1
 	// TypeSetVar indicates the set variable statement.
 	TypeSetVar eventType = 2
+	// TypeQuit indicates the exit cmd.
+	TypeQuit eventType = 3
+	// TypeUpgrade indicates the "upgrade account all" statement.
+	TypeUpgrade eventType = 4
 )
 
 // IEvent is the event interface.
 type IEvent interface {
-	// eventType returns the type of the event.
-	eventType() eventType
+	// notify notifies the event is finished.
+	notify()
+	// wait waits until is event is finished.
+	wait()
 }
 
 // baseEvent describes the base event information which happens in tunnel data flow.
 type baseEvent struct {
 	// typ is the event type.
 	typ eventType
+	// waitC is used to control the event waiter.
+	waitC chan struct{}
 }
 
-// eventType implements the IEvent interface.
-func (e *baseEvent) eventType() eventType {
-	return TypeMin
+// notify implements the IEvent interface.
+func (e *baseEvent) notify() {
+	e.waitC <- struct{}{}
+}
+
+// wait implements the IEvent interface.
+func (e *baseEvent) wait() {
+	<-e.waitC
 }
 
 // sendReq sends an event to event channel.
@@ -95,9 +110,16 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
 			return makeSetVarEvent(sql), false
+		case *tree.UpgradeStatement:
+			return makeUpgradeEvent(sql), true
 		default:
 			return nil, false
 		}
+	} else if b.connCacheEnabled && isCmdQuit(msg) {
+		// The quit event should not be sent to server. It will be
+		// handled in the event handler. According to the config,
+		// the quit command will be sent to server or not.
+		return makeQuitEvent(), true
 	}
 	return nil, false
 }
@@ -123,10 +145,11 @@ func makeKillQueryEvent(stmt string, connID uint64) IEvent {
 	return e
 }
 
-// eventType implements the IEvent interface.
-func (e *killQueryEvent) eventType() eventType {
-	return TypeKillQuery
-}
+// notify implements the IEvent interface.
+func (e *killQueryEvent) notify() {}
+
+// wait implements the IEvent interface.
+func (e *killQueryEvent) wait() {}
 
 // setVarEvent is the event that set session variable or set user variable.
 // We need to check if the execution of this statement is successful, and
@@ -140,13 +163,42 @@ type setVarEvent struct {
 // makeSetVarEvent creates an event with TypeSetVar type.
 func makeSetVarEvent(stmt string) IEvent {
 	e := &setVarEvent{
+		baseEvent: baseEvent{
+			waitC: make(chan struct{}),
+		},
 		stmt: stmt,
 	}
 	e.typ = TypeSetVar
 	return e
 }
 
-// eventType implements the IEvent interface.
-func (e *setVarEvent) eventType() eventType {
-	return TypeSetVar
+type quitEvent struct {
+	baseEvent
+}
+
+// makeQuitEvent creates an event with TypeExit type.
+func makeQuitEvent() IEvent {
+	e := &quitEvent{
+		baseEvent: baseEvent{
+			waitC: make(chan struct{}),
+		},
+	}
+	e.typ = TypeQuit
+	return e
+}
+
+type upgradeEvent struct {
+	baseEvent
+	stmt string
+}
+
+func makeUpgradeEvent(stmt string) IEvent {
+	e := &upgradeEvent{
+		baseEvent: baseEvent{
+			waitC: make(chan struct{}),
+		},
+		stmt: stmt,
+	}
+	e.typ = TypeUpgrade
+	return e
 }

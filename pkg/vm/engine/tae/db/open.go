@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -207,7 +207,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	cleaner := gc2.NewCheckpointCleaner(opts.Ctx, fs, db.BGCheckpointRunner, opts.GCCfg.DisableGC)
+	cleaner := gc2.NewCheckpointCleaner(opts.Ctx, opts.SID, fs, db.BGCheckpointRunner, opts.GCCfg.DisableGC)
 	cleaner.SetCheckGC(opts.GCCfg.CheckGC)
 	cleaner.AddChecker(
 		func(item any) bool {
@@ -296,7 +296,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	go TaeMetricsTask(ctx)
 
 	// For debug or test
-	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
+	//fmt.Println(db.Catalog.SimplePPString(common.PPL3))
 	return
 }
 

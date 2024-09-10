@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -38,10 +39,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-const (
+var (
 	// MinUpdateInterval is the minimal interval to update stats info as it
 	// is necessary to update stats every time.
-	MinUpdateInterval = time.Second * 10
+	MinUpdateInterval = time.Second * 15
 )
 
 type updateStatsRequest struct {
@@ -52,8 +53,6 @@ type updateStatsRequest struct {
 
 	// tableDef is the main table definition.
 	tableDef *plan2.TableDef
-	// partitionsTableDef is the partitions table definition.
-	partitionsTableDef []*plan2.TableDef
 
 	partitionState  *logtailreplay.PartitionState
 	fs              fileservice.FileService
@@ -63,7 +62,6 @@ type updateStatsRequest struct {
 
 func newUpdateStatsRequest(
 	tableDef *plan2.TableDef,
-	partitionsTableDef []*plan2.TableDef,
 	partitionState *logtailreplay.PartitionState,
 	fs fileservice.FileService,
 	ts types.TS,
@@ -71,13 +69,12 @@ func newUpdateStatsRequest(
 	stats *pb.StatsInfo,
 ) *updateStatsRequest {
 	return &updateStatsRequest{
-		statsInfo:          stats,
-		tableDef:           tableDef,
-		partitionsTableDef: partitionsTableDef,
-		partitionState:     partitionState,
-		fs:                 fs,
-		ts:                 ts,
-		approxObjectNum:    approxObjectNum,
+		statsInfo:       stats,
+		tableDef:        tableDef,
+		partitionState:  partitionState,
+		fs:              fs,
+		ts:              ts,
+		approxObjectNum: approxObjectNum,
 	}
 }
 
@@ -110,6 +107,14 @@ func WithUpdateWorkerFactor(f int) GlobalStatsOption {
 	}
 }
 
+// updateRecord records the update status of a key.
+type updateRecord struct {
+	// inProgress indicates if the stats of a table is being updated.
+	inProgress bool
+	// lastUpdate is the time of the stats last updated.
+	lastUpdate time.Time
+}
+
 type GlobalStats struct {
 	ctx context.Context
 
@@ -125,7 +130,7 @@ type GlobalStats struct {
 
 	updatingMu struct {
 		sync.Mutex
-		updating map[pb.StatsInfoKey]struct{}
+		updating map[pb.StatsInfoKey]*updateRecord
 	}
 
 	logtailUpdate *logtailUpdate
@@ -168,7 +173,7 @@ func NewGlobalStats(
 		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
 	}
-	s.updatingMu.updating = make(map[pb.StatsInfoKey]struct{})
+	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	s.mu.cond = sync.NewCond(&s.mu)
 	for _, opt := range opts {
@@ -181,11 +186,20 @@ func NewGlobalStats(
 	return s
 }
 
-func (gs *GlobalStats) ShouldUpdate(key pb.StatsInfoKey, entryNum int64) bool {
+// shouldTrigger returns true only if key already exists in the map.
+func (gs *GlobalStats) shouldTrigger(key pb.StatsInfoKey) bool {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	_, ok := gs.mu.statsInfoMap[key]
+	return ok
+}
+
+// checkTriggerCond checks the condition that if we should trigger the stats update.
+func (gs *GlobalStats) checkTriggerCond(key pb.StatsInfoKey, entryNum int64) bool {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	info, ok := gs.mu.statsInfoMap[key]
-	if ok && info != nil && info.BlockNumber-entryNum > 64 {
+	if ok && info != nil && info.BlockNumber*16-entryNum > 64 {
 		return false
 	}
 	return true
@@ -296,30 +310,35 @@ func (gs *GlobalStats) updateWorker(ctx context.Context) {
 func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey, force bool) {
 	if force {
 		gs.updateC <- key
+		v2.StatsTriggerForcedCounter.Add(1)
 		return
 	}
 
 	select {
 	case gs.updateC <- key:
+		v2.StatsTriggerUnforcedCounter.Add(1)
 	default:
 	}
 }
 
 func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 	key := pb.StatsInfoKey{
+		AccId:      tail.Table.AccId,
 		DatabaseID: tail.Table.DbId,
 		TableID:    tail.Table.TbId,
 	}
 	if len(tail.CkpLocation) > 0 {
-		gs.triggerUpdate(key, false)
+		if gs.shouldTrigger(key) {
+			gs.triggerUpdate(key, false)
+		}
 	} else if tail.Table != nil {
 		var triggered bool
 		for _, cmd := range tail.Commands {
-			if logtailreplay.IsBlkTable(cmd.TableName) ||
-				logtailreplay.IsObjTable(cmd.TableName) ||
-				logtailreplay.IsMetaTable(cmd.TableName) {
+			if logtailreplay.IsMetaEntry(cmd.TableName) {
 				triggered = true
-				gs.triggerUpdate(key, false)
+				if gs.shouldTrigger(key) {
+					gs.triggerUpdate(key, false)
+				}
 				break
 			}
 		}
@@ -328,9 +347,11 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		} else {
 			gs.tableLogtailCounter[key]++
 		}
-		if !triggered && gs.ShouldUpdate(key, gs.tableLogtailCounter[key]) {
+		if !triggered && gs.checkTriggerCond(key, gs.tableLogtailCounter[key]) {
 			gs.tableLogtailCounter[key] = 0
-			gs.triggerUpdate(key, false)
+			if gs.shouldTrigger(key) {
+				gs.triggerUpdate(key, false)
+			}
 		}
 	}
 }
@@ -414,25 +435,76 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 	}
 }
 
-func (gs *GlobalStats) checkUpdating(key pb.StatsInfoKey) bool {
+// shouldUpdate returns true only the stats of the key should be updated.
+func (gs *GlobalStats) shouldUpdate(key pb.StatsInfoKey) bool {
 	gs.updatingMu.Lock()
 	defer gs.updatingMu.Unlock()
-	_, ok := gs.updatingMu.updating[key]
-	if ok {
+	rec, ok := gs.updatingMu.updating[key]
+	if !ok {
+		gs.updatingMu.updating[key] = &updateRecord{
+			inProgress: true,
+		}
 		return true
 	}
-	gs.updatingMu.updating[key] = struct{}{}
+	if rec.inProgress {
+		return false
+	}
+	if time.Since(rec.lastUpdate) > MinUpdateInterval {
+		rec.inProgress = true
+		return true
+	}
 	return false
 }
 
-func (gs *GlobalStats) removeUpdating(key pb.StatsInfoKey) {
+func (gs *GlobalStats) doneUpdate(key pb.StatsInfoKey, updated bool) {
 	gs.updatingMu.Lock()
 	defer gs.updatingMu.Unlock()
-	delete(gs.updatingMu.updating, key)
+	rec, ok := gs.updatingMu.updating[key]
+	if !ok {
+		return
+	}
+	rec.inProgress = false
+	// only if the stats is updated, set the update time.
+	if updated {
+		rec.lastUpdate = time.Now()
+	}
+}
+
+// broadcastStats send the table stats key to gossip manager.
+// when other cns needs the stats, they will send query to this
+// node to get the table stats.
+func (gs *GlobalStats) broadcastStats(key pb.StatsInfoKey) {
+	if gs.KeyRouter == nil {
+		return
+	}
+	var broadcast bool
+	func() {
+		gs.updatingMu.Lock()
+		defer gs.updatingMu.Unlock()
+		rec, ok := gs.updatingMu.updating[key]
+		if !ok {
+			return
+		}
+		broadcast = rec.lastUpdate.IsZero()
+	}()
+	if !broadcast {
+		return
+	}
+	// If it is the first time that the stats info is updated,
+	// send it to key router.
+	gs.KeyRouter.AddItem(gossip.CommonItem{
+		Operation: gossip.Operation_Set,
+		Key: &gossip.CommonItem_StatsInfoKey{
+			StatsInfoKey: &pb.StatsInfoKey{
+				DatabaseID: key.DatabaseID,
+				TableID:    key.TableID,
+			},
+		},
+	})
 }
 
 func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
-	if gs.checkUpdating(key) {
+	if !gs.shouldUpdate(key) {
 		return
 	}
 
@@ -447,22 +519,9 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		gs.mu.Lock()
 		defer gs.mu.Unlock()
 
-		// If it is the first time that the stats info is updated,
-		// send it to key router.
-		// if _, ok := gs.statsUpdating.Load(key); !ok && gs.KeyRouter != nil && updated {
-		//	gs.KeyRouter.AddItem(gossip.CommonItem{
-		//		Operation: gossip.Operation_Set,
-		//		Key: &gossip.CommonItem_StatsInfoKey{
-		//			StatsInfoKey: &pb.StatsInfoKey{
-		//				DatabaseID: key.DatabaseID,
-		//				TableID:    key.TableID,
-		//			},
-		//		},
-		//	})
-		// }
-
 		if updated {
 			gs.mu.statsInfoMap[key] = stats
+			gs.broadcastStats(key)
 		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
 			gs.mu.statsInfoMap[key] = nil
 		}
@@ -470,10 +529,10 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		// Notify all the waiters to read the new stats info.
 		gs.mu.cond.Broadcast()
 
-		gs.removeUpdating(key)
+		gs.doneUpdate(key, updated)
 	}()
 
-	table := gs.engine.getLatestCatalogCache().GetTableById(key.DatabaseID, key.TableID)
+	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	// table or its definition is nil, means that the table is created but not committed yet.
 	if table == nil || table.TableDef == nil {
 		logutil.Errorf("cannot get table by ID %v", key)
@@ -481,24 +540,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	}
 
 	partitionState := gs.engine.GetOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
-	var partitionsTableDef []*plan2.TableDef
-	var approxObjectNum int64
-	if table.Partitioned > 0 {
-		partitionInfo := &plan2.PartitionByDef{}
-		if err := partitionInfo.UnMarshalPartitionInfo([]byte(table.Partition)); err != nil {
-			logutil.Errorf("failed to unmarshal partition table: %v", err)
-			return
-		}
-		for _, partitionTableName := range partitionInfo.PartitionTableNames {
-			partitionTable := gs.engine.getLatestCatalogCache().GetTableByName(key.DatabaseID, partitionTableName)
-			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
-			ps := gs.engine.GetOrCreateLatestPart(key.DatabaseID, partitionTable.Id).Snapshot()
-			approxObjectNum += int64(ps.ApproxObjectsNum())
-		}
-	} else {
-		approxObjectNum = int64(partitionState.ApproxObjectsNum())
-	}
-
+	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
 	if approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return
@@ -508,7 +550,6 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := newUpdateStatsRequest(
 		table.TableDef,
-		partitionsTableDef,
 		partitionState,
 		gs.engine.fs,
 		types.TimestampToTS(now),
@@ -519,6 +560,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
+	v2.StatsUpdateBlockCounter.Add(float64(stats.BlockNumber))
 	updated = true
 }
 
@@ -566,7 +608,7 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	case types.T_datetime:
 		return float64(types.DecodeFixed[types.Datetime](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Datetime](zm.GetMinBuf())) + 1
 	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		//NDV Function
 		// An aggregate function that returns an approximate value similar to the result of COUNT(DISTINCT col),
 		// the "number of distinct values".
@@ -715,12 +757,16 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 			if rate > 1 {
 				rate = 1
 			}
-			if rate < 0.1 {
+			if rate < 0.2 {
 				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
 			}
 			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
 			if ndvUsingZonemap != -1 && info.ColumnNDVs[idx] > ndvUsingZonemap {
 				info.ColumnNDVs[idx] = ndvUsingZonemap
+			}
+
+			if info.ColumnNDVs[idx] < 3 {
+				info.ColumnNDVs[idx] *= (4 - info.ColumnNDVs[idx])
 			}
 
 			if info.ColumnNDVs[idx] > info.TableCnt {
@@ -746,14 +792,7 @@ func UpdateStats(
 
 	info.ApproxObjectNumber = req.approxObjectNum
 	baseTableDef := req.tableDef
-	if len(req.partitionsTableDef) > 0 {
-		for _, def := range req.partitionsTableDef {
-			req.tableDef = def
-			if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
-				return err
-			}
-		}
-	} else if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
+	if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
 		return err
 	}
 	adjustNDV(info, baseTableDef)

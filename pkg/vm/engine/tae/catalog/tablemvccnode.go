@@ -22,7 +22,8 @@ import (
 
 type TableMVCCNode struct {
 	// history schema
-	Schema *Schema
+	Schema          *Schema
+	TombstoneSchema *Schema
 }
 
 func NewEmptyTableMVCCNode() *TableMVCCNode {
@@ -38,6 +39,14 @@ func (e *TableMVCCNode) CloneAll() *TableMVCCNode {
 func (e *TableMVCCNode) CloneData() *TableMVCCNode {
 	return e.CloneAll()
 }
+func (e *TableMVCCNode) GetTombstoneSchema() *Schema {
+	if e.TombstoneSchema != nil {
+		return e.TombstoneSchema
+	} else {
+		e.TombstoneSchema = GetTombstoneSchema(e.Schema)
+		return e.TombstoneSchema
+	}
+}
 
 func (e *TableMVCCNode) String() string {
 	return fmt.Sprintf("schema.v%d.s%d.c%d", e.Schema.Version, e.Schema.Extra.NextColSeqnum, len(e.Schema.ColDefs))
@@ -48,9 +57,6 @@ func (e *TableMVCCNode) Update(un *TableMVCCNode) {
 	e.Schema = un.Schema
 }
 
-func (e *TableMVCCNode) IdempotentUpdate(un *TableMVCCNode) {
-	e.Schema = un.Schema
-}
 func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var schemaBuf []byte
 	if schemaBuf, err = e.Schema.Marshal(); err != nil {
@@ -73,7 +79,7 @@ func (e *TableMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, e
 
 type TableNode struct {
 	// The latest schema. A shortcut to the schema in the last mvvcnode.
-	schema atomic.Pointer[Schema]
+	tombstoneSchema, schema atomic.Pointer[Schema]
 }
 
 func (node *TableNode) WriteTo(w io.Writer) (n int64, err error) {

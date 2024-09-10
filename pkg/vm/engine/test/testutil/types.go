@@ -15,11 +15,17 @@
 package testutil
 
 import (
+	"context"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"path/filepath"
 )
 
 type PObjectStats struct {
@@ -38,9 +44,12 @@ type PInmemRowsStats struct {
 type PartitionStateStats struct {
 	DataObjectsVisible   PObjectStats
 	DataObjectsInvisible PObjectStats
-	InmemRows            PInmemRowsStats
-	CheckpointCnt        int
-	DeltaLocationRowsCnt int
+
+	TombstoneObjectsVisible   PObjectStats
+	TombstoneObjectsInvisible PObjectStats
+
+	InmemRows     PInmemRowsStats
+	CheckpointCnt int
 
 	Details struct {
 		// 0: locations
@@ -50,9 +59,9 @@ type PartitionStateStats struct {
 		DataObjectList struct {
 			Visible, Invisible []logtailreplay.ObjectEntry
 		}
-		TombstoneObjectList []logtailreplay.ObjectEntry
-
-		DirtyBlocks map[types.Blockid]struct{}
+		TombstoneObjectList struct {
+			Visible, Invisible []logtailreplay.ObjectEntry
+		}
 	}
 }
 
@@ -62,22 +71,47 @@ func (s *PartitionStateStats) Summary() PartitionStateStats {
 		DataObjectsInvisible: s.DataObjectsInvisible,
 		InmemRows:            s.InmemRows,
 		CheckpointCnt:        s.CheckpointCnt,
-		DeltaLocationRowsCnt: s.DeltaLocationRowsCnt,
 	}
 }
 
 func (s *PartitionStateStats) String() string {
 	return fmt.Sprintf("dataObjects:{iobj-%d, iblk-%d, irow-%d; dobj-%d, dblk-%d, drow-%d};\n"+
-		"InmemRows:{visible-%d, invisible-%d};\ncheckpoint:{%d};\ndeletes cnt in delta loc:{%d}\n"+
+		"InmemRows:{visible-%d, invisible-%d};\ncheckpoint:{%d};\n"+
 		"visible objects:   %v\n"+
-		"invisible objects: %v\n",
+		"invisible objects: %v\n"+
+		"visible tombstone: %v\n"+
+		"invisible tombstone objects: %v\n",
 		s.DataObjectsVisible.ObjCnt, s.DataObjectsVisible.BlkCnt, s.DataObjectsVisible.RowCnt,
 		s.DataObjectsInvisible.ObjCnt, s.DataObjectsInvisible.BlkCnt, s.DataObjectsInvisible.RowCnt,
 		s.InmemRows.VisibleCnt, s.InmemRows.InvisibleCnt,
-		s.CheckpointCnt, s.DeltaLocationRowsCnt, s.Details.DataObjectList.Visible, s.Details.DataObjectList.Invisible)
+		s.CheckpointCnt, s.Details.DataObjectList.Visible, s.Details.DataObjectList.Invisible,
+		s.TombstoneObjectsVisible, s.TombstoneObjectsInvisible)
 
 }
 
 type TestOptions struct {
 	TaeEngineOptions *options.Options
+	Timeout          time.Duration
+}
+
+func GetS3SharedFileServiceOption(ctx context.Context, dir string) (*options.Options, error) {
+	config := fileservice.Config{
+		Name:    defines.SharedFileServiceName,
+		Backend: "DISK",
+		DataDir: filepath.Join(dir, "share"),
+	}
+
+	fs, err := fileservice.NewFileService(
+		ctx,
+		config,
+		[]*perfcounter.CounterSet{},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &options.Options{
+		Fs: fs,
+	}, nil
 }

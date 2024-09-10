@@ -47,11 +47,15 @@ func consumeEntry(
 
 	if state != nil {
 		t0 := time.Now()
-		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
+		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer, engine.mp)
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
-	if logtailreplay.IsMetaTable(e.TableName) {
+	if logtailreplay.IsMetaEntry(e.TableName) {
+		return nil
+	}
+
+	if !engine.PushClient().receivedLogTailTime.ready.Load() {
 		return nil
 	}
 
@@ -80,13 +84,13 @@ func consumeEntry(
 
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
-		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		if cache != nil {
+		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			cache.DeleteTable(bat)
 		}
 	case catalog.MO_DATABASE_ID:
-		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		if cache != nil {
+		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			cache.DeleteDatabase(bat)
 		}
 	}

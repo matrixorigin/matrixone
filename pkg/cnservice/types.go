@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -45,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
@@ -54,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"go.uber.org/zap"
 )
 
 var (
@@ -77,6 +79,9 @@ type Service interface {
 	GetTaskService() (taskservice.TaskService, bool)
 	GetSQLExecutor() executor.SQLExecutor
 	GetBootstrapService() bootstrap.Service
+	GetTimestampWaiter() client.TimestampWaiter
+	GetEngine() engine.Engine
+	GetClock() clock.Clock
 }
 
 type EngineType string
@@ -395,9 +400,9 @@ func (c *Config) Validate() error {
 
 	// pessimistic mode implies primary key check
 	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
-		config.CNPrimaryCheck = true
+		config.CNPrimaryCheck.Store(true)
 	} else {
-		config.CNPrimaryCheck = false
+		config.CNPrimaryCheck.Store(false)
 	}
 
 	if c.LargestEntryLimit > 0 {
@@ -406,12 +411,12 @@ func (c *Config) Validate() error {
 
 	if c.MaxPreparedStmtCount > 0 {
 		if c.MaxPreparedStmtCount > maxForMaxPreparedStmtCount {
-			frontend.MaxPrepareNumberInOneSession = maxForMaxPreparedStmtCount
+			frontend.MaxPrepareNumberInOneSession.Store(uint32(maxForMaxPreparedStmtCount))
 		} else {
-			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
+			frontend.MaxPrepareNumberInOneSession.Store(uint32(c.MaxPreparedStmtCount))
 		}
 	} else {
-		frontend.MaxPrepareNumberInOneSession = 100000
+		frontend.MaxPrepareNumberInOneSession.Store(100000)
 	}
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
@@ -430,8 +435,10 @@ func (c *Config) Validate() error {
 	}
 
 	// TODO: remove this if rc is stable
-	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
-		c.Txn.EnableCheckRCInvalidError)
+	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
+		moruntime.EnableCheckInvalidRCErrors,
+		c.Txn.EnableCheckRCInvalidError,
+	)
 	return nil
 }
 
@@ -609,7 +616,7 @@ type service struct {
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc
-	mo                     *frontend.MOServer
+	mo                     frontend.Server
 	initHakeeperClientOnce sync.Once
 	_hakeeperClient        logservice.CNHAKeeperClient
 	hakeeperConnected      chan struct{}

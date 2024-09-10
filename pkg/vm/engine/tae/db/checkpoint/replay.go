@@ -17,16 +17,15 @@ package checkpoint
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sort"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -78,7 +77,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := blockio.NewFileReader(r.rt.Fs.Service, CheckpointDir+dir.Name)
+	reader, err := blockio.NewFileReader(r.rt.SID(), r.rt.Fs.Service, CheckpointDir+dir.Name)
 	if err != nil {
 		return
 	}
@@ -129,6 +128,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	totalCount = len(entries)
 	readfn := func(i int, readType uint16) {
 		checkpointEntry := entries[i]
+		checkpointEntry.sid = r.rt.SID()
 		if checkpointEntry.end.Less(&maxGlobalEnd) {
 			return
 		}
@@ -169,7 +169,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	for i := 0; i < bat.Length(); i++ {
 		metaLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
 
-		err = blockio.PrefetchMeta(r.rt.Fs.Service, metaLoc)
+		err = blockio.PrefetchMeta(r.rt.SID(), r.rt.Fs.Service, metaLoc)
 		if err != nil {
 			return
 		}
@@ -226,7 +226,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			maxTs = maxGlobal.end
 		}
 		// for force checkpoint, ckpLSN is 0.
-		if maxGlobal.version >= logtail.CheckpointVersion7 && maxGlobal.ckpLSN > 0 {
+		if maxGlobal.ckpLSN > 0 {
 			if maxGlobal.ckpLSN < maxLSN {
 				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, maxGlobal.ckpLSN))
 			}
@@ -237,7 +237,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	for _, e := range emptyFile {
 		if e.end.GreaterEq(&maxTs) {
 			return types.TS{}, 0, false,
-				moerr.NewInternalError(ctx,
+				moerr.NewInternalErrorf(ctx,
 					"read checkpoint %v failed",
 					e.String())
 		}
@@ -263,7 +263,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		if maxTs.Less(&checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
-		if checkpointEntry.version >= logtail.CheckpointVersion7 && checkpointEntry.ckpLSN != 0 {
+		if checkpointEntry.ckpLSN != 0 {
 			if checkpointEntry.ckpLSN < maxLSN {
 				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, checkpointEntry.ckpLSN))
 			}
@@ -273,7 +273,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		// For version 7, all ckp LSN of force ickp is 0.
 		// In db.ForceIncrementalCheckpoint，it truncates.
 		// If the last ckp is force ickp，LSN check should be disable.
-		if checkpointEntry.version == logtail.CheckpointVersion7 && checkpointEntry.ckpLSN == 0 {
+		if checkpointEntry.ckpLSN == 0 {
 			isLSNValid = false
 		}
 	}
@@ -292,7 +292,13 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	return
 }
 
-func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, tnLocation objectio.Location, startTs, ts types.TS) (string, error) {
+func MergeCkpMeta(
+	ctx context.Context,
+	sid string,
+	fs fileservice.FileService,
+	cnLocation, tnLocation objectio.Location,
+	startTs, ts types.TS,
+) (string, error) {
 	dirs, err := fs.List(ctx, CheckpointDir)
 	if err != nil {
 		return "", err
@@ -314,7 +320,7 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := blockio.NewFileReader(fs, CheckpointDir+dir.Name)
+	reader, err := blockio.NewFileReader(sid, fs, CheckpointDir+dir.Name)
 	if err != nil {
 		return "", err
 	}
@@ -387,23 +393,11 @@ func replayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 				typ = ET_Incremental
 			}
 		}
-		var version uint32
-		if checkpointVersion == 1 {
-			version = logtail.CheckpointVersion1
-		} else {
-			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
-		}
-		var tnLoc objectio.Location
-		if version <= logtail.CheckpointVersion4 {
-			tnLoc = cnLoc
-		} else {
-			tnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
-		}
+		version := bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
+		tnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
 		var ckpLSN, truncateLSN uint64
-		if version >= logtail.CheckpointVersion7 {
-			ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
-			truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
-		}
+		ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
+		truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
 		checkpointEntry := &CheckpointEntry{
 			start:       start,
 			end:         end,

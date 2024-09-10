@@ -22,14 +22,17 @@ import (
 )
 
 func TestFeatureEnabled(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	c := NewTxnClient(newTestTxnSender())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := NewTxnClient("", newTestTxnSender())
 	assert.False(t, c.CNBasedConsistencyEnabled())
 	assert.False(t, c.RefreshExpressionEnabled())
 
-	c = NewTxnClient(newTestTxnSender(),
+	c = NewTxnClient(
+		"",
+		newTestTxnSender(),
 		WithEnableCNBasedConsistency(),
-		WithEnableRefreshExpression())
+		WithEnableRefreshExpression(),
+	)
 	assert.True(t, c.CNBasedConsistencyEnabled())
 	assert.True(t, c.RefreshExpressionEnabled())
 }

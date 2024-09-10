@@ -200,10 +200,13 @@ func putBuffer(buf *bytes.Buffer) {
 	}
 }
 
+var _ table.RowWriter = (*CSVWriter)(nil)
+
 type CSVWriter struct {
 	ctx       context.Context
 	formatter *csv.Writer
 	buf       *bytes.Buffer
+	release   func(buffer *bytes.Buffer)
 }
 
 func NewCSVWriter(ctx context.Context) *CSVWriter {
@@ -215,8 +218,34 @@ func NewCSVWriter(ctx context.Context) *CSVWriter {
 		ctx:       ctx,
 		buf:       buf,
 		formatter: writer,
+		release:   putBuffer,
 	}
 	return w
+}
+
+func NewCSVWriterWithBuffer(ctx context.Context, buf *bytes.Buffer) *CSVWriter {
+	writer := csv.NewWriter(buf)
+
+	w := &CSVWriter{
+		ctx:       ctx,
+		buf:       buf,
+		formatter: writer,
+		release:   nil,
+	}
+	return w
+}
+func (w *CSVWriter) WriteRow(row *table.Row) error { return w.WriteStrings(row.ToStrings()) }
+func (w *CSVWriter) GetContentLength() int         { w.formatter.Flush(); return w.buf.Len() }
+
+// FlushAndClose implements RowWriter, but NO Close action.
+func (w *CSVWriter) FlushAndClose() (int, error) {
+	w.formatter.Flush()
+	return w.GetContentLength(), nil
+}
+
+func (w *CSVWriter) ResetBuffer(buf *bytes.Buffer) {
+	w.buf = buf
+	w.formatter = csv.NewWriter(buf)
 }
 
 func (w *CSVWriter) WriteStrings(record []string) error {
@@ -231,13 +260,18 @@ func (w *CSVWriter) GetContent() string {
 	return w.buf.String()
 }
 
+func (w *CSVWriter) Flush() { w.formatter.Flush() }
+
 func (w *CSVWriter) Release() {
 	if w.buf != nil {
-		w.buf.Reset()
+		if w.release != nil {
+			// fix: need to release the !nil buffer
+			defer w.release(w.buf)
+		}
 		w.buf = nil
 		w.formatter = nil
 	}
-	putBuffer(w.buf)
+	w.release = nil
 }
 
 func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table) error {

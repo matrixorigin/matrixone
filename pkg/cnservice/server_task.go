@@ -22,13 +22,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/proxy"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -65,15 +66,23 @@ func (s *service) initTaskServiceHolder() {
 	defer s.task.Unlock()
 	if s.task.storageFactory == nil {
 		s.task.holder = taskservice.NewTaskServiceHolder(
-			runtime.ProcessLevelRuntime(),
-			util.AddressFunc(getClient))
+			runtime.ServiceRuntime(s.cfg.UUID),
+			util.AddressFunc(
+				s.cfg.UUID,
+				getClient,
+			),
+		)
 	} else {
 		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
-			runtime.ProcessLevelRuntime(),
-			util.AddressFunc(getClient),
+			runtime.ServiceRuntime(s.cfg.UUID),
+			util.AddressFunc(
+				s.cfg.UUID,
+				getClient,
+			),
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
-			})
+			},
+		)
 	}
 }
 
@@ -100,7 +109,12 @@ func (s *service) initSqlWriterFactory() {
 		client, _ := s.getHAKeeperClient()
 		return client
 	}
-	db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(getClient))
+	db_holder.SetSQLWriterDBAddressFunc(
+		util.AddressFunc(
+			s.cfg.UUID,
+			getClient,
+		),
+	)
 }
 
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
@@ -162,6 +176,10 @@ func (s *service) canClaimDaemonTask(taskAccount string) bool {
 
 	// 4. Otherwise, we could not run this task.
 	return false
+}
+
+func (s *service) createProxyUser(command *logservicepb.CreateTaskService) {
+	frontend.SetSpecialUser(proxy.SQLUsername, []byte(command.User.Password))
 }
 
 func (s *service) startTaskRunner() {
@@ -231,18 +249,8 @@ func (s *service) registerExecutorsLocked() {
 		return
 	}
 
-	pu := config.NewParameterUnit(
-		&s.cfg.Frontend,
-		nil,
-		nil,
-		nil)
-	pu.StorageEngine = s.storeEngine
-	pu.TxnClient = s._txnClient
-	s.cfg.Frontend.SetDefaultValues()
-	pu.FileService = s.fileService
-	pu.LockService = s.lockService
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor()
+		return frontend.NewInternalExecutor(s.cfg.UUID)
 	}
 
 	ts, ok := s.task.holder.Get()
@@ -251,11 +259,17 @@ func (s *service) registerExecutorsLocked() {
 	}
 
 	// init metric/log merge task executor
-	s.task.runner.RegisterExecutor(task.TaskCode_MetricLogMerge,
-		export.MergeTaskExecutorFactory(export.WithFileService(s.etlFS)))
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_MetricLogMerge,
+		export.MergeTaskExecutorFactory(
+			s.cfg.UUID,
+			export.WithFileService(s.etlFS),
+		),
+	)
 	// init metric task
-	s.task.runner.RegisterExecutor(task.TaskCode_MetricStorageUsage,
-		mometric.GetMetricStorageUsageExecutor(ieFactory))
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_MetricStorageUsage,
+		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
 	// streaming connector task
 	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
 		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
@@ -273,7 +287,7 @@ func (s *service) registerExecutorsLocked() {
 				stats := objectio.ObjectStats(b)
 				objs[i] = stats.ObjectName().String()
 			}
-			sql := fmt.Sprintf("select mo_ctl('DN', 'MERGEOBJECTS', '%s.%s:%s')",
+			sql := fmt.Sprintf("select mo_ctl('CN', 'MERGEOBJECTS', 'o:%s.%s:%s')",
 				mergeTask.DbName, mergeTask.TableName, strings.Join(objs, ","))
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
@@ -282,4 +296,72 @@ func (s *service) registerExecutorsLocked() {
 			return err
 		},
 	)
+	s.task.runner.RegisterExecutor(task.TaskCode_Retention, func(ctx context.Context, task task.Task) error {
+		iExec := ieFactory()
+		accounts := querySql(ctx, 0, iExec, "select account_id from mo_catalog.mo_account;")
+		if accounts.Error() != nil {
+			return accounts.Error()
+		}
+
+		for i := range accounts.RowCount() {
+			v, err := accounts.Value(ctx, i, 0)
+			if err != nil {
+				return err
+			}
+			accountID := v.(int32)
+			result := querySql(ctx, uint32(accountID), iExec,
+				"select database_name, table_name, retention_deadline from mo_catalog.mo_retention")
+			if result.Error() != nil || result.RowCount() == 0 {
+				continue
+			}
+			if result.ColumnCount() != 3 {
+				return moerr.NewInternalError(ctx, "invalid column count for mo_retention")
+			}
+
+			for j := range result.RowCount() {
+				v, err = result.Value(ctx, j, 2)
+				if err != nil {
+					return err
+				}
+				rDDL := v.(uint64)
+				if time.Unix(int64(rDDL), 0).After(time.Now()) {
+					continue
+				}
+				dbName, err := result.GetString(ctx, j, 0)
+				if err != nil {
+					return err
+				}
+				tableName, err := result.GetString(ctx, j, 1)
+				if err != nil {
+					return err
+				}
+
+				err = execSql(ctx, uint32(accountID), iExec,
+					fmt.Sprintf(
+						"delete from mo_catalog.mo_retention where database_name='%s' and table_name='%s'",
+						dbName, tableName))
+				if err != nil {
+					return err
+				}
+
+				err = execSql(ctx, uint32(accountID), iExec, fmt.Sprintf("drop table %s.%s", dbName, tableName))
+				if err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func execSql(ctx context.Context, accountID uint32, iExec ie.InternalExecutor, sql string) error {
+	ctx, cancel := context.WithTimeout(defines.AttachAccount(ctx, accountID, 0, 0), 10*time.Second)
+	defer cancel()
+	return iExec.Exec(ctx, sql, ie.NewOptsBuilder().Internal(true).Finish())
+}
+
+func querySql(ctx context.Context, accountID uint32, iExec ie.InternalExecutor, sql string) ie.InternalExecResult {
+	ctx, cancel := context.WithTimeout(defines.AttachAccount(ctx, accountID, 0, 0), 10*time.Second)
+	defer cancel()
+	return iExec.Query(ctx, sql, ie.NewOptsBuilder().Internal(true).Finish())
 }

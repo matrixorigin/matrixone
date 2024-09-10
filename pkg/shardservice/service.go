@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -52,6 +53,12 @@ func withDisableAppendDeleteCallback() Option {
 func withDisableAppendCreateCallback() Option {
 	return func(s *service) {
 		s.options.disableAppendCreateCallback = true
+	}
+}
+
+func WithWaitCNReported() Option {
+	return func(s *service) {
+		s.options.waitCNReported = true
 	}
 }
 
@@ -92,6 +99,7 @@ type service struct {
 		disableHeartbeat            atomic.Bool
 		disableAppendDeleteCallback bool
 		disableAppendCreateCallback bool
+		waitCNReported              bool
 	}
 }
 
@@ -100,7 +108,7 @@ func NewService(
 	storage ShardStorage,
 	opts ...Option,
 ) ShardService {
-	logger := getLogger().With(zap.String("service", cfg.ServiceID))
+	logger := runtime.ServiceRuntime(cfg.ServiceID).Logger().With(zap.String("service", cfg.ServiceID))
 	s := &service{
 		logger:  logger,
 		cfg:     cfg,
@@ -145,6 +153,10 @@ func (s *service) Close() error {
 
 func (s *service) Config() Config {
 	return s.cfg
+}
+
+func (s *service) GetStorage() ShardStorage {
+	return s.storage
 }
 
 func (s *service) Create(
@@ -305,7 +317,15 @@ func (s *service) GetShardInfo(
 }
 
 func (s *service) ReplicaCount() int64 {
-	return int64(s.cache.allocate.Load().replicasCount())
+	return int64(s.cache.allocate.Load().replicasCount(nil))
+}
+
+func (s *service) TableReplicaCount(tableID uint64) int64 {
+	return int64(s.cache.allocate.Load().replicasCount(
+		func(v pb.TableShard) bool {
+			return v.TableID == tableID
+		},
+	))
 }
 
 func (s *service) removeReadCache(
@@ -419,6 +439,24 @@ func (s *service) getAllocatedShard(
 func (s *service) doTask(
 	ctx context.Context,
 ) {
+	if s.options.waitCNReported {
+		cs := clusterservice.GetMOCluster(s.cfg.ServiceID)
+		for {
+			reported := false
+			cs.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(s.cfg.ServiceID),
+				func(_ metadata.CNService) bool {
+					reported = true
+					return false
+				},
+			)
+			if reported {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+	}
+
 	timer := time.NewTimer(s.cfg.HeartbeatDuration.Duration)
 	defer timer.Stop()
 
@@ -435,7 +473,7 @@ func (s *service) doTask(
 				s.logger.Error("failed to heartbeat",
 					zap.Error(err))
 			}
-			v2.ReplicaCountGauge.Set(float64(s.cache.allocate.Load().replicasCount()))
+			v2.ReplicaCountGauge.Set(float64(s.cache.allocate.Load().replicasCount(nil)))
 			timer.Reset(s.cfg.HeartbeatDuration.Duration)
 		case table := <-s.createC:
 			if err := s.handleCreateTable(table); err != nil {
@@ -807,10 +845,14 @@ func (s *allocatedCache) clone() *allocatedCache {
 	return clone
 }
 
-func (s *allocatedCache) replicasCount() int {
+func (s *allocatedCache) replicasCount(
+	filter func(pb.TableShard) bool,
+) int {
 	n := 0
 	for _, v := range s.values {
-		n += len(v.Replicas)
+		if filter == nil || filter(v) {
+			n += len(v.Replicas)
+		}
 	}
 	return n
 }

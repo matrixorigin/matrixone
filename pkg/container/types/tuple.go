@@ -31,12 +31,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -115,6 +112,8 @@ func (tp Tuple) SQLStrings(scales []int32) []string {
 		case []byte:
 			s := *(*string)(unsafe.Pointer(&t))
 			res = append(res, strconv.Quote(s))
+		case Uuid:
+			res = append(res, fmt.Sprintf("'%v'", t.String()))
 		case Date:
 			res = append(res, fmt.Sprintf("'%v'", t.String()))
 		case Time:
@@ -185,30 +184,34 @@ func printTuple(tuple Tuple) string {
 	return res.String()
 }
 
-const nilCode = 0x00
-const bytesCode = 0x01
-const intZeroCode = 0x14
-const float32Code = 0x20
-const float64Code = 0x21
-const falseCode = 0x26
-const trueCode = 0x27
-const int8Code = 0x28
-const int16Code = 0x29
-const int32Code = 0x3a
-const int64Code = 0x3b
-const uint8Code = 0x3c
-const uint16Code = 0x3d
-const uint32Code = 0x3e
-const uint64Code = 0x40
-const dateCode = 0x41
-const datetimeCode = 0x42
-const timestampCode = 0x43
-const decimal64Code = 0x44
-const decimal128Code = 0x45
-const stringTypeCode = 0x46
-const timeCode = 0x47
-const enumCode = 0x50 // TODO: reorder the list to put timeCode next to date type code?
-const bitCode = 0x51
+const (
+	nilCode        = 0x00
+	bytesCode      = 0x01
+	bytesMaxCode   = 0x02
+	intZeroCode    = 0x14
+	float32Code    = 0x20
+	float64Code    = 0x21
+	falseCode      = 0x26
+	trueCode       = 0x27
+	int8Code       = 0x28
+	int16Code      = 0x29
+	int32Code      = 0x3a
+	int64Code      = 0x3b
+	uint8Code      = 0x3c
+	uint16Code     = 0x3d
+	uint32Code     = 0x3e
+	uint64Code     = 0x40
+	dateCode       = 0x41
+	datetimeCode   = 0x42
+	timestampCode  = 0x43
+	decimal64Code  = 0x44
+	decimal128Code = 0x45
+	stringTypeCode = 0x46
+	timeCode       = 0x47
+	enumCode       = 0x50 // TODO: reorder the list to put timeCode next to date type code?
+	bitCode        = 0x51
+	uuidCode       = 0x52
+)
 
 var sizeLimits = []uint64{
 	1<<(0*8) - 1,
@@ -242,279 +245,6 @@ func adjustFloatBytes(b []byte, encode bool) {
 	}
 }
 
-const PackerMemUnit = 64
-
-type Packer struct {
-	buf      []byte
-	size     int
-	capacity int
-	mp       *mpool.MPool
-}
-
-func NewPacker(mp *mpool.MPool) *Packer {
-	bytes, err := mp.Alloc(PackerMemUnit)
-	if err != nil {
-		panic(err)
-	}
-	return &Packer{
-		buf:      bytes,
-		size:     0,
-		capacity: PackerMemUnit,
-		mp:       mp,
-	}
-}
-
-func NewPackerArray(length int, mp *mpool.MPool) []*Packer {
-	packerArr := make([]*Packer, length)
-	for num := range packerArr {
-		bytes, err := mp.Alloc(PackerMemUnit)
-		if err != nil {
-			panic(err)
-		}
-		packerArr[num] = &Packer{
-			buf:      bytes,
-			size:     0,
-			capacity: PackerMemUnit,
-			mp:       mp,
-		}
-	}
-	return packerArr
-}
-
-func (p *Packer) FreeMem() {
-	if p.buf != nil {
-		p.mp.Free(p.buf)
-		p.size = 0
-		p.capacity = 0
-		p.buf = nil
-	}
-}
-
-func (p *Packer) Reset() {
-	p.size = 0
-}
-
-func (p *Packer) putByte(b byte) {
-	if p.size < p.capacity {
-		p.buf[p.size] = b
-		p.size++
-	} else {
-		p.buf, _ = p.mp.Grow(p.buf, p.capacity+PackerMemUnit)
-		p.capacity += PackerMemUnit
-		p.buf[p.size] = b
-		p.size++
-	}
-}
-
-func (p *Packer) putBytes(bs []byte) {
-	if p.size+len(bs) < p.capacity {
-		for _, b := range bs {
-			p.buf[p.size] = b
-			p.size++
-		}
-	} else {
-		incrementSize := ((len(bs) / PackerMemUnit) + 1) * PackerMemUnit
-		p.buf, _ = p.mp.Grow(p.buf, p.capacity+incrementSize)
-		p.capacity += incrementSize
-		for _, b := range bs {
-			p.buf[p.size] = b
-			p.size++
-		}
-	}
-}
-
-func (p *Packer) putBytesNil(b []byte, i int) {
-	for i >= 0 {
-		p.putBytes(b[:i+1])
-		p.putByte(0xFF)
-		b = b[i+1:]
-		i = bytes.IndexByte(b, 0x00)
-	}
-	p.putBytes(b)
-}
-
-func (p *Packer) encodeBytes(code byte, b []byte) {
-	p.putByte(code)
-	if i := bytes.IndexByte(b, 0x00); i >= 0 {
-		p.putBytesNil(b, i)
-	} else {
-		p.putBytes(b)
-	}
-	p.putByte(0x00)
-}
-
-func (p *Packer) encodeUint(i uint64) {
-	if i == 0 {
-		p.putByte(intZeroCode)
-		return
-	}
-
-	n := bisectLeft(i)
-	var scratch [8]byte
-
-	p.putByte(byte(intZeroCode + n))
-	binary.BigEndian.PutUint64(scratch[:], i)
-
-	p.putBytes(scratch[8-n:])
-}
-
-func (p *Packer) encodeInt(i int64) {
-	if i >= 0 {
-		p.encodeUint(uint64(i))
-		return
-	}
-
-	n := bisectLeft(uint64(-i))
-	var scratch [8]byte
-
-	p.putByte(byte(intZeroCode - n))
-	offsetEncoded := int64(sizeLimits[n]) + i
-	binary.BigEndian.PutUint64(scratch[:], uint64(offsetEncoded))
-
-	p.putBytes(scratch[8-n:])
-}
-
-func (p *Packer) encodeFloat32(f float32) {
-	var scratch [4]byte
-	binary.BigEndian.PutUint32(scratch[:], math.Float32bits(f))
-	adjustFloatBytes(scratch[:], true)
-
-	p.putByte(float32Code)
-	p.putBytes(scratch[:])
-}
-
-func (p *Packer) encodeFloat64(d float64) {
-	var scratch [8]byte
-	binary.BigEndian.PutUint64(scratch[:], math.Float64bits(d))
-	adjustFloatBytes(scratch[:], true)
-
-	p.putByte(float64Code)
-	p.putBytes(scratch[:])
-}
-
-func (p *Packer) EncodeInt8(e int8) {
-	p.putByte(int8Code)
-	p.encodeInt(int64(e))
-}
-
-func (p *Packer) EncodeInt16(e int16) {
-	p.putByte(int16Code)
-	p.encodeInt(int64(e))
-}
-
-func (p *Packer) EncodeInt32(e int32) {
-	p.putByte(int32Code)
-	p.encodeInt(int64(e))
-}
-
-func (p *Packer) EncodeInt64(e int64) {
-	p.putByte(int64Code)
-	p.encodeInt(e)
-}
-
-func (p *Packer) EncodeUint8(e uint8) {
-	p.putByte(uint8Code)
-	p.encodeUint(uint64(e))
-}
-
-func (p *Packer) EncodeUint16(e uint16) {
-	p.putByte(uint16Code)
-	p.encodeUint(uint64(e))
-}
-
-func (p *Packer) EncodeUint32(e uint32) {
-	p.putByte(uint32Code)
-	p.encodeUint(uint64(e))
-}
-
-func (p *Packer) EncodeUint64(e uint64) {
-	p.putByte(uint64Code)
-	p.encodeUint(e)
-}
-
-func (p *Packer) EncodeFloat32(e float32) {
-	p.encodeFloat32(e)
-}
-
-func (p *Packer) EncodeFloat64(e float64) {
-	p.encodeFloat64(e)
-}
-
-func (p *Packer) EncodeNull() {
-	p.putByte(nilCode)
-}
-
-func (p *Packer) EncodeBool(e bool) {
-	if e {
-		p.putByte(trueCode)
-	} else {
-		p.putByte(falseCode)
-	}
-}
-
-func (p *Packer) EncodeDate(e Date) {
-	p.putByte(dateCode)
-	p.encodeInt(int64(e))
-}
-
-func (p *Packer) EncodeTime(e Time) {
-	p.putByte(timeCode)
-	p.encodeInt(int64(e))
-}
-
-func (p *Packer) EncodeDatetime(e Datetime) {
-	p.putByte(datetimeCode)
-	p.encodeInt(int64(e))
-}
-
-func (p *Packer) EncodeTimestamp(e Timestamp) {
-	p.putByte(timestampCode)
-	p.encodeInt(int64(e))
-}
-
-func (p *Packer) EncodeEnum(e Enum) {
-	p.putByte(enumCode)
-	p.EncodeUint16(uint16(e))
-}
-
-func (p *Packer) EncodeDecimal64(e Decimal64) {
-	p.putByte(decimal64Code)
-	b := *(*[8]byte)(unsafe.Pointer(&e))
-	b[7] ^= 0x80
-	for i := 7; i >= 0; i-- {
-		p.putByte(b[i])
-	}
-}
-
-func (p *Packer) EncodeDecimal128(e Decimal128) {
-	p.putByte(decimal128Code)
-	b := *(*[16]byte)(unsafe.Pointer(&e))
-	b[15] ^= 0x80
-	for i := 15; i >= 0; i-- {
-		p.putByte(b[i])
-	}
-}
-
-func (p *Packer) EncodeStringType(e []byte) {
-	p.putByte(stringTypeCode)
-	p.encodeBytes(bytesCode, e)
-}
-
-func (p *Packer) EncodeBit(e uint64) {
-	p.putByte(bitCode)
-	p.encodeUint(e)
-}
-
-func (p *Packer) GetBuf() []byte {
-	return p.buf[:p.size]
-}
-
-func (p *Packer) Bytes() []byte {
-	ret := make([]byte, p.size)
-	copy(ret, p.buf[:p.size])
-	return ret
-}
-
 func findTerminator(b []byte) int {
 	bp := b
 	var length int
@@ -527,6 +257,9 @@ func findTerminator(b []byte) int {
 		}
 		length += 2
 		bp = bp[idx+2:]
+	}
+	if length == -1 {
+		return len(b)
 	}
 
 	return length
@@ -685,13 +418,19 @@ func decodeDecimal128(b []byte) (Decimal128, int) {
 	return ret, 17
 }
 
+func decodeUuid(b []byte) (Uuid, int) {
+	var ret Uuid
+	copy(ret[:], b[1:])
+	return ret, 17
+}
+
 var DecodeTuple = decodeTuple
 
 func decodeTuple(b []byte) (Tuple, int, []T, error) {
 	var t Tuple
 
 	var i int
-	var schema = make([]T, 0)
+	schema := make([]T, 0)
 	for i < len(b) {
 		var el interface{}
 		var off int
@@ -779,11 +518,15 @@ func decodeTuple(b []byte) (Tuple, int, []T, error) {
 			off += 1
 		case b[i] == enumCode:
 			schema = append(schema, T_enum)
-			//TODO: need to verify @YANGGMM
+			// TODO: need to verify @YANGGMM
 			el, off = decodeUint(uint16Code, b[i+1:])
 			off += 1
+		case b[i] == uuidCode:
+			schema = append(schema, T_uuid)
+			el, off = decodeUuid(b[i:])
+			// off += 1
 		default:
-			return nil, i, nil, moerr.NewInternalErrorNoCtx("unable to decode tuple element with unknown typecode %02x", b[i])
+			return nil, i, nil, moerr.NewInternalErrorNoCtxf("unable to decode tuple element with unknown typecode %02x", b[i])
 		}
 		t = append(t, el)
 		i += off

@@ -54,7 +54,7 @@ func MockCallback(from, to timestamp.Timestamp, closeCB func(), tails ...logtail
 			}
 		}
 	}
-	logutil.Infof(s)
+	logutil.Info(s)
 	return nil
 }
 
@@ -210,14 +210,12 @@ func (mgr *Manager) GetTableOperator(
 	from, to types.TS,
 	catalog *catalog.Catalog,
 	dbID, tableID uint64,
-	scope Scope,
 	visitor catalog.Processor,
 ) *BoundTableOperator {
 	reader := mgr.GetReader(from, to)
 	return NewBoundTableOperator(
 		catalog,
 		reader,
-		scope,
 		dbID,
 		tableID,
 		visitor,

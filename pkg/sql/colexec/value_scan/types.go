@@ -17,6 +17,9 @@ package value_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,10 +30,15 @@ type container struct {
 	idx int
 }
 type ValueScan struct {
-	ctr    *container
-	Batchs []*batch.Batch
+	ctr        container
+	Batchs     []*batch.Batch
+	RowsetData *plan.RowsetData
+	ColCount   int
+	Uuid       []byte
+	NodeType   plan2.Node_NodeType
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (valueScan *ValueScan) GetOperatorBase() *vm.OperatorBase {
@@ -65,18 +73,25 @@ func (valueScan *ValueScan) Release() {
 }
 
 func (valueScan *ValueScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	valueScan.Free(proc, pipelineFailed, err)
+	valueScan.ctr.idx = 0
+	if valueScan.Batchs != nil {
+		valueScan.cleanBatchs(proc)
+	}
+	valueScan.ResetProjection(proc)
 }
 
 func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	valueScan.FreeProjection(proc)
+	if valueScan.Batchs != nil {
+		valueScan.cleanBatchs(proc)
+	}
+}
+
+func (valueScan *ValueScan) cleanBatchs(proc *process.Process) {
 	for _, bat := range valueScan.Batchs {
 		if bat != nil {
 			bat.Clean(proc.Mp())
 		}
 	}
 	valueScan.Batchs = nil
-	if valueScan.ctr != nil {
-		valueScan.ctr.idx = 0
-		valueScan.ctr = nil
-	}
 }

@@ -53,7 +53,16 @@ func (e *memExecutor) ExecTxn(
 }
 
 type memTxnExecutor struct {
-	mocker func(sql string) (Result, error)
+	mocker      func(sql string) (Result, error)
+	txnOperator client.TxnOperator
+}
+
+// NewMemTxnExecutor used to testing
+func NewMemTxnExecutor(mocker func(sql string) (Result, error), txnOperator client.TxnOperator) TxnExecutor {
+	return &memTxnExecutor{
+		mocker:      mocker,
+		txnOperator: txnOperator,
+	}
 }
 
 func (te *memTxnExecutor) Exec(sql string, _ StatementOption) (Result, error) {
@@ -69,7 +78,7 @@ func (te *memTxnExecutor) LockTable(table string) error {
 }
 
 func (te *memTxnExecutor) Txn() client.TxnOperator {
-	return nil
+	return te.txnOperator
 }
 
 // MemResult used to test. Construct a Result from memory.
@@ -82,7 +91,7 @@ type MemResult struct {
 func NewMemResult(
 	types []types.Type,
 	mp *mpool.MPool) *MemResult {
-	return &MemResult{res: Result{mp: mp}, types: types, cols: len(types)}
+	return &MemResult{res: Result{Mp: mp}, types: types, cols: len(types)}
 }
 
 func (m *MemResult) NewBatch() {
@@ -95,17 +104,17 @@ func (m *MemResult) GetResult() Result {
 
 func AppendStringRows(m *MemResult, col int, values []string) error {
 	bat := m.res.Batches[len(m.res.Batches)-1]
-	return appendStringCols(bat, col, m.types[col], values, m.res.mp)
+	return appendStringCols(bat, col, m.types[col], values, m.res.Mp)
 }
 
 func AppendBytesRows(m *MemResult, col int, values [][]byte) error {
 	bat := m.res.Batches[len(m.res.Batches)-1]
-	return appendBytesCols(bat, col, m.types[col], values, m.res.mp)
+	return appendBytesCols(bat, col, m.types[col], values, m.res.Mp)
 }
 
 func AppendFixedRows[T any](m *MemResult, col int, values []T) error {
 	bat := m.res.Batches[len(m.res.Batches)-1]
-	return appendCols(bat, col, m.types[col], values, m.res.mp)
+	return appendCols(bat, col, m.types[col], values, m.res.Mp)
 }
 
 func newBatch(cols int) *batch.Batch {

@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
@@ -115,8 +114,11 @@ func Test_gettingInfo(t *testing.T) {
 		Waiters:     nil,
 	}
 
-	selectStubs := gostub.Stub(&selectSuperTenant,
-		func(selector clusterservice.Selector,
+	selectStubs := gostub.Stub(
+		&selectSuperTenant,
+		func(
+			sid string,
+			selector clusterservice.Selector,
 			username string,
 			filter func(string) bool,
 			appendFn func(service *metadata.CNService)) {
@@ -128,8 +130,13 @@ func Test_gettingInfo(t *testing.T) {
 		})
 	defer selectStubs.Reset()
 
-	listTnStubs := gostub.Stub(&listTnService, func(appendFn func(service *metadata.TNService)) {
-	})
+	listTnStubs := gostub.Stub(
+		&listTnService,
+		func(
+			sid string,
+			appendFn func(service *metadata.TNService)) {
+		},
+	)
 	defer listTnStubs.Reset()
 
 	requestMultipleCnStubs := gostub.Stub(&requestMultipleCn,
@@ -180,7 +187,7 @@ func Test_gettingInfo(t *testing.T) {
 	}
 	defer mpool.DeleteMPool(mp)
 
-	testProc := process.New(context.Background(), mp, nil, nil, nil, nil, &mockQueryService{}, nil, nil, nil)
+	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, &mockQueryService{}, nil, nil, nil)
 
 	type args struct {
 		proc *process.Process
@@ -309,11 +316,6 @@ func Test_gettingInfo(t *testing.T) {
 			args: argsx{
 				proc: testProc,
 				arg: &TableFunction{
-					ctr: &container{
-						state:            dataProducing,
-						executorsForArgs: nil,
-						retSchema:        nil,
-					},
 					Rets: nil,
 					Args: nil,
 					Attrs: []string{
@@ -331,25 +333,30 @@ func Test_gettingInfo(t *testing.T) {
 	}
 	for _, tt := range tests4 {
 		t.Run(tt.name, func(t *testing.T) {
-			result := vm.NewCallResult()
-			got, err := moCacheCall(tt.args.in0, tt.args.proc, tt.args.arg, &result)
+			tvfst, err := moCachePrepare(tt.args.proc, tt.args.arg)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("moCacheCall() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("moCachePrepare() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			err = tvfst.start(tt.args.arg, tt.args.proc, 0)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("tvf.start error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			res, err := tvfst.call(tt.args.arg, tt.args.proc)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("tvf.call error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if got != tt.want {
-				t.Errorf("moCacheCall() got = %v, want %v", got, tt.want)
-			}
-			bat := result.Batch
 
+			bat := res.Batch
 			assert.Equal(t, len(bat.Attrs), 3)
 			assert.Equal(t, bat.Attrs[0], "type")
 			assert.Equal(t, bat.Attrs[1], "used")
 			assert.Equal(t, bat.Attrs[2], "hit_ratio")
 
+			// what?
 			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "mock_cache")
-			assert.Equal(t, vector.MustFixedCol[uint64](bat.GetVector(1))[0], uint64(0))
-
+			assert.Equal(t, vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(1))[0], uint64(0))
 		})
 	}
 
@@ -366,11 +373,6 @@ func Test_gettingInfo(t *testing.T) {
 			args: argsx{
 				proc: testProc,
 				arg: &TableFunction{
-					ctr: &container{
-						state:            dataProducing,
-						executorsForArgs: nil,
-						retSchema:        nil,
-					},
 					Rets: nil,
 					Args: nil,
 					Attrs: []string{
@@ -382,24 +384,33 @@ func Test_gettingInfo(t *testing.T) {
 			},
 			want: false,
 			wantErr: func(assert.TestingT, error, ...interface{}) bool {
-
+				// What?
 				return true
 			},
 		},
 	}
 	for _, tt := range tests5 {
 		t.Run(tt.name, func(t *testing.T) {
-			result := vm.NewCallResult()
-			got, err := moTransactionsCall(tt.args.in0, tt.args.proc, tt.args.arg, &result)
-			if !tt.wantErr(t, err, fmt.Sprintf("moTransactionsCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
+			tvfst, err := moTransactionsPrepare(tt.args.proc, tt.args.arg)
+			if !tt.wantErr(t, err, fmt.Sprintf("moTransactionsPrepare(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
 				return
 			}
-			assert.Equalf(t, tt.want, got, "moTransactionsCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)
-			bat := result.Batch
 
+			err = tvfst.start(tt.args.arg, tt.args.proc, 0)
+			if !tt.wantErr(t, err, fmt.Sprintf("tvfst.start (%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
+				return
+			}
+
+			res, err := tvfst.call(tt.args.arg, tt.args.proc)
+			if !tt.wantErr(t, err, fmt.Sprintf("tvfst.call (%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
+				return
+			}
+
+			bat := res.Batch
 			assert.Equal(t, len(bat.Attrs), 1)
 			assert.Equal(t, bat.Attrs[0], "user_txn")
 
+			// WTH is this check?
 			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "true")
 		})
 	}
@@ -417,11 +428,6 @@ func Test_gettingInfo(t *testing.T) {
 			args: argsx{
 				proc: testProc,
 				arg: &TableFunction{
-					ctr: &container{
-						state:            dataProducing,
-						executorsForArgs: nil,
-						retSchema:        nil,
-					},
 					Rets: nil,
 					Args: nil,
 					Attrs: []string{
@@ -442,13 +448,22 @@ func Test_gettingInfo(t *testing.T) {
 	}
 	for _, tt := range tests6 {
 		t.Run(tt.name, func(t *testing.T) {
-			result := vm.NewCallResult()
-			got, err := moLocksCall(tt.args.in0, tt.args.proc, tt.args.arg, &result)
+			tvfst, err := moLocksPrepare(tt.args.proc, tt.args.arg)
 			if !tt.wantErr(t, err, fmt.Sprintf("moLocksCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
 				return
 			}
-			assert.Equalf(t, tt.want, got, "moLocksCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)
-			bat := result.Batch
+
+			err = tvfst.start(tt.args.arg, tt.args.proc, 0)
+			if !tt.wantErr(t, err, fmt.Sprintf("tvfst.start (%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
+				return
+			}
+
+			res, err := tvfst.call(tt.args.arg, tt.args.proc)
+			if !tt.wantErr(t, err, fmt.Sprintf("tvfst.call (%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
+				return
+			}
+
+			bat := res.Batch
 			assert.Equal(t, len(bat.Attrs), 3)
 			assert.Equal(t, bat.Attrs[0], "table_id")
 			assert.Equal(t, bat.Attrs[1], "lock_key")
@@ -559,7 +574,7 @@ func Test_moConfigurationsCall(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	defer mpool.DeleteMPool(mp)
-	testProc := process.New(context.Background(), mp, nil, nil, nil, nil, &mockQueryService{}, &mockHKClient{}, nil, nil)
+	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, &mockQueryService{}, &mockHKClient{}, nil, nil)
 
 	type args struct {
 		in0  int
@@ -577,11 +592,6 @@ func Test_moConfigurationsCall(t *testing.T) {
 			args: args{
 				proc: testProc,
 				arg: &TableFunction{
-					ctr: &container{
-						state:            dataProducing,
-						executorsForArgs: nil,
-						retSchema:        nil,
-					},
 					Rets: nil,
 					Args: nil,
 					Attrs: []string{
@@ -601,13 +611,22 @@ func Test_moConfigurationsCall(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := vm.NewCallResult()
-			got, err := moConfigurationsCall(tt.args.in0, tt.args.proc, tt.args.arg, &result)
-			if !tt.wantErr(t, err, fmt.Sprintf("moConfigurationsCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
+			tvfst, err := moConfigurationsPrepare(tt.args.proc, tt.args.arg)
+			if !tt.wantErr(t, err, fmt.Sprintf("moConfigurationsPrepare(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
 				return
 			}
-			assert.Equalf(t, tt.want, got, "moConfigurationsCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)
-			bat := result.Batch
+
+			err = tvfst.start(tt.args.arg, tt.args.proc, 0)
+			if !tt.wantErr(t, err, fmt.Sprintf("tvfst.start (%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
+				return
+			}
+
+			res, err := tvfst.call(tt.args.arg, tt.args.proc)
+			if !tt.wantErr(t, err, fmt.Sprintf("tvfst.call (%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
+				return
+			}
+
+			bat := res.Batch
 			assert.Equal(t, len(bat.Attrs), 3)
 			assert.Equal(t, bat.Attrs[0], "name")
 			assert.Equal(t, bat.Attrs[1], "current_value")

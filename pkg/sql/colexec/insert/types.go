@@ -15,8 +15,11 @@
 package insert
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -36,16 +39,16 @@ type container struct {
 	s3Writer           *colexec.S3Writer
 	partitionS3Writers []*colexec.S3Writer // The array is aligned with the partition number array
 	buf                *batch.Batch
+	affectedRows       uint64
 
 	source           engine.Relation
 	partitionSources []engine.Relation // Align array index with the partition number
 }
 
 type Insert struct {
-	ctr          *container
-	affectedRows uint64
-	ToWriteS3    bool // mark if this insert's target is S3 or not.
-	InsertCtx    *InsertCtx
+	ctr       container
+	ToWriteS3 bool // mark if this insert's target is S3 or not.
+	InsertCtx *InsertCtx
 
 	vm.OperatorBase
 }
@@ -85,8 +88,8 @@ type InsertCtx struct {
 	// insert data into Rel.
 	Engine                engine.Engine
 	Ref                   *plan.ObjectRef
-	AddAffectedRows       bool // for hidden table, should not update affect Rows
-	Attrs                 []string
+	AddAffectedRows       bool     // for hidden table, should not update affect Rows
+	Attrs                 []string // letter case: origin
 	PartitionTableIDs     []uint64 // Align array index with the partition number
 	PartitionTableNames   []string // Align array index with the partition number
 	PartitionIndexInBatch int      // The array index position of the partition expression column
@@ -94,39 +97,59 @@ type InsertCtx struct {
 }
 
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	insert.Free(proc, pipelineFailed, err)
+	//@todo need add Reset method for s3Writer
+	if insert.ctr.s3Writer != nil {
+		insert.ctr.s3Writer.Free(proc)
+		insert.ctr.s3Writer = nil
+	}
+	if insert.ctr.partitionS3Writers != nil {
+		for _, writer := range insert.ctr.partitionS3Writers {
+			writer.Free(proc)
+		}
+		insert.ctr.partitionS3Writers = nil
+	}
+	insert.ctr.state = vm.Build
+
+	if insert.ctr.buf != nil {
+		insert.ctr.buf.CleanOnlyData()
+	}
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if insert.ctr != nil {
-		if insert.ctr.s3Writer != nil {
-			insert.ctr.s3Writer.Free(proc)
-			insert.ctr.s3Writer = nil
-		}
+	if insert.ctr.s3Writer != nil {
+		insert.ctr.s3Writer.Free(proc)
+		insert.ctr.s3Writer = nil
+	}
 
-		// Free the partition table S3writer object resources
-		if insert.ctr.partitionS3Writers != nil {
-			for _, writer := range insert.ctr.partitionS3Writers {
-				writer.Free(proc)
-			}
-			insert.ctr.partitionS3Writers = nil
+	// Free the partition table S3writer object resources
+	if insert.ctr.partitionS3Writers != nil {
+		for _, writer := range insert.ctr.partitionS3Writers {
+			writer.Free(proc)
 		}
+		insert.ctr.partitionS3Writers = nil
+	}
 
-		if insert.ctr.buf != nil {
-			insert.ctr.buf.Clean(proc.Mp())
-			insert.ctr.buf = nil
-		}
-
-		insert.ctr = nil
+	if insert.ctr.buf != nil {
+		insert.ctr.buf.Clean(proc.Mp())
+		insert.ctr.buf = nil
 	}
 }
 
 func (insert *Insert) AffectedRows() uint64 {
-	return insert.affectedRows
+	return insert.ctr.affectedRows
 }
 
 func (insert *Insert) GetAffectedRows() *uint64 {
-	return &insert.affectedRows
+	return &insert.ctr.affectedRows
+}
+
+func (insert *Insert) initBufForS3() {
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	insert.ctr.buf = batch.NewWithSize(len(attrs))
+	insert.ctr.buf.SetAttributes(attrs)
+	insert.ctr.buf.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+	insert.ctr.buf.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	insert.ctr.buf.Vecs[2] = vector.NewVec(types.T_binary.ToType())
 }

@@ -100,6 +100,9 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	transfer := &transferArg{}
 	rootCmd.AddCommand(transfer.PrepareCommand())
 
+	inspect := &MoInspectArg{}
+	rootCmd.AddCommand(inspect.PrepareCommand())
+
 	return rootCmd
 }
 
@@ -120,8 +123,11 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("parse err: %v", err)))
 			return
 		}
-		ctx := cmd.Flag("ictx").Value.(*inspectContext)
-		logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
+		v := cmd.Flag("ictx")
+		if v != nil {
+			ctx := cmd.Flag("ictx").Value.(*inspectContext)
+			logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
+		}
 		err := t.Run()
 		if err != nil {
 			cmd.OutOrStdout().Write(
@@ -129,7 +135,7 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			)
 		} else {
 			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf("success. arg %v", t.String())),
+				[]byte(fmt.Sprintf("%v", t.String())),
 			)
 		}
 	}
@@ -186,7 +192,7 @@ func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 	file, _ := cmd.Flags().GetString("outfile")
 	if file != "" {
 		if f, err := os.Create(file); err != nil {
-			return moerr.NewInternalErrorNoCtx("open %s err: %v", file, err)
+			return moerr.NewInternalErrorNoCtxf("open %s err: %v", file, err)
 		} else {
 			c.outfile = f
 		}
@@ -197,7 +203,7 @@ func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *catalogArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked(false).Name)
 	}
 	f := "nil"
 	if c.outfile != nil {
@@ -261,7 +267,7 @@ func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 
 func (c *objStatArg) String() string {
 	if c.tbl != nil {
-		return fmt.Sprintf("%d-%s verbose %v", c.tbl.ID, c.tbl.GetLastestSchema().Name, c.verbose)
+		return fmt.Sprintf("%d-%s verbose %v", c.tbl.ID, c.tbl.GetLastestSchema(false).Name, c.verbose)
 	} else {
 		return fmt.Sprintf("list with top %d", c.topk)
 	}
@@ -344,7 +350,7 @@ func (c *objectPruneArg) String() string {
 	if c.ack != -1 {
 		return fmt.Sprintf("prune: execute task: %d", c.ack)
 	} else {
-		return fmt.Sprintf("prune: table %v-%v, %v ago, cacheLen %v", c.tbl.ID, c.tbl.GetLastestSchema().Name, c.ago, TaskCache.Len())
+		return fmt.Sprintf("prune: table %v-%v, %v ago, cacheLen %v", c.tbl.ID, c.tbl.GetLastestSchema(false).Name, c.ago, TaskCache.Len())
 	}
 }
 
@@ -398,7 +404,7 @@ func (c *objectPruneArg) Run() error {
 	TaskCache.Unlock()
 	entry := c.tbl
 
-	it := entry.MakeObjectIt(true)
+	it := entry.MakeDataObjectIt()
 	now := c.ctx.db.TxnMgr.Now()
 	var total, stale, selected int
 	var minR, maxR, totalR, minS, maxS, totalS int
@@ -421,9 +427,6 @@ func (c *objectPruneArg) Run() error {
 			continue
 		}
 		stale++
-		if c.tbl.TryGetTombstone(*obj.ID()) != nil || obj.GetObjectData().GetTotalChanges() > 0 { // has deletes
-			continue
-		}
 		selected++
 		selectedObjs = append(selectedObjs, obj)
 		stat := obj.GetObjectStats()
@@ -506,7 +509,7 @@ func (c *objectPruneArg) executePrune(objs []*catalog.ObjectEntry) error {
 	notfound := 0
 	w := &bytes.Buffer{}
 	for _, obj := range objs {
-		if err := tblHdl.SoftDeleteObject(obj.ID()); err != nil {
+		if err := tblHdl.SoftDeleteObject(obj.ID(), obj.IsTombstone); err != nil {
 			logutil.Errorf("objprune: del obj %s: %v", obj.ID().String(), err)
 			return err
 		}
@@ -703,7 +706,7 @@ func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *infoArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked(false).Name)
 	}
 
 	if c.obj != nil {
@@ -717,24 +720,17 @@ func (c *infoArg) Run() error {
 	b := &bytes.Buffer{}
 	if c.tbl != nil {
 		b.WriteString(fmt.Sprintf("last_merge: %v\n", c.tbl.Stats.GetLastMerge().String()))
-		b.WriteString(fmt.Sprintf("last_flush: %v\n", c.tbl.Stats.GetLastFlush().ToString()))
 	}
 	if c.obj != nil {
 		b.WriteRune('\n')
-		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.obj.GetObjectData().GetDeltaPersistedTS().ToString()))
+		// b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.obj.GetObjectData().GetDeltaPersistedTS().ToString()))
 		r, reason := c.obj.GetObjectData().PrepareCompactInfo()
-		rows, err := c.obj.GetObjectData().Rows()
-		if err != nil {
-			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID().String(), err)
-		}
-		dels := c.obj.GetObjectData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
-		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
 		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.obj.GetObjectData().PPString(c.verbose, 0, "", c.blkn)))
 
 		schema := c.obj.GetSchema()
 		if schema.HasSortKey() {
-			zm, err := c.obj.GetPKZoneMap(context.Background(), c.obj.GetObjectData().GetFs().Service)
+			zm, err := c.obj.GetPKZoneMap(context.Background())
 			var zmstr string
 			if err != nil {
 				zmstr = err.Error()
@@ -809,7 +805,7 @@ func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *mergePolicyArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked(false).Name)
 	}
 	return fmt.Sprintf(
 		"(%s) maxMergeObjN: %v, maxOsizeObj: %vMB, minOsizeQualified: %vMB, offloadToCnSize: %vMB, hints: %v",
@@ -877,7 +873,7 @@ func (c *RenameColArg) PrepareCommand() *cobra.Command {
 }
 
 func (c *RenameColArg) String() string {
-	return fmt.Sprintf("rename col: %v, %v,%v,%v", c.tbl.GetLastestSchemaLocked().Name, c.oldName, c.newName, c.seq)
+	return fmt.Sprintf("rename col: %v, %v,%v,%v", c.tbl.GetLastestSchemaLocked(false).Name, c.oldName, c.newName, c.seq)
 }
 
 func (c *RenameColArg) Run() (err error) {
@@ -891,7 +887,7 @@ func (c *RenameColArg) Run() (err error) {
 	if err != nil {
 		return err
 	}
-	tblHdl, err := dbHdl.GetRelationByName(c.tbl.GetLastestSchemaLocked().Name)
+	tblHdl, err := dbHdl.GetRelationByName(c.tbl.GetLastestSchemaLocked(false).Name)
 	if err != nil {
 		return err
 	}
@@ -962,7 +958,7 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEnt
 	}
 	bid := objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
 	objid := bid.Object()
-	oentry, err := tbl.GetObjectByID(objid)
+	oentry, err := tbl.GetObjectByID(objid, false)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1110,7 +1106,7 @@ func parseStorageUsageDetail(expr string, ac *db.AccessInfo, db *db.DB) (
 // [pos1, pos2)
 func subString(src string, pos1, pos2 int) (string, error) {
 	if pos2 > len(src) {
-		return "", moerr.NewOutOfRangeNoCtx("", src, pos1, " to ", pos2)
+		return "", moerr.NewOutOfRangeNoCtxf("", src, pos1, " to ", pos2)
 	}
 
 	dst := make([]byte, pos2-pos1)
@@ -1223,9 +1219,9 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 	locations := make([]objectio.Location, 0)
 
 	for idx := range entries {
-		if entries[idx].GetVersion() < logtail.CheckpointVersion11 {
-			continue
-		}
+		// if entries[idx].GetVersion() < logtail.CheckpointVersion11 {
+		// 	continue
+		// }
 		versions = append(versions, entries[idx].GetVersion())
 		locations = append(locations, entries[idx].GetLocation())
 	}
@@ -1237,7 +1233,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 	var usageDelData [][]logtail.UsageData
 
 	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
-		ctx, locations, versions,
+		ctx, c.ctx.db.Runtime.SID(), locations, versions,
 		c.ctx.db.Runtime.Fs.Service, common.DebugAllocator); err != nil {
 		return err
 	}
@@ -1255,7 +1251,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 		if r == nil {
 			return h.GetName(), "deleted"
 		}
-		return h.GetName(), r.Schema().(*catalog.Schema).Name
+		return h.GetName(), r.Schema(false).(*catalog.Schema).Name
 	}
 
 	getAllDbAndTblNames := func(usages []logtail.UsageData) (dbs, tbls []string, maxDbLen, maxTblLen int) {

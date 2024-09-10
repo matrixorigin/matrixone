@@ -157,120 +157,131 @@ func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskse
 }
 
 func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
-	defer leaktest.AfterTest(t)()
-	cfg1 := DefaultConfig()
-	cfg1.UUID = uuid.New().String()
-	cfg1.FS = vfs.NewStrictMem()
-	cfg1.DeploymentID = 1
-	cfg1.RTTMillisecond = 5
-	cfg1.DataDir = "data-1"
-	cfg1.LogServicePort = 9002
-	cfg1.RaftPort = 9000
-	cfg1.GossipPort = 9001
-	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"}
-	cfg1.DisableWorkers = true
-	cfg1.HAKeeperConfig.TickPerSecond = 10
-	cfg1.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg1.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
-	cfg1.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-	cfg2 := DefaultConfig()
-	cfg2.UUID = uuid.New().String()
-	cfg2.FS = vfs.NewStrictMem()
-	cfg2.DeploymentID = 1
-	cfg2.RTTMillisecond = 5
-	cfg2.DataDir = "data-2"
-	cfg2.LogServicePort = 9012
-	cfg2.RaftPort = 9010
-	cfg2.GossipPort = 9011
-	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"}
-	cfg2.DisableWorkers = true
-	cfg2.HAKeeperConfig.TickPerSecond = 10
-	cfg2.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg2.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
-	cfg2.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-	cfg3 := DefaultConfig()
-	cfg3.UUID = uuid.New().String()
-	cfg3.FS = vfs.NewStrictMem()
-	cfg3.DeploymentID = 1
-	cfg3.RTTMillisecond = 5
-	cfg3.DataDir = "data-3"
-	cfg3.LogServicePort = 9022
-	cfg3.RaftPort = 9020
-	cfg3.GossipPort = 9021
-	cfg3.GossipSeedAddresses = []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"}
-	cfg3.DisableWorkers = true
-	cfg3.HAKeeperConfig.TickPerSecond = 10
-	cfg3.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg3.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
-	cfg3.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-	cfg4 := DefaultConfig()
-	cfg4.UUID = uuid.New().String()
-	cfg4.FS = vfs.NewStrictMem()
-	cfg4.DeploymentID = 1
-	cfg4.RTTMillisecond = 5
-	cfg4.DataDir = "data-4"
-	cfg4.LogServicePort = 9032
-	cfg4.RaftPort = 9030
-	cfg4.GossipPort = 9031
-	cfg4.GossipSeedAddresses = []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"}
-	cfg4.DisableWorkers = true
-	cfg4.HAKeeperConfig.TickPerSecond = 10
-	cfg4.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg4.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
-	cfg4.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-	service1, err := NewService(cfg1,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service1.Close())
-	}()
-	service2, err := NewService(cfg2,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service2.Close())
-	}()
-	service3, err := NewService(cfg3,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service3.Close())
-	}()
-	service4, err := NewService(cfg4,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service4.Close())
-	}()
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			defer leaktest.AfterTest(t)()
+			cfg1 := DefaultConfig()
+			cfg1.UUID = uuid.New().String()
+			cfg1.FS = vfs.NewStrictMem()
+			cfg1.DeploymentID = 1
+			cfg1.RTTMillisecond = 5
+			cfg1.DataDir = "data-1"
+			cfg1.LogServicePort = 9002
+			cfg1.RaftPort = 9000
+			cfg1.GossipPort = 9001
+			cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"}
+			cfg1.DisableWorkers = true
+			cfg1.HAKeeperConfig.TickPerSecond = 10
+			cfg1.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
+			cfg1.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
+			cfg1.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
+			cfg2 := DefaultConfig()
+			cfg2.UUID = uuid.New().String()
+			cfg2.FS = vfs.NewStrictMem()
+			cfg2.DeploymentID = 1
+			cfg2.RTTMillisecond = 5
+			cfg2.DataDir = "data-2"
+			cfg2.LogServicePort = 9012
+			cfg2.RaftPort = 9010
+			cfg2.GossipPort = 9011
+			cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"}
+			cfg2.DisableWorkers = true
+			cfg2.HAKeeperConfig.TickPerSecond = 10
+			cfg2.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
+			cfg2.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
+			cfg2.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
+			cfg3 := DefaultConfig()
+			cfg3.UUID = uuid.New().String()
+			cfg3.FS = vfs.NewStrictMem()
+			cfg3.DeploymentID = 1
+			cfg3.RTTMillisecond = 5
+			cfg3.DataDir = "data-3"
+			cfg3.LogServicePort = 9022
+			cfg3.RaftPort = 9020
+			cfg3.GossipPort = 9021
+			cfg3.GossipSeedAddresses = []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"}
+			cfg3.DisableWorkers = true
+			cfg3.HAKeeperConfig.TickPerSecond = 10
+			cfg3.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
+			cfg3.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
+			cfg3.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
+			cfg4 := DefaultConfig()
+			cfg4.UUID = uuid.New().String()
+			cfg4.FS = vfs.NewStrictMem()
+			cfg4.DeploymentID = 1
+			cfg4.RTTMillisecond = 5
+			cfg4.DataDir = "data-4"
+			cfg4.LogServicePort = 9032
+			cfg4.RaftPort = 9030
+			cfg4.GossipPort = 9031
+			cfg4.GossipSeedAddresses = []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"}
+			cfg4.DisableWorkers = true
+			cfg4.HAKeeperConfig.TickPerSecond = 10
+			cfg4.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
+			cfg4.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
+			cfg4.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 
-	peers := make(map[uint64]dragonboat.Target)
-	peers[1] = service1.ID()
-	peers[2] = service2.ID()
-	peers[3] = service3.ID()
-	assert.NoError(t, service1.store.startHAKeeperReplica(1, peers, false))
-	assert.NoError(t, service2.store.startHAKeeperReplica(2, peers, false))
-	assert.NoError(t, service3.store.startHAKeeperReplica(3, peers, false))
-	fn(t, []*Service{service1, service2, service3, service4})
+			runtime.SetupServiceBasedRuntime(cfg1.UUID, rt)
+			runtime.SetupServiceBasedRuntime(cfg2.UUID, rt)
+			runtime.SetupServiceBasedRuntime(cfg3.UUID, rt)
+			runtime.SetupServiceBasedRuntime(cfg4.UUID, rt)
+
+			service1, err := NewService(cfg1,
+				newFS(),
+				nil,
+				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+					return true
+				}),
+			)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, service1.Close())
+			}()
+			service2, err := NewService(cfg2,
+				newFS(),
+				nil,
+				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+					return true
+				}),
+			)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, service2.Close())
+			}()
+			service3, err := NewService(cfg3,
+				newFS(),
+				nil,
+				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+					return true
+				}),
+			)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, service3.Close())
+			}()
+			service4, err := NewService(cfg4,
+				newFS(),
+				nil,
+				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+					return true
+				}),
+			)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, service4.Close())
+			}()
+
+			peers := make(map[uint64]dragonboat.Target)
+			peers[1] = service1.ID()
+			peers[2] = service2.ID()
+			peers[3] = service3.ID()
+			assert.NoError(t, service1.store.startHAKeeperReplica(1, peers, false))
+			assert.NoError(t, service2.store.startHAKeeperReplica(2, peers, false))
+			assert.NoError(t, service3.store.startHAKeeperReplica(3, peers, false))
+			fn(t, []*Service{service1, service2, service3, service4})
+		},
+	)
 }
 
 func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {

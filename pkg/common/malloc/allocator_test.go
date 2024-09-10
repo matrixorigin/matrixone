@@ -60,6 +60,11 @@ func testAllocator(
 					t.Fatal()
 				}
 			}
+			// free
+			var freeze Freezer
+			if dec.As(&freeze) {
+				freeze.Freeze()
+			}
 			// deallocate
 			dec.Deallocate(NoHints)
 		}

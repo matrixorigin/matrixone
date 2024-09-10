@@ -357,11 +357,6 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(sn1)
-	var is1PC bool
-	if sn1, err = w.Write(types.EncodeBool(&is1PC)); err != nil {
-		return
-	}
-	n += int64(sn1)
 	return
 }
 
@@ -376,12 +371,6 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(sn)
 	if sn, err = r.Read(un.End[:]); err != nil {
-		return
-	}
-	n += int64(sn)
-
-	var is1PC bool
-	if sn, err = r.Read(types.EncodeBool(&is1PC)); err != nil {
 		return
 	}
 	n += int64(sn)
@@ -411,9 +400,9 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%s,%s]",
+	return fmt.Sprintf("[%s,%s][%v]",
 		un.Start.ToString(),
-		un.End.ToString())
+		un.End.ToString(), un.Txn == nil)
 }
 
 func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {

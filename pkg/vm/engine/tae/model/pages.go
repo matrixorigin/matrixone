@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -73,9 +72,10 @@ type Path struct {
 
 type TransferHashPage struct {
 	common.RefHelper
-	bornTS      time.Time
+	bornTS      atomic.Pointer[time.Time]
 	id          *common.ID // not include blk offset
-	hashmap     atomic.Pointer[api.HashPageMap]
+	objects     []*objectio.ObjectId
+	hashmap     atomic.Pointer[api.TransferMap]
 	path        Path
 	isTransient bool
 	fs          fileservice.FileService
@@ -83,27 +83,26 @@ type TransferHashPage struct {
 	diskTTL     time.Duration
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs fileservice.FileService, ttl, diskTTL time.Duration) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs fileservice.FileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
 
 	page := &TransferHashPage{
-		bornTS:      ts,
 		id:          id,
 		isTransient: isTransient,
 		fs:          fs,
 		ttl:         ttl,
 		diskTTL:     diskTTL,
+		objects:     createdObjIDs,
 	}
 
-	m := api.HashPageMap{M: make(map[uint32][]byte)}
-	page.hashmap.Store(&m)
+	page.bornTS.Store(&ts)
 	page.OnZeroCB = page.Close
 
 	return page
 }
 
 func (page *TransferHashPage) ID() *common.ID         { return page.id }
-func (page *TransferHashPage) BornTS() time.Time      { return page.bornTS }
-func (page *TransferHashPage) SetBornTS(ts time.Time) { page.bornTS = ts }
+func (page *TransferHashPage) BornTS() time.Time      { return *page.bornTS.Load() }
+func (page *TransferHashPage) SetBornTS(ts time.Time) { page.bornTS.Store(&ts) }
 
 const (
 	notClear    = uint8(0)
@@ -113,10 +112,10 @@ const (
 
 func (page *TransferHashPage) TTL() uint8 {
 	now := time.Now()
-	if now.After(page.bornTS.Add(page.diskTTL)) {
+	if now.After(page.bornTS.Load().Add(page.diskTTL)) {
 		return clearDisk
 	}
-	if now.After(page.bornTS.Add(page.ttl)) {
+	if now.After(page.bornTS.Load().Add(page.ttl)) {
 		return clearMemory
 	}
 	return notClear
@@ -133,14 +132,14 @@ func (page *TransferHashPage) Length() int {
 	if m == nil {
 		return 0
 	}
-	return len(m.M)
+	return len(*m)
 }
 
 func (page *TransferHashPage) String() string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("hashpage[%s][%s][Len=%d]",
 		page.id.BlockString(),
-		page.bornTS.String(),
+		page.bornTS.Load().String(),
 		page.Length()))
 	return w.String()
 }
@@ -157,20 +156,20 @@ func (page *TransferHashPage) Clear() {
 	if m == nil {
 		return
 	}
-
+	if page.bornTS.Load().Add(page.ttl).After(time.Now()) {
+		return
+	}
 	page.hashmap.Store(nil)
-	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(m.M)))
-	m.M = make(map[uint32][]byte)
+	clear(*m)
+	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(*m)))
 }
 
-func (page *TransferHashPage) Train(m map[uint32][]byte) {
-	hashmap := api.HashPageMap{M: m}
-	page.hashmap.Store(&hashmap)
+func (page *TransferHashPage) Train(m api.TransferMap) {
+	page.hashmap.Store(&m)
 	v2.TransferPageRowHistogram.Observe(float64(len(m)))
 }
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
-	v2.TransferPageSinceBornDurationHistogram.Observe(time.Since(page.bornTS).Seconds())
 	m := page.hashmap.Load()
 	if m == nil {
 		diskStart := time.Now()
@@ -181,14 +180,15 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	v2.TransferPageTotalHitHistogram.Observe(1)
 
 	memStart := time.Now()
-	var data []byte
+	var data api.TransferDestPos
 	if m == nil {
 		ok = false
 		return
 	}
-	data, ok = m.M[from]
+	data, ok = (*m)[from]
 	if ok {
-		dest = types.Rowid(data)
+		objID := page.objects[data.ObjIdx]
+		dest = objectio.NewRowIDWithObjectIDBlkNumAndRowID(*objID, data.BlkIdx, data.RowIdx)
 	}
 	memDuration := time.Since(memStart)
 	v2.TransferMemLatencyHistogram.Observe(memDuration.Seconds())
@@ -200,24 +200,52 @@ func (page *TransferHashPage) Marshal() []byte {
 	if m == nil {
 		panic("empty hashmap")
 	}
-	data, _ := proto.Marshal(m)
-	return data
+
+	b := new(bytes.Buffer)
+	size := uint64(len(*m))
+	if size == 0 {
+		return nil
+	}
+	marshalSize := 8 + size*(4+1+2+4)
+	b.Grow(int(marshalSize))
+	b.Write(types.EncodeUint64(&size))
+	for k, v := range *m {
+		b.Write(types.EncodeUint32(&k))
+		b.Write(types.EncodeUint8(&v.ObjIdx))
+		b.Write(types.EncodeUint16(&v.BlkIdx))
+		b.Write(types.EncodeUint32(&v.RowIdx))
+	}
+	return b.Bytes()
 }
 
-func (page *TransferHashPage) Unmarshal(data []byte) (*api.HashPageMap, error) {
-	m := api.HashPageMap{}
-	err := proto.Unmarshal(data, &m)
-	if err != nil {
-		return nil, err
+func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
+	if len(data) == 0 {
+		emptyMap := make(api.TransferMap)
+		return &emptyMap, nil
 	}
-	return &m, nil
+	b := bytes.NewBuffer(data)
+	size := types.DecodeUint64(b.Next(8))
+	transferMap := make(api.TransferMap, size)
+	for b.Len() != 0 {
+		k := types.DecodeUint32(b.Next(4))
+		vO := types.DecodeUint8(b.Next(1))
+		vB := types.DecodeUint16(b.Next(2))
+		vR := types.DecodeUint32(b.Next(4))
+
+		transferMap[k] = api.TransferDestPos{
+			ObjIdx: vO,
+			BlkIdx: vB,
+			RowIdx: vR,
+		}
+	}
+	return &transferMap, nil
 }
 
 func (page *TransferHashPage) SetPath(path Path) {
 	page.path = path
 }
 
-func (page *TransferHashPage) loadTable() *api.HashPageMap {
+func (page *TransferHashPage) loadTable() *api.TransferMap {
 	if page.path.Name == "" {
 		return nil
 	}
@@ -247,6 +275,7 @@ func (page *TransferHashPage) loadTable() *api.HashPageMap {
 		logutil.Errorf("[TransferPage] read persist table %v: %v", page.path.Name, err)
 		return nil
 	}
+	defer ioVector.Release()
 
 	m = page.hashmap.Load()
 	if m != nil {
@@ -256,6 +285,8 @@ func (page *TransferHashPage) loadTable() *api.HashPageMap {
 	if err != nil {
 		return nil
 	}
+	now := time.Now()
+	page.bornTS.Store(&now)
 	page.hashmap.Store(m)
 	logutil.Infof("[TransferPage] load transfer page %v", page.String())
 	v2.TaskMergeTransferPageLengthGauge.Add(float64(page.Length()))

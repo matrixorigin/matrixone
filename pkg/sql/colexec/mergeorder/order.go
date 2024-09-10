@@ -16,7 +16,6 @@ package mergeorder
 
 import (
 	"bytes"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -58,8 +57,10 @@ func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) erro
 }
 
 func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
+	if len(ctr.compares) > 0 {
+		return
+	}
 	var desc, nullsLast bool
-
 	ctr.compares = make([]compare.Compare, len(fs))
 	for i := range ctr.compares {
 		desc = fs[i].Flag&plan2.OrderBySpec_DESC != 0
@@ -78,15 +79,14 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 }
 
 func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) (sendOver bool, err error) {
-	if ctr.buf != nil {
-		proc.PutBatch(ctr.buf)
-		ctr.buf = nil
-	}
-	ctr.buf = batch.NewWithSize(ctr.batchList[0].VectorCount())
 	mp := proc.Mp()
-
-	for i := range ctr.buf.Vecs {
-		ctr.buf.Vecs[i] = proc.GetVector(*ctr.batchList[0].Vecs[i].GetType())
+	if ctr.buf == nil {
+		ctr.buf = batch.NewWithSize(ctr.batchList[0].VectorCount())
+		for i := range ctr.buf.Vecs {
+			ctr.buf.Vecs[i] = vector.NewVec(*ctr.batchList[0].Vecs[i].GetType())
+		}
+	} else {
+		ctr.buf.CleanOnlyData()
 	}
 
 	wholeLength := 0
@@ -150,7 +150,6 @@ func (ctr *container) removeBatch(proc *process.Process, index int) {
 
 	alreadyPut := make(map[*vector.Vector]bool, len(bat.Vecs))
 	for i := range bat.Vecs {
-		proc.PutVector(bat.Vecs[i])
 		alreadyPut[bat.Vecs[i]] = true
 	}
 	ctr.batchList = append(ctr.batchList[:index], ctr.batchList[index+1:]...)
@@ -160,7 +159,10 @@ func (ctr *container) removeBatch(proc *process.Process, index int) {
 		if _, ok := alreadyPut[cols[i]]; ok {
 			continue
 		}
-		proc.PutVector(cols[i])
+		cols[i].Free(proc.GetMPool())
+	}
+	for v := range alreadyPut {
+		v.Free(proc.GetMPool())
 	}
 	ctr.orderCols = append(ctr.orderCols[:index], ctr.orderCols[index+1:]...)
 }
@@ -183,18 +185,17 @@ func (mergeOrder *MergeOrder) OpType() vm.OpType {
 }
 
 func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
-	mergeOrder.ctr = new(container)
-	ctr := mergeOrder.ctr
+	ctr := &mergeOrder.ctr
+	if len(mergeOrder.ctr.executors) == 0 {
+		ctr.batchList = make([]*batch.Batch, 0, defaultCacheBatchSize)
+		ctr.orderCols = make([][]*vector.Vector, 0, defaultCacheBatchSize)
 
-	length := 2 * len(proc.Reg.MergeReceivers)
-	ctr.batchList = make([]*batch.Batch, 0, length)
-	ctr.orderCols = make([][]*vector.Vector, 0, length)
-
-	mergeOrder.ctr.executors = make([]colexec.ExpressionExecutor, len(mergeOrder.OrderBySpecs))
-	for i := range mergeOrder.ctr.executors {
-		mergeOrder.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, mergeOrder.OrderBySpecs[i].Expr)
-		if err != nil {
-			return err
+		mergeOrder.ctr.executors = make([]colexec.ExpressionExecutor, len(mergeOrder.OrderBySpecs))
+		for i := range mergeOrder.ctr.executors {
+			mergeOrder.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, mergeOrder.OrderBySpecs[i].Expr)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -205,21 +206,19 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	ctr := mergeOrder.ctr
+	ctr := &mergeOrder.ctr
 	anal := proc.GetAnalyze(mergeOrder.GetIdx(), mergeOrder.GetParallelIdx(), mergeOrder.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	result := vm.NewCallResult()
-	var err error
 	for {
 		switch ctr.status {
 		case receiving:
-			result, err = vm.ChildrenCall(mergeOrder.GetChildren(0), proc, anal)
+			input, err := vm.ChildrenCall(mergeOrder.GetChildren(0), proc, anal)
 			if err != nil {
-				return result, err
+				return vm.CancelResult, err
 			}
 
-			if result.Batch == nil {
+			if input.Batch == nil {
 				// if number of block is less than 2, no need to do merge sort.
 				ctr.status = normalSending
 
@@ -228,7 +227,7 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 
 					// evaluate the first batch's order column.
 					if err = ctr.evaluateOrderColumn(proc, 0); err != nil {
-						return result, err
+						return input, err
 					}
 					ctr.generateCompares(mergeOrder.OrderBySpecs)
 					ctr.indexList = make([]int64, len(ctr.batchList))
@@ -236,36 +235,49 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 				continue
 			}
 
-			bat := result.Batch
-			atomic.AddInt64(&bat.Cnt, 1)
+			if input.Batch.IsEmpty() {
+				continue
+			}
+
+			bat, err := input.Batch.Dup(proc.GetMPool())
+			if err != nil {
+				return vm.CancelResult, err
+			}
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
-				return result, err
+				return vm.CancelResult, err
 			}
 
 		case normalSending:
 			if len(ctr.batchList) == 0 {
-				result.Batch = nil
-				result.Status = vm.ExecStop
-				return result, nil
+				return vm.CancelResult, nil
 			}
 
 			// If only one batch, no need to sort. just send it.
 			if len(ctr.batchList) == 1 {
+				if ctr.buf != nil {
+					ctr.buf.Clean(proc.Mp())
+					ctr.buf = nil
+				}
 				ctr.buf = ctr.batchList[0]
 				ctr.batchList[0] = nil
+				result := vm.NewCallResult()
 				result.Batch = ctr.buf
-				result.Status = vm.ExecStop
 				return result, nil
 			}
+			return vm.CancelResult, nil
 
 		case pickUpSending:
-			ok, err := ctr.pickAndSend(proc, &result)
-			if ok {
-				result.Status = vm.ExecStop
+			result := vm.NewCallResult()
+			sendOver, err := ctr.pickAndSend(proc, &result)
+			if sendOver {
+				ctr.status = finish
 				return result, err
 			}
 			result.Status = vm.ExecHasMore
 			return result, err
+
+		case finish:
+			return vm.CancelResult, nil
 		}
 	}
 }

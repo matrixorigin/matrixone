@@ -20,9 +20,16 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/golang/mock/gomock"
@@ -30,10 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -50,17 +53,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -91,7 +87,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	txnOperator.EXPECT().Snapshot().AnyTimes()
 
 	a := reuse.Alloc[process.AnalyzeInfo](nil)
-	proc := process.New(defines.AttachAccountId(context.TODO(), catalog.System_Account),
+	proc := process.NewTopProcess(defines.AttachAccountId(context.TODO(), catalog.System_Account),
 		nil,
 		nil,
 		txnOperator,
@@ -140,7 +136,7 @@ func Test_refactorScope(t *testing.T) {
 	s := reuse.Alloc[Scope](nil)
 	s.Proc = proc
 	c := reuse.Alloc[Compile](nil)
-	c.anal = newAnaylze()
+	c.anal = newAnalyzeModule()
 	c.proc = proc
 	c.proc.Ctx = ctx
 	rs := appendWriteBackOperator(c, s)
@@ -207,12 +203,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 			Conditions: [][]*plan.Expr{nil, nil},
 		},
 		&limit.Limit{},
-		&loopanti.LoopAnti{},
 		&loopjoin.LoopJoin{},
-		&loopleft.LoopLeft{},
-		&loopsemi.LoopSemi{},
-		&loopsingle.LoopSingle{},
-		&loopmark.LoopMark{},
 		&offset.Offset{},
 		&order.Order{},
 		&product.Product{},
@@ -231,9 +222,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&merge.Merge{},
 		&mergerecursive.MergeRecursive{},
 		&mergegroup.MergeGroup{},
-		&mergelimit.MergeLimit{},
-		&mergelimit.MergeLimit{},
-		&mergeoffset.MergeOffset{},
 		&mergetop.MergeTop{},
 		&mergeorder.MergeOrder{},
 		&mark.MarkJoin{
@@ -245,10 +233,9 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 				ExParam: exParam,
 			},
 		},
-		//hashbuild operator dont need to serialize
-		//{
-		//	Arg: &hashbuild.Argument{},
-		//},
+		&hashbuild.HashBuild{},
+		&shufflebuild.ShuffleBuild{},
+		&indexbuild.IndexBuild{},
 		&source.Source{},
 	}
 	ctx := &scopeContext{
@@ -261,8 +248,11 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		pipe:     nil,
 		regs:     nil,
 	}
+
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
 	for _, op := range ops {
-		_, _, err := convertToPipelineInstruction(op, ctx, 1)
+		_, _, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.Nil(t, err)
 	}
 }
@@ -295,12 +285,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.RightSemi), RightSemiJoin: &pipeline.RightSemiJoin{}},
 		{Op: int32(vm.RightAnti), RightAntiJoin: &pipeline.RightAntiJoin{}},
 		{Op: int32(vm.Limit), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
-		{Op: int32(vm.LoopAnti), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.LoopJoin), Join: &pipeline.Join{}},
-		{Op: int32(vm.LoopLeft), LeftJoin: &pipeline.LeftJoin{}},
-		{Op: int32(vm.LoopSemi), SemiJoin: &pipeline.SemiJoin{}},
-		{Op: int32(vm.LoopSingle), SingleJoin: &pipeline.SingleJoin{}},
-		{Op: int32(vm.LoopMark), MarkJoin: &pipeline.MarkJoin{}},
 		{Op: int32(vm.Offset), Offset: plan.MakePlan2Int64ConstExprWithType(0)},
 		{Op: int32(vm.Order), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.Product), Product: &pipeline.Product{}},
@@ -315,17 +300,17 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.IntersectAll), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.Minus), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.Connector), Connect: &pipeline.Connector{}},
-		{Op: int32(vm.Merge)},
+		{Op: int32(vm.Merge), Merge: &pipeline.Merge{}},
 		{Op: int32(vm.MergeRecursive)},
 		{Op: int32(vm.MergeGroup), Agg: &pipeline.Group{}},
-		{Op: int32(vm.MergeLimit), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
-		{Op: int32(vm.MergeOffset), Offset: plan.MakePlan2Int64ConstExprWithType(0)},
 		{Op: int32(vm.MergeTop), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.MergeOrder), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.TableFunction), TableFunction: &pipeline.TableFunction{}},
-		//{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
+		{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
 		{Op: int32(vm.External), ExternalScan: &pipeline.ExternalScan{}},
 		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
+		{Op: int32(vm.ShuffleBuild), ShuffleBuild: &pipeline.Shufflebuild{}},
+		{Op: int32(vm.IndexBuild), IndexBuild: &pipeline.Indexbuild{}},
 	}
 	for _, instruction := range instructions {
 		_, err := convertToVmOperator(instruction, ctx, nil)
@@ -334,7 +319,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 }
 
 func Test_mergeAnalyseInfo(t *testing.T) {
-	target := newAnaylze()
+	target := newAnalyzeModule()
 	a := reuse.Alloc[process.AnalyzeInfo](nil)
 	target.analInfos = []*process.AnalyzeInfo{a}
 	ana := &pipeline.AnalysisList{
@@ -372,7 +357,7 @@ func Test_convertToPlanAnalyzeInfo(t *testing.T) {
 
 func Test_decodeBatch(t *testing.T) {
 	mp := &mpool.MPool{}
-	vp := process.New(
+	vp := process.NewTopProcess(
 		context.TODO(),
 		nil,
 		nil,
@@ -395,7 +380,6 @@ func Test_decodeBatch(t *testing.T) {
 		Attrs:      []string{"1"},
 		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
 		Aggs:       []aggexec.AggFuncExec{agg0},
-		AuxData:    nil,
 	}
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)

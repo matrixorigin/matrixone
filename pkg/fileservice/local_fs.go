@@ -29,14 +29,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	"go.uber.org/zap"
 )
 
 // LocalFS is a FileService implementation backed by local file system
@@ -47,7 +48,6 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
-	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -108,13 +108,14 @@ func NewLocalFS(
 		return nil, err
 	}
 
-	if fs.memCache != nil {
-		fs.allocator = fs.memCache
-	} else {
-		fs.allocator = GetDefaultCacheDataAllocator()
-	}
-
 	return fs, nil
+}
+
+func (l *LocalFS) AllocateCacheData(size int) fscache.Data {
+	if l.memCache != nil {
+		l.memCache.cache.EnsureNBytes(size)
+	}
+	return DefaultCacheDataAllocator().AllocateCacheData(size)
 }
 
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -132,7 +133,8 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 
 	if *config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
 		l.memCache = NewMemCache(
-			NewMemoryCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
+			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
+			&config.CacheCallbacks,
 			l.perfCounterSets,
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -147,9 +149,10 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			l.diskCache, err = NewDiskCache(
 				ctx,
 				*config.DiskPath,
-				int(*config.DiskCapacity),
+				fscache.ConstCapacity(int64(*config.DiskCapacity)),
 				l.perfCounterSets,
 				true,
+				l,
 			)
 			if err != nil {
 				return err
@@ -302,16 +305,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	stats := statistic.StatsInfoFromContext(ctx)
 
-	allocator := l.allocator
-	if vector.Policy.Any(SkipMemoryCache) {
-		allocator = GetDefaultCacheDataAllocator()
-	}
-	for i := range vector.Entries {
-		vector.Entries[i].allocator = allocator
-	}
-
 	for _, cache := range vector.Caches {
-		cache := cache
 
 		t0 := time.Now()
 		err := readCache(ctx, cache, vector)
@@ -356,11 +350,6 @@ read_memory_cache:
 		}()
 	}
 
-	ioStart := time.Now()
-	defer func() {
-		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
-	}()
-
 	startLock := time.Now()
 	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
 	if done != nil {
@@ -371,6 +360,12 @@ read_memory_cache:
 		stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 		goto read_memory_cache
 	}
+
+	// Record diskIO and netwokIO(un memory IO) resource
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
 
 	if l.diskCache != nil {
 
@@ -427,7 +422,6 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	for _, cache := range vector.Caches {
-		cache := cache
 		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
@@ -517,8 +511,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					R: r,
 					C: counter,
 				}
-				var cacheData memorycache.CacheData
-				cacheData, err = entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
+				var cacheData fscache.Data
+				cacheData, err = entry.ToCacheData(cr, nil, l)
 				if err != nil {
 					return err
 				}
@@ -596,7 +590,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				}
 			}
 
-			if err = entry.setCachedData(ctx); err != nil {
+			if err = entry.setCachedData(ctx, l); err != nil {
 				return err
 			}
 
@@ -664,8 +658,8 @@ func (l *LocalFS) handleReadCloserForRead(
 			r: io.TeeReader(r, buf),
 			closeFunc: func() error {
 				defer file.Close()
-				var cacheData memorycache.CacheData
-				cacheData, err = entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
+				var cacheData fscache.Data
+				cacheData, err = entry.ToCacheData(buf, buf.Bytes(), l)
 				if err != nil {
 					return err
 				}

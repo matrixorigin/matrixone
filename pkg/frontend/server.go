@@ -18,8 +18,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"net"
 	"sync"
@@ -32,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // RelationName counter for the new connection
@@ -53,6 +53,13 @@ type MOServer struct {
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
+}
+
+// Server interface is for mock MOServer
+type Server interface {
+	GetRoutineManager() *RoutineManager
+	Start() error
+	Stop() error
 }
 
 // BaseService is an interface which indicates that the instance is
@@ -78,6 +85,7 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
+	mo.running = true
 	mo.startListener()
 	setMoServerStarted(true)
 	return nil
@@ -112,6 +120,12 @@ func (mo *MOServer) Stop() error {
 	}
 	logutil.Debug("application stopped")
 	return nil
+}
+
+func (mo *MOServer) IsRunning() bool {
+	mo.mu.RLock()
+	defer mo.mu.RUnlock()
+	return mo.running
 }
 
 func (mo *MOServer) startListener() {
@@ -155,17 +169,30 @@ func (mo *MOServer) startAccept(listener net.Listener) {
 	}
 }
 func (mo *MOServer) handleConn(conn net.Conn) {
-	rs, err := NewIOSession(conn, mo.pu)
+	var rs *Conn
+	var err error
+	defer func() {
+		if rs != nil {
+			err = rs.Close()
+			if err != nil {
+				logutil.Error("Handle conn error", zap.Error(err))
+				return
+			}
+		}
+	}()
+
+	rs, err = NewIOSession(conn, mo.pu)
 	if err != nil {
-		mo.rm.Closed(rs)
 		logutil.Error("NewIOSession error", zap.Error(err))
 		return
 	}
-	mo.rm.Created(rs)
-	err = mo.handshake(rs)
-
+	err = mo.rm.Created(rs)
 	if err != nil {
-		mo.rm.Closed(rs)
+		logutil.Error("Create routine error", zap.Error(err))
+		return
+	}
+	err = mo.handshake(rs)
+	if err != nil {
 		logutil.Error("HandShake error", zap.Error(err))
 		return
 	}
@@ -173,11 +200,6 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 }
 
 func (mo *MOServer) handleLoop(rs *Conn) {
-	defer func() {
-		if err := rs.Close(); err != nil {
-			logutil.Error("close session failed", zap.Error(err))
-		}
-	}()
 	if err := mo.handleMessage(rs); err != nil {
 		logutil.Error("handle session failed", zap.Error(err))
 	}
@@ -195,6 +217,13 @@ func (mo *MOServer) handshake(rs *Conn) error {
 	defer tempCancel()
 
 	routine := rm.getRoutine(rs)
+	if routine == nil {
+		logutil.Error(
+			"Failed to handshake with server, routine does not exist...",
+			zap.Error(err))
+		return err
+	}
+
 	protocol := routine.getProtocol()
 
 	ses := routine.getSession()
@@ -327,7 +356,11 @@ func setGlobalRtMgr(rtMgr *RoutineManager) {
 }
 
 func getGlobalRtMgr() *RoutineManager {
-	return globalRtMgr.Load().(*RoutineManager)
+	v := globalRtMgr.Load()
+	if v != nil {
+		return v.(*RoutineManager)
+	}
+	return nil
 }
 
 func setGlobalPu(pu *config.ParameterUnit) {
@@ -420,6 +453,10 @@ func (mo *MOServer) handleMessage(rs *Conn) error {
 func (mo *MOServer) handleRequest(rs *Conn) error {
 	var msg []byte
 	var err error
+	if !mo.IsRunning() {
+		return io.EOF
+	}
+
 	msg, err = rs.Read()
 	if err != nil {
 		if err == io.EOF {

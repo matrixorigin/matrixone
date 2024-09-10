@@ -26,16 +26,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/simdcsv"
+	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -43,10 +44,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-
-	"github.com/matrixorigin/simdcsv"
-	"go.uber.org/zap"
 )
 
 const LoggerNameETLMerge = "ETLMerge"
@@ -71,6 +70,7 @@ const defaultMaxFileSize = 32 * mpool.MB
 //
 // - Merge.doMergeFiles handle one job flow: read each file, merge in cache, write into file.
 type Merge struct {
+	service     string
 	task        task.AsyncTask          // set by WithTask
 	table       *table.Table            // set by WithTable
 	fs          fileservice.FileService // set by WithFileService
@@ -129,12 +129,16 @@ func WithMaxMergeJobs(jobs int64) MergeOption {
 // serviceInited handle Merge as service
 var serviceInited uint32
 
-func NewMergeService(ctx context.Context, opts ...MergeOption) (*Merge, bool, error) {
+func NewMergeService(
+	ctx context.Context,
+	service string,
+	opts ...MergeOption,
+) (*Merge, bool, error) {
 	// fix multi-init in standalone
 	if !atomic.CompareAndSwapUint32(&serviceInited, 0, 1) {
 		return nil, true, nil
 	}
-	m, err := NewMerge(ctx, opts...)
+	m, err := NewMerge(ctx, service, opts...)
 	return m, false, err
 }
 
@@ -154,13 +158,18 @@ func getMpool() (*mpool.MPool, error) {
 	return ETLMergeTaskPool, nil
 }
 
-func NewMerge(ctx context.Context, opts ...MergeOption) (*Merge, error) {
+func NewMerge(
+	ctx context.Context,
+	service string,
+	opts ...MergeOption,
+) (*Merge, error) {
 	var err error
 	m := &Merge{
+		service:      service,
 		pathBuilder:  table.NewAccountDatePathBuilder(),
 		MaxFileSize:  defaultMaxFileSize,
 		MaxMergeJobs: 1,
-		logger:       runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameETLMerge),
+		logger:       runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameETLMerge),
 	}
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
 	for _, opt := range opts {
@@ -341,7 +350,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 		row := m.table.GetRow(ctx)
 		defer row.Free()
 		// open reader
-		reader, err := newETLReader(ctx, m.table, m.fs, fp.FilePath, fp.FileSize, m.mp)
+		reader, err := newETLReader(ctx, m.service, m.table, m.fs, fp.FilePath, fp.FileSize, m.mp)
 		if err != nil {
 			v2.TraceETLMergeOpenFailedCounter.Inc()
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
@@ -486,8 +495,14 @@ type ContentReader struct {
 // BatchReadRows ~= 20MB rawlog file has about 3700+ rows
 const BatchReadRows = 4000
 
-func NewContentReader(ctx context.Context, path string, reader *simdcsv.Reader, raw io.ReadCloser) *ContentReader {
-	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameContentReader)
+func NewContentReader(
+	ctx context.Context,
+	service string,
+	path string,
+	reader *simdcsv.Reader,
+	raw io.ReadCloser,
+) *ContentReader {
+	logger := runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameContentReader)
 	return &ContentReader{
 		ctx:     ctx,
 		path:    path,
@@ -530,7 +545,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 	if s.idx < s.length {
 		idx := s.idx
 		s.idx++
-		if s.content == nil || len(s.content) == 0 {
+		if len(s.content) == 0 {
 			s.logger.Error("ContentReader.ReadLine.nil",
 				logutil.PathField(s.path),
 				zap.Bool("nil", s.content == nil),
@@ -560,9 +575,17 @@ func (s *ContentReader) Close() {
 	}
 }
 
-func newETLReader(ctx context.Context, tbl *table.Table, fs fileservice.FileService, path string, size int64, mp *mpool.MPool) (ETLReader, error) {
+func newETLReader(
+	ctx context.Context,
+	service string,
+	tbl *table.Table,
+	fs fileservice.FileService,
+	path string,
+	size int64,
+	mp *mpool.MPool,
+) (ETLReader, error) {
 	if strings.LastIndex(path, table.CsvExtension) > 0 {
-		return NewCSVReader(ctx, fs, path)
+		return NewCSVReader(ctx, service, fs, path)
 	} else if strings.LastIndex(path, table.TaeExtension) > 0 {
 		r, err := etl.NewTaeReader(ctx, tbl, path, size, fs, mp)
 		if err != nil {
@@ -583,7 +606,12 @@ func newETLReader(ctx context.Context, tbl *table.Table, fs fileservice.FileServ
 // NewCSVReader create new csv reader.
 // success case return: ok_reader, nil error
 // failed case return: nil_reader, error
-func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) (ETLReader, error) {
+func NewCSVReader(
+	ctx context.Context,
+	service string,
+	fs fileservice.FileService,
+	path string,
+) (ETLReader, error) {
 	// external.ReadFile
 	var reader io.ReadCloser
 	vec := fileservice.IOVector{
@@ -609,7 +637,7 @@ func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) 
 		true)
 
 	// return content Reader
-	return NewContentReader(ctx, path, simdCsvReader, reader), nil
+	return NewContentReader(ctx, service, path, simdCsvReader, reader), nil
 }
 
 type Cache interface {
@@ -650,7 +678,13 @@ func (c *SliceCache) Put(r *table.Row) {
 
 func (c *SliceCache) Size() int64 { return c.size }
 
-func LongRunETLMerge(ctx context.Context, task task.AsyncTask, logger *log.MOLogger, opts ...MergeOption) error {
+func LongRunETLMerge(
+	ctx context.Context,
+	service string,
+	task task.AsyncTask,
+	logger *log.MOLogger,
+	opts ...MergeOption,
+) error {
 	// should init once in/with schema-init.
 	tables := table.GetAllTables()
 	if len(tables) == 0 {
@@ -662,7 +696,7 @@ func LongRunETLMerge(ctx context.Context, task task.AsyncTask, logger *log.MOLog
 	newOptions = append(newOptions, opts...)
 	newOptions = append(newOptions, WithTask(task))
 	newOptions = append(newOptions, WithTable(tables[0]))
-	merge, err := NewMerge(ctx, newOptions...)
+	merge, err := NewMerge(ctx, service, newOptions...)
 	if err != nil {
 		return err
 	}
@@ -679,8 +713,10 @@ func LongRunETLMerge(ctx context.Context, task task.AsyncTask, logger *log.MOLog
 	return nil
 }
 
-func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, task task.Task) error {
-
+func MergeTaskExecutorFactory(
+	service string,
+	opts ...MergeOption,
+) func(ctx context.Context, task task.Task) error {
 	CronMerge := func(ctx context.Context, t task.Task) error {
 		asyncTask, ok := t.(*task.AsyncTask)
 		if !ok {
@@ -691,7 +727,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 
 		args := asyncTask.Metadata.Context
 		ts := time.Now()
-		logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameETLMerge)
+		logger := runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameETLMerge)
 		fields := []zap.Field{
 			zap.String("args", util.UnsafeBytesToString(args)),
 			zap.Time("start", ts),
@@ -706,7 +742,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		if len(args) != 0 {
 			logger.Warn("ETLMergeTask should have empty args", zap.Int("cnt", len(args)))
 		}
-		if err := LongRunETLMerge(ctx, *asyncTask, logger, opts...); err != nil {
+		if err := LongRunETLMerge(ctx, service, *asyncTask, logger, opts...); err != nil {
 			return err
 		}
 		return nil
@@ -740,12 +776,17 @@ func MergeTaskMetadata(id task.TaskCode, args ...string) task.TaskMetadata {
 	}
 }
 
-func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService taskservice.TaskService) error {
+func CreateCronTask(
+	ctx context.Context,
+	service string,
+	executorID task.TaskCode,
+	taskService taskservice.TaskService,
+) error {
 	var err error
 	ctx, span := trace.Start(ctx, "ETLMerge.CreateCronTask")
 	defer span.End()
 	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
-	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx)
+	logger := runtime.ServiceRuntime(service).Logger().WithContext(ctx)
 	logger.Info(fmt.Sprintf("init merge task with CronExpr: %s", MergeTaskCronExpr))
 	if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID), MergeTaskCronExpr); err != nil {
 		return err
@@ -756,7 +797,7 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 // InitCronExpr support min interval 5 min, max 12 hour
 func InitCronExpr(ctx context.Context, duration time.Duration) error {
 	if duration < 0 || duration > 12*time.Hour {
-		return moerr.NewNotSupported(ctx, "export cron expr not support cycle: %v", duration)
+		return moerr.NewNotSupportedf(ctx, "export cron expr not support cycle: %v", duration)
 	}
 	if duration < 5*time.Minute {
 		MergeTaskCronExpr = fmt.Sprintf("@every %.0fs", duration.Seconds())

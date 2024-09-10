@@ -66,6 +66,8 @@ option (gogoproto.protosizer_all) = true;
    ConnectorKafkaSink = 4;
    // MergeObject is for the merge object task.
    MergeObject = 5;
+   // Retention is for table retention
+   Retention = 6;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
@@ -165,12 +167,15 @@ option (gogoproto.protosizer_all) = true;
 enum TaskType {
   Unknown = 0 [(gogoproto.enumvalue_customname) = "TypeUnknown"];
   KafkaSinkConnector = 1 [(gogoproto.enumvalue_customname) = "TypeKafkaSinkConnector"];
+  RetentionType = 2 [(gogoproto.enumvalue_customname) = "TypeRetention"];
 }
 
 message ConnectorDetails {
   string TableName = 1;
   map<string, string> Options = 2;
 }
+
+message RetentionDetails {}
 
 message Details {
   string Description = 1;
@@ -180,6 +185,7 @@ message Details {
   string Error = 5;
   oneof Details {
     ConnectorDetails Connector = 10;
+    RetentionDetails Retention = 11;
   }
 }
 

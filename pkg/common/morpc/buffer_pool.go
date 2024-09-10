@@ -20,7 +20,8 @@ import (
 )
 
 type Buffer struct {
-	buf *buf.ByteBuf
+	markIdx int
+	buf     *buf.ByteBuf
 }
 
 // NewBuffer creates a new buffer
@@ -33,6 +34,7 @@ func (b Buffer) TypeName() string {
 }
 
 func (b *Buffer) reset() {
+	b.markIdx = 0
 	b.buf.Reset()
 }
 
@@ -49,4 +51,45 @@ func (b *Buffer) EncodeUint64(
 		panic(err)
 	}
 	return b.buf.RawSlice(idx, b.buf.GetWriteIndex())
+}
+
+func (b *Buffer) EncodeUint16(
+	v uint16,
+) []byte {
+	b.buf.Grow(2)
+	idx := b.buf.GetWriteIndex()
+	if err := b.buf.WriteUint16(v); err != nil {
+		panic(err)
+	}
+	return b.buf.RawSlice(idx, b.buf.GetWriteIndex())
+}
+
+func (b *Buffer) EncodeBytes(
+	bys []byte,
+) []byte {
+	b.buf.Grow(len(bys))
+	idx := b.buf.GetWriteIndex()
+	if _, err := b.buf.Write(bys); err != nil {
+		panic(err)
+	}
+	return b.buf.RawSlice(idx, b.buf.GetWriteIndex())
+}
+
+func (b *Buffer) EncodeInt(
+	v int,
+) []byte {
+	b.buf.Grow(4)
+	idx := b.buf.GetWriteIndex()
+	if err := b.buf.WriteInt(v); err != nil {
+		panic(err)
+	}
+	return b.buf.RawSlice(idx, b.buf.GetWriteIndex())
+}
+
+func (b *Buffer) Mark() {
+	b.markIdx = b.buf.GetWriteIndex()
+}
+
+func (b *Buffer) GetMarkedData() []byte {
+	return b.buf.RawSlice(b.markIdx, b.buf.GetWriteIndex())
 }

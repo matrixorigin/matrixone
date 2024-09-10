@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,20 +32,20 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state            int
 	checkConflictBat *batch.Batch // batch to check conflict
-	rbat             *batch.Batch
+	rbat             *batch.Batch // return batch
+	uniqueCheckExes  []colexec.ExpressionExecutor
 }
 
 type OnDuplicatekey struct {
 	Affected uint64
-	Engine   engine.Engine
 
 	// Source       engine.Relation
 	// UniqueSource []engine.Relation
 	// Ref          *plan.ObjectRef
+
+	// letter case: origin
 	Attrs              []string
 	InsertColCount     int32
 	UniqueColCheckExpr []*plan.Expr
@@ -54,9 +53,7 @@ type OnDuplicatekey struct {
 	OnDuplicateIdx     []int32
 	OnDuplicateExpr    map[string]*plan.Expr
 
-	IdxIdx []int32
-
-	ctr      *container
+	ctr      container
 	IsIgnore bool
 
 	vm.OperatorBase
@@ -94,18 +91,33 @@ func (onDuplicatekey *OnDuplicatekey) Release() {
 }
 
 func (onDuplicatekey *OnDuplicatekey) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	onDuplicatekey.Free(proc, pipelineFailed, err)
+	if onDuplicatekey.ctr.rbat != nil {
+		onDuplicatekey.ctr.rbat.CleanOnlyData()
+	}
+	if onDuplicatekey.ctr.checkConflictBat != nil {
+		onDuplicatekey.ctr.checkConflictBat.CleanOnlyData()
+	}
+	for _, exe := range onDuplicatekey.ctr.uniqueCheckExes {
+		if exe != nil {
+			exe.ResetForNextQuery()
+		}
+	}
+	onDuplicatekey.ctr.state = Build
 }
 
 func (onDuplicatekey *OnDuplicatekey) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if onDuplicatekey.ctr != nil {
-		onDuplicatekey.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if onDuplicatekey.ctr.rbat != nil {
-			onDuplicatekey.ctr.rbat.Clean(proc.GetMPool())
-		}
-		if onDuplicatekey.ctr.checkConflictBat != nil {
-			onDuplicatekey.ctr.checkConflictBat.Clean(proc.GetMPool())
-		}
-		onDuplicatekey.ctr = nil
+	if onDuplicatekey.ctr.rbat != nil {
+		onDuplicatekey.ctr.rbat.Clean(proc.GetMPool())
+		onDuplicatekey.ctr.rbat = nil
 	}
+	if onDuplicatekey.ctr.checkConflictBat != nil {
+		onDuplicatekey.ctr.checkConflictBat.Clean(proc.GetMPool())
+		onDuplicatekey.ctr.checkConflictBat = nil
+	}
+	for _, exe := range onDuplicatekey.ctr.uniqueCheckExes {
+		if exe != nil {
+			exe.Free()
+		}
+	}
+	onDuplicatekey.ctr.uniqueCheckExes = nil
 }

@@ -269,6 +269,31 @@ var (
 	TxnPreparedWaitDurationHistogram   = txnTNSideDurationHistogram.WithLabelValues("5-PreparedWait")
 	TxnPreparedDurationHistogram       = txnTNSideDurationHistogram.WithLabelValues("6-Prepared")
 
+	txnS3TombstoneCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "S3_tombstone",
+			Help:      "Total number of transfer in S3 tombstone",
+		}, []string{"type"})
+	TxnS3TombstoneSoftdeleteObjectCounter   = txnS3TombstoneCounter.WithLabelValues("softdelete objects")
+	TxnS3TombstoneTransferDataObjectCounter = txnS3TombstoneCounter.WithLabelValues("transfer data objects")
+	TxnS3TombstoneTransferStatsCounter      = txnS3TombstoneCounter.WithLabelValues("transfer tombstones")
+
+	txnS3TombstoneDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "S3_tombstone_duration",
+			Help:      "Bucketed histogram of txn duration on S3 transfer deletes",
+			Buckets:   getDurationBuckets(),
+		}, []string{"step"})
+
+	TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram = txnS3TombstoneDurationHistogram.WithLabelValues("1-GetSoftdeleteObjects")
+	TxnS3TombstoneTransferFindTombstonesHistogram       = txnS3TombstoneDurationHistogram.WithLabelValues("2-FindTombstonesOfObject")
+	TxnS3TombstoneTransferReadTombstoneHistogram        = txnS3TombstoneDurationHistogram.WithLabelValues("3-ReadTombstone")
+	TxnS3TombstoneTransferDeleteRowsHistogram           = txnS3TombstoneDurationHistogram.WithLabelValues("4-TransferDeleteRows")
+
 	TxnBeforeCommitDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
 
 	txnTNDeduplicateDurationHistogram = prometheus.NewHistogramVec(
@@ -319,4 +344,54 @@ var (
 	TxnRangesFastPathObjSortKeyZMapSelectivityHistogram = txnRangesSelectivityHistogram.WithLabelValues("fast_path_obj_sort_key_zm_selectivity")
 	TxnRangesFastPathObjColumnZMapSelectivityHistogram  = txnRangesSelectivityHistogram.WithLabelValues("fast_path_obj_column_zm_selectivity")
 	TxnRangesFastPathBlkColumnZMapSelectivityHistogram  = txnRangesSelectivityHistogram.WithLabelValues("fast_path_blk_column_zm_selectivity")
+)
+
+var (
+	TxnReaderScannedTotalTombstoneHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "reader_scanned_total_tombstone",
+			Help:      "Bucketed histogram of read scanned total tombstone.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 11),
+		})
+
+	TxnReaderEachBLKLoadedTombstoneHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "reader_each_blk_loaded",
+			Help:      "Bucketed histogram of read each blk loaded.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 11),
+		})
+
+	txnReaderTombstoneSelectivityHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "reader_tombstone_selectivity",
+			Help:      "Bucketed histogram of read tombstone.",
+			Buckets:   prometheus.ExponentialBucketsRange(0.001, 1, 21),
+		}, []string{"type"})
+
+	TxnReaderTombstoneZMSelectivityHistogram = txnReaderTombstoneSelectivityHistogram.WithLabelValues("zm_selectivity")
+	TxnReaderTombstoneBLSelectivityHistogram = txnReaderTombstoneSelectivityHistogram.WithLabelValues("bl_selectivity")
+	TransferTombstonesCountHistogram         = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "txn",
+		Name:      "transfer_tombstones_count",
+		Help:      "The total number of transfer tombstones.",
+	})
+
+	txnTransferDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "transfer_duration",
+			Help:      "Bucketed histogram of tombstones transfer durations.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"type"})
+
+	TransferTombstonesDurationHistogram      = txnTransferDurationHistogram.WithLabelValues("tombstones")
+	BatchTransferTombstonesDurationHistogram = txnTransferDurationHistogram.WithLabelValues("batch")
 )

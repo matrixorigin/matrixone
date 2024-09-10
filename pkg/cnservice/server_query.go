@@ -16,9 +16,15 @@ package cnservice
 
 import (
 	"context"
+	"runtime"
+	"runtime/debug"
+	"strings"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -80,6 +86,12 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ReloadAutoIncrementCache, s.handleReloadAutoIncrementCache, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_CtlReader, s.handleCtlReader, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -94,8 +106,12 @@ func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *
 	if accountMgr == nil {
 		return moerr.NewInternalError(ctx, "account routine manager not initialized")
 	}
-
+	logutil.Infof("[handle kill request] handle kill conn, add account id %d, version %d to kill queue", req.KillConnRequest.AccountID, req.KillConnRequest.Version)
 	accountMgr.EnKillQueue(req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+
+	resp.KillConnResponse = &query.KillConnResponse{
+		Success: true,
+	}
 	return nil
 }
 
@@ -111,15 +127,30 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 	if accountMgr == nil {
 		return moerr.NewInternalError(ctx, "account routine manager not initialized")
 	}
-
+	logutil.Infof("[handle alter request] handle alter conn, account id %d to status %s", req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
 	accountMgr.AlterRoutineStatue(req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
+	resp.AlterAccountResponse = &query.AlterAccountResponse{
+		AlterSuccess: true,
+	}
 	return nil
 }
 
 func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
-	resp.TraceSpanResponse.Resp = ctl.SelfProcess(
+	resp.TraceSpanResponse.Resp = ctl.UpdateCurrentCNTraceSpan(
 		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)
+	return nil
+}
+
+func (s *service) handleCtlReader(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	resp.CtlReaderResponse = new(query.CtlReaderResponse)
+
+	extra := strings.Split(types.DecodeStringSlice(req.CtlReaderRequest.Extra)[0], ":")
+	extra = append([]string{req.CtlReaderRequest.Cfg}, extra...)
+
+	resp.CtlReaderResponse.Resp = ctl.UpdateCurrentCNReader(
+		req.CtlReaderRequest.Cmd, extra...)
+
 	return nil
 }
 
@@ -455,5 +486,59 @@ func (s *service) handleGetReplicaCount(
 	_ *morpc.Buffer,
 ) error {
 	resp.GetReplicaCount.Count = s.shardService.ReplicaCount()
+	return nil
+}
+
+func (s *service) handleResetSession(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req.ResetSessionRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	resp.ResetSessionResponse = &query.ResetSessionResponse{}
+	if err := rm.ResetSession(req.ResetSessionRequest, resp.ResetSessionResponse); err != nil {
+		logutil.Errorf("failed to reset session: %v", err)
+		return err
+	}
+	resp.ResetSessionResponse.Success = true
+	return nil
+}
+
+func (s *service) handleGoMaxProcs(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
+	logutil.Info("QueryService::GoMaxProcs",
+		zap.String("op", "set"),
+		zap.Int32("in", req.GoMaxProcsRequest.MaxProcs),
+		zap.Int32("out", resp.GoMaxProcsResponse.MaxProcs),
+	)
+	return nil
+}
+
+func (s *service) handleGoMemLimit(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	resp.GoMemLimitResponse.MemLimitBytes = int64(debug.SetMemoryLimit(req.GoMemLimitRequest.MemLimitBytes))
+	logutil.Info("QueryService::GoMemLimit",
+		zap.String("op", "set"),
+		zap.Int64("in", req.GoMemLimitRequest.MemLimitBytes),
+		zap.Int64("out", resp.GoMemLimitResponse.MemLimitBytes),
+	)
+	return nil
+}
+
+func (s *service) handleFileServiceCacheRequest(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	resp.FileServiceCacheResponse.Message = "Not Implemented"
+	return nil
+}
+
+func (s *service) handleFileServiceCacheEvictRequest(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	resp.FileServiceCacheEvictResponse.Message = "Not Implemented"
 	return nil
 }

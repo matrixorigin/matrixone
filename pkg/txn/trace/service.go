@@ -145,7 +145,8 @@ func NewService(
 	client client.TxnClient,
 	clock clock.Clock,
 	executor executor.SQLExecutor,
-	opts ...Option) (Service, error) {
+	opts ...Option,
+) (Service, error) {
 	if err := os.RemoveAll(dataDir); err != nil {
 		return nil, err
 	}
@@ -160,7 +161,7 @@ func NewService(
 		clock:     clock,
 		executor:  executor,
 		dir:       dataDir,
-		logger:    runtime.ProcessLevelRuntime().Logger().Named("txn-trace"),
+		logger:    runtime.ServiceRuntime(cn).Logger().Named("txn-trace"),
 		loadC:     make(chan loadAction, 4),
 		txnErrorC: make(chan string, stRuntime.NumCPU()*10),
 	}
@@ -500,7 +501,7 @@ func (s *service) updateState(feature, state string) error {
 	switch feature {
 	case FeatureTraceData, FeatureTraceTxnAction, FeatureTraceTxn, FeatureTraceStatement, FeatureTraceTxnWorkspace:
 	default:
-		return moerr.NewNotSupportedNoCtx("feature %s", feature)
+		return moerr.NewNotSupportedNoCtxf("feature %s", feature)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
@@ -649,7 +650,7 @@ func (l *EntryData) createApply(
 	buf *buffer,
 	fn func(e dataEvent),
 	completedPKTables *sync.Map) {
-	commitTS := vector.MustFixedCol[types.TS](l.commitVec)
+	commitTS := vector.MustFixedColWithTypeCheck[types.TS](l.commitVec)
 
 	l.writeToBuf(
 		buf,

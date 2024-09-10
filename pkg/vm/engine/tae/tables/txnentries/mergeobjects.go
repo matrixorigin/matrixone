@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"go.uber.org/zap"
 )
 
@@ -43,15 +45,15 @@ type mergeObjectsEntry struct {
 	relation      handle.Relation
 	droppedObjs   []*catalog.ObjectEntry
 	createdObjs   []*catalog.ObjectEntry
-	transMappings *api.BlkTransferBooking
+	transMappings api.TransferMaps
 	skipTransfer  bool
 
 	rt                   *dbutils.Runtime
 	pageIds              []*common.ID
+	isTombstone          bool
 	delTbls              map[objectio.ObjectId]map[uint16]struct{}
 	collectTs            types.TS
 	transCntBeforeCommit int
-	nextRoundDirties     map[*catalog.ObjectEntry]struct{}
 }
 
 func NewMergeObjectsEntry(
@@ -60,7 +62,8 @@ func NewMergeObjectsEntry(
 	taskName string,
 	relation handle.Relation,
 	droppedObjs, createdObjs []*catalog.ObjectEntry,
-	transMappings *api.BlkTransferBooking,
+	transMappings api.TransferMaps,
+	isTombstone bool,
 	rt *dbutils.Runtime,
 ) (*mergeObjectsEntry, error) {
 	totalCreatedBlkCnt := 0
@@ -76,16 +79,20 @@ func NewMergeObjectsEntry(
 		transMappings: transMappings,
 		skipTransfer:  transMappings == nil,
 		rt:            rt,
+		isTombstone:   isTombstone,
 		taskName:      taskName,
 	}
 
 	if !entry.skipTransfer && totalCreatedBlkCnt > 0 {
 		entry.delTbls = make(map[types.Objectid]map[uint16]struct{})
-		entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
 		entry.collectTs = rt.Now()
+		_, _, ok := fault.TriggerFault("tae: slow transfer deletes")
+		if ok {
+			time.Sleep(time.Second)
+		}
 		var err error
 		// phase 1 transfer
-		entry.transCntBeforeCommit, _, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), entry.collectTs)
+		entry.transCntBeforeCommit, _, err = entry.collectDelsAndTransfer(ctx, entry.txn.GetStartTS(), entry.collectTs)
 		if err != nil {
 			return nil, err
 		}
@@ -95,31 +102,33 @@ func NewMergeObjectsEntry(
 }
 
 func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
+	if entry.isTombstone {
+		return
+	}
 	k := 0
+	pagesToSet := make([][]*model.TransferHashPage, 0, len(entry.droppedObjs))
+	bts := time.Now().Add(time.Hour)
+	createdObjIDs := make([]*objectio.ObjectId, 0, len(entry.createdObjs))
+	for _, obj := range entry.createdObjs {
+		createdObjIDs = append(createdObjIDs, obj.ID())
+	}
 	for _, obj := range entry.droppedObjs {
 		ioVector := model.InitTransferPageIO()
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
 		var duration time.Duration
 		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
-			m := entry.transMappings.Mappings[k].M
+			m := entry.transMappings[k]
 			k++
 			if len(m) == 0 {
 				continue
 			}
 			tblEntry := obj.GetTable()
-			isTransient := !tblEntry.GetLastestSchema().HasPK()
+			isTransient := !tblEntry.GetLastestSchema(false).HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
-			page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
-			mapping := make(map[uint32][]byte, len(m))
-			for srcRow, dst := range m {
-				objID := entry.createdObjs[dst.ObjIdx].ID()
-				blkID := objectio.NewBlockidWithObjectID(objID, uint16(dst.BlkIdx))
-				rowID := objectio.NewRowid(blkID, uint32(dst.RowIdx))
-				mapping[uint32(srcRow)] = rowID[:]
-			}
-			page.Train(mapping)
+			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
+			page.Train(m)
 
 			start = time.Now()
 			err := model.AddTransferPage(page, ioVector)
@@ -129,17 +138,30 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			duration += time.Since(start)
 
 			entry.pageIds = append(entry.pageIds, id)
-			_ = entry.rt.TransferTable.AddPage(page)
 			pages = append(pages, page)
 		}
 
 		start = time.Now()
 		model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+		pagesToSet = append(pagesToSet, pages)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
 	}
-	if k != len(entry.transMappings.Mappings) {
-		logutil.Fatal(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings.Mappings)))
+
+	now := time.Now()
+	for _, pages := range pagesToSet {
+		for _, page := range pages {
+			if page.BornTS() != bts {
+				page.SetBornTS(now.Add(time.Minute))
+			} else {
+				page.SetBornTS(now)
+			}
+			entry.rt.TransferTable.AddPage(page)
+		}
+	}
+
+	if k != len(entry.transMappings) {
+		logutil.Fatal(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings)))
 	}
 }
 
@@ -188,19 +210,20 @@ func (entry *mergeObjectsEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err e
 
 // ATTENTION !!! (from, to] !!!
 func (entry *mergeObjectsEntry) transferObjectDeletes(
+	ctx context.Context,
 	dropped *catalog.ObjectEntry,
 	from, to types.TS,
-	blkOffsetBase int) (transCnt int, collect, transfer time.Duration, err error) {
-
-	dataBlock := dropped.GetObjectData()
-
+	blkOffsetBase int,
+) (transCnt int, collect, transfer time.Duration, err error) {
 	inst := time.Now()
-	bat, _, err := dataBlock.CollectDeleteInRange(
-		entry.txn.GetContext(),
+	bat, err := tables.TombstoneRangeScanByObject(
+		ctx,
+		dropped.GetTable(),
+		*dropped.ID(),
 		from.Next(),
 		to,
-		false,
 		common.MergeAllocator,
+		entry.rt.VectorPool.Small,
 	)
 	if err != nil {
 		return
@@ -209,13 +232,12 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 	if bat == nil || bat.Length() == 0 {
 		return
 	}
+	defer bat.Close()
 	inst = time.Now()
 	defer func() { transfer = time.Since(inst) }()
 
-	entry.nextRoundDirties[dropped] = struct{}{}
-
-	rowid := vector.MustFixedCol[types.Rowid](bat.GetVectorByName(catalog.PhyAddrColumnName).GetDownstreamVector())
-	ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
+	rowid := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
+	ts := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
 
 	count := len(rowid)
 	transCnt += count
@@ -223,15 +245,15 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		row := rowid[i].GetRowOffset()
 		blkOffsetInObj := int(rowid[i].GetBlockOffset())
 		blkOffset := blkOffsetBase + blkOffsetInObj
-		mapping := entry.transMappings.Mappings[blkOffset].M
+		mapping := entry.transMappings[blkOffset]
 		if len(mapping) == 0 {
 			// this block had been all deleted, skip
 			// Note: it is possible that the block is empty, but not the object
 			continue
 		}
-		destpos, ok := mapping[int32(row)]
+		destpos, ok := mapping[row]
 		if !ok {
-			_min, _max := int32(math.MaxInt32), int32(0)
+			_min, _max := uint32(math.MaxUint32), uint32(0)
 			for k := range mapping {
 				if k < _min {
 					_min = k
@@ -247,16 +269,18 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		if entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] == nil {
 			entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] = make(map[uint16]struct{})
 		}
-		entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()][uint16(destpos.BlkIdx)] = struct{}{}
-		blkID := objectio.NewBlockidWithObjectID(entry.createdObjs[destpos.ObjIdx].ID(), uint16(destpos.BlkIdx))
+		entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()][destpos.BlkIdx] = struct{}{}
+		blkID := objectio.NewBlockidWithObjectID(entry.createdObjs[destpos.ObjIdx].ID(), destpos.BlkIdx)
 		entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
 		var targetObj handle.Object
-		targetObj, err = entry.relation.GetObject(entry.createdObjs[destpos.ObjIdx].ID())
+		targetObj, err = entry.relation.GetObject(entry.createdObjs[destpos.ObjIdx].ID(), entry.isTombstone)
 		if err != nil {
 			return
 		}
-		if err = targetObj.RangeDelete(
-			uint16(destpos.BlkIdx), uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact, common.MergeAllocator,
+		id := targetObj.Fingerprint()
+		id.SetBlockOffset(destpos.BlkIdx)
+		if err = targetObj.GetRelation().RangeDelete(
+			id, uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact,
 		); err != nil {
 			return
 		}
@@ -275,7 +299,9 @@ func (s *tempStat) String() string {
 }
 
 // ATTENTION !!! (from, to] !!!
-func (entry *mergeObjectsEntry) collectDelsAndTransfer(from, to types.TS) (transCnt int, stat tempStat, err error) {
+func (entry *mergeObjectsEntry) collectDelsAndTransfer(
+	ctx context.Context, from, to types.TS,
+) (transCnt int, stat tempStat, err error) {
 	if len(entry.createdObjs) == 0 {
 		return
 	}
@@ -290,7 +316,7 @@ func (entry *mergeObjectsEntry) collectDelsAndTransfer(from, to types.TS) (trans
 		hasMappingInThisObj := false
 		blkCnt := dropped.BlockCnt()
 		for iblk := 0; iblk < blkCnt; iblk++ {
-			if len(entry.transMappings.Mappings[blksOffsetBase+iblk].M) != 0 {
+			if len(entry.transMappings[blksOffsetBase+iblk]) != 0 {
 				hasMappingInThisObj = true
 				break
 			}
@@ -307,7 +333,7 @@ func (entry *mergeObjectsEntry) collectDelsAndTransfer(from, to types.TS) (trans
 		cnt := 0
 
 		var ct, tt time.Duration
-		cnt, ct, tt, err = entry.transferObjectDeletes(dropped, from, to, blksOffsetBase)
+		cnt, ct, tt, err = entry.transferObjectDeletes(ctx, dropped, from, to, blksOffsetBase)
 		if err != nil {
 			return
 		}
@@ -351,20 +377,14 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		)
 		return
 	}
-
 	// phase 2 transfer
-	transCnt, stat, err := entry.collectDelsAndTransfer(entry.collectTs, entry.txn.GetPrepareTS())
+	ctx := context.Background()
+	transCnt, stat, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, entry.txn.GetPrepareTS().Prev())
 	if err != nil {
 		return nil
 	}
 
 	inst1 := time.Now()
-	tblEntry := entry.droppedObjs[0].GetTable()
-	tblEntry.Stats.Lock()
-	for dropped := range entry.nextRoundDirties {
-		tblEntry.DeletedDirties = append(tblEntry.DeletedDirties, dropped)
-	}
-	tblEntry.Stats.Unlock()
 
 	total := time.Since(inst)
 	fields := make([]zap.Field, 0, 9)
@@ -373,7 +393,6 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		zap.String("task", entry.taskName),
 		zap.Int("total-transfer", entry.transCntBeforeCommit+transCnt),
 		zap.Int("in-queue-transfer", transCnt),
-		zap.Int("objs", len(entry.nextRoundDirties)),
 		zap.Duration("total-cost", total),
 		zap.Duration("this-tran-cost", time.Since(inst1)),
 		zap.String("commit-ts", entry.txn.GetPrepareTS().ToString()),

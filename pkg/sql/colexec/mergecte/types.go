@@ -17,7 +17,6 @@ package mergecte
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,15 +31,19 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 	buf        *batch.Batch
-	nodeCnt    int32
+	bats       []*batch.Batch
 	curNodeCnt int32
 	status     int32
+	last       bool
+	freeBats   []*batch.Batch
+	i          int
 }
 
 type MergeCTE struct {
-	ctr *container
+	ctr container
+
+	NodeCnt int
 
 	vm.OperatorBase
 }
@@ -70,6 +73,11 @@ func NewArgument() *MergeCTE {
 	return reuse.Alloc[MergeCTE](nil)
 }
 
+func (mergeCTE *MergeCTE) WithNodeCnt(nodeCnt int) *MergeCTE {
+	mergeCTE.NodeCnt = nodeCnt
+	return mergeCTE
+}
+
 func (mergeCTE *MergeCTE) Release() {
 	if mergeCTE != nil {
 		reuse.Free[MergeCTE](mergeCTE, nil)
@@ -77,17 +85,16 @@ func (mergeCTE *MergeCTE) Release() {
 }
 
 func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeCTE.Free(proc, pipelineFailed, err)
+	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
+	mergeCTE.ctr.status = sendInitial
+	mergeCTE.ctr.i = 0
+	mergeCTE.ctr.last = false
 }
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if mergeCTE.ctr != nil {
-		mergeCTE.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if mergeCTE.ctr.buf != nil {
-			mergeCTE.ctr.buf.Clean(proc.Mp())
-			mergeCTE.ctr.buf = nil
+	for _, bat := range mergeCTE.ctr.freeBats {
+		if bat != nil {
+			bat.Clean(proc.Mp())
 		}
-		mergeCTE.ctr = nil
 	}
-
 }

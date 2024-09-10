@@ -211,11 +211,14 @@ func startPythonUdfServiceCluster(
 	return nil
 }
 
-func waitHAKeeperReady(cfg logservice.HAKeeperClientConfig) (logservice.CNHAKeeperClient, error) {
+func waitHAKeeperReady(
+	service string,
+	cfg logservice.HAKeeperClientConfig,
+) (logservice.CNHAKeeperClient, error) {
 	getClient := func() (logservice.CNHAKeeperClient, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancel()
-		client, err := logservice.NewCNHAKeeperClient(ctx, cfg)
+		client, err := logservice.NewCNHAKeeperClient(ctx, service, cfg)
 		if err != nil {
 			logutil.Errorf("hakeeper not ready, err: %v", err)
 			return nil, err
@@ -294,10 +297,11 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 }
 
 func waitClusterCondition(
+	service string,
 	cfg logservice.HAKeeperClientConfig,
 	waitFunc func(logservice.CNHAKeeperClient) error,
 ) error {
-	client, err := waitHAKeeperReady(cfg)
+	client, err := waitHAKeeperReady(service, cfg)
 	if err != nil {
 		return err
 	}

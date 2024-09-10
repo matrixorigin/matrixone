@@ -79,7 +79,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	// 3. create temporary replica table which doesn't have foreign key constraints
 	err = c.runSql(qry.CreateTmpTableSql)
 	if err != nil {
-		c.proc.Info(c.proc.Ctx, "Create copy table for alter table",
+		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
 			zap.String("databaseName", c.db),
 			zap.String("origin tableName", qry.GetTableDef().Name),
 			zap.String("copy tableName", qry.CopyTableDef.Name),
@@ -91,7 +91,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	// 4. copy the original table data to the temporary replica table
 	err = c.runSql(qry.InsertTmpDataSql)
 	if err != nil {
-		c.proc.Info(c.proc.Ctx, "insert data to copy table for alter table",
+		c.proc.Error(c.proc.Ctx, "insert data to copy table for alter table",
 			zap.String("databaseName", c.db),
 			zap.String("origin tableName", qry.GetTableDef().Name),
 			zap.String("copy tableName", qry.CopyTableDef.Name),
@@ -102,7 +102,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 	// 5. drop original table
 	if err = dbSource.Delete(c.proc.Ctx, tblName); err != nil {
-		c.proc.Info(c.proc.Ctx, "drop original table for alter table",
+		c.proc.Error(c.proc.Ctx, "drop original table for alter table",
 			zap.String("databaseName", c.db),
 			zap.String("origin tableName", qry.GetTableDef().Name),
 			zap.String("copy tableName", qry.CopyTableDef.Name),
@@ -116,7 +116,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
 			err = c.runSql(deleteSql)
 			if err != nil {
-				c.proc.Info(c.proc.Ctx, "delete all index meta data of origin table in `mo_indexes` for alter table",
+				c.proc.Error(c.proc.Ctx, "delete all index meta data of origin table in `mo_indexes` for alter table",
 					zap.String("databaseName", c.db),
 					zap.String("origin tableName", qry.GetTableDef().Name),
 					zap.String("delete all index sql", deleteSql),
@@ -132,7 +132,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		for _, indexdef := range qry.TableDef.Indexes {
 			if indexdef.TableExist {
 				if err = dbSource.Delete(c.proc.Ctx, indexdef.IndexTableName); err != nil {
-					c.proc.Info(c.proc.Ctx, "delete all index table of origin table for alter table",
+					c.proc.Error(c.proc.Ctx, "delete all index table of origin table for alter table",
 						zap.String("databaseName", c.db),
 						zap.String("origin tableName", qry.GetTableDef().Name),
 						zap.String("origin tableName index table", indexdef.IndexTableName),
@@ -146,7 +146,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	//6. obtain relation for new tables
 	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
 	if err != nil {
-		c.proc.Info(c.proc.Ctx, "obtain new relation for copy table for alter table",
+		c.proc.Error(c.proc.Ctx, "obtain new relation for copy table for alter table",
 			zap.String("databaseName", c.db),
 			zap.String("origin tableName", qry.GetTableDef().Name),
 			zap.String("copy table name", qry.CopyTableDef.Name),
@@ -166,7 +166,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	constraint = append(constraint, tmp)
 	err = newRel.TableRenameInTxn(c.proc.Ctx, constraint)
 	if err != nil {
-		c.proc.Info(c.proc.Ctx, "Rename copy tableName to origin tableName in for alter table",
+		c.proc.Error(c.proc.Ctx, "Rename copy tableName to origin tableName in for alter table",
 			zap.String("origin tableName", qry.GetTableDef().Name),
 			zap.String("copy table name", qry.CopyTableDef.Name),
 			zap.Error(err))
@@ -195,7 +195,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			}
 			if err != nil {
-				c.proc.Info(c.proc.Ctx, "invoke reindex for the new table for alter table",
+				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
 					zap.String("origin tableName", qry.GetTableDef().Name),
 					zap.String("copy table name", qry.CopyTableDef.Name),
 					zap.String("indexAlgo", multiTableIndex.IndexAlgo),
@@ -207,7 +207,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 	// get and update the change mapping information of table colIds
 	if err = updateNewTableColId(c, newRel, qry.ChangeTblColIdMap); err != nil {
-		c.proc.Info(c.proc.Ctx, "get and update the change mapping information of table colIds for alter table",
+		c.proc.Error(c.proc.Ctx, "get and update the change mapping information of table colIds for alter table",
 			zap.String("origin tableName", qry.GetTableDef().Name),
 			zap.String("copy table name", qry.CopyTableDef.Name),
 			zap.Error(err))
@@ -217,7 +217,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	if len(qry.CopyTableDef.RefChildTbls) > 0 {
 		// Restore the original table's foreign key child table ids to the copy table definition
 		if err = restoreNewTableRefChildTbls(c, newRel, qry.CopyTableDef.RefChildTbls); err != nil {
-			c.proc.Info(c.proc.Ctx, "Restore original table's foreign key child table ids to copyTable definition for alter table",
+			c.proc.Error(c.proc.Ctx, "Restore original table's foreign key child table ids to copyTable definition for alter table",
 				zap.String("origin tableName", qry.GetTableDef().Name),
 				zap.String("copy table name", qry.CopyTableDef.Name),
 				zap.Error(err))
@@ -227,7 +227,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		// update foreign key child table references to the current table
 		for _, tblId := range qry.CopyTableDef.RefChildTbls {
 			if err = updateTableForeignKeyColId(c, qry.ChangeTblColIdMap, tblId, originRel.GetTableID(c.proc.Ctx), newRel.GetTableID(c.proc.Ctx)); err != nil {
-				c.proc.Info(c.proc.Ctx, "update foreign key child table references to the current table for alter table",
+				c.proc.Error(c.proc.Ctx, "update foreign key child table references to the current table for alter table",
 					zap.String("origin tableName", qry.GetTableDef().Name),
 					zap.String("copy table name", qry.CopyTableDef.Name),
 					zap.Error(err))
@@ -239,7 +239,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	if len(qry.TableDef.Fkeys) > 0 {
 		for _, fkey := range qry.CopyTableDef.Fkeys {
 			if err = notifyParentTableFkTableIdChange(c, fkey, originRel.GetTableID(c.proc.Ctx)); err != nil {
-				c.proc.Info(c.proc.Ctx, "notify parent table foreign key TableId Change for alter table",
+				c.proc.Error(c.proc.Ctx, "notify parent table foreign key TableId Change for alter table",
 					zap.String("origin tableName", qry.GetTableDef().Name),
 					zap.String("copy table name", qry.CopyTableDef.Name),
 					zap.Error(err))
@@ -272,6 +272,30 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	}
 
 	return err
+}
+
+func (s *Scope) RenameTable(c *Compile) (err error) {
+	qry := s.Plan.GetDdl().GetRenameTable()
+
+	for _, alterTable := range qry.AlterTables {
+		plan := &plan.Plan{
+			Plan: &plan.Plan_Ddl{
+				Ddl: &plan.DataDefinition{
+					DdlType: plan.DataDefinition_ALTER_TABLE,
+					Definition: &plan.DataDefinition_AlterTable{
+						AlterTable: alterTable,
+					},
+				},
+			},
+		}
+		subScope := newScope(AlterTable).withPlan(plan)
+		defer subScope.release()
+		err = subScope.AlterTable(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // updateTableForeignKeyColId update foreign key colid of child table references
@@ -317,7 +341,7 @@ func updateNewTableColId(c *Compile, copyRel engine.Relation, changColDefMap map
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			for _, vColDef := range changColDefMap {
-				if vColDef.Name == attr.Attr.Name {
+				if vColDef.GetOriginCaseName() == attr.Attr.Name {
 					vColDef.ColId = attr.Attr.ID
 					break
 				}

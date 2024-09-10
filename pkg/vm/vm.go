@@ -17,8 +17,6 @@ package vm
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -40,13 +38,13 @@ func Prepare(op Operator, proc *process.Process) error {
 	})
 }
 
-func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
+func SetAnalyzeInfo(rootOp Operator, proc *process.Process) {
 	HandleAllOp(rootOp, func(parentOp Operator, op Operator) error {
 		switch op.OpType() {
 		case Output:
 			op.GetOperatorBase().SetIdx(-1)
-		case TableScan:
-			op.GetOperatorBase().SetIdx(parentOp.GetOperatorBase().Idx)
+			//case TableScan:
+			//	op.GetOperatorBase().SetIdx(parentOp.GetOperatorBase().Idx)
 		}
 		return nil
 	})
@@ -90,7 +88,7 @@ func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
 				info.ParallelIdx = -1
 			}
 
-		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, LoopLeft, Single, LoopSingle, Semi, RightSemi, LoopSemi, Anti, RightAnti, LoopAnti, Mark, LoopMark, Product, ProductL2:
+		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, Single, Semi, RightSemi, Anti, RightAnti, Mark, Product, ProductL2:
 			info.ParallelMajor = true
 			if info.Idx >= 0 && info.Idx < len(proc.Base.AnalInfos) {
 				if pidx, ok := idxMapMajor[info.Idx]; ok {
@@ -107,25 +105,4 @@ func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
 		opBase.SetInfo(info)
 		return nil
 	})
-}
-
-func Run(rootOp Operator, proc *process.Process) (end bool, err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(proc.Ctx, e)
-			logutil.Errorf("panic in vm.Run: %v", err)
-		}
-	}()
-
-	setAnalyzeInfo(rootOp, proc)
-
-	end = false
-	for !end {
-		result, err := rootOp.Call(proc)
-		if err != nil {
-			return true, err
-		}
-		end = result.Status == ExecStop || result.Batch == nil
-	}
-	return end, nil
 }

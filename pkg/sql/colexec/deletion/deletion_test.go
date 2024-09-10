@@ -26,11 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,8 +62,15 @@ func TestNormalDeletion(t *testing.T) {
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
+	database := mock_frontend.NewMockDatabase(ctrl)
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
+
 	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+
 	proc := testutil.NewProc()
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
@@ -76,63 +83,130 @@ func TestNormalDeletion(t *testing.T) {
 				SchemaName: "testDb",
 				ObjName:    "testTable",
 			},
-			Engine: eng,
+			Engine:        eng,
+			PrimaryKeyIdx: 1,
 		},
-		ctr: &container{
+		ctr: container{
 			source: relation,
 		},
 	}
 
-	batch1 := &batch.Batch{
-		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
-			testutil.MakeScalarInt64(3, 3),
-			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
-			testutil.MakeScalarVarchar("d", 3),
-			testutil.MakeScalarNull(types.T_int64, 3),
-		},
-		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
-		Cnt:   1,
-	}
-	batch1.SetRowCount(3)
-
-	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}) (*batch.Batch, error) {
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-
-		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-
-		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-
-		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-		bat.SetRowCount(bat.GetVector(1).Length())
-		return bat, nil
-	}).AnyTimes()
-	reader.EXPECT().Close().Return(nil).AnyTimes()
-	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
-	childArg := &table_scan.TableScan{
-		Reader: reader,
-	}
-	err := childArg.Prepare(proc)
+	resetChildren(&arg)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+	_, err = arg.Call(proc)
 	require.NoError(t, err)
 
-	arg.SetChildren([]vm.Operator{childArg})
+	arg.Reset(proc, false, nil)
+
+	err = arg.Prepare(proc)
+	require.NoError(t, err)
 	_, err = arg.Call(proc)
 	require.NoError(t, err)
 	arg.Free(proc, false, nil)
-	arg.GetChildren(0).Free(proc, false, nil)
-	proc.FreeVectors()
+	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func resetChildren(arg *Deletion) {
+	op := colexec.NewMockOperator()
+	bat := colexec.MakeMockBatchsWithRowID()
+	op.WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
+}
+
+func newBatch(proc *process.Process, rows int64) *batch.Batch {
+	// not random
+	ts := []types.Type{types.New(types.T_Rowid, 0, 0), types.New(types.T_int32, 0, 0), types.New(types.T_int32, 0, 0)}
+	bat := testutil.NewBatch(ts, false, int(rows), proc.Mp())
+	pkAttr := make([]string, 3)
+	pkAttr[0] = "rowid"
+	pkAttr[1] = "pk"
+	pkAttr[2] = "partition_id"
+	bat.SetAttributes(pkAttr)
+	return bat
+}
+
+func TestSplitBatch(t *testing.T) {
+	type fields struct {
+		ctr          container
+		DeleteCtx    *DeleteCtx
+		SegmentMap   map[string]int32
+		RemoteDelete bool
+		IBucket      uint32
+		Nbucket      uint32
+	}
+
+	type args struct {
+		proc   *process.Process
+		srcBat *batch.Batch
+	}
+
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "test_partition_table_1",
+			fields: fields{
+				ctr: container{
+					resBat:           batch.New(false, []string{"rowid", "pk", "partition_id"}),
+					partitionSources: []engine.Relation{nil, nil},
+				},
+				DeleteCtx: &DeleteCtx{
+					RowIdIdx:              0,
+					PrimaryKeyIdx:         1,
+					PartitionIndexInBatch: 2,
+					PartitionTableIDs:     []uint64{1, 2},
+				},
+				SegmentMap:   map[string]int32{},
+				RemoteDelete: false,
+				IBucket:      0,
+				Nbucket:      1,
+			},
+			args: args{
+				proc: testutil.NewProc(),
+			},
+			wantErr: true,
+		},
+		// {
+		// 	name: "test_non_partition_table",
+		// 	fields: fields{
+		// 		ctr: container{
+		// 			resBat: batch.New(false, []string{"rowid", "pk"}),
+		// 		},
+		// 		DeleteCtx: &DeleteCtx{
+		// 			PrimaryKeyIdx: 1,
+		// 			RowIdIdx: 0,
+		// 		},
+		// 	},
+		// 	args: args{
+		// 		proc: testutil.NewProc(),
+		// 		srcBat: batch.NewWithSize(2),
+		// 	},
+		// 	wantErr: false,
+		// },
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deletion := &Deletion{
+				ctr:          tt.fields.ctr,
+				DeleteCtx:    tt.fields.DeleteCtx,
+				RemoteDelete: tt.fields.RemoteDelete,
+				IBucket:      tt.fields.IBucket,
+				Nbucket:      tt.fields.Nbucket,
+			}
+			tt.args.srcBat = newBatch(tt.args.proc, 3)
+			if tt.name == "test_partition_table_1" {
+				vector.SetFixedAtWithTypeCheck(tt.args.srcBat.GetVector(2), 0, int32(-1))
+			}
+			if err := deletion.SplitBatch(tt.args.proc, tt.args.srcBat); (err != nil) != tt.wantErr {
+				t.Errorf("Deletion.SplitBatch() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
 }

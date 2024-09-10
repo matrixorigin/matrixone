@@ -31,6 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	unnestMode      = "both"
+	unnestRecursive = false
+)
+
 func genFilterMap(filters []string) map[string]struct{} {
 	if filters == nil {
 		return defaultFilterMap
@@ -42,15 +47,61 @@ func genFilterMap(filters []string) map[string]struct{} {
 	return filterMap
 }
 
-// func unnestString(buf *bytes.Buffer) {
-// 	buf.WriteString("unnest")
-// }
+type unnestParam struct {
+	FilterMap map[string]struct{} `json:"filterMap"`
+	ColName   string              `json:"colName"`
+}
 
-func unnestPrepare(proc *process.Process, arg *TableFunction) error {
-	param := unnestParam{}
-	param.ColName = string(arg.Params)
-	if len(param.ColName) == 0 {
-		param.ColName = "UNNEST_DEFAULT"
+var (
+	unnestDeniedFilters = []string{"col", "seq"}
+	defaultFilterMap    = map[string]struct{}{
+		"key":   {},
+		"path":  {},
+		"index": {},
+		"value": {},
+		"this":  {},
+	}
+)
+
+type unnestState struct {
+	inited bool
+	param  unnestParam
+	path   bytejson.Path
+	outer  bool
+
+	called bool
+	// holding one call batch, unnestState owns it.
+	batch *batch.Batch
+}
+
+func (u *unnestState) reset(tf *TableFunction, proc *process.Process) {
+	if u.batch != nil {
+		u.batch.CleanOnlyData()
+	}
+	u.called = false
+}
+
+func (u *unnestState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
+	var res vm.CallResult
+	if u.called {
+		return res, nil
+	}
+	res.Batch = u.batch
+	u.called = true
+	return res, nil
+}
+
+func (u *unnestState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
+	if u.batch != nil {
+		u.batch.Clean(proc.Mp())
+	}
+}
+
+func unnestPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
+	st := &unnestState{}
+	st.param.ColName = string(arg.Params)
+	if len(st.param.ColName) == 0 {
+		st.param.ColName = "UNNEST_DEFAULT"
 	}
 	var filters []string
 	for i := range arg.Attrs {
@@ -65,9 +116,9 @@ func unnestPrepare(proc *process.Process, arg *TableFunction) error {
 			filters = append(filters, arg.Attrs[i])
 		}
 	}
-	param.FilterMap = genFilterMap(filters)
+	st.param.FilterMap = genFilterMap(filters)
 	if len(arg.Args) < 1 || len(arg.Args) > 3 {
-		return moerr.NewInvalidInput(proc.Ctx, "unnest: argument number must be 1, 2 or 3")
+		return nil, moerr.NewInvalidInput(proc.Ctx, "unnest: argument number must be 1, 2 or 3")
 	}
 	if len(arg.Args) == 1 {
 		vType := types.T_varchar.ToType()
@@ -78,138 +129,89 @@ func unnestPrepare(proc *process.Process, arg *TableFunction) error {
 		bType := types.T_bool.ToType()
 		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
 	}
-	dt, err := json.Marshal(param)
+	dt, err := json.Marshal(st.param)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	arg.Params = dt
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
+	return st, err
+}
+
+// start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
+// always return one batch per nthRow.
+func (u *unnestState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+	var err error
+	jsonVec := tf.ctr.argVecs[0]
+
+	if !u.inited {
+		// do some typecheck craziness.  This really should have been done in prepare.
+		if jsonVec.GetType().Oid != types.T_json && jsonVec.GetType().Oid != types.T_varchar {
+			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.GetType().String()))
+		}
+
+		pathVec := tf.ctr.argVecs[1]
+		if pathVec.GetType().Oid != types.T_varchar {
+			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.GetType().String()))
+		}
+
+		outerVec := tf.ctr.argVecs[2]
+		if outerVec.GetType().Oid != types.T_bool {
+			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: third argument must be bool, but got %s", outerVec.GetType().String()))
+		}
+
+		if !pathVec.IsConst() || !outerVec.IsConst() {
+			return moerr.NewInvalidInput(proc.Ctx, "unnest: second and third arguments must be scalar")
+		}
+
+		if u.path, err = types.ParseStringToPath(pathVec.UnsafeGetStringAt(0)); err != nil {
+			return err
+		}
+
+		u.outer = vector.MustFixedColWithTypeCheck[bool](outerVec)[0]
+		u.batch = tf.createResultBatch()
+		u.inited = true
+	}
+
+	u.called = false
+	// clean up the batch
+	u.batch.CleanOnlyData()
+
+	switch jsonVec.GetType().Oid {
+	case types.T_json:
+		err = handle(u.batch, jsonVec, nthRow, &u.path, u.outer, &u.param, tf, proc, parseJson)
+	case types.T_varchar:
+		err = handle(u.batch, jsonVec, nthRow, &u.path, u.outer, &u.param, tf, proc, parseStr)
+	default:
+		panic("unreachable")
+	}
 	return err
 }
 
-func unnestCall(_ int, proc *process.Process, arg *TableFunction, result *vm.CallResult) (bool, error) {
-	var (
-		err      error
-		rbat     *batch.Batch
-		jsonVec  *vector.Vector
-		pathVec  *vector.Vector
-		outerVec *vector.Vector
-		path     bytejson.Path
-		outer    bool
-	)
-	bat := result.Batch
-	defer func() {
-		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
-		}
-	}()
-	if bat == nil {
-		return true, nil
-	}
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		result.Batch = batch.EmptyBatch
-		return false, nil
-	}
-	jsonVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
+func handle(bat *batch.Batch, jsonVec *vector.Vector, nthRow int,
+	path *bytejson.Path, outer bool, param *unnestParam, arg *TableFunction,
+	proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) error {
+	// nthRow is the row number in the input batch, const batch is handled correctly in GetBytesAt
+	json, err := fn(jsonVec.GetBytesAt(nthRow))
 	if err != nil {
-		return false, err
+		return err
 	}
-	if jsonVec.GetType().Oid != types.T_json && jsonVec.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.GetType().String()))
-	}
-	pathVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat}, nil)
+	//
+	ures, err := json.Unnest(path, outer, unnestRecursive, unnestMode, param.FilterMap)
 	if err != nil {
-		return false, err
+		return err
 	}
-	if pathVec.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.GetType().String()))
-	}
-	outerVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat}, nil)
+
+	err = makeBatch(bat, ures, param, arg, proc)
 	if err != nil {
-		return false, err
+		return err
 	}
-	if outerVec.GetType().Oid != types.T_bool {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: third argument must be bool, but got %s", outerVec.GetType().String()))
-	}
-	if !pathVec.IsConst() || !outerVec.IsConst() {
-		return false, moerr.NewInvalidInput(proc.Ctx, "unnest: second and third arguments must be scalar")
-	}
-	path, err = types.ParseStringToPath(pathVec.UnsafeGetStringAt(0))
-	if err != nil {
-		return false, err
-	}
-	outer = vector.MustFixedCol[bool](outerVec)[0]
-	param := unnestParam{}
-	if err = json.Unmarshal(arg.Params, &param); err != nil {
-		return false, err
-	}
-	switch jsonVec.GetType().Oid {
-	case types.T_json:
-		rbat, err = handle(jsonVec, &path, outer, &param, arg, proc, parseJson)
-	case types.T_varchar:
-		rbat, err = handle(jsonVec, &path, outer, &param, arg, proc, parseStr)
-	}
-	if err != nil {
-		return false, err
-	}
-	result.Batch = rbat
-	return false, nil
+	bat.SetRowCount(len(ures))
+	return nil
 }
 
-func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unnestParam, arg *TableFunction, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
-	var (
-		err  error
-		rbat *batch.Batch
-		json bytejson.ByteJson
-		ures []bytejson.UnnestResult
-	)
-
-	rbat = batch.NewWithSize(len(arg.Attrs))
-	rbat.Attrs = arg.Attrs
-	rbat.Cnt = 1
-	for i := range arg.ctr.retSchema {
-		rbat.Vecs[i] = proc.GetVector(arg.ctr.retSchema[i])
-	}
-
-	if jsonVec.IsConst() {
-		json, err = fn(jsonVec.GetBytesAt(0))
-		if err != nil {
-			return nil, err
-		}
-		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.FilterMap)
-		if err != nil {
-			return nil, err
-		}
-		rbat, err = makeBatch(rbat, ures, param, arg, proc)
-		if err != nil {
-			return nil, err
-		}
-		rbat.SetRowCount(len(ures))
-		return rbat, nil
-	}
-	jsonSlice := vector.ExpandBytesCol(jsonVec)
-	rows := 0
-	for i := range jsonSlice {
-		json, err = fn(jsonSlice[i])
-		if err != nil {
-			return nil, err
-		}
-		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.FilterMap)
-		if err != nil {
-			return nil, err
-		}
-		rbat, err = makeBatch(rbat, ures, param, arg, proc)
-		if err != nil {
-			return nil, err
-		}
-		rows += len(ures)
-	}
-	rbat.SetRowCount(rows)
-	return rbat, nil
-}
-
-func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *TableFunction, proc *process.Process) (*batch.Batch, error) {
+func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *TableFunction, proc *process.Process) error {
 	for i := 0; i < len(ures); i++ {
 		for j := 0; j < len(arg.Attrs); j++ {
 			vec := bat.GetVector(int32(j))
@@ -234,11 +236,11 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 				err = moerr.NewInvalidArg(proc.Ctx, "unnest: invalid column name:%s", arg.Attrs[j])
 			}
 			if err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
-	return bat, nil
+	return nil
 }
 
 func parseJson(dt []byte) (bytejson.ByteJson, error) {

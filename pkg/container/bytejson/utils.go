@@ -30,7 +30,7 @@ import (
 
 func ParseFromString(s string) (ret ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtx("json text %s", s)
+		err = moerr.NewInvalidInputNoCtxf("json text %s", s)
 		return
 	}
 	data := util.UnsafeStringToBytes(s)
@@ -40,11 +40,11 @@ func ParseFromString(s string) (ret ByteJson, err error) {
 
 func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtx("json text %s", string(s))
+		err = moerr.NewInvalidInputNoCtxf("json text %s", string(s))
 		return
 	}
 	if !json.Valid(s) {
-		err = moerr.NewInvalidInputNoCtx("json text %s", string(s))
+		err = moerr.NewInvalidInputNoCtxf("json text %s", string(s))
 		return
 	}
 	err = bj.UnmarshalJSON(s)
@@ -75,7 +75,7 @@ func addString(buf []byte, in string) []byte {
 
 func checkFloat64(n float64) error {
 	if math.IsInf(n, 0) || math.IsNaN(n) {
-		return moerr.NewInvalidInputNoCtx("json float64 %f", n)
+		return moerr.NewInvalidInputNoCtxf("json float64 %f", n)
 	}
 	return nil
 }
@@ -107,7 +107,7 @@ func ParseJsonPath(path string) (p Path, err error) {
 	pg := newPathGenerator(path)
 	pg.trimSpace()
 	if !pg.hasNext() || pg.next() != '$' {
-		err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)
+		err = moerr.NewInvalidInputNoCtxf("invalid json path '%s'", path)
 	}
 	pg.trimSpace()
 	subPaths := make([]subPath, 0, 8)
@@ -124,14 +124,14 @@ func ParseJsonPath(path string) (p Path, err error) {
 			ok = false
 		}
 		if !ok {
-			err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)
+			err = moerr.NewInvalidInputNoCtxf("invalid json path '%s'", path)
 			return
 		}
 		pg.trimSpace()
 	}
 
 	if len(subPaths) > 0 && subPaths[len(subPaths)-1].tp == subPathDoubleStar {
-		err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)
+		err = moerr.NewInvalidInputNoCtxf("invalid json path '%s'", path)
 		return
 	}
 	p.init(subPaths)
@@ -151,7 +151,7 @@ func addByteElem(buf []byte, entryStart int, elems []ByteJson) []byte {
 	return buf
 }
 
-func mergeToArray(origin []ByteJson) *ByteJson {
+func mergeToArray(origin []ByteJson) ByteJson {
 	totalSize := headerSize + len(origin)*valEntrySize
 	for _, el := range origin {
 		if el.Type != TpCodeLiteral {
@@ -162,7 +162,7 @@ func mergeToArray(origin []ByteJson) *ByteJson {
 	endian.PutUint32(buf, uint32(len(origin)))
 	endian.PutUint32(buf[docSizeOff:], uint32(totalSize))
 	buf = addByteElem(buf, headerSize, origin)
-	return &ByteJson{Type: TpCodeArray, Data: buf}
+	return ByteJson{Type: TpCodeArray, Data: buf}
 }
 
 // check unnest mode

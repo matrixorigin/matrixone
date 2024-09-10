@@ -152,6 +152,7 @@ type ExParamConst struct {
 	Init         bool
 	ScanType     int
 	FileSize     int64
+	FileStartOff int64
 	Filepath     string
 	CompressType string
 	Format       string
@@ -170,9 +171,9 @@ type ExParam struct {
 	LoadFile    bool
 	Local       bool
 	QueryResult bool
-	SysTable    bool
 	Parallel    bool
 	Strict      bool
+	ExtTab      bool // means table is created by syntax, create external table
 }
 
 type S3Parameter struct {

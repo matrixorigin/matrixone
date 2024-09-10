@@ -16,6 +16,7 @@ package shardservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -142,6 +143,9 @@ func (s *storage) Get(
 	)
 	if err != nil {
 		return 0, pb.ShardsMetadata{}, err
+	}
+	if metadata.IsEmpty() {
+		shardTableID = 0
 	}
 	return shardTableID, metadata, nil
 }
@@ -316,14 +320,34 @@ func (s *storage) Read(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	// TODO: implement this
-	return nil, nil
+	fn, ok := s.handles[method]
+	if !ok {
+		panic(fmt.Sprintf("method not found: %d", method))
+	}
+
+	return fn(
+		ctx,
+		shard,
+		s.engine,
+		param,
+		ts,
+		buffer,
+	)
 }
 
 func (s *storage) Unsubscribe(
 	tables ...uint64,
 ) error {
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	var err error
+	for _, tid := range tables {
+		if e := s.engine.UnsubscribeTable(ctx, 0, tid); e != nil {
+			err = errors.Join(err, e)
+		}
+	}
+	return err
 }
 
 func readMetadata(

@@ -58,7 +58,7 @@ func IsPrepareStatement(stmt tree.Statement) bool {
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
-		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
+		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.RenameTable,
 		*tree.CreateDatabase, *tree.DropDatabase, *tree.CreateSequence, *tree.DropSequence,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
 		return true
@@ -187,7 +187,7 @@ func statementCanBeExecutedInUncommittedTransaction(ctx context.Context, ses FeS
 	case *tree.PrepareString:
 		v, err := ses.GetSessionSysVar("lower_case_table_names")
 		if err != nil {
-			return false, err
+			v = int64(1)
 		}
 		preStmt, err := mysql.ParseOne(ctx, st.Sql, v.(int64))
 		defer func() {
