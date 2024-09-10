@@ -611,7 +611,7 @@ func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, e
 	for i < j {
 		m := (i + j) / 2
 		// first value >= lowRowid
-		if !rowids[m].Less(*lowRowid) {
+		if !rowids[m].LT(lowRowid) {
 			j = m
 		} else {
 			i = m + 1
@@ -623,7 +623,7 @@ func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, e
 	for i < j {
 		m := (i + j) / 2
 		// first value > highRowid
-		if highRowid.Less(rowids[m]) {
+		if highRowid.LT(&rowids[m]) {
 			j = m
 		} else {
 			i = m + 1
