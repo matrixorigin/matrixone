@@ -51,3 +51,7 @@ explain phyplan select * from emp;
 explain phyplan select empno, ename, job from emp where sal > 2000;
 -- @separator:table
 explain phyplan select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;
+
+drop table emp;
+drop table dept;
+drop database db1;

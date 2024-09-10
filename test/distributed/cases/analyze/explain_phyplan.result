@@ -79,3 +79,6 @@ Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
                     └── projection
                         └── tablescan
   }
+drop table emp;
+drop table dept;
+drop database db1;
