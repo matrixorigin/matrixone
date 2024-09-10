@@ -36,7 +36,7 @@ var _ vm.Operator = new(Deletion)
 
 // make it mutable in ut
 var (
-	flushThreshold = 1 * mpool.MB
+	flushThreshold = 32 * mpool.MB
 )
 
 // SetCNFlushDeletesThreshold update threshold to n MB
