@@ -106,7 +106,7 @@ func TombstoneRangeScanByObject(
 		}
 		if tombstone.HasCommittedPersistedData() {
 			zm := tombstone.GetSortKeyZonemap()
-			if !zm.PrefixEq(objectID[:]) {
+			if !zm.RowidPrefixEq(objectID[:]) {
 				continue
 			}
 			// TODO: Bloomfilter

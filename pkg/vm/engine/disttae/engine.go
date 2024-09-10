@@ -256,9 +256,19 @@ func (e *Engine) loadDatabaseFromStorage(
 	return ret, nil
 }
 
-func (e *Engine) Database(ctx context.Context, name string,
-	op client.TxnOperator) (engine.Database, error) {
-	logDebugf(op.Txn(), "Engine.Database %s", name)
+func (e *Engine) Database(
+	ctx context.Context,
+	name string,
+	op client.TxnOperator,
+) (engine.Database, error) {
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug(
+			"Transaction.Database",
+			zap.String("txn", op.Txn().DebugString()),
+			zap.String("name", name),
+		)
+	})
+
 	txn, err := txnIsValid(op)
 	if err != nil {
 		return nil, err
@@ -526,7 +536,12 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 }
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
-	logDebugf(op.Txn(), "Engine.New")
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug(
+			"Transaction.New",
+			zap.String("txn", op.Txn().DebugString()),
+		)
+	})
 	proc := process.NewTopProcess(
 		ctx,
 		e.mp,

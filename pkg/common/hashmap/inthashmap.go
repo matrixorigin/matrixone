@@ -29,7 +29,7 @@ func init() {
 
 func NewIntHashMap(hasNull bool) (*IntHashMap, error) {
 	mp := &hashtable.Int64HashMap{}
-	if err := mp.Init(); err != nil {
+	if err := mp.Init(nil); err != nil {
 		return nil, err
 	}
 	return &IntHashMap{

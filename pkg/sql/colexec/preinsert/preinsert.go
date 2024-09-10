@@ -22,10 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
 
@@ -40,35 +39,40 @@ func (preInsert *PreInsert) OpType() vm.OpType {
 	return vm.PreInsert
 }
 
-func (preInsert *PreInsert) Prepare(_ *proc) error {
+func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 	if preInsert.ctr.canFreeVecIdx == nil {
 		preInsert.ctr.canFreeVecIdx = make(map[int]bool)
 	}
-	return nil
+	if preInsert.CompPkeyExpr != nil && preInsert.ctr.compPkExecutor == nil {
+		preInsert.ctr.compPkExecutor, err = colexec.NewExpressionExecutor(proc, preInsert.CompPkeyExpr)
+		if err != nil {
+			return
+		}
+	}
+	if preInsert.ClusterByExpr != nil && preInsert.ctr.clusterByExecutor == nil {
+		preInsert.ctr.clusterByExecutor, err = colexec.NewExpressionExecutor(proc, preInsert.ClusterByExpr)
+		if err != nil {
+			return
+		}
+	}
+	return
 }
 
-func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) (err error) {
-	tableDef := preInsert.TableDef
-	if preInsert.ctr.buf != nil {
-		for i := len(preInsert.Attrs); i < len(preInsert.ctr.buf.Vecs); i++ {
-			preInsert.ctr.buf.Vecs[i].Free(proc.Mp())
-			preInsert.ctr.buf.SetVector(int32(i), nil)
-		}
-		preInsert.ctr.buf.Vecs = preInsert.ctr.buf.Vecs[:len(preInsert.Attrs)]
-		preInsert.ctr.buf.Attrs = preInsert.ctr.buf.Attrs[:len(preInsert.Attrs)]
-		preInsert.ctr.buf.SetRowCount(0)
-	} else {
+func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first bool) (err error) {
+	if first {
 		for idx := range preInsert.Attrs {
-			if tableDef.Cols[idx].Typ.AutoIncr {
+			if preInsert.TableDef.Cols[idx].Typ.AutoIncr {
 				preInsert.ctr.canFreeVecIdx[idx] = true
 			}
 		}
 		preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
 		preInsert.ctr.buf.Attrs = make([]string, 0, len(preInsert.Attrs))
 		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.Attrs...)
+	} else {
+		preInsert.ctr.buf.SetRowCount(0)
 	}
-	// if col is AutoIncr, genAutoIncrCol function may change the vector of this col, so wo should copy the vec from children vec
-	// and the other cols of preInsert.Attrs is stable, we just use the vecs of children's vecs, so just preInsert.ctr.buf.SetVector using bat.Vecs
+	// if col is AutoIncr, genAutoIncrCol function may change the vector of this col, we should copy the vec from children vec, so it in canFreeVecIdx
+	// and the other cols of preInsert.Attrs is stable, we just use the vecs of children's vecs
 	for idx := range preInsert.Attrs {
 		if _, ok := preInsert.ctr.canFreeVecIdx[idx]; ok {
 			typ := bat.Vecs[idx].GetType()
@@ -77,7 +81,7 @@ func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) (err error) {
 			} else {
 				preInsert.ctr.buf.Vecs[idx] = vector.NewVec(*typ)
 			}
-			if err := vector.GetUnionAllFunction(*typ, proc.Mp())(preInsert.ctr.buf.Vecs[idx], bat.Vecs[idx]); err != nil {
+			if err = vector.GetUnionAllFunction(*typ, proc.Mp())(preInsert.ctr.buf.Vecs[idx], bat.Vecs[idx]); err != nil {
 				return err
 			}
 		} else {
@@ -86,7 +90,7 @@ func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) (err error) {
 				//expland const vector
 				typ := bat.Vecs[idx].GetType()
 				tmpVec := vector.NewVec(*typ)
-				if err := vector.GetUnionAllFunction(*typ, proc.Mp())(tmpVec, bat.Vecs[idx]); err != nil {
+				if err = vector.GetUnionAllFunction(*typ, proc.Mp())(tmpVec, bat.Vecs[idx]); err != nil {
 					return err
 				}
 				preInsert.ctr.buf.Vecs[idx] = tmpVec
@@ -95,6 +99,69 @@ func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) (err error) {
 			}
 		}
 	}
+	return
+}
+func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, first bool) (err error) {
+	if first {
+		if preInsert.ctr.compPkExecutor != nil {
+			vec, err := preInsert.ctr.compPkExecutor.Eval(proc, []*batch.Batch{preInsert.ctr.buf}, nil)
+			if err != nil {
+				return err
+			}
+			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
+			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.CPrimaryKeyColName)
+		}
+
+		if preInsert.ctr.clusterByExecutor != nil {
+			vec, err := preInsert.ctr.clusterByExecutor.Eval(proc, []*batch.Batch{preInsert.ctr.buf}, nil)
+			if err != nil {
+				return err
+			}
+			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
+			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.TableDef.ClusterBy.Name)
+		}
+		if preInsert.IsUpdate {
+			idx := len(bat.Vecs) - 1
+			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.Row_ID)
+			rowIdVec := vector.NewVec(*bat.GetVector(int32(idx)).GetType())
+			err = rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
+			if err != nil {
+				rowIdVec.Free(proc.Mp())
+				return err
+			}
+			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, rowIdVec)
+		}
+
+	} else {
+		idx := len(preInsert.Attrs)
+		if preInsert.ctr.compPkExecutor != nil {
+			vec, err := preInsert.ctr.compPkExecutor.Eval(proc, []*batch.Batch{preInsert.ctr.buf}, nil)
+			if err != nil {
+				return err
+			}
+			preInsert.ctr.buf.Vecs[idx] = vec
+			idx += 1
+		}
+		if preInsert.ctr.clusterByExecutor != nil {
+			vec, err := preInsert.ctr.clusterByExecutor.Eval(proc, []*batch.Batch{preInsert.ctr.buf}, nil)
+			if err != nil {
+				return err
+			}
+			preInsert.ctr.buf.Vecs[idx] = vec
+			idx += 1
+		}
+
+		if preInsert.IsUpdate {
+			i := len(bat.Vecs) - 1
+			rowIdVec := preInsert.ctr.buf.Vecs[idx]
+			rowIdVec.CleanOnlyData()
+			err = rowIdVec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	return err
 }
 
@@ -117,8 +184,12 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	preInsert.initBuf(proc, bat)
 
+	first := preInsert.ctr.buf == nil
+	err = preInsert.constructColBuf(proc, bat, first)
+	if err != nil {
+		return result, err
+	}
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
@@ -130,30 +201,14 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		}
 	}
 	// check new rows not null
-	err = colexec.BatchDataNotNullCheck(preInsert.ctr.buf, preInsert.TableDef, proc.Ctx)
+	tempVecs := preInsert.ctr.buf.Vecs[:len(preInsert.Attrs)]
+	err = colexec.BatchDataNotNullCheck(tempVecs, preInsert.Attrs, preInsert.TableDef, proc.Ctx)
 	if err != nil {
 		return result, err
 	}
 
-	// calculate the composite primary key column and append the result vector to batch
-	err = genCompositePrimaryKey(preInsert.ctr.buf, proc, preInsert.TableDef)
-	if err != nil {
+	if err = preInsert.constructHiddenColBuf(proc, bat, first); err != nil {
 		return result, err
-	}
-	err = genClusterBy(preInsert.ctr.buf, proc, preInsert.TableDef)
-	if err != nil {
-		return result, err
-	}
-	if preInsert.IsUpdate {
-		idx := len(bat.Vecs) - 1
-		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.Row_ID)
-		rowIdVec := vector.NewVec(*bat.GetVector(int32(idx)).GetType())
-		err = rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
-		if err != nil {
-			rowIdVec.Free(proc.Mp())
-			return result, err
-		}
-		preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, rowIdVec)
 	}
 
 	result.Batch = preInsert.ctr.buf
@@ -177,24 +232,4 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 	}
 	proc.SetLastInsertID(lastInsertValue)
 	return nil
-}
-
-func genCompositePrimaryKey(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
-	// Check whether the composite primary key column is included
-	if tableDef.Pkey.CompPkeyCol == nil {
-		return nil
-	}
-
-	return util.FillCompositeKeyBatch(bat, catalog.CPrimaryKeyColName, tableDef.Pkey.Names, proc)
-}
-
-func genClusterBy(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
-	if tableDef.ClusterBy == nil {
-		return nil
-	}
-	clusterBy := tableDef.ClusterBy.Name
-	if clusterBy == "" || !util.JudgeIsCompositeClusterByColumn(clusterBy) {
-		return nil
-	}
-	return util.FillCompositeClusterByBatch(bat, clusterBy, proc)
 }
