@@ -19,19 +19,16 @@ import (
 	"container/heap"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-
-	"github.com/matrixorigin/matrixone/pkg/compare"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -129,7 +126,23 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			err = top.ctr.build(top, bat, proc, analyzer)
+
+			//because ctr.build will change input batch(append new Vector)
+			if top.ctr.buildBat == nil {
+				top.ctr.n = len(bat.Vecs)
+				top.ctr.buildBat = batch.NewWithSize(top.ctr.n)
+			} else {
+				top.ctr.buildBat.Vecs = top.ctr.buildBat.Vecs[:len(bat.Vecs)]
+			}
+			top.ctr.buildBat.Recursive = bat.Recursive
+			top.ctr.buildBat.Ro = bat.Ro
+			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
+			top.ctr.buildBat.Attrs = bat.Attrs
+			top.ctr.buildBat.Aggs = bat.Aggs
+			copy(top.ctr.buildBat.Vecs, bat.Vecs)
+			top.ctr.buildBat.SetRowCount(bat.RowCount())
+
+			err = top.ctr.build(top, top.ctr.buildBat, proc)
 			if err != nil {
 				return result, err
 			}
@@ -159,8 +172,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 	panic("bug")
 }
 
-func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
-	ctr.n = len(bat.Vecs)
+func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process) error {
 	ctr.poses = ctr.poses[:0]
 	for i := range ap.Fs {
 		vec, err := ctr.executorsForOrderColumn[i].Eval(proc, []*batch.Batch{bat}, nil)
@@ -176,13 +188,8 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 			}
 		}
 		if aNewOrderColumn {
-			nv, err := vec.Dup(proc.Mp())
-			if err != nil {
-				return err
-			}
 			ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
-			bat.Vecs = append(bat.Vecs, nv)
-			analyzer.Alloc(int64(nv.Size()))
+			bat.Vecs = append(bat.Vecs, vec)
 		}
 	}
 
