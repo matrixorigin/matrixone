@@ -391,9 +391,6 @@ func (tbl *txnTableDelegate) BuildReaders(
 	)
 }
 
-type shardingLocalDS struct {
-}
-
 type shardingLocalReader struct {
 	iteratePhase ReaderPhase
 	closed       bool
@@ -401,9 +398,7 @@ type shardingLocalReader struct {
 	tblDelegate  *txnTableDelegate
 	streamID     types.Uuid
 	//relation data to distribute to remote CN which holds shard's partition state.
-	remoteRelData engine.RelData
-	//read policy for remote.
-	//remoteReadPolicy      engine.DataSourceReadPolicy
+	remoteRelData         engine.RelData
 	remoteTombApplyPolicy engine.TombstoneApplyPolicy
 	remoteScanType        int
 }

@@ -38,9 +38,6 @@ import (
 
 const StreamReaderLease = time.Minute * 2
 
-type shardingRemoteDS struct {
-}
-
 type shardingRemoteReader struct {
 	streamID types.Uuid
 	rd       engine.Reader
