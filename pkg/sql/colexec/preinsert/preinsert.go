@@ -16,6 +16,9 @@ package preinsert
 
 import (
 	"bytes"
+	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const opName = "preinsert"
@@ -40,6 +42,12 @@ func (preInsert *PreInsert) OpType() vm.OpType {
 }
 
 func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
+	if preInsert.OpAnalyzer == nil {
+		preInsert.OpAnalyzer = process.NewAnalyzer(preInsert.GetIdx(), preInsert.IsFirst, preInsert.IsLast, "preinsert")
+	} else {
+		preInsert.OpAnalyzer.Reset()
+	}
+
 	if preInsert.ctr.canFreeVecIdx == nil {
 		preInsert.ctr.canFreeVecIdx = make(map[int]bool)
 	}
@@ -170,15 +178,14 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(preInsert.GetIdx(), preInsert.GetParallelIdx(), preInsert.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := preInsert.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCall(preInsert.GetChildren(0), proc, anal)
+	result, err := vm.ChildrenCall(preInsert.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
-	anal.Input(result.Batch, preInsert.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
@@ -195,10 +202,12 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
 	if preInsert.HasAutoCol {
-		err := genAutoIncrCol(preInsert.ctr.buf, proc, preInsert)
+		start := time.Now()
+		err = genAutoIncrCol(preInsert.ctr.buf, proc, preInsert)
 		if err != nil {
 			return result, err
 		}
+		analyzer.AddIncrementTime(start)
 	}
 	// check new rows not null
 	tempVecs := preInsert.ctr.buf.Vecs[:len(preInsert.Attrs)]
@@ -212,7 +221,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	}
 
 	result.Batch = preInsert.ctr.buf
-	anal.Output(result.Batch, preInsert.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 

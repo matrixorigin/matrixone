@@ -45,6 +45,12 @@ func (preInsertSecIdx *PreInsertSecIdx) OpType() vm.OpType {
 }
 
 func (preInsertSecIdx *PreInsertSecIdx) Prepare(proc *process.Process) error {
+	if preInsertSecIdx.OpAnalyzer == nil {
+		preInsertSecIdx.OpAnalyzer = process.NewAnalyzer(preInsertSecIdx.GetIdx(), preInsertSecIdx.IsFirst, preInsertSecIdx.IsLast, "pre_insert_secondary_index")
+	} else {
+		preInsertSecIdx.OpAnalyzer.Reset()
+	}
+
 	return nil
 }
 
@@ -76,15 +82,14 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(preInsertSecIdx.GetIdx(), preInsertSecIdx.GetParallelIdx(), preInsertSecIdx.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := preInsertSecIdx.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCall(preInsertSecIdx.GetChildren(0), proc, anal)
+	result, err := vm.ChildrenCall(preInsertSecIdx.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
-	anal.Input(result.Batch, preInsertSecIdx.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
@@ -131,6 +136,6 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	}
 
 	result.Batch = preInsertSecIdx.ctr.buf
-	anal.Output(result.Batch, preInsertSecIdx.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }

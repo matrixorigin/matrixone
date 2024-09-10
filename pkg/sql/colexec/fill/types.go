@@ -61,7 +61,7 @@ type container struct {
 	exes    []colexec.ExpressionExecutor
 	done    bool
 
-	process func(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error)
+	process func(ctr *container, ap *Fill, proc *process.Process, anal process.Analyzer) (vm.CallResult, error)
 }
 
 type Fill struct {
@@ -122,8 +122,9 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr.bats = ctr.bats[:0]
 
 	if fill.ProjectList != nil {
-		anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
-		anal.Alloc(fill.ProjectAllocSize)
+		if fill.OpAnalyzer != nil {
+			fill.OpAnalyzer.Alloc(fill.ProjectAllocSize)
+		}
 		fill.ResetProjection(proc)
 	}
 }
