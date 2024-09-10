@@ -41,6 +41,12 @@ func (dedupJoin *DedupJoin) OpType() vm.OpType {
 }
 
 func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
+	if dedupJoin.OpAnalyzer == nil {
+		dedupJoin.OpAnalyzer = process.NewAnalyzer(dedupJoin.GetIdx(), dedupJoin.IsFirst, dedupJoin.IsLast, "dedup join")
+	} else {
+		dedupJoin.OpAnalyzer.Reset()
+	}
+
 	if len(dedupJoin.ctr.vecs) == 0 {
 		dedupJoin.ctr.vecs = make([]*vector.Vector, len(dedupJoin.Conditions[0]))
 		dedupJoin.ctr.evecs = make([]evalVector, len(dedupJoin.Conditions[0]))
