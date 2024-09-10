@@ -99,60 +99,36 @@ func NewService(
 	}
 
 	srv := &service{
-		metadata: metadata.CNStore{
-			UUID: cfg.UUID,
-			Role: metadata.MustParseCNRole(cfg.Role),
+		metadata:     metadata.CNStore{UUID: cfg.UUID, Role: metadata.MustParseCNRole(cfg.Role)},
+		cfg:          cfg,
+		logger:       logutil.GetGlobalLogger().Named("cn-service"),
+		metadataFS:   metadataFS,
+		etlFS:        etlFS,
+		fileService:  fileService,
+		sessionMgr:   queryservice.NewSessionManager(),
+		addressMgr:   address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
+		gossipNode:   gossipNode,
+		responsePool: &sync.Pool{New: func() any { return &pipeline.Message{} }},
+		requestHandler: func(ctx context.Context,
+			cnAddr string,
+			message morpc.Message,
+			cs morpc.ClientSession,
+			engine engine.Engine,
+			fService fileservice.FileService,
+			lockService lockservice.LockService,
+			queryClient qclient.QueryClient,
+			hakeeper logservice.CNHAKeeperClient,
+			udfService udf.Service,
+			cli client.TxnClient,
+			aicm *defines.AutoIncrCacheManager,
+			messageAcquirer func() morpc.Message) error {
+			return nil
 		},
-		cfg:         cfg,
-		logger:      logutil.GetGlobalLogger().Named("cn-service"),
-		metadataFS:  metadataFS,
-		etlFS:       etlFS,
-		fileService: fileService,
-		sessionMgr:  queryservice.NewSessionManager(),
-		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
-		gossipNode:  gossipNode,
 	}
-
-	srv.requestHandler = func(ctx context.Context,
-		cnAddr string,
-		message morpc.Message,
-		cs morpc.ClientSession,
-		engine engine.Engine,
-		fService fileservice.FileService,
-		lockService lockservice.LockService,
-		queryClient qclient.QueryClient,
-		hakeeper logservice.CNHAKeeperClient,
-		udfService udf.Service,
-		cli client.TxnClient,
-		aicm *defines.AutoIncrCacheManager,
-		messageAcquirer func() morpc.Message) error {
-		return nil
-	}
-
 	for _, opt := range options {
 		opt(srv)
 	}
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
-
-	srv.registerServices()
-	if _, err = srv.getHAKeeperClient(); err != nil {
-		return nil, err
-	}
-	if err := srv.initQueryService(); err != nil {
-		return nil, err
-	}
-
-	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
-
-	if err := srv.initMetadata(); err != nil {
-		return nil, err
-	}
-
-	srv.responsePool = &sync.Pool{
-		New: func() any {
-			return &pipeline.Message{}
-		},
-	}
 
 	pu := config.NewParameterUnit(
 		&cfg.Frontend,
@@ -161,8 +137,24 @@ func NewService(
 		engine.Nodes{engine.Node{
 			Addr: srv.pipelineServiceServiceAddr(),
 		}})
-	pu.HAKeeperClient = srv._hakeeperClient
 	frontend.InitServerVersion(pu.SV.MoVersion)
+	srv.pu = pu
+	srv.registerServices()
+	if _, err = srv.getHAKeeperClient(); err != nil {
+		return nil, err
+	}
+	if err = srv.initQueryService(); err != nil {
+		return nil, err
+	}
+	if err = srv.initMetadata(); err != nil {
+		return nil, err
+	}
+
+	srv.pu.LockService = srv.lockService
+	srv.pu.HAKeeperClient = srv._hakeeperClient
+	srv.pu.QueryClient = srv.queryClient
+	srv.pu.UdfService = srv.udfService
+	srv._txnClient = srv.pu.TxnClient
 
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
 	srv.aicm = &defines.AutoIncrCacheManager{
@@ -186,14 +178,7 @@ func NewService(
 		panic(err)
 	}
 
-	srv.pu = pu
-	srv.pu.LockService = srv.lockService
-	srv.pu.HAKeeperClient = srv._hakeeperClient
-	srv.pu.QueryClient = srv.queryClient
-	srv.pu.UdfService = srv.udfService
-	srv._txnClient = pu.TxnClient
-
-	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
+	if err = srv.initMOServer(ctx, srv.pu, srv.aicm); err != nil {
 		return nil, err
 	}
 
@@ -217,25 +202,6 @@ func NewService(
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
-
-	srv.requestHandler = func(ctx context.Context,
-		cnAddr string,
-		message morpc.Message,
-		cs morpc.ClientSession,
-		engine engine.Engine,
-		fService fileservice.FileService,
-		lockService lockservice.LockService,
-		queryClient qclient.QueryClient,
-		hakeeper logservice.CNHAKeeperClient,
-		udfService udf.Service,
-		cli client.TxnClient,
-		aicm *defines.AutoIncrCacheManager,
-		messageAcquirer func() morpc.Message) error {
-		return nil
-	}
-	for _, opt := range options {
-		opt(srv)
-	}
 
 	// TODO: global client need to refactor
 	err = cnclient.NewCNClient(
