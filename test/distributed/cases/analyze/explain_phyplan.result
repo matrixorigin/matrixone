@@ -14,7 +14,7 @@ INSERT INTO dept VALUES (30,'SALES','CHICAGO');
 INSERT INTO dept VALUES (40,'OPERATIONS','BOSTON');
 explain phyplan select * from dept;
 tp qurery phyplan
-Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: [])
+Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
   DataSource: db1.dept[deptno dname loc]
   Pipeline: └── output
                 └── projection
@@ -48,7 +48,7 @@ INSERT INTO emp VALUES (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 explain phyplan select * from emp;
 tp qurery phyplan
-Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: [])
+Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
   DataSource: db1.emp[empno ename job mgr hiredate sal comm deptno]
   Pipeline: └── output
                 └── projection
@@ -56,7 +56,7 @@ Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: [])
                         └── tablescan
 explain phyplan select empno, ename, job from emp where sal > 2000;
 tp qurery phyplan
-Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: [])
+Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
   DataSource: db1.emp[empno ename job sal]
   Pipeline: └── output
                 └── projection
@@ -65,7 +65,7 @@ Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: [])
                             └── tablescan
 explain phyplan select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;
 tp qurery phyplan
-Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: [])
+Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
   DataSource: db1.emp[ename deptno]
   Pipeline: └── output
                 └── projection
@@ -73,7 +73,7 @@ Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: [])
                         └── projection
                             └── tablescan
   PreScopes: {
-    Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: [])
+    Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
       DataSource: db1.dept[deptno dname]
       Pipeline: └── hash build
                     └── projection

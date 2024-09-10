@@ -446,7 +446,12 @@ func explainSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitR
 	if scope.Proc != nil {
 		receiverStr = getReceiverStr(scope, scope.Proc.Reg.MergeReceivers, rmp)
 	}
-	buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr))
+
+	if option.Verbose || option.Analyze {
+		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr))
+	} else {
+		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Mcpu, receiverStr))
+	}
 
 	// Scope DataSource
 	if scope.DataSource != nil {
