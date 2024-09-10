@@ -1,3 +1,6 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+
 drop database if exists test;
 create database test;
 use test;
@@ -271,3 +274,106 @@ create table abnormal01 (col1 int, col3 char) with retention period 0.1 month;
 create table abnormal01 (col1 int, col3 char) with retention period 10 years;
 create table abnormal01 (col1 int, col3 char) with retention period 10 minutes;
 drop database test01;
+
+
+
+
+-- nonsys create retention table
+-- @bvt:issue#18651
+-- @session:id=1&user=acc01:test_account&password=111
+drop database if exists nonsys_test;
+create database nonsys_test;
+use nonsys_test;
+drop table if exists test01;
+create table test01(t1 time,t2 time,t3 time) with retention period 2 second;
+insert into test01 values("-838:59:59.0000","838:59:59.00","22:00:00");
+insert into test01 values("0:00:00.0000","0","0:00");
+insert into test01 values(null,NULL,null);
+insert into test01 values("23","1122","-1122");
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+select sleep(2);
+-- @session
+-- @ignore:0
+select mo_ctl('cn', 'task', ':retention');
+select sleep(1);
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+show tables;
+drop database nonsys_test;
+-- @session
+-- @bvt:issue
+
+
+
+
+-- pub-sub, not subscribed
+drop database if exists db01;
+create database db01;
+use db01;
+drop table if exists table01;
+create table table01 (col1 int unique key, col2 enum ('a','b','c')) with retention period 2 second;
+insert into table01 values(1,'a');
+insert into table01 values(2, 'b');
+
+drop publication if exists pub01;
+create publication pub01 database db01 table table01 account acc01 comment 'publish to acc01';
+-- @ignore:5,6
+show publications;
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+select sleep(2);
+-- @ignore:0
+select mo_ctl('cn', 'task', ':retention');
+select sleep(1);
+-- @ignore:5,6
+show publications;
+drop publication pub01;
+drop database db01;
+
+
+
+
+-- pub-sub, subscribed
+drop database if exists db02;
+create database db02;
+use db02;
+drop table if exists table01;
+create table table01 (col1 int unique key, col2 enum ('a','b','c')) with retention period 2 second;
+insert into table01 values(1,'a');
+insert into table01 values(2, 'b');
+
+drop publication if exists pub01;
+create publication pub01 database db02 table table01 account acc01 comment 'publish to acc01';
+-- @ignore:5,6
+show publications;
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
+show subscriptions all;
+drop database if exists sub01;
+create database sub01 from sys publication pub01;
+-- @ignore:5,7
+show subscriptions;
+-- @session
+
+-- @ignore:2
+select * from mo_catalog.mo_retention;
+select sleep(2);
+-- @ignore:0
+select mo_ctl('cn', 'task', ':retention');
+select sleep(1);
+-- @ignore:5,6
+show publications;
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
+show subscriptions;
+drop database sub01;
+-- @session
+
+drop publication pub01;
+drop database db02;
+
+drop account acc01;
