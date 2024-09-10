@@ -736,6 +736,14 @@ const (
 	End
 )
 
+type DataSourceType uint8
+
+const (
+	GeneralLocalDataSource DataSourceType = iota
+	ShardingLocalDataSource
+	ShardingRemoteDataSource
+)
+
 type DataSource interface {
 	Next(
 		ctx context.Context,

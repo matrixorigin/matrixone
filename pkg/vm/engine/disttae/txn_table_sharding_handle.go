@@ -38,14 +38,17 @@ import (
 
 const StreamReaderLease = time.Minute * 2
 
-type streamReader struct {
+type shardingRemoteDS struct {
+}
+
+type shardingRemoteReader struct {
 	streamID types.Uuid
 	rd       engine.Reader
 	colTypes []types.Type
 	deadline time.Time
 }
 
-func (sr *streamReader) updateCols(cols []string, tblDef *plan.TableDef) {
+func (sr *shardingRemoteReader) updateCols(cols []string, tblDef *plan.TableDef) {
 	if len(sr.colTypes) == 0 {
 		sr.colTypes = make([]types.Type, len(cols))
 		for i, column := range cols {
@@ -65,14 +68,14 @@ func (sr *streamReader) updateCols(cols []string, tblDef *plan.TableDef) {
 
 type streamHandle struct {
 	sync.Mutex
-	streamReaders map[types.Uuid]streamReader
+	streamReaders map[types.Uuid]shardingRemoteReader
 	GCManager     *gc.Manager
 }
 
 var streamHandler streamHandle
 
 func init() {
-	streamHandler.streamReaders = make(map[types.Uuid]streamReader)
+	streamHandler.streamReaders = make(map[types.Uuid]shardingRemoteReader)
 	streamHandler.GCManager = gc.NewManager(
 		gc.WithCronJob(
 			"streamReaderGC",
@@ -272,8 +275,8 @@ func HandleShardingReadBuildReader(
 		ctx,
 		0,
 		relData,
-		//engine.DataSourceReadPolicy(param.ReaderBuildParam.ReadPolicy),
 		engine.TombstoneApplyPolicy(param.ReaderBuildParam.TombstoneApplyPolicy),
+		engine.ShardingRemoteDataSource,
 	)
 	if err != nil {
 		return nil, err
@@ -298,7 +301,7 @@ func HandleShardingReadBuildReader(
 	}
 	streamHandler.Lock()
 	defer streamHandler.Unlock()
-	streamHandler.streamReaders[uuid] = streamReader{
+	streamHandler.streamReaders[uuid] = shardingRemoteReader{
 		streamID: uuid,
 		rd:       rd,
 		deadline: time.Now().Add(StreamReaderLease),
@@ -360,7 +363,6 @@ func HandleShardingReadNext(
 		cols,
 		nil,
 		mp,
-		nil,
 		bat,
 	)
 	if err != nil {

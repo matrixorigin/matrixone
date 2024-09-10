@@ -742,9 +742,9 @@ func (mr *MockDataSourceMockRecorder) GetTombstones(ctx, bid interface{}) *gomoc
 }
 
 // Next mocks base method.
-func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, memFilter any, mp *mpool.MPool, vp engine.VectorPool, bat *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
+func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, memFilter any, mp *mpool.MPool, bat *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Next", ctx, cols, types, seqNums, memFilter, mp, vp, bat)
+	ret := m.ctrl.Call(m, "Next", ctx, cols, types, seqNums, memFilter, mp, bat)
 	ret0, _ := ret[0].(*objectio.BlockInfo)
 	ret1, _ := ret[1].(engine.DataState)
 	ret2, _ := ret[2].(error)
@@ -752,9 +752,9 @@ func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.
 }
 
 // Next indicates an expected call of Next.
-func (mr *MockDataSourceMockRecorder) Next(ctx, cols, types, seqNums, memFilter, mp, vp, bat interface{}) *gomock.Call {
+func (mr *MockDataSourceMockRecorder) Next(ctx, cols, types, seqNums, memFilter, mp, bat interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Next", reflect.TypeOf((*MockDataSource)(nil).Next), ctx, cols, types, seqNums, memFilter, mp, vp, bat)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Next", reflect.TypeOf((*MockDataSource)(nil).Next), ctx, cols, types, seqNums, memFilter, mp, bat)
 }
 
 // SetFilterZM mocks base method.

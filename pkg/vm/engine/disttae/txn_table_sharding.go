@@ -222,7 +222,7 @@ func (tbl *txnTableDelegate) Ranges(
 
 	buf := morpc.NewBuffer()
 	defer buf.Close()
-	uncommitted, _ := tbl.origin.collectUnCommittedObjects(txnOffset)
+	uncommitted, _ := tbl.origin.collectUnCommittedDataObjs(txnOffset)
 	buf.Mark()
 	for _, v := range uncommitted {
 		buf.EncodeBytes(v[:])
@@ -391,7 +391,10 @@ func (tbl *txnTableDelegate) BuildReaders(
 	)
 }
 
-type shardingReader struct {
+type shardingLocalDS struct {
+}
+
+type shardingLocalReader struct {
 	iteratePhase ReaderPhase
 	closed       bool
 	lrd          engine.Reader
@@ -400,17 +403,16 @@ type shardingReader struct {
 	//relation data to distribute to remote CN which holds shard's partition state.
 	remoteRelData engine.RelData
 	//read policy for remote.
-	remoteReadPolicy      engine.DataSourceReadPolicy
+	//remoteReadPolicy      engine.DataSourceReadPolicy
 	remoteTombApplyPolicy engine.TombstoneApplyPolicy
 	remoteScanType        int
 }
 
-func (r *shardingReader) Read(
+func (r *shardingLocalReader) Read(
 	ctx context.Context,
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
 	bat *batch.Batch,
 ) (isEnd bool, err error) {
 	defer func() {
@@ -421,7 +423,7 @@ func (r *shardingReader) Read(
 	for {
 		switch r.iteratePhase {
 		case InLocal:
-			isEnd, err = r.lrd.Read(ctx, cols, expr, mp, vp, bat)
+			isEnd, err = r.lrd.Read(ctx, cols, expr, mp, bat)
 			if err != nil {
 				return
 			}
@@ -438,7 +440,7 @@ func (r *shardingReader) Read(
 				func(param *shard.ReadParam) {
 					param.ReaderBuildParam.RelData = relData
 					param.ReaderBuildParam.Expr = expr
-					param.ReaderBuildParam.ReadPolicy = int32(r.remoteReadPolicy)
+					//param.ReaderBuildParam.ReadPolicy = int32(r.remoteReadPolicy)
 					param.ReaderBuildParam.ScanType = int32(r.remoteScanType)
 				},
 				func(resp []byte) {
@@ -481,11 +483,11 @@ func (r *shardingReader) Read(
 
 }
 
-func (r *shardingReader) Close() error {
+func (r *shardingLocalReader) Close() error {
 	return r.close()
 }
 
-func (r *shardingReader) close() error {
+func (r *shardingLocalReader) close() error {
 	if !r.closed {
 		r.lrd.Close()
 		err := r.tblDelegate.forwardRead(
@@ -504,17 +506,17 @@ func (r *shardingReader) close() error {
 	return nil
 }
 
-func (r *shardingReader) SetOrderBy(orderby []*plan.OrderBySpec) {
+func (r *shardingLocalReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	//r.source.SetOrderBy(orderby)
 	panic("not implemented")
 }
 
-func (r *shardingReader) GetOrderBy() []*plan.OrderBySpec {
+func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {
 	//return r.source.GetOrderBy()
 	panic("not implemented")
 }
 
-func (r *shardingReader) SetFilterZM(zm objectio.ZoneMap) {
+func (r *shardingLocalReader) SetFilterZM(zm objectio.ZoneMap) {
 	//r.source.SetFilterZM(zm)
 	panic("not implemented")
 }
@@ -541,7 +543,7 @@ func buildShardingReaders(
 		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
 	}
 
-	_, uncommittedObjNames := tbl.origin.collectUnCommittedObjects(txnOffset)
+	_, uncommittedObjNames := tbl.origin.collectUnCommittedDataObjs(txnOffset)
 	uncommittedTombstones, err := tbl.origin.CollectTombstones(ctx, txnOffset, engine.Policy_CollectUncommittedTombstones)
 	if err != nil {
 		return nil, err
@@ -584,25 +586,21 @@ func buildShardingReaders(
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
 	var shard engine.RelData
-	//var localReadPolicy engine.DataSourceReadPolicy
-	//var remoteReadPolicy engine.DataSourceReadPolicy
 	for i := 0; i < newNum; i++ {
 		if i == 0 {
 			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
-			//localReadPolicy = engine.Policy_SkipReadCommittedInMem
-			//remoteReadPolicy = engine.Policy_SkipReadUncommittedInMem
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
-			//localReadPolicy = engine.Policy_SkipReadInMem
-			//remoteReadPolicy = engine.Policy_SkipReadInMem
 		}
 
 		localRelData, remoteRelData := group(shard)
+
 		ds, err := tbl.origin.buildLocalDataSource(
 			ctx,
 			txnOffset,
 			localRelData,
-			policy|engine.Policy_SkipCommittedInMemory|engine.Policy_SkipCommittedS3)
+			policy|engine.Policy_SkipCommittedInMemory|engine.Policy_SkipCommittedS3,
+			engine.ShardingLocalDataSource)
 		if err != nil {
 			return nil, err
 		}
@@ -620,11 +618,10 @@ func buildShardingReaders(
 		}
 		lrd.scanType = scanType
 
-		srd := &shardingReader{
-			lrd:           lrd,
-			tblDelegate:   tbl,
-			remoteRelData: remoteRelData,
-			//remoteReadPolicy:      remoteReadPolicy,
+		srd := &shardingLocalReader{
+			lrd:                   lrd,
+			tblDelegate:           tbl,
+			remoteRelData:         remoteRelData,
 			remoteTombApplyPolicy: engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3,
 			remoteScanType:        scanType,
 		}

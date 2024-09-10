@@ -269,19 +269,10 @@ message KeyParam {
 }
 
 message ReaderBuildParam {
-    //block info list
-   // bytes blkList = 1;
-   // //object stats list
-   // bytes objList = 2;
-   // bytes inMemTombstones = 3;
-   // //tombstone object stats list
-   // bytes persistedTombstoneObjs = 4;
     bytes relData = 1;
-    //plan.Expr expr = 2 [(gogoproto.nullable) = false];
     plan.Expr expr = 2;
     int32 scanType = 3;
-    int32 readPolicy = 4;
-    int32 tombstoneApplyPolicy = 5;
+    int32 tombstoneApplyPolicy = 4;
 }
 
 message ReaderBuildResult {
@@ -294,8 +285,6 @@ message ReadNextParam {
 }
 
 message ReadNextResult {
-   // bool  isEnd = 1;
-    //bytes batch = 2;
     bytes result = 1;
 }
 

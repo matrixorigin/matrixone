@@ -551,7 +551,7 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	txnOffset int,
 ) (data engine.RelData, err error) {
-	unCommittedObjs, _ := tbl.collectUnCommittedObjects(txnOffset)
+	unCommittedObjs, _ := tbl.collectUnCommittedDataObjs(txnOffset)
 	return tbl.doRanges(
 		ctx,
 		exprs,
@@ -860,7 +860,7 @@ func (tbl *txnTable) rangesOnePart(
 // Parameters:
 //   - txnOffset: Transaction writes offset used to specify the starting position for reading data.
 //   - fromSnapshot: Boolean indicating if the data is from a snapshot.
-func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
+func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
 	var unCommittedObjects []objectio.ObjectStats
 	unCommittedObjNames := make(map[objectio.ObjectNameShort]struct{})
 
@@ -1651,7 +1651,8 @@ func BuildLocalDataSource(
 		ctx,
 		txnOffset,
 		ranges,
-		engine.Policy_CheckAll)
+		engine.Policy_CheckAll,
+		engine.GeneralLocalDataSource)
 }
 
 func (tbl *txnTable) buildLocalDataSource(
@@ -1659,6 +1660,7 @@ func (tbl *txnTable) buildLocalDataSource(
 	txnOffset int,
 	relData engine.RelData,
 	policy engine.TombstoneApplyPolicy,
+	category engine.DataSourceType,
 ) (source engine.DataSource, err error) {
 
 	switch relData.GetType() {
@@ -1687,8 +1689,10 @@ func (tbl *txnTable) buildLocalDataSource(
 				tbl,
 				txnOffset,
 				ranges,
+				relData.GetTombstones(),
 				skipReadMem,
 				policy,
+				category,
 			)
 		}
 
@@ -1753,7 +1757,7 @@ func (tbl *txnTable) BuildReaders(
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, tombstonePolicy)
+		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {
 			return nil, err
 		}
