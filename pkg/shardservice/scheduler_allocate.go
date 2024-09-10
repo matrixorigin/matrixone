@@ -15,6 +15,7 @@
 package shardservice
 
 import (
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -57,6 +58,7 @@ func (s *allocateScheduler) doAllocate(
 			zap.Uint64("table", t.id),
 			zap.Any("cns", r.cns),
 		)
+		v2.ReplicaScheduleSkipWithNoCNCounter.Add(1)
 		return
 	}
 
@@ -72,6 +74,7 @@ func (s *allocateScheduler) doAllocate(
 		}()
 		return cns[seq%len(cns)].id
 	}
+	n := 0
 	for i := range t.shards {
 		for j := range t.shards[i].Replicas {
 			if t.shards[i].Replicas[j].CN == "" {
@@ -81,11 +84,15 @@ func (s *allocateScheduler) doAllocate(
 					zap.String("shard", t.shards[i].String()),
 					zap.String("replica", t.shards[i].Replicas[j].String()),
 				)
+				n++
 				r.addOpLocked(
 					cn,
 					newAddReplicaOp(t.shards[i], t.shards[i].Replicas[j]),
 				)
 			}
 		}
+	}
+	if n > 0 {
+		v2.ReplicaScheduleAllocateReplicaCounter.Add(float64(n))
 	}
 }

@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -63,6 +62,12 @@ func (sample *Sample) OpType() vm.OpType {
 }
 
 func (sample *Sample) Prepare(proc *process.Process) (err error) {
+	if sample.OpAnalyzer == nil {
+		sample.OpAnalyzer = process.NewAnalyzer(sample.GetIdx(), sample.IsFirst, sample.IsLast, "sample")
+	} else {
+		sample.OpAnalyzer.Reset()
+	}
+
 	sample.ctr = &container{
 		isGroupBy:     len(sample.GroupExprs) != 0,
 		isMultiSample: len(sample.SampleExprs) > 1,
@@ -113,12 +118,12 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(sample.GetIdx(), sample.GetParallelIdx(), sample.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := sample.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	// duplicate code from other operators.
-	result, lastErr := vm.ChildrenCall(sample.Children[0], proc, anal)
+	result, lastErr := vm.ChildrenCall(sample.GetChildren(0), proc, analyzer)
 	if lastErr != nil {
 		return result, lastErr
 	}
@@ -139,23 +144,21 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if bat == nil {
 		result.Batch, lastErr = ctr.samplePool.Result(true)
-		anal.Output(result.Batch, sample.GetIsLast())
 		sample.ctr.buf = result.Batch
 		result.Status = vm.ExecStop
 		ctr.workDone = true
+		analyzer.Output(result.Batch)
 		return result, lastErr
 	}
 
 	var err error
 	if !bat.IsEmpty() {
-		anal.Input(bat, sample.GetIsFirst())
-
 		if err = ctr.evaluateSampleAndGroupByColumns(proc, bat); err != nil {
 			return result, err
 		}
 
 		if ctr.isGroupBy {
-			err = ctr.hashAndSample(bat, proc.Mp())
+			err = ctr.hashAndSample(bat)
 		} else {
 			err = ctr.samplePool.Sample(1, ctr.sampleVectors, nil, bat)
 		}
@@ -172,8 +175,8 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 	} else {
 		result.Batch, err = ctr.samplePool.Result(false)
 	}
-	anal.Output(result.Batch, sample.GetIsLast())
 	sample.ctr.buf = result.Batch
+	analyzer.Output(result.Batch)
 	return result, err
 }
 
@@ -218,14 +221,14 @@ func (ctr *container) evaluateSampleAndGroupByColumns(proc *process.Process, bat
 	return nil
 }
 
-func (ctr *container) hashAndSample(bat *batch.Batch, mp *mpool.MPool) (err error) {
+func (ctr *container) hashAndSample(bat *batch.Batch) (err error) {
 	var iterator hashmap.Iterator
 	var groupList []uint64
 	count := bat.RowCount()
 
 	if ctr.useIntHashMap {
 		if ctr.intHashMap == nil {
-			ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVectorsNullable, mp)
+			ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVectorsNullable)
 			if err != nil {
 				return err
 			}
@@ -233,7 +236,7 @@ func (ctr *container) hashAndSample(bat *batch.Batch, mp *mpool.MPool) (err erro
 		iterator = ctr.intHashMap.NewIterator()
 	} else {
 		if ctr.strHashMap == nil {
-			ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVectorsNullable, mp)
+			ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVectorsNullable)
 			if err != nil {
 				return err
 			}

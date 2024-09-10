@@ -3538,10 +3538,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 					minVal, maxVal = col[i], col[i]
 					first = false
 				} else {
-					if col[i].Less(minVal) {
+					if col[i].LT(&minVal) {
 						minVal = col[i]
 					}
-					if maxVal.Less(col[i]) {
+					if maxVal.LT(&col[i]) {
 
 						maxVal = col[i]
 					}
@@ -3550,10 +3550,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		} else {
 			minVal, maxVal = col[0], col[0]
 			for i, j := 1, len(col); i < j; i++ {
-				if col[i].Less(minVal) {
+				if col[i].LT(&minVal) {
 					minVal = col[i]
 				}
-				if maxVal.Less(col[i]) {
+				if maxVal.LT(&col[i]) {
 					maxVal = col[i]
 				}
 			}
@@ -3848,10 +3848,10 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
 		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+			return col[i].LT(&col[j])
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Rowid) bool {
-			return a.Equal(b)
+			return a.EQ(&b)
 		})
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4046,7 +4046,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
 		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+			return col[i].LT(&col[j])
 		})
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
@@ -4211,17 +4211,30 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 
 	for i := range short {
 		idx := sort.Search(lenLong, func(j int) bool {
-			return cmp(long[j], short[i]) > 0
+			return cmp(long[j], short[i]) >= 0
 		})
+
 		if idx >= lenLong {
 			break
 		}
 
-		if idx > 0 && cmp(short[i], long[idx-1]) == 0 {
+		if cmp(short[i], long[idx]) == 0 {
 			if err = AppendFixed(ret, short[i], false, mp); err != nil {
 				return err
 			}
 		}
+
+		// skip the same item
+		j := idx + 1
+		for j < lenLong && cmp(long[j], long[j-1]) == 0 {
+			j++
+		}
+
+		if j >= lenLong {
+			break
+		}
+
+		idx = j
 
 		long = long[idx:]
 		lenLong = len(long)
@@ -4319,17 +4332,31 @@ func Intersection2VectorVarlen(
 	for i := range shortCol {
 		shortBytes := shortCol[i].GetByteSlice(shortArea)
 		idx := sort.Search(lenLong, func(j int) bool {
-			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) > 0
+			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) >= 0
 		})
+
 		if idx >= lenLong {
 			break
 		}
 
-		if idx > 0 && bytes.Equal(shortBytes, longCol[idx-1].GetByteSlice(longArea)) {
+		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
 			if err = AppendBytes(ret, shortBytes, false, mp); err != nil {
 				return err
 			}
 		}
+
+		// skip the same item
+		j := idx + 1
+		for j < lenLong && bytes.Equal(
+			longCol[j].GetByteSlice(longArea), longCol[j-1].GetByteSlice(longArea)) {
+			j++
+		}
+
+		if j >= lenLong {
+			break
+		}
+
+		idx = j
 
 		longCol = longCol[idx:]
 		lenLong = len(longCol)

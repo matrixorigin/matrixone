@@ -30,6 +30,11 @@ func (connector *Connector) String(buf *bytes.Buffer) {
 }
 
 func (connector *Connector) Prepare(_ *process.Process) error {
+	if connector.OpAnalyzer == nil {
+		connector.OpAnalyzer = process.NewAnalyzer(connector.GetIdx(), connector.IsFirst, connector.IsLast, "connector")
+	} else {
+		connector.OpAnalyzer.Reset()
+	}
 	return nil
 }
 
@@ -42,9 +47,13 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	analyzer := connector.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	reg := connector.Reg
 
-	result, err := connector.Children[0].Call(proc)
+	result, err := vm.ChildrenCall(connector.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

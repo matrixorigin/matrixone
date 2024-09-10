@@ -151,7 +151,6 @@ func (t *TableReader) Read(
 	colNames []string,
 	plan *plan.Expr,
 	mp *mpool.MPool,
-	_ engine.VectorPool,
 	bat *batch.Batch) (bool, error) {
 	if t == nil {
 		return true, nil

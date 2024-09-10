@@ -296,11 +296,9 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 	if _, _, err := m.writer.Sync(ctx); err != nil {
 		return err
 	}
-	cobjstats := m.writer.GetObjectStats()[:objectio.SchemaTombstone]
+	cobjstats := m.writer.GetObjectStats()
 	commitEntry := m.host.GetCommitEntry()
-	for _, cobj := range cobjstats {
-		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
-	}
+	commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobjstats.Clone().Marshal())
 	m.writer = nil
 	return nil
 }

@@ -82,18 +82,21 @@ func TestBlockInfoSliceTraverse(t *testing.T) {
 	for i := 0; i < s.Len(); i++ {
 		blkInfo := s.Get(i)
 		require.Equal(t, intToBlockid(int32(i)), blkInfo.BlockID)
-		require.Equal(t, false, blkInfo.Appendable)
-		blkInfo.Appendable = true
+		require.Equal(t, false, blkInfo.IsAppendable())
+		blkInfo.ObjectFlags |= ObjectFlag_Appendable
 	}
 
 	for i := 0; i < s.Len(); i++ {
-		require.Equal(t, true, s.Get(i).Appendable)
+		require.Equal(t, true, s.Get(i).IsAppendable())
 	}
 
-	s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(1000), Appendable: true})
+	blk := BlockInfo{BlockID: intToBlockid(1000)}
+	blk.ObjectFlags |= ObjectFlag_Appendable
+
+	s.AppendBlockInfo(blk)
 
 	for i := 0; i < s.Len(); i++ {
-		require.Equal(t, true, s.Get(i).Appendable)
+		require.Equal(t, true, s.Get(i).IsAppendable())
 	}
 }
 
@@ -109,14 +112,16 @@ func TestBytesToBlockInfoSlice(t *testing.T) {
 	for i := 0; i < s.Len(); i++ {
 		blkInfo := s.Get(i)
 		require.Equal(t, intToBlockid(int32(i)), blkInfo.BlockID)
-		require.Equal(t, false, blkInfo.Appendable)
-		blkInfo.Appendable = true
+		require.Equal(t, false, blkInfo.IsAppendable())
+		blkInfo.ObjectFlags |= ObjectFlag_Appendable
 	}
 
-	s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(1000), Appendable: true})
+	blk := BlockInfo{BlockID: intToBlockid(1000)}
+	blk.ObjectFlags |= ObjectFlag_Appendable
+	s.AppendBlockInfo(blk)
 
 	for i := 0; i < s.Len(); i++ {
-		require.Equal(t, true, s.Get(i).Appendable)
+		require.Equal(t, true, s.Get(i).IsAppendable())
 	}
 
 	require.Equal(t, 1000*BlockInfoSize, len(bs))
@@ -125,10 +130,10 @@ func TestBytesToBlockInfoSlice(t *testing.T) {
 	require.Equal(t, 1001*BlockInfoSize, len(bs))
 	require.Equal(t, s.GetAllBytes(), bs)
 
-	s.Get(999).Appendable = false
-	require.Equal(t, false, s.Get(999).Appendable)
+	s.Get(999).ObjectFlags &= ^ObjectFlag_Appendable
+	require.Equal(t, false, s.Get(999).IsAppendable())
 	blkInfo := DecodeBlockInfo(bs[999*BlockInfoSize:])
-	require.Equal(t, false, blkInfo.Appendable)
+	require.Equal(t, false, blkInfo.IsAppendable())
 }
 
 func TestBlockInfoSlice_Slice(t *testing.T) {
