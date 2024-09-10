@@ -3538,10 +3538,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 					minVal, maxVal = col[i], col[i]
 					first = false
 				} else {
-					if col[i].Less(minVal) {
+					if col[i].LT(&minVal) {
 						minVal = col[i]
 					}
-					if maxVal.Less(col[i]) {
+					if maxVal.LT(&col[i]) {
 
 						maxVal = col[i]
 					}
@@ -3550,10 +3550,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		} else {
 			minVal, maxVal = col[0], col[0]
 			for i, j := 1, len(col); i < j; i++ {
-				if col[i].Less(minVal) {
+				if col[i].LT(&minVal) {
 					minVal = col[i]
 				}
-				if maxVal.Less(col[i]) {
+				if maxVal.LT(&col[i]) {
 					maxVal = col[i]
 				}
 			}
@@ -3848,10 +3848,10 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
 		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+			return col[i].LT(&col[j])
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Rowid) bool {
-			return a.Equal(b)
+			return a.EQ(&b)
 		})
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4046,7 +4046,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
 		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+			return col[i].LT(&col[j])
 		})
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:

@@ -361,6 +361,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.AlterView(c)
 	case AlterTable:
 		return s.AlterTable(c)
+	case RenameTable:
+		return s.RenameTable(c)
 	case DropTable:
 		return s.DropTable(c)
 	case DropSequence:
@@ -578,6 +580,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 		case plan.DataDefinition_ALTER_TABLE:
 			return []*Scope{
 				newScope(AlterTable).
+					withPlan(pn),
+			}, nil
+		case plan.DataDefinition_RENAME_TABLE:
+			return []*Scope{
+				newScope(RenameTable).
 					withPlan(pn),
 			}, nil
 		case plan.DataDefinition_DROP_TABLE:
@@ -2864,14 +2871,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	}
 
 	ss = c.mergeShuffleScopesIfNeeded(ss, true)
-	if len(c.cnList) > 1 {
-		// merge here to avoid bugs, delete this in the future
-		for i := range ss {
-			if ss[i].NodeInfo.Mcpu > 1 {
-				ss[i] = c.newMergeScopeByCN([]*Scope{ss[i]}, ss[i].NodeInfo)
-			}
-		}
-	}
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
 	for _, cn := range c.cnList {
@@ -2889,7 +2888,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		shuffleArg := constructShuffleArgForGroup(shuffleGroups, n)
 		shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(shuffleArg)
-		if len(c.cnList) > 1 && ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+		if ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
 			ss[i] = c.newMergeScopeByCN([]*Scope{ss[i]}, ss[i].NodeInfo)
 		}
 		dispatchArg := constructDispatch(j, shuffleGroups, ss[i], n, false)
@@ -3214,7 +3213,7 @@ func (c *Compile) compileOnduplicateKey(n *plan.Node, ss []*Scope) ([]*Scope, er
 // the deletion operators.
 func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, n *plan.Node) *Scope {
 	for i := 0; i < len(ss); i++ {
-		if ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+		if ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 	}
@@ -3442,7 +3441,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
 		probeScopes[i].setRootOperator(shuffleProbeOp)
 
-		if !single && probeScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+		if probeScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
 			probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
 		}
 
@@ -3463,7 +3462,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		buildScopes[i].setRootOperator(shuffleBuildOp)
 
-		if !single && buildScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+		if buildScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
 			buildScopes[i] = c.newMergeScopeByCN([]*Scope{buildScopes[i]}, buildScopes[i].NodeInfo)
 		}
 
@@ -4092,12 +4091,14 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 						}
 					case types.T_Rowid:
 						min := types.DecodeFixed[types.Rowid](zm.GetMinBuf())
-						if min.Less(partialResults[i].(types.Rowid)) {
+						v := partialResults[i].(types.Rowid)
+						if min.LT(&v) {
 							partialResults[i] = min
 						}
 					case types.T_Blockid:
 						min := types.DecodeFixed[types.Blockid](zm.GetMinBuf())
-						if min.Less(partialResults[i].(types.Blockid)) {
+						v := partialResults[i].(types.Blockid)
+						if min.LT(&v) {
 							partialResults[i] = min
 						}
 					}
@@ -4219,12 +4220,14 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 						}
 					case types.T_Rowid:
 						max := types.DecodeFixed[types.Rowid](zm.GetMaxBuf())
-						if max.Great(partialResults[i].(types.Rowid)) {
+						v := partialResults[i].(types.Rowid)
+						if max.GT(&v) {
 							partialResults[i] = max
 						}
 					case types.T_Blockid:
 						max := types.DecodeFixed[types.Blockid](zm.GetMaxBuf())
-						if max.Great(partialResults[i].(types.Blockid)) {
+						v := partialResults[i].(types.Blockid)
+						if max.GT(&v) {
 							partialResults[i] = max
 						}
 					}
