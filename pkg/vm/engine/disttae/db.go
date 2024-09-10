@@ -257,6 +257,9 @@ func (e *Engine) init(ctx context.Context) error {
 		bat.Clean(m)
 	}
 
+	// clear all tables in global stats.
+	e.globalStats.clearTables()
+
 	return nil
 }
 
