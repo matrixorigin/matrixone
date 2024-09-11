@@ -22,16 +22,17 @@ func newObjCompactPolicy(fs fileservice.FileService) *objCompactPolicy {
 	}
 }
 
-func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) {
+func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
 	if entry.IsTombstone {
-		return
+		return false
 	}
 
 	if entry.OriginSize() < config.ObjectMinOsize {
-		return
+		return false
 	}
 
 	o.objects = append(o.objects, entry)
+	return true
 }
 
 func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
