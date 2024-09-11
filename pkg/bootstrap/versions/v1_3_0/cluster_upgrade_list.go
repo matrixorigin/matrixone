@@ -27,7 +27,7 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
 	upg_mo_subs,
-  upgradeShardingMetadata,
+	upgradeShardingMetadata,
 	upgradeSharding,
 	upg_drop_idx_task_status,
 	upg_drop_idx_task_runner,
