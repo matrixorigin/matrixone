@@ -476,7 +476,7 @@ func (sm *SnapshotMeta) Update(
 		logutil.Errorf("[UpdateSnapshot] updateTableInfo failed %v", err)
 		return sm, err
 	}
-	if len(sm.tides) == 0 {
+	if len(sm.tides) == 0 && sm.pitr.tid == 0 {
 		return sm, nil
 	}
 
