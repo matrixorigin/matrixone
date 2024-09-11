@@ -82,3 +82,9 @@ func (t *TransDelsForBlks) Prune(gap time.Duration) {
 		}
 	}
 }
+
+func (t *TransDelsForBlks) Delete(blkID types.Blockid) {
+	t.Lock()
+	defer t.Unlock()
+	delete(t.dels, blkID)
+}
