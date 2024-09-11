@@ -276,12 +276,16 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 func (bj ByteJson) queryValByKey(key []byte) ByteJson {
 	cnt := bj.GetElemCnt()
 	idx := sort.Search(cnt, func(i int) bool {
-		return bytes.Compare(bj.getObjectKey(i), key) >= 0
+		k := bj.getObjectKey(i)
+		return bytes.Compare(k, key) >= 0
 	})
-	if idx >= cnt || !bytes.Equal(bj.getObjectKey(idx), key) {
-		return Null
+	if idx < cnt {
+		k := bj.getObjectKey(idx)
+		if bytes.Equal(k, key) {
+			return bj.getObjectVal(idx)
+		}
 	}
-	return bj.getObjectVal(idx)
+	return Null
 }
 
 func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
