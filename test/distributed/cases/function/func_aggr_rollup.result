@@ -26,23 +26,23 @@ year    country    product    profit
 null    null    null    null
 null    null    Mouse    150
 null    null    Printer    200
-null    China    Mouse    300
 null    China    null    300
+null    China    Mouse    300
 null    null    null    350
-2023    China    null    400
 2023    China    Printer    400
+2023    China    null    400
 null    India    null    500
 null    India    Mouse    500
-2023    null    Printer    700
 2023    null    null    700
+2023    null    Printer    700
 2024    USA    Printer    1001
-2023    null    null    1100
 2024    China    Printer    1100
 2024    China    null    1100
+2023    null    null    1100
 null    null    null    1150
 2024    USA    Smartphone    2000
-2024    Canada    Smartphone    2200
 2024    Canada    null    2200
+2024    Canada    Smartphone    2200
 2024    USA    Laptop    3210
 2024    USA    null    6211
 2024    null    null    9511
@@ -68,23 +68,23 @@ year    country    product    profit    grp_year    grp_country    grp_product
 null    null    null    null    0    0    0
 null    null    Mouse    150    0    0    0
 null    null    Printer    200    0    0    0
-null    China    Mouse    300    0    0    0
 null    China    null    300    0    0    1
+null    China    Mouse    300    0    0    0
 null    null    null    350    0    0    1
-2023    China    null    400    0    0    1
 2023    China    Printer    400    0    0    0
+2023    China    null    400    0    0    1
 null    India    null    500    0    0    1
 null    India    Mouse    500    0    0    0
-2023    null    Printer    700    0    0    0
 2023    null    null    700    0    0    1
+2023    null    Printer    700    0    0    0
 2024    USA    Printer    1001    0    0    0
-2023    null    null    1100    0    1    1
 2024    China    Printer    1100    0    0    0
 2024    China    null    1100    0    0    1
+2023    null    null    1100    0    1    1
 null    null    null    1150    0    1    1
 2024    USA    Smartphone    2000    0    0    0
-2024    Canada    Smartphone    2200    0    0    0
 2024    Canada    null    2200    0    0    1
+2024    Canada    Smartphone    2200    0    0    0
 2024    USA    Laptop    3210    0    0    0
 2024    USA    null    6211    0    0    1
 2024    null    null    9511    0    1    1
@@ -162,8 +162,8 @@ null    null    null    1150
 null    null    null    11761
 null    China    null    300
 null    India    null    500
-2023    null    null    700
 2023    null    null    1100
+2023    null    null    700
 2023    China    null    400
 2024    null    null    9511
 2024    Canada    null    2200
@@ -193,9 +193,9 @@ ROLLUP
 ORDER BY GROUPING(year) DESC;
 year    profit
 null    11761
-null    1150
-2023    1100
 2024    9511
+2023    1100
+null    1150
 SELECT
 year,
 country,
@@ -209,7 +209,7 @@ WITH
 ROLLUP
 ORDER BY
 profit;
-Argument #1 of GROUPING function is not in GROUP BY
+SQL syntax error: column "sales.product" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT
 year,
 country,
@@ -223,7 +223,15 @@ WITH
 ROLLUP
 ORDER BY
 profit;
-Argument #1 of GROUPING function is not in GROUP BY
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 5 column 15 near "+1) AS grp_product
+FROM sales
+GROUP BY
+year,
+country
+WITH
+ROLLUP
+ORDER BY
+profit;";
 SELECT
 year,
 country,
@@ -238,7 +246,8 @@ WITH
 ROLLUP
 ORDER BY
 profit;
-You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'FROM sales
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 5 column 5 near "
+FROM sales
 WHERE
 GROUPING(year) = 1
 GROUP BY
@@ -247,4 +256,4 @@ country
 WITH
 ROLLUP
 ORDER BY
-' at line 5
+profit;";
