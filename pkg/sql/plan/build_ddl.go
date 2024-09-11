@@ -1704,7 +1704,9 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id: int32(types.T_int64),
+				Id:    int32(types.T_int64),
+				Width: 64, // int32(types.T_int64.TypeLen()),
+				Scale: -1,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -1737,7 +1739,9 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id: int32(types.T_int32),
+				Id:    int32(types.T_int32),
+				Width: 32, // int32(types.T_int32.TypeLen()),
+				Scale: -1,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
