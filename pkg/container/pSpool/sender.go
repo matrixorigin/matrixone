@@ -111,7 +111,6 @@ func (ps *pipelineSpool) Close() {
 	}
 
 	ps.cache.Free()
-	return
 }
 
 func (ps *pipelineSpool) sendToAll(ctx context.Context, msg pipelineSpoolMessage) (queryDone bool) {
