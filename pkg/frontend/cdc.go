@@ -297,7 +297,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 	///////////
 
 	//step 1 : handle tables
-	jsonTables, tablePts, err := preprocessTables(
+	tablePts, err := preprocessTables(
 		ctx,
 		ses,
 		cdcLevel,
@@ -372,34 +372,6 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		noFull = true
 	}
 
-	//step 5: create daemon task
-	insertSql := getSqlForNewCdcTask(
-		uint64(creatorAccInfo.GetTenantID()), //the account_id of cdc creator
-		cdcId,
-		create.TaskName.String(),
-		jsonSrcUri, //json bytes
-		"",
-		jsonSinkUri, //json bytes
-		sinkType,
-		encodedSinkPwd, //encrypted password
-		"",
-		"",
-		"",
-		jsonTables,
-		jsonFilters,
-		"",
-		cdc2.SASCommon,
-		cdc2.SASCommon,
-		"", //1.3 does not support startTs
-		"", //1.3 does not support endTs
-		cdcTaskOptionsMap["ConfigFile"],
-		dat,
-		CdcRunning,
-		0,
-		noFull,
-		"",
-	)
-
 	details := &task.Details{
 		//account info that create cdc
 		AccountID: creatorAccInfo.GetTenantID(),
@@ -438,6 +410,39 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		if err != nil {
 			return 0, err
 		}
+
+		jsonTables, err := cdc2.JsonEncode(tablePts)
+		if err != nil {
+			return 0, err
+		}
+
+		//step 5: create daemon task
+		insertSql := getSqlForNewCdcTask(
+			uint64(creatorAccInfo.GetTenantID()), //the account_id of cdc creator
+			cdcId,
+			create.TaskName.String(),
+			jsonSrcUri, //json bytes
+			"",
+			jsonSinkUri, //json bytes
+			sinkType,
+			encodedSinkPwd, //encrypted password
+			"",
+			"",
+			"",
+			jsonTables,
+			jsonFilters,
+			"",
+			cdc2.SASCommon,
+			cdc2.SASCommon,
+			"", //1.3 does not support startTs
+			"", //1.3 does not support endTs
+			cdcTaskOptionsMap["ConfigFile"],
+			dat,
+			CdcRunning,
+			0,
+			noFull,
+			"",
+		)
 
 		//insert cdc record into the mo_cdc_task
 		exec, err := tx.ExecContext(ctx, insertSql)
@@ -767,22 +772,18 @@ func preprocessTables(
 	level string,
 	account string,
 	tables string,
-) (string, *cdc2.PatternTuples, error) {
+) (*cdc2.PatternTuples, error) {
 	tablesPts, err := extractTablePairs(ctx, tables, account)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 
 	//step 2: check privilege
 	if err = canCreateCdcTask(ctx, ses, level, account, tablesPts); err != nil {
-		return "", nil, err
+		return nil, err
 	}
 
-	jsonTablePts, err := cdc2.JsonEncode(tablesPts)
-	if err != nil {
-		return "", nil, err
-	}
-	return jsonTablePts, tablesPts, nil
+	return tablesPts, nil
 }
 
 /*
@@ -1382,28 +1383,25 @@ func handleRestartCdc(ses *Session, execCtx *ExecCtx, st *tree.RestartCDC) error
 func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error) {
 	var targetTaskStatus task.TaskStatus
 	var taskName string
-	ts := getGlobalPu().TaskService
-	if ts == nil {
-		return moerr.NewInternalError(ctx,
-			"task service not ready yet, please try again later.")
-	}
 
 	conds := make([]taskservice.Condition, 0)
 	appendCond := func(cond ...taskservice.Condition) {
 		conds = append(conds, cond...)
 	}
+	accountId := ses.GetTenantInfo().GetTenantID()
+
 	switch stmt := st.(type) {
 	case *tree.DropCDC:
 		targetTaskStatus = task.TaskStatus_CancelRequested
 		if stmt.Option.All {
 			appendCond(
-				taskservice.WithAccountID(taskservice.EQ, ses.GetTenantInfo().GetTenantID()),
+				taskservice.WithAccountID(taskservice.EQ, accountId),
 				taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 			)
 		} else {
 			taskName = stmt.Option.TaskName.String()
 			appendCond(
-				taskservice.WithAccountID(taskservice.EQ, ses.GetTenantInfo().GetTenantID()),
+				taskservice.WithAccountID(taskservice.EQ, accountId),
 				taskservice.WithTaskName(taskservice.EQ, stmt.Option.TaskName.String()),
 				taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 			)
@@ -1412,12 +1410,12 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		targetTaskStatus = task.TaskStatus_PauseRequested
 		if stmt.Option.All {
 			appendCond(
-				taskservice.WithAccountID(taskservice.EQ, ses.GetTenantInfo().GetTenantID()),
+				taskservice.WithAccountID(taskservice.EQ, accountId),
 				taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 			)
 		} else {
 			taskName = stmt.Option.TaskName.String()
-			appendCond(taskservice.WithAccountID(taskservice.EQ, ses.GetTenantInfo().GetTenantID()),
+			appendCond(taskservice.WithAccountID(taskservice.EQ, accountId),
 				taskservice.WithTaskName(taskservice.EQ, stmt.Option.TaskName.String()),
 				taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 			)
@@ -1426,7 +1424,7 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		targetTaskStatus = task.TaskStatus_RestartRequested
 		taskName = stmt.TaskName.String()
 		appendCond(
-			taskservice.WithAccountID(taskservice.EQ, ses.GetTenantInfo().GetTenantID()),
+			taskservice.WithAccountID(taskservice.EQ, accountId),
 			taskservice.WithTaskName(taskservice.EQ, stmt.TaskName.String()),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
@@ -1434,23 +1432,39 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		targetTaskStatus = task.TaskStatus_ResumeRequested
 		taskName = stmt.TaskName.String()
 		appendCond(
-			taskservice.WithAccountID(taskservice.EQ, ses.GetTenantInfo().GetTenantID()),
+			taskservice.WithAccountID(taskservice.EQ, accountId),
 			taskservice.WithTaskName(taskservice.EQ, stmt.TaskName.String()),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
 	}
 
+	return runUpdateCdcTask(ctx, targetTaskStatus, uint64(accountId), taskName, conds...)
+}
+
+func runUpdateCdcTask(
+	ctx context.Context,
+	targetTaskStatus task.TaskStatus,
+	accountId uint64,
+	taskName string,
+	conds ...taskservice.Condition,
+) (err error) {
+	ts := getGlobalPu().TaskService
+	if ts == nil {
+		return moerr.NewInternalError(ctx,
+			"task service not ready yet, please try again later.")
+	}
 	updateCdcTaskFunc := func(
 		ctx context.Context,
 		targetStatus task.TaskStatus,
 		taskKeyMap map[taskservice.CdcTaskKey]struct{},
-		tx taskservice.SqlExecutor) (int, error) {
+		tx taskservice.SqlExecutor,
+	) (int, error) {
 		return updateCdcTask(
 			ctx,
 			targetStatus,
 			taskKeyMap,
 			tx,
-			uint64(ses.GetTenantInfo().GetTenantID()),
+			accountId,
 			taskName,
 		)
 	}

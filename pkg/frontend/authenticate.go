@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -52,6 +53,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -2997,6 +2999,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
 				ses.Errorf(ctx, "post alter account suspend error: %s", err.Error())
 			}
+
+			if err = postProcessCdc(ctx, ses, aa.Name, targetAccountId, tree.AccountStatusSuspend.String()); err != nil {
+				ses.Errorf(ctx, "post pause cdc of alter accound suspend error: %s", err.Error())
+			}
 		}
 
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusRestricted {
@@ -3010,6 +3016,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			if err != nil {
 				ses.Errorf(ctx, "post alter account restricted error: %s", err.Error())
 			}
+
+			if err = postProcessCdc(ctx, ses, aa.Name, targetAccountId, tree.AccountStatusRestricted.String()); err != nil {
+				ses.Errorf(ctx, "post pause cdc of alter accound restricted error: %s", err.Error())
+			}
 		}
 
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusOpen && accountStatus == tree.AccountStatusRestricted.String() {
@@ -3022,6 +3032,16 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusOpen.String())
 			if err != nil {
 				ses.Errorf(ctx, "post alter account not restricted error: %s", err.Error())
+			}
+
+		}
+
+		if aa.StatusOption.Exist &&
+			aa.StatusOption.Option == tree.AccountStatusOpen &&
+			(accountStatus == tree.AccountStatusRestricted.String() ||
+				accountStatus == tree.AccountStatusSuspend.String()) {
+			if err = postProcessCdc(ctx, ses, aa.Name, targetAccountId, tree.AccountStatusOpen.String()); err != nil {
+				ses.Errorf(ctx, "post resume cdc of alter accound not restricted or not suspend error: %s", err.Error())
 			}
 		}
 	}
@@ -3725,6 +3745,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Errorf(ctx, "post drop account error: %s", err.Error())
 	}
 
+	if err = postProcessCdc(ctx, ses, da.Name, uint64(accountId), "drop"); err != nil {
+		ses.Errorf(ctx, "post drop cdc of the accound error: %s", err.Error())
+	}
+
 	return err
 }
 
@@ -3786,6 +3810,47 @@ func postDropSuspendAccount(
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
+}
+
+func postProcessCdc(
+	ctx context.Context,
+	ses *Session,
+	targetAccountName string,
+	targetAccountID uint64,
+	targetAccountStatus string,
+) (err error) {
+	//drop or pause cdc
+	switch targetAccountStatus {
+	case "drop":
+		return runUpdateCdcTask(
+			ctx,
+			task.TaskStatus_CancelRequested,
+			targetAccountID,
+			"",
+			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+	case tree.AccountStatusSuspend.String(), tree.AccountStatusRestricted.String():
+		return runUpdateCdcTask(
+			ctx,
+			task.TaskStatus_PauseRequested,
+			targetAccountID,
+			"",
+			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+	case tree.AccountStatusOpen.String():
+		return runUpdateCdcTask(
+			ctx,
+			task.TaskStatus_ResumeRequested,
+			targetAccountID,
+			"",
+			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+	}
+
+	return
 }
 
 // doDropUser accomplishes the DropUser statement
