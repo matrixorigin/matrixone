@@ -42,8 +42,6 @@ type container struct {
 
 	batchRowCount int64
 	rbat          *batch.Batch
-
-	maxAllocSize int64
 }
 
 type Apply struct {

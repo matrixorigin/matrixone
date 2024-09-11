@@ -44,5 +44,6 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 
 func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
+	apply.ctr.batchRowCount = 0
 	return result, moerr.NewInternalErrorNoCtx("apply call")
 }
