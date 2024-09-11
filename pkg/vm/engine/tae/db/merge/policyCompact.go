@@ -64,20 +64,17 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 		return false
 	}
 	iter := sels.Iterator()
-	deletedRows := uint32(0)
 	tombstoneRows := uint32(0)
 	for iter.HasNext() {
 		i := iter.Next()
-		deletedRows += o.countRowsInOneTombstoneForOneObject(entry, tombstoneStats[i])
 		tombstoneRows += tombstoneStats[i].Rows()
 	}
 	rows := entry.Rows()
-	if deletedRows > rows/2 || tombstoneRows > rows*5 {
+	if tombstoneRows > rows*5 {
 		logutil.Info("[MERGE-POLICY-REVISE]",
 			zap.String("policy", "compact"),
 			zap.String("data object", entry.String()),
 			zap.Uint32("data rows", rows),
-			zap.Uint32("deleted rows", deletedRows),
 			zap.Uint32("tombstone rows", tombstoneRows),
 		)
 		o.objects = append(o.objects, entry)
