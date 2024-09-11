@@ -271,6 +271,15 @@ func (gs *GlobalStats) RemoveTid(tid uint64) {
 	delete(gs.logtailUpdate.mu.updated, tid)
 }
 
+// clearTables clears the tables in the map if there are any tables in it.
+func (gs *GlobalStats) clearTables() {
+	gs.logtailUpdate.mu.Lock()
+	defer gs.logtailUpdate.mu.Unlock()
+	if len(gs.logtailUpdate.mu.updated) > 0 {
+		gs.logtailUpdate.mu.updated = make(map[uint64]struct{})
+	}
+}
+
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
 	select {
 	case gs.tailC <- tail:
