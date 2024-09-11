@@ -269,16 +269,24 @@ drop database db01;
 -- stage name: reserved keywords and non reserved keywords
 drop stage if exists `change`;
 create stage `change` url = 'file:///$resources/into_outfile/stage';
+-- @ignore:1
+show stages;
+-- @ignore:0,2,5
+select * from mo_catalog.mo_stages;
+drop stage `change`;
 drop stage if exists account;
 create stage account url = 'file:///$resources/into_outfile/stage';
+-- @ignore:1
+show stages;
+-- @ignore:0,2,5
+select * from mo_catalog.mo_stages;
+drop stage account;
 drop stage if exists `$$%%`;
 create stage `$$%%` url = 'file:///$resources/into_outfile/stage';
 -- @ignore:1
 show stages;
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
-drop stage `change`;
-drop stage account;
 drop stage `$$%%`;
 
 

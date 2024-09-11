@@ -20,7 +20,7 @@ drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-307    stage01    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:08:59    
+359    stage01    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:46    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage01    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
@@ -51,7 +51,7 @@ drop stage if exists stage02;
 create stage stage02 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-308    stage02    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:08:59    
+360    stage02    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:46    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage02    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
@@ -101,7 +101,7 @@ drop stage if exists stage03;
 create stage stage03 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-309    stage03    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:09:00    
+361    stage03    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:46    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage03    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
@@ -161,7 +161,7 @@ drop stage if exists stage04;
 create stage stage04 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-310    stage04    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:09:00    
+362    stage04    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:47    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage04    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
@@ -200,7 +200,7 @@ drop stage if exists stage05;
 create stage stage05 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-311    stage05    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:09:00    
+363    stage05    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:47    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage05    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
@@ -271,7 +271,7 @@ drop stage if exists stage07;
 create stage stage07 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-312    stage07    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:09:01    
+364    stage07    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:48    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage07    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
@@ -298,7 +298,7 @@ drop stage if exists stage08;
 create stage stage08 url = 'file:///$resources/into_outfile/stage' comment = 'this is a stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-313    stage08    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:09:01    this is a stage
+365    stage08    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:48    this is a stage
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage08    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    this is a stage
@@ -327,7 +327,7 @@ drop stage if exists stage09;
 create stage stage09 url = 'file:///$resources/into_outfile/stage' comment = '这是一个基于file system创建的stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-314    stage09    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:09:01    这是一个基于file system创建的stage
+366    stage09    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:48    这是一个基于file system创建的stage
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage09    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    这是一个基于file system创建的stage
@@ -364,7 +364,7 @@ drop stage if exists stage11;
 create stage stage11 url = 'file:///$resources/into_outfile/stage' comment = 'this is a stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    stage11    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:09:02    this is a stage
+1    stage11    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:49    this is a stage
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage11    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    this is a stage
@@ -381,22 +381,30 @@ drop stage stage11;
 drop database db01;
 drop stage if exists `change`;
 create stage `change` url = 'file:///$resources/into_outfile/stage';
+show stages;
+STAGE_NAME    URL    STATUS    COMMENT
+change    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+select * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+367    change    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:49    
+drop stage `change`;
 drop stage if exists account;
 create stage account url = 'file:///$resources/into_outfile/stage';
+show stages;
+STAGE_NAME    URL    STATUS    COMMENT
+account    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+select * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+368    account    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:49    
+drop stage account;
 drop stage if exists `$$%%`;
 create stage `$$%%` url = 'file:///$resources/into_outfile/stage';
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-change    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
-account    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
 $$%%    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-315    change    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:09:02    
-316    account    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:09:02    
-317    $$%%    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:09:02    
-drop stage `change`;
-drop stage account;
+369    $$%%    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 13:44:49    
 drop stage `$$%%`;
 drop stage if exists stage01;
 create stage ab_stage url = 'file:///$resources/into_outfile/stage';
