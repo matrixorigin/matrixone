@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"math"
 	"sync"
 )
 
@@ -44,8 +45,6 @@ type cachedBatch struct {
 	// bytes to copy vector's data and area to.
 	bytesCache [][]byte
 }
-
-var _ = initCachedBatch
 
 func initCachedBatch(mp *mpool.MPool, capacity int) *cachedBatch {
 	if capacity < 1 {
@@ -205,30 +204,48 @@ func (cb *cachedBatch) getSuitableVector(
 	cb.bytesCacheLock.Lock()
 
 	if first > 0 {
+		suitIdx := -1
+		suitDifference := math.MaxInt
+
 		for i, bs := range cb.bytesCache {
-			if cap(bs) >= first {
-				if setDataFirst {
-					vector.SetVecData(vec, bs)
-				} else {
-					vector.SetVecArea(vec, bs)
+			if difference := cap(bs) - first; difference > 0 {
+				if difference < suitDifference {
+					suitIdx = i
+					suitDifference = difference
 				}
-				cb.bytesCache = append(cb.bytesCache[:i], cb.bytesCache[i+1:]...)
-				break
 			}
+		}
+
+		if suitIdx != -1 {
+			if setDataFirst {
+				vector.SetVecData(vec, cb.bytesCache[suitIdx])
+			} else {
+				vector.SetVecArea(vec, cb.bytesCache[suitIdx])
+			}
+			cb.bytesCache = append(cb.bytesCache[:suitIdx], cb.bytesCache[suitIdx+1:]...)
 		}
 	}
 
 	if second > 0 {
+		suitIdx := -1
+		suitDifference := math.MaxInt
+
 		for i, bs := range cb.bytesCache {
-			if cap(bs) >= second {
-				if setDataFirst {
-					vector.SetVecArea(vec, bs)
-				} else {
-					vector.SetVecData(vec, bs)
+			if difference := cap(bs) - second; difference > 0 {
+				if difference < suitDifference {
+					suitIdx = i
+					suitDifference = difference
 				}
-				cb.bytesCache = append(cb.bytesCache[:i], cb.bytesCache[i+1:]...)
-				break
 			}
+		}
+
+		if suitIdx != -1 {
+			if setDataFirst {
+				vector.SetVecArea(vec, cb.bytesCache[suitIdx])
+			} else {
+				vector.SetVecData(vec, cb.bytesCache[suitIdx])
+			}
+			cb.bytesCache = append(cb.bytesCache[:suitIdx], cb.bytesCache[suitIdx+1:]...)
 		}
 	}
 
