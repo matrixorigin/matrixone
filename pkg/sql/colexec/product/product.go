@@ -66,6 +66,22 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
+			if ctr.inBat == nil { // get one batch from leftchild before receive from build side
+				result, err = vm.ChildrenCall(product.GetChildren(0), proc, analyzer)
+				if err != nil {
+					return result, err
+				}
+				ctr.inBat = result.Batch
+				if ctr.inBat == nil {
+					ctr.state = End
+					continue
+				}
+				if ctr.inBat.IsEmpty() {
+					ctr.inBat = nil
+					continue
+				}
+			}
+
 			if err = product.build(proc, analyzer); err != nil {
 				return result, err
 			}
