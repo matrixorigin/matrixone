@@ -408,14 +408,26 @@ func GetTxnOp(
 	ctx context.Context,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
+	info string,
 ) (client.TxnOperator, error) {
 	nowTs := cnEngine.LatestLogtailAppliedTime()
 	createByOpt := client.WithTxnCreateBy(
 		0,
 		"",
-		"readMultipleTables",
+		info,
 		0)
 	return cnTxnClient.New(ctx, nowTs, createByOpt)
+}
+
+func FinishTxnOp(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {
+	//same timeout value as it in frontend
+	ctx2, cancel := context.WithTimeout(ctx, cnEngine.Hints().CommitOrRollbackTimeout)
+	defer cancel()
+	if inputErr != nil {
+		_ = txnOp.Rollback(ctx2)
+	} else {
+		_ = txnOp.Commit(ctx2)
+	}
 }
 
 func GetTableDef(
@@ -424,10 +436,6 @@ func GetTableDef(
 	cnEngine engine.Engine,
 	tblId uint64,
 ) (*plan.TableDef, error) {
-	if err := cnEngine.New(ctx, txnOp); err != nil {
-		return nil, err
-	}
-
 	_, _, rel, err := cnEngine.GetRelationById(ctx, txnOp, tblId)
 	if err != nil {
 		return nil, err

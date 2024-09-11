@@ -52,14 +52,14 @@ func Test_newCdcSqlFormat(t *testing.T) {
 		d,
 		"running",
 		125,
-		"xxx",
+		true,
 		"yyy",
 	)
-	wantSql := "insert into mo_catalog.mo_cdc_task values(3,\"019111fd-aed1-70c0-8760-9abadd8f0f4a\",\"task1\",\"src uri\",\"123\",\"dst uri\",\"mysql\",\"456\",\"ca path\",\"cert path\",\"key path\",\"db1:t1\",\"xfilter\",\"op filters\",\"error\",\"common\",\"\",\"\",\"conf path\",\"2024-08-02 15:20:00\",\"running\",125,\"125\",\"xxx\",\"yyy\",\"\",\"\",\"\",\"\",\"\")"
+	wantSql := "insert into mo_catalog.mo_cdc_task values(3,\"019111fd-aed1-70c0-8760-9abadd8f0f4a\",\"task1\",\"src uri\",\"123\",\"dst uri\",\"mysql\",\"456\",\"ca path\",\"cert path\",\"key path\",\"db1:t1\",\"xfilter\",\"op filters\",\"error\",\"common\",\"\",\"\",\"conf path\",\"2024-08-02 15:20:00\",\"running\",125,\"125\",\"true\",\"yyy\",\"\",\"\",\"\",\"\",\"\")"
 	assert.Equal(t, wantSql, sql)
 
 	sql2 := getSqlForRetrievingCdcTask(3, id)
-	wantSql2 := "select sink_uri, sink_type, sink_password, tables, filters, start_ts from mo_catalog.mo_cdc_task where account_id = 3 and task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
+	wantSql2 := "select sink_uri, sink_type, sink_password, tables, filters, no_full from mo_catalog.mo_cdc_task where account_id = 3 and task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
 	assert.Equal(t, wantSql2, sql2)
 }
 
@@ -175,7 +175,7 @@ func Test_parseTables(t *testing.T) {
 	}
 
 	for _, tkase := range kases {
-		pirs, err := extractTablePairs(context.Background(), tkase.input)
+		pirs, err := extractTablePairs(context.Background(), tkase.input, "")
 		if tkase.wantErr {
 			assert.Errorf(t, err, tkase.input)
 		} else {
@@ -233,7 +233,7 @@ func Test_privilegeCheck(t *testing.T) {
 		{},
 	}
 	err = canCreateCdcTask(ctx, ses, "Account", "acc1", gen(pts))
-	assert.Nil(t, err)
+	assert.Error(t, err)
 
 	pts = []*cdc2.PatternTuple{
 		{Source: cdc2.PatternTable{Account: "acc1"}},
@@ -258,7 +258,7 @@ func Test_privilegeCheck(t *testing.T) {
 	assert.NotNil(t, err)
 
 	err = canCreateCdcTask(ctx, ses, "Account", "acc1", gen(pts))
-	assert.Nil(t, err)
+	assert.Error(t, err)
 
 	pts = []*cdc2.PatternTuple{
 		{Source: cdc2.PatternTable{Account: "acc2"}},

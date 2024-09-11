@@ -981,6 +981,7 @@ type CdcTask struct {
 	tables  cdc2.PatternTuples
 	filters cdc2.PatternTuples
 	startTs types.TS
+	noFull  string
 
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
@@ -1034,13 +1035,8 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 
 	ctx := defines.AttachAccountId(rootCtx, uint32(cdc.cdcTask.Accounts[0].GetId()))
 
-	txnOp, err := cdc2.GetTxnOp(ctx, cdc.cnEngine, cdc.cnTxnClient)
-	if err != nil {
-		return err
-	}
-
 	//step1 : get cdc task definition
-	if err = cdc.retrieveCdcTask(ctx, txnOp); err != nil {
+	if err = cdc.retrieveCdcTask(ctx); err != nil {
 		return err
 	}
 
@@ -1071,6 +1067,37 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		dbTableInfos = append(dbTableInfos, info)
 	}
 
+	err = cdc.startWatermarkAndPipeline(ctx, dbTableInfos)
+	if err != nil {
+		return err
+	}
+
+	if firstTime {
+		// hold
+		ch := make(chan int, 1)
+		<-ch
+	}
+	return
+}
+
+func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos []*cdc2.DbTableInfo) (err error) {
+	var info *cdc2.DbTableInfo
+	txnOp, err := cdc2.GetTxnOp(ctx, cdc.cnEngine, cdc.cnTxnClient, "cdc-startWatermarkAndPipeline")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		cdc2.FinishTxnOp(ctx, err, txnOp, cdc.cnEngine)
+	}()
+	err = cdc.cnEngine.New(ctx, txnOp)
+	if err != nil {
+		return err
+	}
+
+	if cdc.noFull == "true" {
+		cdc.startTs = types.TimestampToTS(txnOp.SnapshotTS())
+	}
+
 	// start watermark updater
 	cdc.sunkWatermarkUpdater = cdc2.NewWatermarkUpdater(cdc.cdcTask.Accounts[0].GetId(), cdc.cdcTask.TaskId, cdc.ie)
 
@@ -1093,16 +1120,10 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 			return
 		}
 	}
-
-	if firstTime {
-		// hold
-		ch := make(chan int, 1)
-		<-ch
-	}
 	return
 }
 
-func (cdc *CdcTask) retrieveCdcTask(ctx context.Context, txnOp client.TxnOperator) error {
+func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 
 	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
@@ -1181,9 +1202,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context, txnOp client.TxnOperato
 	}
 
 	cdc.startTs = types.TS{}
-	if noFull == "true" {
-		cdc.startTs = types.TimestampToTS(txnOp.SnapshotTS())
-	}
+	cdc.noFull = noFull
 
 	fmt.Fprintln(os.Stderr, "====>", "cdc task row",
 		cdc.sinkUri,
@@ -1450,8 +1469,7 @@ func runUpdateCdcTask(
 ) (err error) {
 	ts := getGlobalPu().TaskService
 	if ts == nil {
-		return moerr.NewInternalError(ctx,
-			"task service not ready yet, please try again later.")
+		return nil
 	}
 	updateCdcTaskFunc := func(
 		ctx context.Context,
@@ -1634,10 +1652,13 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	}
 
 	// current timestamp
-	txnOp, err := cdc2.GetTxnOp(ctx, pu.StorageEngine, pu.TxnClient)
+	txnOp, err := cdc2.GetTxnOp(ctx, pu.StorageEngine, pu.TxnClient, "cdc-handleShowCdc")
 	if err != nil {
 		return err
 	}
+	defer func() {
+		cdc2.FinishTxnOp(ctx, err, txnOp, pu.StorageEngine)
+	}()
 	timestamp := txnOp.SnapshotTS().ToStdTime().String()
 
 	// get from task table

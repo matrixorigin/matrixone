@@ -125,29 +125,12 @@ func (reader *tableReader) readTable(
 
 	var txnOp client.TxnOperator
 	//step1 : create an txnOp
-	nowTs := reader.cnEngine.LatestLogtailAppliedTime()
-	createByOpt := client.WithTxnCreateBy(
-		0,
-		"",
-		"readMultipleTables",
-		0)
-
-	txnOp, err = reader.cnTxnClient.New(
-		ctx,
-		nowTs,
-		createByOpt)
+	txnOp, err = GetTxnOp(ctx, reader.cnEngine, reader.cnTxnClient, "readMultipleTables")
 	if err != nil {
 		return err
 	}
 	defer func() {
-		//same timeout value as it in frontend
-		ctx2, cancel := context.WithTimeout(ctx, reader.cnEngine.Hints().CommitOrRollbackTimeout)
-		defer cancel()
-		if err != nil {
-			_ = txnOp.Rollback(ctx2)
-		} else {
-			_ = txnOp.Commit(ctx2)
-		}
+		FinishTxnOp(ctx, err, txnOp, reader.cnEngine)
 	}()
 	err = reader.cnEngine.New(ctx, txnOp)
 	if err != nil {
