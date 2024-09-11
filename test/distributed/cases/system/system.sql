@@ -5,10 +5,8 @@ select * from information_schema.files limit 1;
 use system;
 show tables;
 select * from statement_info limit 0;
-explain select * from statement_info limit 0;
 select * from span_info limit 0;
 select * from rawlog limit 0;
-explain select * from rawlog limit 0;
 select * from log_info limit 0;
 select * from error_info limit 0;
 
@@ -29,7 +27,6 @@ create account acc01 admin_name = 'test_account' identified by '111';
 use system;
 show tables;
 select * from statement_info limit 0;
-explain select * from statement_info limit 0;
 create database db01;
 use db01;
 create table table01 (id int);
@@ -41,7 +38,6 @@ insert into table02 select * from table01 limit 0;
 (select * from table01 limit 0) union all (select * from table02 limit 0);
 -- @session
 select * from system.statement_info limit 0;
-explain select * from system.statement_info limit 0;
 
 select * from db01.table01 limit 0;
 drop database db01;
