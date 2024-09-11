@@ -558,7 +558,7 @@ func ReadDeletes(
 	return
 }
 
-func EvalDeleteRowsByTimestamp(
+func EvalDeleteMaskFromDNCreatedTombstones(
 	deletes *batch.Batch, ts types.TS, blockid *types.Blockid,
 ) (rows *nulls.Bitmap) {
 	if deletes == nil {
@@ -568,7 +568,7 @@ func EvalDeleteRowsByTimestamp(
 	tss := vector.MustFixedColWithTypeCheck[types.TS](deletes.Vecs[1])
 	//aborts := deletes.Vecs[3]
 
-	start, end := FindIntervalForBlock(rowids, blockid)
+	start, end := FindStartEndOfBlockFromSortedRowids(rowids, blockid)
 
 	for i := end - 1; i >= start; i-- {
 		if tss[i].Greater(&ts) {
@@ -576,7 +576,7 @@ func EvalDeleteRowsByTimestamp(
 		}
 		row := rowids[i].GetRowOffset()
 		if rows == nil {
-			rows = nulls.NewWithSize(row + 1)
+			rows = nulls.NewWithSize(int(row) + 1)
 		}
 		rows.Add(uint64(row))
 	}
@@ -584,7 +584,7 @@ func EvalDeleteRowsByTimestamp(
 	return
 }
 
-func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
+func EvalDeleteMaskFromCNCreatedTombstones(
 	bid types.Blockid,
 	deletes *batch.Batch,
 ) (rows *nulls.Bitmap) {
@@ -593,11 +593,11 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
 	}
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0])
 
-	start, end := FindIntervalForBlock(rowids, &bid)
+	start, end := FindStartEndOfBlockFromSortedRowids(rowids, &bid)
 	for i := end - 1; i >= start; i-- {
 		row := rowids[i].GetRowOffset()
 		if rows == nil {
-			rows = nulls.NewWithSize(row + 1)
+			rows = nulls.NewWithSize(int(row) + 1)
 		}
 		rows.Add(uint64(row))
 	}
@@ -605,7 +605,7 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
 	return
 }
 
-func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, end int) {
+func FindStartEndOfBlockFromSortedRowids(rowids []types.Rowid, id *types.Blockid) (start int, end int) {
 	lowRowid := objectio.NewRowid(id, 0)
 	highRowid := objectio.NewRowid(id, math.MaxUint32)
 	i, j := 0, len(rowids)
@@ -655,9 +655,9 @@ func FillBlockDeleteMask(
 		defer release()
 
 		if createdByCN {
-			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(blockId, persistedDeletes)
+			rows = EvalDeleteMaskFromCNCreatedTombstones(blockId, persistedDeletes)
 		} else {
-			rows = EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
+			rows = EvalDeleteMaskFromDNCreatedTombstones(persistedDeletes, snapshotTS, &blockId)
 		}
 
 		if rows != nil {
