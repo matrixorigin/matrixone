@@ -2,13 +2,13 @@ package merge
 
 import (
 	"context"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"go.uber.org/zap"
 )
 
 type objCompactPolicy struct {
@@ -65,13 +65,13 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 		deletedRows += tombstoneStats[iter.Next()].Rows()
 	}
 	rows := entry.Rows()
-	logutil.Info("[MERGE-POLICY-REVISE]",
-		zap.String("policy", "compact"),
-		zap.String("data object", entry.String()),
-		zap.Uint32("data rows", rows),
-		zap.Uint32("tombstone rows", deletedRows),
-	)
 	if deletedRows > rows {
+		logutil.Info("[MERGE-POLICY-REVISE]",
+			zap.String("policy", "compact"),
+			zap.String("data object", entry.String()),
+			zap.Uint32("data rows", rows),
+			zap.Uint32("tombstone rows", deletedRows),
+		)
 		o.objects = append(o.objects, entry)
 		return true
 	}
