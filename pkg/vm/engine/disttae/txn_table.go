@@ -680,10 +680,10 @@ var slowPathCounter atomic.Int64
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef,             // table definition (schema)
-	exprs []*plan.Expr,                  // filter expression
-	outBlocks *objectio.BlockInfoSlice,  // output marshaled block list after filtering
-	proc *process.Process,               // process of this transaction
+	tableDef *plan.TableDef, // table definition (schema)
+	exprs []*plan.Expr, // filter expression
+	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
+	proc *process.Process, // process of this transaction
 	uncommittedObjects []objectio.ObjectStats,
 ) (err error) {
 	var done bool
@@ -1727,15 +1727,15 @@ func (tbl *txnTable) BuildReaders(
 	def := tbl.GetTableDef(ctx)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
-	if mod != 0 {
-		divide++
-	}
+	current := 0
 	var shard engine.RelData
 	for i := 0; i < newNum; i++ {
-		if i < newNum-1 {
-			shard = relData.DataSlice(i*divide, (i+1)*divide)
+		if i < mod {
+			shard = relData.DataSlice(current, current+divide+1)
+			current = current + divide + 1
 		} else {
-			shard = relData.DataSlice(i*divide, blkCnt)
+			shard = relData.DataSlice(current, current+divide)
+			current = current + divide
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, tombstonePolicy)
 		if err != nil {
