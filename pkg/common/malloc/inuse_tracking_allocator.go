@@ -18,8 +18,8 @@ import (
 	"sync/atomic"
 )
 
-type InuseTrackingAllocator struct {
-	upstream        Allocator
+type InuseTrackingAllocator[U Allocator] struct {
+	upstream        U
 	inUse           atomic.Uint64
 	onChange        func(uint64)
 	deallocatorPool *ClosureDeallocatorPool[inuseTrackingDeallocatorArgs, *inuseTrackingDeallocatorArgs]
@@ -33,11 +33,11 @@ func (inuseTrackingDeallocatorArgs) As(Trait) bool {
 	return false
 }
 
-func NewInuseTrackingAllocator(
-	upstream Allocator,
+func NewInuseTrackingAllocator[U Allocator](
+	upstream U,
 	onChange func(uint64),
-) (ret *InuseTrackingAllocator) {
-	ret = &InuseTrackingAllocator{
+) (ret *InuseTrackingAllocator[U]) {
+	ret = &InuseTrackingAllocator[U]{
 		upstream: upstream,
 		onChange: onChange,
 		deallocatorPool: NewClosureDeallocatorPool(
@@ -52,9 +52,9 @@ func NewInuseTrackingAllocator(
 	return ret
 }
 
-var _ Allocator = new(InuseTrackingAllocator)
+var _ Allocator = new(InuseTrackingAllocator[Allocator])
 
-func (s *InuseTrackingAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
+func (s *InuseTrackingAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr, dec, err := s.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err

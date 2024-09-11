@@ -19,13 +19,11 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -59,6 +57,12 @@ func (group *Group) OpType() vm.OpType {
 }
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
+	if group.OpAnalyzer == nil {
+		group.OpAnalyzer = process.NewAnalyzer(group.GetIdx(), group.IsFirst, group.IsLast, "group")
+	} else {
+		group.OpAnalyzer.Reset()
+	}
+
 	if !group.ctr.skipInitReusableMem {
 		group.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 		group.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
@@ -169,11 +173,11 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := group.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst())
+	result, err := group.ctr.processGroupByAndAgg(group, proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -185,12 +189,12 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
-	anal.Output(result.Batch, group.GetIsLast())
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
 // compute the `agg(expression)List group by expressionList`.
-func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, anal process.Analyze, isFirst bool) (vm.CallResult, error) {
+func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		// receive data from pre-operator.
@@ -199,7 +203,7 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 		case vm.Build:
 			batList := make([]*batch.Batch, 1)
 			for {
-				result, err := vm.ChildrenCall(ap.GetChildren(0), proc, anal)
+				result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -213,7 +217,6 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 				if result.Batch.IsEmpty() {
 					continue
 				}
-				anal.Input(result.Batch, isFirst)
 
 				bat := result.Batch
 				batList[0] = bat
@@ -276,7 +279,7 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 
 				// analyze.
 				for _, vec := range aggVectors {
-					anal.Alloc(int64(vec.Size()))
+					analyzer.Alloc(int64(vec.Size()))
 				}
 			}
 			result.Batch = ctr.bat

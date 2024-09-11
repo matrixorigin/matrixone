@@ -156,7 +156,7 @@ func (tomb *tombstoneData) HasBlockTombstone(
 	}
 	if len(tomb.rowids) > 0 {
 		// TODO: optimize binary search once
-		start, end := blockio.FindIntervalForBlock(tomb.rowids, &blockId)
+		start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, &blockId)
 		if end > start {
 			return true, nil
 		}
@@ -234,7 +234,7 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 		return
 	}
 
-	start, end := blockio.FindIntervalForBlock(tomb.rowids, &bid)
+	start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, &bid)
 
 	for i := start; i < end; i++ {
 		offset := tomb.rowids[i].GetRowOffset()
