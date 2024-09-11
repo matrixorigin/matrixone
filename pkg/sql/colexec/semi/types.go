@@ -49,8 +49,10 @@ type container struct {
 	executor []colexec.ExpressionExecutor
 	vecs     []*vector.Vector
 
-	mp        *message.JoinMap
-	skipProbe bool
+	mp *message.JoinMap
+
+	skipProbe     bool
+	skipProbeRBat *batch.Batch //only ref to input batch, do not free this batch
 
 	maxAllocSize int64
 }

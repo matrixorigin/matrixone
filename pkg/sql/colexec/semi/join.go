@@ -117,12 +117,20 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.skipProbe {
+				if ctr.skipProbeRBat == nil {
+					ctr.skipProbeRBat = batch.NewWithSize(len(semiJoin.Result))
+				}
+				ctr.skipProbeRBat.Recursive = bat.Recursive
+				ctr.skipProbeRBat.Ro = bat.Ro
+				ctr.skipProbeRBat.ShuffleIDX = bat.ShuffleIDX
+				ctr.skipProbeRBat.Attrs = bat.Attrs
+				ctr.skipProbeRBat.Aggs = bat.Aggs
 				newvecs := make([]*vector.Vector, len(semiJoin.Result))
 				for i, pos := range semiJoin.Result {
 					newvecs[i] = bat.Vecs[pos]
 				}
-				bat.Vecs = newvecs
-				result.Batch, err = semiJoin.EvalProjection(bat, proc)
+				ctr.skipProbeRBat.Vecs = newvecs
+				result.Batch, err = semiJoin.EvalProjection(ctr.skipProbeRBat, proc)
 				if err != nil {
 					return result, err
 				}
