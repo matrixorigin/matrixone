@@ -406,13 +406,6 @@ func getNonSortedPKSearchFuncByPKVec(
 	return nil
 }
 
-func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		infos = append(infos, txnMeta.DebugString())
-		logutil.Debugf(msg+" %s", infos...)
-	}
-}
-
 // ListTnService gets all tn service in the cluster
 func ListTnService(
 	service string,

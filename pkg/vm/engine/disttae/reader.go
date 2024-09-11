@@ -200,7 +200,7 @@ func (r *mergeReader) Read(
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	bat *batch.Batch,
+	outBatch *batch.Batch,
 ) (bool, error) {
 	start := time.Now()
 	defer func() {
@@ -211,7 +211,7 @@ func (r *mergeReader) Read(
 		return true, nil
 	}
 	for len(r.rds) > 0 {
-		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, bat)
+		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, outBatch)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()
@@ -222,7 +222,7 @@ func (r *mergeReader) Read(
 			r.rds = r.rds[1:]
 		} else {
 			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-				logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
+				logutil.Debug(testutil.OperatorCatchBatch("merge reader", outBatch))
 			}
 			return false, nil
 		}
@@ -312,7 +312,7 @@ func (r *reader) Read(
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	bat *batch.Batch,
+	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
 
 	var dataState engine.DataState
@@ -334,7 +334,7 @@ func (r *reader) Read(
 		r.columns.seqnums,
 		r.memFilter,
 		mp,
-		bat)
+		outBatch)
 
 	dataState = state
 
@@ -374,7 +374,7 @@ func (r *reader) Read(
 		filter,
 		policy,
 		r.tableDef.Name,
-		bat,
+		outBatch,
 		mp,
 		r.fs,
 	)
@@ -387,14 +387,14 @@ func (r *reader) Read(
 		gatherStats(numRead, numHit)
 	}
 
-	bat.SetAttributes(cols)
+	outBatch.SetAttributes(cols)
 
 	if blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
-		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
+		outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
 	}
 
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
+		logutil.Debug(testutil.OperatorCatchBatch("block reader", outBatch))
 	}
 
 	return false, nil

@@ -156,7 +156,7 @@ func (tomb *tombstoneData) HasBlockTombstone(
 	}
 	if len(tomb.rowids) > 0 {
 		// TODO: optimize binary search once
-		start, end := blockio.FindIntervalForBlock(tomb.rowids, &blockId)
+		start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, &blockId)
 		if end > start {
 			return true, nil
 		}
@@ -167,7 +167,7 @@ func (tomb *tombstoneData) HasBlockTombstone(
 	for i, end := 0, tomb.files.Len(); i < end; i++ {
 		objectStats := tomb.files.Get(i)
 		zm := objectStats.SortKeyZoneMap()
-		if !zm.PrefixEq(blockId[:]) {
+		if !zm.RowidPrefixEq(blockId[:]) {
 			continue
 		}
 		location := objectStats.ObjectLocation()
@@ -189,8 +189,8 @@ func (tomb *tombstoneData) HasBlockTombstone(
 		for pos := startIdx; pos < blkCnt; pos++ {
 			blkMeta := dataMeta.GetBlockMeta(uint32(pos))
 			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
-			if !columnZonemap.PrefixEq(blockId[:]) {
-				if columnZonemap.PrefixGT(blockId[:]) {
+			if !columnZonemap.RowidPrefixEq(blockId[:]) {
+				if columnZonemap.RowidPrefixGT(blockId[:]) {
 					break
 				}
 				continue
@@ -234,7 +234,7 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 		return
 	}
 
-	start, end := blockio.FindIntervalForBlock(tomb.rowids, &bid)
+	start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, &bid)
 
 	for i := start; i < end; i++ {
 		offset := tomb.rowids[i].GetRowOffset()
@@ -295,7 +295,7 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 
 func (tomb *tombstoneData) SortInMemory() {
 	sort.Slice(tomb.rowids, func(i, j int) bool {
-		return tomb.rowids[i].Less(tomb.rowids[j])
+		return tomb.rowids[i].LT(&tomb.rowids[j])
 	})
 }
 
