@@ -35,7 +35,7 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, mergeReceivers []
 		//r.chs[i] = mr.Ch
 		r.nilBatchCnt[i] = mr.NilBatchCnt
 		r.receiverListener[i+1] = reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
+			Dir: reflect.SelectRecv,
 			//Chan: reflect.ValueOf(mr.Ch),
 		}
 	}

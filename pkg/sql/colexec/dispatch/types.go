@@ -72,8 +72,10 @@ type Dispatch struct {
 
 	// IsSink means this is a Sink Node
 	IsSink bool
-	// RecSink means this is a Recursive Sink Node
+	// RecSink means this is the dispatch operator for `mergeRecursive` pipeline.
 	RecSink bool
+	// RecCTE means this is the dispatch operator for `mergeCTE` pipeline.
+	RecCTE bool
 
 	ShuffleType int32
 	// FuncId means the sendFunc you want to call

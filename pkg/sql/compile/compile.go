@@ -3256,7 +3256,7 @@ func (c *Compile) compileSinkNode(n *plan.Node, ss []*Scope, step int32) ([]*Sco
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	dispatchLocal := constructDispatchLocal(true, true, n.RecursiveSink, receivers)
+	dispatchLocal := constructDispatchLocal(true, true, n.RecursiveSink, n.RecursiveCte, receivers)
 	dispatchLocal.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(dispatchLocal)
 	c.anal.isFirst = false

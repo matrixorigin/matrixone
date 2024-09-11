@@ -1277,11 +1277,12 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 	return arg
 }
 
-func constructDispatchLocal(all bool, isSink, RecSink bool, regs []*process.WaitRegister) *dispatch.Dispatch {
+func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {
 	arg := dispatch.NewArgument()
 	arg.LocalRegs = regs
 	arg.IsSink = isSink
-	arg.RecSink = RecSink
+	arg.RecSink = rec
+	arg.RecCTE = recCTE
 	if all {
 		arg.FuncId = dispatch.SendToAllLocalFunc
 	} else {

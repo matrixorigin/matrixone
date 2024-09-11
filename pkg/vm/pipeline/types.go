@@ -35,25 +35,8 @@ func (p *Pipeline) isCtePipelineAtLoop() (isMergeCte bool, atLoop bool) {
 	// required:
 	// 1. it is a linked tree.
 	// 2. it holds `merge-cte` or `merge-recursive`.
-	next := p.rootOp
-	if next.OpType() != vm.Dispatch {
-		return false, false
-	}
-
-	for next != nil {
-		opt := next.OpType()
-		if opt == vm.MergeCTE {
-			return true, true
-		}
-		if opt == vm.MergeRecursive {
-			return false, true
-		}
-
-		cds := next.GetOperatorBase().Children
-		if len(cds) != 1 {
-			break
-		}
-		next = cds[0]
+	if d, ok := p.rootOp.(*dispatch.Dispatch); ok {
+		return d.RecCTE, d.RecCTE || d.RecSink
 	}
 	return false, false
 }

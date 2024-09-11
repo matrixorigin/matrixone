@@ -493,7 +493,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
 	case *dispatch.Dispatch:
-		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, FuncId: int32(t.FuncId)}
+		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, RecCte: t.RecCTE, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
 		for i := range t.ShuffleRegIdxLocal {
 			in.Dispatch.ShuffleRegIdxLocal[i] = int32(t.ShuffleRegIdxLocal[i])
@@ -963,6 +963,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := dispatch.NewArgument()
 		arg.IsSink = t.IsSink
 		arg.RecSink = t.RecSink
+		arg.RecCTE = t.RecCte
 		arg.FuncId = int(t.FuncId)
 		arg.LocalRegs = regs
 		arg.RemoteRegs = rrs
