@@ -23,8 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
 	"github.com/google/uuid"
 )
 
@@ -242,7 +240,6 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		case <-timeoutCtx.Done():
 			timeoutCancel()
 			logutil.Errorf("waiting messsage timeout, waiting for tag %v, messageBoard debug message %v", mr.tags, mr.mb.DebugString())
-			return nil, false, moerr.NewInternalErrorNoCtx("wait message timeout")
 		case <-mr.waiter:
 			timeoutCancel()
 		case <-ctx.Done():
