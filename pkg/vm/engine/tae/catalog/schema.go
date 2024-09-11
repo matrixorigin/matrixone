@@ -1033,6 +1033,35 @@ func MockSnapShotSchema() *Schema {
 	return schema
 }
 
+func MockPitrSchema() *Schema {
+	schema := NewEmptySchema("mo_pitr")
+
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
+	schema.AppendCol("col0", types.T_varchar.ToType())
+	schema.AppendCol("col1", types.T_varchar.ToType())
+	schema.AppendCol("col2", types.T_uint64.ToType())
+	schema.AppendCol("col3", types.T_uint64.ToType())
+	schema.AppendCol("col4", types.T_uint64.ToType())
+	schema.AppendCol("col5", types.T_varchar.ToType())
+	schema.AppendCol("col6", types.T_uint64.ToType())
+	schema.AppendCol("col7", types.T_varchar.ToType())
+	schema.AppendCol("col9", types.T_varchar.ToType())
+	schema.AppendCol("col10", types.T_varchar.ToType())
+	schema.AppendCol("col11", types.T_uint64.ToType())
+	schema.AppendCol("col12", types.T_uint8.ToType())
+	schema.AppendCol("col13", types.T_varchar.ToType())
+	schema.Constraint, _ = constraintDef.MarshalBinary()
+	// mock fake pk
+	schema.AppendFakePKCol()
+	schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
+
+	_ = schema.Finalize(false)
+	return schema
+}
+
 // `colCnt` specifies the number of columns in the schema.
 // `pkIdx` specifies the index of the primary in the specified columns.
 // `from` specifies the starting index of the columns in the predefined order.

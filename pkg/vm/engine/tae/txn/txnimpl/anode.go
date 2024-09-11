@@ -16,9 +16,9 @@ package txnimpl
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -127,6 +127,12 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 		// 		continue
 		// 	}
 		// }
+		if schema.GetColIdx(attr) == -1 {
+			logutil.Infof("attr: %s", data.Attrs)
+			for i := range schema.ColDefs {
+				logutil.Infof("schema: %s", schema.ColDefs[i].Name)
+			}
+		}
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := n.data.Vecs[def.Idx]
 		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())

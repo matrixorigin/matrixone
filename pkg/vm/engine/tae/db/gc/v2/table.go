@@ -162,7 +162,7 @@ func (t *GCTable) objectsComparedAndDeleteLocked(
 
 func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, pitrVec types.TS, name string) bool {
 	if len(snapVec) == 0 && len(pitrVec) == 0 {
-		logutil.Infof("[soft GC]Snapshot Refers", zap.String("name", name))
+		logutil.Info("[soft GC]Snapshot Refers", zap.String("name", name))
 		return false
 	}
 	if obj.dropTS.IsEmpty() {
@@ -174,7 +174,6 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, pitrVec types.TS, na
 		return true
 	}
 
-	logutil.Infof("[soft GC]Pitr Get %v, name is %v", pitrVec.ToString(), name)
 	if !pitrVec.IsEmpty() {
 		if obj.dropTS.Greater(&pitrVec) {
 			logutil.Info("[soft GC]Pitr Refers",

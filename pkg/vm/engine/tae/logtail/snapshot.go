@@ -682,12 +682,6 @@ func (sm *SnapshotMeta) GetPITR(
 	mp *mpool.MPool,
 ) (*PitrInfo, error) {
 	idxes := []uint16{ColPitrLevel, ColPitrObjId, ColPitrLength, ColPitrUnit}
-	colTypes := []types.Type{
-		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-		types.New(types.T_int64, 0, 0),
-		types.New(types.T_int64, 0, 0),
-		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-	}
 	tombstonesStats := make([]objectio.ObjectStats, 0)
 	for _, tombstone := range sm.pitr.tombstones {
 		tombstonesStats = append(tombstonesStats, tombstone.stats)
@@ -695,6 +689,7 @@ func (sm *SnapshotMeta) GetPITR(
 	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
 	pitr := &PitrInfo{
+		cluster:  types.TS{},
 		account:  make(map[uint32]types.TS),
 		database: make(map[uint64]types.TS),
 		tables:   make(map[uint64]types.TS),
@@ -709,25 +704,11 @@ func (sm *SnapshotMeta) GetPITR(
 				MetaLoc: objectio.ObjectLocation(loc),
 			}
 
-			var vp engine.VectorPool
-			buildBatch := func() *batch.Batch {
-				result := batch.NewWithSize(len(colTypes))
-				for i, typ := range colTypes {
-					if vp == nil {
-						result.Vecs[i] = vector.NewVec(typ)
-					} else {
-						result.Vecs[i] = vp.GetVector(typ)
-					}
-				}
-				return result
-			}
-
-			bat := buildBatch()
-			defer bat.Clean(mp)
 			bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs)
 			if err != nil {
 				return nil, err
 			}
+			defer bat.Clean(mp)
 			objIDList := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[1])
 			lengList := vector.MustFixedColWithTypeCheck[uint8](bat.Vecs[2])
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
