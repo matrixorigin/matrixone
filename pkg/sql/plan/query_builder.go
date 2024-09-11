@@ -2251,6 +2251,28 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if ctx.recSelect && clause.Distinct {
 			return 0, moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		}
+
+		if len(clause.Exprs) == 1 {
+			switch clause.Exprs[0].Expr.(type) {
+			case tree.UnqualifiedStar:
+				if astLimit != nil && astLimit.Count != nil {
+					limitBinder := NewLimitBinder(builder, ctx)
+					limitExpr, err := limitBinder.BindExpr(astLimit.Count, 0, true)
+					if err != nil {
+						return 0, err
+					}
+
+					if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
+						if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+							if c.U64Val == 0 {
+								builder.qry.SkipBuildPlanTag = true
+							}
+						}
+					}
+				}
+			}
+		}
+
 		// build FROM clause
 		nodeID, err = builder.buildFrom(clause.From.Tables, ctx)
 		if err != nil {
@@ -3546,6 +3568,25 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		schema, err = databaseIsValid(schema, builder.compCtx, snapshot)
 		if err != nil {
 			return 0, err
+		}
+
+		if builder.qry.SkipBuildPlanTag {
+			var tableDef *TableDef
+			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(schema, table)
+			if err != nil {
+				return 0, err
+			}
+
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:     plan.Node_TABLE_SCAN,
+				Stats:        nil,
+				ObjRef:       &plan.ObjectRef{DbName: schema, SchemaName: table},
+				TableDef:     tableDef,
+				BindingTags:  []int32{builder.genNewTag()},
+				ScanSnapshot: snapshot,
+			}, ctx)
+
+			return
 		}
 
 		// TODO

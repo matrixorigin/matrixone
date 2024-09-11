@@ -985,6 +985,9 @@ message Query {
 
 	//detectSqls are sqls detect fk self refer constraint
 	repeated string detectSqls= 8;
+
+	// skip exec Tag
+	bool skipBuildPlanTag = 9;
 }
 
 message TransationControl {

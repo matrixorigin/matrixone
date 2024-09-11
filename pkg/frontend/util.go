@@ -1492,3 +1492,63 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	convertMysqlTextTypeToBlobType(c)
 	return c, nil
 }
+
+func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, table string, ses FeSession) (*plan.TableDef, error) {
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+	var (
+		sql     string
+		erArray []ExecResult
+		err     error
+	)
+
+	sql, err = getTableColumnDefSql(ctx, accountId, dbName, table)
+	if err != nil {
+		return nil, err
+	}
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if !execResultArrayHasData(erArray) {
+		return nil, moerr.NewNoSuchTable(ctx, dbName, table)
+	}
+
+	cols := make([]*plan.ColDef, 0)
+	for _, result := range erArray {
+		for i := uint64(0); i < result.GetRowCount(); i++ {
+			colName, err := result.GetString(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+
+			colType, err := result.GetString(ctx, i, 1)
+			if err != nil {
+				return nil, err
+			}
+
+			typ := new(types.Type)
+			err = typ.Unmarshal([]byte(colType))
+			if err != nil {
+				return nil, err
+			}
+			cols = append(cols, &plan.ColDef{
+				ColId:  i,
+				Name:   colName,
+				Hidden: strings.Contains(colName, "__mo_"),
+				Typ:    plan.Type{Id: int32(typ.Oid)},
+			})
+		}
+	}
+	return &plan.TableDef{
+		Name: table,
+		Cols: cols,
+	}, nil
+}

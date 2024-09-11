@@ -120,6 +120,7 @@ type CompilerContext interface {
 	SetQueryingSubscription(meta *SubscriptionMeta)
 	GetQueryingSubscription() *SubscriptionMeta
 	IsPublishing(dbName string) (bool, error)
+	BuildTableDefByMoColumns(dbName, table string) (*TableDef, error)
 	ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef)
 
 	ResolveSnapshotWithSnapshotName(snapshotName string) (*Snapshot, error)
