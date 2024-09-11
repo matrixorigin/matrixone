@@ -76,4 +76,6 @@ func TestConfigForTable(t *testing.T) {
 	configProvider.invalidCache(tbl3)
 	config = configProvider.getConfig(tbl3)
 	require.Equal(t, defaultBasicConfig.MaxOsizeMergedObj, config.MaxOsizeMergedObj)
+
+	require.Equal(t, "customConfigProvider: 0-:115343360,2 | ", configProvider.String())
 }

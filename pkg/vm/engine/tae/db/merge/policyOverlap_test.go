@@ -55,8 +55,8 @@ func TestObjOverlap(t *testing.T) {
 	// no overlap
 	entry1 := newSortedTestObjectEntry(t, 1, 2, overlapSizeThreshold)
 	entry2 := newSortedTestObjectEntry(t, 3, 4, overlapSizeThreshold)
-	policy.onObject(entry1, defaultBasicConfig)
-	policy.onObject(entry2, defaultBasicConfig)
+	require.True(t, policy.onObject(entry1, defaultBasicConfig))
+	require.True(t, policy.onObject(entry2, defaultBasicConfig))
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 0, len(objs))
 
@@ -65,8 +65,8 @@ func TestObjOverlap(t *testing.T) {
 	// overlap
 	entry3 := newSortedTestObjectEntry(t, 1, 4, overlapSizeThreshold)
 	entry4 := newSortedTestObjectEntry(t, 2, 3, overlapSizeThreshold)
-	policy.onObject(entry3, defaultBasicConfig)
-	policy.onObject(entry4, defaultBasicConfig)
+	require.True(t, policy.onObject(entry3, defaultBasicConfig))
+	require.True(t, policy.onObject(entry4, defaultBasicConfig))
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 1, len(objs))
 	require.Equal(t, 2, len(objs[0].objs))
@@ -77,8 +77,8 @@ func TestObjOverlap(t *testing.T) {
 	// entry is not sorted
 	entry5 := newTestObjectEntry(t, overlapSizeThreshold, false)
 	entry6 := newTestObjectEntry(t, overlapSizeThreshold, false)
-	policy.onObject(entry5, defaultBasicConfig)
-	policy.onObject(entry6, defaultBasicConfig)
+	require.False(t, policy.onObject(entry5, defaultBasicConfig))
+	require.False(t, policy.onObject(entry6, defaultBasicConfig))
 	require.Equal(t, 0, len(policy.objects))
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 0, len(objs))
@@ -95,11 +95,11 @@ func TestObjOverlap(t *testing.T) {
 	entry10 := newSortedTestObjectEntry(t, 12, 13, overlapSizeThreshold)
 	entry11 := newSortedTestObjectEntry(t, 13, 15, overlapSizeThreshold)
 
-	policy.onObject(entry7, defaultBasicConfig)
-	policy.onObject(entry8, defaultBasicConfig)
-	policy.onObject(entry9, defaultBasicConfig)
-	policy.onObject(entry10, defaultBasicConfig)
-	policy.onObject(entry11, defaultBasicConfig)
+	require.True(t, policy.onObject(entry7, defaultBasicConfig))
+	require.True(t, policy.onObject(entry8, defaultBasicConfig))
+	require.True(t, policy.onObject(entry9, defaultBasicConfig))
+	require.True(t, policy.onObject(entry10, defaultBasicConfig))
+	require.True(t, policy.onObject(entry11, defaultBasicConfig))
 
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 1, len(objs))
@@ -112,11 +112,17 @@ func TestObjOverlap(t *testing.T) {
 	entry12 := newSortedTestObjectEntry(t, 1, 4, overlapSizeThreshold)
 	entry13 := newSortedTestObjectEntry(t, 2, 3, overlapSizeThreshold)
 
-	policy.onObject(entry12, defaultBasicConfig)
-	policy.onObject(entry13, defaultBasicConfig)
+	require.True(t, policy.onObject(entry12, defaultBasicConfig))
+	require.True(t, policy.onObject(entry13, defaultBasicConfig))
 
 	objs = policy.revise(0, 0, defaultBasicConfig)
 	require.Equal(t, 0, len(objs))
 
 	policy.resetForTable(nil)
+}
+
+func TestMinValue(t *testing.T) {
+	require.Equal(t, minValue(types.T_bit), 0)
+	require.True(t, types.CompareDecimal64(minValue(types.T_decimal64).(types.Decimal64), 0) < 0)
+	require.True(t, types.CompareDecimal128(minValue(types.T_decimal128).(types.Decimal128), types.Decimal128{}) < 0)
 }
