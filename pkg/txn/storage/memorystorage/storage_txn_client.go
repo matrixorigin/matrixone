@@ -64,6 +64,14 @@ func (s *StorageTxnClient) New(
 	}, nil
 }
 
+func (s *StorageTxnClient) RestartTxn(
+	ctx context.Context,
+	op client.TxnOperator,
+	ts timestamp.Timestamp,
+	options ...client.TxnOption) (client.TxnOperator, error) {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnClient) GetState() client.TxnState {
 	panic("unimplemented")
 }
