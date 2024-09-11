@@ -15,6 +15,8 @@
 package v1_3_0
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -24,6 +26,7 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
 	upg_mo_subs,
+	upg_alter_async_task,
 }
 
 var needUpgradePubSub = false
@@ -62,5 +65,32 @@ var upg_mo_subs = versions.UpgradeEntry{
 		}
 		needUpgradePubSub = true
 		return false, nil
+	},
+}
+
+// ------------------------------------------------------------------------------------------------------------
+var upg_alter_async_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysAsyncTask,
+	UpgType:   versions.ADD_INDEX,
+	UpgSql:    fmt.Sprintf(`ALTER TABLE %s.%s DROP INDEX idx_task_status, DROP INDEX idx_task_runner, DROP INDEX idx_task_executor, DROP INDEX idx_task_epoch, DROP INDEX task_metadata_id`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, err := versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_status")
+		if exists || err != nil {
+			return false, err
+		}
+		exists, err = versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_runner")
+		if exists || err != nil {
+			return false, err
+		}
+		exists, err = versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_executor")
+		if exists || err != nil {
+			return false, err
+		}
+		exists, err = versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "task_metadata_id")
+		if exists || err != nil {
+			return false, err
+		}
+		return true, nil
 	},
 }
