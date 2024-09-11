@@ -70,6 +70,20 @@ func (c *DashboardCreator) initLogtailCollectRow() dashboard.Option {
 			4,
 			axis.Unit("s"),
 			axis.Min(0)),
+
+		c.getHistogram(
+			"pull scan row count",
+			c.getMetricWithFilter("mo_logtail_pull_scan_txn_count_bucket", `type="scan-row"`),
+			[]float64{0.50, 0.7, 0.8, 0.90},
+			6,
+			axis.Min(0)),
+
+		c.getHistogram(
+			"pull skip blk count",
+			c.getMetricWithFilter("mo_logtail_pull_scan_txn_count_bucket", `type="skip-blk"`),
+			[]float64{0.50, 0.7, 0.8, 0.90},
+			6,
+			axis.Min(0)),
 	)
 }
 
