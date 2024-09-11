@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,14 +31,10 @@ import (
 )
 
 const (
-	project_doc_id              = "t1.doc_id"
-	project_tfidf               = "CAST ((nmatch/nword) * log10((SELECT count(*) from %s) / (SELECT COUNT(1) FROM %s WHERE word='%s')) AS float) AS tfidf"
-	single_word_exact_match_sql = `SELECT %s FROM 
-	(SELECT MIN(first_doc_id) AS first_doc_id, MAX(last_doc_id) AS last_doc_id, MAX(doc_count) AS nmatch, doc_id FROM %s WHERE word ='%s' GROUP BY doc_id ) AS t1  
-	LEFT JOIN  
-	(SELECT COUNT(1) as nword, doc_id FROM %s WHERE doc_id in (SELECT doc_id FROM %s WHERE word = '%s') GROUP BY doc_id) AS t2 
-	ON 
-	t1.doc_id = t2.doc_id;`
+	//default_mode_sql = "SELECT CAST(%d AS BIGINT), doc_id, pos, doc_count, first_doc_id, last_doc_id FROM %s WHERE word = '%s'"
+	default_mode_sql = "SELECT doc_id, pos, doc_count, first_doc_id, last_doc_id FROM %s WHERE word = '%s'"
+
+	countstar_sql = "SELECT COUNT(*) FROM %s"
 )
 
 type fulltextState struct {
@@ -104,43 +101,209 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
-func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tblname, pattern string, mode int64, bat *batch.Batch) (err error) {
+type Word struct {
+	DocId      any
+	Position   []int64
+	DocCount   int32
+	FirstDocId any
+	LastDocId  any
+}
 
-	var projects []string
+type WordAccum struct {
+	Id              int64
+	Mode            int64
+	OriginalPattern string
+	SqlPattern      string
+	Words           map[any]*Word
+}
 
-	if len(tableFunction.Attrs) == 2 {
-		projects = append(projects, project_doc_id)
-		tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
-		projects = append(projects, tfidf)
+type SearchAccum struct {
+	TblName    string
+	Mode       int64
+	Pattern    string
+	Params     string
+	WordAccums []*WordAccum
+	Nrow       int64
+}
 
-	} else if len(tableFunction.Attrs) == 1 {
-		if tableFunction.Attrs[0] == "DOC_ID" {
-			projects = append(projects, project_doc_id)
-			//tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
-			//projects = append(projects, tfidf)
-		} else {
-			tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
-			projects = append(projects, tfidf)
-			projects = append(projects, project_doc_id)
-		}
-	}
+func NewWordAccum(id int64, pattern string, mode int64) *WordAccum {
+	return &WordAccum{Id: id, Mode: mode, OriginalPattern: pattern, SqlPattern: pattern, Words: make(map[any]*Word)}
+}
 
-	project := strings.Join(projects, ",")
+// run each word
+func (w *WordAccum) run(proc *process.Process, tblname string, first_doc_id, last_doc_id any) error {
 
-	sql := fmt.Sprintf(single_word_exact_match_sql, project, tblname, pattern, tblname, tblname, pattern)
-	logutil.Infof("FULLTEXT SQL = %s", sql)
+	sql := fmt.Sprintf(default_mode_sql, tblname, w.SqlPattern)
+
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
 		return err
 	}
 	defer res.Close()
 
-	for _, b := range res.Batches {
-		bat, err = bat.Append(proc.Ctx, proc.Mp(), b)
-		if err != nil {
-			return err
+	for _, bat := range res.Batches {
+
+		if len(bat.Vecs) != 5 {
+			return moerr.NewInternalError(proc.Ctx, "output vector columns not match")
+		}
+
+		for i := 0; i < bat.RowCount(); i++ {
+			// doc_id any
+			doc_id := vector.GetAny(bat.Vecs[0], i)
+
+			// pos int64
+			pos := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[1], i)
+
+			// doc_count int32
+			doc_count := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[2], i)
+
+			// first_doc_id any
+			first_doc_id := vector.GetAny(bat.Vecs[3], i)
+
+			// last_doc_id any
+			last_doc_id := vector.GetAny(bat.Vecs[4], i)
+
+			//logutil.Infof("ID:%d, DOC_ID:%v, POS:%d, DOC_COUNT:%d, FIRST: %v, LAST: %v", id, doc_id, pos, doc_count, first_doc_id, last_doc_id)
+
+			_, ok := w.Words[doc_id]
+			if ok {
+				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
+			} else {
+				w.Words[doc_id] = &Word{DocId: doc_id, Position: []int64{pos}, DocCount: doc_count, FirstDocId: first_doc_id, LastDocId: last_doc_id}
+			}
+		}
+
+	}
+	return nil
+}
+
+func NewSearchAccum(tblname string, pattern string, mode int64, params string) *SearchAccum {
+
+	var accums []*WordAccum
+
+	// TODO: tokenize the pattern based on mode and params
+	// use space as separator for now
+	strs := strings.Split(pattern, " ")
+
+	for i, s := range strs {
+		accums = append(accums, NewWordAccum(int64(i), s, mode))
+	}
+
+	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: pattern, Params: params, WordAccums: accums}
+}
+
+// $(IDF) = LOG10(#word in collection/sum(doc_count))
+// $(TF) = number of nword match in record (doc_count)
+// $(rank) = $(TF) * $(IDF) * %(IDF)
+func (s *SearchAccum) score(proc *process.Process) map[any]float32 {
+	score := make(map[any]float32)
+
+	if s.Nrow == 0 {
+		return score
+	}
+
+	// calculate sum(doc_count)
+	sum_count := make([]int32, len(s.WordAccums))
+	for i, acc := range s.WordAccums {
+		logutil.Infof("%d %v", i, acc)
+		for doc_id := range acc.Words {
+			sum_count[i] += acc.Words[doc_id].DocCount
+		}
+
+	}
+
+	// calculate the score
+	for i, acc := range s.WordAccums {
+		logutil.Infof("%d %v", i, acc)
+		for doc_id := range acc.Words {
+			tf := float64(acc.Words[doc_id].DocCount)
+			idf := math.Log10(float64(s.Nrow) / float64(sum_count[i]))
+			tfidf := float32(tf * idf * idf)
+			_, ok := score[doc_id]
+			if ok {
+				score[doc_id] += tfidf
+			} else {
+				score[doc_id] = tfidf
+			}
 		}
 	}
 
+	/*
+		// sort by value
+		keys := make([]any, 0, len(score))
+		for key := range score {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return score[keys[i]] < score[keys[j]] })
+	*/
+
+	return score
+}
+
+func (s *SearchAccum) run(proc *process.Process) error {
+
+	var first_doc_id, last_doc_id any
+
+	// count(*) to get number of words in the collection
+	nrow, err := s.runCountStar(proc)
+	if err != nil {
+		return err
+	}
+
+	s.Nrow = nrow
+
+	for _, w := range s.WordAccums {
+		err := w.run(proc, s.TblName, first_doc_id, last_doc_id)
+		if err != nil {
+			return err
+		}
+
+		// update first_doc_id and last_doc_id for filtering
+	}
+
+	return nil
+}
+
+func (s *SearchAccum) runCountStar(proc *process.Process) (int64, error) {
+	var nrow int64
+	nrow = 0
+	sql := fmt.Sprintf(countstar_sql, s.TblName)
+	logutil.Infof("COUNT STAR: %s", sql)
+
+	res, err := ft_runSql(proc, sql)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+
+	if len(res.Batches) == 0 {
+		return 0, nil
+	}
+
+	bat := res.Batches[0]
+	if bat.RowCount() == 1 {
+		nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0)
+		//logutil.Infof("NROW = %d", nrow)
+	}
+
+	return nrow, nil
+}
+
+func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tblname, pattern string, mode int64, bat *batch.Batch) (err error) {
+
+	s := NewSearchAccum(tblname, pattern, mode, "")
+
+	s.run(proc)
+
+	scoremap := s.score(proc)
+
+	// write the batch
+	for key := range scoremap {
+		// type of id follow primary key column
+		vector.AppendAny(bat.Vecs[0], key, false, proc.Mp())
+		// score
+		vector.AppendFixed[float32](bat.Vecs[1], scoremap[key], false, proc.Mp())
+	}
+	bat.SetRowCount(len(scoremap))
 	return nil
 }
