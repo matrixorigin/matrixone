@@ -210,6 +210,12 @@ func (s *service) startTaskRunner() {
 			s.cfg.TaskRunner.HeartbeatInterval.Duration,
 			s.cfg.TaskRunner.HeartbeatTimeout.Duration,
 		),
+		taskservice.WithHaKeeperClient(
+			func() util.HAKeeperClient {
+				client, _ := s.getHAKeeperClient()
+				return client
+			}),
+		taskservice.WithCnUUID(s.cfg.UUID),
 	)
 
 	s.registerExecutorsLocked()

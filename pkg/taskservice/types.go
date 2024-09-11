@@ -317,6 +317,18 @@ func (c *taskNameCond) sql() string {
 	return fmt.Sprintf("task_name %s '%s'", OpName[c.op], c.taskName)
 }
 
+type cnLabelsCond struct {
+	op     Op
+	labels *CnLabels
+}
+
+func (c *cnLabelsCond) eval(v any) bool {
+	return false
+}
+func (c *cnLabelsCond) sql() string {
+	return fmt.Sprintf("%v", c.labels)
+}
+
 func compare[T constraints.Ordered](op Op, a T, b T) bool {
 	switch op {
 	case EQ:
@@ -352,6 +364,7 @@ const (
 	CondCronTaskId
 	CondTaskMetadataId
 	CondCdcTaskName
+	CondCnLabels
 )
 
 var (
@@ -493,6 +506,12 @@ func WithTaskName(op Op, value string) Condition {
 	}
 }
 
+func WithLabels(op Op, labels *CnLabels) Condition {
+	return func(c *conditions) {
+		(*c)[CondCnLabels] = &cnLabelsCond{op: op, labels: labels}
+	}
+}
+
 // TaskService Asynchronous Task Service, which provides scheduling execution and management of
 // asynchronous tasks. CN, DN, HAKeeper, LogService will all hold this service.
 type TaskService interface {
@@ -543,10 +562,10 @@ type TaskService interface {
 	GetStorage() TaskStorage
 
 	// AddCdcTask Update cdc task in one transaction
-	AddCdcTask(context.Context, task.TaskMetadata, *task.Details, func(context.Context, DBExecutor) (int, error)) (int, error)
+	AddCdcTask(context.Context, task.TaskMetadata, *task.Details, func(context.Context, SqlExecutor) (int, error)) (int, error)
 
 	// UpdateCdcTask Update cdc task in one transaction
-	UpdateCdcTask(context.Context, task.TaskStatus, ...Condition) (int, error)
+	UpdateCdcTask(context.Context, task.TaskStatus, func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), ...Condition) (int, error)
 }
 
 // TaskExecutor which is responsible for the execution logic of a specific Task, and the function exists to
@@ -612,9 +631,9 @@ type TaskStorage interface {
 	// HeartbeatDaemonTask update the last heartbeat field of the task.
 	HeartbeatDaemonTask(ctx context.Context, task []task.DaemonTask) (int, error)
 	// AddCdcTask insert cdcTask and daemonTask
-	AddCdcTask(context.Context, task.DaemonTask, func(context.Context, DBExecutor) (int, error)) (int, error)
+	AddCdcTask(context.Context, task.DaemonTask, func(context.Context, SqlExecutor) (int, error)) (int, error)
 	// UpdateCdcTask Update cdc task in one transaction
-	UpdateCdcTask(context.Context, task.TaskStatus, ...Condition) (int, error)
+	UpdateCdcTask(context.Context, task.TaskStatus, func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), ...Condition) (int, error)
 }
 
 // TaskServiceHolder create and hold the task service in the cn, tn and log node. Create
@@ -633,3 +652,40 @@ type TaskStorageFactory interface {
 }
 
 type Getter func() (TaskService, bool)
+
+type CnLabels struct {
+	cnUUID string
+	//account -> cn map. in all cn
+	labels map[string]map[string]struct{}
+}
+
+func NewCnLabels(cnUUID string) *CnLabels {
+	return &CnLabels{
+		cnUUID: cnUUID,
+		labels: make(map[string]map[string]struct{}),
+	}
+}
+
+func (cnlabels *CnLabels) Add(cn string, labels []string) {
+	for _, label := range labels {
+		if len(label) == 0 {
+			continue
+		}
+		if cnMap, has := cnlabels.labels[label]; has {
+			cnMap[cn] = struct{}{}
+		} else {
+			cnlabels.labels[label] = make(map[string]struct{})
+			cnMap[cn] = struct{}{}
+		}
+	}
+}
+
+func (cnlabels *CnLabels) HasAccount(account string) (bool, map[string]struct{}) {
+	cnMap, has := cnlabels.labels[account]
+	return has, cnMap
+}
+
+type CdcTaskKey struct {
+	AccountId uint64
+	TaskId    string
+}

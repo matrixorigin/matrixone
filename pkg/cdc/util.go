@@ -475,7 +475,7 @@ func Deduplicate[T ~string | ~int](values []T) []T {
 		}
 	})
 	ret := make([]T, 0)
-	for key, _ := range set {
+	for key := range set {
 		ret = append(ret, key)
 	}
 	return ret

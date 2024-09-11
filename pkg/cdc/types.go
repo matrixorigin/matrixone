@@ -22,12 +22,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/tidwall/btree"
 )
 
 const (
@@ -316,26 +317,6 @@ func (info *UriInfo) String() string {
 	return fmt.Sprintf("%s%s:%s@%s:%d", SourceUriPrefix, info.User, "******", info.Ip, info.Port)
 }
 
-// EncodeUriInfo encodes the UriInfo
-func EncodeUriInfo(info *UriInfo) (string, error) {
-	jsonUri, err := json.Marshal(info)
-	if err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(jsonUri), nil
-}
-
-// DecodeUriInfo decodes the uri json bytes
-func DecodeUriInfo(uri string, uriInfo *UriInfo) error {
-	jsonSinkUriBytes, err := hex.DecodeString(uri)
-	if err != nil {
-		return err
-	}
-
-	return json.Unmarshal(jsonSinkUriBytes, uriInfo)
-}
-
 type PatternTable struct {
 	AccountId     uint64 `json:"account_id"`
 	Account       string `json:"account"`
@@ -346,7 +327,7 @@ type PatternTable struct {
 }
 
 func (table PatternTable) String() string {
-	return fmt.Sprintf("(%s,%s,%s)", table.Account, table.Database, table.Table)
+	return fmt.Sprintf("(%s,%d,%s,%s)", table.Account, table.AccountId, table.Database, table.Table)
 }
 
 type PatternTuple struct {
@@ -383,20 +364,24 @@ func (pts *PatternTuples) String() string {
 	return strings.Join(ss, ",")
 }
 
-func EncodePatternTuples(pts *PatternTuples) (string, error) {
-	jsonTablePts, err := json.Marshal(pts)
+// JsonEncode encodes the object to json
+func JsonEncode(value any) (string, error) {
+	jbytes, err := json.Marshal(value)
 	if err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(jsonTablePts), err
+
+	return hex.EncodeToString(jbytes), nil
 }
 
-func DecodePatternTuples(jsonTuples string, pts *PatternTuples) error {
-	jsonBytes, err := hex.DecodeString(jsonTuples)
+// JsonDecode decodes the json bytes to objects
+func JsonDecode(jbytes string, value any) error {
+	jRawBytes, err := hex.DecodeString(jbytes)
 	if err != nil {
 		return err
 	}
-	err = json.Unmarshal(jsonBytes, &pts)
+
+	err = json.Unmarshal(jRawBytes, value)
 	if err != nil {
 		return err
 	}

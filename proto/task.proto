@@ -181,12 +181,18 @@ message ConnectorDetails {
   map<string, string> Options = 2;
 }
 
+message Account {
+   uint64 Id = 1;
+   string Name = 2;
+}
+
 message CreateCdcDetails {
-  uint64 AccountId = 1;
   //cdc task uuid
-  string TaskId = 2;
+  string TaskId = 1;
   //cdc task name in CreateCdc
-  string TaskName = 3;
+  string TaskName = 2;
+  //cdc source account
+  repeated Account Accounts = 3;
 }
 
 message RetentionDetails {}

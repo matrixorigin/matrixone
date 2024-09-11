@@ -1679,7 +1679,7 @@ func extractUriInfo(ctx context.Context, uri string, uriPrefix string) (string, 
 		return "", cdc.UriInfo{}, moerr.NewInternalError(ctx, "source uri is invalid format")
 	}
 
-	jsonUriInfo, err := cdc.EncodeUriInfo(&uriInfo)
+	jsonUriInfo, err := cdc.JsonEncode(&uriInfo)
 	if err != nil {
 		return "", cdc.UriInfo{}, err
 	}

@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
@@ -414,9 +415,33 @@ func (r *taskRunner) mergeTasks(tasksSlice ...[]task.DaemonTask) []task.DaemonTa
 // - status: task.TaskStatus_Created
 // - status: task.TaskStatus_Running AND last-heartbeat: timeout
 func (r *taskRunner) startTasks(ctx context.Context) []task.DaemonTask {
+	hakeeperClient := r.getClient()
+	// account -> cn map. in all cn
+	labels := NewCnLabels(r.cnUUID)
+	if hakeeperClient != nil {
+		ctx2, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		state, err := hakeeperClient.GetClusterState(ctx2)
+		if err != nil {
+			r.logger.Error("failed to get cluster state", zap.Error(err))
+		} else {
+			var ok bool
+			var labelList metadata.LabelList
+			//cn -> cnStoreInfo
+			for cn, cnInfo := range state.CNState.Stores {
+				//account -> account list
+				if labelList, ok = cnInfo.Labels["account"]; ok {
+					//account list
+					labels.Add(cn, labelList.GetLabels())
+				}
+			}
+		}
+	}
+
 	return r.mergeTasks(
 		r.queryDaemonTasks(ctx,
 			WithTaskStatusCond(task.TaskStatus_Created),
+			WithLabels(IN, labels),
 		),
 		r.queryDaemonTasks(ctx,
 			WithTaskStatusCond(task.TaskStatus_Running),

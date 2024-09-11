@@ -269,6 +269,88 @@ func Test_privilegeCheck(t *testing.T) {
 
 }
 
+func Test_attachAccoutForFilters(t *testing.T) {
+	var tenantInfo *TenantInfo
+	var err error
+	var pts []*cdc2.PatternTuple
+	ctx := context.Background()
+	ses := &Session{}
+
+	gen := func(pts []*cdc2.PatternTuple) *cdc2.PatternTuples {
+		return &cdc2.PatternTuples{Pts: pts}
+	}
+
+	tenantInfo = &TenantInfo{
+		Tenant:      sysAccountName,
+		DefaultRole: moAdminRoleName,
+	}
+	ses.tenant = tenantInfo
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: "acc1"}},
+		{Source: cdc2.PatternTable{Account: sysAccountName}},
+	}
+	err = attachAccountToFilters(ctx, ses, "Cluster", "", gen(pts))
+	assert.Nil(t, err)
+
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: sysAccountName, Database: moCatalog}},
+	}
+	err = attachAccountToFilters(ctx, ses, "Cluster", "", gen(pts))
+	assert.Nil(t, err)
+
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: sysAccountName}},
+	}
+	err = attachAccountToFilters(ctx, ses, "Account", "acc1", gen(pts))
+	assert.NotNil(t, err)
+
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: "acc2"}},
+	}
+	err = attachAccountToFilters(ctx, ses, "Account", "acc1", gen(pts))
+	assert.NotNil(t, err)
+
+	pts = []*cdc2.PatternTuple{
+		{},
+	}
+	err = attachAccountToFilters(ctx, ses, "Account", "acc1", gen(pts))
+	assert.Nil(t, err)
+	assert.Equalf(t, "acc1", pts[0].Source.Account, "different account")
+
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: "acc1"}},
+	}
+	err = attachAccountToFilters(ctx, ses, "Account", "acc1", gen(pts))
+	assert.Nil(t, err)
+
+	tenantInfo = &TenantInfo{
+		Tenant:      "acc1",
+		DefaultRole: accountAdminRoleName,
+	}
+	ses.tenant = tenantInfo
+
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: "acc1"}},
+		{},
+	}
+	err = attachAccountToFilters(ctx, ses, "Cluster", "", gen(pts))
+	assert.NotNil(t, err)
+
+	err = attachAccountToFilters(ctx, ses, "Account", "acc2", gen(pts))
+	assert.NotNil(t, err)
+
+	err = attachAccountToFilters(ctx, ses, "Account", "acc1", gen(pts))
+	assert.Nil(t, err)
+
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: "acc2"}},
+		{Source: cdc2.PatternTable{Account: sysAccountName}},
+	}
+	err = attachAccountToFilters(ctx, ses, "Account", "acc1", gen(pts))
+	assert.NotNil(t, err)
+
+}
+
 func Test_extractTableInfo(t *testing.T) {
 	type args struct {
 		ctx                 context.Context
