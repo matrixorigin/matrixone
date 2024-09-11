@@ -134,7 +134,8 @@ message MultiUpdate {
   bool ToWriteS3 = 2;
   uint32 IBucket = 3;
   uint32 NBucket = 4;
-  repeated plan.UpdateCtx update_ctx = 5;
+  map<string,int32> SegmentMap = 5;
+  repeated plan.UpdateCtx update_ctx = 6;
 }
 
 message Array{
