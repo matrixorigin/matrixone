@@ -3,6 +3,7 @@ package merge
 import (
 	"context"
 	"go.uber.org/zap"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -50,13 +51,15 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 			continue
 		}
 
-		tombstoneStats = append(tombstoneStats, tIter.Item().GetObjectStats())
+		tombstoneStats = append(tombstoneStats, tEntry.GetObjectStats())
 	}
 	if len(tombstoneStats) == 0 {
 		return false
 	}
 
-	sels, err := blockio.FindTombstonesOfObject(context.TODO(), *entry.ID(), tombstoneStats, o.fs)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	sels, err := blockio.FindTombstonesOfObject(ctx, *entry.ID(), tombstoneStats, o.fs)
+	cancel()
 	if err != nil {
 		return false
 	}
@@ -103,7 +106,9 @@ func (o *objCompactPolicy) countRowsInOneTombstoneForOneObject(entry *catalog.Ob
 	count := uint32(0)
 	for i := 0; i < int(stats.BlkCnt()); i++ {
 		loc := stats.BlockLocation(uint16(i), o.tblEntry.GetLastestSchema(true).BlockMaxRows)
-		c, err := o.countRowsInOneTombstoneBlockForOneObject(context.TODO(), entry, loc)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		c, err := o.countRowsInOneTombstoneBlockForOneObject(ctx, entry, loc)
+		cancel()
 		if err != nil {
 			return 0
 		}
@@ -120,8 +125,9 @@ func (o *objCompactPolicy) countRowsInOneTombstoneBlockForOneObject(ctx context.
 	)
 	defer closeFunc()
 	if err != nil {
-		logutil.Warn("[MERGE-POLICY-REVISE] failed to load tombstone columns",
+		logutil.Error("[MERGE-POLICY-REVISE] failed to load tombstone columns",
 			zap.String("policy", "compact"),
+			zap.String("location", loc.String()),
 			zap.Error(err),
 		)
 		return 0, err
