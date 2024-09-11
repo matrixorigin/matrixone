@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
@@ -236,7 +235,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&shufflebuild.ShuffleBuild{},
 		&indexbuild.IndexBuild{},
 		&source.Source{},
-		&apply.Apply{},
 	}
 	ctx := &scopeContext{
 		id:       1,
