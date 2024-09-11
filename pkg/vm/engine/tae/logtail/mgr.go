@@ -199,7 +199,7 @@ func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) {
 	}
 	mgr.truncated = ts
 	cnt := mgr.table.TruncateByTimeStamp(ts)
-	logutil.Info("[logtail] GC", zap.String("ts", ts.ToString()), zap.Int("deleted", cnt))
+	logutil.Info("[logtail] GC", zap.String("ts", ts.ToString()), zap.Int("deleted-blk", cnt), zap.Int("remaining-row", mgr.table.BlockCount()))
 }
 
 func (mgr *Manager) TryCompactTable() {
