@@ -21,8 +21,8 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-type ManagedAllocator struct {
-	upstream Allocator
+type ManagedAllocator[U Allocator] struct {
+	upstream U
 	inUse    [256]managedAllocatorShard
 }
 
@@ -37,15 +37,15 @@ type managedAllocatorItem struct {
 	deallocator Deallocator
 }
 
-func NewManagedAllocator(
-	upstream Allocator,
-) *ManagedAllocator {
-	return &ManagedAllocator{
+func NewManagedAllocator[U Allocator](
+	upstream U,
+) *ManagedAllocator[U] {
+	return &ManagedAllocator[U]{
 		upstream: upstream,
 	}
 }
 
-func (m *ManagedAllocator) Allocate(size uint64, hints Hints) ([]byte, error) {
+func (m *ManagedAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, error) {
 	slice, dec, err := m.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, err
@@ -56,7 +56,7 @@ func (m *ManagedAllocator) Allocate(size uint64, hints Hints) ([]byte, error) {
 	return slice, nil
 }
 
-func (m *ManagedAllocator) Deallocate(slice []byte, hints Hints) {
+func (m *ManagedAllocator[U]) Deallocate(slice []byte, hints Hints) {
 	ptr := unsafe.Pointer(unsafe.SliceData(slice))
 	shard := &m.inUse[hashPointer(uintptr(ptr))]
 	shard.deallocate(ptr, hints)

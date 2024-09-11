@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,6 +43,12 @@ func (dispatch *Dispatch) OpType() vm.OpType {
 }
 
 func (dispatch *Dispatch) Prepare(proc *process.Process) error {
+	if dispatch.OpAnalyzer == nil {
+		dispatch.OpAnalyzer = process.NewAnalyzer(dispatch.GetIdx(), dispatch.IsFirst, dispatch.IsLast, "dispatch")
+	} else {
+		dispatch.OpAnalyzer.Reset()
+	}
+
 	ctr := new(container)
 	dispatch.ctr = ctr
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
@@ -127,9 +134,13 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	analyzer := dispatch.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ap := dispatch
 
-	result, err := dispatch.Children[0].Call(proc)
+	result, err := vm.ChildrenCall(dispatch.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

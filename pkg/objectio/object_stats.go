@@ -45,9 +45,9 @@ const (
 )
 
 const (
-	AppendableFlag = 0x1
-	SortedFlag     = 0x2
-	CNCreatedFlag  = 0x4
+	ObjectFlag_Appendable = 1 << iota
+	ObjectFlag_Sorted
+	ObjectFlag_CNCreated
 )
 
 var ZeroObjectStats ObjectStats
@@ -62,19 +62,19 @@ type ObjectStatsOptions func(*ObjectStats)
 
 func WithCNCreated() ObjectStatsOptions {
 	return func(o *ObjectStats) {
-		o[reservedOffset] |= CNCreatedFlag
+		o[reservedOffset] |= ObjectFlag_CNCreated
 	}
 }
 
 func WithSorted() ObjectStatsOptions {
 	return func(o *ObjectStats) {
-		o[reservedOffset] |= SortedFlag
+		o[reservedOffset] |= ObjectFlag_Sorted
 	}
 }
 
 func WithAppendable() ObjectStatsOptions {
 	return func(o *ObjectStats) {
-		o[reservedOffset] |= AppendableFlag
+		o[reservedOffset] |= ObjectFlag_Appendable
 	}
 }
 
@@ -86,15 +86,15 @@ func NewObjectStatsWithObjectID(id *ObjectId, appendable, sorted, cnCreated bool
 	stats := new(ObjectStats)
 	SetObjectStatsObjectName(stats, BuildObjectNameWithObjectID(id))
 	if appendable {
-		stats[reservedOffset] = stats[reservedOffset] | AppendableFlag
+		stats[reservedOffset] = stats[reservedOffset] | ObjectFlag_Appendable
 	}
 
 	if sorted {
-		stats[reservedOffset] = stats[reservedOffset] | SortedFlag
+		stats[reservedOffset] = stats[reservedOffset] | ObjectFlag_Sorted
 	}
 
 	if cnCreated {
-		stats[reservedOffset] = stats[reservedOffset] | CNCreatedFlag
+		stats[reservedOffset] = stats[reservedOffset] | ObjectFlag_CNCreated
 	}
 
 	return stats
@@ -119,15 +119,15 @@ func (des *ObjectStats) Clone() *ObjectStats {
 }
 
 func (des *ObjectStats) GetAppendable() bool {
-	return des[reservedOffset]&AppendableFlag != 0
+	return des[reservedOffset]&ObjectFlag_Appendable != 0
 }
 
 func (des *ObjectStats) GetSorted() bool {
-	return des[reservedOffset]&SortedFlag != 0
+	return des[reservedOffset]&ObjectFlag_Sorted != 0
 }
 
 func (des *ObjectStats) GetCNCreated() bool {
-	return des[reservedOffset]&CNCreatedFlag != 0
+	return des[reservedOffset]&ObjectFlag_CNCreated != 0
 }
 func (des *ObjectStats) IsZero() bool {
 	return bytes.Equal(des[:], ZeroObjectStats[:])
