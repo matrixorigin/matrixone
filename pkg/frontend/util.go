@@ -1539,11 +1539,23 @@ func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, t
 			if err != nil {
 				return nil, err
 			}
+
+			colNum, err := result.GetUint64(ctx, i, 2)
+			if err != nil {
+				return nil, err
+			}
+
 			cols = append(cols, &plan.ColDef{
-				ColId:  i,
-				Name:   colName,
-				Hidden: strings.Contains(colName, "__mo_"),
-				Typ:    plan.Type{Id: int32(typ.Oid)},
+				ColId:      colNum,
+				Name:       strings.ToLower(colName),
+				OriginName: colName,
+				Hidden:     strings.Contains(colName, "__mo_"),
+				Typ: plan.Type{
+					Id:    int32(typ.Oid),
+					Width: typ.Width,
+					Scale: typ.Scale,
+					Table: table,
+				},
 			})
 		}
 	}
