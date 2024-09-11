@@ -102,10 +102,10 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.inBat = nil
 					continue
 				}
-				if ctr.bat == nil {
-					ctr.inBat = nil
-					continue
-				}
+			}
+			if ctr.bat == nil {
+				ctr.inBat = nil
+				continue
 			}
 
 			if ctr.rbat == nil {
