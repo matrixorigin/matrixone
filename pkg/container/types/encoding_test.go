@@ -15,13 +15,10 @@
 package types
 
 import (
-	"bytes"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"math"
 	"testing"
-	"time"
-
-	"github.com/stretchr/testify/require"
 )
 
 func TestIntToUint(t *testing.T) {
@@ -271,31 +268,6 @@ func BenchmarkEncodeSliceFloat64(b *testing.B) {
 		x := EncodeSlice(v)
 		y := DecodeSlice[float64](x)
 		if len(y) != len(v) {
-			panic("Encode decode error")
-		}
-	}
-}
-
-func TestEncodeTS(t *testing.T) {
-	ts := BuildTS(time.Now().UTC().UnixNano(), 0)
-	encoded := EncodeFixed(ts)
-	decoded := DecodeFixed[TS](encoded)
-	require.Equal(t, ts, decoded, ts.ToString(), decoded.ToString())
-
-	t1 := BuildTS(20, 1)
-	t2 := BuildTS(19, 2)
-
-	b1 := EncodeFixed(t1)
-	b2 := EncodeFixed(t2)
-
-	require.Equal(t, t1.Greater(&t2), bytes.Compare(b1, b2) > 0)
-}
-
-func BenchmarkEncodeTS(b *testing.B) {
-	ts := BuildTS(time.Now().UTC().UnixNano(), 0)
-	for i := 0; i < b.N; i++ {
-		t := DecodeFixed[TS](EncodeFixed(ts))
-		if !ts.Equal(&t) {
 			panic("Encode decode error")
 		}
 	}

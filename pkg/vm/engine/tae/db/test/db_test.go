@@ -21,18 +21,12 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/require"
-
-	"sort"
-
-	"github.com/panjf2000/ants/v2"
-	"github.com/stretchr/testify/assert"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -68,6 +63,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -9389,43 +9387,19 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	schema := catalog.MockSchemaEnhanced(1, 0, 2)
-	schema.BlockMaxRows = 4
-	schema.ObjectMaxBlocks = 10000
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 1
+	schema.ObjectMaxBlocks = 5
 	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 100)
+	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
 	tae.CreateRelAndAppend(bat, true)
-	//tae.DeleteAll(true)
+	tae.DeleteAll(true)
+
 	txn, rel := tae.GetRelation()
-	assert.NoError(t, txn.Commit(ctx))
-
-	blks := testutil.GetAllBlockMetas(rel, false)
-
-	//var realMax, realMin []types.TS
-	var dts []types.TS
-
-	for i := 0; i < bat.Length()/int(schema.BlockMaxRows); i++ {
-		for j := range schema.BlockMaxRows {
-			id := blks[i].AsCommonID()
-			txn, rel = tae.GetRelation()
-			err := rel.RangeDelete(id, uint32(j), uint32(j), handle.DT_Normal)
-			require.NoError(t, err)
-			require.NoError(t, txn.Commit(ctx))
-			cs := txn.GetCommitTS()
-			dts = append(dts, cs)
-
-			time.Sleep(time.Millisecond * 1)
-			tae.CompactBlocks(true)
-		}
-	}
-
-	txn, rel = tae.GetRelation()
-	dataObj := testutil.GetOneBlockMeta(rel)
-	dataObj = testutil.GetOneBlockMeta(rel)
 	atombstone := testutil.GetOneTombstoneMeta(rel)
+	dataObj := testutil.GetOneBlockMeta(rel)
 	assert.NoError(t, txn.Commit(ctx))
-
 	tae.CompactBlocks(true)
 
 	txn, _ = tae.GetRelation()
@@ -9437,62 +9411,31 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 		&deletes,
 		common.DebugAllocator)
 	assert.NoError(t, txn.Commit(ctx))
-	//assert.Equal(t, 10, deletes.Count())
+	assert.Equal(t, 1, deletes.Count())
+	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
+}
 
-	txn, rel = tae.GetRelation()
-	it := rel.MakeObjectIt(true)
-	it.Next()
+func TestStartStopTableMerge(t *testing.T) {
+	db := testutil.InitTestDB(context.Background(), "MergeTest", t, nil)
+	defer db.Close()
 
-	obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-	stats := obj.GetObjectStats()
-	objLoc := stats.ObjectLocation()
+	scheduler := merge.NewScheduler(db.Runtime, db.CNMergeSched)
 
-	require.False(t, stats.GetAppendable())
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 1000
+	schema.ObjectMaxBlocks = 2
 
-	meta, err := objectio.FastLoadObjectMeta(ctx, &objLoc, false, tae.Runtime.Fs.Service)
-	require.NoError(t, err)
+	txn, _ := db.StartTxn(nil)
+	database, _ := txn.CreateDatabase("db", "", "")
+	rel, _ := database.CreateRelation(schema)
+	require.NoError(t, txn.Commit(context.Background()))
 
-	id := obj.AsCommonID()
-	dataMeta := meta.MustDataMeta()
-	dataMeta.Length()
-	colIdxes := catalog.TombstoneBatchIdxes
-	colIdxes = append(colIdxes, catalog.COLIDX_COMMITS)
+	tbl := rel.GetMeta().(*catalog.TableEntry)
+	scheduler.StopMerge(tbl)
 
-	for _, ts := range dts {
-		contain := false
-		for idx := 0; idx < int(stats.BlkCnt()); idx++ {
-			//tsZM := dataMeta.GetColumnMeta(uint32(idx), 2).ZoneMap()
-			//zmMax := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
-			//zmMin := types.DecodeFixed[types.TS](tsZM.GetMinBuf())
+	require.Equal(t, moerr.GetOkStopCurrRecur(), scheduler.LoopProcessor.OnTable(tbl))
 
-			//if tsZM.Contains(ts) {
-			//	continue
-			//}
+	scheduler.StartMerge(tbl)
 
-			loc := stats.BlockLocation(uint16(idx), 8192)
-			id.SetBlockOffset(uint16(idx))
-
-			loaded, f, err := blockio.ReadDeletes(ctx, loc, tae.Runtime.Fs.Service, false)
-			require.NoError(t, err)
-
-			committs := vector.MustFixedColNoTypeCheck[types.TS](loaded.Vecs[1])
-			for _, x := range committs {
-				if x.Equal(&ts) {
-					contain = true
-					fmt.Println("found")
-					break
-				}
-			}
-
-			if contain {
-				break
-			}
-
-			f()
-		}
-
-		if !contain {
-			panic("????")
-		}
-	}
+	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
 }

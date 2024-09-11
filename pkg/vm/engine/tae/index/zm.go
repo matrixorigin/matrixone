@@ -121,11 +121,6 @@ func (zm ZM) StringForCompose() string {
 	})
 }
 
-func (zm ZM) DebugString() string {
-	return fmt.Sprintf("init: %v, valid: %v, detail: %s",
-		zm.IsInited(), zm.Valid(), zm.String())
-}
-
 func (zm ZM) String() string {
 	return zm.innerString(func(b []byte) string {
 		for _, c := range b {

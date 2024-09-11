@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -27,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"math"
-	"runtime/debug"
 )
 
 type BlockWriter struct {
@@ -142,33 +140,6 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
 			return nil, err
-		}
-		// check ts zm
-		{
-			if zm.GetType() == types.T_TS {
-				tss := vector.MustFixedColNoTypeCheck[types.TS](columnData.GetDownstreamVector())
-				var minTS, maxTS types.TS = tss[0], tss[0]
-				for x := range tss {
-					if tss[x].Less(&minTS) {
-						minTS = tss[x]
-					}
-
-					if tss[x].Greater(&maxTS) {
-						maxTS = tss[x]
-					}
-				}
-
-				zmMaxTS, zmMinTS := types.TS(zm.GetMaxBuf()), types.TS(zm.GetMinBuf())
-				if !zmMinTS.Equal(&minTS) || !zmMaxTS.Equal(&maxTS) {
-					fmt.Printf("zm not expected: \nzmMinTS:%s; zmMaxTS:%s\nexpeMin:%s; expeMax:%s\nall data:\n:%s\nstack:%s\n",
-						zmMinTS.ToString(), zmMaxTS.ToString(),
-						minTS.ToString(), maxTS.ToString(),
-						common.MoVectorToString(columnData.GetDownstreamVector(), columnData.Length()),
-						string(debug.Stack()))
-
-					logutil.Fatal("")
-				}
-			}
 		}
 
 		index.SetZMSum(zm, columnData.GetDownstreamVector())

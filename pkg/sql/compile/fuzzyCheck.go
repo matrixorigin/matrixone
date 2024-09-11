@@ -336,9 +336,9 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 				} else {
 					ds, e := strconv.Unquote(dupKey[0])
 					if e != nil {
-						err = moerr.NewDuplicateEntry(c.proc.Ctx, f.tbl+"->"+dupKey[0], f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, dupKey[0], f.attr)
 					} else {
-						err = moerr.NewDuplicateEntry(c.proc.Ctx, f.tbl+"->"+ds, f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, ds, f.attr)
 					}
 				}
 			} else {
@@ -353,7 +353,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 							scales[i] = 0
 						}
 					}
-					err = moerr.NewDuplicateEntry(c.proc.Ctx, f.tbl+"->"+t.ErrString(scales), f.attr)
+					err = moerr.NewDuplicateEntry(c.proc.Ctx, t.ErrString(scales), f.attr)
 				}
 			}
 		}
