@@ -130,6 +130,46 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
+// genCreateIndexTableSql: Generate ddl statements for creating index table
+func genCreateIndexTableSqlForFullTextIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+	var sql string
+	planCols := indexTableDef.GetCols()
+	for i, planCol := range planCols {
+		if planCol.Name == catalog.CPrimaryKeyColName {
+			continue
+		}
+		if i >= 1 {
+			sql += ","
+		}
+		sql += planCol.Name + " "
+		typeId := types.T(planCol.Typ.Id)
+		switch typeId {
+		case types.T_bit:
+			sql += fmt.Sprintf("BIT(%d)", planCol.Typ.Width)
+		case types.T_char:
+			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+		case types.T_varchar:
+			sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+		case types.T_binary:
+			sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+		case types.T_varbinary:
+			sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+		case types.T_decimal64:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_decimal128:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		default:
+			sql += typeId.String()
+		}
+	}
+
+	if indexTableDef.Pkey != nil && indexTableDef.Pkey.Names != nil {
+		pkStr := fmt.Sprintf(", primary key ( %s ) ", partsToColsStr(indexTableDef.Pkey.Names))
+		sql += pkStr
+	}
+	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
+}
+
 // genCreateIndexTableSqlForIvfIndex: Generate ddl statements for creating ivf index table
 // NOTE: Here the columns are part of meta, centroids, entries table.
 // meta      -> key varchar(65535), value varchar(65535)

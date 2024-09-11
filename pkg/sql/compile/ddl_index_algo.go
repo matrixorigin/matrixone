@@ -105,7 +105,7 @@ func (s *Scope) handleFullTextIndexTable(c *Compile, indexDef *plan.IndexDef, qr
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	createSQL := genCreateIndexTableSql(def, indexDef, qryDatabase)
+	createSQL := genCreateIndexTableSqlForFullTextIndex(def, indexDef, qryDatabase)
 	err := c.runSql(createSQL)
 	if err != nil {
 		return err

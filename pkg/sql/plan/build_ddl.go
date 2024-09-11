@@ -1705,7 +1705,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				Id:    int32(types.T_int64),
-				Width: 64, // int32(types.T_int64.TypeLen()),
+				Width: 64,
 				Scale: -1,
 			},
 			Default: &plan.Default{
@@ -1740,7 +1740,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				Id:    int32(types.T_int32),
-				Width: 32, // int32(types.T_int32.TypeLen()),
+				Width: 32,
 				Scale: -1,
 			},
 			Default: &plan.Default{
@@ -1786,6 +1786,19 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			},
 		}
 		tableDef.Cols = append(tableDef.Cols, colDef)
+
+		// IMPORTANT: Index Table MUST HAVE A PRIMARY OTHERWISE CREATE TABLE (FULLTEXT(c1,c2) WILL NOT CREATE TABLE AND SELECT TABLE WILL CRASH
+		// hidden composite primary key
+		colDef = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		colDef.Alg = plan.CompressType_Lz4
+		colDef.Primary = true
+		tableDef.Cols = append(tableDef.Cols, colDef)
+
+		tableDef.Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.FullTextIndex_TabCol_Id, catalog.FullTextIndex_TabCol_Position},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: colDef,
+		}
 
 		logutil.Infof("indexDef %s", indexDef.String())
 		logutil.Infof("index columns = %v", indexParts)
