@@ -20,16 +20,8 @@ func (e ObjectMeta) MustGetMeta(metaType DataMetaType) ObjectDataMeta {
 	return objectMetaV3(e[IOEntryHeaderSize:]).MustGetMeta(metaType)
 }
 
-func (e ObjectMeta) HeaderLength() uint32 {
-	return objectMetaV3(e[IOEntryHeaderSize:]).HeaderLength()
-}
-
 func (e ObjectMeta) DataMetaCount() uint16 {
 	return objectMetaV3(e[IOEntryHeaderSize:]).DataMetaCount()
-}
-
-func (e ObjectMeta) TombstoneMetaCount() uint16 {
-	return objectMetaV3(e[IOEntryHeaderSize:]).TombstoneMetaCount()
 }
 
 func (e ObjectMeta) DataMeta() (ObjectDataMeta, bool) {
@@ -40,26 +32,10 @@ func (e ObjectMeta) MustDataMeta() ObjectDataMeta {
 	return objectMetaV3(e[IOEntryHeaderSize:]).MustDataMeta()
 }
 
-func (e ObjectMeta) TombstoneMeta() (ObjectDataMeta, bool) {
-	return objectMetaV3(e[IOEntryHeaderSize:]).TombstoneMeta()
-}
-
 func (e ObjectMeta) MustTombstoneMeta() ObjectDataMeta {
 	return objectMetaV3(e[IOEntryHeaderSize:]).MustTombstoneMeta()
 }
 
 func (e ObjectMeta) SubMeta(pos uint16) (ObjectDataMeta, bool) {
 	return objectMetaV3(e[IOEntryHeaderSize:]).SubMeta(pos)
-}
-
-func (e ObjectMeta) SubMetaCount() uint16 {
-	return objectMetaV3(e[IOEntryHeaderSize:]).SubMetaCount()
-}
-
-func (e ObjectMeta) SubMetaIndex() SubMetaIndex {
-	return objectMetaV3(e[IOEntryHeaderSize:]).SubMetaIndex()
-}
-
-func (e ObjectMeta) SubMetaTypes() []uint16 {
-	return objectMetaV3(e[IOEntryHeaderSize:]).SubMetaTypes()
 }
