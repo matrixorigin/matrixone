@@ -77,3 +77,15 @@ func TestBlockInfoSlice(t *testing.T) {
 	require.Equal(t, 0, len(data1))
 
 }
+
+func TestDca(t *testing.T) {
+	pClient := &PushClient{}
+
+	signalCnt := 0
+	require.True(t, pClient.dcaTryDelay(true, func() { signalCnt++ }))  // skip for sub response
+	require.True(t, pClient.dcaTryDelay(false, func() { signalCnt++ })) // delay
+	pClient.dcaConfirmAndApply()
+	require.Equal(t, 1, signalCnt)
+	require.False(t, pClient.dcaTryDelay(false, func() {})) // skip for finished replay
+
+}

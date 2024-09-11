@@ -38,71 +38,12 @@ func Prepare(op Operator, proc *process.Process) error {
 	})
 }
 
-func SetAnalyzeInfo(rootOp Operator, proc *process.Process) {
+func ModifyOutputOpNodeIdx(rootOp Operator, proc *process.Process) {
 	HandleAllOp(rootOp, func(parentOp Operator, op Operator) error {
 		switch op.OpType() {
 		case Output:
 			op.GetOperatorBase().SetIdx(-1)
-			//case TableScan:
-			//	op.GetOperatorBase().SetIdx(parentOp.GetOperatorBase().Idx)
 		}
-		return nil
-	})
-
-	idxMapMajor := make(map[int]int, 0)
-	idxMapMinor := make(map[int]int, 0)
-	HandleAllOp(rootOp, func(parentOp Operator, op Operator) error {
-		opBase := op.GetOperatorBase()
-		info := &OperatorInfo{
-			Idx:     opBase.Idx,
-			IsFirst: opBase.IsFirst,
-			IsLast:  opBase.IsLast,
-
-			CnAddr:      opBase.CnAddr,
-			OperatorID:  opBase.OperatorID,
-			ParallelID:  opBase.ParallelID,
-			MaxParallel: opBase.MaxParallel,
-		}
-		opType := op.OpType()
-		switch opType {
-		case HashBuild, ShuffleBuild, IndexBuild, Filter, MergeGroup, MergeOrder:
-			isMinor := true
-			if opType == Filter {
-				if opType != TableScan && opType != External {
-					isMinor = false // restrict operator is minor only for scan
-				}
-			}
-
-			if isMinor {
-				if info.Idx >= 0 && info.Idx < len(proc.Base.AnalInfos) {
-					info.ParallelMajor = false
-					if pidx, ok := idxMapMinor[info.Idx]; ok {
-						info.ParallelIdx = pidx
-					} else {
-						pidx = proc.Base.AnalInfos[info.Idx].AddNewParallel(false)
-						idxMapMinor[info.Idx] = pidx
-						info.ParallelIdx = pidx
-					}
-				}
-			} else {
-				info.ParallelIdx = -1
-			}
-
-		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, Single, Semi, RightSemi, Anti, RightAnti, Mark, Product, ProductL2:
-			info.ParallelMajor = true
-			if info.Idx >= 0 && info.Idx < len(proc.Base.AnalInfos) {
-				if pidx, ok := idxMapMajor[info.Idx]; ok {
-					info.ParallelIdx = pidx
-				} else {
-					pidx = proc.Base.AnalInfos[info.Idx].AddNewParallel(true)
-					idxMapMajor[info.Idx] = pidx
-					info.ParallelIdx = pidx
-				}
-			}
-		default:
-			info.ParallelIdx = -1 // do nothing for parallel analyze info
-		}
-		opBase.SetInfo(info)
 		return nil
 	})
 }

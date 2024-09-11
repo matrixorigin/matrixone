@@ -86,6 +86,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select period from t1",
+		output: "select period from t1",
+	}, {
 		input:  "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name='admin' identified by '123456';",
 		output: "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name 'admin' identified by '******'",
 	}, {

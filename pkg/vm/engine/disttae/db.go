@@ -246,6 +246,9 @@ func (e *Engine) init(ctx context.Context) error {
 		e.catalog.InsertColumns(bat)
 	}
 
+	// clear all tables in global stats.
+	e.globalStats.clearTables()
+
 	return nil
 }
 
@@ -328,7 +331,8 @@ func (e *Engine) getOrCreateSnapPart(
 				e,
 				nil,
 				state,
-				entry); err != nil {
+				entry,
+				false); err != nil {
 				return err
 			}
 		}
@@ -420,7 +424,7 @@ func (e *Engine) LazyLoadLatestCkp(
 				}
 			}()
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, cache, state, entry); err != nil {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, cache, state, entry, false); err != nil {
 					return err
 				}
 			}

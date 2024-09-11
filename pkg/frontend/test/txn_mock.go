@@ -312,6 +312,14 @@ func (m *MockTxnClient) New(ctx context.Context, commitTS timestamp.Timestamp, o
 	return ret0, ret1
 }
 
+func (m *MockTxnClient) RestartTxn(
+	ctx context.Context,
+	op client.TxnOperator,
+	ts timestamp.Timestamp,
+	options ...client.TxnOption) (client.TxnOperator, error) {
+	panic("unimplemented")
+}
+
 // New indicates an expected call of New.
 func (mr *MockTxnClientMockRecorder) New(ctx, commitTS interface{}, options ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()

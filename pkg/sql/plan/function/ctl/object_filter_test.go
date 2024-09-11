@@ -72,7 +72,7 @@ func TestOverlap(t *testing.T) {
 	}
 
 	{
-		bs := make([]byte, 4)
+		bs := make([]byte, 8)
 		zm := index.NewZM(types.T_float64, 0)
 		binary.LittleEndian.PutUint32(bs, 0)
 		index.UpdateZM(zm, bs)
@@ -95,7 +95,7 @@ func TestOverlap(t *testing.T) {
 	}
 
 	{
-		bs := make([]byte, 4)
+		bs := make([]byte, 8)
 		zm := index.NewZM(types.T_float64, 0)
 		binary.LittleEndian.PutUint32(bs, 0)
 		index.UpdateZM(zm, bs)
@@ -126,7 +126,7 @@ func TestOverlap(t *testing.T) {
 	}
 
 	{
-		bs := make([]byte, 4)
+		bs := make([]byte, 8)
 		zm := index.NewZM(types.T_float64, 0)
 		binary.LittleEndian.PutUint32(bs, 0)
 		index.UpdateZM(zm, bs)
