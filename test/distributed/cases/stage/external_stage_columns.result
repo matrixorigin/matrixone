@@ -24,13 +24,13 @@ stage_id    stage_name    url    stage_credentials    stage_status    created_ti
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage01    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
-select col1, col2 from t1 into outfile 'stage://stage01/local_stage_table01.csv';
+select col1, col2 from t1 into outfile 'stage://stage01/local_stage_table001.csv';
 drop table t1;
 create table t1(
 col1 date not null,
 col2 datetime
 );
-load data infile '$resources/into_outfile/stage/local_stage_table01.csv' into table t1 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_table001.csv' into table t1 fields terminated by ',' ignore 1 lines;
 select * from t1;
 col1    col2
 1000-01-01    0001-01-01 00:00:00
@@ -55,17 +55,17 @@ drop stage if exists stage02;
 create stage stage02 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-296    stage02    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:08:01    
+336    stage02    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 11:25:22    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage02    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
-select col3, col4 from t2 into outfile 'stage://stage02/local_stage_table02.csv';
+select col3, col4 from t2 into outfile 'stage://stage02/local_stage_table002.csv';
 drop table t2;
 create table t2(
 col3 decimal(5,2),
 col4 decimal(20,5)
 );
-load data infile '$resources/into_outfile/stage/local_stage_table02.csv' into table t2 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_table002.csv' into table t2 fields terminated by ',' ignore 1 lines;
 select * from t2;
 col3    col4
 1.30    1.30000
@@ -109,17 +109,17 @@ drop stage if exists stage03;
 create stage stage03 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-297    stage03    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:08:01    
+337    stage03    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 11:25:22    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage03    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
-select col1, col3 from t3 into outfile 'stage://stage03/local_stage_table03.csv';
+select col1, col3 from t3 into outfile 'stage://stage03/local_stage_table003.csv';
 drop table t3;
 create table t3(
 col1 char(225) default 'a',
 col3 text
 );
-load data infile '$resources/into_outfile/stage/local_stage_table03.csv' into table t3 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_table003.csv' into table t3 fields terminated by ',' ignore 1 lines;
 select * from t3;
 col1    col3
 a    c
@@ -173,11 +173,11 @@ drop stage if exists stage04;
 create stage stage04 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-298    stage04    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:08:02    
+338    stage04    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 11:25:23    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage04    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
-select col1, col3, col5, col7 from t4 into outfile 'stage://stage04/local_stage_table04.csv';
+select col1, col3, col5, col7 from t4 into outfile 'stage://stage04/local_stage_table004.csv';
 drop table if exists t4;
 create table t4(
 col1 tinyint,
@@ -185,7 +185,7 @@ col3 int,
 col5 tinyint unsigned,
 col7 int unsigned
 );
-load data infile '$resources/into_outfile/stage/local_stage_table04.csv' into table t4 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_table004.csv' into table t4 fields terminated by ',' ignore 1 lines;
 select * from t4;
 col1    col3    col5    col7
 127    2147483647    255    4294967295
@@ -218,17 +218,17 @@ drop stage if exists stage05;
 create stage stage05 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-299    stage05    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:08:02    
+339    stage05    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 11:25:23    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage05    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
-select col1,col2,col3 from t5 into outfile 'stage://stage05/local_stage_table05.csv';
+select col1,col2,col3 from t5 into outfile 'stage://stage05/local_stage_table005.csv';
 truncate t5;
 insert into t5 values (1,1,1);
-load data infile '$resources/into_outfile/stage/local_stage_table05.csv' into table t5 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_table005.csv' into table t5 fields terminated by ',' ignore 1 lines;
 Duplicate entry '1' for key 'col1'
 delete from t5;
-load data infile '$resources/into_outfile/stage/local_stage_table05.csv' into table t5 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_table005.csv' into table t5 fields terminated by ',' ignore 1 lines;
 select * from t5;
 col1    col2    col3
 1    1    1
@@ -257,13 +257,13 @@ select * from mo_catalog.mo_stages;
 
 show stages;
 
-select col2 from t6 into outfile 'stage://stage06/local_stage_table06.csv';
+select col2 from t6 into outfile 'stage://stage06/local_stage_table006.csv';
 
 drop table if exists t6;
 
 create table t6 (col2 varchar(20));
 
-load data infile '$resources/into_outfile/stage/local_stage_table06.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_table006.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
 
 select * from t6;
 
@@ -284,14 +284,14 @@ drop stage if exists stage07;
 create stage stage07 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-300    stage07    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:08:02    
+340    stage07    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 11:25:23    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage07    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
-select col2 from t7 into outfile 'stage://stage07/local_stage_table07.csv';
+select col2 from t7 into outfile 'stage://stage07/local_stage_table007.csv';
 drop table if exists t7;
 create table t7(col1 text);
-load data infile '$resources/into_outfile/stage/local_stage_table07.csv' into table t7 FIELDS ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' ignore 1 lines parallel 'true';
+load data infile '$resources/into_outfile/stage/local_stage_table007.csv' into table t7 FIELDS ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' ignore 1 lines parallel 'true';
 select * from t7;
 col1
 1
@@ -316,7 +316,7 @@ drop stage if exists stage11;
 create stage stage11 url = 'file:///$resources/into_outfile/stage' comment = 'this is a stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    stage11    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 10:08:03    this is a stage
+1    stage11    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-11 11:25:24    this is a stage
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage11    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    this is a stage
