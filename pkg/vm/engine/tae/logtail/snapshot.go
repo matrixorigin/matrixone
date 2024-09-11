@@ -155,18 +155,6 @@ type PitrInfo struct {
 	tables   map[uint64]types.TS
 }
 
-func (p *PitrInfo) GetAccount() map[uint32]types.TS {
-	return p.account
-}
-
-func (p *PitrInfo) GetDatabase() map[uint64]types.TS {
-	return p.database
-}
-
-func (p *PitrInfo) GetTables() map[uint64]types.TS {
-	return p.tables
-}
-
 func (p *PitrInfo) IsEmpty() bool {
 	return p.cluster.IsEmpty() &&
 		len(p.account) == 0 &&
@@ -522,7 +510,6 @@ func (sm *SnapshotMeta) Update(
 
 		if tid == sm.pitr.tid {
 			mapFun(*objects2)
-			logutil.Infof("[UpdateSnapshot] sm.pitr.objects %d", len(*objects2))
 		}
 		if _, ok := sm.tides[tid]; !ok {
 			return
@@ -533,7 +520,6 @@ func (sm *SnapshotMeta) Update(
 		mapFun((*objects)[tid])
 	}
 	collectObjects(&sm.objects, &sm.pitr.objects, data.GetObjectBatchs(), collector)
-	logutil.Infof("[UpdateSnapshot] sm.pitr.objects %d", len(sm.pitr.objects))
 	collectObjects(&sm.tombstones, &sm.pitr.tombstones, data.GetTombstoneObjectBatchs(), collector)
 	return nil, nil
 }
