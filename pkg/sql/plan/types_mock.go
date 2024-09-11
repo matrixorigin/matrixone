@@ -353,8 +353,9 @@ func (mr *MockCompilerContext2MockRecorder) IsPublishing(dbName interface{}) *go
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsPublishing", reflect.TypeOf((*MockCompilerContext2)(nil).IsPublishing), dbName)
 }
+
 // BuildTableDefByMoColumns mocks base method.
-func (m *MockCompilerContext2) BuildTableDefByMoColumns(dbName, table string) (*TableDef, error){
+func (m *MockCompilerContext2) BuildTableDefByMoColumns(dbName, table string) (*TableDef, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "BuildTableDefByMoColumns", dbName, table)
 	ret0, _ := ret[0].(*TableDef)
