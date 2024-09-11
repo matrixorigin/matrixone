@@ -34,7 +34,7 @@ func init() {
 
 func NewStrMap(hasNull bool) (*StrHashMap, error) {
 	mp := &hashtable.StringHashMap{}
-	if err := mp.Init(); err != nil {
+	if err := mp.Init(nil); err != nil {
 		return nil, err
 	}
 	return &StrHashMap{

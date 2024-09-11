@@ -130,7 +130,7 @@ func FilterObjects(
 		}
 
 		if objStats.Rows() == 0 {
-			logutil.Errorf("object stats has zero rows: %s", objStats.String())
+			logutil.Errorf("object stats has zero rows: %s", objStats.ObjectName().String())
 			util.EnableCoreDump()
 			util.CoreDump()
 		}

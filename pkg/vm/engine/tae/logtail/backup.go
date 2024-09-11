@@ -142,7 +142,7 @@ func GetTombstonesByBlockId(
 		}
 		if !obj.ZMIsEmpty() {
 			objZM := obj.SortKeyZoneMap()
-			if skip := !objZM.PrefixEq(bid[:]); skip {
+			if skip := !objZM.RowidPrefixEq(bid[:]); skip {
 				return true, nil
 			}
 		}
