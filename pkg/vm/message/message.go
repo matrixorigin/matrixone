@@ -239,7 +239,7 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		select {
 		case <-timeoutCtx.Done():
 			timeoutCancel()
-			logutil.Errorf("waiting messsage timeout, waiting for tag %v, messageBoard debug message %v", mr.tags, mr.mb.DebugString())
+			logutil.Warnf("waiting messsage timeout, waiting for tag %v, messageBoard debug message %v", mr.tags, mr.mb.DebugString())
 		case <-mr.waiter:
 			timeoutCancel()
 		case <-ctx.Done():
