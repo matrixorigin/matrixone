@@ -158,10 +158,10 @@ func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	_, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ch2:  make(chan process.PipelineSignal, 3),
+		Ch2: make(chan process.PipelineSignal, 3),
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-		Ch2:  make(chan process.PipelineSignal, 3),
+		Ch2: make(chan process.PipelineSignal, 3),
 	}
 	return testCase{
 		ds:    ds,

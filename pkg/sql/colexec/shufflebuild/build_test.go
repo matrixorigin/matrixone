@@ -141,7 +141,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	_, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ch2:  make(chan process.PipelineSignal, 10),
+		Ch2: make(chan process.PipelineSignal, 10),
 	}
 	proc.SetMessageBoard(message.NewMessageBoard())
 	return buildTestCase{
