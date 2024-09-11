@@ -1874,7 +1874,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, false)
+			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, isExplain)
 			if err != nil {
 				return nil, err
 			}

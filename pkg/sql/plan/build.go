@@ -59,7 +59,7 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 }
 
 func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepareStmt bool, skipStats bool, isExplain bool) (*Plan, error) {
-	if true {
+	if !isExplain {
 		return buildInsert(stmt, ctx, false, isPrepareStmt)
 	}
 

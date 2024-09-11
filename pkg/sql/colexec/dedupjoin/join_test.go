@@ -82,7 +82,7 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestJoin(t *testing.T) {
+func TestDedupJoin(t *testing.T) {
 	for _, tc := range tcs {
 
 		resetChildren(tc.arg)

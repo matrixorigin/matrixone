@@ -142,6 +142,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Fuzzy Filter for duplicate key"
 	case plan.Node_LOCK_OP:
 		pname = "Lock"
+	case plan.Node_DEDUP_JOIN:
+		pname = "Dedup Join"
 	default:
 		panic("error node type")
 	}
