@@ -40,7 +40,7 @@ func (s *metaScanState) start(tf *TableFunction, proc *process.Process, nthRow i
 	s.startPreamble(tf, proc, nthRow)
 
 	// Get uuid
-	uuid := vector.GetFixedAt[types.Uuid](tf.ctr.argVecs[0], nthRow)
+	uuid := vector.GetFixedAtWithTypeCheck[types.Uuid](tf.ctr.argVecs[0], nthRow)
 	// get file size
 	path := catalog.BuildQueryResultMetaPath(proc.GetSessionInfo().Account, uuid.String())
 

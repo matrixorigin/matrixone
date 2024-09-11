@@ -216,7 +216,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 
 		if info.ShuffleRanges[i] != nil {
 			if s.MinValMap[colName] != s.MaxValMap[colName] &&
-				s.TableCnt > threshHoldForRangeShuffle &&
+				s.TableCnt > ShuffleThreshHoldOfNDV*2 &&
 				info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV &&
 				!util.JudgeIsCompositeClusterByColumn(colName) &&
 				colName != catalog.CPrimaryKeyColName {
@@ -1224,6 +1224,8 @@ func DefaultHugeStats() *plan.Stats {
 	stats.Outcnt = 100000000
 	stats.Selectivity = 1
 	stats.BlockNum = 10000
+	stats.Rowsize = 10000
+	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
 
@@ -1234,6 +1236,8 @@ func DefaultBigStats() *plan.Stats {
 	stats.Outcnt = float64(costThresholdForOneCN)
 	stats.Selectivity = 1
 	stats.BlockNum = int32(BlockThresholdForOneCN)
+	stats.Rowsize = 1000
+	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
 
@@ -1244,6 +1248,8 @@ func DefaultStats() *plan.Stats {
 	stats.Outcnt = 1000
 	stats.Selectivity = 1
 	stats.BlockNum = 1
+	stats.Rowsize = 100
+	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
 
@@ -1254,6 +1260,8 @@ func DefaultMinimalStats() *plan.Stats {
 	stats.Outcnt = 10
 	stats.Selectivity = 0.0001
 	stats.BlockNum = 1
+	stats.Rowsize = 1
+	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
 

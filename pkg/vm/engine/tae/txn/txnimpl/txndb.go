@@ -154,8 +154,9 @@ func (db *txnDB) RangeDelete(
 	return table.RangeDelete(id, start, end, pkVec, dt)
 }
 
-func (db *txnDB) TryDeleteByDeltaloc(
-	id *common.ID, deltaloc objectio.Location,
+func (db *txnDB) TryDeleteByStats(
+	id *common.ID,
+	stats objectio.ObjectStats,
 ) (ok bool, err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
@@ -164,7 +165,7 @@ func (db *txnDB) TryDeleteByDeltaloc(
 	if table.IsDeleted() {
 		return false, moerr.NewNotFoundNoCtx()
 	}
-	return table.TryDeleteByDeltaloc(id, deltaloc)
+	return table.TryDeleteByStats(id, stats)
 }
 
 func (db *txnDB) GetByFilter(ctx context.Context, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {

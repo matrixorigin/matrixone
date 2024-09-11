@@ -206,7 +206,7 @@ func GetAccountIdByName(accountName string, txn executor.TxnExecutor) (int32, er
 	// Check if the group account name exists
 	var accountId int32 = -1
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		accountId = vector.GetFixedAt[int32](cols[0], 0)
+		accountId = vector.GetFixedAtWithTypeCheck[int32](cols[0], 0)
 		return true
 	})
 

@@ -19,13 +19,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -55,6 +54,11 @@ func (loopJoin *LoopJoin) OpType() vm.OpType {
 
 func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
+	if loopJoin.OpAnalyzer == nil {
+		loopJoin.OpAnalyzer = process.NewAnalyzer(loopJoin.GetIdx(), loopJoin.IsFirst, loopJoin.IsLast, "loop_join")
+	} else {
+		loopJoin.OpAnalyzer.Reset()
+	}
 
 	if loopJoin.Cond != nil && loopJoin.ctr.expr == nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.Cond)
@@ -74,9 +78,10 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := loopJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &loopJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -85,7 +90,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err = loopJoin.build(proc, anal); err != nil {
+			if err = loopJoin.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			if ctr.mp == nil && (loopJoin.JoinType == LoopInner || loopJoin.JoinType == LoopSemi) {
@@ -96,7 +101,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ctr.inbat == nil {
-				input, err = loopJoin.Children[0].Call(proc)
+				input, err = vm.ChildrenCall(loopJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -108,7 +113,6 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if ctr.inbat.IsEmpty() {
 					continue
 				}
-				anal.Input(ctr.inbat, loopJoin.GetIsFirst())
 				ctr.probeIdx = 0
 				ctr.batIdx = 0
 			}
@@ -151,7 +155,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, loopJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, err
 		default:
 			result.Batch = nil
@@ -161,11 +165,11 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (loopJoin *LoopJoin) build(proc *process.Process, anal process.Analyze) error {
+func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer) (err error) {
 	start := time.Now()
-	defer anal.WaitStop(start)
-	loopJoin.ctr.mp = message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
-	return nil
+	defer analyzer.WaitStop(start)
+	loopJoin.ctr.mp, err = message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	return err
 }
 
 func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {

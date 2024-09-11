@@ -41,6 +41,12 @@ func (singleJoin *SingleJoin) OpType() vm.OpType {
 }
 
 func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
+	if singleJoin.OpAnalyzer == nil {
+		singleJoin.OpAnalyzer = process.NewAnalyzer(singleJoin.GetIdx(), singleJoin.IsFirst, singleJoin.IsLast, "single_left")
+	} else {
+		singleJoin.OpAnalyzer.Reset()
+	}
+
 	if singleJoin.ctr.vecs == nil {
 		singleJoin.ctr.vecs = make([]*vector.Vector, len(singleJoin.Conditions[0]))
 		singleJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(singleJoin.Conditions[0]))
@@ -70,9 +76,10 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := singleJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &singleJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -81,11 +88,14 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 	for {
 		switch ctr.state {
 		case Build:
-			singleJoin.build(anal, proc)
+			err = singleJoin.build(analyzer, proc)
+			if err != nil {
+				return result, err
+			}
 			ctr.state = Probe
 
 		case Probe:
-			input, err = singleJoin.Children[0].Call(proc)
+			input, err = vm.ChildrenCall(singleJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -96,12 +106,12 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 			}
 			if bat.Last() {
 				result.Batch = bat
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
 			if bat.IsEmpty() {
 				continue
 			}
-			anal.Input(bat, singleJoin.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(singleJoin.Result))
@@ -137,7 +147,7 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				return result, err
 			}
 
-			anal.Output(result.Batch, singleJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -147,14 +157,18 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 		}
 	}
 }
-func (singleJoin *SingleJoin) build(anal process.Analyze, proc *process.Process) {
+func (singleJoin *SingleJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &singleJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(singleJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	defer analyzer.WaitStop(start)
+	ctr.mp, err = message.ReceiveJoinMap(singleJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
+	return nil
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, result *vm.CallResult) error {
@@ -221,7 +235,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Proc
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					}
-					bs := vector.MustFixedCol[bool](vec)
+					bs := vector.MustFixedColWithTypeCheck[bool](vec)
 					if bs[0] {
 						if matched {
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
@@ -268,7 +282,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Proc
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						}
-						bs := vector.MustFixedCol[bool](vec)
+						bs := vector.MustFixedColWithTypeCheck[bool](vec)
 						if bs[0] {
 							if matched {
 								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")

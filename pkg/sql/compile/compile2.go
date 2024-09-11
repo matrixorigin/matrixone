@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
@@ -175,6 +176,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(runStart.Sub(c.startAt).Seconds())
 	sp := c.proc.GetStmtProfile()
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
+
 	stats := statistic.StatsInfoFromContext(execTopContext)
 	stats.ExecutionStart()
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, seq)
@@ -203,10 +205,17 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
 	for {
+		// Before compile.runOnce, reset `StatsInfo` IO resources which in sql context
+		stats.ResetIOAccessTimeConsumption()
+		stats.ResetIOMergerTimeConsumption()
+
 		// build query context and pipeline contexts for the current run.
 		runC.InitPipelineContextToExecuteQuery()
-
+		runC.MessageBoard.BeforeRunonce()
 		if err = runC.runOnce(); err == nil {
+			if runC.anal != nil {
+				runC.anal.retryTimes = retryTimes
+			}
 			break
 		}
 
@@ -238,9 +247,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC != c {
 			runC.Release()
 		}
-		defChanged := moerr.IsMoErrCode(
-			err,
-			moerr.ErrTxnNeedRetryWithDefChanged)
+
+		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		if runC, err = c.prepareRetry(defChanged); err != nil {
 			return nil, err
 		}
@@ -256,13 +264,16 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
+
+	if c.hasValidQueryPlan() {
+		c.handlePlanAnalyze(runC)
+	}
+
 	return queryResult, err
 }
 
 // prepareRetry rebuild a new Compile object for retrying the query.
-func (c *Compile) prepareRetry(
-	defChanged bool,
-) (*Compile, error) {
+func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	v2.TxnStatementRetryCounter.Inc()
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
@@ -352,4 +363,9 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 	for _, prePipeline := range parallelScope.PreScopes {
 		prePipeline.buildContextFromParentCtx(parallelScope.Proc.Ctx)
 	}
+}
+
+func (c *Compile) handlePlanAnalyze(runC *Compile) {
+	c.GenPhyPlan(runC)
+	c.fillPlanNodeAnalyzeInfo()
 }

@@ -19,15 +19,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
+type PrefetchType uint8
+
+const (
+	PrefetchFileType PrefetchType = iota
+	PrefetchMetaType
+)
+
 // PrefetchParams is the parameter of the executed IoPipeline.PrefetchParams, which
 // provides the merge function, which can merge the PrefetchParams requests of
 // multiple blocks in an object/file
 type PrefetchParams struct {
-	ids          map[uint16]*objectio.ReadBlockOptions
-	fs           fileservice.FileService
-	key          objectio.Location
-	reader       *objectio.ObjectReader
-	prefetchFile bool
+	fs  fileservice.FileService
+	key objectio.Location
+	typ PrefetchType
 }
 
 func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {
@@ -36,81 +41,16 @@ func BuildPrefetchParams(service fileservice.FileService, key objectio.Location)
 }
 
 func buildPrefetchParams(service fileservice.FileService, key objectio.Location) PrefetchParams {
-	ids := make(map[uint16]*objectio.ReadBlockOptions)
 	return PrefetchParams{
-		ids: ids,
 		fs:  service,
 		key: key,
-	}
-}
-
-func buildPrefetchParamsByReader(reader *BlockReader) PrefetchParams {
-	ids := make(map[uint16]*objectio.ReadBlockOptions)
-	return PrefetchParams{
-		ids:    ids,
-		reader: reader.GetObjectReader(),
-	}
-}
-
-func (p *PrefetchParams) AddBlock(idxes []uint16, ids []uint16) {
-	blocks := make(map[uint16]*objectio.ReadBlockOptions)
-	columns := make(map[uint16]bool)
-	for _, idx := range idxes {
-		columns[idx] = true
-	}
-	for _, id := range ids {
-		blocks[id] = &objectio.ReadBlockOptions{
-			Id:       id,
-			Idxes:    columns,
-			DataType: uint16(objectio.SchemaData),
-		}
-	}
-	p.mergeIds(blocks)
-}
-func (p *PrefetchParams) AddBlockWithType(idxes []uint16, ids []uint16, dataType uint16) {
-	blocks := make(map[uint16]*objectio.ReadBlockOptions)
-	columns := make(map[uint16]bool)
-	for _, idx := range idxes {
-		columns[idx] = true
-	}
-	for _, id := range ids {
-		blocks[id] = &objectio.ReadBlockOptions{
-			Id:       id,
-			DataType: dataType,
-			Idxes:    columns,
-		}
-	}
-	p.mergeIds(blocks)
-}
-
-func (p *PrefetchParams) mergeIds(ids2 map[uint16]*objectio.ReadBlockOptions) {
-	for id, block := range ids2 {
-		if p.ids[id] == nil {
-			p.ids[id] = block
-			continue
-		}
-		for index := range block.Idxes {
-			p.ids[id].Idxes[index] = true
-		}
 	}
 }
 
 func mergePrefetch(processes []PrefetchParams) map[string]PrefetchParams {
 	pc := make(map[string]PrefetchParams)
 	for _, p := range processes {
-		var name string
-		if p.reader != nil {
-			name = p.reader.GetName()
-		} else {
-			name = p.key.Name().String()
-		}
-		old, ok := pc[name]
-		if !ok {
-			pc[name] = p
-			continue
-		}
-		old.mergeIds(p.ids)
-		pc[name] = old
+		pc[p.key.Name().String()] = p
 	}
 	return pc
 }

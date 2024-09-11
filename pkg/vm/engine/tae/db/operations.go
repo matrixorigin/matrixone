@@ -19,12 +19,12 @@ import (
 	fmt "fmt"
 	"time"
 
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 const (
@@ -168,7 +168,7 @@ type WriteReq struct {
 	FileName string
 	MetaLocs []string
 	//for delete on S3
-	DeltaLocs []string
+	TombstoneStats []objectio.ObjectStats
 	//tasks for loading primary keys or deleted row ids
 	Jobs []*tasks.Job
 	//loaded sorted primary keys or deleted row ids.
@@ -285,17 +285,36 @@ type StorageUsageResp_V0 struct {
 	BlockEntries []*BlockMetaInfo
 }
 
-type StorageUsageResp struct {
+type StorageUsageResp_V1 struct {
 	Succeed bool
 	AccIds  []int64
 	Sizes   []uint64
 	Magic   uint64
 }
 
-func (s *StorageUsageResp) MarshalBinary() ([]byte, error) {
+func (s *StorageUsageResp_V1) MarshalBinary() ([]byte, error) {
 	return s.Marshal()
 }
 
-func (s *StorageUsageResp) UnmarshalBinary(data []byte) error {
+func (s *StorageUsageResp_V1) UnmarshalBinary(data []byte) error {
+	return s.Unmarshal(data)
+}
+
+type StorageUsageResp_V2 struct {
+	Succeed bool
+	AccIds  []int64
+	Sizes   []uint64
+	Magic   uint64
+
+	ObjCnts []uint64
+	BlkCnts []uint64
+	RowCnts []uint64
+}
+
+func (s *StorageUsageResp_V2) MarshalBinary() ([]byte, error) {
+	return s.Marshal()
+}
+
+func (s *StorageUsageResp_V2) UnmarshalBinary(data []byte) error {
 	return s.Unmarshal(data)
 }

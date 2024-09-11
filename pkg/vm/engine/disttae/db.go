@@ -16,10 +16,11 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,14 +45,14 @@ func (e *Engine) tryAdjustThreeTablesCreatedTimeWithBatch(b *batch.Batch) {
 	tnameIdx := catalog.MO_TABLES_REL_NAME_IDX + cache.MO_OFF
 	createdTsIdx := catalog.MO_TABLES_CREATED_TIME_IDX + cache.MO_OFF
 	for i := 0; i < b.RowCount(); i++ {
-		aid := vector.GetFixedAt[uint32](b.Vecs[aidIdx], i)
+		aid := vector.GetFixedAtWithTypeCheck[uint32](b.Vecs[aidIdx], i)
 		tname := b.Vecs[tnameIdx].GetStringAt(i)
 		if aid == 0 && tname == "mo_user" {
-			ts := vector.GetFixedAt[types.Timestamp](b.Vecs[createdTsIdx], i)
-			vector.SetFixedAt(e.moDatabaseCreatedTime, 0, ts)
-			vector.SetFixedAt(e.moTablesCreatedTime, 0, ts)
-			vector.SetFixedAt(e.moColumnsCreatedTime, 0, ts)
-			vector.SetFixedAt(e.moCatalogCreatedTime, 0, ts)
+			ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](b.Vecs[createdTsIdx], i)
+			vector.SetFixedAtWithTypeCheck(e.moDatabaseCreatedTime, 0, ts)
+			vector.SetFixedAtWithTypeCheck(e.moTablesCreatedTime, 0, ts)
+			vector.SetFixedAtWithTypeCheck(e.moColumnsCreatedTime, 0, ts)
+			vector.SetFixedAtWithTypeCheck(e.moCatalogCreatedTime, 0, ts)
 			e.timeFixed = true
 			return
 		}
@@ -245,6 +246,9 @@ func (e *Engine) init(ctx context.Context) error {
 		e.catalog.InsertColumns(bat)
 	}
 
+	// clear all tables in global stats.
+	e.globalStats.clearTables()
+
 	return nil
 }
 
@@ -327,7 +331,8 @@ func (e *Engine) getOrCreateSnapPart(
 				e,
 				nil,
 				state,
-				entry); err != nil {
+				entry,
+				false); err != nil {
 				return err
 			}
 		}
@@ -419,7 +424,7 @@ func (e *Engine) LazyLoadLatestCkp(
 				}
 			}()
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, cache, state, entry); err != nil {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, cache, state, entry, false); err != nil {
 					return err
 				}
 			}

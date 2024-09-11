@@ -19,19 +19,16 @@ import (
 	"container/heap"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-
-	"github.com/matrixorigin/matrixone/pkg/compare"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -54,6 +51,11 @@ func (top *Top) OpType() vm.OpType {
 }
 
 func (top *Top) Prepare(proc *process.Process) (err error) {
+	if top.OpAnalyzer == nil {
+		top.OpAnalyzer = process.NewAnalyzer(top.GetIdx(), top.IsFirst, top.IsLast, "top")
+	} else {
+		top.OpAnalyzer.Reset()
+	}
 
 	// limit executor
 	if top.ctr.limitExecutor == nil {
@@ -66,7 +68,7 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	top.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
+	top.ctr.limit = vector.MustFixedColWithTypeCheck[uint64](vec)[0]
 
 	if top.ctr.limit > 1024 {
 		top.ctr.sels = make([]int64, 0, 1024)
@@ -99,11 +101,9 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(top.GetIdx(), top.GetParallelIdx(), top.GetParallelMajor())
-	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
+	analyzer := top.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	if top.ctr.limit == 0 {
 		result := vm.NewCallResult()
@@ -113,12 +113,11 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if top.ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(top.GetChildren(0), proc, anal)
+			result, err := vm.ChildrenCall(top.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
 			bat := result.Batch
-			anal.Input(bat, top.IsFirst)
 
 			if bat == nil {
 				top.ctr.state = vm.Eval
@@ -127,7 +126,23 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			err = top.ctr.build(top, bat, proc, anal)
+
+			//because ctr.build will change input batch(append new Vector)
+			if top.ctr.buildBat == nil {
+				top.ctr.n = len(bat.Vecs)
+				top.ctr.buildBat = batch.NewWithSize(top.ctr.n)
+			} else {
+				top.ctr.buildBat.Vecs = top.ctr.buildBat.Vecs[:len(bat.Vecs)]
+			}
+			top.ctr.buildBat.Recursive = bat.Recursive
+			top.ctr.buildBat.Ro = bat.Ro
+			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
+			top.ctr.buildBat.Attrs = bat.Attrs
+			top.ctr.buildBat.Aggs = bat.Aggs
+			copy(top.ctr.buildBat.Vecs, bat.Vecs)
+			top.ctr.buildBat.SetRowCount(bat.RowCount())
+
+			err = top.ctr.build(top, top.ctr.buildBat, proc)
 			if err != nil {
 				return result, err
 			}
@@ -146,6 +161,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 		}
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
@@ -156,8 +172,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 	panic("bug")
 }
 
-func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, analyze process.Analyze) error {
-	ctr.n = len(bat.Vecs)
+func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process) error {
 	ctr.poses = ctr.poses[:0]
 	for i := range ap.Fs {
 		vec, err := ctr.executorsForOrderColumn[i].Eval(proc, []*batch.Batch{bat}, nil)
@@ -173,13 +188,8 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 			}
 		}
 		if aNewOrderColumn {
-			nv, err := vec.Dup(proc.Mp())
-			if err != nil {
-				return err
-			}
 			ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
-			bat.Vecs = append(bat.Vecs, nv)
-			analyze.Alloc(int64(nv.Size()))
+			bat.Vecs = append(bat.Vecs, vec)
 		}
 	}
 
@@ -330,55 +340,55 @@ func (top *Top) getTopValue() ([]byte, bool) {
 	}
 	switch vec.GetType().Oid {
 	case types.T_int8:
-		v := vector.GetFixedAt[int8](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int8](vec, x)
 		return types.EncodeInt8(&v), true
 	case types.T_int16:
-		v := vector.GetFixedAt[int16](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int16](vec, x)
 		return types.EncodeInt16(&v), true
 	case types.T_int32:
-		v := vector.GetFixedAt[int32](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int32](vec, x)
 		return types.EncodeInt32(&v), true
 	case types.T_int64:
-		v := vector.GetFixedAt[int64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int64](vec, x)
 		return types.EncodeInt64(&v), true
 	case types.T_uint8:
-		v := vector.GetFixedAt[uint8](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint8](vec, x)
 		return types.EncodeUint8(&v), true
 	case types.T_uint16:
-		v := vector.GetFixedAt[uint16](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint16](vec, x)
 		return types.EncodeUint16(&v), true
 	case types.T_uint32:
-		v := vector.GetFixedAt[uint32](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint32](vec, x)
 		return types.EncodeUint32(&v), true
 	case types.T_uint64:
-		v := vector.GetFixedAt[uint64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint64](vec, x)
 		return types.EncodeUint64(&v), true
 	case types.T_float32:
-		v := vector.GetFixedAt[float32](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[float32](vec, x)
 		return types.EncodeFloat32(&v), true
 	case types.T_float64:
-		v := vector.GetFixedAt[float64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[float64](vec, x)
 		return types.EncodeFloat64(&v), true
 	case types.T_date:
-		v := vector.GetFixedAt[types.Date](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Date](vec, x)
 		return types.EncodeDate(&v), true
 	case types.T_datetime:
-		v := vector.GetFixedAt[types.Datetime](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, x)
 		return types.EncodeDatetime(&v), true
 	case types.T_timestamp:
-		v := vector.GetFixedAt[types.Timestamp](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, x)
 		return types.EncodeTimestamp(&v), true
 	case types.T_time:
-		v := vector.GetFixedAt[types.Time](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Time](vec, x)
 		return types.EncodeTime(&v), true
 	case types.T_decimal64:
-		v := vector.GetFixedAt[types.Decimal64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, x)
 		return types.EncodeDecimal64(&v), true
 	case types.T_decimal128:
-		v := vector.GetFixedAt[types.Decimal128](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, x)
 		return types.EncodeDecimal128(&v), true
 	case types.T_enum:
-		v := vector.GetFixedAt[types.Enum](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, x)
 		return types.EncodeEnum(&v), true
 	}
 	return nil, false

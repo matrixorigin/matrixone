@@ -48,3 +48,5 @@ show create table snapshot_read.test_snapshot_read {snapshot = 'snapshot_01'};
 show create table snapshot_read.test_snapshot_read_view {snapshot = 'snapshot_01'};
 show databases like 'snapshot_read' {snapshot = 'snapshot_01'};
 drop snapshot snapshot_01;
+-- @ignore:1
+show snapshots;

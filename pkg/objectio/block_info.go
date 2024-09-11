@@ -55,19 +55,48 @@ const (
 )
 
 type BlockInfo struct {
-	BlockID types.Blockid
-	//It's used to indicate whether the block is appendable block or non-appendable blk for reader.
-	// for appendable block, the data visibility in the block is determined by the commit ts and abort ts.
-	Appendable bool
-	Sorted     bool
-	MetaLoc    ObjectLocation
+	BlockID     types.Blockid
+	MetaLoc     ObjectLocation
+	ObjectFlags int8
 
 	//TODO:: remove it.
 	PartitionNum int16
 }
 
+func (b *BlockInfo) SetFlagByObjStats(stats *ObjectStats) {
+	b.ObjectFlags = stats.GetFlag()
+}
+
+func (b *BlockInfo) IsAppendable() bool {
+	return b.ObjectFlags&ObjectFlag_Appendable != 0
+}
+
+func (b *BlockInfo) IsSorted() bool {
+	return b.ObjectFlags&ObjectFlag_Sorted != 0
+}
+
+func (b *BlockInfo) IsCNCreated() bool {
+	return b.ObjectFlags&ObjectFlag_CNCreated != 0
+}
+
 func (b *BlockInfo) String() string {
-	return fmt.Sprintf("[A-%v]blk-%s", b.Appendable, b.BlockID.ShortStringEx())
+	flag := ""
+	if b.IsAppendable() {
+		flag = flag + "A"
+	}
+	if b.IsSorted() {
+		flag = flag + "S"
+	}
+	if b.IsCNCreated() {
+		flag = flag + "C"
+	}
+
+	return fmt.Sprintf(
+		"[%s]ID-%s, MetaLoc: %s, PartitionNum: %d",
+		flag,
+		b.BlockID.ShortStringEx(),
+		b.MetaLocation().String(),
+		b.PartitionNum)
 }
 
 func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
@@ -77,20 +106,15 @@ func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 	}
 	space += uint32(types.BlockidSize)
 
-	if _, err := w.Write(types.EncodeBool(&b.Appendable)); err != nil {
-		return 0, err
-	}
-	space++
-
-	if _, err := w.Write(types.EncodeBool(&b.Sorted)); err != nil {
-		return 0, err
-	}
-	space++
-
 	if _, err := w.Write(types.EncodeSlice(b.MetaLoc[:])); err != nil {
 		return 0, err
 	}
 	space += uint32(LocationLen)
+
+	if _, err := w.Write(types.EncodeInt8(&b.ObjectFlags)); err != nil {
+		return 0, err
+	}
+	space++
 
 	if _, err := w.Write(types.EncodeInt16(&b.PartitionNum)); err != nil {
 		return 0, err
@@ -103,13 +127,12 @@ func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 func (b *BlockInfo) Unmarshal(buf []byte) error {
 	b.BlockID = types.DecodeFixed[types.Blockid](buf[:types.BlockidSize])
 	buf = buf[types.BlockidSize:]
-	b.Appendable = types.DecodeFixed[bool](buf)
-	buf = buf[1:]
-	b.Sorted = types.DecodeFixed[bool](buf)
-	buf = buf[1:]
 
 	copy(b.MetaLoc[:], buf[:LocationLen])
 	buf = buf[LocationLen:]
+
+	b.ObjectFlags = types.DecodeInt8(buf[:1])
+	buf = buf[1:]
 
 	b.PartitionNum = types.DecodeFixed[int16](buf[:2])
 	return nil

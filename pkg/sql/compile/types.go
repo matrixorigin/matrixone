@@ -23,7 +23,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -49,7 +48,6 @@ const (
 	Merge magicType = iota
 	Normal
 	Remote
-	Parallel
 	CreateDatabase
 	CreateTable
 	CreateView
@@ -60,6 +58,7 @@ const (
 	TruncateTable
 	AlterView
 	AlterTable
+	RenameTable
 	MergeInsert
 	MergeDelete
 	CreateSequence
@@ -67,6 +66,51 @@ const (
 	AlterSequence
 	Replace
 )
+
+func (m magicType) String() string {
+	switch m {
+	case Merge:
+		return "Merge"
+	case Normal:
+		return "Normal"
+	case Remote:
+		return "Remote"
+	case CreateDatabase:
+		return "CreateDatabase"
+	case CreateTable:
+		return "CreateTable"
+	case CreateView:
+		return "CreateView"
+	case CreateIndex:
+		return "CreateIndex"
+	case DropDatabase:
+		return "DropDatabase"
+	case DropTable:
+		return "DropTable"
+	case DropIndex:
+		return "DropIndex"
+	case TruncateTable:
+		return "TruncateTable"
+	case AlterView:
+		return "AlterView"
+	case AlterTable:
+		return "AlterTable"
+	case MergeInsert:
+		return "MergeInsert"
+	case MergeDelete:
+		return "MergeDelete"
+	case CreateSequence:
+		return "CreateSequence"
+	case DropSequence:
+		return "DropSequence"
+	case AlterSequence:
+		return "AlterSequence"
+	case Replace:
+		return "Replace"
+	default:
+		return "Unknown"
+	}
+}
 
 // Source contains information of a relation which will be used in execution.
 type Source struct {
@@ -80,7 +124,6 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Rel                    engine.Relation
-	Bat                    *batch.Batch
 	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
 	node                   *plan.Node
 	TableDef               *plan.TableDef
@@ -105,9 +148,6 @@ type Scope struct {
 	// 1 -  execution unit for processing intermediate results.
 	// 2 -  execution unit that requires remote call.
 	Magic magicType
-
-	// IsJoin means the pipeline is join
-	IsJoin bool
 
 	// IsEnd means the pipeline is end
 	IsEnd bool
@@ -197,48 +237,6 @@ type scopeContext struct {
 	regs     map[*process.WaitRegister]int32
 }
 
-// analyzeModule information
-type analyzeModule struct {
-	// curNodeIdx is the current Node index when compilePlanScope
-	curNodeIdx int
-	// isFirst is the first opeator in pipeline for plan Node
-	isFirst   bool
-	qry       *plan.Query
-	analInfos []*process.AnalyzeInfo
-}
-
-func (a *analyzeModule) S3IOInputCount(idx int, count int64) {
-	atomic.AddInt64(&a.analInfos[idx].S3IOInputCount, count)
-}
-
-func (a *analyzeModule) S3IOOutputCount(idx int, count int64) {
-	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
-}
-
-func (a *analyzeModule) Nodes() []*process.AnalyzeInfo {
-	return a.analInfos
-}
-
-func (a analyzeModule) TypeName() string {
-	return "compile.analyzeModule"
-}
-
-func newAnalyzeModule() *analyzeModule {
-	return reuse.Alloc[analyzeModule](nil)
-}
-
-func (a *analyzeModule) release() {
-	// there are 3 situations to release analyzeInfo
-	// 1 is free analyzeInfo of Local CN when release analyze
-	// 2 is free analyzeInfo of remote CN before transfer back
-	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-	// this is situation 1
-	for i := range a.analInfos {
-		reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
-	}
-	reuse.Free[analyzeModule](a, nil)
-}
-
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scopes []*Scope
@@ -267,7 +265,7 @@ type Compile struct {
 	// queryStatus is a structure to record query has done.
 	queryStatus queryDoneWaiter
 
-	anal *analyzeModule
+	anal *AnalyzeModule
 	// e db engine instance.
 	e engine.Engine
 

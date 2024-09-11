@@ -20,9 +20,9 @@ import (
 )
 
 func TestGetStacktrace(t *testing.T) {
-	ids := make([]StacktraceID, 0, 1024)
+	ids := make([]Stacktrace, 0, 1024)
 	for range 1024 {
-		ids = append(ids, GetStacktraceID(0))
+		ids = append(ids, GetStacktrace(0))
 	}
 	for _, id := range ids {
 		msg := id.String()
@@ -32,8 +32,23 @@ func TestGetStacktrace(t *testing.T) {
 	}
 }
 
-func BenchmarkGetStacktraceID(b *testing.B) {
+func BenchmarkGetStacktrace(b *testing.B) {
 	for range b.N {
-		GetStacktraceID(0)
+		GetStacktrace(0)
 	}
+}
+
+func FuzzGetStacktrace(f *testing.F) {
+	var exec func(i uint)
+	exec = func(i uint) {
+		if i > 0 {
+			exec(i - 1)
+			return
+		}
+		trace := GetStacktrace(0)
+		_ = trace.String()
+	}
+	f.Fuzz(func(t *testing.T, i uint) {
+		exec(i % 65536)
+	})
 }

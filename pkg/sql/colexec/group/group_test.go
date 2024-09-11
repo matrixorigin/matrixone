@@ -19,11 +19,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -89,7 +89,7 @@ func TestGroupOperatorBehavior1(t *testing.T) {
 				if outputBatch != nil {
 					require.Equal(t, 1, len(outputBatch.Vecs))
 					require.Equal(t, 0, len(outputBatch.Aggs))
-					require.Equal(t, int64(55), vector.MustFixedCol[int64](outputBatch.Vecs[0])[0])
+					require.Equal(t, int64(55), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])[0])
 				} else {
 					require.Fail(t, "output batch should not be nil.")
 				}
@@ -156,7 +156,7 @@ func TestGroupOperatorBehavior1(t *testing.T) {
 					// just do a flush to check the result.
 					aggResult, err := outputBatch.Aggs[0].Flush()
 					require.NoError(t, err)
-					require.Equal(t, int64(15), vector.MustFixedCol[int64](aggResult)[0])
+					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](aggResult)[0])
 					aggResult.Free(proc.Mp())
 				} else {
 					require.Fail(t, "output batch should not be nil.")
@@ -232,8 +232,8 @@ func TestGroupOperatorBehavior2(t *testing.T) {
 					require.Equal(t, 2, len(outputBatch.Vecs))
 					require.Equal(t, 0, len(outputBatch.Aggs))
 
-					vs0 := vector.MustFixedCol[int64](outputBatch.Vecs[0])
-					vs1 := vector.MustFixedCol[int64](outputBatch.Vecs[1])
+					vs0 := vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])
+					vs1 := vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[1])
 					require.Equal(t, int64(1), vs0[0])
 					require.Equal(t, int64(1+2), vs1[0])
 					require.Equal(t, int64(2), vs0[1])
@@ -305,11 +305,11 @@ func TestGroupOperatorBehavior2(t *testing.T) {
 					require.Equal(t, 1, len(outputBatch.Vecs))
 					require.Equal(t, 1, len(outputBatch.Aggs))
 
-					vs0 := vector.MustFixedCol[int64](outputBatch.Vecs[0])
+					vs0 := vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])
 					// do a flush to check the result.
 					aggResult, err := outputBatch.Aggs[0].Flush()
 					require.NoError(t, err)
-					vs1 := vector.MustFixedCol[int64](aggResult)
+					vs1 := vector.MustFixedColWithTypeCheck[int64](aggResult)
 					require.Equal(t, int64(1), vs0[0])
 					require.Equal(t, int64(1), vs1[0])
 					require.Equal(t, int64(2), vs0[1])
@@ -345,18 +345,8 @@ func newColumnExpression(pos int32, typ types.Type) *plan.Expr {
 }
 
 func resetChildren(arg *Group, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	_ = valueScanArg.Prepare(nil)
-	if arg.NumChildren() == 0 {
-		arg.AppendChild(valueScanArg)
-
-	} else {
-		arg.SetChildren(
-			[]vm.Operator{
-				valueScanArg,
-			})
-	}
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 	arg.ctr.state = vm.Build
 }

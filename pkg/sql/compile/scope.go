@@ -20,9 +20,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
@@ -112,54 +110,29 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		return err
 	}
 
-	if s.DataSource != nil {
-		if s.DataSource.isConst {
-			s.DataSource.Bat = nil
-		} else {
-			s.DataSource.Rel = nil
-			s.DataSource.R = nil
-		}
+	if s.DataSource != nil && !s.DataSource.isConst {
+		s.DataSource.Rel = nil
+		s.DataSource.R = nil
 	}
 	return nil
 }
 
 func (s *Scope) initDataSource(c *Compile) (err error) {
-	if s.DataSource == nil {
+	if s.DataSource == nil || s.DataSource.isConst {
 		return nil
 	}
-	if s.DataSource.isConst {
-		if s.DataSource.Bat != nil {
-			return
-		}
 
-		if err := vm.HandleLeafOp(nil, s.RootOp, func(leafOpParent vm.Operator, leafOp vm.Operator) error {
-			if leafOp.OpType() == vm.ValueScan {
-				if s.DataSource.node.NodeType == plan.Node_VALUE_SCAN {
-					bat, err := constructValueScanBatch(c.proc, s.DataSource.node)
-					if err != nil {
-						return err
-					}
-					s.DataSource.Bat = bat
-				}
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-
-	} else {
-		if s.DataSource.Rel != nil {
-			return nil
-		}
-		return c.compileTableScanDataSource(s)
+	if s.DataSource.Rel != nil {
+		return nil
 	}
-	return nil
+	return c.compileTableScanDataSource(s)
 }
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
 	var p *pipeline.Pipeline
 	defer func() {
+
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 			c.proc.Error(c.proc.Ctx, "panic in scope run",
@@ -171,6 +144,11 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 	}()
 
+	if s.RootOp == nil {
+		// it's a fake scope
+		return nil
+	}
+
 	if s.DataSource == nil {
 		p = pipeline.NewMerge(s.RootOp)
 		_, err = p.MergeRun(s.Proc)
@@ -181,7 +159,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
-			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+			_, err = p.ConstRun(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
 				s.NodeInfo.Data = engine.BuildEmptyRelData()
@@ -251,7 +229,6 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
 	var wg sync.WaitGroup
-
 	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		wg.Add(1)
@@ -268,8 +245,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 				preScopeResultReceiveChan <- scope.MergeRun(c)
 			case Remote:
 				preScopeResultReceiveChan <- scope.RemoteRun(c)
-			case Parallel:
-				preScopeResultReceiveChan <- scope.ParallelRun(c)
 			default:
 				preScopeResultReceiveChan <- moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
 			}
@@ -304,28 +279,18 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	// if rootOp is nil, it's a fake empty scope, just do nothing
-	if s.RootOp != nil {
-		if s.Magic != Normal && s.DataSource != nil {
-			magic := s.Magic
-			s.Magic = Normal
-			err := s.ParallelRun(c)
-			s.Magic = magic
-			if err != nil {
-				return err
-			}
-		} else {
-			if err := s.Run(c); err != nil {
-				return err
-			}
-		}
+	preScopeCount := len(s.PreScopes)
+	remoteScopeCount := len(s.RemoteReceivRegInfos)
+	//after parallelRun, prescope count may change. we need to save this before parallelRun
+
+	err := s.ParallelRun(c)
+	if err != nil {
+		return err
 	}
 
 	// receive and check error from pre-scopes and remote scopes.
-	preScopeCount := len(s.PreScopes)
-	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	if remoteScopeCount == 0 {
-		for i := 0; i < len(s.PreScopes); i++ {
+		for i := 0; i < preScopeCount; i++ {
 			if err := <-preScopeResultReceiveChan; err != nil {
 				return err
 			}
@@ -360,7 +325,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
 	if !s.canRemote(c, true) {
-		return s.ParallelRun(c)
+		return s.MergeRun(c)
 	}
 
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
@@ -394,6 +359,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 func (s *Scope) ParallelRun(c *Compile) (err error) {
 	var parallelScope *Scope
 
+	// Warning: It is possible that an error occurs before the pipeline has executed prepare, triggering
+	// defer `pipeline.Cleanup()`, and execute `reset()` and `free()`. If the operator analyzer is not
+	// instantiated and there is a statistical operation in reset, a null pointer will occur
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
@@ -411,9 +379,9 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 
 	switch {
 	// probability 1: it's a JOIN pipeline.
-	case s.IsJoin:
-		parallelScope, err = buildJoinParallelRun(s, c)
-		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
+	//case s.IsJoin:
+	//parallelScope, err = buildJoinParallelRun(s, c)
+	//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// probability 2: it's a LOAD pipeline.
 	case s.IsLoad:
@@ -433,47 +401,19 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		return err
 	}
 
-	if parallelScope != s {
-		setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
-	}
-
-	if parallelScope.Magic == Normal {
+	if parallelScope == s {
 		return parallelScope.Run(c)
 	}
-	parallelScope.Magic = Normal
+
+	setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
 	err = parallelScope.MergeRun(c)
-	if parallelScope != s {
-		parallelScope.release()
-	}
 	return err
-}
-
-// buildJoinParallelRun deal one case of scope.ParallelRun.
-// this function will create a pipeline to run a join in parallel.
-func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	mcpu := s.NodeInfo.Mcpu
-	if mcpu <= 1 { // broadcast join with no parallel
-		return s, nil
-	}
-
-	chp := s.PreScopes
-	for i := range chp {
-		chp[i].IsEnd = true
-	}
-
-	ms, ss := newParallelScope(s, c)
-	probeScope := c.newBroadcastJoinProbeScope(s, ss)
-
-	ms.PreScopes = append(ms.PreScopes, chp...)
-	ms.PreScopes = append(ms.PreScopes, probeScope)
-
-	return ms, nil
 }
 
 // buildLoadParallelRun deal one case of scope.ParallelRun.
 // this function will create a pipeline to load in parallel.
 func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	ms, ss := newParallelScope(s, c)
+	ms, ss := newParallelScope(s)
 	for i := range ss {
 		ss[i].DataSource = &Source{
 			isConst: true,
@@ -511,7 +451,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
 	}
 
-	ms, ss := newParallelScope(s, c)
+	ms, ss := newParallelScope(s)
 	for i := range ss {
 		ss[i].DataSource = &Source{
 			R:            readers[i],
@@ -561,42 +501,46 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				exprs = append(exprs, spec.Expr)
 				filters = append(filters, msg)
 			}
-			msgReceiver.Free()
 		}
 	}
 
+	var appendNotPkFilter []*plan.Expr
 	for i := range inExprList {
 		fn := inExprList[i].GetF()
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
+		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
+		if !isFilterOnPK {
+			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(inExprList[i]))
+		}
+	}
 
-		newExpr := plan2.DeepCopyExpr(inExprList[i])
-		//put expr in reader
-		newExprList := []*plan.Expr{newExpr}
+	// reset filter
+	if len(appendNotPkFilter) > 0 {
+		// put expr in filter instruction
+		op := vm.GetLeafOp(s.RootOp)
+		if _, ok := op.(*table_scan.TableScan); ok {
+			op = vm.GetLeafOpParent(nil, s.RootOp)
+		}
+		arg, ok := op.(*filter.Filter)
+		if !ok {
+			panic("missing instruction for runtime filter!")
+		}
+		if arg.E != nil {
+			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(arg.E))
+		}
+		arg.SetExeExpr(colexec.RewriteFilterExprList(appendNotPkFilter))
+	}
+
+	// reset datasource
+	if len(inExprList) > 0 {
+		newExprList := plan2.DeepCopyExprList(inExprList)
 		if s.DataSource.FilterExpr != nil {
 			newExprList = append(newExprList, s.DataSource.FilterExpr)
 		}
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
-
-		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
-		if !isFilterOnPK {
-			// put expr in filter instruction
-			op := vm.GetLeafOp(s.RootOp)
-			if _, ok := op.(*table_scan.TableScan); ok {
-				op = vm.GetLeafOpParent(nil, s.RootOp)
-			}
-			arg, ok := op.(*filter.Filter)
-			if !ok {
-				panic("missing instruction for runtime filter!")
-			}
-			newExprList := []*plan.Expr{newExpr}
-			if arg.E != nil {
-				newExprList = append(newExprList, plan2.DeepCopyExpr(arg.E))
-			}
-			arg.SetExeExpr(colexec.RewriteFilterExprList(newExprList))
-		}
 	}
 
 	if s.NodeInfo.NeedExpandRanges {
@@ -607,7 +551,12 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 
 		newExprList := plan2.DeepCopyExprList(inExprList)
 		if len(s.DataSource.node.BlockFilterList) > 0 {
-			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
+			tmp := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(s.DataSource.node.BlockFilterList))
+			tmp, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, tmp, s.Proc, true, true)
+			if err != nil {
+				return err
+			}
+			newExprList = append(newExprList, tmp)
 		}
 
 		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)
@@ -635,77 +584,38 @@ func (s *Scope) isTableScan() bool {
 	return isTableScan
 }
 
-func newParallelScope1(s *Scope, c *Compile) (*Scope, []*Scope) {
-	lenChannels := 0
-	if s.IsJoin {
-		lenChannels = 1
-	}
-
-	dispatchOp := s.RootOp
-	s.RootOp = dispatchOp.GetOperatorBase().GetChildren(0)
-	dispatchOp.GetOperatorBase().ResetChildren()
-	rs := newScope(Merge)
-	rs.NodeInfo = engine.Node{Addr: s.NodeInfo.Addr, Mcpu: 1}
-	rs.Proc = s.Proc.NewNoContextChildProc(1)
-	rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, s.NodeInfo.Mcpu)
-	rs.Proc.Reg.MergeReceivers[0].NilBatchCnt = s.NodeInfo.Mcpu
-
-	mergeOp := merge.NewArgument()
-	rs.setRootOperator(mergeOp)
-
-	rs.setRootOperator(dispatchOp)
-
-	parallelScopes := make([]*Scope, s.NodeInfo.Mcpu)
-	for i := 0; i < s.NodeInfo.Mcpu; i++ {
-		parallelScopes[i] = newScope(Normal)
-		parallelScopes[i].NodeInfo = s.NodeInfo
-		parallelScopes[i].NodeInfo.Mcpu = 1
-		parallelScopes[i].Proc = s.Proc.NewContextChildProc(lenChannels)
-		parallelScopes[i].TxnOffset = s.TxnOffset
-		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, s.NodeInfo.Mcpu))
-
-		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[0])
-		parallelScopes[i].setRootOperator(connArg)
-	}
-
-	rs.PreScopes = parallelScopes
-	s.PreScopes = nil
-	return rs, parallelScopes
-}
-
-func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
+func newParallelScope(s *Scope) (*Scope, []*Scope) {
 	if s.NodeInfo.Mcpu == 1 {
 		return s, nil
 	}
 
-	if op, ok := s.RootOp.(*dispatch.Dispatch); ok {
-		if len(op.RemoteRegs) > 0 {
-			// dispatch to remote CN is too complicated
-			// after spool implemented, delete this
-			return newParallelScope1(s, c)
-		}
+	if _, ok := s.RootOp.(*dispatch.Dispatch); ok {
+		panic("dispatch operator should never dup!")
 	}
 
-	lenChannels := 0
-	if s.IsJoin {
-		lenChannels = 1
-	}
+	// fake scope is used to merge parallel scopes, and do nothing itself
+	rs := newScope(Normal)
+	rs.Proc = s.Proc.NewContextChildProc(0)
 
 	parallelScopes := make([]*Scope, s.NodeInfo.Mcpu)
 	for i := 0; i < s.NodeInfo.Mcpu; i++ {
 		parallelScopes[i] = newScope(Normal)
 		parallelScopes[i].NodeInfo = s.NodeInfo
 		parallelScopes[i].NodeInfo.Mcpu = 1
-		parallelScopes[i].Proc = s.Proc.NewContextChildProc(lenChannels)
+		parallelScopes[i].Proc = rs.Proc.NewContextChildProc(0)
 		parallelScopes[i].TxnOffset = s.TxnOffset
 		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, s.NodeInfo.Mcpu))
 	}
 
-	// fake scope is used to merge parallel scopes, and do nothing itself
-	rs := newScope(Merge)
-	rs.Proc = s.Proc
 	rs.PreScopes = parallelScopes
-	s.PreScopes = nil
+	s.PreScopes = append(s.PreScopes, rs)
+
+	// after parallelScope
+	// s(fake)
+	//   |_ rs(fake)
+	//   |     |_ parallelScpes
+	//   |
+	//   |_ prescopes
 	return rs, parallelScopes
 }
 

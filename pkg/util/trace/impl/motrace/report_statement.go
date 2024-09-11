@@ -100,7 +100,7 @@ func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 		windowSize, _ := ctx.Value(DurationKey).(time.Duration)
 		e.StatementTag = ""
 		e.StatementFingerprint = ""
-		e.Error = nil
+		//e.Error = nil /* keep the Error msg */
 		e.Database = ""
 		duration := e.Duration
 		e.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(e.statsArray.GetMemorySize() * float64(duration)))
@@ -247,6 +247,7 @@ type Key struct {
 	Window        time.Time
 	Status        StatementInfoStatus
 	SqlSourceType string
+	Error         string
 }
 
 func (k Key) Before(end time.Time) bool {
@@ -271,8 +272,22 @@ type Statistic struct {
 	BytesScan int64
 }
 
+func getErrorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func (s *StatementInfo) Key(duration time.Duration) table.WindowKey {
-	return Key{SessionID: s.SessionID, StatementType: s.StatementType, Window: s.ResponseAt.Truncate(duration), Status: s.Status, SqlSourceType: s.SqlSourceType}
+	return Key{
+		SessionID:     s.SessionID,
+		StatementType: s.StatementType,
+		Window:        s.ResponseAt.Truncate(duration),
+		Status:        s.Status,
+		SqlSourceType: s.SqlSourceType,
+		Error:         getErrorString(s.Error),
+	}
 }
 
 func (s *StatementInfo) GetName() string {
