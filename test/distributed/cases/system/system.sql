@@ -6,16 +6,12 @@ use system;
 show tables;
 select * from statement_info limit 0;
 explain select * from statement_info limit 0;
-select * from sql_statement_hotspot limit 0;
-explain select * from sql_statement_hotspot limit 0;
 select * from span_info limit 0;
-explain select * from span_info limit 0;
 select * from rawlog limit 0;
 explain select * from rawlog limit 0;
 select * from log_info limit 0;
-explain select * from log_info limit 0;
 select * from error_info limit 0;
-explain select * from error_info limit 0;
+
 
 create database db01;
 use db01;

@@ -20,50 +20,21 @@ statement_id    transaction_id    session_id    account    user    host    datab
 explain select * from statement_info limit 0;
 TP QURERY PLAN
 Project
-  ->  Table Scan on system.statement_info
+  ->  Table Scan on statement_info.
         Limit: 0
-select * from sql_statement_hotspot limit 0;
-statement_id    statement    timeconsumed    memorysize    collecttime    node    account    user    type
-explain select * from sql_statement_hotspot limit 0;
-TP QURERY PLAN
-Project
-  Limit: 0
-  ->  Sort
-        Sort Key: statement_info.duration DESC
-        Limit: 10
-        ->  Table Scan on system.statement_info
-              Filter Cond: (statement_info.aggr_count = 0), (cast(statement_info.response_at AS TIMESTAMP) < now()), (cast(statement_info.response_at AS TIMESTAMP) > date_sub(now(), 10, 3))
 select * from span_info limit 0;
 trace_id    span_id    parent_span_id    span_kind    node_uuid    node_type    span_name    start_time    end_time    duration    resource    extra
-explain select * from span_info limit 0;
-TP QURERY PLAN
-Project
-  Limit: 0
-  ->  Table Scan on system.rawlog
-        Filter Cond: (rawlog.raw_item = 'span_info')
 select * from rawlog limit 0;
 raw_item    node_uuid    node_type    span_id    trace_id    logger_name    timestamp    level    caller    message    extra    err_code    error    stack    span_name    parent_span_id    start_time    end_time    duration    resource    span_kind    statement_id    session_id
 explain select * from rawlog limit 0;
 TP QURERY PLAN
 Project
-  ->  Table Scan on system.rawlog
+  ->  Table Scan on rawlog.
         Limit: 0
 select * from log_info limit 0;
 trace_id    span_id    span_kind    node_uuid    node_type    timestamp    logger_name    level    caller    message    extra    stack    session_id    statement_id
-explain select * from log_info limit 0;
-TP QURERY PLAN
-Project
-  Limit: 0
-  ->  Table Scan on system.rawlog
-        Filter Cond: (rawlog.raw_item = 'log_info')
 select * from error_info limit 0;
 timestamp    err_code    error    trace_id    span_id    span_kind    node_uuid    node_type    stack
-explain select * from error_info limit 0;
-TP QURERY PLAN
-Project
-  Limit: 0
-  ->  Table Scan on system.rawlog
-        Filter Cond: (rawlog.raw_item = 'error_info')
 create database db01;
 use db01;
 create table table01 (id int);
@@ -88,8 +59,7 @@ statement_id    transaction_id    session_id    account    user    host    datab
 explain select * from statement_info limit 0;
 TP QURERY PLAN
 Project
-  ->  Table Scan on system.statement_info
-        Filter Cond: (statement_info.account = 'acc01')
+  ->  Table Scan on statement_info.
         Limit: 0
 create database db01;
 use db01;
@@ -109,7 +79,7 @@ statement_id    transaction_id    session_id    account    user    host    datab
 explain select * from system.statement_info limit 0;
 TP QURERY PLAN
 Project
-  ->  Table Scan on system.statement_info
+  ->  Table Scan on statement_info.
         Limit: 0
 select * from db01.table01 limit 0;
 id

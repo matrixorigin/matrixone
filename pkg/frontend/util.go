@@ -1548,7 +1548,8 @@ func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, t
 		}
 	}
 	return &plan.TableDef{
-		Name: table,
-		Cols: cols,
+		Name:   table,
+		Cols:   cols,
+		DbName: dbName,
 	}, nil
 }
