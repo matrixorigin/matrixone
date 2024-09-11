@@ -37,6 +37,9 @@ type Config struct {
 
 	// EnableMetrics indicates whether to expose metrics to prometheus
 	EnableMetrics *bool `toml:"enable-metrics"`
+
+	HashmapSoftLimit *uint64 `toml:"hashmap-soft-limit"`
+	HashmapHardLimit *uint64 `toml:"hashmap-hard-limit"`
 }
 
 var defaultConfig = func() *atomic.Pointer[Config] {
@@ -46,7 +49,9 @@ var defaultConfig = func() *atomic.Pointer[Config] {
 	ret.Store(&Config{
 		CheckFraction:     ptrTo(uint32(4096)),
 		EnableMetrics:     ptrTo(true),
-		FullStackFraction: ptrTo(uint32(100)),
+		FullStackFraction: ptrTo(uint32(10)),
+		HashmapSoftLimit:  ptrTo(uint64(48 * (1 << 30))),
+		HashmapHardLimit:  ptrTo(uint64(64 * (1 << 30))),
 	})
 
 	return ret
@@ -55,15 +60,27 @@ var defaultConfig = func() *atomic.Pointer[Config] {
 func patchConfig(config Config, delta Config) Config {
 	if delta.CheckFraction != nil {
 		config.CheckFraction = delta.CheckFraction
+		logutil.Info("malloc set config", zap.Any("CheckFraction", *delta.CheckFraction))
 	}
 	if delta.EnableMetrics != nil {
 		config.EnableMetrics = delta.EnableMetrics
+		logutil.Info("malloc set config", zap.Any("EnableMetrics", *delta.EnableMetrics))
 	}
 	if delta.FullStackFraction != nil {
 		config.FullStackFraction = delta.FullStackFraction
+		logutil.Info("malloc set config", zap.Any("FullStackFraction", *delta.FullStackFraction))
 	}
 	if delta.Allocator != nil {
 		config.Allocator = delta.Allocator
+		logutil.Info("malloc set config", zap.Any("Allocator", *delta.Allocator))
+	}
+	if delta.HashmapSoftLimit != nil {
+		config.HashmapSoftLimit = delta.HashmapSoftLimit
+		logutil.Info("malloc set config", zap.Any("HashmapSoftLimit", *delta.HashmapSoftLimit))
+	}
+	if delta.HashmapHardLimit != nil {
+		config.HashmapHardLimit = delta.HashmapHardLimit
+		logutil.Info("malloc set config", zap.Any("HashmapHardLimit", *delta.HashmapHardLimit))
 	}
 	return config
 }
@@ -73,4 +90,16 @@ func SetDefaultConfig(delta Config) {
 	config = patchConfig(config, delta)
 	defaultConfig.Store(&config)
 	logutil.Info("malloc: set default config", zap.Any("config", delta))
+}
+
+func GetDefaultConfig() Config {
+	return *defaultConfig.Load()
+}
+
+func WithTempDefaultConfig(config Config, fn func()) {
+	old := defaultConfig.Swap(&config)
+	defer func() {
+		defaultConfig.Store(old)
+	}()
+	fn()
 }
