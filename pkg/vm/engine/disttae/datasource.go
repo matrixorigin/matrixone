@@ -18,11 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
-	"slices"
-	"sort"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"slices"
+	"sort"
 )
 
 const (
@@ -1150,18 +1147,10 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 	defer iter.Close()
 
 	var (
-		meta     objectio.ObjectMeta
-		dataMeta objectio.ObjectDataMeta
-
-		//exist    bool
-		//bf       objectio.BloomFilter
-		//bfIndex  index.StaticFilter
 		location objectio.Location
 
 		loaded  *batch.Batch
 		release func()
-
-		//encodedMinTS = types.EncodeFixed(minTS)
 	)
 
 	anyIf := func(check func(row objectio.Rowid) bool) bool {
@@ -1176,51 +1165,23 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 	for iter.Next() && len(rowIds) > len(deleted) {
 		obj := iter.Entry()
 
+		if !obj.GetAppendable() {
+			if obj.CreateTime.Less(&minTS) {
+				continue
+			}
+		}
+
 		if !obj.ZMIsEmpty() {
 			objZM := obj.SortKeyZoneMap()
 
 			if !anyIf(func(row objectio.Rowid) bool {
-				return objZM.RowidPrefixEq(row.BorrowBlockID()[:])
+				return objZM.Contains(row)
 			}) {
 				continue
 			}
 		}
 
-		objLoc := obj.Location()
-		if meta, err = objectio.FastLoadObjectMeta(ls.ctx, &objLoc, false, ls.fs); err != nil {
-			return nil, err
-		}
-		dataMeta = meta.MustDataMeta()
-		dataMeta.Length()
-
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
-			shouldSkip := false
-			var maxv, minv types.TS
-			var tsZM index.ZM
-			if !obj.GetCNCreated() {
-				tsZM = dataMeta.GetColumnMeta(uint32(idx), uint16(2)).ZoneMap()
-				ub := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
-				if minTS.Greater(&ub) {
-					maxv = types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
-					minv = types.DecodeFixed[types.TS](tsZM.GetMinBuf())
-					//fmt.Println("zm filtered",
-					//	maxv.ToString(),
-					//	minv.ToString(),
-					//	minTS.ToString())
-					//
-					if maxv.Less(&minv) {
-						logutil.Fatal("???",
-							zap.String("max", maxv.ToString()),
-							zap.String("min", minv.ToString()),
-							zap.String("obj", obj.ObjectName().String()),
-							zap.Int("blk", idx),
-							zap.String("zonemap", tsZM.String()))
-					}
-					shouldSkip = true
-					//continue
-				}
-			}
-
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
 			if loaded, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
@@ -1239,19 +1200,6 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				s, e := blockio.FindIntervalForBlock(deletedRowIds, rowIds[i].BorrowBlockID())
 				for j := s; j < e; j++ {
 					if rowIds[i].EQ(&deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
-						if shouldSkip {
-							loaded.Vecs[1].InplaceSort()
-
-							logutil.Fatal("this blk should skip by ts",
-								zap.String("obj", obj.String()),
-								zap.String("min", minv.ToString()),
-								zap.String("max", maxv.ToString()),
-								zap.String("ts", minTS.ToString()),
-								zap.String("zm", tsZM.DebugString()),
-								zap.String("commits",
-									fmt.Sprintf(
-										common.MoVectorToString(loaded.Vecs[1], loaded.Vecs[1].Length()))))
-						}
 						deleted = append(deleted, int64(i))
 						break
 					}
@@ -1259,9 +1207,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 			}
 
 			release()
-
 		}
-
 	}
 
 	return deleted, nil
