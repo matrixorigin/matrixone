@@ -321,8 +321,10 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 			if err != nil {
 				return err
 			}
-			stats := writer.GetObjectStats()
-			tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, stats)
+			writerStats := writer.GetObjectStats()
+			stats := objectio.NewObjectStatsWithObjectID(name.ObjectId(), false, true, true)
+			objectio.SetObjectStats(stats, &writerStats)
+			tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, *stats)
 		}
 		v2.TxnS3TombstoneTransferFindTombstonesHistogram.Observe(findTombstoneDuration.Seconds())
 		v2.TxnS3TombstoneTransferReadTombstoneHistogram.Observe(readTombstoneDuration.Seconds())

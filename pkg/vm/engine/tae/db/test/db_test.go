@@ -9417,3 +9417,32 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 	assert.Equal(t, 1, deletes.Count())
 	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
 }
+
+func TestTransferS3Deletes(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	rows := 10
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	// apply deleteloc fails on ablk
+	txn, _ := tae.StartTxn(nil)
+	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, txn)
+	{
+		tae.CompactBlocks(true)
+	}
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	assert.NoError(t, txn.Commit(ctx))
+	tae.CheckRowsByScan(9, true)
+	t.Log(tae.Catalog.SimplePPString(3))
+}
