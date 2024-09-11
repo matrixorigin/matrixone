@@ -64,7 +64,7 @@ func TestManagedAllocator(t *testing.T) {
 
 func BenchmarkManagedAllocator(b *testing.B) {
 
-	newAllocator := func() *ManagedAllocator {
+	newAllocator := func() *ManagedAllocator[Allocator] {
 		return NewManagedAllocator(
 			newUpstreamAllocatorForTest(),
 		)
