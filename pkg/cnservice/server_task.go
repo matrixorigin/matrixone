@@ -22,7 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -297,71 +297,64 @@ func (s *service) registerExecutorsLocked() {
 		},
 	)
 	s.task.runner.RegisterExecutor(task.TaskCode_Retention, func(ctx context.Context, task task.Task) error {
-		iExec := ieFactory()
-		accounts := querySql(ctx, 0, iExec, "select account_id from mo_catalog.mo_account;")
-		if accounts.Error() != nil {
-			return accounts.Error()
+		ctx1, cancel1 := context.WithTimeout(ctx, 10*time.Second)
+		result, err := s.sqlExecutor.Exec(ctx1, "select account_id from mo_catalog.mo_account;",
+			executor.Options{}.WithWaitCommittedLogApplied())
+		cancel1()
+		if err != nil {
+			return err
 		}
+		accounts := make([]int32, 0)
+		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			if len(cols) != 1 {
+				return false
+			}
+			for i := range cols[0].Length() {
+				accounts = append(accounts, vector.GetFixedAtNoTypeCheck[int32](cols[0], i))
+			}
+			return true
+		})
 
-		for i := range accounts.RowCount() {
-			v, err := accounts.Value(ctx, i, 0)
+		for _, accountID := range accounts {
+			ctx2, cancel2 := context.WithTimeout(ctx, 15*time.Second)
+			err = s.sqlExecutor.ExecTxn(ctx2, func(txn executor.TxnExecutor) error {
+				results, err := txn.Exec("select database_name, table_name, retention_deadline from mo_catalog.mo_retention", executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+
+				results.ReadRows(func(rows int, cols []*vector.Vector) bool {
+					if len(cols) != 3 {
+						return false
+					}
+
+					for i := range cols[0].Length() {
+						ddl := vector.GetFixedAtNoTypeCheck[uint64](cols[2], i)
+						if time.Unix(int64(ddl), 0).After(time.Now()) {
+							continue
+						}
+						dbName := cols[0].GetStringAt(i)
+						tableName := cols[1].GetStringAt(i)
+						_, err = txn.Exec(fmt.Sprintf(
+							"delete from mo_catalog.mo_retention where database_name='%s' and table_name='%s'",
+							dbName, tableName), executor.StatementOption{})
+						if err != nil {
+							return false
+						}
+						_, err = txn.Exec(fmt.Sprintf("drop table %s.%s", dbName, tableName), executor.StatementOption{})
+						if err != nil {
+							return false
+						}
+					}
+					return true
+				})
+				return nil
+			}, executor.Options{}.WithAccountID(uint32(accountID)).WithDisableTrace())
+			cancel2()
 			if err != nil {
 				return err
-			}
-			accountID := v.(int32)
-			result := querySql(ctx, uint32(accountID), iExec,
-				"select database_name, table_name, retention_deadline from mo_catalog.mo_retention")
-			if result.Error() != nil || result.RowCount() == 0 {
-				continue
-			}
-			if result.ColumnCount() != 3 {
-				return moerr.NewInternalError(ctx, "invalid column count for mo_retention")
-			}
-
-			for j := range result.RowCount() {
-				v, err = result.Value(ctx, j, 2)
-				if err != nil {
-					return err
-				}
-				rDDL := v.(uint64)
-				if time.Unix(int64(rDDL), 0).After(time.Now()) {
-					continue
-				}
-				dbName, err := result.GetString(ctx, j, 0)
-				if err != nil {
-					return err
-				}
-				tableName, err := result.GetString(ctx, j, 1)
-				if err != nil {
-					return err
-				}
-
-				err = execSql(ctx, uint32(accountID), iExec,
-					fmt.Sprintf(
-						"delete from mo_catalog.mo_retention where database_name='%s' and table_name='%s'",
-						dbName, tableName))
-				if err != nil {
-					return err
-				}
-
-				err = execSql(ctx, uint32(accountID), iExec, fmt.Sprintf("drop table %s.%s", dbName, tableName))
-				if err != nil {
-					return err
-				}
 			}
 		}
 		return nil
 	})
-}
-
-func execSql(ctx context.Context, accountID uint32, iExec ie.InternalExecutor, sql string) error {
-	ctx, cancel := context.WithTimeout(defines.AttachAccount(ctx, accountID, 0, 0), 10*time.Second)
-	defer cancel()
-	return iExec.Exec(ctx, sql, ie.NewOptsBuilder().Internal(true).Finish())
-}
-
-func querySql(ctx context.Context, accountID uint32, iExec ie.InternalExecutor, sql string) ie.InternalExecResult {
-	ctx, cancel := context.WithTimeout(defines.AttachAccount(ctx, accountID, 0, 0), 10*time.Second)
-	defer cancel()
-	return iExec.Query(ctx, sql, ie.NewOptsBuilder().Internal(true).Finish())
 }
