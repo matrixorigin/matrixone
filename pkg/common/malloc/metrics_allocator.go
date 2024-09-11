@@ -18,8 +18,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-type MetricsAllocator struct {
-	upstream        Allocator
+type MetricsAllocator[U Allocator] struct {
+	upstream        U
 	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs, *metricsDeallocatorArgs]
 
 	allocateBytesCounter   prometheus.Counter
@@ -36,14 +36,14 @@ func (metricsDeallocatorArgs) As(Trait) bool {
 	return false
 }
 
-func NewMetricsAllocator(
-	upstream Allocator,
+func NewMetricsAllocator[U Allocator](
+	upstream U,
 	allocateBytesCounter prometheus.Counter,
 	inuseBytesGauge prometheus.Gauge,
 	allocateObjectsCounter prometheus.Counter,
 	inuseObjectsGauge prometheus.Gauge,
-) *MetricsAllocator {
-	return &MetricsAllocator{
+) *MetricsAllocator[U] {
+	return &MetricsAllocator[U]{
 		upstream:               upstream,
 		allocateBytesCounter:   allocateBytesCounter,
 		inuseBytesGauge:        inuseBytesGauge,
@@ -68,9 +68,9 @@ type AllocateInfo struct {
 	Size        uint64
 }
 
-var _ Allocator = new(MetricsAllocator)
+var _ Allocator = new(MetricsAllocator[Allocator])
 
-func (m *MetricsAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
+func (m *MetricsAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr, dec, err := m.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
