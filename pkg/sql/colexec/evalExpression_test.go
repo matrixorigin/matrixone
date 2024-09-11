@@ -27,6 +27,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestListExpressionExecutor(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	bat := testutil.NewBatch(
+		[]types.Type{types.T_int64.ToType()},
+		true, 10, proc.Mp())
+
+	//build plan_list
+	exprList := []*plan.Expr{
+		makePlan2Int64ConstExprWithType(1),
+		makePlan2Int64ConstExprWithType(2),
+	}
+
+	evalExpr := &plan.Expr{
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{
+				List: exprList,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int64),
+			NotNullable: true,
+		},
+	}
+	curr := proc.Mp().CurrNB()
+
+	listExprExecutor, err := NewExpressionExecutor(proc, evalExpr)
+	require.NoError(t, err)
+
+	vec, err := listExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
+	require.NoError(t, err)
+	vals := vector.MustFixedColNoTypeCheck[int64](vec)
+	require.Equal(t, int64(1), vals[0])
+	require.Equal(t, int64(2), vals[1])
+
+	listExprExecutor.ResetForNextQuery()
+
+	vec, err = listExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
+	require.NoError(t, err)
+	vals = vector.MustFixedColNoTypeCheck[int64](vec)
+	require.Equal(t, int64(1), vals[0])
+	require.Equal(t, int64(2), vals[1])
+
+	listExprExecutor.Free()
+
+	require.Equal(t, curr, proc.Mp().CurrNB())
+}
+
 func TestFixedExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess()
 
