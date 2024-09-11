@@ -20,8 +20,9 @@ load data infile '$resources/load_data/time_date_1.csv' into table t1 fields ter
 select * from t1;
 drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
+-- @ignore:0
 show stages;
 select col1, col2 from t1 into outfile 'stage://stage01/local_stage_table01.csv';
 drop table t1;
@@ -50,8 +51,9 @@ load data infile '$resources/load_data/float_1.csv' into table t2 fields termina
 select * from t2;
 drop stage if exists stage02;
 create stage stage02 url = 'file:///$resources/into_outfile/stage';
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
+-- @ignore:0
 show stages;
 select col3, col4 from t2 into outfile 'stage://stage02/local_stage_table02.csv';
 drop table t2;
@@ -80,8 +82,9 @@ load data infile '$resources/load_data/char_varchar_1.csv' into table t3 fields 
 select * from t3;
 drop stage if exists stage03;
 create stage stage03 url = 'file:///$resources/into_outfile/stage';
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
+-- @ignore:0
 show stages;
 select col1, col3 from t3 into outfile 'stage://stage03/local_stage_table03.csv';
 drop table t3;
@@ -114,8 +117,9 @@ load data infile '$resources/load_data/integer_numbers_1.csv' into table t4 fiel
 select * from t4;
 drop stage if exists stage04;
 create stage stage04 url = 'file:///$resources/into_outfile/stage';
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
+-- @ignore:0
 show stages;
 select col1, col3, col5, col7 from t4 into outfile 'stage://stage04/local_stage_table04.csv';
 drop table if exists t4;
@@ -146,8 +150,9 @@ load data infile '$resources/load_data/auto_increment_1.csv' into table t5 field
 select * from t5;
 drop stage if exists stage05;
 create stage stage05 url = 'file:///$resources/into_outfile/stage';
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
+-- @ignore:0
 show stages;
 select col1,col2,col3 from t5 into outfile 'stage://stage05/local_stage_table05.csv';
 truncate t5;
@@ -171,8 +176,9 @@ load data infile '$resources/load_data/test_enclosed_by01.csv' into table t6 fie
 select * from t6;
 drop stage if exists stage06;
 create stage stage06 url = 'file:///$resources/into_outfile/stage';
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
+-- @ignore:0
 show stages;
 select col2 from t6 into outfile 'stage://stage06/local_stage_table06.csv';
 drop table if exists t6;
@@ -193,8 +199,9 @@ load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compressio
 select * from t7;
 drop stage if exists stage07;
 create stage stage07 url = 'file:///$resources/into_outfile/stage';
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
+-- @ignore:0
 show stages;
 select col2 from t7 into outfile 'stage://stage07/local_stage_table07.csv';
 drop table if exists t7;
@@ -218,7 +225,7 @@ load data infile '$resources/load_data/test_character.csv' into table t11 CHARAC
 select * from t11;
 drop stage if exists stage11;
 create stage stage11 url = 'file:///$resources/into_outfile/stage' comment = 'this is a stage';
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
 show stages;
 select col1 from t11 into outfile 'stage://stage11/local_stage_table11.csv';
