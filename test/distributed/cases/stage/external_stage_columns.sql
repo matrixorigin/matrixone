@@ -229,10 +229,10 @@ create stage stage11 url = 'file:///$resources/into_outfile/stage' comment = 'th
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select col1 from t11 into outfile 'stage://stage11/local_stage_table11.csv';
+select col1 from t11 into outfile 'stage://stage11/local_stage_table011.csv';
 drop table if exists t11;
 create table t11 (col1 int);
-load data infile '$resources/into_outfile/stage/local_stage_table11.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_table011.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' ignore 1 lines;
 select * from t11;
 drop table t11;
 drop stage stage11;
