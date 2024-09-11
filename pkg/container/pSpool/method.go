@@ -46,7 +46,7 @@ type PipelineCommunication interface {
 func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) PipelineCommunication {
 	bl := getBufferLength(receiverCnt)
 
-	ps2 := &pipelineSpool2{
+	ps2 := &pipelineSpool{
 		shardPool:    make([]pipelineSpoolMessage, bl),
 		shardRefs:    make([]atomic.Int32, bl),
 		rs:           newReceivers(receiverCnt),

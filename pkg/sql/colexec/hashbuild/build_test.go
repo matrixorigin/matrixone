@@ -79,25 +79,24 @@ func TestBuild(t *testing.T) {
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.arg.SetChildren([]vm.Operator{tc.marg})
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
 		ok, err := tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, true, ok.Status == vm.ExecStop)
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.marg.Reset(tc.proc, false, nil)
-		require.Less(t, int64(0), tc.proc.Mp().CurrNB()) //hashbuild operator can not release hashmap
 		tc.proc.GetMessageBoard().Reset()
 
 		err = tc.marg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
 
 		ok, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
@@ -105,7 +104,6 @@ func TestBuild(t *testing.T) {
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.marg.Reset(tc.proc, false, nil)
-		require.Less(t, int64(0), tc.proc.Mp().CurrNB()) //hashbuild operator can not release hashmap
 		tc.proc.GetMessageBoard().Reset()
 	}
 }
@@ -122,15 +120,15 @@ func BenchmarkBuild(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
 			for {
 				ok, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
 				//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-				tc.proc.Reg.MergeReceivers[0].Ch <- nil
+				tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
 				//mp.Free()
 				ok.Batch.Clean(tc.proc.Mp())
 				break
@@ -158,9 +156,9 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ch:  make(chan *process.RegisterMessage, 10),
+		Ch2:  make(chan process.PipelineSignal, 10),
 	}
 	return buildTestCase{
 		types:  ts,

@@ -69,11 +69,10 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 
 // WaitRegister channel
 type WaitRegister struct {
-	// Ch, data receiver's channel, receiver will wait for data from this channel.
-	Ch  chan *RegisterMessage
+	// Ch2, data receiver's channel for receive-action-signal.
 	Ch2 chan PipelineSignal
 
-	// how many nil batch this channel can receive, default 0 means every nil batch close channel
+	// how many nil-batches this channel can receive, default 0 means every nil batch close channel
 	NilBatchCnt int
 }
 

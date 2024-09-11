@@ -27,7 +27,7 @@ const (
 	SendToAnyLocal = -2
 )
 
-type pipelineSpool2 struct {
+type pipelineSpool struct {
 	shardPool []pipelineSpoolMessage
 	shardRefs []atomic.Int32
 
@@ -50,7 +50,7 @@ type pipelineSpoolMessage struct {
 	src *cachedBatch
 }
 
-func (ps *pipelineSpool2) SendBatch(
+func (ps *pipelineSpool) SendBatch(
 	ctx context.Context, receiverID int, data *batch.Batch, info error) (queryDone bool, err error) {
 
 	if receiverID == SendToAnyLocal {
@@ -81,7 +81,7 @@ func (ps *pipelineSpool2) SendBatch(
 	return queryDone, nil
 }
 
-func (ps *pipelineSpool2) ReleaseCurrent(idx int) {
+func (ps *pipelineSpool) ReleaseCurrent(idx int) {
 	if last := ps.rs[idx].getLastPop(); last != noneLastPop {
 		if ps.shardRefs[last].Add(-1) == 0 {
 			ps.cache.CacheBatch(ps.shardPool[last].content)
@@ -91,7 +91,7 @@ func (ps *pipelineSpool2) ReleaseCurrent(idx int) {
 	}
 }
 
-func (ps *pipelineSpool2) ReceiveBatch(idx int) (data *batch.Batch, info error) {
+func (ps *pipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 	ps.ReleaseCurrent(idx)
 
 	next := ps.rs[idx].popNextIndex()
@@ -101,7 +101,7 @@ func (ps *pipelineSpool2) ReceiveBatch(idx int) (data *batch.Batch, info error) 
 	return ps.shardPool[next].content, ps.shardPool[next].err
 }
 
-func (ps *pipelineSpool2) Close() {
+func (ps *pipelineSpool) Close() {
 	// wait for all receivers done its work first.
 	requireEndingReceiver := len(ps.rs)
 	for requireEndingReceiver > 0 {
@@ -114,7 +114,7 @@ func (ps *pipelineSpool2) Close() {
 	return
 }
 
-func (ps *pipelineSpool2) sendToAll(ctx context.Context, msg pipelineSpoolMessage) (queryDone bool) {
+func (ps *pipelineSpool) sendToAll(ctx context.Context, msg pipelineSpoolMessage) (queryDone bool) {
 	select {
 	case <-ctx.Done():
 		return true
@@ -129,7 +129,7 @@ func (ps *pipelineSpool2) sendToAll(ctx context.Context, msg pipelineSpoolMessag
 	return false
 }
 
-func (ps *pipelineSpool2) sendToIdx(ctx context.Context, idx int, msg pipelineSpoolMessage) (queryDone bool) {
+func (ps *pipelineSpool) sendToIdx(ctx context.Context, idx int, msg pipelineSpoolMessage) (queryDone bool) {
 	select {
 	case <-ctx.Done():
 		return true

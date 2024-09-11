@@ -272,7 +272,7 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 func (bat *Batch) Clean(m *mpool.MPool) {
 	// situations that batch was still in use.
 	// we use `!= 0` but not `>0` to avoid the situation that the batch was cleaned more than required.
-	if bat == EmptyBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
+	if bat == EmptyBatch || bat == CteEndBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
 	}
 

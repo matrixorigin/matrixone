@@ -28,7 +28,6 @@ type PipelineActionType uint8
 const (
 	GetFromIndex PipelineActionType = iota
 	GetDirectly
-	SkipFromCursor
 )
 
 type PipelineSignal struct {
@@ -66,15 +65,6 @@ func NewPipelineSignalToDirectly(data *batch.Batch, mp *mpool.MPool) PipelineSig
 	}
 }
 
-// NewPipelineSignalToSkip return a signal indicates the receiver to skip the next data from source.
-func NewPipelineSignalToSkip(source pSpool.PipelineCommunication, index int) PipelineSignal {
-	return PipelineSignal{
-		typ:    SkipFromCursor,
-		source: source,
-		index:  index,
-	}
-}
-
 // Action will get the input batch from one place according to which type this signal is.
 //
 // the result batch of this function is an READ-ONLY one.
@@ -82,10 +72,6 @@ func (signal PipelineSignal) Action() (data *batch.Batch, info error, skipThis b
 	if signal.typ == GetFromIndex {
 		data, info = signal.source.ReceiveBatch(signal.index)
 		return data, info, false
-	}
-	if signal.typ == SkipFromCursor {
-		signal.source.Skip(signal.index)
-		return nil, nil, true
 	}
 
 	return signal.directly, nil, false

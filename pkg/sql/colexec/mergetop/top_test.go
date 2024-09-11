@@ -156,12 +156,12 @@ func BenchmarkTop(b *testing.B) {
 func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) testCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ch:  make(chan *process.RegisterMessage, 3),
+		Ch2:  make(chan process.PipelineSignal, 3),
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-		Ch:  make(chan *process.RegisterMessage, 3),
+		Ch2:  make(chan process.PipelineSignal, 3),
 	}
 	return testCase{
 		ds:    ds,
