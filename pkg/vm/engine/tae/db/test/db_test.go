@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"math/rand"
 	"reflect"
 	"sort"
