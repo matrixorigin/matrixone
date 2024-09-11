@@ -12207,6 +12207,7 @@ non_reserved_keyword:
 |   POLYGON
 |   PROCEDURE
 |   PROXY
+|	PERIOD
 |   QUERY
 |   PAUSE
 |   PROFILES

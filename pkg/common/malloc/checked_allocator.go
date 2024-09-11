@@ -21,8 +21,8 @@ import (
 	"unsafe"
 )
 
-type CheckedAllocator struct {
-	upstream        Allocator
+type CheckedAllocator[U Allocator] struct {
+	upstream        U
 	deallocatorPool *ClosureDeallocatorPool[checkedAllocatorArgs, *checkedAllocatorArgs]
 }
 
@@ -38,10 +38,10 @@ func (checkedAllocatorArgs) As(Trait) bool {
 	return false
 }
 
-func NewCheckedAllocator(
-	upstream Allocator,
-) *CheckedAllocator {
-	return &CheckedAllocator{
+func NewCheckedAllocator[U Allocator](
+	upstream U,
+) *CheckedAllocator[U] {
+	return &CheckedAllocator[U]{
 		upstream: upstream,
 
 		deallocatorPool: NewClosureDeallocatorPool(
@@ -67,9 +67,9 @@ func NewCheckedAllocator(
 
 }
 
-var _ Allocator = new(CheckedAllocator)
+var _ Allocator = new(CheckedAllocator[Allocator])
 
-func (c *CheckedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
+func (c *CheckedAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr, dec, err := c.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
