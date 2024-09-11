@@ -177,7 +177,9 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 	var end bool
 	var err error
 
-	connectorAnalyze := s.RootOp.GetOperatorBase().OpAnalyzer
+	connectorOperator := s.RootOp.(*connector.Connector)
+	connectorAnalyze := process.NewAnalyzer(
+		connectorOperator.GetIdx(), connectorOperator.IsFirst, connectorOperator.IsLast, "connector")
 
 	mp := s.Proc.Mp()
 	nextChannel := s.RootOp.(*connector.Connector).Reg.Ch2
