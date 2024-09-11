@@ -73,7 +73,8 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	if tombstoneRows > rows*5 {
 		logutil.Info("[MERGE-POLICY-REVISE]",
 			zap.String("policy", "compact"),
-			zap.String("data object", entry.String()),
+			zap.String("table", o.tblEntry.GetFullName()),
+			zap.String("data object", entry.ID().ShortStringEx()),
 			zap.Uint32("data rows", rows),
 			zap.Uint32("tombstone rows", tombstoneRows),
 		)
