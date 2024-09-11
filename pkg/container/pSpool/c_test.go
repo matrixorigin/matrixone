@@ -48,7 +48,7 @@ func TestCacheBatchBehavior_Get_Cache_Free(t *testing.T) {
 		require.NotEqual(t, originBatch, b1)
 		require.Equal(t, 1, b1.RowCount())
 		require.Equal(t, 1, len(b1.Vecs))
-		vs := vector.MustFixedCol[int64](b1.Vecs[0])
+		vs := vector.MustFixedColNoTypeCheck[int64](b1.Vecs[0])
 		require.Equal(t, 1, len(vs))
 		require.Equal(t, int64(1), vs[0])
 	}
@@ -74,7 +74,7 @@ func TestCacheBatchBehavior_Get_Cache_Free(t *testing.T) {
 		require.NotEqual(t, originBatch, b3)
 		require.Equal(t, 1, b3.RowCount())
 		require.Equal(t, 1, len(b3.Vecs))
-		vs := vector.MustFixedCol[int64](b3.Vecs[0])
+		vs := vector.MustFixedColNoTypeCheck[int64](b3.Vecs[0])
 		require.Equal(t, 1, len(vs))
 	}
 	require.True(t, len(cache.bytesCache) == 0)

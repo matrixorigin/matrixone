@@ -17,7 +17,6 @@ package pSpool
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/spool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sync/atomic"
 )
@@ -37,33 +36,13 @@ type PipelineCommunication interface {
 	// ReleaseCurrent force to release the last received one.
 	ReleaseCurrent(idx int)
 
-	// Skip ignore next coming data from idx-th receiver.
-	Skip(idx int)
-
-	// Close the sender and receivers.
+	// Close the sender and receivers, and do memory clean.
 	Close()
-}
-
-// GeneratePipelineSpool make a pipeline spool for using.
-// you only need to support how many receivers it should hold.
-func GeneratePipelineSpool(mp *mpool.MPool, receiverCnt int) PipelineCommunication {
-	bl := getBufferLength(receiverCnt)
-
-	send, cursor := spool.New[pipelineSpoolMessage](int64(bl), receiverCnt)
-	memoryCache := initCachedBatch(mp, bl)
-
-	sp := &pipelineSpool{
-		sp:           send,
-		cs:           cursor,
-		cache:        memoryCache,
-		csDoneSignal: make(chan struct{}, receiverCnt),
-	}
-	return sp
 }
 
 // InitMyPipelineSpool return a simple pipeline spool for temporary plan.
 //
-// todo: use GeneratePipelineSpool after pipeline construct process is simple.
+// todo: use spool package after pipeline construct process is simple.
 func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) PipelineCommunication {
 	bl := getBufferLength(receiverCnt)
 
@@ -81,11 +60,6 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) PipelineCommunication
 	}
 
 	return ps2
-}
-
-func OutPutTheWaitingChannelAndFree(c PipelineCommunication) (ch chan struct{}, freeMethod func()) {
-	p2 := c.(*pipelineSpool2)
-	return p2.csDoneSignal, p2.cache.Free
 }
 
 func getBufferLength(cnt int) int {

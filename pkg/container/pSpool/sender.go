@@ -20,6 +20,13 @@ import (
 	"sync/atomic"
 )
 
+const (
+	// SendToAllLocal and SendToAnyLocal
+	// are Special receiver IDs for SendBatch method.
+	SendToAllLocal = -1
+	SendToAnyLocal = -2
+)
+
 type pipelineSpool2 struct {
 	shardPool []pipelineSpoolMessage
 	shardRefs []atomic.Int32
@@ -33,6 +40,14 @@ type pipelineSpool2 struct {
 	// each cs done its work (after the readers get an End-Message from it, reader will put a value into this channel).
 	// and the data producer should wait all consumers done before its close or reset.
 	csDoneSignal chan struct{}
+}
+
+// pipelineSpoolMessage is the element of pipelineSpool.
+type pipelineSpoolMessage struct {
+	content *batch.Batch
+	err     error
+
+	src *cachedBatch
 }
 
 func (ps *pipelineSpool2) SendBatch(
@@ -84,10 +99,6 @@ func (ps *pipelineSpool2) ReceiveBatch(idx int) (data *batch.Batch, info error) 
 		ps.csDoneSignal <- struct{}{}
 	}
 	return ps.shardPool[next].content, ps.shardPool[next].err
-}
-
-func (ps *pipelineSpool2) Skip(idx int) {
-	// this function shouldn't do anything.
 }
 
 func (ps *pipelineSpool2) Close() {
