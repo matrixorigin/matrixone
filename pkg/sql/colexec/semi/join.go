@@ -116,32 +116,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			// if ctr.skipProbe {
-			// 	if ctr.skipProbeRBat == nil {
-			// 		ctr.skipProbeRBat = batch.NewWithSize(len(semiJoin.Result))
-			// 	}
-			// 	ctr.skipProbeRBat.Recursive = bat.Recursive
-			// 	ctr.skipProbeRBat.Ro = bat.Ro
-			// 	ctr.skipProbeRBat.ShuffleIDX = bat.ShuffleIDX
-			// 	ctr.skipProbeRBat.Attrs = bat.Attrs
-			// 	ctr.skipProbeRBat.Aggs = bat.Aggs
-			// 	newvecs := make([]*vector.Vector, len(semiJoin.Result))
-			// 	for i, pos := range semiJoin.Result {
-			// 		newvecs[i] = bat.Vecs[pos]
-			// 	}
-			// 	ctr.skipProbeRBat.Vecs = newvecs
-			// 	result.Batch, err = semiJoin.EvalProjection(ctr.skipProbeRBat, proc)
-			// 	if err != nil {
-			// 		return result, err
-			// 	}
-			// 	analyzer.Output(result.Batch)
-			// 	return result, nil
-			// }
-
-			if ctr.mp == nil {
-				continue
-			}
-
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(semiJoin.Result))
 				for i, pos := range semiJoin.Result {
@@ -154,6 +128,25 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				for i, pos := range semiJoin.Result {
 					ctr.rbat.Vecs[i].SetSorted(bat.Vecs[pos].GetSorted())
 				}
+			}
+
+			if ctr.skipProbe {
+				for i, pos := range semiJoin.Result {
+					err = ctr.rbat.Vecs[i].UnionBatch(bat.Vecs[pos], 0, bat.Vecs[pos].Length(), nil, proc.Mp())
+					if err != nil {
+						return result, err
+					}
+				}
+				result.Batch, err = semiJoin.EvalProjection(ctr.rbat, proc)
+				if err != nil {
+					return result, err
+				}
+				analyzer.Output(result.Batch)
+				return result, nil
+			}
+
+			if ctr.mp == nil {
+				continue
 			}
 
 			if err := ctr.probe(bat, semiJoin, proc, &probeResult); err != nil {
