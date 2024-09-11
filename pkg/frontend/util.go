@@ -1545,23 +1545,53 @@ func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, t
 				return nil, err
 			}
 
+			attDefault, err := result.GetString(ctx, i, 4)
+			if err != nil {
+				return nil, err
+			}
+			def := new(plan.Default)
+			err = types.Decode([]byte(attDefault), def)
+			if err != nil {
+				return nil, err
+			}
+
+			isHidden, err := result.GetInt64(ctx, i, 6)
+			if err != nil {
+				return nil, err
+			}
+
+			arrOnUpdate, err := result.GetString(ctx, i, 7)
+			if err != nil {
+				return nil, err
+			}
+			onUpdate := new(plan.OnUpdate)
+			err = types.Decode([]byte(arrOnUpdate), onUpdate)
+			if err != nil {
+				return nil, err
+			}
+
 			cols = append(cols, &plan.ColDef{
+				TblName:    table,
+				DbName:     dbName,
 				ColId:      colNum,
 				Name:       strings.ToLower(colName),
 				OriginName: colName,
-				Hidden:     strings.Contains(colName, "__mo_"),
+				Hidden:     isHidden == 1,
 				Typ: plan.Type{
-					Id:    int32(typ.Oid),
-					Width: typ.Width,
-					Scale: typ.Scale,
-					Table: table,
+					Id:          int32(typ.Oid),
+					Width:       typ.Width,
+					Scale:       typ.Scale,
+					Table:       table,
+					NotNullable: !def.NullAbility,
 				},
+				Default:  def,
+				OnUpdate: onUpdate,
 			})
 		}
 	}
 	return &plan.TableDef{
 		Name:   table,
-		Cols:   cols,
 		DbName: dbName,
+		Cols:   cols,
 	}, nil
 }
