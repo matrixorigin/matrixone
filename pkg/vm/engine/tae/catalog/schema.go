@@ -1048,13 +1048,12 @@ func MockPitrSchema() *Schema {
 	schema.AppendCol("col5", types.T_varchar.ToType())
 	schema.AppendCol("col6", types.T_uint64.ToType())
 	schema.AppendCol("col7", types.T_varchar.ToType())
+	schema.AppendCol("col8", types.T_varchar.ToType())
 	schema.AppendCol("col9", types.T_varchar.ToType())
-	schema.AppendCol("col10", types.T_varchar.ToType())
-	schema.AppendCol("col11", types.T_uint64.ToType())
-	schema.AppendCol("col12", types.T_uint8.ToType())
-	schema.AppendCol("col13", types.T_varchar.ToType())
+	schema.AppendCol("col10", types.T_uint64.ToType())
+	schema.AppendCol("col11", types.T_uint8.ToType())
+	schema.AppendCol("col12", types.T_varchar.ToType())
 	schema.Constraint, _ = constraintDef.MarshalBinary()
-	// mock fake pk
 	schema.AppendFakePKCol()
 	schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
 

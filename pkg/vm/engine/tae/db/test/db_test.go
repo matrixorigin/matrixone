@@ -6555,9 +6555,6 @@ func TestSnapshotMeta(t *testing.T) {
 		rel5, err = testutil.CreateRelation2(ctx, txn, database3, snapshotSchema2)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
-		db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
-		db.DiskCleaner.GetCleaner().SetTid(rel4.ID())
-		db.DiskCleaner.GetCleaner().SetTid(rel5.ID())
 	}
 	//db.DiskCleaner.GetCleaner().DisableGCForTest()
 
@@ -6705,7 +6702,7 @@ func TestPitrMeta(t *testing.T) {
 
 	pitrSchema := catalog.MockPitrSchema()
 	pitrSchema.Extra.BlockMaxRows = 2
-	pitrSchema.Extra.ObjectMaxBlocks = 1
+	pitrSchema.Extra.ObjectMaxBlocks = 2
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.Extra.BlockMaxRows = 10
 	schema1.Extra.ObjectMaxBlocks = 2
@@ -6714,25 +6711,39 @@ func TestPitrMeta(t *testing.T) {
 	var err error
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err = testutil.CreateDatabase2(ctx, txn, "db")
+		database, err = testutil.CreateDatabase2(ctx, txn, "db1")
 		assert.Nil(t, err)
 		rel3, err = testutil.CreateRelation2(ctx, txn, database, pitrSchema)
 		assert.Nil(t, err)
-		database2, err = testutil.CreateDatabase2(ctx, txn, "db1")
+		database2, err = testutil.CreateDatabase2(ctx, txn, "db")
 		assert.Nil(t, err)
 		rel4, err = testutil.CreateRelation2(ctx, txn, database2, schema1)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
-		db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
 	}
-	//db.DiskCleaner.GetCleaner().DisableGCForTest()
+	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
 
+	pool, err := ants.NewPool(20)
+	assert.Nil(t, err)
+	defer pool.Release()
+	var wg sync.WaitGroup
+
+	for _, data1 := range bats {
+		wg.Add(1)
+		err = pool.Submit(testutil.AppendClosure(t, data1, schema1.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
+	tae.Restart(ctx)
+	db = tae.DB
 	db.DiskCleaner.GetCleaner().DisableGCForTest()
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	attrs := []string{"col0", "col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8", "col9", "col10", "col11", "col12"}
@@ -6741,10 +6752,10 @@ func TestPitrMeta(t *testing.T) {
 		types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(),
 		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
 		types.T_uint8.ToType(), types.T_varchar.ToType()}
-	opt := containers.Options{}
-	opt.Capacity = 0
-	data := containers.BuildBatch(attrs, vecTypes, opt)
 	for i := 0; i < 4; i++ {
+		opt := containers.Options{}
+		opt.Capacity = 0
+		data := containers.BuildBatch(attrs, vecTypes, opt)
 		data.Vecs[0].Append([]byte("db"), false)
 		data.Vecs[1].Append([]byte("rel"), false)
 		data.Vecs[2].Append(uint64(0), false)
@@ -6775,37 +6786,21 @@ func TestPitrMeta(t *testing.T) {
 		data.Vecs[7].Append([]byte("varchar"), false)
 		data.Vecs[8].Append([]byte("varchar"), false)
 		data.Vecs[9].Append([]byte("varchar"), false)
-
-	}
-	txn1, _ := db.StartTxn(nil)
-	db2, _ := txn1.GetDatabase("db")
-	rel, _ := db2.GetRelationByID(database.GetID())
-	err = rel.Append(context.Background(), data)
-	defer data.Close()
-	assert.Nil(t, err)
-	assert.Nil(t, txn1.Commit(context.Background()))
-	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
-	defer bat.Close()
-	bats := bat.Split(bat.Length())
-
-	pool, err := ants.NewPool(20)
-	assert.Nil(t, err)
-	defer pool.Release()
-	var wg sync.WaitGroup
-
-	for _, data1 := range bats {
-		wg.Add(2)
-		err = pool.Submit(testutil.AppendClosure(t, data1, schema1.Name, db, &wg))
+		txn1, _ := db.StartTxn(nil)
+		database, _ = txn1.GetDatabase("db1")
+		rel, _ := database.GetRelationByID(rel3.ID())
+		err = rel.Append(context.Background(), data)
+		data.Close()
 		assert.Nil(t, err)
+		assert.Nil(t, txn1.Commit(context.Background()))
 	}
-	wg.Wait()
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
-	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
+	db.DiskCleaner.GetCleaner().EnableGCForTest()
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
@@ -6815,10 +6810,39 @@ func TestPitrMeta(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
+	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
+	db.DiskCleaner.GetCleaner().EnableGCForTest()
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	testutils.WaitExpect(3000, func() bool {
+		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
+			return false
+		}
+		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
+		if minEnd.IsEmpty() {
+			return false
+		}
+		if initMinMerged == nil {
+			return true
+		}
+		initMinEnd := initMinMerged.GetEnd()
+		return minEnd.Greater(&initMinEnd)
+	})
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	if minMerged == nil {
 		return
 	}
+	minEnd := minMerged.GetEnd()
+	if minEnd.IsEmpty() {
+		return
+	}
+	if initMinMerged != nil {
+		initMinEnd := initMinMerged.GetEnd()
+		if !minEnd.Greater(&initMinEnd) {
+			return
+		}
+	}
+
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
 	db = tae.DB
@@ -6832,7 +6856,7 @@ func TestPitrMeta(t *testing.T) {
 		return end.GreaterEq(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
-	minEnd := minMerged.GetEnd()
+	minEnd = minMerged.GetEnd()
 	assert.True(t, end.GreaterEq(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
