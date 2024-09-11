@@ -3572,10 +3572,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 		var subMeta *SubscriptionMeta
 		subMeta, err = builder.compCtx.GetSubscriptionMeta(schema, snapshot)
-		if err != nil {
-			return 0, err
-		}
-		if builder.qry.SkipBuildPlanTag && snapshot == nil && subMeta == nil {
+		if err == nil && builder.qry.SkipBuildPlanTag && snapshot == nil && subMeta == nil {
 			var tableDef *TableDef
 			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(schema, table)
 			if err != nil {
