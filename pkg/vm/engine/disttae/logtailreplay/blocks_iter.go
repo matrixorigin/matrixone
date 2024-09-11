@@ -51,9 +51,7 @@ func (b *objectsIter) Next() bool {
 }
 
 func (b *objectsIter) Entry() ObjectEntry {
-	return ObjectEntry{
-		ObjectInfo: b.iter.Item().ObjectInfo,
-	}
+	return b.iter.Item()
 }
 
 func (b *objectsIter) Close() error {
