@@ -63,8 +63,8 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) PipelineCommunication
 }
 
 func getBufferLength(cnt int) int {
-	if cnt <= 4 {
+	if cnt <= 2 {
 		return 2
 	}
-	return (cnt + 1) / 2
+	return cnt
 }
