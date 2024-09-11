@@ -69,7 +69,7 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 		tombstoneRows += tombstoneStats[i].Rows()
 	}
 	rows := entry.Rows()
-	if deletedRows > rows/2 || tombstoneRows > rows*10 {
+	if deletedRows > rows/2 || tombstoneRows > rows*5 {
 		logutil.Info("[MERGE-POLICY-REVISE]",
 			zap.String("policy", "compact"),
 			zap.String("data object", entry.String()),
