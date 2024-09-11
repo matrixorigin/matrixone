@@ -355,13 +355,19 @@ func (s *service) registerExecutorsLocked() {
 }
 
 func execSql(ctx context.Context, accountID uint32, iExec ie.InternalExecutor, sql string) error {
-	ctx, cancel := context.WithTimeout(defines.AttachAccount(ctx, accountID, 0, 0), 10*time.Second)
-	defer cancel()
+	if accountID == 0 {
+		ctx = defines.AttachAccountId(ctx, accountID)
+	} else {
+		ctx = defines.AttachAccount(ctx, accountID, frontend.GetAdminUserId(), frontend.GetAccountAdminRoleId())
+	}
 	return iExec.Exec(ctx, sql, ie.NewOptsBuilder().Internal(true).Finish())
 }
 
 func querySql(ctx context.Context, accountID uint32, iExec ie.InternalExecutor, sql string) ie.InternalExecResult {
-	ctx, cancel := context.WithTimeout(defines.AttachAccount(ctx, accountID, 0, 0), 10*time.Second)
-	defer cancel()
+	if accountID == 0 {
+		ctx = defines.AttachAccountId(ctx, accountID)
+	} else {
+		ctx = defines.AttachAccount(ctx, accountID, frontend.GetAdminUserId(), frontend.GetAccountAdminRoleId())
+	}
 	return iExec.Query(ctx, sql, ie.NewOptsBuilder().Internal(true).Finish())
 }
