@@ -16,10 +16,12 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,9 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"go.uber.org/zap"
 )
 
 // MaxRpcTime is a default timeout time to rpc context if user never set this deadline.
@@ -122,7 +124,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	// if the last operator was connector,
 	// we can send data to the receiver channel to reduce spool's copy.
 	if _, isConnector := s.RootOp.(*connector.Connector); isConnector {
-		return receiveMessageFromCnServerIfConnector(c, s, sender)
+		return receiveMessageFromCnServerIfConnector(s, sender)
 	}
 
 	// generate a new pipeline to send data in local.
@@ -148,7 +150,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		var bat *batch.Batch
 		var end bool
 		var err error
-		dispatchAnalyze := c.proc.GetAnalyze(s.RootOp.GetOperatorBase().GetIdx(), -1, false)
+		dispatchAnalyze := s.RootOp.GetOperatorBase().OpAnalyzer
 
 		for {
 			bat, end, err = sender.receiveBatch()
@@ -170,12 +172,12 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	panic(fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", s.RootOp.OpType()))
 }
 
-func receiveMessageFromCnServerIfConnector(c *Compile, s *Scope, sender *messageSenderOnClient) error {
+func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClient) error {
 	var bat *batch.Batch
 	var end bool
 	var err error
 
-	connectorAnalyze := c.proc.GetAnalyze(s.RootOp.GetOperatorBase().GetIdx(), -1, false)
+	connectorAnalyze := s.RootOp.GetOperatorBase().OpAnalyzer
 
 	mp := s.Proc.Mp()
 	nextChannel := s.RootOp.(*connector.Connector).Reg.Ch2
@@ -201,7 +203,7 @@ type messageSenderOnClient struct {
 	mp *mpool.MPool
 
 	// anal was used to merge remote-run's cost analysis information.
-	anal *analyzeModule
+	anal *AnalyzeModule
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -223,7 +225,7 @@ func newMessageSenderOnClient(
 	sid string,
 	toAddr string,
 	mp *mpool.MPool,
-	ana *analyzeModule,
+	analyzeModule *AnalyzeModule,
 ) (*messageSenderOnClient, error) {
 	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(toAddr)
 	if err != nil {
@@ -234,7 +236,7 @@ func newMessageSenderOnClient(
 		safeToClose:  true,
 		alreadyClose: false,
 		mp:           mp,
-		anal:         ana,
+		anal:         analyzeModule,
 		streamSender: streamSender,
 	}
 
@@ -330,11 +332,13 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
-				ana := new(pipeline.AnalysisList)
-				if err = ana.Unmarshal(anaData); err != nil {
+				var p models.PhyPlan
+				err = json.Unmarshal(anaData, &p)
+				if err != nil {
 					return nil, false, err
 				}
-				sender.dealAnalysis(ana)
+
+				sender.dealRemoteAnalysis(p)
 			}
 			return nil, true, nil
 		}
@@ -408,36 +412,11 @@ func generateStopSendingMessage(streamID uint64) *pipeline.Message {
 	return message
 }
 
-func (sender *messageSenderOnClient) dealAnalysis(ana *pipeline.AnalysisList) {
+func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 	if sender.anal == nil {
 		return
 	}
-	mergeAnalyseInfo(sender.anal, ana)
-}
-
-func mergeAnalyseInfo(target *analyzeModule, ana *pipeline.AnalysisList) {
-	source := ana.List
-	if len(target.analInfos) != len(source) {
-		return
-	}
-	for i := range target.analInfos {
-		n := source[i]
-		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
-		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
-		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
-		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
-		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
-		target.analInfos[i].MergeArray(n)
-		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
-		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
-		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
-		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
-		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
-		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
-		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
-		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
-		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
-	}
+	sender.anal.AppendRemotePhyPlan(p)
 }
 
 func (sender *messageSenderOnClient) close() {

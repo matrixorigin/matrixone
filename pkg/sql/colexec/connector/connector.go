@@ -34,6 +34,12 @@ func (connector *Connector) Prepare(proc *process.Process) error {
 	if connector.ctr.sp == nil {
 		connector.ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), 1)
 	}
+
+	if connector.OpAnalyzer == nil {
+		connector.OpAnalyzer = process.NewAnalyzer(connector.GetIdx(), connector.IsFirst, connector.IsLast, "connector")
+	} else {
+		connector.OpAnalyzer.Reset()
+	}
 	return nil
 }
 
@@ -42,7 +48,11 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := connector.Children[0].Call(proc)
+	analyzer := connector.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	result, err := vm.ChildrenCall(connector.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

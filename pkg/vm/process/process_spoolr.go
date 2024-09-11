@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"reflect"
+	"time"
 )
 
 type PipelineActionType uint8
@@ -144,8 +145,12 @@ func (receiver *PipelineSignalReceiver) releaseCurrent() {
 	}
 }
 
-func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, info error) {
+func (receiver *PipelineSignalReceiver) GetNextBatch(
+	analyzer Analyzer) (content *batch.Batch, info error) {
 	var skipThisSignal bool
+	var chosen int
+	var ok bool
+	var v reflect.Value
 
 	for {
 		receiver.releaseCurrent()
@@ -154,11 +159,21 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 			return nil, nil
 		}
 
-		chosen, v, ok := reflect.Select(receiver.regs)
-		if chosen == 0 {
+		if analyzer != nil {
+			start := time.Now()
+			chosen, v, ok = reflect.Select(receiver.regs)
+			analyzer.WaitStop(start)
+			if chosen == 0 {
+				return nil, nil
+			}
 
-			return nil, nil
+		} else {
+			chosen, v, ok = reflect.Select(receiver.regs)
+			if chosen == 0 {
+				return nil, nil
+			}
 		}
+
 		if ok {
 			msg := (v.Interface()).(PipelineSignal)
 			content, info, skipThisSignal = msg.Action()
@@ -179,6 +194,9 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 			}
 
 			receiver.setCurrent(&msg)
+			if analyzer != nil {
+				analyzer.Input(content)
+			}
 			return content, info
 		}
 		break
@@ -194,6 +212,6 @@ func (receiver *PipelineSignalReceiver) WaitingEnd() {
 		if receiver.alive == 0 {
 			return
 		}
-		_, _ = receiver.GetNextBatch()
+		_, _ = receiver.GetNextBatch(nil)
 	}
 }

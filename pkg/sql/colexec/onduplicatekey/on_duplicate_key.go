@@ -41,6 +41,12 @@ func (onDuplicatekey *OnDuplicatekey) OpType() vm.OpType {
 }
 
 func (onDuplicatekey *OnDuplicatekey) Prepare(p *process.Process) (err error) {
+	if onDuplicatekey.OpAnalyzer == nil {
+		onDuplicatekey.OpAnalyzer = process.NewAnalyzer(onDuplicatekey.GetIdx(), onDuplicatekey.IsFirst, onDuplicatekey.IsLast, "on_duplicate_key")
+	} else {
+		onDuplicatekey.OpAnalyzer.Reset()
+	}
+
 	if len(onDuplicatekey.ctr.uniqueCheckExes) == 0 {
 		onDuplicatekey.ctr.uniqueCheckExes, err = colexec.NewExpressionExecutorsFromPlanExpressions(p, onDuplicatekey.UniqueColCheckExpr)
 		if err != nil {
@@ -55,16 +61,16 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(onDuplicatekey.GetIdx(), onDuplicatekey.GetParallelIdx(), onDuplicatekey.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := onDuplicatekey.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	for {
 		switch onDuplicatekey.ctr.state {
 		case Build:
 			for {
-				result, err := onDuplicatekey.GetChildren(0).Call(proc)
+				result, err := vm.ChildrenCall(onDuplicatekey.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -73,7 +79,6 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 					break
 				}
 				bat := result.Batch
-				anal.Input(bat, onDuplicatekey.GetIsFirst())
 				err = resetInsertBatchForOnduplicateKey(proc, bat, onDuplicatekey)
 				if err != nil {
 					return result, err
@@ -83,11 +88,9 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 			onDuplicatekey.ctr.state = Eval
 
 		case Eval:
-			if onDuplicatekey.ctr.rbat != nil {
-				anal.Output(onDuplicatekey.ctr.rbat, onDuplicatekey.GetIsLast())
-			}
 			result.Batch = onDuplicatekey.ctr.rbat
 			onDuplicatekey.ctr.state = End
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case End:

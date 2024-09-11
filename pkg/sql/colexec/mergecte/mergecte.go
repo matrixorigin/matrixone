@@ -36,6 +36,12 @@ func (mergeCTE *MergeCTE) OpType() vm.OpType {
 }
 
 func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
+	if mergeCTE.OpAnalyzer == nil {
+		mergeCTE.OpAnalyzer = process.NewAnalyzer(mergeCTE.GetIdx(), mergeCTE.IsFirst, mergeCTE.IsLast, "merge cte")
+	} else {
+		mergeCTE.OpAnalyzer.Reset()
+	}
+
 	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
 	mergeCTE.ctr.status = sendInitial
 	return nil
@@ -46,9 +52,9 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeCTE.GetIdx(), mergeCTE.GetParallelIdx(), mergeCTE.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := mergeCTE.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	var err error
@@ -56,7 +62,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 
 	switch ctr.status {
 	case sendInitial:
-		result, err = mergeCTE.GetChildren(0).Call(proc)
+		result, err = vm.ChildrenCall(mergeCTE.GetChildren(0), proc, analyzer)
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
@@ -78,6 +84,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
+				analyzer.Alloc(int64(appBat.Size()))
 				ctr.freeBats = append(ctr.freeBats, appBat)
 			}
 			ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
@@ -102,7 +109,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	case sendRecursive:
 		for !mergeCTE.ctr.last {
-			result, err = mergeCTE.GetChildren(1).Call(proc)
+			result, err = vm.ChildrenCall(mergeCTE.GetChildren(1), proc, analyzer)
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err
@@ -130,6 +137,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 						if err != nil {
 							return result, err
 						}
+						analyzer.Alloc(int64(appBat.Size()))
 						ctr.freeBats = append(ctr.freeBats, appBat)
 					}
 					ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
@@ -150,6 +158,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 					if err != nil {
 						return result, err
 					}
+					analyzer.Alloc(int64(appBat.Size()))
 					ctr.freeBats = append(ctr.freeBats, appBat)
 				}
 				ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
@@ -165,10 +174,9 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		mergeCTE.ctr.last = false
 	}
 
-	anal.Input(mergeCTE.ctr.buf, mergeCTE.GetIsFirst())
-	anal.Output(mergeCTE.ctr.buf, mergeCTE.GetIsLast())
 	result.Batch = mergeCTE.ctr.buf
 	result.Status = vm.ExecHasMore
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 

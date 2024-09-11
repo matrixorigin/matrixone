@@ -19,19 +19,16 @@ import (
 	"container/heap"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-
-	"github.com/matrixorigin/matrixone/pkg/compare"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -54,6 +51,11 @@ func (top *Top) OpType() vm.OpType {
 }
 
 func (top *Top) Prepare(proc *process.Process) (err error) {
+	if top.OpAnalyzer == nil {
+		top.OpAnalyzer = process.NewAnalyzer(top.GetIdx(), top.IsFirst, top.IsLast, "top")
+	} else {
+		top.OpAnalyzer.Reset()
+	}
 
 	// limit executor
 	if top.ctr.limitExecutor == nil {
@@ -99,11 +101,9 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(top.GetIdx(), top.GetParallelIdx(), top.GetParallelMajor())
-	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
+	analyzer := top.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	if top.ctr.limit == 0 {
 		result := vm.NewCallResult()
@@ -113,12 +113,11 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if top.ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(top.GetChildren(0), proc, anal)
+			result, err := vm.ChildrenCall(top.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
 			bat := result.Batch
-			anal.Input(bat, top.IsFirst)
 
 			if bat == nil {
 				top.ctr.state = vm.Eval
@@ -162,6 +161,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 		}
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 

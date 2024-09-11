@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/vm"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,6 +33,12 @@ func (merge *Merge) OpType() vm.OpType {
 }
 
 func (merge *Merge) Prepare(proc *process.Process) error {
+	if merge.OpAnalyzer == nil {
+		merge.OpAnalyzer = process.NewAnalyzer(merge.GetIdx(), merge.IsFirst, merge.IsLast, "merge")
+	} else {
+		merge.OpAnalyzer.Reset()
+	}
+
 	if merge.Partial {
 		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
 	} else {
@@ -47,14 +52,14 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(merge.GetIdx(), merge.GetParallelIdx(), merge.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := merge.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	var info error
 	result := vm.NewCallResult()
 	for {
-		result.Batch, info = merge.ctr.receiver.GetNextBatch()
+		result.Batch, info = merge.ctr.receiver.GetNextBatch(analyzer)
 		if info != nil {
 			return vm.CancelResult, info
 		}
@@ -69,7 +74,6 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		break
 	}
 
-	anal.Input(result.Batch, merge.GetIsFirst())
-	anal.Output(result.Batch, merge.GetIsLast())
+	analyzer.Output(result.Batch)
 	return result, nil
 }

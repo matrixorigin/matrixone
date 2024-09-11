@@ -128,8 +128,10 @@ func (rightSemi *RightSemi) Reset(proc *process.Process, pipelineFailed bool, er
 	if !ctr.handledLast && rightSemi.NumCPU > 1 && !rightSemi.IsMerger {
 		rightSemi.Channel <- nil
 	}
-	anal := proc.GetAnalyze(rightSemi.GetIdx(), rightSemi.GetParallelIdx(), rightSemi.GetParallelMajor())
-	anal.Alloc(ctr.maxAllocSize)
+	if rightSemi.OpAnalyzer != nil {
+		rightSemi.OpAnalyzer.Alloc(ctr.maxAllocSize)
+	}
+
 	ctr.maxAllocSize = 0
 
 	ctr.cleanBuf(proc)
