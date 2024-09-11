@@ -105,7 +105,7 @@ drop publication if exists pub01;
 create publication pub01 database test01 account acc01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    test01    *    acc01        2024-09-11 18:31:03    null    
+pub01    test01    *    acc01        2024-09-11 18:32:43    null    
 drop database if exists sub01;
 create database sub01 from sys publication pub01;
 use sub01;
@@ -126,6 +126,14 @@ create database db01;
 use db01;
 create table table01 (id int);
 insert into table01 values(1);
+select * from table01 limit 1;
+id
+1
+select id from table01 limit 1;
+id
+1
+select id from table01 limit 0;
+id
 select * from table01 limit 0;
 id
 select * from table02 limit 0;
