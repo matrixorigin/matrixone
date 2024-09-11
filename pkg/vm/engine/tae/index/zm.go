@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -639,6 +640,24 @@ func (zm ZM) Or(o ZM) (res bool, ok bool) {
 	return
 }
 
+func (zm ZM) RowidPrefixGT(s []byte) bool {
+	zmin := zm.GetMinBuf()
+	v := (*types.Rowid)(unsafe.Pointer(&zmin[0]))
+	return v.ComparePrefix(s) > 0
+}
+
+func (zm ZM) RowidPrefixEq(s []byte) bool {
+	zmin := zm.GetMinBuf()
+	zmax := zm.GetMaxBuf()
+	minv := (*types.Rowid)(unsafe.Pointer(&zmin[0]))
+	if minv.ComparePrefix(s) > 0 {
+		return false
+	}
+	maxv := (*types.Rowid)(unsafe.Pointer(&zmax[0]))
+
+	return maxv.ComparePrefix(s) >= 0
+}
+
 func (zm ZM) PrefixGT(s []byte) bool {
 	zmin := zm.GetMinBuf()
 	return types.PrefixCompare(zmin, s) > 0
@@ -921,10 +940,10 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		col := vector.MustFixedColNoTypeCheck[types.Rowid](vec)
 		minVal, maxVal := types.DecodeFixed[types.Rowid](zm.GetMinBuf()), types.DecodeFixed[types.Rowid](zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal.Le(col[i])
+			return minVal.LE(&col[i])
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal.Less(col[i])
+			return maxVal.LT(&col[i])
 		})
 		return lowerBound, upperBound
 
@@ -1161,10 +1180,10 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		col := vector.MustFixedColNoTypeCheck[types.Rowid](vec)
 		minVal, maxVal := types.DecodeFixed[types.Rowid](zm.GetMinBuf()), types.DecodeFixed[types.Rowid](zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal.Le(col[i])
+			return minVal.LE(&col[i])
 		})
 
-		return lowerBound < len(col) && col[lowerBound].Le(maxVal)
+		return lowerBound < len(col) && col[lowerBound].LE(&maxVal)
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		col, area := vector.MustVarlenaRawData(vec)

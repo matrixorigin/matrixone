@@ -299,6 +299,7 @@ func MockColTypes() (ct []Type) {
 	return columnTypes
 }
 
+// PXU FIXME
 func CompareTSTSAligned(a, b TS) int {
 	return bytes.Compare(a[:], b[:])
 }

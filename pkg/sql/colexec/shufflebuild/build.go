@@ -35,6 +35,12 @@ func (shuffleBuild *ShuffleBuild) OpType() vm.OpType {
 }
 
 func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
+	if shuffleBuild.OpAnalyzer == nil {
+		shuffleBuild.OpAnalyzer = process.NewAnalyzer(shuffleBuild.GetIdx(), shuffleBuild.IsFirst, shuffleBuild.IsLast, "shuffle build")
+	} else {
+		shuffleBuild.OpAnalyzer.Reset()
+	}
+
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
@@ -46,9 +52,9 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(shuffleBuild.GetIdx(), shuffleBuild.GetParallelIdx(), shuffleBuild.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := shuffleBuild.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	ap := shuffleBuild
@@ -56,24 +62,27 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
-			err := ctr.collectBuildBatches(ap, proc, anal, shuffleBuild.GetIsFirst())
+			err := ctr.collectBuildBatches(ap, proc, analyzer)
 			if err != nil {
+				analyzer.Output(result.Batch)
 				return result, err
 			}
 			if err = ctr.handleRuntimeFilter(ap, proc); err != nil {
+				analyzer.Output(result.Batch)
 				return result, err
 			}
 			ctr.state = BuildHashMap
 		case BuildHashMap:
 			err := ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, ap.RuntimeFilterSpec, proc)
 			if err != nil {
+				analyzer.Output(result.Batch)
 				return result, err
 			}
 			if !ap.NeedBatches {
 				// if do not need merged batch, free it now to save memory
 				ctr.hashmapBuilder.Batches.Clean(proc.Mp())
 			}
-			anal.Alloc(ctr.hashmapBuilder.GetSize())
+			analyzer.Alloc(ctr.hashmapBuilder.GetSize())
 			ctr.state = SendJoinMap
 
 		case SendJoinMap:
@@ -92,14 +101,15 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
+func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *process.Process, analyzer process.Analyzer) error {
 	for {
-		result, err := vm.ChildrenCall(shuffleBuild.Children[0], proc, anal)
+		result, err := vm.ChildrenCall(shuffleBuild.Children[0], proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -109,8 +119,8 @@ func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *proc
 		if result.Batch.IsEmpty() {
 			continue
 		}
-		anal.Input(result.Batch, isFirst)
-		anal.Alloc(int64(result.Batch.Size()))
+
+		analyzer.Alloc(int64(result.Batch.Size()))
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
 		err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)
 		if err != nil {

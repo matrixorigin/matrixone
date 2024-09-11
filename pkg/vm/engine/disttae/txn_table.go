@@ -587,12 +587,12 @@ func (tbl *txnTable) doRanges(
 			traceFilterExprInterval.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
-		if traceFilterExprInterval2.Add(slowStep) >= 20 {
+		if traceFilterExprInterval2.Add(slowStep) >= 50 {
 			traceFilterExprInterval2.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
-		if rangesLen >= 50 {
+		if rangesLen >= 60 {
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
@@ -815,7 +815,7 @@ func (tbl *txnTable) rangesOnePart(
 					}
 				}
 
-				blk.SetFlagByObjStats(obj.ObjectStats)
+				blk.SetFlagByObjStats(&obj.ObjectStats)
 
 				outBlocks.AppendBlockInfo(blk)
 
@@ -1888,7 +1888,7 @@ func (tbl *txnTable) PKPersistedBetween(
 						}
 					}
 
-					blk.SetFlagByObjStats(obj.ObjectStats)
+					blk.SetFlagByObjStats(&obj.ObjectStats)
 
 					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
