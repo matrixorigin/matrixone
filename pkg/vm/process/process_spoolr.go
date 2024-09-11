@@ -109,7 +109,7 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 	// if regs were not much, we will use an optimized method to receive msg.
 	// and there is no need to init the `reflect.SelectCase`.
 	var scs []reflect.SelectCase = nil
-	if len(regs) > 4 {
+	if len(regs) > 8 {
 		scs = make([]reflect.SelectCase, 0, len(regs)+1)
 		scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(runningCtx.Done())})
 		for i := range regs {
@@ -219,6 +219,14 @@ func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
 		return receiver.listenToThreeEntry()
 	case 4:
 		return receiver.listenToFourEntry()
+	case 5:
+		return receiver.listenToFiveEntry()
+	case 6:
+		return receiver.listenToSixEntry()
+	case 7:
+		return receiver.listenToSevenEntry()
+	case 8:
+		return receiver.listenToEightEntry()
 	}
 
 	// common case.
@@ -288,5 +296,85 @@ func (receiver *PipelineSignalReceiver) listenToFourEntry() (chosen int, v Pipel
 		return 3, v
 	case v = <-receiver.srcReg[3].Ch2:
 		return 4, v
+	}
+}
+
+func (receiver *PipelineSignalReceiver) listenToFiveEntry() (chosen int, v PipelineSignal) {
+	select {
+	case <-receiver.usrCtx.Done():
+		return 0, v
+	case v = <-receiver.srcReg[0].Ch2:
+		return 1, v
+	case v = <-receiver.srcReg[1].Ch2:
+		return 2, v
+	case v = <-receiver.srcReg[2].Ch2:
+		return 3, v
+	case v = <-receiver.srcReg[3].Ch2:
+		return 4, v
+	case v = <-receiver.srcReg[4].Ch2:
+		return 5, v
+	}
+}
+
+func (receiver *PipelineSignalReceiver) listenToSixEntry() (chosen int, v PipelineSignal) {
+	select {
+	case <-receiver.usrCtx.Done():
+		return 0, v
+	case v = <-receiver.srcReg[0].Ch2:
+		return 1, v
+	case v = <-receiver.srcReg[1].Ch2:
+		return 2, v
+	case v = <-receiver.srcReg[2].Ch2:
+		return 3, v
+	case v = <-receiver.srcReg[3].Ch2:
+		return 4, v
+	case v = <-receiver.srcReg[4].Ch2:
+		return 5, v
+	case v = <-receiver.srcReg[5].Ch2:
+		return 6, v
+	}
+}
+
+func (receiver *PipelineSignalReceiver) listenToSevenEntry() (chosen int, v PipelineSignal) {
+	select {
+	case <-receiver.usrCtx.Done():
+		return 0, v
+	case v = <-receiver.srcReg[0].Ch2:
+		return 1, v
+	case v = <-receiver.srcReg[1].Ch2:
+		return 2, v
+	case v = <-receiver.srcReg[2].Ch2:
+		return 3, v
+	case v = <-receiver.srcReg[3].Ch2:
+		return 4, v
+	case v = <-receiver.srcReg[4].Ch2:
+		return 5, v
+	case v = <-receiver.srcReg[5].Ch2:
+		return 6, v
+	case v = <-receiver.srcReg[6].Ch2:
+		return 7, v
+	}
+}
+
+func (receiver *PipelineSignalReceiver) listenToEightEntry() (chosen int, v PipelineSignal) {
+	select {
+	case <-receiver.usrCtx.Done():
+		return 0, v
+	case v = <-receiver.srcReg[0].Ch2:
+		return 1, v
+	case v = <-receiver.srcReg[1].Ch2:
+		return 2, v
+	case v = <-receiver.srcReg[2].Ch2:
+		return 3, v
+	case v = <-receiver.srcReg[3].Ch2:
+		return 4, v
+	case v = <-receiver.srcReg[4].Ch2:
+		return 5, v
+	case v = <-receiver.srcReg[5].Ch2:
+		return 6, v
+	case v = <-receiver.srcReg[6].Ch2:
+		return 7, v
+	case v = <-receiver.srcReg[7].Ch2:
+		return 8, v
 	}
 }
