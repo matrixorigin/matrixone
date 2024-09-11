@@ -147,14 +147,14 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 
 		if analyzer != nil {
 			start := time.Now()
-			chosen, v, ok = reflect.Select(receiver.regs)
+			chosen, v, ok = receiver.listenToAll()
 			analyzer.WaitStop(start)
 			if chosen == 0 {
 				return nil, nil
 			}
 
 		} else {
-			chosen, v, ok = reflect.Select(receiver.regs)
+			chosen, v, ok = receiver.listenToAll()
 			if chosen == 0 {
 				return nil, nil
 			}
@@ -188,6 +188,10 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 		break
 	}
 	panic("unexpected sender close during GetNextBatch")
+}
+
+func (receiver *PipelineSignalReceiver) listenToAll() (chosen int, v reflect.Value, ok bool) {
+	return reflect.Select(receiver.regs)
 }
 
 func (receiver *PipelineSignalReceiver) WaitingEnd() {
