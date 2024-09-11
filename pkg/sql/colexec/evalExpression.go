@@ -430,7 +430,11 @@ type ListExpressionExecutor struct {
 }
 
 func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	expr.resultVector.CleanOnlyData()
+	if expr.resultVector == nil {
+		expr.resultVector = vector.NewVec(expr.typ)
+	} else {
+		expr.resultVector.CleanOnlyData()
+	}
 	for i := range expr.parameterExecutor {
 		vec, err := expr.parameterExecutor[i].Eval(proc, batches, selectList)
 		if err != nil {

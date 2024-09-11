@@ -55,6 +55,7 @@ func TestListExpressionExecutor(t *testing.T) {
 
 	listExprExecutor, err := NewExpressionExecutor(proc, evalExpr)
 	require.NoError(t, err)
+	require.Equal(t, listExprExecutor.IsColumnExpr(), false)
 
 	vec, err := listExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
 	require.NoError(t, err)
@@ -69,6 +70,13 @@ func TestListExpressionExecutor(t *testing.T) {
 	vals = vector.MustFixedColNoTypeCheck[int64](vec)
 	require.Equal(t, int64(1), vals[0])
 	require.Equal(t, int64(2), vals[1])
+
+	vec, err = listExprExecutor.EvalWithoutResultReusing(proc, []*batch.Batch{bat}, nil)
+	require.NoError(t, err)
+	vals = vector.MustFixedColNoTypeCheck[int64](vec)
+	require.Equal(t, int64(1), vals[0])
+	require.Equal(t, int64(2), vals[1])
+	vec.Free(proc.GetMPool())
 
 	listExprExecutor.Free()
 
