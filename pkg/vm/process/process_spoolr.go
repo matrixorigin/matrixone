@@ -78,6 +78,9 @@ func (signal PipelineSignal) Action() (data *batch.Batch, info error, skipThis b
 }
 
 type PipelineSignalReceiver struct {
+	usrCtx context.Context
+	srcReg []*WaitRegister
+
 	alive int
 
 	// receive data channel, first reg is the monitor for runningCtx.
@@ -91,8 +94,8 @@ type PipelineSignalReceiver struct {
 
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
 	nbs := make([]int, len(regs))
-	scs := make([]reflect.SelectCase, 0, len(regs)+1)
-	scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(runningCtx.Done())})
+	srcRegs := make([]*WaitRegister, len(regs))
+
 	for i, reg := range regs {
 		// 0 is default number, it takes a same effect as 1.
 		if reg.NilBatchCnt == 0 {
@@ -100,11 +103,23 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 		} else {
 			nbs[i] = reg.NilBatchCnt
 		}
+		srcRegs[i] = reg
+	}
 
-		scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(regs[i].Ch2)})
+	// if regs were not much, we will use an optimized method to receive msg.
+	// and there is no need to init the `reflect.SelectCase`.
+	var scs []reflect.SelectCase = nil
+	if len(regs) > 4 {
+		scs = make([]reflect.SelectCase, 0, len(regs)+1)
+		scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(runningCtx.Done())})
+		for i := range regs {
+			scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(regs[i].Ch2)})
+		}
 	}
 
 	return &PipelineSignalReceiver{
+		usrCtx:        runningCtx,
+		srcReg:        srcRegs,
 		alive:         len(regs),
 		regs:          scs,
 		nbs:           nbs,
@@ -135,8 +150,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 	analyzer Analyzer) (content *batch.Batch, info error) {
 	var skipThisSignal bool
 	var chosen int
-	var ok bool
-	var v reflect.Value
+	var msg PipelineSignal
 
 	for {
 		receiver.releaseCurrent()
@@ -147,61 +161,132 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 
 		if analyzer != nil {
 			start := time.Now()
-			chosen, v, ok = receiver.listenToAll()
+			chosen, msg = receiver.listenToAll()
 			analyzer.WaitStop(start)
 			if chosen == 0 {
 				return nil, nil
 			}
 
 		} else {
-			chosen, v, ok = receiver.listenToAll()
+			chosen, msg = receiver.listenToAll()
 			if chosen == 0 {
 				return nil, nil
 			}
 		}
 
-		if ok {
-			msg := (v.Interface()).(PipelineSignal)
-			content, info, skipThisSignal = msg.Action()
-			if skipThisSignal {
-				continue
-			}
-			if content == nil {
-				idx := chosen - 1
-
-				receiver.nbs[idx]--
-				if receiver.nbs[idx] == 0 {
-					// remove the unused channel.
-					receiver.regs = append(receiver.regs[:chosen], receiver.regs[chosen+1:]...)
-					receiver.nbs = append(receiver.nbs[:idx], receiver.nbs[idx+1:]...)
-					receiver.alive--
-				}
-				continue
-			}
-
-			receiver.setCurrent(&msg)
-			if analyzer != nil {
-				analyzer.Input(content)
-			}
-			return content, info
+		content, info, skipThisSignal = msg.Action()
+		if skipThisSignal {
+			continue
 		}
-		break
+		if content == nil {
+			receiver.removeIdxReceiver(chosen)
+			continue
+		}
+
+		receiver.setCurrent(&msg)
+		if analyzer != nil {
+			analyzer.Input(content)
+		}
+		return content, info
 	}
-	panic("unexpected sender close during GetNextBatch")
 }
 
-func (receiver *PipelineSignalReceiver) listenToAll() (chosen int, v reflect.Value, ok bool) {
-	return reflect.Select(receiver.regs)
+// idx is start from 0, this is the index of receiver at the receiver.regs.
+func (receiver *PipelineSignalReceiver) removeIdxReceiver(chosen int) {
+	idx := chosen - 1
+
+	receiver.nbs[idx]--
+	if receiver.nbs[idx] == 0 {
+		// remove the unused channel.
+		receiver.srcReg = append(receiver.srcReg[:idx], receiver.srcReg[idx+1:]...)
+		receiver.nbs = append(receiver.nbs[:idx], receiver.nbs[idx+1:]...)
+
+		if len(receiver.regs) > 0 {
+			receiver.regs = append(receiver.regs[:chosen], receiver.regs[chosen+1:]...)
+		}
+		receiver.alive--
+	}
+}
+
+func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
+	// hard codes for less interface convert and less reflect.
+	switch len(receiver.srcReg) {
+	case 1:
+		return receiver.listenToSingleEntry()
+	case 2:
+		return receiver.listenToTwoEntry()
+	case 3:
+		return receiver.listenToThreeEntry()
+	case 4:
+		return receiver.listenToFourEntry()
+	}
+
+	// common case.
+	chosen, value, ok := reflect.Select(receiver.regs)
+	if !ok {
+		panic("unexpected sender close during GetNextBatch")
+	}
+	return chosen, value.Interface().(PipelineSignal)
 }
 
 func (receiver *PipelineSignalReceiver) WaitingEnd() {
 	if len(receiver.regs) > 0 {
 		receiver.regs[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(context.TODO().Done())}
 	}
+
+	receiver.usrCtx = context.TODO()
 	for {
 		if receiver.alive == 0 {
 			return
 		}
 		_, _ = receiver.GetNextBatch(nil)
+	}
+}
+
+func (receiver *PipelineSignalReceiver) listenToSingleEntry() (chosen int, v PipelineSignal) {
+	select {
+	case <-receiver.usrCtx.Done():
+		return 0, v
+	case v = <-receiver.srcReg[0].Ch2:
+		return 1, v
+	}
+}
+
+func (receiver *PipelineSignalReceiver) listenToTwoEntry() (chosen int, v PipelineSignal) {
+	select {
+	case <-receiver.usrCtx.Done():
+		return 0, v
+	case v = <-receiver.srcReg[0].Ch2:
+		return 1, v
+	case v = <-receiver.srcReg[1].Ch2:
+		return 2, v
+	}
+}
+
+func (receiver *PipelineSignalReceiver) listenToThreeEntry() (chosen int, v PipelineSignal) {
+	select {
+	case <-receiver.usrCtx.Done():
+		return 0, v
+	case v = <-receiver.srcReg[0].Ch2:
+		return 1, v
+	case v = <-receiver.srcReg[1].Ch2:
+		return 2, v
+	case v = <-receiver.srcReg[2].Ch2:
+		return 3, v
+	}
+}
+
+func (receiver *PipelineSignalReceiver) listenToFourEntry() (chosen int, v PipelineSignal) {
+	select {
+	case <-receiver.usrCtx.Done():
+		return 0, v
+	case v = <-receiver.srcReg[0].Ch2:
+		return 1, v
+	case v = <-receiver.srcReg[1].Ch2:
+		return 2, v
+	case v = <-receiver.srcReg[2].Ch2:
+		return 3, v
+	case v = <-receiver.srcReg[3].Ch2:
+		return 4, v
 	}
 }
