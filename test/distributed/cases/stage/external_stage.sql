@@ -22,7 +22,7 @@ drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 select * from t1 into outfile 'stage://stage01/local_stage_table01.csv';
 truncate t1;
@@ -49,7 +49,7 @@ drop stage if exists stage02;
 create stage stage02 url = 'file:///$resources/into_outfile/stage';
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 select * from t2 into outfile 'stage://stage02/local_stage_table02.csv';
 truncate t2;
@@ -76,7 +76,7 @@ drop stage if exists stage03;
 create stage stage03 url = 'file:///$resources/into_outfile/stage';
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 select * from t3 into outfile 'stage://stage03/local_stage_table03.csv';
 delete from t3;
@@ -107,7 +107,7 @@ drop stage if exists stage04;
 create stage stage04 url = 'file:///$resources/into_outfile/stage';
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 select * from t4 into outfile 'stage://stage04/local_stage_table04.csv';
 delete from t4;
@@ -134,7 +134,7 @@ drop stage if exists stage05;
 create stage stage05 url = 'file:///$resources/into_outfile/stage';
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 select * from t5 into outfile 'stage://stage05/local_stage_table05.csv';
 truncate t5;
@@ -160,7 +160,7 @@ drop stage if exists stage06;
 create stage stage06 url = 'file:///$resources/into_outfile/stage';
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 select * from t6 into outfile 'stage://stage06/local_stage_table06.csv';
 truncate t6;
@@ -182,7 +182,7 @@ drop stage if exists stage07;
 create stage stage07 url = 'file:///$resources/into_outfile/stage';
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 select * from t7 into outfile 'stage://stage07/local_stage_table07.csv';
 truncate t7;
@@ -203,7 +203,7 @@ drop stage if exists stage08;
 create stage stage08 url = 'file:///$resources/into_outfile/stage' comment = 'this is a stage';
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 select * from t8 into outfile 'stage://stage08/local_stage_table08.csv';
 truncate t8;
@@ -224,7 +224,7 @@ drop stage if exists stage09;
 create stage stage09 url = 'file:///$resources/into_outfile/stage' comment = '这是一个基于file system创建的stage';
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 select * from t9 into outfile 'stage://stage09/local_stage_table09.csv';
 truncate t9;
@@ -235,7 +235,7 @@ drop table t9;
 drop stage stage09;
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 
 
@@ -253,7 +253,7 @@ drop stage if exists stage11;
 create stage stage11 url = 'file:///$resources/into_outfile/stage' comment = 'this is a stage';
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
--- @ignore:0
+-- @ignore:1
 show stages;
 select * from t11 into outfile 'stage://stage11/local_stage_table11.csv';
 truncate t11;
@@ -273,7 +273,7 @@ drop stage if exists account;
 create stage account url = 'file:///$resources/into_outfile/stage';
 drop stage if exists `$$%%`;
 create stage `$$%%` url = 'file:///$resources/into_outfile/stage';
--- @ignore:0
+-- @ignore:1
 show stages;
 -- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
