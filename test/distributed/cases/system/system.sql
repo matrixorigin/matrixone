@@ -103,3 +103,12 @@ drop publication if exists pub01;
 show publications;
 drop database if exists test01;
 drop account if exists acc01;
+
+create database db01;
+use db01;
+create table table01 (id int);
+insert into table01 values(1);
+select * from table01 limit 0;
+select * from table02 limit 0;
+select * from system.table03 limit 0;
+drop database db01;
