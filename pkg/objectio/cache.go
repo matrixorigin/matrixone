@@ -124,13 +124,7 @@ func LoadObjectMetaByExtent(
 	key := encodeCacheKey(*name.Short(), cacheKeyTypeMeta)
 	v, ok := metaCache.Get(key)
 	if ok {
-		var obj any
-		obj, err = Decode(v)
-		if err != nil {
-			return
-		}
-		meta = obj.(ObjectMeta)
-		return
+		return MustObjectMeta(v), nil
 	}
 	if extent.Length() == 0 {
 		logutil.Warn("[LoadObjectMetaByExtent]",
