@@ -564,9 +564,6 @@ func EvalDeleteRowsByTimestamp(
 	if deletes == nil {
 		return
 	}
-	// record visible delete rows
-	rows = nulls.NewWithSize(64)
-
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0])
 	tss := vector.MustFixedColWithTypeCheck[types.TS](deletes.Vecs[1])
 	//aborts := deletes.Vecs[3]
@@ -578,6 +575,9 @@ func EvalDeleteRowsByTimestamp(
 			continue
 		}
 		row := rowids[i].GetRowOffset()
+		if rows == nil {
+			rows = nulls.NewWithSize(row + 1)
+		}
 		rows.Add(uint64(row))
 	}
 
@@ -591,16 +591,17 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
 	if deletes == nil {
 		return
 	}
-	// record visible delete rows
-	rows = nulls.NewWithSize(0)
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0])
 
 	start, end := FindIntervalForBlock(rowids, &bid)
-
-	for i := start; i < end; i++ {
+	for i := end - 1; i >= start; i-- {
 		row := rowids[i].GetRowOffset()
+		if rows == nil {
+			rows = nulls.NewWithSize(row + 1)
+		}
 		rows.Add(uint64(row))
 	}
+
 	return
 }
 
