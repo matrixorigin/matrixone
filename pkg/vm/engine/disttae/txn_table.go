@@ -1725,14 +1725,13 @@ func (tbl *txnTable) BuildReaders(
 
 	scanType := determineScanType(relData, newNum)
 	def := tbl.GetTableDef(ctx)
-	mod := blkCnt % newNum
-	divide := blkCnt / newNum
+	divide := blkCnt/newNum + 1
 	var shard engine.RelData
 	for i := 0; i < newNum; i++ {
-		if i == 0 {
-			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
+		if i < newNum-1 {
+			shard = relData.DataSlice(i*divide, (i+1)*divide)
 		} else {
-			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
+			shard = relData.DataSlice(i*divide, blkCnt)
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, tombstonePolicy)
 		if err != nil {
