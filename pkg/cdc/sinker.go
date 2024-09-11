@@ -32,7 +32,7 @@ import (
 const (
 	// DefaultMaxAllowedPacket of mysql is 64 MB
 	DefaultMaxAllowedPacket uint64 = 64 * 1024 * 1024
-	DefaultRetryTimes              = 3
+	DefaultRetryTimes              = -1
 	DefaultRetryDuration           = 30 * time.Minute
 )
 
@@ -236,7 +236,7 @@ func (s *mysqlSinker) sinkCkp(ctx context.Context, bat *batch.Batch) (err error)
 
 	for i := 0; i < bat.RowCount(); i++ {
 		// step1: get row from the batch
-		if err = extractRowFromEveryVector2(ctx, bat, i, s.insertRow); err != nil {
+		if err = extractRowFromEveryVector(ctx, bat, i, s.insertRow); err != nil {
 			return
 		}
 

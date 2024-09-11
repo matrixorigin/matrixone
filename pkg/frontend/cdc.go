@@ -105,9 +105,19 @@ const (
 	updateCdcMetaFormat = "update `mo_catalog`.`mo_cdc_task` set state = ? where 1=1"
 
 	deleteWatermarkFormat = "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = %d and task_id = '%s'"
+
+	getWatermarkFormat = `
+		select 
+			t.reldatabase, t.relname, w.watermark
+		from 
+			mo_catalog.mo_cdc_watermark w 
+		join 
+			mo_catalog.mo_tables t 
+		on w.table_id = t.rel_id 
+		where w.account_id = %d and w.task_id = '%s'`
 )
 
-var showCdcOutputColumns = [6]Column{
+var showCdcOutputColumns = [7]Column{
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
 			name:       "task_id",
@@ -141,7 +151,13 @@ var showCdcOutputColumns = [6]Column{
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
 			name:       "checkpoint",
-			columnType: defines.MYSQL_TYPE_LONGLONG,
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	},
+	&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "timestamp",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
 		},
 	},
 }
@@ -1281,7 +1297,6 @@ func (cdc *CdcTask) Cancel() error {
 }
 
 func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client.TxnOperator) error {
-
 	// reader --call--> sinker ----> remote db
 	ctx := defines.AttachAccountId(context.Background(), uint32(cdc.cdcTask.Accounts[0].GetId()))
 
@@ -1582,17 +1597,37 @@ func executeSql(ctx context.Context, tx taskservice.SqlExecutor, query string, a
 }
 
 func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error) {
+	var (
+		taskId        string
+		taskName      string
+		sourceUri     string
+		sinkUri       string
+		state         string
+		ckpStr        string
+		sourceUriInfo cdc2.UriInfo
+		sinkUriInfo   cdc2.UriInfo
+	)
+
+	ctx := defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	pu := getGlobalPu()
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
 	rs := &MysqlResultSet{}
 	ses.SetMysqlResultSet(rs)
 	for _, column := range showCdcOutputColumns {
 		rs.AddColumn(column)
 	}
 
-	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
+	// current timestamp
+	txnOp, err := cdc2.GetTxnOp(ctx, pu.StorageEngine, pu.TxnClient)
+	if err != nil {
+		return err
+	}
+	timestamp := txnOp.SnapshotTS().ToStdTime().String()
 
-	sql := fmt.Sprintf("SELECT task_id, task_name, source_uri, sink_uri, state, checkpoint FROM %s.mo_cdc_task", catalog.MO_CATALOG)
+	// get from task table
+	sql := fmt.Sprintf("SELECT task_id, task_name, source_uri, sink_uri, state FROM %s.mo_cdc_task", catalog.MO_CATALOG)
 	if !st.Option.All {
 		sql += fmt.Sprintf(" where task_name = '%s'", st.Option.TaskName)
 	}
@@ -1607,20 +1642,8 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 		return
 	}
 
-	var (
-		taskId        string
-		taskName      string
-		sourceUri     string
-		sinkUri       string
-		state         string
-		ckp           uint64
-		sourceUriInfo cdc2.UriInfo
-		sinkUriInfo   cdc2.UriInfo
-	)
-
 	for _, result := range erArray {
 		for i := uint64(0); i < result.GetRowCount(); i++ {
-
 			if taskId, err = result.GetString(ctx, i, 0); err != nil {
 				return
 			}
@@ -1636,9 +1659,6 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 			if state, err = result.GetString(ctx, i, 4); err != nil {
 				return
 			}
-			if ckp, err = result.GetUint64(ctx, i, 5); err != nil {
-				return
-			}
 
 			// decode uriInfo
 			if err = cdc2.JsonDecode(sourceUri, &sourceUriInfo); err != nil {
@@ -1648,15 +1668,61 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 				return
 			}
 
+			// get watermarks
+			if ckpStr, err = getTaskCkp(ctx, bh, ses.GetTenantInfo().TenantID, taskId); err != nil {
+				return
+			}
+
 			rs.AddRow([]interface{}{
 				taskId,
 				taskName,
 				sourceUriInfo.String(),
 				sinkUriInfo.String(),
 				state,
-				ckp,
+				ckpStr,
+				timestamp,
 			})
 		}
 	}
+	return
+}
+
+func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId string) (s string, err error) {
+	var (
+		dbName    string
+		tblName   string
+		watermark string
+	)
+
+	s = "{\n"
+
+	sql := fmt.Sprintf(getWatermarkFormat, accountId, taskId)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	for _, result := range erArray {
+		for i := uint64(0); i < result.GetRowCount(); i++ {
+			if dbName, err = result.GetString(ctx, i, 0); err != nil {
+				return
+			}
+			if tblName, err = result.GetString(ctx, i, 1); err != nil {
+				return
+			}
+			if watermark, err = result.GetString(ctx, i, 2); err != nil {
+				return
+			}
+
+			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark)
+		}
+	}
+
+	s += "}"
 	return
 }

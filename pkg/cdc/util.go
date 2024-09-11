@@ -43,42 +43,11 @@ import (
 )
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
-// skipFirstNCols denotes the first N columns should be skipped
-func extractRowFromEveryVector(
-	ctx context.Context,
-	dataSet *batch.Batch,
-	skipFirstNCols int,
-	rowIndex int,
-	row []any,
-) error {
-	for i, vec := range dataSet.Vecs { //col index
-		if i < skipFirstNCols {
-			continue
-		}
-		rowIndexBackup := rowIndex
-		if vec.IsConstNull() {
-			row[i] = nil
-			continue
-		}
-		if vec.IsConst() {
-			rowIndex = 0
-		}
-
-		err := extractRowFromVector(ctx, vec, i, row, rowIndex)
-		if err != nil {
-			return err
-		}
-		rowIndex = rowIndexBackup
-	}
-	return nil
-}
-
-// extractRowFromEveryVector2 gets the j row from the every vector and outputs the row
 // bat columns layout:
 // 1. data: user defined cols | cpk (if need) | commit-ts
 // 2. tombstone: pk/cpk | commit-ts
 // return user defined cols for data or only one cpk column for tombstone
-func extractRowFromEveryVector2(
+func extractRowFromEveryVector(
 	ctx context.Context,
 	dataSet *batch.Batch,
 	rowIndex int,
@@ -211,8 +180,10 @@ func convertColIntoSql(
 	var temp string
 	switch typ.Oid { //get col
 	case types.T_json:
+		sqlBuff = appendByte(sqlBuff, '\'')
 		temp = data.(bytejson.ByteJson).String()
 		sqlBuff = appendString(sqlBuff, temp)
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_bool:
 		b := data.(bool)
 		if b {
@@ -227,7 +198,9 @@ func convertColIntoSql(
 		byteLength := (bitLength + 7) / 8
 		b := types.EncodeUint64(&value)[:byteLength]
 		slices.Reverse(b)
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendBytes(sqlBuff, b)
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_int8:
 		value := data.(int8)
 		sqlBuff = appendInt64(sqlBuff, int64(value))
@@ -266,9 +239,9 @@ func convertColIntoSql(
 		types.T_varbinary,
 		types.T_datalink:
 		value := data.([]byte)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendBytes(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -276,66 +249,66 @@ func convertColIntoSql(
 		//+------------------------------+
 		//|   �?   @  @@                  |
 		//+------------------------------+
-		value := data.(float32)
-		sqlBuff = appendFloat64(sqlBuff, float64(value), 32)
+		value := data.([]float32)
+		sqlBuff = appendString(sqlBuff, floatArrayToString(value))
 	case types.T_array_float64:
-		value := data.(float64)
-		sqlBuff = appendFloat64(sqlBuff, value, 64)
+		value := data.([]float64)
+		sqlBuff = appendString(sqlBuff, floatArrayToString(value))
 	case types.T_date:
 		value := data.(types.Date)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_datetime:
 		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_time:
 		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_timestamp:
 		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_decimal64:
 		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_decimal128:
 		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_uuid:
 		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_Rowid:
 		value := data.(types.Rowid)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_Blockid:
 		value := data.(types.Blockid)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_TS:
 		value := data.(types.TS)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value.ToString())
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_enum:
 		value := data.(types.Enum)
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '"')
+		sqlBuff = appendByte(sqlBuff, '\'')
 	default:
 		logutil.Error(
 			"Failed to extract row from vector, unsupported type",
@@ -377,6 +350,19 @@ func appendFloat64(buf []byte, value float64, bitSize int) []byte {
 		}
 	}
 	return buf
+}
+
+func floatArrayToString[T float32 | float64](arr []T) string {
+	str := "'["
+	for i, v := range arr {
+		if i == 0 {
+			str += fmt.Sprintf("%f", v)
+		} else {
+			str += fmt.Sprintf(",%f", v)
+		}
+	}
+	str += "]'"
+	return str
 }
 
 func openDbConn(

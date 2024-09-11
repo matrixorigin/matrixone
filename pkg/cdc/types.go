@@ -285,7 +285,7 @@ func (iter *atomicBatchRowIter) Next() bool {
 
 func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
 	batchRow := iter.iter.Item()
-	return extractRowFromEveryVector2(
+	return extractRowFromEveryVector(
 		ctx,
 		batchRow.Src,
 		batchRow.Offset,
