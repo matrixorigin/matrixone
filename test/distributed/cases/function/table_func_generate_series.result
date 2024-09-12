@@ -178,3 +178,18 @@ select count(*) as ttl from t;
 ttl
 200000
 drop table t;
+create table t(a int, b int);
+explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf;
+TP QURERY PLAN
+Project
+  ->  CROSS APPLY
+        ->  Table Scan on table_func_generate_series.t
+        ->  Table Function on generate_series
+explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf where t.a > 1;
+TP QURERY PLAN
+Project
+  ->  CROSS APPLY
+        ->  Table Scan on table_func_generate_series.t
+              Filter Cond: (t.a > 1)
+        ->  Table Function on generate_series
+drop table t;
