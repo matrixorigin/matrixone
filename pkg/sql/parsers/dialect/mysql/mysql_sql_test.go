@@ -337,6 +337,24 @@ var (
 			input:  "explain (analyze true,verbose false,format json) select * from emp",
 			output: "explain (analyze true,verbose false,format json) select * from emp",
 		}, {
+			input:  "explain phyplan select * from emp where sal > 3000",
+			output: "explain (phyplan) select * from emp where sal > 3000",
+		}, {
+			input:  "explain phyplan verbose select * from emp",
+			output: "explain (phyplan,verbose) select * from emp",
+		}, {
+			input:  "explain phyplan analyze select * from emp",
+			output: "explain (phyplan,analyze) select * from emp",
+		}, {
+			input:  "explain (phyplan true,verbose false) select * from emp",
+			output: "explain (phyplan true,verbose false) select * from emp",
+		}, {
+			input:  "explain (phyplan true,verbose false,format json) select * from emp",
+			output: "explain (phyplan true,verbose false,format json) select * from emp",
+		}, {
+			input:  "explain (phyplan true,analyze true,verbose true) select * from emp",
+			output: "explain (phyplan true,analyze true,verbose true) select * from emp",
+		}, {
 			input:  "with t11 as (select * from t1) update t11 join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
 			output: "with t11 as (select * from t1) update t11 inner join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
 		}, {
