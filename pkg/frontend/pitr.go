@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -253,7 +254,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 			accountName,
 			databaseName,
 			tableName,
-			0,
+			math.MaxUint64,
 			uint8(pitrVal),
 			pitrUnit)
 		if err != nil {
@@ -465,6 +466,9 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 	}
 	err = bh.Exec(ctx, sql)
 	if err != nil {
+		if strings.Contains(err.Error(), "Duplicate entry") {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("%s already has a pitr", pitrLevel.String()))
+		}
 		return err
 	}
 

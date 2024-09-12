@@ -147,7 +147,8 @@ var (
 			obj_id bigint unsigned,
 			pitr_length tinyint unsigned,
 			pitr_unit varchar(10),
-			primary key(pitr_name, create_account)
+			primary key(pitr_name, create_account),
+			UNIQUE KEY (create_account, obj_id)
 			)`, catalog.MO_CATALOG, catalog.MO_PITR)
 
 	MoCatalogMoRetentionDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
