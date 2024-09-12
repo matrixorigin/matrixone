@@ -122,7 +122,9 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		TblFuncExprList: exprs,
-		Children:        []int32{childId},
+	}
+	if childId >= 0 {
+		node.Children = []int32{childId}
 	}
 	return builder.appendNode(node, ctx), nil
 }
