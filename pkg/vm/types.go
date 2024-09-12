@@ -106,6 +106,7 @@ const (
 	Sample
 	ProductL2
 	Mock
+	Apply
 )
 
 func (op OpType) String() string {

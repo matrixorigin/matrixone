@@ -1232,6 +1232,15 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileSinkNode(n, ss, step)
+	/*case plan.Node_APPLY:
+	left, err = c.compilePlanScope(step, n.Children[0], ns)
+	if err != nil {
+		return nil, err
+	}
+
+	c.setAnalyzeCurrent(left, int(curNodeIdx))
+	ss = c.compileSort(n, c.compileApply(n, ns[n.Children[1]], left))
+	return ss, nil*/
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -2511,6 +2520,24 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
+/*
+	func (c *Compile) compileApply(node, right *plan.Node, probeScopes []*Scope) []*Scope {
+		rs := c.mergeScopesByCN(probeScopes)
+
+		switch node.JoinType {
+		case plan.Node_INNER:
+			for i := range rs {
+				op := constructApply(node, right, apply.CROSS, c.proc)
+				op.SetIdx(c.anal.curNodeIdx)
+				rs[i].setRootOperator(op)
+			}
+		default:
+			panic("unknown apply")
+		}
+
+		return rs
+	}
+*/
 func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
