@@ -44,3 +44,11 @@ create table t(a int, b text);
 insert into t select result, repeat('foobarzoo', 600) t from generate_series(1, 200000) t;
 select count(*) as ttl from t;
 drop table t;
+
+# Test cross apply
+create table t(a int, b int);
+-- @separator:table
+explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf;
+-- @separator:table
+explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf where t.a > 1;
+drop table t;

@@ -39,6 +39,12 @@ func (insert *Insert) OpType() vm.OpType {
 }
 
 func (insert *Insert) Prepare(proc *process.Process) error {
+	if insert.OpAnalyzer == nil {
+		insert.OpAnalyzer = process.NewAnalyzer(insert.GetIdx(), insert.IsFirst, insert.IsLast, "insert")
+	} else {
+		insert.OpAnalyzer.Reset()
+	}
+
 	insert.ctr.state = vm.Build
 	if insert.ToWriteS3 {
 		if len(insert.InsertCtx.PartitionTableIDs) > 0 {
@@ -87,21 +93,22 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(insert.GetIdx(), insert.GetParallelIdx(), insert.GetParallelMajor())
-	anal.Start()
+	analyzer := insert.OpAnalyzer
+	analyzer.Start()
+
 	t := time.Now()
 	defer func() {
-		anal.AddInsertTime(t)
-		anal.Stop()
+		analyzer.AddInsertTime(t)
+		analyzer.Stop()
 	}()
 
 	if insert.ToWriteS3 {
-		return insert.insert_s3(proc, anal)
+		return insert.insert_s3(proc, analyzer)
 	}
-	return insert.insert_table(proc, anal)
+	return insert.insert_table(proc, analyzer)
 }
 
-func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
@@ -109,7 +116,7 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 
 	if insert.ctr.state == vm.Build {
 		for {
-			input, err := vm.ChildrenCall(insert.GetChildren(0), proc, anal)
+			input, err := vm.ChildrenCall(insert.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return input, err
 			}
@@ -122,7 +129,6 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 				continue
 			}
 
-			anal.Input(input.Batch, insert.IsFirst)
 			if insert.InsertCtx.AddAffectedRows {
 				affectedRows := uint64(input.Batch.RowCount())
 				atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
@@ -191,7 +197,7 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 			}
 		}
 		insert.ctr.state = vm.End
-		anal.Output(result.Batch, insert.IsLast)
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
@@ -202,12 +208,11 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 	panic("bug")
 }
 
-func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
-	input, err := vm.ChildrenCall(insert.GetChildren(0), proc, anal)
+func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	input, err := vm.ChildrenCall(insert.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return input, err
 	}
-	anal.Input(input.Batch, insert.IsFirst)
 
 	if input.Batch == nil || input.Batch.IsEmpty() {
 		return input, nil
@@ -257,7 +262,7 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 		atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
 	}
 	// `insertBat` does not include partition expression columns
-	anal.Output(input.Batch, insert.IsLast)
+	analyzer.Output(input.Batch)
 	return input, nil
 }
 

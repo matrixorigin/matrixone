@@ -669,7 +669,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 			}
 		}
 		if typ.Oid.IsDatalink() {
-			_, _, _, err2 := types.ParseDatalink(s)
+			_, _, err2 := function.ParseDatalink(s, proc)
 			if err2 != nil {
 				return nil, err2
 			}

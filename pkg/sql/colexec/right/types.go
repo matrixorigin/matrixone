@@ -136,8 +136,9 @@ func (rightJoin *RightJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.state = Build
 	ctr.lastpos = 0
 
-	anal := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
-	anal.Alloc(ctr.maxAllocSize)
+	if rightJoin.OpAnalyzer != nil {
+		rightJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+	}
 	rightJoin.ctr.buf = nil
 	ctr.maxAllocSize = 0
 }
