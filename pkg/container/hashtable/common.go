@@ -21,16 +21,14 @@ import (
 const (
 	kInitialCellCntBits = 10
 	kInitialCellCnt     = 1 << kInitialCellCntBits
-	maxBlockSize        = 128 * (1 << 20)
+	maxBlockSize        = 256 * (1 << 20)
 )
 
 func maxElemCnt(cellCnt, cellSize uint64) uint64 {
 	if cellCnt*cellSize < maxBlockSize {
 		return cellCnt / 2
-	} else if cellCnt*cellSize < maxBlockSize*2 {
-		return cellCnt * 3 / 4
 	} else {
-		return cellCnt * 4 / 5
+		return cellCnt * 3 / 4
 	}
 }
 
