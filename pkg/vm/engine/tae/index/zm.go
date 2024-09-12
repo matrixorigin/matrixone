@@ -523,7 +523,7 @@ func (zm ZM) AnyGE(o ZM) (res bool, ok bool) {
 	return
 }
 
-// zm.min >= k
+// zm.max >= k
 func (zm ZM) AnyGEByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
@@ -1675,9 +1675,13 @@ func UpdateZM(zm ZM, v []byte) {
 	}
 	t := zm.GetType()
 	scale := zm.GetScale()
-	if compute.Compare(v, zm.GetMinBuf(), t, scale, scale) < 0 {
+
+	maxv := zm.GetMaxBuf()
+	minv := zm.GetMinBuf()
+
+	if compute.Compare(v, minv, t, scale, scale) < 0 {
 		zm.updateMinFixed(v)
-	} else if compute.Compare(v, zm.GetMaxBuf(), t, scale, scale) > 0 {
+	} else if compute.Compare(v, maxv, t, scale, scale) > 0 {
 		zm.updateMaxFixed(v)
 	}
 }
