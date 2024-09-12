@@ -638,5 +638,6 @@ func init() {
 		"pitr":                       PITR,
 		"cdc":                        CDC,
 		"rollup":                     ROLLUP,
+		"apply":                      APPLY,
 	}
 }
