@@ -82,7 +82,7 @@ func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
 
 	var version Version
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		version.Version = cols[0].UnsafeGetStringAt(0)
+		version.Version = cols[0].GetStringAt(0)
 		version.VersionOffset = vector.GetFixedAt[uint32](cols[1], 0)
 		version.State = vector.GetFixedAt[int32](cols[2], 0)
 		return true
@@ -102,7 +102,7 @@ func GetLatestUpgradeVersion(txn executor.TxnExecutor) (Version, error) {
 
 	var version Version
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		version.Version = cols[0].UnsafeGetStringAt(0)
+		version.Version = cols[0].GetStringAt(0)
 		return true
 	})
 	return version, nil
@@ -124,7 +124,7 @@ func MustGetLatestReadyVersion(
 
 	version := ""
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		version = cols[0].UnsafeGetStringAt(0)
+		version = cols[0].GetStringAt(0)
 		return true
 	})
 	if version == "" {
