@@ -314,11 +314,7 @@ delete from t1 where c1>1000000;
 select count(*) from t1;
 set session optimizer_hints="";
 DROP TABLE IF EXISTS `t3`;
-CREATE TABLE t3 (
-    id INT PRIMARY KEY,
-    col1 INT,
-    key idx_col1 (col1)
-);
+CREATE TABLE t3 ( id INT PRIMARY KEY,col1 INT,key idx_col1 (col1));
 INSERT INTO t3 (SELECT *,1 FROM generate_series(0,8192,1)g);
 DELETE FROM t3 WHERE col1=1;
 SELECT COUNT(*) FROM t3 WHERE col1=1;
