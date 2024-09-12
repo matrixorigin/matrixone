@@ -300,9 +300,9 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 		return
 	}
 
-	for _, vec := range bat.Vecs {
+	for i, vec := range bat.Vecs {
 		if vec != nil {
-			bat.ReplaceVector(vec, nil)
+			bat.ReplaceVector(vec, nil, i)
 			vec.Free(proc.GetMPool())
 		}
 	}

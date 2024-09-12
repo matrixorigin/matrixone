@@ -75,7 +75,7 @@ func (cb *cachedBatch) CacheBatch(bat *batch.Batch) {
 
 func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 
-	for _, vec := range bat.Vecs {
+	for i, vec := range bat.Vecs {
 		if vec == nil {
 			continue
 		}
@@ -99,7 +99,7 @@ func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 		}
 		cb.bytesCacheLock.Unlock()
 
-		bat.ReplaceVector(vec, nil)
+		bat.ReplaceVector(vec, nil, i)
 	}
 	bat.Vecs = bat.Vecs[:0]
 	bat.Attrs = bat.Attrs[:0]
@@ -157,17 +157,16 @@ func (cb *cachedBatch) GetCopiedBatch(
 			}
 
 			typ := *vec.GetType()
-			dataSize := len(vec.GetData())
-			areaSize := len(vec.GetArea())
 
 			if vec.IsConst() {
 				dst.Vecs[i] = vector.NewVec(typ)
 				if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
+					dst.Clean(cb.mp)
 					return nil, false, err
 				}
 
 			} else {
-				dst.Vecs[i] = cb.setSuitableDataAreaToVector(dataSize, areaSize, vector.NewVec(typ))
+				dst.Vecs[i] = cb.setSuitableDataAreaToVector(len(vec.GetData()), len(vec.GetArea()), vector.NewVec(typ))
 				dst.Vecs[i].Reset(typ)
 				if err = vector.GetUnionAllFunction(typ, cb.mp)(dst.Vecs[i], vec); err != nil {
 					dst.Clean(cb.mp)
@@ -178,8 +177,8 @@ func (cb *cachedBatch) GetCopiedBatch(
 			dst.Vecs[i].SetIsBin(vec.GetIsBin())
 
 			// range src and found the same vector.
-			for j, srcVec := range src.Vecs {
-				if srcVec == vec {
+			for j := i+1; j < len(src.Vecs); j++ {
+				if dst.Vecs[j] == nil && src.Vecs[j] == vec {
 					dst.Vecs[j] = dst.Vecs[i]
 				}
 			}
