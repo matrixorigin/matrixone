@@ -174,6 +174,8 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			m.stats.blkRowCnt = 0
 			m.stats.objBlkCnt++
 
+			_ = vector.MustFixedColWithTypeCheck[T](m.buffer.Vecs[m.sortKeyIdx])
+
 			if m.writer == nil {
 				m.writer = m.host.PrepareNewWriter()
 			}
