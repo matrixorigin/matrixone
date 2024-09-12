@@ -143,7 +143,7 @@ var upg_drop_task_metadata_id = versions.UpgradeEntry{
 			return false, err
 		}
 		return true, nil
-  },
+	},
 }
 
 var upgradeShardingMetadata = versions.UpgradeEntry{
