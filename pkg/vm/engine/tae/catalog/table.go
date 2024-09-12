@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strings"
 	"sync/atomic"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -358,7 +357,7 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 	}
 	defer it.Release()
 	zonemapKind := common.ZonemapPrintKindNormal
-	if schema := entry.GetLastestSchemaLocked(false); schema.HasSortKey() && strings.HasPrefix(schema.GetSingleSortKey().Name, "__") {
+	if schema := entry.GetLastestSchemaLocked(isTombstone); schema.HasSortKey() && schema.GetSingleSortKey().Name == "__mo_cpkey_col" {
 		zonemapKind = common.ZonemapPrintKindCompose
 	}
 
@@ -504,7 +503,6 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		objectEntry := objIt.Item()
 		if err := processor.OnTombstone(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				objIt.Next()
 				continue
 			}
 			return err
