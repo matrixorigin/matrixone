@@ -961,9 +961,9 @@ var (
 		"mo_subs":                     0,
 		"mo_shards":                   0,
 		"mo_shards_metadata":          0,
+		catalog.MO_RETENTION:          0,
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
-		catalog.MO_RETENTION:          0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
