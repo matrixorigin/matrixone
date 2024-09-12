@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -121,7 +122,8 @@ func runTestWithTwoFileServices(t *testing.T, fn func(sf1 *cacheFs, sf2 *cacheFs
 			KeyRouterFactory: func() client.KeyRouter[query.CacheKey] {
 				return keyRouter
 			},
-			QueryClient: qt,
+			QueryClient:    qt,
+			MemoryCapacity: ptrTo[toml.ByteSize](1 << 30),
 		}
 		cacheCfg.setDefaults()
 		cacheCfg.SetRemoteCacheCallback()

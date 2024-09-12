@@ -60,23 +60,6 @@ type CacheCallbacks struct {
 type CacheCallbackFunc = func(fscache.CacheKey, fscache.Data)
 
 func (c *CacheConfig) setDefaults() {
-	if c.MemoryCapacity == nil {
-		size := toml.ByteSize(512 << 20)
-		c.MemoryCapacity = &size
-	}
-	if c.DiskCapacity == nil {
-		size := toml.ByteSize(8 << 30)
-		c.DiskCapacity = &size
-	}
-	if c.DiskMinEvictInterval == nil {
-		c.DiskMinEvictInterval = &toml.Duration{
-			Duration: time.Minute * 7,
-		}
-	}
-	if c.DiskEvictTarget == nil {
-		target := 0.8
-		c.DiskEvictTarget = &target
-	}
 	c.RPC.Adjust()
 }
 
