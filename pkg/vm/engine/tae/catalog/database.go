@@ -592,6 +592,8 @@ func MockDBEntryWithAccInfo(accId uint64, dbId uint64) *DBEntry {
 
 	entry.DBNode = &DBNode{}
 	entry.DBNode.acInfo.TenantID = uint32(accId)
+	entry.BaseEntryImpl = NewBaseEntry(
+		func() *EmptyMVCCNode { return &EmptyMVCCNode{} })
 
 	return entry
 }

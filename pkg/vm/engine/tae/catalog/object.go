@@ -585,6 +585,27 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
 	return e
 }
 
+func MockTombstoneEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
+	stats := objectio.NewObjectStats()
+	objectio.SetObjectStatsSize(stats, uint32(size))
+	// to make sure pass the stats empty check
+	objectio.SetObjectStatsRowCnt(stats, uint32(1))
+	ts := types.BuildTS(time.Now().UnixNano(), 0)
+	e := &ObjectEntry{
+		table: tbl,
+		ObjectNode: ObjectNode{
+			IsTombstone: true,
+		},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: ts,
+		},
+		ObjectMVCCNode: ObjectMVCCNode{*stats},
+		CreateNode:     *txnbase.NewTxnMVCCNodeWithTS(ts),
+		ObjectState:    ObjectState_Create_ApplyCommit,
+	}
+	return e
+}
+
 func (entry *ObjectEntry) GetMVCCNodeInRange(start, end types.TS) (nodes []*txnbase.TxnMVCCNode) {
 	needWait, txn := entry.GetLastMVCCNode().NeedWaitCommitting(end.Next())
 	if needWait {
