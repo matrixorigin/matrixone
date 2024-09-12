@@ -63,7 +63,7 @@ type BlockInfo struct {
 	PartitionNum int16
 }
 
-func (b *BlockInfo) SetFlagByObjStats(stats ObjectStats) {
+func (b *BlockInfo) SetFlagByObjStats(stats *ObjectStats) {
 	b.ObjectFlags = stats.GetFlag()
 }
 
