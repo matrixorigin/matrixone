@@ -89,7 +89,7 @@ func (ht *Int64HashMap) Init(allocator malloc.Allocator) (err error) {
 	ht.rawDataDeallocators = make([]malloc.Deallocator, 1)
 	ht.cells = make([][]Int64HashMapCell, 1)
 
-	if err := ht.allocate(0, uint64(ht.blockCellCnt*strCellSize)); err != nil {
+	if err = ht.allocate(0, uint64(ht.blockCellCnt*intCellSize)); err != nil {
 		return err
 	}
 
@@ -218,7 +218,7 @@ func (ht *Int64HashMap) ResizeOnDemand(n int) error {
 		ht.cellCntMask = ht.cellCnt - 1
 
 		for i := oldBlockNum; i < newBlockNum; i++ {
-			if err := ht.allocate(i, uint64(ht.blockCellCnt*strCellSize)); err != nil {
+			if err := ht.allocate(i, uint64(ht.blockCellCnt*intCellSize)); err != nil {
 				return err
 			}
 		}
@@ -281,7 +281,7 @@ func (ht *Int64HashMap) ResizeOnDemand(n int) error {
 			ht.cellCntMask = ht.cellCnt - 1
 
 			for i := 0; i < newBlockNum; i++ {
-				if err := ht.allocate(i, uint64(ht.blockCellCnt*strCellSize)); err != nil {
+				if err := ht.allocate(i, uint64(ht.blockCellCnt*intCellSize)); err != nil {
 					return err
 				}
 			}
