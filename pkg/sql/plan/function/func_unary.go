@@ -24,7 +24,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
 	"runtime"
@@ -33,6 +32,8 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/RoaringBitmap/roaring"
 	"golang.org/x/exp/constraints"
@@ -591,44 +592,99 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		filePath := util.UnsafeBytesToString(_filePath)
 		fs := proc.GetFileService()
 
-		moUrl, offsetSize, ext, err := types.ParseDatalink(filePath)
-		if err != nil {
-			return err
-		}
-		r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+		moUrl, offsetSize, err := ParseDatalink(filePath, proc)
 		if err != nil {
 			return err
 		}
 
-		defer r.Close()
-
-		fileBytes, err := io.ReadAll(r)
-		if err != nil {
-			return err
-		}
-
-		var contentBytes []byte
-		switch ext {
-		case ".csv", ".txt":
-			contentBytes = fileBytes
-			//nothing to do.
-		default:
-			return moerr.NewInvalidInputf(proc.Ctx, "unsupported file extension: %s", ext)
-		}
-
-		if len(fileBytes) > 65536 /*blob size*/ {
-			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-		}
-		if len(fileBytes) == 0 {
-			if err = rs.AppendBytes(nil, true); err != nil {
+		err = func() error {
+			r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+			if err != nil {
 				return err
 			}
-			return nil
-		}
 
-		if err = rs.AppendBytes(contentBytes, false); err != nil {
+			defer r.Close()
+
+			fileBytes, err := io.ReadAll(r)
+			if err != nil {
+				return err
+			}
+
+			if len(fileBytes) == 0 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				return nil
+			}
+
+			if err = rs.AppendBytes(fileBytes, false); err != nil {
+				return err
+			}
+
+			return nil
+		}()
+
+		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// WriteFileDatalink write content to file service and return number of byte written
+func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+	contentVec := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		_filePath, null1 := filePathVec.GetStrValue(i)
+		if null1 {
+			if err := rs.Append(int64(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath := util.UnsafeBytesToString(_filePath)
+
+		moUrl, _, err := ParseDatalink(filePath, proc)
+		if err != nil {
+			return err
+		}
+
+		_content, null2 := contentVec.GetStrValue(i)
+		if null2 {
+			if err := rs.Append(int64(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		content := util.UnsafeBytesToString(_content)
+
+		err = func() error {
+			writer, err := NewFileServiceWriter(moUrl, proc)
+			if err != nil {
+				return err
+			}
+
+			defer writer.Close()
+
+			n, err := writer.Write([]byte(content))
+			if err != nil {
+				return err
+			}
+
+			if err = rs.Append(int64(n), false); err != nil {
+				return err
+			}
+
+			return nil
+		}()
+
+		if err != nil {
+			return err
+		}
+
 	}
 	return nil
 }
