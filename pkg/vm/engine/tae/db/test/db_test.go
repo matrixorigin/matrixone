@@ -9467,3 +9467,37 @@ func TestStartStopTableMerge(t *testing.T) {
 
 	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
 }
+
+func TestRollbackMergeInQueue(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 20
+	schema.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+
+	err = task.OnExec(context.Background())
+	require.NoError(t, err)
+	tae.Runtime.LockMergeService.LockFromUser(rel.ID())
+	require.Error(t, txn.Commit(ctx)) // rollback
+
+	txn, rel = tae.GetRelation()
+
+	objH, err := rel.GetObject(obj.ID(), false)
+	meta := objH.GetMeta().(*catalog.ObjectEntry)
+	require.Equal(t, catalog.ObjectState_Create_ApplyCommit, meta.ObjectState)
+	require.True(t, meta.DeletedAt.IsEmpty())
+	require.Equal(t, 2, rel.GetMeta().(*catalog.TableEntry).ObjectCnt(false) /*Aobj(deleted), Nobj(rollbacked)*/)
+}

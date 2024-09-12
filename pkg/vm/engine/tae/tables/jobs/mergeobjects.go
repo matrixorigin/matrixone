@@ -404,6 +404,9 @@ func HandleMergeEntryInTxn(
 		objID := drop.ObjectName().ObjectId()
 		obj, err := rel.GetObject(objID, isTombstone)
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				logutil.Infof("[MERGE-EOB] LockMerge %v %v", objID.ShortStringEx(), err)
+			}
 			return nil, err
 		}
 		mergedObjs = append(mergedObjs, obj.GetMeta().(*catalog.ObjectEntry))
