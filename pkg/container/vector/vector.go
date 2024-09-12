@@ -1015,11 +1015,11 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		u64Length := uint64(moreLength)
 
 		moreNp := more.GetBitmap()
-		if moreNp == nil || moreNp.EmptyByFlag() {
+		if moreNp == nil || moreNp.EmptyByFlag() || moreLength == 0 {
 			return
 		}
 
-		for i := u64Length; i != 0; i-- {
+		for i := u64Length-1; i != 0; i-- {
 			if moreNp.Contains(i) {
 				dst.Set(i + u64offset)
 			}
