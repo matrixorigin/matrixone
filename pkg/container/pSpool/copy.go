@@ -74,7 +74,7 @@ func (cb *cachedBatch) CacheBatch(bat *batch.Batch) {
 }
 
 func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
-	cb.bytesCacheLock.Lock()
+
 	for _, vec := range bat.Vecs {
 		if vec == nil {
 			continue
@@ -89,17 +89,18 @@ func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 
 		data := vector.GetAndClearVecData(vec)
 		area := vector.GetAndClearVecArea(vec)
+
+		cb.bytesCacheLock.Lock()
 		if data != nil {
 			cb.bytesCache = append(cb.bytesCache, data)
 		}
 		if area != nil {
 			cb.bytesCache = append(cb.bytesCache, area)
 		}
+		cb.bytesCacheLock.Unlock()
 
 		bat.ReplaceVector(vec, nil)
 	}
-	cb.bytesCacheLock.Unlock()
-
 	bat.Vecs = bat.Vecs[:0]
 	bat.Attrs = bat.Attrs[:0]
 	bat.SetRowCount(0)
