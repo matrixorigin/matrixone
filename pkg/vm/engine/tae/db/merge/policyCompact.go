@@ -1,3 +1,17 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package merge
 
 import (
@@ -5,7 +19,6 @@ import (
 	"go.uber.org/zap"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -98,45 +111,4 @@ func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry) {
 	o.tblEntry = entry
 	o.objects = o.objects[:0]
-}
-
-func (o *objCompactPolicy) countRowsInOneTombstoneForOneObject(entry *catalog.ObjectEntry, stats objectio.ObjectStats) uint32 {
-	count := uint32(0)
-	for i := 0; i < int(stats.BlkCnt()); i++ {
-		loc := stats.BlockLocation(uint16(i), o.tblEntry.GetLastestSchema(true).BlockMaxRows)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		c, err := o.countRowsInOneTombstoneBlockForOneObject(ctx, entry, loc)
-		cancel()
-		if err != nil {
-			return 0
-		}
-		count += c
-	}
-	return count
-}
-
-func (o *objCompactPolicy) countRowsInOneTombstoneBlockForOneObject(ctx context.Context, entry *catalog.ObjectEntry, loc objectio.Location) (uint32, error) {
-	count := uint32(0)
-	vectors, closeFunc, err := blockio.LoadColumns2(
-		ctx, []uint16{0, 1}, nil, o.fs, loc,
-		fileservice.Policy(0), false, nil,
-	)
-	defer closeFunc()
-	if err != nil {
-		logutil.Error("[MERGE-POLICY-REVISE] failed to load tombstone columns",
-			zap.String("policy", "compact"),
-			zap.String("location", loc.String()),
-			zap.Error(err),
-		)
-		return 0, err
-	}
-	for j := range vectors[0].Length() {
-		rowID := vectors[0].Get(j).(types.Rowid)
-		blkID2, _ := rowID.Decode()
-		if *blkID2.Object() != *entry.ID() {
-			continue
-		}
-		count++
-	}
-	return count, nil
 }
