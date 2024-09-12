@@ -1412,6 +1412,18 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 	return "QUERY PLAN"
 }
 
+func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
+	switch GetExecType(qry, txnHaveDDL) {
+	case ExecTypeTP:
+		return "TP QURERY PHYPLAN"
+	case ExecTypeAP_ONECN:
+		return "AP QUERY PHYPLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
+	case ExecTypeAP_MULTICN:
+		return "AP QUERY PHYPLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
+	}
+	return "QUERY PHYPLAN"
+}
+
 func PrintStats(qry *plan.Query) string {
 	buf := bytes.NewBuffer(make([]byte, 0, 1024*64))
 	buf.WriteString("Print Stats: \n")
