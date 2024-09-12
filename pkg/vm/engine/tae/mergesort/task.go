@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -126,9 +127,15 @@ func DoMergeAndWrite(
 	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
 	fromObjsDesc := ""
+	fromSize := uint32(0)
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
-		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, obj.ObjectName().ObjectId().ShortStringEx())
+		fromObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
+			obj.ObjectName().ObjectId().ShortStringEx(),
+			obj.BlkCnt(),
+			units.BytesSize(float64(obj.OriginSize())),
+			obj.Rows())
+		fromSize += obj.OriginSize()
 	}
 	logutil.Info(
 		"[MERGE-START]",
@@ -136,7 +143,9 @@ func DoMergeAndWrite(
 		common.AnyField("txn-info", txnInfo),
 		common.AnyField("host", mergehost.HostHintName()),
 		common.AnyField("timestamp", commitEntry.StartTs.DebugString()),
-		common.AnyField("objs", fromObjsDesc),
+		zap.Int("from-obj-cnt", len(commitEntry.MergedObjs)),
+		zap.String("from-objs", fromObjsDesc),
+		zap.String("from-size", units.BytesSize(float64(fromSize))),
 	)
 	defer func() {
 		if err != nil {
@@ -164,18 +173,23 @@ func DoMergeAndWrite(
 	}
 
 	toObjsDesc := ""
+	toSize := uint32(0)
 	for _, o := range commitEntry.CreatedObjs {
 		obj := objectio.ObjectStats(o)
-		toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
+		toObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
 			obj.ObjectName().ObjectId().ShortStringEx(),
 			obj.BlkCnt(),
+			units.BytesSize(float64(obj.OriginSize())),
 			obj.Rows())
+		toSize += obj.OriginSize()
 	}
 
 	logutil.Info(
 		"[MERGE-END]",
 		zap.String("task", mergehost.Name()),
+		zap.Int("to-obj-cnt", len(commitEntry.CreatedObjs)),
 		common.AnyField("to-objs", toObjsDesc),
+		common.AnyField("to-size", units.BytesSize(float64(toSize))),
 		common.DurationField(time.Since(now)),
 	)
 	return nil

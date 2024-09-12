@@ -347,9 +347,15 @@ type TableStat struct {
 	Csize     int
 }
 
-func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat TableStat, w bytes.Buffer) {
-
-	it := entry.MakeDataObjectIt()
+func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTombstone bool) (stat TableStat, w bytes.Buffer) {
+	var it btree.IterG[*ObjectEntry]
+	if isTombstone {
+		w.WriteString("TOMBSTONES\n")
+		it = entry.MakeTombstoneObjectIt()
+	} else {
+		w.WriteString("DATA\n")
+		it = entry.MakeDataObjectIt()
+	}
 	defer it.Release()
 	zonemapKind := common.ZonemapPrintKindNormal
 	if schema := entry.GetLastestSchemaLocked(false); schema.HasSortKey() && strings.HasPrefix(schema.GetSingleSortKey().Name, "__") {
@@ -404,8 +410,8 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 	return
 }
 
-func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int) string {
-	stat, detail := entry.ObjectStats(level, start, end)
+func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int, isTombstone bool) string {
+	stat, detail := entry.ObjectStats(level, start, end, isTombstone)
 
 	var avgCsize, avgRow, avgOsize int
 	if stat.Loaded > 0 {
