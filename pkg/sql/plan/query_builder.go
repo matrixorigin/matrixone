@@ -2265,7 +2265,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
 						if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 							if c.U64Val == 0 {
-								builder.qry.SkipBuildPlanTag = true
+								builder.isSkipBuildTableDef = true
 							}
 						}
 					}
@@ -3572,7 +3572,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 		var subMeta *SubscriptionMeta
 		subMeta, err = builder.compCtx.GetSubscriptionMeta(schema, snapshot)
-		if err == nil && builder.qry.SkipBuildPlanTag && snapshot == nil && subMeta == nil {
+		if err == nil && builder.isSkipBuildTableDef && snapshot == nil && subMeta == nil {
 			var tableDef *TableDef
 			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(schema, table)
 			if err != nil {
