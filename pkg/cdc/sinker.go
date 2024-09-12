@@ -45,7 +45,7 @@ func NewSinker(
 	retryDuration time.Duration,
 ) (Sinker, error) {
 	//TODO: remove console
-	if sinkUri.SinkTyp == "console" {
+	if sinkUri.SinkTyp == ConsoleSink {
 		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
 	}
 
@@ -143,7 +143,7 @@ type mysqlSinker struct {
 	preRowType RowType
 }
 
-func NewMysqlSinker(
+var NewMysqlSinker = func(
 	mysql Sink,
 	dbTblInfo *DbTableInfo,
 	watermarkUpdater *WatermarkUpdater,
@@ -513,6 +513,8 @@ func (s *mysqlSinker) getInsertRowBuf(ctx context.Context) (err error) {
 	return
 }
 
+var unpackWithSchema = types.UnpackWithSchema
+
 // getDeleteRowBuf convert delete row to string
 func (s *mysqlSinker) getDeleteRowBuf(ctx context.Context) (err error) {
 	s.rowBuf = append(s.rowBuf[:0], '(')
@@ -526,7 +528,7 @@ func (s *mysqlSinker) getDeleteRowBuf(ctx context.Context) (err error) {
 	} else {
 		// composite pk
 		var pkTuple types.Tuple
-		if pkTuple, _, err = types.UnpackWithSchema(s.deleteRow[0].([]byte)); err != nil {
+		if pkTuple, _, err = unpackWithSchema(s.deleteRow[0].([]byte)); err != nil {
 			return
 		}
 		for i, pkEle := range pkTuple {
@@ -554,7 +556,7 @@ type mysqlSink struct {
 	retryDuration time.Duration
 }
 
-func NewMysqlSink(
+var NewMysqlSink = func(
 	user, password string,
 	ip string, port int,
 	retryTimes int,
@@ -586,7 +588,7 @@ func (s *mysqlSink) Send(ctx context.Context, sql string) (err error) {
 	for retry, startTime := 0, time.Now(); needRetry(retry, startTime); retry++ {
 		//fmt.Fprintf(os.Stderr, "----mysql send sql----, len:%d, sql:%s\n", len(sql), sql[:min(200, len(sql))])
 		// return if success
-		if _, err = s.conn.ExecContext(ctx, sql); err == nil {
+		if _, err = s.conn.Exec(sql); err == nil {
 			logutil.Errorf("----mysql send sql----, success")
 			return
 		}

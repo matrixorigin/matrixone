@@ -25,7 +25,6 @@ import (
 	"math/rand"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -364,7 +363,7 @@ func floatArrayToString[T float32 | float64](arr []T) string {
 	return str
 }
 
-func openDbConn(
+var openDbConn = func(
 	user, password string,
 	ip string,
 	port int) (db *sql.DB, err error) {
@@ -384,8 +383,10 @@ func openDbConn(
 	return
 }
 
-func tryConn(dsn string) (*sql.DB, error) {
-	db, err := sql.Open("mysql", dsn)
+var openDb = sql.Open
+
+var tryConn = func(dsn string) (*sql.DB, error) {
+	db, err := openDb("mysql", dsn)
 	if err != nil {
 		return nil, err
 	} else {
@@ -443,59 +444,6 @@ func GetTableDef(
 	return rel.CopyTableDef(ctx), nil
 }
 
-func TrimSpace(values []string) []string {
-	if len(values) == 0 {
-		return values
-	}
-	ret := make([]string, 0)
-	ForEach[string](values, func(v string) {
-		res := strings.TrimSpace(v)
-		if len(res) > 0 {
-			ret = append(ret, res)
-		}
-	})
-	return ret
-}
-
-func Deduplicate[T ~string | ~int](values []T) []T {
-	if len(values) == 0 {
-		return values
-	}
-	set := make(map[T]struct{})
-	ForEach(values, func(val T) {
-		if _, ok := set[val]; !ok {
-			set[val] = struct{}{}
-		}
-	})
-	ret := make([]T, 0)
-	for key := range set {
-		ret = append(ret, key)
-	}
-	return ret
-}
-
-func ForEach[T any](values []T, fn func(T)) {
-	if len(values) == 0 || fn == nil {
-		return
-	}
-	for _, value := range values {
-		fn(value)
-	}
-}
-
-func ForEachWithError[T any](values []T, fn func(T) error) error {
-	if len(values) == 0 || fn == nil {
-		return nil
-	}
-	for _, value := range values {
-		err := fn(value)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 const (
 	aesKey = "test-aes-key-not-use-it-in-cloud"
 )
@@ -512,7 +460,7 @@ func aesCFBEncode(data []byte, aesKey []byte) (string, error) {
 
 	encoded := make([]byte, aes.BlockSize+len(data))
 	iv := encoded[:aes.BlockSize]
-	salt := generate_salt(aes.BlockSize)
+	salt := generateSalt(aes.BlockSize)
 	copy(iv, salt)
 	stream := cipher.NewCFBEncrypter(block, iv)
 	stream.XORKeyStream(encoded[aes.BlockSize:], data)
@@ -522,6 +470,7 @@ func aesCFBEncode(data []byte, aesKey []byte) (string, error) {
 func AesCFBDecode(ctx context.Context, data string) (string, error) {
 	return aesCFBDecode(ctx, data, []byte(aesKey))
 }
+
 func aesCFBDecode(ctx context.Context, data string, aesKey []byte) (string, error) {
 	encodedData, err := hex.DecodeString(data)
 	if err != nil {
@@ -541,7 +490,7 @@ func aesCFBDecode(ctx context.Context, data string, aesKey []byte) (string, erro
 	return string(encodedData), nil
 }
 
-func generate_salt(n int) []byte {
+func generateSalt(n int) []byte {
 	buf := make([]byte, n)
 	r := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 	r.Read(buf)

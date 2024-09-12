@@ -27,6 +27,7 @@ var (
 	varcharType  = types.T_varchar.ToType()
 	textType     = types.T_text.ToType()
 	rowIdType    = types.T_Rowid.ToType()
+	tsType       = types.T_TS.ToType()
 	uuidType     = types.T_uuid.ToType()
 	jsonType     = types.T_json.ToType()
 	datetimeType = types.T_datetime.ToType()
