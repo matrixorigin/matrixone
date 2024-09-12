@@ -18,7 +18,6 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"math"
 	"sync"
@@ -160,12 +159,22 @@ func (cb *cachedBatch) GetCopiedBatch(
 			dataSize := len(vec.GetData())
 			areaSize := len(vec.GetArea())
 
-			dst.Vecs[i] = cb.getSuitableVector(dataSize, areaSize, typ)
-			if err = vector.GetUnionAllFunction(typ, cb.mp)(dst.Vecs[i], vec); err != nil {
-				dst.Clean(cb.mp)
-				return nil, false, err
+			if vec.IsConst() {
+				dst.Vecs[i] = vector.NewVec(typ)
+				if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
+					return nil, false, err
+				}
+
+			} else {
+				dst.Vecs[i] = cb.setSuitableDataAreaToVector(dataSize, areaSize, vector.NewVec(typ))
+				dst.Vecs[i].Reset(typ)
+				if err = vector.GetUnionAllFunction(typ, cb.mp)(dst.Vecs[i], vec); err != nil {
+					dst.Clean(cb.mp)
+					return nil, false, err
+				}
+				dst.Vecs[i].SetSorted(vec.GetSorted())
 			}
-			dst.Vecs[i].SetSorted(vec.GetSorted())
+			dst.Vecs[i].SetIsBin(vec.GetIsBin())
 
 			// range src and found the same vector.
 			for j, srcVec := range src.Vecs {
@@ -188,18 +197,17 @@ func (cb *cachedBatch) GetCopiedBatch(
 	return dst, false, nil
 }
 
-// getSuitableVector get two long-enough bytes slices from the cache, and set them to the vector.
+// setSuitableDataAreaToVector get two long-enough bytes slices from the cache,
+// and set them to the vector.
 // if not found, set the last one to the vector.
-func (cb *cachedBatch) getSuitableVector(
-	dataSize, areaSize int, typ types.Type) *vector.Vector {
+func (cb *cachedBatch) setSuitableDataAreaToVector(
+	dataSize, areaSize int, vec *vector.Vector) *vector.Vector {
 	setDataFirst := dataSize >= areaSize
 
 	first, second := dataSize, areaSize
 	if !setDataFirst {
 		first, second = areaSize, dataSize
 	}
-
-	vec := vector.NewVec(typ)
 
 	cb.bytesCacheLock.Lock()
 
@@ -260,7 +268,6 @@ func (cb *cachedBatch) getSuitableVector(
 
 	cb.bytesCacheLock.Unlock()
 
-	vec.Reset(typ)
 	return vec
 }
 
