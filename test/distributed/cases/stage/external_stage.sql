@@ -362,7 +362,7 @@ create stage ex_stage url = 'file:///$resources/into_outfile/stage' comment = 'f
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select * from ex_table_01 into outfile 'stage://ex_stage/stage_table01.csv';
+select * from ex_table_01 into outfile 'stage://ex_stage/stage_t01.csv';
 drop table ex_table_01;
 create external table ex_table_01(
 col1 tinyint,
@@ -385,9 +385,9 @@ col17 text,
 col18 varchar(255),
 col19 varchar(255),
 col20 varchar(255))
-infile 'stage://ex_stage/stage_table01.csv' fields terminated by ','  enclosed by '\"'  ignore 1 lines;
+infile 'stage://ex_stage/stage_t01.csv' fields terminated by ','  enclosed by '\"'  ignore 1 lines;
 select col1, col2, col3, col4, col5, col6, col7, col8, col9 from ex_table_01;
 drop stage ex_stage;
 drop table ex_table_01;
-
+create database test01;
 drop account acc01;
