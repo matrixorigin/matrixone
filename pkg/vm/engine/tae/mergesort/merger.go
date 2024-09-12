@@ -17,6 +17,7 @@ package mergesort
 import (
 	"context"
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -173,8 +174,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		if m.stats.blkRowCnt == int(m.rowPerBlk) {
 			m.stats.blkRowCnt = 0
 			m.stats.objBlkCnt++
-
-			_ = vector.MustFixedColWithTypeCheck[T](m.buffer.Vecs[m.sortKeyIdx])
 
 			if m.writer == nil {
 				m.writer = m.host.PrepareNewWriter()
