@@ -151,6 +151,13 @@ func (w *WordAccum) run(proc *process.Process, tblname string, first_doc_id, las
 			// doc_id any
 			doc_id := vector.GetAny(bat.Vecs[0], i)
 
+			bytes, ok := doc_id.([]byte)
+			if ok {
+				// change it to string
+				key := string(bytes)
+				doc_id = key
+			}
+
 			// pos int64
 			pos := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[1], i)
 
@@ -165,7 +172,7 @@ func (w *WordAccum) run(proc *process.Process, tblname string, first_doc_id, las
 
 			//logutil.Infof("ID:%d, DOC_ID:%v, POS:%d, DOC_COUNT:%d, FIRST: %v, LAST: %v", id, doc_id, pos, doc_count, first_doc_id, last_doc_id)
 
-			_, ok := w.Words[doc_id]
+			_, ok = w.Words[doc_id]
 			if ok {
 				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
 			} else {
@@ -297,13 +304,35 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tbl
 
 	scoremap := s.score(proc)
 
-	// write the batch
-	for key := range scoremap {
-		// type of id follow primary key column
-		vector.AppendAny(bat.Vecs[0], key, false, proc.Mp())
-		// score
-		vector.AppendFixed[float32](bat.Vecs[1], scoremap[key], false, proc.Mp())
+	if bat.VectorCount() == 1 {
+		// only doc_id returned
+
+		// write the batch
+		for key := range scoremap {
+			doc_id := key
+			if s, ok := doc_id.(string); ok {
+				bytes := []byte(s)
+				doc_id = bytes
+			}
+			// type of id follow primary key column
+			vector.AppendAny(bat.Vecs[0], doc_id, false, proc.Mp())
+		}
+	} else {
+		// doc_id and score returned
+		for key := range scoremap {
+			doc_id := key
+			if s, ok := doc_id.(string); ok {
+				bytes := []byte(s)
+				doc_id = bytes
+			}
+			// type of id follow primary key column
+			vector.AppendAny(bat.Vecs[0], doc_id, false, proc.Mp())
+
+			// score
+			vector.AppendFixed[float32](bat.Vecs[1], scoremap[key], false, proc.Mp())
+		}
 	}
+
 	bat.SetRowCount(len(scoremap))
 	return nil
 }
