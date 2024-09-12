@@ -304,19 +304,6 @@ func (s *service) registerExecutorsLocked() {
 		},
 	)
 
-	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
-		frontend.RegisterCdcExecutor(
-			s.logger,
-			ts,
-			ieFactory,
-			s.task.runner.Attach,
-			s.cfg.UUID,
-			s.fileService,
-			s._txnClient,
-			s.storeEngine,
-			s.distributeTaeMp,
-		))
-
 	s.task.runner.RegisterExecutor(task.TaskCode_Retention, func(ctx context.Context, task task.Task) error {
 		ctx1, cancel1 := context.WithTimeout(ctx, 10*time.Second)
 		result, err := s.sqlExecutor.Exec(ctx1, "select account_id from mo_catalog.mo_account;",
@@ -378,4 +365,17 @@ func (s *service) registerExecutorsLocked() {
 		}
 		return nil
 	})
+
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
+		frontend.RegisterCdcExecutor(
+			s.logger,
+			ts,
+			ieFactory,
+			s.task.runner.Attach,
+			s.cfg.UUID,
+			s.fileService,
+			s._txnClient,
+			s.storeEngine,
+			s.distributeTaeMp,
+		))
 }
