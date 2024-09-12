@@ -19,8 +19,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -1128,9 +1126,6 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 
 	//step5: update daemon task status
 	if len(updateTasks) > 0 {
-		for _, uTask := range updateTasks {
-			fmt.Fprintln(os.Stderr, "==>", uTask.Account, uTask.Details.String())
-		}
 		affectedTaskRow, err = m.RunUpdateDaemonTask(ctx, updateTasks, tx)
 		if err != nil {
 			return 0, err
