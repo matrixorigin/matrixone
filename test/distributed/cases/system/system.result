@@ -105,7 +105,7 @@ drop publication if exists pub01;
 create publication pub01 database test01 account acc01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    test01    *    acc01        2024-09-11 18:32:43    null    
+pub01    test01    *    acc01        2024-09-12 18:33:38    null    
 drop database if exists sub01;
 create database sub01 from sys publication pub01;
 use sub01;
@@ -140,4 +140,15 @@ select * from table02 limit 0;
 no such table db01.table02
 select * from system.table03 limit 0;
 no such table system.table03
+create snapshot snapshot01 for account sys;
+select * from table01 {snapshot = 'snapshot01'} limit 0;
+id
+select * from table01 {snapshot = 'snapshot01'} limit 1;
+id
+1
+select * from table02 {snapshot = 'snapshot01'} limit 0;
+SQL parser error: table "table02" does not exist
+select * from table02 {snapshot = 'snapshot01'} limit 1;
+SQL parser error: table "table02" does not exist
+drop snapshot if exists snapshot01;
 drop database db01;

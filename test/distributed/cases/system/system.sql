@@ -114,4 +114,11 @@ select id from table01 limit 0;
 select * from table01 limit 0;
 select * from table02 limit 0;
 select * from system.table03 limit 0;
+
+create snapshot snapshot01 for account sys;
+select * from table01 {snapshot = 'snapshot01'} limit 0;
+select * from table01 {snapshot = 'snapshot01'} limit 1;
+select * from table02 {snapshot = 'snapshot01'} limit 0;
+select * from table02 {snapshot = 'snapshot01'} limit 1;
+drop snapshot if exists snapshot01;
 drop database db01;
