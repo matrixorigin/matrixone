@@ -22,12 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"go.uber.org/zap"
 )
 
 type Merger interface {
@@ -175,21 +173,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		if m.stats.blkRowCnt == int(m.rowPerBlk) {
 			m.stats.blkRowCnt = 0
 			m.stats.objBlkCnt++
-
-			sortKeyCol := vector.MustFixedColNoTypeCheck[T](m.buffer.Vecs[m.sortKeyIdx])
-			var lastKey T
-			var zero T
-			for _, k := range sortKeyCol {
-				if lastKey != zero && lastKey == k {
-					logutil.Warn("duplicate sort key",
-						zap.Any("one", lastKey),
-						zap.Any("other", k),
-						zap.Bool("isTombstone", m.isTombstone),
-						zap.String("name", m.host.Name()),
-					)
-				}
-				lastKey = k
-			}
 
 			if m.writer == nil {
 				m.writer = m.host.PrepareNewWriter()
