@@ -68,14 +68,6 @@ func init() {
 			WithEnableChecker(),
 	)
 
-	reuse.CreatePool[ListExpressionExecutor](
-		func() *ListExpressionExecutor {
-			return &ListExpressionExecutor{}
-		},
-		func(s *ListExpressionExecutor) { *s = ListExpressionExecutor{} },
-		reuse.DefaultOptions[ListExpressionExecutor]().
-			WithEnableChecker(),
-	)
 }
 
 func (expr FixedVectorExpressionExecutor) TypeName() string {
@@ -130,14 +122,5 @@ func (expr FunctionExpressionExecutor) TypeName() string {
 
 func NewFunctionExpressionExecutor() *FunctionExpressionExecutor {
 	fe := reuse.Alloc[FunctionExpressionExecutor](nil)
-	return fe
-}
-
-func (expr ListExpressionExecutor) TypeName() string {
-	return "ListExpressionExecutor"
-}
-
-func NewListExpressionExecutor() *ListExpressionExecutor {
-	fe := reuse.Alloc[ListExpressionExecutor](nil)
 	return fe
 }

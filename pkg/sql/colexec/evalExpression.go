@@ -150,20 +150,6 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}
 		return NewFixedVectorExpressionExecutor(proc.Mp(), true, vec), nil
 
-	case *plan.Expr_List:
-		executor := NewListExpressionExecutor()
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		executor.Init(proc, typ, len(t.List.List))
-		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := NewExpressionExecutor(proc, t.List.List[i])
-			if paramErr != nil {
-				executor.Free()
-				return nil, paramErr
-			}
-			executor.SetParameter(i, subExecutor)
-		}
-		return executor, nil
-
 	case *plan.Expr_F:
 		overloadID := t.F.GetFunc().GetObj()
 		overload, err := function.GetFunctionById(proc.Ctx, overloadID)
@@ -419,79 +405,6 @@ func (expr *VarExpressionExecutor) Free() {
 
 func (expr *VarExpressionExecutor) IsColumnExpr() bool {
 	return false
-}
-
-type ListExpressionExecutor struct {
-	mp *mpool.MPool
-
-	typ               types.Type
-	resultVector      *vector.Vector
-	parameterExecutor []ExpressionExecutor
-}
-
-func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	if expr.resultVector == nil {
-		expr.resultVector = vector.NewVec(expr.typ)
-	} else {
-		expr.resultVector.CleanOnlyData()
-	}
-	for i := range expr.parameterExecutor {
-		vec, err := expr.parameterExecutor[i].Eval(proc, batches, selectList)
-		if err != nil {
-			return nil, err
-		}
-		err = expr.resultVector.UnionOne(vec, 0, expr.mp)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return expr.resultVector, nil
-}
-
-func (expr *ListExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	vec, err := expr.Eval(proc, batches, nil)
-	if err != nil {
-		return nil, err
-	}
-	expr.resultVector = nil
-	return vec, nil
-}
-
-func (expr *ListExpressionExecutor) Free() {
-	if expr == nil {
-		return
-	}
-	for _, e := range expr.parameterExecutor {
-		e.Free()
-	}
-	if expr.resultVector != nil {
-		expr.resultVector.Free(expr.mp)
-		expr.resultVector = nil
-	}
-	reuse.Free[ListExpressionExecutor](expr, nil)
-}
-
-func (expr *ListExpressionExecutor) IsColumnExpr() bool {
-	return false
-}
-
-func (expr *ListExpressionExecutor) Init(proc *process.Process, typ types.Type, parameterNum int) {
-	m := proc.Mp()
-
-	expr.typ = typ
-	expr.mp = m
-	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
-	expr.resultVector = vector.NewVec(typ)
-}
-
-func (expr *ListExpressionExecutor) SetParameter(index int, executor ExpressionExecutor) {
-	expr.parameterExecutor[index] = executor
-}
-
-func (expr *ListExpressionExecutor) ResetForNextQuery() {
-	for _, e := range expr.parameterExecutor {
-		e.ResetForNextQuery()
-	}
 }
 
 func (expr *FunctionExpressionExecutor) Init(
