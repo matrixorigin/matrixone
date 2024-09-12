@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -579,8 +578,11 @@ func queryTable(
 	var rows *sql.Rows
 	var err error
 	rows, err = tx.QueryContext(ctx, query)
-	if err != nil || rows.Err() != nil {
-		return false, errors.Join(err, rows.Err())
+	if err != nil {
+		return false, err
+	}
+	if rows.Err() != nil {
+		return false, rows.Err()
 	}
 	defer func() {
 		_ = rows.Close()
@@ -1474,8 +1476,11 @@ func updateCdcTask(
 	query := getCdcTaskIdFormat + whereClauses
 
 	rows, err := tx.QueryContext(ctx, query)
-	if err != nil || rows.Err() != nil {
-		return 0, errors.Join(err, rows.Err())
+	if err != nil {
+		return 0, err
+	}
+	if rows.Err() != nil {
+		return 0, rows.Err()
 	}
 	defer func() {
 		_ = rows.Close()

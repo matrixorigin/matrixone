@@ -679,6 +679,26 @@ func (cnlabels *CnLabels) HasAccount(account string) (bool, map[string]struct{})
 	return has, cnMap
 }
 
+func (cnlabels *CnLabels) String() string {
+	if cnlabels == nil || cnlabels.labels == nil {
+		return cnlabels.cnUUID
+	}
+	sb := strings.Builder{}
+	sb.WriteString(cnlabels.cnUUID)
+	sb.WriteString(":>")
+	for acc, mp := range cnlabels.labels {
+		sb.WriteString(acc)
+		if len(mp) > 0 {
+			sb.WriteString(":")
+			for label, _ := range mp {
+				sb.WriteString(label)
+				sb.WriteString(",")
+			}
+		}
+	}
+	return sb.String()
+}
+
 type CdcTaskKey struct {
 	AccountId uint64
 	TaskId    string
