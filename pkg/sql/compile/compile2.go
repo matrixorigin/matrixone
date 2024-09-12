@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -154,6 +156,14 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		txnOperator.GetWorkspace().IncrSQLCount()
 		txnOperator.EnterRunSql()
 	}
+
+	var isExplainPhyPlan = false
+	var option *ExplainOption
+	if explainStmt, ok := c.stmt.(*tree.ExplainPhyPlan); ok {
+		isExplainPhyPlan = true
+		option = getExplainOption(explainStmt.Options)
+	}
+
 	defer func() {
 		// if a rerun occurs, it differs from the original c, so we need to release it.
 		if runC != c {
@@ -266,7 +276,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 
 	if c.hasValidQueryPlan() {
-		c.handlePlanAnalyze(runC)
+		c.handlePlanAnalyze(runC, isExplainPhyPlan, option)
 	}
 
 	return queryResult, err
@@ -365,7 +375,12 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 	}
 }
 
-func (c *Compile) handlePlanAnalyze(runC *Compile) {
+func (c *Compile) handlePlanAnalyze(runC *Compile, isExplainPhyPlan bool, option *ExplainOption) {
 	c.GenPhyPlan(runC)
 	c.fillPlanNodeAnalyzeInfo()
+
+	if isExplainPhyPlan {
+		scopeInfo := makeExplainPhyPlanBuffer(c.scopes, option)
+		runC.anal.explainPhyBuffer = scopeInfo
+	}
 }

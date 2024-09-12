@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -235,6 +236,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "window", nil
 	case plan.Node_MATERIAL:
 		return "mterial", nil
+	case plan.Node_APPLY:
+		return "apply", nil
 	default:
 		return "", moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -632,6 +635,11 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_MATERIAL:
 		labels = append(labels, models.Label{
 			Name:  Label_Meterial,
+			Value: []string{},
+		})
+	case plan.Node_APPLY:
+		labels = append(labels, models.Label{
+			Name:  Label_Apply,
 			Value: []string{},
 		})
 	default:

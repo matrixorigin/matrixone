@@ -5,6 +5,7 @@
 package mock_frontend
 
 import (
+	"bytes"
 	context "context"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	reflect "reflect"
@@ -244,6 +245,19 @@ func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx interface{}, ph
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordExecPlan", reflect.TypeOf((*MockComputationWrapper)(nil).RecordExecPlan), ctx, phyPlan)
 }
+
+// SetExplainBuffer mocks base method.
+func (m *MockComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetExplainBuffer", buf)
+}
+
+// SetExplainBuffer indicates an expected call of SetExplainBuffer.
+func (mr *MockComputationWrapperMockRecorder) SetExplainBuffer(buf interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExplainBuffer", reflect.TypeOf((*MockComputationWrapper)(nil).SetExplainBuffer), buf)
+}
+
 
 // ResetPlanAndStmt mocks base method.
 func (m *MockComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
