@@ -79,6 +79,7 @@ const (
 	Label_Replace           = "Replace"
 	Label_Unknown           = "Unknown"
 	Label_Meterial          = "Meterial"
+	Label_Apply             = "Apply"
 )
 
 const (
