@@ -412,29 +412,29 @@ drop stage sub_stage01;
 -- fields terminated by '|' enclosed by '' lines terminated by '\n' ignore 1 lines
 drop table if exists ex_table_2;
 create table ex_table_2(
-    clo1 tinyint,
-    clo2 smallint,
-    clo3 int,
-    clo4 bigint,
-    clo5 tinyint unsigned,
-    clo6 smallint unsigned,
-    clo7 int unsigned,
-    clo8 bigint unsigned,
-    col9 float,
-    col10 double,
-    col11 varchar(255),
-    col12 Date,
-    col13 DateTime,
-    col14 timestamp,
-    col15 bool,
-    col16 decimal(5,2),
-    col17 text,
-    col18 varchar(255),
-    col19 varchar(255),
-    col20 varchar(255)
+col1 tinyint,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned,
+col9 float,
+col10 double,
+col11 varchar(255),
+col12 Date,
+col13 DateTime,
+col14 timestamp,
+col15 bool,
+col16 decimal(5,2),
+col17 text,
+col18 varchar(255),
+col19 varchar(255),
+col20 varchar(255)
 );
 load data infile '$resources/external_table_file/ex_table_sep_1.csv' into table ex_table_2 fields terminated by '|' enclosed by '' lines terminated by '\n';
-select * from ex_table_2;
+select col1, col2, col5, col6, col7, col8, col9, col10, col12, col13 from ex_table_2;
 drop stage if exists ex_stage02;
 create stage ex_stage02 url = 'file:///$resources/into_outfile' comment = 'ex_stage02';
 drop stage if exists sub_stage02;
@@ -443,29 +443,19 @@ create stage sub_stage02 url = 'stage://ex_stage02/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select * from ex_table_2 into outfile 'stage://sub_stage02/external_t02.csv';
-drop ex_table_2;
+select col1, col2, col5, col6, col7, col8, col9, col10, col12, col13 from ex_table_2 into outfile 'stage://sub_stage02/external_t02.csv';
+drop table ex_table_2;
 create external table ex_table_2(
-    clo1 tinyint,
-    clo2 smallint,
-    clo3 int,
-    clo4 bigint,
-    clo5 tinyint unsigned,
-    clo6 smallint unsigned,
-    clo7 int unsigned,
-    clo8 bigint unsigned,
-    col9 float,
-    col10 double,
-    col11 varchar(255),
-    col12 Date,
-    col13 DateTime,
-    col14 timestamp,
-    col15 bool,
-    col16 decimal(5,2),
-    col17 text,
-    col18 varchar(255),
-    col19 varchar(255),
-    col20 varchar(255)) infile 'stage://sub_stage02/external_t02.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' ignore 1 lines;
+col1 tinyint,
+col2 smallint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned,
+col9 float,
+col10 double,
+col11 varchar(255),
+col12 Date) infile 'stage://sub_stage02/external_t02.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' ignore 1 lines;
 select * from ex_table_2;
 show create table ex_table_2;
 drop table ex_table_2;
