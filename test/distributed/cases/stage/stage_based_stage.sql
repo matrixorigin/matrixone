@@ -340,4 +340,184 @@ select * from ab_table02;
 drop table ab_table02;
 drop stage ab_stage;
 drop stage sub_stage;
+
+
+
+-- create stage, load data into table, alter stage url, comment
+drop table if exists t15;
+create table t15(col1 int unique key, col2 bigint, col3 varchar(30));
+load data infile '$resources/load_data/test_starting_by03.csv' into table t15 fields terminated by '|' lines terminated by '\n';
+select * from t15;
+drop stage if exists alter_stage01;
+create stage alter_stage01 url = 'file:///$resources/into_outfile' comment = '这是一个基于file system创建的stage';
+drop stage if exists alter_substage01;
+create stage alter_substage01 url = 'stage://alter_stage01/stage';
+-- @ignore:0,2,5
+select * from mo_catalog.mo_stages;
+-- @ignore:1
+show stages;
+alter stage alter_stage01 set url = 'file:/into_outfile';
+select * from t15 into outfile 'stage://alter_stage01/local_stage_t09.csv';
+alter stage alter_stage01 set comment = 'this is a modified stage';
+-- @ignore:0,2,5
+select * from mo_catalog.mo_stages;
+truncate t15;
+load data infile 'file:/into_outfile/into_outfile/stage/local_stage_t09.csv' into table t15 fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select * from t15;
+show create table t15;
+drop table t15;
+drop stage alter_stage01;
+drop stage alter_substage01;
+
+
+
+-- external table
+-- fields terminated by ',' enclosed by '\"' lines terminated by '\n'
+drop table if exists ex_table_1;
+create table ex_table_1
+(char_1 char(20),
+char_2 varchar(10),
+date_1 date,
+date_2 datetime,
+date_3 timestamp
+);
+load data infile '$resources/external_table_file/ex_table_char.csv' into table ex_table_3 fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select * from ex_table_1;
+drop stage if exists ex_stage01;
+create stage ex_stage01 url = 'file:///$resources/into_outfile' comment = '基于external table加载数据';
+drop stage if exists sub_stage01;
+create stage sub_stage01 url = 'stage://ex_stage01/stage';
+-- @ignore:0,2,5
+select * from mo_catalog.mo_stages;
+-- @ignore:1
+show stages;
+select * from ex_table_1 into outfile 'stage://sub_stage01/external_t01.csv';
+drop table if exists ex_table_1;
+create external table ex_table_1
+(char_1 char(20),
+char_2 varchar(10),
+date_1 date,
+date_2 datetime,
+date_3 timestamp)
+infile 'stage://sub_stage01/external_t01.csv' fields terminated by ',' enclosed by '\"' lines terminated by '\n' ignore 1 lines;
+select * from ex_table_1;
+show create table ex_table_1;
+drop table ex_table_1;
+drop stage ex_stage01;
+drop stage sub_stage01;
+
+
+
+-- external table
+-- fields terminated by '|' enclosed by '' lines terminated by '\n' ignore 1 lines
+drop table if exists ex_table_2;
+create table ex_table_2(
+    clo1 tinyint,
+    clo2 smallint,
+    clo3 int,
+    clo4 bigint,
+    clo5 tinyint unsigned,
+    clo6 smallint unsigned,
+    clo7 int unsigned,
+    clo8 bigint unsigned,
+    col9 float,
+    col10 double,
+    col11 varchar(255),
+    col12 Date,
+    col13 DateTime,
+    col14 timestamp,
+    col15 bool,
+    col16 decimal(5,2),
+    col17 text,
+    col18 varchar(255),
+    col19 varchar(255),
+    col20 varchar(255)
+);
+load data infile '$resources/external_table_file/ex_table_sep_1.csv' into table ex_table_2 fields terminated by '|' enclosed by '' lines terminated by '\n';
+select * from ex_table_2;
+drop stage if exists ex_stage02;
+create stage ex_stage02 url = 'file:///$resources/into_outfile' comment = 'ex_stage02';
+drop stage if exists sub_stage02;
+create stage sub_stage02 url = 'stage://ex_stage02/stage';
+-- @ignore:0,2,5
+select * from mo_catalog.mo_stages;
+-- @ignore:1
+show stages;
+select * from ex_table_2 into outfile 'stage://sub_stage02/external_t02.csv';
+drop ex_table_2;
+create external table ex_table_2(
+    clo1 tinyint,
+    clo2 smallint,
+    clo3 int,
+    clo4 bigint,
+    clo5 tinyint unsigned,
+    clo6 smallint unsigned,
+    clo7 int unsigned,
+    clo8 bigint unsigned,
+    col9 float,
+    col10 double,
+    col11 varchar(255),
+    col12 Date,
+    col13 DateTime,
+    col14 timestamp,
+    col15 bool,
+    col16 decimal(5,2),
+    col17 text,
+    col18 varchar(255),
+    col19 varchar(255),
+    col20 varchar(255)) infile 'stage://sub_stage02/external_t02.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' ignore 1 lines;
+select * from ex_table_2;
+show create table ex_table_2;
+drop table ex_table_2;
+drop stage ex_stage02;
+drop stage sub_stage02;
+
+
+
+-- create external table and load data from stage in non-sys account
+-- @session:id=1&user=acc01:test_account&password=111
+drop database if exists acc_test;
+create database acc_test;
+use acc_test;
+drop table if exists jsonline_t1;
+create table jsonline_t1(
+col1 tinyint,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned
+);
+load data infile{'filepath'='$resources/load_data/integer_numbers_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t1;
+select * from jsonline_t1;
+drop stage if exists ex_stage03;
+create stage ex_stage03 url = 'file:///$resources/into_outfile' comment = 'ex_stage03';
+drop stage if exists sub_stage03;
+create stage sub_stage03 url = 'stage://ex_stage03/stage';
+-- @ignore:0,2,5
+select * from mo_catalog.mo_stages;
+-- @ignore:1
+show stages;
+select * from jsonline_t1 into outfile 'stage://sub_stage03/external_t03.csv';
+drop table jsonline_t1;
+use acc_test;
+create external table jsonline_t1 (
+col1 tinyint,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned
+) infile 'stage://sub_stage03/external_t03.csv' fields terminated by ',' ignore 1 lines;
+select * from jsonline_t1;
+drop table jsonline_t1;
+drop stage ex_stage03;
+drop stage sub_stage03;
+drop database acc_test;
+-- @session
+drop database test;
 drop account acc01;
