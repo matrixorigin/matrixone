@@ -1436,7 +1436,7 @@ func constructPartition(n *plan.Node) *partition.Partition {
 	return arg
 }
 
-func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) *indexjoin.IndexJoin {
+func constructIndexJoin(n *plan.Node, proc *process.Process) *indexjoin.IndexJoin {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
@@ -1451,7 +1451,7 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 	return arg
 }
 
-func constructProductL2(n *plan.Node, typs []types.Type, proc *process.Process) *productl2.Productl2 {
+func constructProductL2(n *plan.Node, proc *process.Process) *productl2.Productl2 {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)

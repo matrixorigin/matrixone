@@ -2291,16 +2291,23 @@ func (c *Compile) compileProbeSideForBoradcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			op := constructProductL2(node, rightTyps, c.proc)
+			op := constructProductL2(node, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
+			if rs[i].NodeInfo.Mcpu != 1 {
+				//product_l2 join is very time_consuming, increase the parallelism
+				rs[i].NodeInfo.Mcpu *= 8
+			}
+			if rs[i].NodeInfo.Mcpu > ncpu {
+				rs[i].NodeInfo.Mcpu = ncpu
+			}
 		}
 		c.anal.isFirst = false
 	case plan.Node_INDEX:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			op := constructIndexJoin(node, rightTyps, c.proc)
+			op := constructIndexJoin(node, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 		}
