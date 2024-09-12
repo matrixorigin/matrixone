@@ -28,7 +28,7 @@ func maxElemCnt(cellCnt, cellSize uint64) uint64 {
 	if cellCnt*cellSize < maxBlockSize {
 		return cellCnt / 2
 	} else {
-		return cellCnt * 3 / 4
+		return cellCnt * 4 / 5
 	}
 }
 
