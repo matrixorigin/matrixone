@@ -542,8 +542,6 @@ type TaskService interface {
 	QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error)
 	// UpdateDaemonTask updates the daemon task record.
 	UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, cond ...Condition) (int, error)
-	// DeleteDaemonTask deletes the daemon task record.
-	DeleteDaemonTask(ctx context.Context, conds ...Condition) (int, error)
 	// HeartbeatDaemonTask sends heartbeat to daemon task.
 	HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask) error
 
