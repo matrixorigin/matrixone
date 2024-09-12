@@ -279,7 +279,6 @@ drop database test01;
 
 
 -- nonsys create retention table
--- @bvt:issue#18651
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists nonsys_test;
 create database nonsys_test;
@@ -303,7 +302,6 @@ select * from mo_catalog.mo_retention;
 show tables;
 drop database nonsys_test;
 -- @session
--- @bvt:issue
 
 
 
