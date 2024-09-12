@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -75,15 +75,15 @@ func NewConsoleSinker(
 }
 
 func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
-	fmt.Fprintln(os.Stderr, "====console sinker====")
+	logutil.Info("====console sinker====")
 
-	fmt.Fprintln(os.Stderr, "output type", data.outputTyp)
+	logutil.Infof("output type %s", data.outputTyp)
 	switch data.outputTyp {
 	case OutputTypeCheckpoint:
 		if data.checkpointBat != nil && data.checkpointBat.RowCount() > 0 {
 			//FIXME: only test here
-			fmt.Fprintln(os.Stderr, "checkpoint")
-			fmt.Fprintln(os.Stderr, data.checkpointBat.String())
+			logutil.Info("checkpoint")
+			logutil.Info(data.checkpointBat.String())
 		}
 	case OutputTypeTailDone:
 		if data.insertAtmBatch != nil && data.insertAtmBatch.Rows.Len() > 0 {
@@ -98,11 +98,11 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 			iter := data.insertAtmBatch.GetRowIterator()
 			for iter.Next() {
 				_ = iter.Row(ctx, row)
-				fmt.Fprintln(os.Stderr, "insert", row)
+				logutil.Infof("insert %v", row)
 			}
 		}
 	case OutputTypeUnfinishedTailWIP:
-		fmt.Fprintln(os.Stderr, "====tail wip====")
+		logutil.Info("====tail wip====")
 	}
 
 	return nil
@@ -199,7 +199,7 @@ func NewMysqlSinker(
 func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error) {
 	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceTblId)
 	if data.toTs.LessEq(&watermark) {
-		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: unexpected watermark: %s, current watermark: %s\n",
+		logutil.Errorf("^^^^^ Sinker: unexpected watermark: %s, current watermark: %s",
 			data.toTs.ToString(), watermark.ToString())
 		return
 	}
@@ -581,16 +581,16 @@ func (s *mysqlSink) Send(ctx context.Context, sql string) (err error) {
 	needRetry := func(retry int, startTime time.Time) bool {
 		// retryTimes == -1 means retry forever
 		// do not exceed retryTimes and retryDuration
-		return (s.retryTimes == -1 || retry < s.retryTimes) && time.Now().Sub(startTime) < s.retryDuration
+		return (s.retryTimes == -1 || retry < s.retryTimes) && time.Since(startTime) < s.retryDuration
 	}
 	for retry, startTime := 0, time.Now(); needRetry(retry, startTime); retry++ {
-		fmt.Fprintf(os.Stderr, "----mysql send sql----, len:%d, sql:%s\n", len(sql), sql[:min(200, len(sql))])
+		//fmt.Fprintf(os.Stderr, "----mysql send sql----, len:%d, sql:%s\n", len(sql), sql[:min(200, len(sql))])
 		// return if success
 		if _, err = s.conn.ExecContext(ctx, sql); err == nil {
-			fmt.Fprintf(os.Stderr, "----mysql send sql----, success\n")
+			logutil.Errorf("----mysql send sql----, success")
 			return
 		}
-		fmt.Fprintf(os.Stderr, "----mysql send sql----, failed, err = %v\n", err)
+		//fmt.Fprintf(os.Stderr, "----mysql send sql----, failed, err = %v\n", err)
 		time.Sleep(time.Second)
 	}
 	return moerr.NewInternalError(ctx, "mysql sink retry exceed retryTimes or retryDuration")
@@ -603,12 +603,12 @@ func (s *mysqlSink) Close() {
 	}
 }
 
-type matrixoneSink struct {
-}
-
-func (*matrixoneSink) Send(ctx context.Context, data *DecoderOutput) error {
-	return nil
-}
+//type matrixoneSink struct {
+//}
+//
+//func (*matrixoneSink) Send(ctx context.Context, data *DecoderOutput) error {
+//	return nil
+//}
 
 func genPrimaryKeyStr(tableDef *plan.TableDef) string {
 	buf := strings.Builder{}

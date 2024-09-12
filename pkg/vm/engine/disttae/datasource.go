@@ -32,13 +32,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -128,7 +125,6 @@ func (rs *RemoteDataSource) Next(
 	seqNums []uint16,
 	_ any,
 	_ *mpool.MPool,
-	_ engine.VectorPool,
 	_ *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 
@@ -161,9 +157,8 @@ func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
 		bids[idx-begin] = blk.BlockID
 	}
 
-	// prefetch blk data
-	err := blockio.BlockPrefetch(
-		rs.proc.GetService(), seqNums, rs.fs, blks, true)
+	err := blockio.Prefetch(
+		rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
@@ -178,7 +173,7 @@ func (rs *RemoteDataSource) Close() {
 }
 
 func (rs *RemoteDataSource) applyInMemTombstones(
-	bid types.Blockid,
+	bid objectio.Blockid,
 	rowsOffset []int64,
 	deletedRows *nulls.Nulls,
 ) (leftRows []int64) {
@@ -194,7 +189,7 @@ func (rs *RemoteDataSource) applyInMemTombstones(
 
 func (rs *RemoteDataSource) applyPersistedTombstones(
 	ctx context.Context,
-	bid types.Blockid,
+	bid objectio.Blockid,
 	rowsOffset []int64,
 	mask *nulls.Nulls,
 ) (leftRows []int64, err error) {
@@ -435,8 +430,7 @@ func (ls *LocalDataSource) Next(
 	seqNums []uint16,
 	filter any,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
-	bat *batch.Batch,
+	outBatch *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 
 	if ls.memPKFilter == nil {
@@ -454,13 +448,13 @@ func (ls *LocalDataSource) Next(
 	for {
 		switch ls.iteratePhase {
 		case engine.InMem:
-			bat.CleanOnlyData()
-			err := ls.iterateInMemData(ctx, cols, types, seqNums, bat, mp, vp)
+			outBatch.CleanOnlyData()
+			err := ls.iterateInMemData(ctx, cols, types, seqNums, outBatch, mp)
 			if err != nil {
 				return nil, engine.InMem, err
 			}
 
-			if bat.RowCount() == 0 {
+			if outBatch.RowCount() == 0 {
 				ls.iteratePhase = engine.Persisted
 				continue
 			}
@@ -515,18 +509,17 @@ func (ls *LocalDataSource) iterateInMemData(
 	cols []string,
 	colTypes []types.Type,
 	seqNums []uint16,
-	bat *batch.Batch,
+	outBatch *batch.Batch,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
 ) (err error) {
 
-	bat.SetRowCount(0)
+	outBatch.SetRowCount(0)
 
-	if err = ls.filterInMemUnCommittedInserts(seqNums, mp, bat); err != nil {
+	if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, mp, outBatch); err != nil {
 		return err
 	}
 
-	if err = ls.filterInMemCommittedInserts(colTypes, seqNums, mp, bat); err != nil {
+	if err = ls.filterInMemCommittedInserts(ctx, colTypes, seqNums, mp, outBatch); err != nil {
 		return err
 	}
 
@@ -569,9 +562,10 @@ func checkWorkspaceEntryType(
 }
 
 func (ls *LocalDataSource) filterInMemUnCommittedInserts(
+	_ context.Context,
 	seqNums []uint16,
 	mp *mpool.MPool,
-	bat *batch.Batch,
+	outBatch *batch.Batch,
 ) error {
 
 	if ls.wsCursor >= ls.txnOffset {
@@ -587,12 +581,12 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 
 	rows := 0
 	writes := ls.table.getTxn().writes
-	maxRows := int(options.DefaultBlockMaxRows)
+	maxRows := objectio.BlockMaxRows
 	if len(writes) == 0 {
 		return nil
 	}
 
-	var retainedRowIds []types.Rowid
+	var retainedRowIds []objectio.Rowid
 
 	for ; ls.wsCursor < ls.txnOffset; ls.wsCursor++ {
 		if writes[ls.wsCursor].bat == nil {
@@ -603,17 +597,18 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 			break
 		}
 
-		entry := ls.table.getTxn().writes[ls.wsCursor]
+		entry := writes[ls.wsCursor]
 
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
 			continue
 		}
 
-		retainedRowIds = vector.MustFixedCol[types.Rowid](entry.bat.Vecs[0])
+		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
 		offsets := rowIdsToOffset(retainedRowIds, int64(0)).([]int64)
 
 		b, _ := retainedRowIds[0].Decode()
-		sels, err := ls.ApplyTombstones(ls.ctx, b, offsets, engine.Policy_CheckUnCommittedOnly)
+		sels, err := ls.ApplyTombstones(
+			ls.ctx, b, offsets, engine.Policy_CheckUnCommittedOnly)
 		if err != nil {
 			return err
 		}
@@ -624,7 +619,7 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 
 		rows += len(sels)
 
-		for i, destVec := range bat.Vecs {
+		for i, destVec := range outBatch.Vecs {
 			colIdx := int(seqNums[i])
 			if colIdx != objectio.SEQNUM_ROWID {
 				colIdx++
@@ -637,15 +632,16 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 		}
 	}
 
-	bat.SetRowCount(bat.Vecs[0].Length())
+	outBatch.SetRowCount(outBatch.Vecs[0].Length())
 	return nil
 }
 
 func (ls *LocalDataSource) filterInMemCommittedInserts(
+	_ context.Context,
 	colTypes []types.Type,
 	seqNums []uint16,
 	mp *mpool.MPool,
-	bat *batch.Batch,
+	outBatch *batch.Batch,
 ) error {
 
 	// in meme committed insert only need to apply deletes that exists
@@ -655,7 +651,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 	//	ls.rc.SkipPStateDeletes = false
 	//}()
 
-	if bat.RowCount() >= int(options.DefaultBlockMaxRows) {
+	if outBatch.RowCount() >= objectio.BlockMaxRows {
 		return nil
 	}
 
@@ -675,15 +671,20 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 
 	var minTS types.TS = types.MaxTs()
 	var batRowIdx int
-	if batRowIdx = slices.Index(bat.Attrs, catalog.Row_ID); batRowIdx == -1 {
-		batRowIdx = len(bat.Attrs)
-		bat.Attrs = append(bat.Attrs, catalog.Row_ID)
-		bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_Rowid.ToType()))
+	if batRowIdx = slices.Index(outBatch.Attrs, catalog.Row_ID); batRowIdx == -1 {
+		batRowIdx = len(outBatch.Attrs)
+		outBatch.Attrs = append(outBatch.Attrs, catalog.Row_ID)
+		outBatch.Vecs = append(outBatch.Vecs, vector.NewVec(types.T_Rowid.ToType()))
+		// Add empty rowid for workspace row
+		// It is impossible for them to be be eliminated by tombstone in tomestone objects, so using emtpy rowid is totally safe.
+		for range outBatch.RowCount() {
+			vector.AppendFixed(outBatch.Vecs[len(outBatch.Vecs)-1], objectio.Rowid{}, false, mp)
+		}
 
 		defer func() {
-			bat.Attrs = bat.Attrs[:len(bat.Attrs)-1]
-			bat.Vecs[len(bat.Vecs)-1].Free(mp)
-			bat.Vecs = bat.Vecs[:len(bat.Vecs)-1]
+			outBatch.Attrs = outBatch.Attrs[:len(outBatch.Attrs)-1]
+			outBatch.Vecs[len(outBatch.Vecs)-1].Free(mp)
+			outBatch.Vecs = outBatch.Vecs[:len(outBatch.Vecs)-1]
 		}()
 	}
 
@@ -693,9 +694,9 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 	applyOffset := 0
 
 	goon := true
-	for goon && bat.Vecs[0].Length() < int(options.DefaultBlockMaxRows) {
+	for goon && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 		//minTS = types.MaxTs()
-		for bat.Vecs[0].Length() < int(options.DefaultBlockMaxRows) {
+		for outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 			if goon = ls.pStateRows.insIter.Next(); !goon {
 				break
 			}
@@ -716,10 +717,10 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 				continue
 			}
 
-			for i, name := range bat.Attrs {
+			for i, name := range outBatch.Attrs {
 				if name == catalog.Row_ID {
 					if err = vector.AppendFixed(
-						bat.Vecs[i],
+						outBatch.Vecs[i],
 						entry.RowID,
 						false,
 						mp); err != nil {
@@ -730,12 +731,12 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 					if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 						entry.Batch.Attrs[idx] == "" /*drop column*/ {
 						err = vector.AppendAny(
-							bat.Vecs[i],
+							outBatch.Vecs[i],
 							nil,
 							true,
 							mp)
 					} else {
-						err = bat.Vecs[i].UnionOne(
+						err = outBatch.Vecs[i].UnionOne(
 							entry.Batch.Vecs[int(2+seqNums[i])],
 							entry.Offset,
 							mp,
@@ -748,7 +749,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 			}
 		}
 
-		rowIds := vector.MustFixedCol[types.Rowid](bat.Vecs[batRowIdx])
+		rowIds := vector.MustFixedColWithTypeCheck[objectio.Rowid](outBatch.Vecs[batRowIdx])
 		deleted, err := ls.batchApplyTombstoneObjects(minTS, rowIds[applyOffset:])
 		if err != nil {
 			return err
@@ -758,58 +759,13 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 			deleted[i] += int64(applyOffset)
 		}
 
-		bat.Shrink(deleted, true)
-		applyOffset = bat.Vecs[0].Length()
+		outBatch.Shrink(deleted, true)
+		applyOffset = outBatch.Vecs[0].Length()
 	}
 
-	bat.SetRowCount(bat.Vecs[0].Length())
+	outBatch.SetRowCount(outBatch.Vecs[0].Length())
 
 	return nil
-}
-
-func loadBlockDeletesByLocation(
-	ctx context.Context,
-	fs fileservice.FileService,
-	blockId types.Blockid,
-	location objectio.Location,
-	snapshotTS types.TS,
-) (deleteMask *nulls.Nulls, err error) {
-
-	var (
-		rows *nulls.Nulls
-		//bisect           time.Duration
-		release          func()
-		persistedByCN    bool
-		persistedDeletes *batch.Batch
-	)
-
-	if !location.IsEmpty() {
-		//t1 := time.Now()
-
-		if persistedDeletes, persistedByCN, release, err = blockio.ReadBlockDelete(ctx, location, fs); err != nil {
-			return nil, err
-		}
-		defer release()
-
-		//readCost := time.Since(t1)
-
-		if persistedByCN {
-			rows = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(blockId, persistedDeletes)
-		} else {
-			//t2 := time.Now()
-			rows = blockio.EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
-			//bisect = time.Since(t2)
-		}
-
-		if rows != nil {
-			deleteMask = rows
-		}
-
-		//readTotal := time.Since(t1)
-		//blockio.RecordReadDel(readTotal, readCost, bisect)
-	}
-
-	return deleteMask, nil
 }
 
 // ApplyTombstones check if any deletes exist in
@@ -950,17 +906,17 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 	done := false
 	writes := ls.table.getTxn().writes[:ls.txnOffset]
 
-	var delRowIds []types.Rowid
+	var delRowIds []objectio.Rowid
 
 	for idx := range writes {
 		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
 			continue
 		}
 
-		delRowIds = vector.MustFixedCol[types.Rowid](writes[idx].bat.Vecs[0])
+		delRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
 		for _, delRowId := range delRowIds {
 			b, o := delRowId.Decode()
-			if bid.Compare(b) != 0 {
+			if bid.Compare(&b) != 0 {
 				continue
 			}
 
@@ -979,44 +935,6 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 	return leftRows
 }
 
-// if blks comes from unCommitted flushed s3 deletes, the
-// blkCommitTS can be zero.
-func applyDeletesWithinDeltaLocations(
-	ctx context.Context,
-	fs fileservice.FileService,
-	bid objectio.Blockid,
-	snapshotTS types.TS,
-	blkCommitTS types.TS,
-	offsets []int64,
-	deletedRows *nulls.Nulls,
-	locations ...objectio.Location,
-) (leftRows []int64, err error) {
-
-	if offsets != nil {
-		leftRows = make([]int64, 0, len(offsets))
-	}
-
-	var mask *nulls.Nulls
-
-	for _, loc := range locations {
-		if mask, err = loadBlockDeletesByLocation(
-			ctx, fs, bid, loc[:], snapshotTS); err != nil {
-			return nil, err
-		}
-
-		if offsets != nil {
-			leftRows = removeIf(offsets, func(t int64) bool {
-				return mask.Contains(uint64(t))
-			})
-
-		} else if deletedRows != nil {
-			deletedRows.Or(mask)
-		}
-	}
-
-	return leftRows, nil
-}
-
 func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
 	bid objectio.Blockid,
 	offsets []int64,
@@ -1024,43 +942,46 @@ func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
 ) (leftRows []int64, err error) {
 
 	leftRows = offsets
-	var locations []objectio.Location
 
-	// cannot hold the lock too long
-	{
-		s3FlushedDeletes := &ls.table.getTxn().blockId_tn_delete_metaLoc_batch
-		s3FlushedDeletes.RWMutex.Lock()
-		defer s3FlushedDeletes.RWMutex.Unlock()
+	s3FlushedDeletes := &ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
+	s3FlushedDeletes.RWMutex.Lock()
+	defer s3FlushedDeletes.RWMutex.Unlock()
 
-		if len(s3FlushedDeletes.data[bid]) == 0 || ls.pState.BlockPersisted(bid) {
-			return
-		}
-
-		locations = make([]objectio.Location, 0, len(s3FlushedDeletes.data[bid]))
-
-		for _, bat := range s3FlushedDeletes.data[bid] {
-			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-			for i := range vs {
-				loc, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-				if err != nil {
-					return nil, err
-				}
-
-				locations = append(locations, loc)
-			}
-		}
+	if len(s3FlushedDeletes.data) == 0 || ls.pState.BlockPersisted(bid) {
+		return
 	}
 
-	return applyDeletesWithinDeltaLocations(
+	if deletedRows == nil {
+		deletedRows = &nulls.Nulls{}
+		deletedRows.InitWithSize(8192)
+	}
+
+	var curr int
+	getTombstone := func() (*objectio.ObjectStats, error) {
+		if curr >= len(s3FlushedDeletes.data) {
+			return nil, nil
+		}
+		i := curr
+		curr++
+		return &s3FlushedDeletes.data[i], nil
+	}
+
+	if err = blockio.GetTombstonesByBlockId(
 		ls.ctx,
-		ls.fs,
-		bid,
 		ls.snapshotTS,
-		types.TS{},
-		offsets,
+		bid,
+		getTombstone,
 		deletedRows,
-		locations...,
-	)
+		ls.fs,
+	); err != nil {
+		return nil, err
+	}
+
+	offsets = removeIf(offsets, func(t int64) bool {
+		return deletedRows.Contains(uint64(t))
+	})
+
+	return offsets, nil
 }
 
 func (ls *LocalDataSource) applyWorkspaceRawRowIdDeletes(
@@ -1134,22 +1055,41 @@ func (ls *LocalDataSource) applyPStateTombstoneObjects(
 		return offsets, nil
 	}
 
-	scanOp := func(onTombstone func(tombstone logtailreplay.ObjectEntry) (bool, error)) (err error) {
-		return ForeachTombstoneObject(ls.snapshotTS, onTombstone, ls.pState)
+	var iter logtailreplay.ObjectsIter
+	getTombstone := func() (*objectio.ObjectStats, error) {
+		var err error
+		if iter == nil {
+			if iter, err = ls.pState.NewObjectsIter(
+				ls.snapshotTS, true, true,
+			); err != nil {
+				return nil, err
+			}
+		}
+		if iter.Next() {
+			entry := iter.Entry()
+			return &entry.ObjectStats, nil
+		}
+		return nil, nil
 	}
+	defer func() {
+		if iter != nil {
+			iter.Close()
+		}
+	}()
 
 	if deletedRows == nil {
 		deletedRows = &nulls.Nulls{}
 		deletedRows.InitWithSize(8192)
 	}
 
-	if err := GetTombstonesByBlockId(
+	if err := blockio.GetTombstonesByBlockId(
 		ls.ctx,
-		ls.fs,
-		bid,
 		ls.snapshotTS,
+		bid,
+		getTombstone,
 		deletedRows,
-		scanOp); err != nil {
+		ls.fs,
+	); err != nil {
 		return nil, err
 	}
 
@@ -1177,152 +1117,21 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	}
 
 	// prefetch blk data
-	err := blockio.BlockPrefetch(
-		ls.table.proc.Load().GetService(), seqNums, ls.fs, blks, true)
+	err := blockio.Prefetch(
+		ls.table.proc.Load().GetService(), ls.fs, blks[0].MetaLocation())
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
 
-	ls.table.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
-	defer ls.table.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
-
-	// prefetch cn flushed but not committed deletes
-	var ok bool
-	var bats []*batch.Batch
-	var locs []objectio.Location = make([]objectio.Location, 0)
-
-	pkColIdx := ls.table.tableDef.Pkey.PkeyColId
-
-	for idx := begin; idx < end; idx++ {
-		if bats, ok = ls.table.getTxn().blockId_tn_delete_metaLoc_batch.data[ls.rangeSlice.Get(idx).BlockID]; !ok {
-			continue
-		}
-
-		locs = locs[:0]
-		for _, bat := range bats {
-			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-			for i := range vs {
-				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-				if err != nil {
-					logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
-				}
-				locs = append(locs, location)
-			}
-		}
-
-		if len(locs) == 0 {
-			continue
-		}
-
-		pref, err := blockio.BuildPrefetchParams(ls.fs, locs[0])
-		if err != nil {
-			logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
-		}
-
-		for _, loc := range locs {
-			//rowId + pk
-			pref.AddBlockWithType([]uint16{0, uint16(pkColIdx)}, []uint16{loc.ID()}, uint16(objectio.SchemaTombstone))
-		}
-
-		if err = blockio.PrefetchWithMerged(ls.table.proc.Load().GetService(), pref); err != nil {
-			logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
-		}
-	}
+	ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RLock()
+	defer ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RUnlock()
 
 	ls.rc.batchPrefetchCursor = end
 }
 
-func GetTombstonesByBlockId(
-	ctx context.Context,
-	fs fileservice.FileService,
-	bid objectio.Blockid,
-	snapshot types.TS,
-	deleteMask *nulls.Nulls,
-	scanOp func(func(tombstone logtailreplay.ObjectEntry) (bool, error)) error,
-) (err error) {
-
-	var (
-		totalBlk     int
-		zmBreak      int
-		blBreak      int
-		loaded       int
-		totalScanned int
-	)
-
-	onTombstone := func(obj logtailreplay.ObjectEntry) (bool, error) {
-		totalScanned++
-		if !obj.ZMIsEmpty() {
-			objZM := obj.SortKeyZoneMap()
-			if skip := !objZM.PrefixEq(bid[:]); skip {
-				zmBreak++
-				return true, nil
-			}
-		}
-
-		var objMeta objectio.ObjectMeta
-
-		location := obj.Location()
-
-		if objMeta, err = objectio.FastLoadObjectMeta(
-			ctx, &location, false, fs,
-		); err != nil {
-			return false, err
-		}
-		dataMeta := objMeta.MustDataMeta()
-
-		blkCnt := int(dataMeta.BlockCount())
-		totalBlk += blkCnt
-
-		startIdx := sort.Search(blkCnt, func(i int) bool {
-			return dataMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap().AnyGEByValue(bid[:])
-		})
-
-		for pos := startIdx; pos < blkCnt; pos++ {
-			blkMeta := dataMeta.GetBlockMeta(uint32(pos))
-			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
-			// block id is the prefix of the rowid and zonemap is min-max of rowid
-			// !PrefixEq means there is no rowid of this block in this zonemap, so skip
-			if !columnZonemap.PrefixEq(bid[:]) {
-				if columnZonemap.PrefixGT(bid[:]) {
-					// all zone maps are sorted by the rowid
-					// if the block id is less than the prefix of the min rowid, skip the rest blocks
-					break
-				}
-				continue
-			}
-			loaded++
-			tombstoneLoc := catalog2.BuildLocation(obj.ObjectStats, uint16(pos), options.DefaultBlockMaxRows)
-
-			var mask *nulls.Nulls
-
-			if mask, err = loadBlockDeletesByLocation(
-				ctx, fs, bid, tombstoneLoc, snapshot,
-			); err != nil {
-				return false, err
-			}
-
-			deleteMask.Or(mask)
-		}
-		return true, nil
-	}
-
-	err = scanOp(onTombstone)
-
-	v2.TxnReaderEachBLKLoadedTombstoneHistogram.Observe(float64(loaded))
-	v2.TxnReaderScannedTotalTombstoneHistogram.Observe(float64(totalScanned))
-	if totalScanned != 0 {
-		v2.TxnReaderTombstoneZMSelectivityHistogram.Observe(float64(zmBreak) / float64(totalScanned))
-	}
-	if totalBlk != 0 {
-		v2.TxnReaderTombstoneBLSelectivityHistogram.Observe(float64(blBreak) / float64(totalBlk))
-	}
-
-	return err
-}
-
 func (ls *LocalDataSource) batchApplyTombstoneObjects(
 	minTS types.TS,
-	rowIds []types.Rowid,
+	rowIds []objectio.Rowid,
 ) (deleted []int64, err error) {
 	//maxTombstoneTS := ls.pState.MaxTombstoneCreateTS()
 	//if maxTombstoneTS.Less(&minTS) {
@@ -1345,12 +1154,11 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		bfIndex  index.StaticFilter
 		location objectio.Location
 
-		loaded        *batch.Batch
-		persistedByCN bool
-		release       func()
+		loaded  *batch.Batch
+		release func()
 	)
 
-	anyIf := func(check func(row types.Rowid) bool) bool {
+	anyIf := func(check func(row objectio.Rowid) bool) bool {
 		for _, r := range rowIds {
 			if check(r) {
 				return true
@@ -1365,8 +1173,8 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		if !obj.ZMIsEmpty() {
 			objZM := obj.SortKeyZoneMap()
 
-			if !anyIf(func(row types.Rowid) bool {
-				return objZM.PrefixEq(row.BorrowBlockID()[:])
+			if !anyIf(func(row objectio.Rowid) bool {
+				return objZM.RowidPrefixEq(row.BorrowBlockID()[:])
 			}) {
 				continue
 			}
@@ -1384,7 +1192,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				return nil, err
 			}
 
-			if !anyIf(func(row types.Rowid) bool {
+			if !anyIf(func(row objectio.Rowid) bool {
 				exist, err = bfIndex.PrefixMayContainsKey(row.BorrowBlockID()[:], index.PrefixFnID_Block, 2)
 				if exist || err != nil {
 					return true
@@ -1393,29 +1201,28 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 			}) {
 				continue
 			}
-
 			if err != nil {
 				return nil, err
 			}
 
-			location = catalog2.BuildLocation(obj.ObjectStats, uint16(idx), options.DefaultBlockMaxRows)
+			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
-			if loaded, persistedByCN, release, err = blockio.ReadBlockDelete(ls.ctx, location, ls.fs); err != nil {
+			if loaded, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
 				return nil, err
 			}
 
-			var deletedRowIds []types.Rowid
+			var deletedRowIds []objectio.Rowid
 			var commit []types.TS
 
-			deletedRowIds = vector.MustFixedCol[types.Rowid](loaded.Vecs[0])
-			if !persistedByCN {
-				commit = vector.MustFixedCol[types.TS](loaded.Vecs[1])
+			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](loaded.Vecs[0])
+			if !obj.GetCNCreated() {
+				commit = vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[1])
 			}
 
 			for i := range rowIds {
-				s, e := blockio.FindIntervalForBlock(deletedRowIds, rowIds[i].BorrowBlockID())
+				s, e := blockio.FindStartEndOfBlockFromSortedRowids(deletedRowIds, rowIds[i].BorrowBlockID())
 				for j := s; j < e; j++ {
-					if rowIds[i].Equal(deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
+					if rowIds[i].EQ(&deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
 						deleted = append(deleted, int64(i))
 						break
 					}

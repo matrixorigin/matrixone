@@ -181,9 +181,6 @@ func NewFlushTableTailTask(
 		if !hdl.IsAppendable() {
 			panic(fmt.Sprintf("logic err %v is nonappendable", hdl.GetID().String()))
 		}
-		if obj.HasDropCommitted() {
-			continue
-		}
 		if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 			logutil.Info(
 				"[FLUSH-NEED-RETRY]",
@@ -191,6 +188,9 @@ func NewFlushTableTailTask(
 				common.AnyField("obj", obj.ID().String()),
 			)
 			return nil, txnif.ErrTxnNeedRetry
+		}
+		if obj.HasDropCommitted() {
+			continue
 		}
 		task.aObjMetas = append(task.aObjMetas, obj)
 		task.aObjHandles = append(task.aObjHandles, hdl)
@@ -211,12 +211,12 @@ func NewFlushTableTailTask(
 		if !hdl.IsAppendable() {
 			panic(fmt.Sprintf("logic err %v is nonappendable", hdl.GetID().String()))
 		}
-		if obj.HasDropCommitted() {
-			continue
-		}
 		if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 			logutil.Infof("[FlushTabletail] obj %v needs retry", obj.ID().String())
 			return nil, txnif.ErrTxnNeedRetry
+		}
+		if obj.HasDropCommitted() {
+			continue
 		}
 		task.aTombstoneMetas = append(task.aTombstoneMetas, obj)
 		task.aTombstoneHandles = append(task.aTombstoneHandles, hdl)
@@ -381,16 +381,6 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 
-	///////////////////
-	//// phase separator
-	///////////////////
-
-	phaseDesc = "1-merging persisted tombstones"
-	inst = time.Now()
-	// ignore error
-	_ = task.mergePersistedTombstones(ctx)
-	statWaitTombstoneMerge := time.Since(inst)
-
 	/////////////////////
 	//// phase separator
 	///////////////////
@@ -468,7 +458,6 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("wait-aobj-flush", statWaitAobj),
 			common.AnyField("wait-dels-flush", statWaitTombstones),
 			common.AnyField("log-txn-entry", statNewFlushEntry),
-			common.AnyField("tombstone-merge", statWaitTombstoneMerge),
 		)
 	}
 
@@ -857,37 +846,6 @@ func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, su
 		}
 	}
 	return nil
-}
-
-func (task *flushTableTailTask) mergePersistedTombstones(ctx context.Context) error {
-	tombstones := make([]*catalog.ObjectEntry, 0)
-	tombstoneIter := task.rel.MakeObjectItOnSnap(true)
-	for tombstoneIter.Next() {
-		tombstone := tombstoneIter.GetObject().GetMeta().(*catalog.ObjectEntry)
-		if tombstone.IsCommitted() && !tombstone.IsAppendable() {
-			tombstones = append(tombstones, tombstone)
-		}
-	}
-	if len(tombstones) < 2 {
-		return nil
-	}
-	// FIXME: (w-zr) this result of append is never used
-	// scopes := make([]common.ID, 0, len(tombstones))
-	// for _, obj := range tombstones {
-	// 	scopes = append(scopes, *obj.AsCommonID())
-	// }
-	tombstoneTask, err := NewMergeObjectsTask(
-		tasks.WaitableCtx,
-		task.txn,
-		tombstones,
-		task.rt,
-		common.DefaultMaxOsizeObjMB*common.Const1MBytes,
-		true,
-	)
-	if err != nil {
-		return err
-	}
-	return tombstoneTask.Execute(ctx)
 }
 
 func releaseFlushObjTasks(ftask *flushTableTailTask, subtasks []*flushObjTask, err error) {

@@ -413,6 +413,23 @@ id    t5_id
 4    null
 5    null
 6    null
+set session optimizer_hints="execType=3";
+drop table if exists t1;
+create table t1(c1 int primary key, c2 int, c3 int, key(c2));
+insert into t1 select *,*,* from generate_series(1,1000000)g;
+select count(*) from t1;
+count(*)
+1000000
+delete from t1 where c3>500000;
+select count(*) from t1;
+count(*)
+500000
+update t1 set c1=c1+1000000, c2=c2+1000000 where c3<400000;
+delete from t1 where c1>1000000;
+select count(*) from t1;
+count(*)
+100001
+set session optimizer_hints="";
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

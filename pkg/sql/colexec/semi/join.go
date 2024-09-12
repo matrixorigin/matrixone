@@ -40,6 +40,12 @@ func (semiJoin *SemiJoin) OpType() vm.OpType {
 }
 
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
+	if semiJoin.OpAnalyzer == nil {
+		semiJoin.OpAnalyzer = process.NewAnalyzer(semiJoin.GetIdx(), semiJoin.IsFirst, semiJoin.IsLast, "semi join")
+	} else {
+		semiJoin.OpAnalyzer.Reset()
+	}
+
 	if semiJoin.ctr.vecs == nil {
 		semiJoin.ctr.vecs = make([]*vector.Vector, len(semiJoin.Conditions[0]))
 		semiJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(semiJoin.Conditions[0]))
@@ -69,9 +75,10 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := semiJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &semiJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -80,7 +87,10 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			semiJoin.build(anal, proc)
+			err = semiJoin.build(analyzer, proc)
+			if err != nil {
+				return result, err
+			}
 			if ctr.mp == nil && !semiJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -93,7 +103,7 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			input, err = semiJoin.Children[0].Call(proc)
+			input, err = vm.ChildrenCall(semiJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -105,7 +115,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			anal.Input(bat, semiJoin.GetIsFirst())
 
 			if ctr.skipProbe {
 				newvecs := make([]*vector.Vector, len(semiJoin.Result))
@@ -117,7 +126,7 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
-				anal.Output(result.Batch, semiJoin.GetIsLast())
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
 
@@ -148,7 +157,7 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, semiJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -159,14 +168,18 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (semiJoin *SemiJoin) build(anal process.Analyze, proc *process.Process) {
+func (semiJoin *SemiJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &semiJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(semiJoin.JoinMapTag, semiJoin.IsShuffle, semiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	defer analyzer.WaitStop(start)
+	ctr.mp, err = message.ReceiveJoinMap(semiJoin.JoinMapTag, semiJoin.IsShuffle, semiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
+	return nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Process, result *vm.CallResult) error {
@@ -215,7 +228,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					}
-					bs := vector.MustFixedCol[bool](vec)
+					bs := vector.MustFixedColWithTypeCheck[bool](vec)
 					if bs[0] {
 						matched = true
 					}
@@ -238,7 +251,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						}
-						bs := vector.MustFixedCol[bool](vec)
+						bs := vector.MustFixedColWithTypeCheck[bool](vec)
 						if bs[0] {
 							matched = true
 							break

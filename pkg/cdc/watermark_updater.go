@@ -17,7 +17,6 @@ package cdc
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
@@ -66,10 +66,10 @@ func NewWatermarkUpdater(accountId uint64, taskId string, ie ie.InternalExecutor
 }
 
 func (u *WatermarkUpdater) Run(ar *ActiveRoutine) {
-	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ WatermarkUpdater.Run: start\n")
+	logutil.Info("^^^^^ WatermarkUpdater.Run: start")
 	defer func() {
 		u.flushAll()
-		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ WatermarkUpdater.Run: end\n")
+		logutil.Info("^^^^^ WatermarkUpdater.Run: end")
 	}()
 
 	for {
@@ -153,7 +153,7 @@ func (u *WatermarkUpdater) flushAll() {
 		tableId := k.(uint64)
 		ts := v.(types.TS)
 		if err := u.updateDb(tableId, ts); err != nil {
-			fmt.Fprintf(os.Stderr, "flush table %d failed, current watermark: %s\n", tableId, ts.ToString())
+			logutil.Errorf("flush table %d failed, current watermark: %s\n", tableId, ts.ToString())
 		}
 		return true
 	})

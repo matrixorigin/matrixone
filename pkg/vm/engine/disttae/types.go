@@ -282,9 +282,9 @@ type Transaction struct {
 	// notice that it's guarded by txn.Lock() and has the same lifecycle as transaction.
 	cnBlkId_Pos map[types.Blockid]Pos
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	blockId_tn_delete_metaLoc_batch struct {
+	cn_flushed_s3_tombstone_object_stats_list struct {
 		sync.RWMutex
-		data map[types.Blockid][]*batch.Batch
+		data []objectio.ObjectStats
 	}
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
@@ -368,6 +368,14 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
+func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
+	txn.cn_flushed_s3_tombstone_object_stats_list.Lock()
+	defer txn.cn_flushed_s3_tombstone_object_stats_list.Unlock()
+
+	txn.cn_flushed_s3_tombstone_object_stats_list.data =
+		append(txn.cn_flushed_s3_tombstone_object_stats_list.data, stats)
+}
+
 func (txn *Transaction) Readonly() bool {
 	return txn.readOnly.Load()
 }
@@ -448,12 +456,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	txn.Lock()
 	defer txn.Unlock()
 	//free batches
-	for key := range txn.toFreeBatches {
-		for _, bat := range txn.toFreeBatches[key] {
-			txn.proc.PutBatch(bat)
-		}
-		delete(txn.toFreeBatches, key)
-	}
+	txn.CleanToFreeBatches()
 	//merge writes for the last statement
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
@@ -643,6 +646,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
 	}
+
+	txn.CleanToFreeBatches()
 
 	for i := len(txn.restoreTxnTableFunc) - 1; i >= 0; i-- {
 		txn.restoreTxnTableFunc[i]()
@@ -845,21 +850,17 @@ type withFilterMixin struct {
 	columns struct {
 		seqnums  []uint16
 		colTypes []types.Type
-		// colNulls []bool
 
 		pkPos                    int // -1 means no primary key in columns
 		indexOfFirstSortedColumn int
 	}
 
 	filterState struct {
-		evaluated bool
 		//point select for primary key
 		expr     *plan.Expr
-		filter   blockio.BlockReadFilter
+		filter   objectio.BlockReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
-		hasNull  bool
-		record   bool
 	}
 }
 
@@ -885,144 +886,4 @@ type mergeReader struct {
 }
 
 type emptyReader struct {
-}
-
-type InputType int
-
-const (
-	InputTypePartitionState InputType = 1
-	InputTypeHeartbeat      InputType = 2
-	InputTypeDDL            InputType = 3
-)
-
-func (typ InputType) String() string {
-	switch typ {
-	case InputTypePartitionState:
-		return "PartitionState"
-	case InputTypeHeartbeat:
-		return "Heartbeat"
-	case InputTypeDDL:
-		return "DDL"
-	default:
-		return "usp input type"
-	}
-}
-
-type DecoderInput struct {
-	typ InputType
-	//ts comes from the ts timestamp on the logtail package
-	ts         timestamp.Timestamp
-	state      *logtailreplay.PartitionState
-	receivedAt time.Time
-	ddls       []*DDL
-	//fromSubResp denotes the content comes from subscribe response
-	fromSubResp bool
-}
-
-func (dec *DecoderInput) IsHeartbeat() bool {
-	return dec.typ == InputTypeHeartbeat
-}
-
-func (dec *DecoderInput) IsDDL() bool {
-	return dec.typ == InputTypeDDL
-}
-
-func (dec *DecoderInput) TS() timestamp.Timestamp {
-	return dec.ts
-}
-
-func (dec *DecoderInput) State() *logtailreplay.PartitionState {
-	return dec.state
-}
-
-func (dec *DecoderInput) FromSubResp() bool {
-	return dec.fromSubResp
-}
-
-// Queue
-// Two features:
-//
-//	persistence
-//	concurrent safe
-type Queue[T any] interface {
-	//Push saves the value before it returns
-	Push(T)
-	Pop()
-	Front() T
-	Back() T
-	Size() int
-	Empty() bool
-}
-
-type DDLType int
-
-const (
-	DDLTypeInvalid           DDLType = 0
-	DDLTypeCreateDB          DDLType = 1
-	DDLTypeDropDB            DDLType = 2
-	DDLTypeCreateTable       DDLType = 3
-	DDLTypeDropTable         DDLType = 4
-	DDLTypeAlterTableInplace DDLType = 5
-	DDLTypeAlterTableCopy    DDLType = 6
-	DDLTypeTruncateTable     DDLType = 7
-)
-
-func (dtype DDLType) String() string {
-	switch dtype {
-	case DDLTypeInvalid:
-		return "invalid"
-	case DDLTypeCreateDB:
-		return "create db"
-	case DDLTypeDropDB:
-		return "drop db"
-	case DDLTypeCreateTable:
-		return "create table"
-	case DDLTypeDropTable:
-		return "drop table"
-	case DDLTypeAlterTableInplace:
-		return "alter table inplace"
-	case DDLTypeAlterTableCopy:
-		return "alter table copy"
-	case DDLTypeTruncateTable:
-		return "truncate table"
-	default:
-		return "usp detect result type"
-	}
-}
-
-type DDL struct {
-	Typ        DDLType
-	AccountId  uint64
-	DB         string
-	Table      string
-	DBId       uint64
-	TableId    uint64
-	OldTableId uint64
-}
-
-func (d DDL) String() string {
-	return fmt.Sprintf("Typ:%v AccID:%v Db:%v Table:%v DBID:%v TableID:%v OldTableID:%v",
-		d.Typ,
-		d.AccountId,
-		d.DB,
-		d.Table,
-		d.DBId,
-		d.TableId,
-		d.OldTableId)
-}
-
-type ActionType int
-
-const (
-	ActionInsertTable    ActionType = 1
-	ActionDeleteTable    ActionType = 2
-	ActionInsertDatabase ActionType = 3
-	ActionDeleteDatabase ActionType = 4
-)
-
-type DDLListener interface {
-	Init(ts timestamp.Timestamp)
-	OnAction(typ ActionType, bat *batch.Batch)
-	GetDDLs() []*DDL
-	Clear()
 }

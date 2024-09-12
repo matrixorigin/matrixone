@@ -108,6 +108,135 @@ const (
 	Mock
 )
 
+func (op OpType) String() string {
+	switch op {
+	case Top:
+		return "Top"
+	case Limit:
+		return "Limit"
+	case Order:
+		return "Order"
+	case Group:
+		return "Group"
+	case Window:
+		return "Window"
+	case TimeWin:
+		return "TimeWin"
+	case Fill:
+		return "Fill"
+	case Output:
+		return "Output"
+	case Offset:
+		return "Offset"
+	case Product:
+		return "Product"
+	case Filter:
+		return "Filter"
+	case Dispatch:
+		return "Dispatch"
+	case Connector:
+		return "Connector"
+	case Projection:
+		return "Projection"
+	case Join:
+		return "Join"
+	case LoopJoin:
+		return "LoopJoin"
+	case Left:
+		return "Left"
+	case Single:
+		return "Single"
+	case Semi:
+		return "Semi"
+	case RightSemi:
+		return "RightSemi"
+	case Anti:
+		return "Anti"
+	case RightAnti:
+		return "RightAnti"
+	case Mark:
+		return "Mark"
+	case IndexJoin:
+		return "IndexJoin"
+	case IndexBuild:
+		return "IndexBuild"
+	case Merge:
+		return "Merge"
+	case MergeTop:
+		return "MergeTop"
+	case MergeLimit:
+		return "MergeLimit"
+	case MergeOrder:
+		return "MergeOrder"
+	case MergeGroup:
+		return "MergeGroup"
+	case MergeOffset:
+		return "MergeOffset"
+	case MergeRecursive:
+		return "MergeRecursive"
+	case MergeCTE:
+		return "MergeCTE"
+	case Partition:
+		return "Partition"
+	case Deletion:
+		return "Deletion"
+	case Insert:
+		return "Insert"
+	case External:
+		return "External"
+	case Source:
+		return "Source"
+	case Minus:
+		return "Minus"
+	case Intersect:
+		return "Intersect"
+	case IntersectAll:
+		return "IntersectAll"
+	case UnionAll:
+		return "UnionAll"
+	case HashBuild:
+		return "HashBuild"
+	case ShuffleBuild:
+		return "ShuffleBuild"
+	case TableFunction:
+		return "TableFunction"
+	case TableScan:
+		return "TableScan"
+	case ValueScan:
+		return "ValueScan"
+	case MergeBlock:
+		return "MergeBlock"
+	case MergeDelete:
+		return "MergeDelete"
+	case Right:
+		return "Right"
+	case OnDuplicateKey:
+		return "OnDuplicateKey"
+	case FuzzyFilter:
+		return "FuzzyFilter"
+	case PreInsert:
+		return "PreInsert"
+	case PreInsertUnique:
+		return "PreInsertUnique"
+	case PreInsertSecondaryIndex:
+		return "PreInsertSecondaryIndex"
+	case LastInstructionOp:
+		return "LastInstructionOp"
+	case LockOp:
+		return "LockOp"
+	case Shuffle:
+		return "Shuffle"
+	case Sample:
+		return "Sample"
+	case ProductL2:
+		return "ProductL2"
+	case Mock:
+		return "Mock"
+	default:
+		return "Unknown"
+	}
+}
+
 type Operator interface {
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
@@ -140,7 +269,8 @@ type Operator interface {
 
 type OperatorBase struct {
 	OperatorInfo
-	Children []Operator
+	OpAnalyzer process.Analyzer
+	Children   []Operator
 }
 
 func (o *OperatorBase) SetInfo(info *OperatorInfo) {
@@ -211,14 +341,6 @@ func (o *OperatorBase) SetIdx(idx int) {
 	o.Idx = idx
 }
 
-func (o *OperatorBase) GetParallelIdx() int {
-	return o.ParallelIdx
-}
-
-func (o *OperatorBase) GetParallelMajor() bool {
-	return o.ParallelMajor
-}
-
 func (o *OperatorBase) GetIsFirst() bool {
 	return o.IsFirst
 }
@@ -253,10 +375,13 @@ func CancelCheck(proc *process.Process) (error, bool) {
 	}
 }
 
-func ChildrenCall(o Operator, proc *process.Process, anal process.Analyze) (CallResult, error) {
+func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
 	beforeChildrenCall := time.Now()
-	result, err := o.Call(proc)
+	result, err := op.Call(proc)
 	anal.ChildrenCallStop(beforeChildrenCall)
+	if err == nil {
+		anal.Input(result.Batch)
+	}
 	return result, err
 }
 
@@ -288,11 +413,9 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Idx           int // plan node index to which the pipeline operator belongs
-	ParallelIdx   int
-	ParallelMajor bool
-	IsFirst       bool
-	IsLast        bool
+	Idx     int // plan node index to which the pipeline operator belongs
+	IsFirst bool
+	IsLast  bool
 
 	CnAddr      string
 	OperatorID  int32

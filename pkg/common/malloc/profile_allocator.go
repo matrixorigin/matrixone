@@ -71,19 +71,19 @@ func (h *HeapSampleValues) Values() []int64 {
 	}
 }
 
-type ProfileAllocator struct {
-	upstream        Allocator
+type ProfileAllocator[U Allocator] struct {
+	upstream        U
 	profiler        *Profiler[HeapSampleValues, *HeapSampleValues]
 	fraction        uint32
 	deallocatorPool *ClosureDeallocatorPool[profileDeallocateArgs, *profileDeallocateArgs]
 }
 
-func NewProfileAllocator(
-	upstream Allocator,
+func NewProfileAllocator[U Allocator](
+	upstream U,
 	profiler *Profiler[HeapSampleValues, *HeapSampleValues],
 	fraction uint32,
-) *ProfileAllocator {
-	return &ProfileAllocator{
+) *ProfileAllocator[U] {
+	return &ProfileAllocator[U]{
 		upstream: upstream,
 		profiler: profiler,
 		fraction: fraction,
@@ -106,9 +106,9 @@ func (profileDeallocateArgs) As(Trait) bool {
 	return false
 }
 
-var _ Allocator = new(ProfileAllocator)
+var _ Allocator = new(ProfileAllocator[Allocator])
 
-func (p *ProfileAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
+func (p *ProfileAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr, dec, err := p.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err

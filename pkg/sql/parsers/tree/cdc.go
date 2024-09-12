@@ -94,7 +94,7 @@ func (node *ShowCDC) Format(ctx *FmtCtx) {
 		ctx.WriteString(" all")
 	} else {
 		ctx.WriteString(" task ")
-		ctx.WriteString(fmt.Sprintf("%s", node.Option.TaskName))
+		ctx.WriteString(string(node.Option.TaskName))
 	}
 	ctx.WriteByte(';')
 }
@@ -116,7 +116,7 @@ func (node *PauseCDC) Format(ctx *FmtCtx) {
 		ctx.WriteString(" all")
 	} else {
 		ctx.WriteString(" task ")
-		ctx.WriteString(fmt.Sprintf("%s", node.Option.TaskName))
+		ctx.WriteString(string(node.Option.TaskName))
 	}
 	ctx.WriteByte(';')
 }
@@ -144,7 +144,7 @@ func (node *DropCDC) Format(ctx *FmtCtx) {
 		ctx.WriteString(" all")
 	} else {
 		ctx.WriteString(" task ")
-		ctx.WriteString(fmt.Sprintf("%s", node.Option.TaskName))
+		ctx.WriteString(string(node.Option.TaskName))
 	}
 	ctx.WriteByte(';')
 }
@@ -170,7 +170,7 @@ type ResumeCDC struct {
 func (node *ResumeCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("resume cdc")
 	ctx.WriteString(" task ")
-	ctx.WriteString(fmt.Sprintf("%s", node.TaskName))
+	ctx.WriteString(string(node.TaskName))
 	ctx.WriteByte(';')
 }
 
@@ -188,7 +188,7 @@ type RestartCDC struct {
 func (node *RestartCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("resume cdc")
 	ctx.WriteString(" task ")
-	ctx.WriteString(fmt.Sprintf("%s", node.TaskName))
+	ctx.WriteString(string(node.TaskName))
 	ctx.WriteString(" 'restart'")
 	ctx.WriteByte(';')
 }

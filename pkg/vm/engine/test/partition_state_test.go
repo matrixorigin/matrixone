@@ -714,7 +714,7 @@ func Test_Bug_DupEntryWhenGCInMemTombstones(t *testing.T) {
 		require.Equal(t, res.Batches[0].RowCount(), 3)
 		require.Equal(t, 0,
 			slices.Compare(
-				vector.MustFixedCol[int32](res.Batches[0].Vecs[schema.GetPrimaryKey().Idx]),
+				vector.MustFixedColWithTypeCheck[int32](res.Batches[0].Vecs[schema.GetPrimaryKey().Idx]),
 				[]int32{4, 3, 2}))
 
 		res.Close()
@@ -749,7 +749,7 @@ func Test_Bug_DupEntryWhenGCInMemTombstones(t *testing.T) {
 		require.Equal(t, res.Batches[0].RowCount(), 4)
 		require.Equal(t, 0,
 			slices.Compare(
-				vector.MustFixedCol[int32](res.Batches[0].Vecs[schema.GetPrimaryKey().Idx]),
+				vector.MustFixedColWithTypeCheck[int32](res.Batches[0].Vecs[schema.GetPrimaryKey().Idx]),
 				[]int32{4, 3, 2, 1}))
 		res.Close()
 	}

@@ -112,19 +112,19 @@ func (p *PartitionState) HandleDataObjectList(
 
 	vec := mustVectorFromProto(ee.Bat.Vecs[5])
 	defer vec.Free(pool)
-	createTSCol := vector.MustFixedCol[types.TS](vec)
+	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[6])
 	defer vec.Free(pool)
-	deleteTSCol := vector.MustFixedCol[types.TS](vec)
+	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[7])
 	defer vec.Free(pool)
-	startTSCol := vector.MustFixedCol[types.TS](vec)
+	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[9])
 	defer vec.Free(pool)
-	commitTSCol := vector.MustFixedCol[types.TS](vec)
+	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
 		p.shared.Lock()
@@ -140,10 +140,8 @@ func (p *PartitionState) HandleDataObjectList(
 			continue
 		}
 
-		objEntry.Appendable = objEntry.ObjectStats.GetAppendable()
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
-		objEntry.Sorted = objEntry.ObjectStats.GetSorted()
 
 		old, exist := p.dataObjects.Get(objEntry)
 		if exist {
@@ -164,7 +162,7 @@ func (p *PartitionState) HandleDataObjectList(
 				Time:         createTSCol[idx],
 				ShortObjName: *objEntry.ObjectShortName(),
 				IsDelete:     false,
-				IsAppendable: objEntry.Appendable,
+				IsAppendable: objEntry.GetAppendable(),
 			}
 			p.objectIndexByTS.Set(e)
 		}
@@ -177,12 +175,12 @@ func (p *PartitionState) HandleDataObjectList(
 				Time:         deleteTSCol[idx],
 				IsDelete:     true,
 				ShortObjName: *objEntry.ObjectShortName(),
-				IsAppendable: objEntry.Appendable,
+				IsAppendable: objEntry.GetAppendable(),
 			}
 			p.objectIndexByTS.Set(e)
 		}
 
-		if objEntry.Appendable && objEntry.DeleteTime.IsEmpty() {
+		if objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty() {
 			panic("logic error")
 		}
 
@@ -212,7 +210,7 @@ func (p *PartitionState) HandleDataObjectList(
 				// if the inserting block is appendable, need to delete the rows for it;
 				// if the inserting block is non-appendable and has delta location, need to delete
 				// the deletes for it.
-				if objEntry.Appendable {
+				if objEntry.GetAppendable() {
 					if entry.Time.LessEq(&trunctPoint) {
 						// delete the row
 						p.rows.Delete(entry)
@@ -268,19 +266,19 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 	vec := mustVectorFromProto(ee.Bat.Vecs[5])
 	defer vec.Free(pool)
-	createTSCol := vector.MustFixedCol[types.TS](vec)
+	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[6])
 	defer vec.Free(pool)
-	deleteTSCol := vector.MustFixedCol[types.TS](vec)
+	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[7])
 	defer vec.Free(pool)
-	startTSCol := vector.MustFixedCol[types.TS](vec)
+	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[9])
 	defer vec.Free(pool)
-	commitTSCol := vector.MustFixedCol[types.TS](vec)
+	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	var tbIter = p.inMemTombstoneIndex.Copy().Iter()
 	defer tbIter.Release()
@@ -298,10 +296,8 @@ func (p *PartitionState) HandleTombstoneObjectList(
 			continue
 		}
 
-		objEntry.Appendable = objEntry.ObjectStats.GetAppendable()
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
-		objEntry.Sorted = objEntry.ObjectStats.GetSorted()
 
 		old, exist := p.tombstoneObjects.Get(objEntry)
 		if exist {
@@ -321,12 +317,12 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 		p.tombstoneObjects.Set(objEntry)
 
-		if objEntry.Appendable && objEntry.DeleteTime.IsEmpty() {
+		if objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty() {
 			panic("logic error")
 		}
 
 		// for appendable object, gc rows when delete object
-		if !objEntry.Appendable {
+		if !objEntry.GetAppendable() {
 			continue
 		}
 
@@ -382,15 +378,15 @@ func (p *PartitionState) HandleRowsDelete(
 
 	vec := mustVectorFromProto(input.Vecs[0])
 	defer vec.Free(pool)
-	rowIDVector := vector.MustFixedCol[types.Rowid](vec)
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
 
 	vec = mustVectorFromProto(input.Vecs[1])
 	defer vec.Free(pool)
-	timeVector := vector.MustFixedCol[types.TS](vec)
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(input.Vecs[3])
 	defer vec.Free(pool)
-	tbRowIdVector := vector.MustFixedCol[types.Rowid](vec)
+	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
 
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
@@ -479,11 +475,11 @@ func (p *PartitionState) HandleRowsInsert(
 
 	vec := mustVectorFromProto(input.Vecs[0])
 	defer vec.Free(pool)
-	rowIDVector := vector.MustFixedCol[types.Rowid](vec)
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
 
 	vec = mustVectorFromProto(input.Vecs[1])
 	defer vec.Free(pool)
-	timeVector := vector.MustFixedCol[types.TS](vec)
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
@@ -754,10 +750,10 @@ func (p *PartitionState) PKExistInMemBetween(
 					}
 				}
 				row := rowIter.Item()
-				if row.BlockID.Compare(entry.BlockID) != 0 {
+				if row.BlockID.Compare(&entry.BlockID) != 0 {
 					break
 				}
-				if !row.RowID.Equal(entry.RowID) {
+				if !row.RowID.EQ(&entry.RowID) {
 					break
 				}
 				if row.Time.GreaterEq(&from) {

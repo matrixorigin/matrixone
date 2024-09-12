@@ -480,3 +480,15 @@ func (bat *Batch) Allocated() int {
 	}
 	return ret
 }
+
+func (bat *Batch) Window(start, end int) (*Batch, error) {
+	b := NewWithSize(len(bat.Vecs))
+	var err error
+	for i, vec := range bat.Vecs {
+		b.Vecs[i], err = vec.Window(start, end)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return b, nil
+}

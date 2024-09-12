@@ -78,7 +78,7 @@ Tables_in_res_test
 r_test
 show create table r_test;
 Table    Create Table
-r_test    CREATE TABLE `r_test` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
+r_test    CREATE TABLE `r_test` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
 show columns from r_test;
 Field    Type    Null    Key    Default    Extra    Comment
 c1    INT(32)    YES    UNI    null        
@@ -185,9 +185,6 @@ r_test    BASE TABLE
 show full tables from res_test;;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE
-select version();
-version()
-8.0.30-MatrixOne-v1.0.0
 alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
 internal error: do not have privilege to execute the statement
 select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
@@ -258,7 +255,7 @@ Tables_in_res_test
 r_test
 show create table r_test;
 Table    Create Table
-r_test    CREATE TABLE `r_test` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
+r_test    CREATE TABLE `r_test` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
 show columns from r_test;
 Field    Type    Null    Key    Default    Extra    Comment
 c1    INT(32)    YES    UNI    null        
@@ -316,4 +313,20 @@ drop role role1;
 drop database rdb;
 drop database res_test;
 drop account if exists acc1;
+select version();
+version()
+8.0.30-MatrixOne-v1.3.0
+drop database if exists abc;
+create database abc;
+use abc;
+select version();
+version()
+8.0.30-MatrixOne-v1.3.0
+drop database abc;
+drop account if exists acc01;
+create account acc01 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select version();
+version()
+8.0.30-MatrixOne-v1.3.0
+drop account if exists acc01;
 set global enable_privilege_cache = on;

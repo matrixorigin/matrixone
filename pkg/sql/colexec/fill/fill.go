@@ -40,6 +40,12 @@ func (fill *Fill) OpType() vm.OpType {
 }
 
 func (fill *Fill) Prepare(proc *process.Process) (err error) {
+	if fill.OpAnalyzer == nil {
+		fill.OpAnalyzer = process.NewAnalyzer(fill.GetIdx(), fill.IsFirst, fill.IsLast, "fill")
+	} else {
+		fill.OpAnalyzer.Reset()
+	}
+
 	ctr := &fill.ctr
 
 	f := true
@@ -118,12 +124,13 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := fill.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &fill.ctr
 
-	result, err := ctr.process(ctr, fill, proc, anal)
+	result, err := ctr.process(ctr, fill, proc, analyzer)
 
 	if fill.ProjectList != nil {
 		result.Batch, err = fill.EvalProjection(result.Batch, proc)
@@ -145,9 +152,9 @@ func resetColRef(expr *plan.Expr, idx int) {
 	}
 }
 
-func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
-	result, err := ap.GetChildren(0).Call(proc)
+	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -163,8 +170,6 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.
 		return result, err
 	}
 
-	anal.Input(ctr.buf, ap.IsFirst)
-
 	for i := 0; i < ap.ColLen; i++ {
 		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
 			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
@@ -176,7 +181,7 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.
 	}
 
 	result.Batch = ctr.buf
-	anal.Output(ctr.buf, ap.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -277,9 +282,9 @@ func processNextCol(ctr *container, idx int, proc *process.Process) error {
 	}
 }
 
-func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
-	result, err := ap.GetChildren(0).Call(proc)
+	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -287,7 +292,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	anal.Input(ctr.buf, ap.IsFirst)
+
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	}
@@ -321,7 +326,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		}
 	}
 	result.Batch = ctr.buf
-	anal.Output(result.Batch, ap.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -447,7 +452,7 @@ func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 	}
 }
 
-func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
 	result := vm.NewCallResult()
 	if ctr.done {
@@ -459,10 +464,11 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		result.Batch = ctr.bats[ctr.idx]
 		result.Status = vm.ExecNext
 		ctr.idx++
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 	for i := 0; ; i++ {
-		result, err = ap.GetChildren(0).Call(proc)
+		result, err = vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
@@ -482,6 +488,7 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 			if err != nil {
 				return result, err
 			}
+			analyzer.Alloc(int64(appBat.Size()))
 			ctr.bats = append(ctr.bats, appBat)
 		}
 	}
@@ -490,7 +497,6 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	anal.Input(ctr.buf, ap.IsFirst)
 
 	for i := range ctr.bats[0].Vecs {
 		if err = processNextCol(ctr, i, proc); err != nil {
@@ -502,11 +508,11 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 	result.Status = vm.ExecNext
 	ctr.idx++
 
-	anal.Output(result.Batch, ap.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
-func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
 	result := vm.NewCallResult()
 	if ctr.done {
@@ -518,17 +524,18 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 		result.Batch = ctr.bats[ctr.idx]
 		result.Status = vm.ExecNext
 		ctr.idx++
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 	for i := 0; ; i++ {
-		result, err = ap.GetChildren(0).Call(proc)
+		result, err = vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
 		if result.Batch == nil {
 			break
 		}
-		anal.Input(result.Batch, ap.IsFirst)
+
 		if len(ctr.bats) > i {
 			if ctr.bats[i] != nil {
 				ctr.bats[i].CleanOnlyData()
@@ -542,6 +549,7 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 			if err != nil {
 				return result, err
 			}
+			analyzer.Alloc(int64(appBat.Size()))
 			ctr.bats = append(ctr.bats, appBat)
 		}
 	}
@@ -560,12 +568,12 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 	result.Status = vm.ExecNext
 	ctr.idx++
 
-	anal.Output(result.Batch, ap.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
-func processDefault(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
-	result, err := ap.GetChildren(0).Call(proc)
+func processDefault(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -574,12 +582,13 @@ func processDefault(ctr *container, ap *Fill, proc *process.Process, anal proces
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	anal.Input(ctr.buf, ap.IsFirst)
-	anal.Output(result.Batch, ap.IsLast)
+
 	ctr.buf, err = result.Batch.Dup(proc.Mp())
+	analyzer.Alloc(int64(ctr.buf.Size()))
 	if err != nil {
 		return result, err
 	}
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -587,49 +596,49 @@ func appendValue(v, w *vector.Vector, j int, proc *process.Process) error {
 	var err error
 	switch v.GetType().Oid {
 	case types.T_bool:
-		err = vector.AppendFixed[bool](v, vector.GetFixedAt[bool](w, j), false, proc.Mp())
+		err = vector.AppendFixed[bool](v, vector.GetFixedAtNoTypeCheck[bool](w, j), false, proc.Mp())
 	case types.T_bit:
-		err = vector.AppendFixed[uint64](v, vector.GetFixedAt[uint64](w, j), false, proc.Mp())
+		err = vector.AppendFixed[uint64](v, vector.GetFixedAtNoTypeCheck[uint64](w, j), false, proc.Mp())
 	case types.T_int8:
-		err = vector.AppendFixed[int8](v, vector.GetFixedAt[int8](w, j), false, proc.Mp())
+		err = vector.AppendFixed[int8](v, vector.GetFixedAtNoTypeCheck[int8](w, j), false, proc.Mp())
 	case types.T_int16:
-		err = vector.AppendFixed[int16](v, vector.GetFixedAt[int16](w, j), false, proc.Mp())
+		err = vector.AppendFixed[int16](v, vector.GetFixedAtNoTypeCheck[int16](w, j), false, proc.Mp())
 	case types.T_int32:
-		err = vector.AppendFixed[int32](v, vector.GetFixedAt[int32](w, j), false, proc.Mp())
+		err = vector.AppendFixed[int32](v, vector.GetFixedAtNoTypeCheck[int32](w, j), false, proc.Mp())
 	case types.T_int64:
-		err = vector.AppendFixed[int64](v, vector.GetFixedAt[int64](w, j), false, proc.Mp())
+		err = vector.AppendFixed[int64](v, vector.GetFixedAtNoTypeCheck[int64](w, j), false, proc.Mp())
 	case types.T_uint8:
-		err = vector.AppendFixed[uint8](v, vector.GetFixedAt[uint8](w, j), false, proc.Mp())
+		err = vector.AppendFixed[uint8](v, vector.GetFixedAtNoTypeCheck[uint8](w, j), false, proc.Mp())
 	case types.T_uint16:
-		err = vector.AppendFixed[uint16](v, vector.GetFixedAt[uint16](w, j), false, proc.Mp())
+		err = vector.AppendFixed[uint16](v, vector.GetFixedAtNoTypeCheck[uint16](w, j), false, proc.Mp())
 	case types.T_uint32:
-		err = vector.AppendFixed[uint32](v, vector.GetFixedAt[uint32](w, j), false, proc.Mp())
+		err = vector.AppendFixed[uint32](v, vector.GetFixedAtNoTypeCheck[uint32](w, j), false, proc.Mp())
 	case types.T_uint64:
-		err = vector.AppendFixed[uint64](v, vector.GetFixedAt[uint64](w, j), false, proc.Mp())
+		err = vector.AppendFixed[uint64](v, vector.GetFixedAtNoTypeCheck[uint64](w, j), false, proc.Mp())
 	case types.T_float32:
-		err = vector.AppendFixed[float32](v, vector.GetFixedAt[float32](w, j), false, proc.Mp())
+		err = vector.AppendFixed[float32](v, vector.GetFixedAtNoTypeCheck[float32](w, j), false, proc.Mp())
 	case types.T_float64:
-		err = vector.AppendFixed[float64](v, vector.GetFixedAt[float64](w, j), false, proc.Mp())
+		err = vector.AppendFixed[float64](v, vector.GetFixedAtNoTypeCheck[float64](w, j), false, proc.Mp())
 	case types.T_date:
-		err = vector.AppendFixed[types.Date](v, vector.GetFixedAt[types.Date](w, j), false, proc.Mp())
+		err = vector.AppendFixed[types.Date](v, vector.GetFixedAtNoTypeCheck[types.Date](w, j), false, proc.Mp())
 	case types.T_datetime:
-		err = vector.AppendFixed[types.Datetime](v, vector.GetFixedAt[types.Datetime](w, j), false, proc.Mp())
+		err = vector.AppendFixed[types.Datetime](v, vector.GetFixedAtNoTypeCheck[types.Datetime](w, j), false, proc.Mp())
 	case types.T_time:
-		err = vector.AppendFixed[types.Time](v, vector.GetFixedAt[types.Time](w, j), false, proc.Mp())
+		err = vector.AppendFixed[types.Time](v, vector.GetFixedAtNoTypeCheck[types.Time](w, j), false, proc.Mp())
 	case types.T_timestamp:
-		err = vector.AppendFixed[types.Timestamp](v, vector.GetFixedAt[types.Timestamp](w, j), false, proc.Mp())
+		err = vector.AppendFixed[types.Timestamp](v, vector.GetFixedAtNoTypeCheck[types.Timestamp](w, j), false, proc.Mp())
 	case types.T_enum:
-		err = vector.AppendFixed[types.Enum](v, vector.GetFixedAt[types.Enum](w, j), false, proc.Mp())
+		err = vector.AppendFixed[types.Enum](v, vector.GetFixedAtNoTypeCheck[types.Enum](w, j), false, proc.Mp())
 	case types.T_decimal64:
-		err = vector.AppendFixed[types.Decimal64](v, vector.GetFixedAt[types.Decimal64](w, j), false, proc.Mp())
+		err = vector.AppendFixed[types.Decimal64](v, vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j), false, proc.Mp())
 	case types.T_decimal128:
-		err = vector.AppendFixed[types.Decimal128](v, vector.GetFixedAt[types.Decimal128](w, j), false, proc.Mp())
+		err = vector.AppendFixed[types.Decimal128](v, vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j), false, proc.Mp())
 	case types.T_uuid:
-		err = vector.AppendFixed[types.Uuid](v, vector.GetFixedAt[types.Uuid](w, j), false, proc.Mp())
+		err = vector.AppendFixed[types.Uuid](v, vector.GetFixedAtNoTypeCheck[types.Uuid](w, j), false, proc.Mp())
 	case types.T_TS:
-		err = vector.AppendFixed[types.TS](v, vector.GetFixedAt[types.TS](w, j), false, proc.Mp())
+		err = vector.AppendFixed[types.TS](v, vector.GetFixedAtNoTypeCheck[types.TS](w, j), false, proc.Mp())
 	case types.T_Rowid:
-		err = vector.AppendFixed[types.Rowid](v, vector.GetFixedAt[types.Rowid](w, j), false, proc.Mp())
+		err = vector.AppendFixed[types.Rowid](v, vector.GetFixedAtNoTypeCheck[types.Rowid](w, j), false, proc.Mp())
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
@@ -647,49 +656,49 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 	var err error
 	switch v.GetType().Oid {
 	case types.T_bool:
-		err = vector.SetFixedAt[bool](v, i, vector.GetFixedAt[bool](w, j))
+		err = vector.SetFixedAtNoTypeCheck[bool](v, i, vector.GetFixedAtNoTypeCheck[bool](w, j))
 	case types.T_bit:
-		err = vector.SetFixedAt[uint64](v, i, vector.GetFixedAt[uint64](w, j))
+		err = vector.SetFixedAtNoTypeCheck[uint64](v, i, vector.GetFixedAtNoTypeCheck[uint64](w, j))
 	case types.T_int8:
-		err = vector.SetFixedAt[int8](v, i, vector.GetFixedAt[int8](w, j))
+		err = vector.SetFixedAtNoTypeCheck[int8](v, i, vector.GetFixedAtNoTypeCheck[int8](w, j))
 	case types.T_int16:
-		err = vector.SetFixedAt[int16](v, i, vector.GetFixedAt[int16](w, j))
+		err = vector.SetFixedAtNoTypeCheck[int16](v, i, vector.GetFixedAtNoTypeCheck[int16](w, j))
 	case types.T_int32:
-		err = vector.SetFixedAt[int32](v, i, vector.GetFixedAt[int32](w, j))
+		err = vector.SetFixedAtNoTypeCheck[int32](v, i, vector.GetFixedAtNoTypeCheck[int32](w, j))
 	case types.T_int64:
-		err = vector.SetFixedAt[int64](v, i, vector.GetFixedAt[int64](w, j))
+		err = vector.SetFixedAtNoTypeCheck[int64](v, i, vector.GetFixedAtNoTypeCheck[int64](w, j))
 	case types.T_uint8:
-		err = vector.SetFixedAt[uint8](v, i, vector.GetFixedAt[uint8](w, j))
+		err = vector.SetFixedAtNoTypeCheck[uint8](v, i, vector.GetFixedAtNoTypeCheck[uint8](w, j))
 	case types.T_uint16:
-		err = vector.SetFixedAt[uint16](v, i, vector.GetFixedAt[uint16](w, j))
+		err = vector.SetFixedAtNoTypeCheck[uint16](v, i, vector.GetFixedAtNoTypeCheck[uint16](w, j))
 	case types.T_uint32:
-		err = vector.SetFixedAt[uint32](v, i, vector.GetFixedAt[uint32](w, j))
+		err = vector.SetFixedAtNoTypeCheck[uint32](v, i, vector.GetFixedAtNoTypeCheck[uint32](w, j))
 	case types.T_uint64:
-		err = vector.SetFixedAt[uint64](v, i, vector.GetFixedAt[uint64](w, j))
+		err = vector.SetFixedAtNoTypeCheck[uint64](v, i, vector.GetFixedAtNoTypeCheck[uint64](w, j))
 	case types.T_float32:
-		err = vector.SetFixedAt[float32](v, i, vector.GetFixedAt[float32](w, j))
+		err = vector.SetFixedAtNoTypeCheck[float32](v, i, vector.GetFixedAtNoTypeCheck[float32](w, j))
 	case types.T_float64:
-		err = vector.SetFixedAt[float64](v, i, vector.GetFixedAt[float64](w, j))
+		err = vector.SetFixedAtNoTypeCheck[float64](v, i, vector.GetFixedAtNoTypeCheck[float64](w, j))
 	case types.T_date:
-		err = vector.SetFixedAt[types.Date](v, i, vector.GetFixedAt[types.Date](w, j))
+		err = vector.SetFixedAtNoTypeCheck[types.Date](v, i, vector.GetFixedAtNoTypeCheck[types.Date](w, j))
 	case types.T_datetime:
-		err = vector.SetFixedAt[types.Datetime](v, i, vector.GetFixedAt[types.Datetime](w, j))
+		err = vector.SetFixedAtNoTypeCheck[types.Datetime](v, i, vector.GetFixedAtNoTypeCheck[types.Datetime](w, j))
 	case types.T_time:
-		err = vector.SetFixedAt[types.Time](v, i, vector.GetFixedAt[types.Time](w, j))
+		err = vector.SetFixedAtNoTypeCheck[types.Time](v, i, vector.GetFixedAtNoTypeCheck[types.Time](w, j))
 	case types.T_timestamp:
-		err = vector.SetFixedAt[types.Timestamp](v, i, vector.GetFixedAt[types.Timestamp](w, j))
+		err = vector.SetFixedAtNoTypeCheck[types.Timestamp](v, i, vector.GetFixedAtNoTypeCheck[types.Timestamp](w, j))
 	case types.T_enum:
-		err = vector.SetFixedAt[types.Enum](v, i, vector.GetFixedAt[types.Enum](w, j))
+		err = vector.SetFixedAtNoTypeCheck[types.Enum](v, i, vector.GetFixedAtNoTypeCheck[types.Enum](w, j))
 	case types.T_decimal64:
-		err = vector.SetFixedAt[types.Decimal64](v, i, vector.GetFixedAt[types.Decimal64](w, j))
+		err = vector.SetFixedAtNoTypeCheck[types.Decimal64](v, i, vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j))
 	case types.T_decimal128:
-		err = vector.SetFixedAt[types.Decimal128](v, i, vector.GetFixedAt[types.Decimal128](w, j))
+		err = vector.SetFixedAtNoTypeCheck[types.Decimal128](v, i, vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j))
 	case types.T_uuid:
-		err = vector.SetFixedAt[types.Uuid](v, i, vector.GetFixedAt[types.Uuid](w, j))
+		err = vector.SetFixedAtNoTypeCheck[types.Uuid](v, i, vector.GetFixedAtNoTypeCheck[types.Uuid](w, j))
 	case types.T_TS:
-		err = vector.SetFixedAt[types.TS](v, i, vector.GetFixedAt[types.TS](w, j))
+		err = vector.SetFixedAtNoTypeCheck[types.TS](v, i, vector.GetFixedAtNoTypeCheck[types.TS](w, j))
 	case types.T_Rowid:
-		err = vector.SetFixedAt[types.Rowid](v, i, vector.GetFixedAt[types.Rowid](w, j))
+		err = vector.SetFixedAtNoTypeCheck[types.Rowid](v, i, vector.GetFixedAtNoTypeCheck[types.Rowid](w, j))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:

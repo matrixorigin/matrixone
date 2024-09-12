@@ -119,3 +119,5 @@ drop database view_test3;
 drop snapshot sn1;
 drop snapshot syssn1;
 drop account acc1;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

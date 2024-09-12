@@ -14,32 +14,32 @@
 
 package malloc
 
-type LeaksTrackingAllocator struct {
-	upstream        Allocator
+type LeaksTrackingAllocator[U Allocator] struct {
+	upstream        U
 	deallocatorPool *ClosureDeallocatorPool[leaksTrackingDeallocatorArgs, *leaksTrackingDeallocatorArgs]
 	tracker         *LeaksTracker
 }
 
 type leaksTrackingDeallocatorArgs struct {
-	stacktraceID StacktraceID
+	stacktrace Stacktrace
 }
 
 func (leaksTrackingDeallocatorArgs) As(Trait) bool {
 	return false
 }
 
-func NewLeaksTrackingAllocator(
-	upstream Allocator,
+func NewLeaksTrackingAllocator[U Allocator](
+	upstream U,
 	tracker *LeaksTracker,
-) (ret *LeaksTrackingAllocator) {
+) (ret *LeaksTrackingAllocator[U]) {
 
-	ret = &LeaksTrackingAllocator{
+	ret = &LeaksTrackingAllocator[U]{
 		upstream: upstream,
 		tracker:  tracker,
 
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *leaksTrackingDeallocatorArgs) {
-				ret.tracker.deallocate(args.stacktraceID)
+				ret.tracker.deallocate(args.stacktrace)
 			},
 		),
 	}
@@ -47,19 +47,19 @@ func NewLeaksTrackingAllocator(
 	return ret
 }
 
-var _ Allocator = new(LeaksTrackingAllocator)
+var _ Allocator = new(LeaksTrackingAllocator[Allocator])
 
-func (t *LeaksTrackingAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
+func (t *LeaksTrackingAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	slice, dec, err := t.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
 	}
-	stacktraceID := GetStacktraceID(0)
+	stacktraceID := GetStacktrace(0)
 	t.tracker.allocate(stacktraceID)
 	return slice, ChainDeallocator(
 		dec,
 		t.deallocatorPool.Get(leaksTrackingDeallocatorArgs{
-			stacktraceID: stacktraceID,
+			stacktrace: stacktraceID,
 		}),
 	), nil
 }

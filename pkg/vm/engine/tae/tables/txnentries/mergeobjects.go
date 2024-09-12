@@ -232,11 +232,12 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 	if bat == nil || bat.Length() == 0 {
 		return
 	}
+	defer bat.Close()
 	inst = time.Now()
 	defer func() { transfer = time.Since(inst) }()
 
-	rowid := vector.MustFixedCol[types.Rowid](bat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
-	ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
+	rowid := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
+	ts := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
 
 	count := len(rowid)
 	transCnt += count

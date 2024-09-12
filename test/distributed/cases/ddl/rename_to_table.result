@@ -66,7 +66,7 @@ create table rename_table_09(a int,b varchar(10));
 create table rename_table_10(a int,b varchar(10));
 insert into rename_table_10 values(20,'ste'),(22,'ip'),(24,'opt');
 rename table rename_table_10 to rename_table_09;
-Table 'rename_table_09' already exists
+table rename_table_09 already exists
 drop table rename_table_09;
 drop table rename_table_10;
 create table rename_table_11(a int primary key auto_increment,b varchar(10));
@@ -136,22 +136,22 @@ insert into rename_table_21 values(1258,0.762),(157,21.25),(958,44.85);
 rename table rename_table_21 to w_01;
 show create table w_01;
 Table    Create Table
-w_01    CREATE TABLE `w_01` (\n  `a` BIGINT NOT NULL,\n  `b` DECIMAL(5,3) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+w_01    CREATE TABLE `w_01` (\n  `a` bigint NOT NULL,\n  `b` decimal(5,3) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 alter table w_01 drop primary key;
 show create table w_01;
 Table    Create Table
-w_01    CREATE TABLE `w_01` (\n  `a` BIGINT NOT NULL,\n  `b` DECIMAL(5,3) DEFAULT NULL\n)
+w_01    CREATE TABLE `w_01` (\n  `a` bigint NOT NULL,\n  `b` decimal(5,3) DEFAULT NULL\n)
 drop table w_01;
 create table rename_table_22(a bigint,b decimal(5,3),c varchar(10),primary key(a,c));
 insert into rename_table_22 values(1,0.762,'0102934'),(2,21.25,'0103084'),(1,44.85,'0104552');
 rename table rename_table_22 to w_02;
 show create table w_02;
 Table    Create Table
-w_02    CREATE TABLE `w_02` (\n  `a` BIGINT NOT NULL,\n  `b` DECIMAL(5,3) DEFAULT NULL,\n  `c` VARCHAR(10) NOT NULL,\n  PRIMARY KEY (`a`,`c`)\n)
+w_02    CREATE TABLE `w_02` (\n  `a` bigint NOT NULL,\n  `b` decimal(5,3) DEFAULT NULL,\n  `c` varchar(10) NOT NULL,\n  PRIMARY KEY (`a`,`c`)\n)
 alter table w_02 drop primary key;
 show create table w_02;
 Table    Create Table
-w_02    CREATE TABLE `w_02` (\n  `a` BIGINT NOT NULL,\n  `b` DECIMAL(5,3) DEFAULT NULL,\n  `c` VARCHAR(10) NOT NULL\n)
+w_02    CREATE TABLE `w_02` (\n  `a` bigint NOT NULL,\n  `b` decimal(5,3) DEFAULT NULL,\n  `c` varchar(10) NOT NULL\n)
 drop table w_02;
 create table rename_table_23(a bigint,b decimal(5,3),unique key idx(a));
 insert into rename_table_23 values(1002,0.762),(743,21.25),(958,44.85);
@@ -159,17 +159,17 @@ rename table rename_table_23 to w_03;
 alter table w_03 drop index idx;
 show create table w_03;
 Table    Create Table
-w_03    CREATE TABLE `w_03` (\n  `a` BIGINT DEFAULT NULL,\n  `b` DECIMAL(5,3) DEFAULT NULL\n)
+w_03    CREATE TABLE `w_03` (\n  `a` bigint DEFAULT NULL,\n  `b` decimal(5,3) DEFAULT NULL\n)
 alter table w_03 add unique index idx1(a);
 show create table w_03;
 Table    Create Table
-w_03    CREATE TABLE `w_03` (\n  `a` BIGINT DEFAULT NULL,\n  `b` DECIMAL(5,3) DEFAULT NULL,\n  UNIQUE KEY `idx1` (`a`)\n)
+w_03    CREATE TABLE `w_03` (\n  `a` bigint DEFAULT NULL,\n  `b` decimal(5,3) DEFAULT NULL,\n  UNIQUE KEY `idx1` (`a`)\n)
 drop table w_03;
 create table rename_fk_01(col1 varchar(30) not null primary key,col2 int);
 create table rename_fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES rename_fk_01(col1));
 show create table rename_fk_02;
 Table    Create Table
-rename_fk_02    CREATE TABLE `rename_fk_02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(25) DEFAULT NULL,\n  `col3` TINYINT DEFAULT NULL,\n  CONSTRAINT `ck` FOREIGN KEY (`col2`) REFERENCES `rename_fk_01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+rename_fk_02    CREATE TABLE `rename_fk_02` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` tinyint DEFAULT NULL,\n  CONSTRAINT `ck` FOREIGN KEY (`col2`) REFERENCES `rename_fk_01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into rename_fk_01 values ('90',5983),('100',734),('190',50);
 insert into rename_fk_02(col2,col3) values ('90',5),('90',4),('100',0),(NULL,80);
 select * from rename_fk_01;
@@ -188,7 +188,7 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 rename table rename_fk_02 to w_04;
 show create table w_04;
 Table    Create Table
-w_04    CREATE TABLE `w_04` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(25) DEFAULT NULL,\n  `col3` TINYINT DEFAULT NULL,\n  CONSTRAINT `ck` FOREIGN KEY (`col2`) REFERENCES `rename_fk_01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+w_04    CREATE TABLE `w_04` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` tinyint DEFAULT NULL,\n  CONSTRAINT `ck` FOREIGN KEY (`col2`) REFERENCES `rename_fk_01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into rename_fk_01 values ('200',983),('300',45),('400',23);
 insert into w_04(col2,col3) values ('400',5),('500',4),('300',0);
 internal error: Cannot add or update a child row: a foreign key constraint fails
@@ -201,14 +201,14 @@ null    null    80
 alter table w_04 drop foreign key ck;
 show create table w_04;
 Table    Create Table
-w_04    CREATE TABLE `w_04` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(25) DEFAULT NULL,\n  `col3` TINYINT DEFAULT NULL\n)
+w_04    CREATE TABLE `w_04` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` tinyint DEFAULT NULL\n)
 drop table w_04;
 create table rename_table_25(a int primary key auto_increment,b varchar(10) not null,c decimal(5,3) default 0.05);
 insert into rename_table_25(b,c) values('nnnn',0.5),('jeep',23.43),('moon',2.3);
 rename table rename_table_25 to w_05;
 show create table w_05;
 Table    Create Table
-w_05    CREATE TABLE `w_05` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` VARCHAR(10) NOT NULL,\n  `c` DECIMAL(5,3) DEFAULT 0.05,\n  PRIMARY KEY (`a`)\n)
+w_05    CREATE TABLE `w_05` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` varchar(10) NOT NULL,\n  `c` decimal(5,3) DEFAULT 0.05,\n  PRIMARY KEY (`a`)\n)
 drop table w_05;
 create table rename_table_26(a int primary key auto_increment,b varchar(10));
 insert into rename_table_26(b) values ('kimi'),('red'),('lipo');
@@ -217,11 +217,11 @@ alter table w_06 add column c decimal(4,2) default 0.05;
 alter table w_06 modify b varchar(20);
 show create table w_06;
 Table    Create Table
-w_06    CREATE TABLE `w_06` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` VARCHAR(20) DEFAULT NULL,\n  `c` DECIMAL(4,2) DEFAULT 0.05,\n  PRIMARY KEY (`a`)\n)
+w_06    CREATE TABLE `w_06` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` varchar(20) DEFAULT NULL,\n  `c` decimal(4,2) DEFAULT 0.05,\n  PRIMARY KEY (`a`)\n)
 alter table w_06 drop column c;
 show create table w_06;
 Table    Create Table
-w_06    CREATE TABLE `w_06` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` VARCHAR(20) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+w_06    CREATE TABLE `w_06` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 drop table w_06;
 create table rename_table_01(a int primary key auto_increment,b varchar(10));
 create table rename_table_02(a int primary key auto_increment,b varchar(10));

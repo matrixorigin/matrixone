@@ -387,10 +387,6 @@ var (
 		CondAccount:       {},
 		CondLastHeartbeat: {},
 	}
-	cdcWhereConditionCodes = map[condCode]struct{}{
-		CondAccountID:   {},
-		CondCdcTaskName: {},
-	}
 )
 
 type conditions map[condCode]condition

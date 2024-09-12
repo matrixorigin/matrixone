@@ -90,8 +90,9 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 	productl2.ctr.inBat = nil
 	if productl2.ProjectList != nil {
-		anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
-		anal.Alloc(productl2.ProjectAllocSize)
+		if productl2.OpAnalyzer != nil {
+			productl2.OpAnalyzer.Alloc(productl2.ProjectAllocSize)
+		}
 		productl2.ResetProjection(proc)
 	}
 	productl2.ctr.state = Build

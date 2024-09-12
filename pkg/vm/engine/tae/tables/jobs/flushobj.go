@@ -160,7 +160,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("delete-rows", drow),
 		)
 	}
-	task.Stats = writer.GetObjectStats()[objectio.SchemaData]
+	task.Stats = writer.GetObjectStats()
 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Block.Flush.Add(1)

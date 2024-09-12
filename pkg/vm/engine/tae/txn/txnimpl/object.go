@@ -178,9 +178,6 @@ func (obj *txnObject) Close() (err error) {
 	// putObjectCnt.Add(1)
 	return
 }
-func (obj *txnObject) GetTotalChanges() int {
-	return obj.entry.GetObjectData().GetTotalChanges()
-}
 func (obj *txnObject) GetMeta() any           { return obj.entry }
 func (obj *txnObject) String() string         { return obj.entry.String() }
 func (obj *txnObject) GetID() *types.Objectid { return obj.entry.ID() }
@@ -201,20 +198,11 @@ func (obj *txnObject) UpdateStats(stats objectio.ObjectStats) error {
 }
 
 func (obj *txnObject) Prefetch(idxes []int) error {
-	schema := obj.table.GetLocalSchema(obj.entry.IsTombstone)
-	seqnums := make([]uint16, 0, len(idxes))
-	for _, idx := range idxes {
-		if idx == catalog.COLIDX_COMMITS {
-			seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
-			continue
-		}
-		seqnums = append(seqnums, schema.ColDefs[idx].SeqNum)
-	}
 	if obj.IsUncommitted() {
-		return obj.table.dataTable.tableSpace.Prefetch(obj.entry, seqnums)
+		return obj.table.dataTable.tableSpace.Prefetch(obj.entry)
 	}
 	for i := 0; i < obj.entry.BlockCnt(); i++ {
-		err := obj.entry.GetObjectData().Prefetch(seqnums, uint16(i))
+		err := obj.entry.GetObjectData().Prefetch(uint16(i))
 		if err != nil {
 			return err
 		}

@@ -324,7 +324,6 @@ func (space *tableSpace) AddObjsWithMetaLoc(
 	pkVecs []containers.Vector,
 	stats objectio.ObjectStats,
 ) (err error) {
-	space.registerStats(stats)
 	for i := range pkVecs {
 		dedupType := space.table.store.txn.GetDedupType()
 		//insert primary keys into space.index
@@ -342,6 +341,7 @@ func (space *tableSpace) AddObjsWithMetaLoc(
 			space.rows += uint32(pkVecs[i].Length())
 		}
 	}
+	space.registerStats(stats)
 	return nil
 }
 
@@ -443,9 +443,9 @@ func (space *tableSpace) HybridScan(
 	(*bat).Deletes.Or(space.node.data.Deletes)
 }
 
-func (space *tableSpace) Prefetch(obj *catalog.ObjectEntry, idxes []uint16) error {
+func (space *tableSpace) Prefetch(obj *catalog.ObjectEntry) error {
 	n := space.node
-	return n.Prefetch(idxes)
+	return n.Prefetch()
 }
 
 func (space *tableSpace) GetValue(row uint32, col uint16) (any, bool, error) {

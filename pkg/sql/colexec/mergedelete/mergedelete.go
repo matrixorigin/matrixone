@@ -37,6 +37,12 @@ func (mergeDelete *MergeDelete) OpType() vm.OpType {
 }
 
 func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
+	if mergeDelete.OpAnalyzer == nil {
+		mergeDelete.OpAnalyzer = process.NewAnalyzer(mergeDelete.GetIdx(), mergeDelete.IsFirst, mergeDelete.IsLast, "merge_delete")
+	} else {
+		mergeDelete.OpAnalyzer.Reset()
+	}
+
 	ref := mergeDelete.Ref
 	eng := mergeDelete.Engine
 	partitionNames := mergeDelete.PartitionTableNames
@@ -56,14 +62,14 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := mergeDelete.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	var err error
 	var name string
 
-	input, err := vm.ChildrenCall(mergeDelete.Children[0], proc, anal)
+	input, err := vm.ChildrenCall(mergeDelete.Children[0], proc, analyzer)
 	if err != nil {
 		return vm.CancelResult, err
 	}
@@ -82,7 +88,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	// |  blk_id  | batch.Marshal(int64 offset) | RawBatchOffset(RawBatch[in txn workspace])|  partitionIdx
 	blkIds, area0 := vector.MustVarlenaRawData(resBat.GetVector(0))
 	deltaLocs, area1 := vector.MustVarlenaRawData(resBat.GetVector(1))
-	typs := vector.MustFixedCol[int8](resBat.GetVector(2))
+	typs := vector.MustFixedColWithTypeCheck[int8](resBat.GetVector(2))
 
 	bat := mergeDelete.ctr.bat
 	bat.CleanOnlyData()
@@ -90,7 +96,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	// If the target table is a partition table, Traverse partition subtables for separate processing
 
 	if len(mergeDelete.ctr.partitionSources) > 0 {
-		partitionIdxs := vector.MustFixedCol[int32](resBat.GetVector(3))
+		partitionIdxs := vector.MustFixedColWithTypeCheck[int32](resBat.GetVector(3))
 		for i := 0; i < resBat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i].UnsafeGetString(area0), typs[i])
 
@@ -122,7 +128,9 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	}
 	// and there are another attr used to record how many rows are deleted
 	if mergeDelete.AddAffectedRows {
-		mergeDelete.ctr.affectedRows += uint64(vector.GetFixedAt[uint32](resBat.GetVector(4), 0))
+		mergeDelete.ctr.affectedRows += uint64(vector.GetFixedAtWithTypeCheck[uint32](resBat.GetVector(4), 0))
 	}
+
+	analyzer.Output(input.Batch)
 	return input, nil
 }

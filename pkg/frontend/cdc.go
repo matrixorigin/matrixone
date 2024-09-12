@@ -17,9 +17,9 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"time"
 
@@ -267,7 +267,6 @@ func handleCreateCdc(ses *Session, execCtx *ExecCtx, create *tree.CreateCDC) err
 }
 
 func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err error) {
-	fmt.Fprintln(os.Stderr, "===>create cdc", create.Tables)
 	ts := getGlobalPu().TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
@@ -310,10 +309,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 
 	//step 2: handle filters
 	//There must be no special characters (',' '.' ':' '`') in the single rule.
-	var filters string
-	filters = cdcTaskOptionsMap["Rules"]
-
-	fmt.Fprintln(os.Stderr, "===>create cdc rules", filters)
+	filters := cdcTaskOptionsMap["Rules"]
 
 	jsonFilters, filterPts, err := preprocessRules(ctx, filters)
 	if err != nil {
@@ -391,15 +387,6 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		},
 	}
 
-	fmt.Fprintln(os.Stderr, "====>save cdc task",
-		creatorAccInfo.GetTenantID(),
-		cdcId,
-		create.TaskName,
-		create.SourceUri,
-		create.SinkUri,
-		create.SinkType,
-	)
-
 	addCdcTaskCallback := func(ctx context.Context, tx taskservice.SqlExecutor) (ret int, err error) {
 		err = checkAccounts(ctx, tx, tablePts, filterPts)
 		if err != nil {
@@ -408,7 +395,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 
 		ret, err = checkTables(ctx, tx, tablePts, filterPts)
 		if err != nil {
-			return 0, err
+			return
 		}
 
 		jsonTables, err := cdc2.JsonEncode(tablePts)
@@ -503,7 +490,7 @@ func checkAccounts(ctx context.Context, tx taskservice.SqlExecutor, tablePts, fi
 			return err
 		}
 		if !exists {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("account %s does not exist", acc))
+			return moerr.NewInternalErrorf(ctx, "account %s does not exist", acc)
 		}
 		res[acc] = accId
 	}
@@ -592,8 +579,8 @@ func queryTable(
 	var rows *sql.Rows
 	var err error
 	rows, err = tx.QueryContext(ctx, query)
-	if err != nil {
-		return false, err
+	if err != nil || rows.Err() != nil {
+		return false, errors.Join(err, rows.Err())
 	}
 	defer func() {
 		_ = rows.Close()
@@ -796,7 +783,7 @@ func extractTablePairs(ctx context.Context, pattern string, defaultAcc string) (
 
 	tablePairs := strings.Split(pattern, ",")
 	if len(tablePairs) == 0 {
-		return nil, fmt.Errorf("invalid pattern format")
+		return nil, moerr.NewInternalError(ctx, "invalid pattern format")
 	}
 
 	//step1 : split pattern by ',' => table pair
@@ -838,7 +825,7 @@ func extractRules(ctx context.Context, pattern string) (*cdc2.PatternTuples, err
 
 	tablePairs := strings.Split(pattern, ",")
 	if len(tablePairs) == 0 {
-		return nil, fmt.Errorf("invalid pattern format")
+		return nil, moerr.NewInternalError(ctx, "invalid pattern format")
 	}
 	var err error
 	//step1 : split pattern by ',' => table pair
@@ -922,7 +909,6 @@ func RegisterCdcExecutor(
 	cnEngMp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) error {
 	return func(ctx context.Context, T task.Task) error {
-		fmt.Fprintln(os.Stderr, "====>", "cdc task executor")
 		ctx1, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 		tasks, err := ts.QueryDaemonTask(ctx1,
@@ -938,13 +924,6 @@ func RegisterCdcExecutor(
 		if !ok {
 			return moerr.NewInternalError(ctx, "invalid details type")
 		}
-
-		fmt.Fprintln(os.Stderr, "====>", "cdc task info 1", tasks[0].String())
-		taskId := details.CreateCdc.GetTaskId()
-		taskName := details.CreateCdc.GetTaskName()
-
-		fmt.Fprintln(os.Stderr, "====>", "cdc task info 2", taskId, taskName)
-
 		cdc := NewCdcTask(
 			logger,
 			ieFactory(),
@@ -1030,8 +1009,6 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 			close(cdc.activeRoutine.Cancel)
 		}
 	}()
-
-	fmt.Fprintln(os.Stderr, "====> cdc start")
 
 	ctx := defines.AttachAccountId(rootCtx, uint32(cdc.cdcTask.Accounts[0].GetId()))
 
@@ -1204,13 +1181,6 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	cdc.startTs = types.TS{}
 	cdc.noFull = noFull
 
-	fmt.Fprintln(os.Stderr, "====>", "cdc task row",
-		cdc.sinkUri,
-		sinkTyp,
-		sinkPwd,
-		cdc.tables,
-		cdc.filters,
-	)
 	return nil
 }
 
@@ -1270,21 +1240,18 @@ func needSkipThisTable(accountName, dbName, tblName string, filters *cdc2.Patter
 
 // Resume cdc task from last recorded watermark
 func (cdc *CdcTask) Resume() (err error) {
-	fmt.Println("=====> it's resume")
 	for {
 		// closed in Pause, need renew
 		cdc.activeRoutine.Cancel = make(chan struct{})
 		if err = cdc.Start(context.Background(), false); err == nil {
 			return
 		}
-		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Resume task %s failed, err: %v\n", cdc.cdcTask.TaskName, err)
 		time.Sleep(time.Second)
 	}
 }
 
 // Restart cdc task from init watermark
 func (cdc *CdcTask) Restart() (err error) {
-	fmt.Println("=====> it's restart")
 	for {
 		// closed in Pause, need renew
 		cdc.activeRoutine.Cancel = make(chan struct{})
@@ -1294,14 +1261,12 @@ func (cdc *CdcTask) Restart() (err error) {
 				return
 			}
 		}
-		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Restart task %s failed, err: %v\n", cdc.cdcTask.TaskName, err)
 		time.Sleep(time.Second)
 	}
 }
 
 // Pause cdc task
 func (cdc *CdcTask) Pause() error {
-	fmt.Println("=====> it's pause")
 	close(cdc.activeRoutine.Cancel)
 	cdc.activeRoutine.Cancel = nil
 	return nil
@@ -1309,7 +1274,6 @@ func (cdc *CdcTask) Pause() error {
 
 // Cancel cdc task
 func (cdc *CdcTask) Cancel() error {
-	fmt.Println("=====> it's cancel")
 	if cdc.activeRoutine.Cancel != nil {
 		close(cdc.activeRoutine.Cancel)
 	}
@@ -1325,8 +1289,6 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(os.Stderr, "table %s(%d) init watermark: %s\n",
-		info.SourceTblName, info.SourceTblId, watermark.ToString())
 	cdc.sunkWatermarkUpdater.UpdateMem(info.SourceTblId, watermark)
 
 	tableDef, err := cdc2.GetTableDef(ctx, txnOp, cdc.cnEngine, info.SourceTblId)
@@ -1361,14 +1323,11 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 	)
 	go reader.Run(ctx, cdc.activeRoutine)
 
-	_, _ = fmt.Fprintf(os.Stderr, "ExecPipeline for table %s(%d) has been added\n", info.SourceTblName, info.SourceTblId)
 	return nil
 }
 
 func (cdc *CdcTask) ResetWatermarkForTable(info *cdc2.DbTableInfo) (err error) {
 	tblId := info.SourceTblId
-	_, _ = fmt.Fprintf(os.Stderr, "ResetWatermarkForTable: %s(%d)\n", info.SourceTblName, tblId)
-
 	// delete old watermark of table
 	cdc.sunkWatermarkUpdater.DeleteFromMem(tblId)
 	if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tblId); err != nil {
@@ -1515,8 +1474,8 @@ func updateCdcTask(
 	query := getCdcTaskIdFormat + whereClauses
 
 	rows, err := tx.QueryContext(ctx, query)
-	if err != nil {
-		return 0, err
+	if err != nil || rows.Err() != nil {
+		return 0, errors.Join(err, rows.Err())
 	}
 	defer func() {
 		_ = rows.Close()
@@ -1527,7 +1486,6 @@ func updateCdcTask(
 			return 0, err
 		}
 		tInfo := taskservice.CdcTaskKey{AccountId: accountId, TaskId: taskId}
-		fmt.Fprintln(os.Stderr, "==>", "account id", accountId, "task id", taskId)
 		taskKeyMap[tInfo] = struct{}{}
 	}
 
@@ -1605,7 +1563,7 @@ func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap
 	cnt := int64(0)
 	var err error
 	//deleting mo_cdc_watermark belongs to cancelled cdc task
-	for tInfo, _ := range taskKeyMap {
+	for tInfo := range taskKeyMap {
 		deleteSql2 := getSqlForDeleteWatermark(tInfo.AccountId, tInfo.TaskId)
 		cnt, err = executeSql(ctx, tx, deleteSql2)
 		if err != nil {

@@ -20,11 +20,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
@@ -154,7 +148,7 @@ func (tomb *tombstoneData) HasAnyTombstoneFile() bool {
 // false positive check
 func (tomb *tombstoneData) HasBlockTombstone(
 	ctx context.Context,
-	id objectio.Blockid,
+	blockId objectio.Blockid,
 	fs fileservice.FileService,
 ) (bool, error) {
 	if tomb == nil {
@@ -162,58 +156,46 @@ func (tomb *tombstoneData) HasBlockTombstone(
 	}
 	if len(tomb.rowids) > 0 {
 		// TODO: optimize binary search once
-		start, end := blockio.FindIntervalForBlock(tomb.rowids, &id)
+		start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, &blockId)
 		if end > start {
 			return true, nil
 		}
 	}
-	if len(tomb.files) > 0 {
-		for i, end := 0, tomb.files.Len(); i < end; i++ {
-			objectStats := tomb.files.Get(i)
-			zm := objectStats.SortKeyZoneMap()
-			if zm.PrefixEq(id[:]) {
-				return true, nil
-			}
-			bf, err := objectio.FastLoadBF(
-				ctx,
-				objectStats.ObjectLocation(),
-				false,
-				fs,
-			)
-			if err != nil {
-				logutil.Error(
-					"LOAD-BF-ERROR",
-					zap.String("location", objectStats.ObjectLocation().String()),
-					zap.Error(err),
-				)
-				return false, err
-			}
-			oneBlockBF := index.NewEmptyBloomFilterWithType(index.HBF)
-			for idx, end := 0, int(objectStats.BlkCnt()); idx < end; idx++ {
-				buf := bf.GetBloomFilter(uint32(idx))
-				if err := index.DecodeBloomFilter(oneBlockBF, buf); err != nil {
-					logutil.Error(
-						"DECODE-BF-ERROR",
-						zap.String("location", objectStats.ObjectLocation().String()),
-						zap.Error(err),
-					)
-					return false, err
+	if len(tomb.files) == 0 {
+		return false, nil
+	}
+	for i, end := 0, tomb.files.Len(); i < end; i++ {
+		objectStats := tomb.files.Get(i)
+		zm := objectStats.SortKeyZoneMap()
+		if !zm.RowidPrefixEq(blockId[:]) {
+			continue
+		}
+		location := objectStats.ObjectLocation()
+		objectMeta, err := objectio.FastLoadObjectMeta(
+			ctx, &location, false, fs,
+		)
+		if err != nil {
+			return false, err
+		}
+
+		dataMeta := objectMeta.MustDataMeta()
+
+		blkCnt := int(dataMeta.BlockCount())
+
+		startIdx := sort.Search(blkCnt, func(i int) bool {
+			return dataMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap().AnyGEByValue(blockId[:])
+		})
+
+		for pos := startIdx; pos < blkCnt; pos++ {
+			blkMeta := dataMeta.GetBlockMeta(uint32(pos))
+			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
+			if !columnZonemap.RowidPrefixEq(blockId[:]) {
+				if columnZonemap.RowidPrefixGT(blockId[:]) {
+					break
 				}
-				if exist, err := oneBlockBF.PrefixMayContainsKey(
-					id[:],
-					index.PrefixFnID_Block,
-					2,
-				); err != nil {
-					logutil.Error(
-						"PREFIX-MAY-CONTAINS-ERROR",
-						zap.String("location", objectStats.ObjectLocation().String()),
-						zap.Error(err),
-					)
-					return false, err
-				} else if exist {
-					return true, nil
-				}
+				continue
 			}
+			return true, nil
 		}
 	}
 	return false, nil
@@ -228,13 +210,12 @@ func (tomb *tombstoneData) PrefetchTombstones(
 	for i, end := 0, tomb.files.Len(); i < end; i++ {
 		stats := tomb.files.Get(i)
 		for j := 0; j < int(stats.BlkCnt()); j++ {
-			loc := catalog.BuildLocation(*stats, uint16(j), options.DefaultBlockMaxRows)
+			loc := stats.BlockLocation(uint16(j), objectio.BlockMaxRows)
 			if err := blockio.Prefetch(
 				srvId,
-				[]uint16{0, 1, 2},
-				[]uint16{loc.ID()},
 				fs,
-				loc); err != nil {
+				loc,
+			); err != nil {
 				logutil.Errorf("prefetch block delta location: %s", err.Error())
 			}
 		}
@@ -253,7 +234,7 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 		return
 	}
 
-	start, end := blockio.FindIntervalForBlock(tomb.rowids, &bid)
+	start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, &bid)
 
 	for i := start; i < end; i++ {
 		offset := tomb.rowids[i].GetRowOffset()
@@ -277,16 +258,14 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 		return
 	}
 
-	var obj logtailreplay.ObjectEntry
-	scanOp := func(onTombstone func(tombstone logtailreplay.ObjectEntry) (bool, error)) error {
-		for i, end := 0, tomb.files.Len(); i < end; i++ {
-			stats := tomb.files.Get(i)
-			obj.ObjectStats = *stats
-			if goOn, err := onTombstone(obj); err != nil || !goOn {
-				return err
-			}
+	var curr int
+	getTombstone := func() (*objectio.ObjectStats, error) {
+		if curr >= tomb.files.Len() {
+			return nil, nil
 		}
-		return nil
+		i := curr
+		curr++
+		return tomb.files.Get(i), nil
 	}
 
 	if deletedMask == nil {
@@ -294,13 +273,14 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 		deletedMask.InitWithSize(8192)
 	}
 
-	if err = GetTombstonesByBlockId(
+	if err = blockio.GetTombstonesByBlockId(
 		ctx,
-		fs,
-		bid,
 		snapshot,
+		bid,
+		getTombstone,
 		deletedMask,
-		scanOp); err != nil {
+		fs,
+	); err != nil {
 		return nil, err
 	}
 
@@ -315,7 +295,7 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 
 func (tomb *tombstoneData) SortInMemory() {
 	sort.Slice(tomb.rowids, func(i, j int) bool {
-		return tomb.rowids[i].Less(tomb.rowids[j])
+		return tomb.rowids[i].LT(&tomb.rowids[j])
 	})
 }
 

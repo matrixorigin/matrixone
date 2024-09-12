@@ -24,13 +24,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -38,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
@@ -99,6 +99,8 @@ const (
 	ColumnStatus      = "status"       // column in table mo_catalog.mo_account
 
 	ColumnSnapshotSize = "snapshot_size" // result column in `show accounts`, or column in table mo_catalog.mo_account
+
+	ColumnObjectCount = "object_count"
 )
 
 var (
@@ -125,6 +127,7 @@ func cleanStorageUsageMetric(logger *log.MOLogger, actor string) {
 	// clean metric data for next cron task.
 	metric.StorageUsageFactory.Reset()
 	metric.SnapshotUsageFactory.Reset()
+	metric.ObjectCountFactory.Reset()
 	logger.Info("clean storage usage metric", zap.String("actor", actor))
 }
 
@@ -134,6 +137,7 @@ func checkServerStarted(logger *log.MOLogger) bool {
 
 // after 1.3.0, turn it as CONST var
 var accountIdx, sizeIdx, snapshotSizeIdx uint64
+var objectCountIdx uint64
 var name2IdxErr error
 var name2IdxOnce sync.Once
 
@@ -162,7 +166,12 @@ func GetColumnIdxFromShowAccountResult(ctx context.Context, result ie.InternalEx
 			// adapt version, after 1.3.0. this column is necessary.
 			name2idx[ColumnSnapshotSize] = math.MaxUint64
 		}
+		if _, ok := name2idx[ColumnObjectCount]; !ok {
+			logutil.Errorf("column object count does not exists: %v", name2idx)
+			name2idx[ColumnObjectCount] = math.MaxUint64
+		}
 		accountIdx, sizeIdx, snapshotSizeIdx = name2idx[ColumnAccountName], name2idx[ColumnSize], name2idx[ColumnSnapshotSize]
+		objectCountIdx = name2idx[ColumnObjectCount]
 	})
 	return name2IdxErr
 }
@@ -173,7 +182,7 @@ func CalculateStorageUsage(
 	sqlExecutor func() ie.InternalExecutor,
 ) (err error) {
 	var account string
-	var sizeMB, snapshotSizeMB float64
+	var sizeMB, snapshotSizeMB, objectCount float64
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
 	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
@@ -249,7 +258,6 @@ func CalculateStorageUsage(
 		metric.StorageUsageFactory.Reset()
 
 		for rowIdx := uint64(0); rowIdx < cnt; rowIdx++ {
-
 			account, err = result.GetString(ctx, rowIdx, accountIdx)
 			if err != nil {
 				return err
@@ -269,9 +277,22 @@ func CalculateStorageUsage(
 				}
 			}
 
-			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
-				zap.Float64("snapshot", snapshotSizeMB))
+			if objectCountIdx == math.MaxUint64 {
+				objectCount = 0.0
+			} else {
+				objectCount, err = result.GetFloat64(ctx, rowIdx, objectCountIdx)
+				if err != nil {
+					return err
+				}
+			}
 
+			logger.Debug("storage_usage",
+				zap.String("account", account),
+				zap.Float64("sizeMB", sizeMB),
+				zap.Float64("snapshot", snapshotSizeMB),
+				zap.Float64("object_count", objectCount))
+
+			metric.ObjectCount(account).Set(objectCount)
 			metric.StorageUsage(account).Set(sizeMB)
 			metric.SnapshotUsage(account).Set(snapshotSizeMB)
 		}

@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -84,29 +83,29 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	case types.T_json:
 		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex)))
 	case types.T_bool:
-		row[i] = vector.GetFixedAt[bool](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[bool](vec, rowIndex)
 	case types.T_bit:
-		row[i] = vector.GetFixedAt[uint64](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)
 	case types.T_int8:
-		row[i] = vector.GetFixedAt[int8](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[int8](vec, rowIndex)
 	case types.T_uint8:
-		row[i] = vector.GetFixedAt[uint8](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[uint8](vec, rowIndex)
 	case types.T_int16:
-		row[i] = vector.GetFixedAt[int16](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[int16](vec, rowIndex)
 	case types.T_uint16:
-		row[i] = vector.GetFixedAt[uint16](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[uint16](vec, rowIndex)
 	case types.T_int32:
-		row[i] = vector.GetFixedAt[int32](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[int32](vec, rowIndex)
 	case types.T_uint32:
-		row[i] = vector.GetFixedAt[uint32](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[uint32](vec, rowIndex)
 	case types.T_int64:
-		row[i] = vector.GetFixedAt[int64](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[int64](vec, rowIndex)
 	case types.T_uint64:
-		row[i] = vector.GetFixedAt[uint64](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)
 	case types.T_float32:
-		row[i] = vector.GetFixedAt[float32](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[float32](vec, rowIndex)
 	case types.T_float64:
-		row[i] = vector.GetFixedAt[float64](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		row[i] = copyBytes(vec.GetBytesAt(rowIndex))
 	case types.T_array_float32:
@@ -120,35 +119,35 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	case types.T_array_float64:
 		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
-		row[i] = vector.GetFixedAt[types.Date](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[types.Date](vec, rowIndex)
 	case types.T_datetime:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAt[types.Datetime](vec, rowIndex).String2(scale)
+		row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex).String2(scale)
 	case types.T_time:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAt[types.Time](vec, rowIndex).String2(scale)
+		row[i] = vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex).String2(scale)
 	case types.T_timestamp:
 		scale := vec.GetType().Scale
 		//TODO:get the right timezone
 		//timeZone := ses.GetTimeZone()
 		timeZone := time.UTC
-		row[i] = vector.GetFixedAt[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
+		row[i] = vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAt[types.Decimal64](vec, rowIndex).Format(scale)
+		row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex).Format(scale)
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAt[types.Decimal128](vec, rowIndex).Format(scale)
+		row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
 	case types.T_uuid:
-		row[i] = vector.GetFixedAt[types.Uuid](vec, rowIndex).String()
+		row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex).String()
 	case types.T_Rowid:
-		row[i] = vector.GetFixedAt[types.Rowid](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[types.Rowid](vec, rowIndex)
 	case types.T_Blockid:
-		row[i] = vector.GetFixedAt[types.Blockid](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[types.Blockid](vec, rowIndex)
 	case types.T_TS:
-		row[i] = vector.GetFixedAt[types.TS](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[types.TS](vec, rowIndex)
 	case types.T_enum:
-		row[i] = vector.GetFixedAt[types.Enum](vec, rowIndex)
+		row[i] = vector.GetFixedAtWithTypeCheck[types.Enum](vec, rowIndex)
 	default:
 		logutil.Error(
 			"Failed to extract row from vector, unsupported type",
@@ -381,7 +380,7 @@ func openDbConn(
 		}
 		time.Sleep(time.Second)
 	}
-	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ openDbConn failed\n")
+	logutil.Error("^^^^^ openDbConn failed")
 	return
 }
 
@@ -452,7 +451,7 @@ func TrimSpace(values []string) []string {
 	ForEach[string](values, func(v string) {
 		res := strings.TrimSpace(v)
 		if len(res) > 0 {
-			ret = append(ret)
+			ret = append(ret, res)
 		}
 	})
 	return ret

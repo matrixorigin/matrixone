@@ -35,6 +35,7 @@ func consumeEntry(
 	cache *cache.CatalogCache,
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
+	isSub bool,
 ) error {
 	start := time.Now()
 	defer func() {
@@ -51,14 +52,20 @@ func consumeEntry(
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
-	if logtailreplay.IsMetaEntry(e.TableName) {
+	// Try to handle the memory records of the three tables
+	if !catalog.IsSystemTable(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) {
 		return nil
 	}
 
-	if !engine.PushClient().receivedLogTailTime.ready.Load() {
+	if engine.PushClient().dcaTryDelay(isSub, func() { applyToCatalogCache(cache, e) }) {
 		return nil
 	}
 
+	applyToCatalogCache(cache, e)
+	return nil
+}
+
+func applyToCatalogCache(cache *cache.CatalogCache, e *api.Entry) {
 	t0 := time.Now()
 	if e.EntryType == api.Entry_Insert {
 		switch e.TableId {
@@ -79,7 +86,7 @@ func consumeEntry(
 			}
 		}
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
-		return nil
+		return
 	}
 
 	switch e.TableId {
@@ -95,6 +102,4 @@ func consumeEntry(
 		}
 	}
 	v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
-
-	return nil
 }

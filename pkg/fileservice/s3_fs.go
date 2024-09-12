@@ -46,7 +46,6 @@ type S3FS struct {
 	storage   ObjectStorage
 	keyPrefix string
 
-	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -113,7 +112,7 @@ func NewS3FS(
 	// limit number of concurrent operations
 	concurrency := args.Concurrency
 	if concurrency == 0 {
-		concurrency = 100
+		concurrency = 1024
 	}
 	fs.storage = newObjectStorageSemaphore(
 		fs.storage,
@@ -133,14 +132,14 @@ func NewS3FS(
 		}
 	}
 
-	// allocator
-	if fs.memCache != nil {
-		fs.allocator = fs.memCache
-	} else {
-		fs.allocator = GetDefaultCacheDataAllocator()
-	}
-
 	return fs, nil
+}
+
+func (s *S3FS) AllocateCacheData(size int) fscache.Data {
+	if s.memCache != nil {
+		s.memCache.cache.EnsureNBytes(size)
+	}
+	return DefaultCacheDataAllocator().AllocateCacheData(size)
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -160,11 +159,8 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			NewMemoryCache(
-				fscache.ConstCapacity(int64(*config.MemoryCapacity)),
-				config.CheckOverlaps,
-				&config.CacheCallbacks,
-			),
+			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
+			&config.CacheCallbacks,
 			s.perfCounterSets,
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -182,6 +178,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			s.perfCounterSets,
 			true,
+			s,
 		)
 		if err != nil {
 			return err
@@ -445,14 +442,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
-	}
-
-	allocator := s.allocator
-	if vector.Policy.Any(SkipMemoryCache) {
-		allocator = GetDefaultCacheDataAllocator()
-	}
-	for i := range vector.Entries {
-		vector.Entries[i].allocator = allocator
 	}
 
 	for _, cache := range vector.Caches {
@@ -845,7 +834,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err = entry.setCachedData(ctx); err != nil {
+		if err = entry.setCachedData(ctx, s); err != nil {
 			return err
 		}
 

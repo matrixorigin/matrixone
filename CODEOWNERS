@@ -39,6 +39,9 @@
 # pkg/catalog
 /pkg/catalog @XuPeng-SH
 
+#pkg/cdc
+/pkg/cdc @daviszhen @ck89119
+
 # pkg/cnservice
 /pkg/cnservice @reusee @daviszhen
 
@@ -199,7 +202,7 @@
 /pkg/vm/process @m-schen @XuPeng-SH @aunjgr
 /pkg/vm/message @badboynt1
 /pkg/vm/engine/disttae @XuPeng-SH @triump2020
-/pkg/vm/engine/disttae/logtailreplay @reusee @triump2020
+/pkg/vm/engine/disttae/logtailreplay @triump2020
 /pkg/vm/engine/tae @XuPeng-SH
 /pkg/vm/engine/memoryengine @reusee
 /pkg/vm/engine/tae/logtail/service @XuPeng-SH @volgariver6

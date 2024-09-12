@@ -160,7 +160,8 @@ func (l *localLockTable) doLock(
 				c.txn.closeBlockWaiters()
 			}
 
-			if len(c.w.conflictKey) > 0 &&
+			ck := *c.w.conflictKey.Load()
+			if len(ck) > 0 &&
 				c.opts.Granularity == pb.Granularity_Row {
 
 				if l.options.beforeCloseFirstWaiter != nil {
@@ -171,9 +172,9 @@ func (l *localLockTable) doLock(
 				// we must reload conflict lock, because the lock may be deleted
 				// by other txn and readd into store. So c.w.conflictWith is
 				// invalid.
-				conflictWith, ok := l.mu.store.Get(c.w.conflictKey)
+				conflictWith, ok := l.mu.store.Get(ck)
 				if ok && conflictWith.closeWaiter(c.w) {
-					l.mu.store.Delete(c.w.conflictKey)
+					l.mu.store.Delete(ck)
 				}
 				l.mu.Unlock()
 			}
@@ -468,8 +469,8 @@ func (l *localLockTable) handleLockConflictLocked(
 		return ErrLockConflict
 	}
 
-	c.w.conflictKey = key
-	c.w.lt = l
+	c.w.conflictKey.Store(&key)
+	c.w.lt.Store(l)
 	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)

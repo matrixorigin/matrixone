@@ -17,8 +17,6 @@ package cdc
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -89,9 +87,9 @@ func (reader *tableReader) Close() {}
 func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine) {
-	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ tableReader(%s).Run: start\n", reader.info.SourceTblName)
+	logutil.Infof("^^^^^ tableReader(%s).Run: start", reader.info.SourceTblName)
 	defer func() {
-		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ tableReader(%s).Run: end\n", reader.info.SourceTblName)
+		logutil.Infof("^^^^^ tableReader(%s).Run: end", reader.info.SourceTblName)
 	}()
 
 	for {

@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -212,7 +213,7 @@ type ComputationWrapper interface {
 
 	GetUUID() []byte
 
-	RecordExecPlan(ctx context.Context) error
+	RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error
 
 	GetLoadTag() bool
 
@@ -397,7 +398,7 @@ func (prepareStmt *PrepareStmt) Close() {
 var _ buf.Allocator = &SessionAllocator{}
 
 type SessionAllocator struct {
-	allocator *malloc.ManagedAllocator
+	allocator *malloc.ManagedAllocator[malloc.Allocator]
 }
 
 func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {

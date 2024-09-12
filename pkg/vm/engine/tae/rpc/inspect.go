@@ -276,7 +276,7 @@ func (c *objStatArg) String() string {
 func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
-		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl).(*merge.BasicPolicyConfig)
+		p := c.ctx.db.MergeScheduler.GetPolicy(c.tbl)
 		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
@@ -725,13 +725,7 @@ func (c *infoArg) Run() error {
 		b.WriteRune('\n')
 		// b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.obj.GetObjectData().GetDeltaPersistedTS().ToString()))
 		r, reason := c.obj.GetObjectData().PrepareCompactInfo()
-		rows, err := c.obj.GetObjectData().Rows()
-		if err != nil {
-			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID().String(), err)
-		}
-		dels := c.obj.GetObjectData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
-		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
 		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.obj.GetObjectData().PPString(c.verbose, 0, "", c.blkn)))
 
 		schema := c.obj.GetSchema()
@@ -837,7 +831,11 @@ func (c *mergePolicyArg) Run() error {
 			merge.StopMerge.Store(false)
 		}
 	} else {
-		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl, &merge.BasicPolicyConfig{
+		txn, err := c.ctx.db.StartTxn(nil)
+		if err != nil {
+			return err
+		}
+		c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
 			MergeMaxOneRun:    int(c.maxMergeObjN),
 			ObjectMinOsize:    minosize,
 			MaxOsizeMergedObj: maxosize,

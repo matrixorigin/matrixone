@@ -72,7 +72,7 @@ type Path struct {
 
 type TransferHashPage struct {
 	common.RefHelper
-	bornTS      time.Time
+	bornTS      atomic.Pointer[time.Time]
 	id          *common.ID // not include blk offset
 	objects     []*objectio.ObjectId
 	hashmap     atomic.Pointer[api.TransferMap]
@@ -86,7 +86,6 @@ type TransferHashPage struct {
 func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs fileservice.FileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
 
 	page := &TransferHashPage{
-		bornTS:      ts,
 		id:          id,
 		isTransient: isTransient,
 		fs:          fs,
@@ -95,14 +94,15 @@ func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs files
 		objects:     createdObjIDs,
 	}
 
+	page.bornTS.Store(&ts)
 	page.OnZeroCB = page.Close
 
 	return page
 }
 
 func (page *TransferHashPage) ID() *common.ID         { return page.id }
-func (page *TransferHashPage) BornTS() time.Time      { return page.bornTS }
-func (page *TransferHashPage) SetBornTS(ts time.Time) { page.bornTS = ts }
+func (page *TransferHashPage) BornTS() time.Time      { return *page.bornTS.Load() }
+func (page *TransferHashPage) SetBornTS(ts time.Time) { page.bornTS.Store(&ts) }
 
 const (
 	notClear    = uint8(0)
@@ -112,10 +112,10 @@ const (
 
 func (page *TransferHashPage) TTL() uint8 {
 	now := time.Now()
-	if now.After(page.bornTS.Add(page.diskTTL)) {
+	if now.After(page.bornTS.Load().Add(page.diskTTL)) {
 		return clearDisk
 	}
-	if now.After(page.bornTS.Add(page.ttl)) {
+	if now.After(page.bornTS.Load().Add(page.ttl)) {
 		return clearMemory
 	}
 	return notClear
@@ -139,7 +139,7 @@ func (page *TransferHashPage) String() string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("hashpage[%s][%s][Len=%d]",
 		page.id.BlockString(),
-		page.bornTS.String(),
+		page.bornTS.Load().String(),
 		page.Length()))
 	return w.String()
 }
@@ -156,10 +156,12 @@ func (page *TransferHashPage) Clear() {
 	if m == nil {
 		return
 	}
-
+	if page.bornTS.Load().Add(page.ttl).After(time.Now()) {
+		return
+	}
 	page.hashmap.Store(nil)
-	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(*m)))
 	clear(*m)
+	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(*m)))
 }
 
 func (page *TransferHashPage) Train(m api.TransferMap) {
@@ -168,7 +170,6 @@ func (page *TransferHashPage) Train(m api.TransferMap) {
 }
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
-	v2.TransferPageSinceBornDurationHistogram.Observe(time.Since(page.bornTS).Seconds())
 	m := page.hashmap.Load()
 	if m == nil {
 		diskStart := time.Now()
@@ -284,6 +285,8 @@ func (page *TransferHashPage) loadTable() *api.TransferMap {
 	if err != nil {
 		return nil
 	}
+	now := time.Now()
+	page.bornTS.Store(&now)
 	page.hashmap.Store(m)
 	logutil.Infof("[TransferPage] load transfer page %v", page.String())
 	v2.TaskMergeTransferPageLengthGauge.Add(float64(page.Length()))

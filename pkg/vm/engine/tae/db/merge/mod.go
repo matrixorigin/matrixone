@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 var StopMerge atomic.Bool
@@ -196,12 +195,10 @@ const (
 	constSmallMergeGap = 3 * time.Minute
 )
 
-type Policy interface {
-	OnObject(obj *catalog.ObjectEntry, force bool)
-	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
-	ResetForTable(*catalog.TableEntry)
-	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
-	GetConfig(*catalog.TableEntry) any
+type policy interface {
+	onObject(*catalog.ObjectEntry, *BasicPolicyConfig) bool
+	revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind)
+	resetForTable(*catalog.TableEntry)
 }
 
 func NewUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
