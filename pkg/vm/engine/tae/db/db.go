@@ -63,7 +63,7 @@ type DB struct {
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
-	MergeHandle        *MergeTaskBuilder
+	MergeScheduler     *merge.Scheduler
 
 	DiskCleaner *gc2.DiskCleaner
 
