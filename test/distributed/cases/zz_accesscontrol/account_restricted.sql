@@ -64,7 +64,6 @@ show collation like 'utf8mb4_general_ci%';
 show full tables;
 show full tables from res_test;;
 
-select version();
 alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
 select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
 select user_name from mo_catalog.mo_user;
@@ -137,4 +136,20 @@ drop database rdb;
 drop database res_test;
 -- @session
 drop account if exists acc1;
+
+-- @ignore:0
+select version();
+drop database if exists abc;
+create database abc;
+use abc;
+-- @ignore:0
+select version();
+drop database abc;
+drop account if exists acc01;
+create account acc01 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=7&user=acc01:admin&password=123456
+-- @ignore:0
+select version();
+-- @session
+drop account if exists acc01;
 set global enable_privilege_cache = on;
