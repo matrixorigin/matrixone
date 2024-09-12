@@ -24,10 +24,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
 type wmMockSQLExecutor struct {
@@ -40,9 +41,9 @@ type wmMockSQLExecutor struct {
 func newWmMockSQLExecutor() *wmMockSQLExecutor {
 	return &wmMockSQLExecutor{
 		mp:       make(map[uint64]string),
-		insertRe: regexp.MustCompile("^insert .* values \\(.*\\, .*\\, (.*), \\'(.*)\\'\\)$"),
-		updateRe: regexp.MustCompile("^update .* set watermark\\=\\'(.*)\\' where .* and table_id \\= (.*)$"),
-		selectRe: regexp.MustCompile("^select .* and table_id \\= (.*)$"),
+		insertRe: regexp.MustCompile(`^insert .* values \(.*\, .*\, (.*), \'(.*)\'\)$`),
+		updateRe: regexp.MustCompile(`^update .* set watermark\=\'(.*)\' where .* and table_id \= (.*)$`),
+		selectRe: regexp.MustCompile(`^select .* and table_id \= (.*)$`),
 	}
 }
 
@@ -256,6 +257,7 @@ func TestWatermarkUpdater_DbOps(t *testing.T) {
 
 	// ---------- delete tableId 1
 	err = u.DeleteFromDb(uint64(1))
+	assert.NoError(t, err)
 	// count is 2
 	count, err = u.GetCountFromDb()
 	assert.NoError(t, err)
