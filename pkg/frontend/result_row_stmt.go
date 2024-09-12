@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bufio"
 	"time"
 
 	"go.uber.org/zap"
@@ -112,7 +113,49 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		if time.Since(runBegin) > time.Second {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
+		//----------------------------------------------------------------------------------------------------------------------
+	case *tree.ExplainPhyPlan:
+		queryPlan := execCtx.cw.Plan()
+		txnHaveDDL := false
+		ws := ses.proc.GetTxnOperator().GetWorkspace()
+		if ws != nil {
+			txnHaveDDL = ws.GetHaveDDL()
+		}
+		explainColName := plan2.GetPhyPlanTitle(queryPlan.GetQuery(), txnHaveDDL)
+		colDefs, columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
+		if err != nil {
+			ses.Error(execCtx.reqCtx,
+				"Failed to get columns from ExplainColumns handler",
+				zap.Error(err))
+			return
+		}
 
+		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+
+		ses.EnterFPrint(FPResultRowStmtExplainAnalyze1)
+		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze1)
+		err = execCtx.resper.RespPreMeta(execCtx, columns)
+		if err != nil {
+			return
+		}
+
+		ses.EnterFPrint(FPResultRowStmtExplainAnalyze2)
+		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze2)
+		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
+		runBegin := time.Now()
+		/*
+			Step 1: Start
+		*/
+		if _, err = execCtx.runner.Run(0); err != nil {
+			return
+		}
+
+		// only log if run time is longer than 1s
+		if time.Since(runBegin) > time.Second {
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+		}
+		//----------------------------------------------------------------------------------------------------------------------
 	default:
 		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 		if err != nil {
@@ -277,7 +320,29 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 		if err != nil {
 			return
 		}
+		//--------------------------------------------------------------------------------------------------------------
+	case *tree.ExplainPhyPlan:
+		queryPlan := execCtx.cw.Plan()
+		txnHaveDDL := false
+		ws := ses.proc.GetTxnOperator().GetWorkspace()
+		if ws != nil {
+			txnHaveDDL = ws.GetHaveDDL()
+		}
+		explainColName := plan2.GetPlanTitle(queryPlan.GetQuery(), txnHaveDDL)
 
+		txnCompileWrapper := execCtx.cw.(*TxnComputationWrapper)
+		reader := bufio.NewReader(txnCompileWrapper.explainBuffer)
+		err = buildMoExplainPhyPlan(execCtx, explainColName, reader, ses, getDataFromPipeline)
+		if err != nil {
+			return
+		}
+
+		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
+		if err != nil {
+			return
+		}
+
+		//--------------------------------------------------------------------------------------------------------------
 	default:
 		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err != nil {
