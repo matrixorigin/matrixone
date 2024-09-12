@@ -31,6 +31,7 @@ import (
 )
 
 type HashmapBuilder struct {
+	needDupVec         bool
 	InputBatchRowCount int
 	vecs               [][]*vector.Vector
 	IntHashMap         *hashmap.IntHashMap
@@ -67,6 +68,9 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 		hb.executor = make([]colexec.ExpressionExecutor, len(Conditions))
 		hb.keyWidth = 0
 		for i, expr := range Conditions {
+			if _, ok := Conditions[i].Expr.(*pbplan.Expr_Col); !ok {
+				hb.needDupVec = true
+			}
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
 			// todo : for varlena type, always go strhashmap
@@ -84,6 +88,13 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 }
 
 func (hb *HashmapBuilder) Reset(proc *process.Process) {
+	if hb.needDupVec {
+		for i := range hb.vecs {
+			for j := range hb.vecs[i] {
+				hb.vecs[i][j].Free(proc.Mp())
+			}
+		}
+	}
 	if hb.InputBatchRowCount == 0 {
 		hb.FreeHashMapAndBatches(proc)
 	}
@@ -168,7 +179,14 @@ func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			hb.vecs[idx1][idx2] = vec
+			if hb.needDupVec {
+				hb.vecs[idx1][idx2], err = vec.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
+			} else {
+				hb.vecs[idx1][idx2] = vec
+			}
 		}
 	}
 	return nil
