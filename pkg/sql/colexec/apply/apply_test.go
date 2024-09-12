@@ -34,7 +34,8 @@ var (
 
 func init() {
 	tcs = []applyTestCase{
-		newTestCase(),
+		newTestCase(CROSS),
+		newTestCase(OUTER),
 	}
 }
 
@@ -54,10 +55,12 @@ func TestApply(t *testing.T) {
 	}
 }
 
-func newTestCase() applyTestCase {
+func newTestCase(applyType int) applyTestCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	arg := NewArgument()
+	arg.ApplyType = applyType
 	return applyTestCase{
-		arg:  NewArgument(),
+		arg:  arg,
 		proc: proc,
 	}
 }

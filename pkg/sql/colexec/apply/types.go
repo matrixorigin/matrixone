@@ -90,10 +90,12 @@ func (apply *Apply) Reset(proc *process.Process, pipelineFailed bool, err error)
 
 	ctr.state = Build
 
-	if apply.ProjectList != nil {
-		apply.OpAnalyzer.Alloc(apply.ProjectAllocSize)
-		apply.ResetProjection(proc)
-	}
+	/*
+		if apply.ProjectList != nil {
+			apply.OpAnalyzer.Alloc(apply.ProjectAllocSize)
+			apply.ResetProjection(proc)
+		}
+	*/
 }
 
 func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -101,9 +103,11 @@ func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) 
 
 	ctr.cleanBatch(proc.Mp())
 
-	if apply.ProjectList != nil {
-		apply.FreeProjection(proc)
-	}
+	/*
+		if apply.ProjectList != nil {
+				apply.FreeProjection(proc)
+			}
+	*/
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

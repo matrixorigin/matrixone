@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,7 +44,9 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 }
 
 func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
+	ctr := &apply.ctr
 	result := vm.NewCallResult()
-	apply.ctr.batchRowCount = 0
+	ctr.batchRowCount = 0
+	ctr.rbat = batch.NewWithSize(len(apply.Result))
 	return result, moerr.NewInternalErrorNoCtx("apply call")
 }
