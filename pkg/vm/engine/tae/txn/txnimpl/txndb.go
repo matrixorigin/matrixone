@@ -438,6 +438,14 @@ func (db *txnDB) Freeze() (err error) {
 	return
 }
 
+func (db *txnDB) approxSize() int {
+	size := 0
+	for _, tbl := range db.tables {
+		size += tbl.approxSize()
+	}
+	return size
+}
+
 func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 	for _, table := range db.tables {
 		if err = table.PrePreareTransfer(txnif.PrePreparePhase, table.store.rt.Now()); err != nil {
