@@ -197,6 +197,9 @@ func objectValid(objectEntry *catalog.ObjectEntry) bool {
 	if !objectEntry.IsCommitted() {
 		return false
 	}
+	if objectEntry.IsCreatingOrAborted() {
+		return false
+	}
 
 	return true
 }
