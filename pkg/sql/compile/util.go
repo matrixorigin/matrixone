@@ -135,7 +135,7 @@ func genCreateIndexTableSqlForFullTextIndex(indexTableDef *plan.TableDef, indexD
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
-		if planCol.Name == catalog.CPrimaryKeyColName {
+		if planCol.Name == catalog.CPrimaryKeyColName || planCol.Name == catalog.FakePrimaryKeyColName {
 			continue
 		}
 		if i >= 1 {
@@ -163,10 +163,6 @@ func genCreateIndexTableSqlForFullTextIndex(indexTableDef *plan.TableDef, indexD
 		}
 	}
 
-	if indexTableDef.Pkey != nil && indexTableDef.Pkey.Names != nil {
-		pkStr := fmt.Sprintf(", primary key ( %s ) ", partsToColsStr(indexTableDef.Pkey.Names))
-		sql += pkStr
-	}
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
