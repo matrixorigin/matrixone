@@ -987,7 +987,6 @@ message Query {
 
 	//detectSqls are sqls detect fk self refer constraint
 	repeated string detectSqls= 8;
-
 }
 
 message TransationControl {
