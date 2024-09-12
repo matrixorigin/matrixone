@@ -14,6 +14,8 @@
 
 package malloc
 
+const DebugThreshHold = 1024 * 1024
+
 type Allocator interface {
 	Allocate(size uint64, hint Hints) ([]byte, Deallocator, error)
 }

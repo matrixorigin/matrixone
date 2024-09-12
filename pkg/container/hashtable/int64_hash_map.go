@@ -17,6 +17,8 @@ package hashtable
 import (
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -51,6 +53,9 @@ func init() {
 }
 
 func (ht *Int64HashMap) Free() {
+	if ht.blockMaxElemCnt > malloc.DebugThreshHold {
+		logutil.Infof("hashmap debug : inthashmap %p is deallocating maxelecnt %v", ht, ht.blockMaxElemCnt)
+	}
 	for i, de := range ht.rawDataDeallocators {
 		if de != nil {
 			de.Deallocate(malloc.NoHints)
@@ -63,6 +68,9 @@ func (ht *Int64HashMap) Free() {
 func (ht *Int64HashMap) allocate(index int, size uint64) error {
 	if ht.rawDataDeallocators[index] != nil {
 		panic("overwriting")
+	}
+	if ht.blockMaxElemCnt > malloc.DebugThreshHold {
+		logutil.Infof("hashmap debug : inthashmap %p is allocating, maxelecnt %v size %v", ht, ht.blockMaxElemCnt, size)
 	}
 	bs, de, err := ht.allocator.Allocate(size, malloc.NoHints)
 	if err != nil {

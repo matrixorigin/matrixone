@@ -15,6 +15,7 @@
 package hashtable
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -59,6 +60,9 @@ func init() {
 }
 
 func (ht *StringHashMap) Free() {
+	if ht.blockMaxElemCnt > malloc.DebugThreshHold {
+		logutil.Infof("hashmap debug : strhashmap %p is deallocating maxelecnt %v", ht, ht.blockMaxElemCnt)
+	}
 	for i, de := range ht.rawDataDeallocators {
 		if de != nil {
 			de.Deallocate(malloc.NoHints)
@@ -71,6 +75,9 @@ func (ht *StringHashMap) Free() {
 func (ht *StringHashMap) allocate(index int, size uint64) error {
 	if ht.rawDataDeallocators[index] != nil {
 		panic("overwriting")
+	}
+	if ht.blockMaxElemCnt > malloc.DebugThreshHold {
+		logutil.Infof("hashmap debug : strhashmap %p is allocating, maxelecnt %v size %v", ht, ht.blockMaxElemCnt, size)
 	}
 	bs, de, err := ht.allocator.Allocate(size, malloc.NoHints)
 	if err != nil {

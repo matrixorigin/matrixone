@@ -17,6 +17,9 @@ package hashmap_util
 import (
 	"runtime"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -204,10 +207,16 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 			if err != nil {
 				return err
 			}
+			if hb.InputBatchRowCount > malloc.DebugThreshHold {
+				logutil.Infof("hashmap debug : In Join, inthashmap %p is preallocating for rows %v", hb.IntHashMap, hb.InputBatchRowCount)
+			}
 		} else {
 			err = hb.StrHashMap.PreAlloc(uint64(hb.InputBatchRowCount))
 			if err != nil {
 				return err
+			}
+			if hb.InputBatchRowCount > malloc.DebugThreshHold {
+				logutil.Infof("hashmap debug : In Join, strhashmap %p is preallocating for rows %v", hb.StrHashMap, hb.InputBatchRowCount)
 			}
 		}
 	} else {
@@ -238,9 +247,12 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 				rate := float64(groupCount) / float64(i)
 				hashmapCount := uint64(float64(hb.InputBatchRowCount) * rate)
 				if hashmapCount > groupCount {
-					err := hb.IntHashMap.PreAlloc(hashmapCount - groupCount)
+					err = hb.IntHashMap.PreAlloc(hashmapCount - groupCount)
 					if err != nil {
 						return err
+					}
+					if hb.InputBatchRowCount > malloc.DebugThreshHold {
+						logutil.Infof("hashmap debug : In Join, inthashmap %p is preallocating for rows %v", hb.IntHashMap, hb.InputBatchRowCount)
 					}
 				}
 			} else {
@@ -248,9 +260,12 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 				rate := float64(groupCount) / float64(i)
 				hashmapCount := uint64(float64(hb.InputBatchRowCount) * rate)
 				if hashmapCount > groupCount {
-					err := hb.StrHashMap.PreAlloc(hashmapCount - groupCount)
+					err = hb.StrHashMap.PreAlloc(hashmapCount - groupCount)
 					if err != nil {
 						return err
+					}
+					if hb.InputBatchRowCount > malloc.DebugThreshHold {
+						logutil.Infof("hashmap debug : In Join, strhashmap %p is preallocating for rows %v", hb.StrHashMap, hb.InputBatchRowCount)
 					}
 				}
 			}

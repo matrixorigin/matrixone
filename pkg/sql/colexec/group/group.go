@@ -17,6 +17,8 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -462,6 +464,9 @@ func (ctr *container) initHashMap(proc *process.Process, config *Group) (err err
 			return err
 		}
 		if config.PreAllocSize > 0 {
+			if config.PreAllocSize > malloc.DebugThreshHold {
+				logutil.Infof("hashmap debug : In agg, inthashmap %p is preallocating for size %v", ctr.intHashMap, config.PreAllocSize)
+			}
 			if err = ctr.intHashMap.PreAlloc(config.PreAllocSize); err != nil {
 				return err
 			}
@@ -472,6 +477,9 @@ func (ctr *container) initHashMap(proc *process.Process, config *Group) (err err
 			return err
 		}
 		if config.PreAllocSize > 0 {
+			if config.PreAllocSize > malloc.DebugThreshHold {
+				logutil.Infof("hashmap debug : In agg, strhashmap %p is preallocating for size %v", ctr.strHashMap, config.PreAllocSize)
+			}
 			if err = ctr.strHashMap.PreAlloc(config.PreAllocSize); err != nil {
 				return err
 			}
