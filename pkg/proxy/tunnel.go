@@ -427,7 +427,7 @@ func (t *tunnel) Close() error {
 		}
 		// Close the event channels.
 		close(t.reqC)
-		close(t.respC)
+		// close(t.respC)
 
 		cc, sc := t.getConns()
 		if cc != nil {
