@@ -1949,7 +1949,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 		defer release()
 
-		searchFunc := blockio.ChooseBlkDataSearchFunc(filter, blk)
+		searchFunc := filter.DecideSearchFunc(blk.IsSorted())
 		if searchFunc == nil {
 			searchFunc = buildUnsortedFilter()
 		}
