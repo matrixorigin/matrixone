@@ -161,7 +161,7 @@ func Test_UpgEntry(t *testing.T) {
 				}
 				return executor.Result{}, nil
 			}, txnOperator)
-			upg_drop_idx_task_epoch.Upgrade(executor, uint32(0))
+			upg_drop_task_metadata_id.Upgrade(executor, uint32(0))
 		},
 	)
 }
