@@ -79,7 +79,7 @@ var upg_mo_subs = versions.UpgradeEntry{
 var upg_drop_idx_task_status = versions.UpgradeEntry{
 	Schema:    catalog.MOTaskDB,
 	TableName: catalog.MOSysAsyncTask,
-	UpgType:   versions.ADD_INDEX,
+	UpgType:   versions.DROP_INDEX,
 	UpgSql:    fmt.Sprintf(`ALTER TABLE %s.%s DROP INDEX idx_task_status`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, err := versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_status")
@@ -93,7 +93,7 @@ var upg_drop_idx_task_status = versions.UpgradeEntry{
 var upg_drop_idx_task_runner = versions.UpgradeEntry{
 	Schema:    catalog.MOTaskDB,
 	TableName: catalog.MOSysAsyncTask,
-	UpgType:   versions.ADD_INDEX,
+	UpgType:   versions.DROP_INDEX,
 	UpgSql:    fmt.Sprintf(`ALTER TABLE %s.%s DROP INDEX idx_task_runner`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, err := versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_runner")
@@ -107,7 +107,7 @@ var upg_drop_idx_task_runner = versions.UpgradeEntry{
 var upg_drop_idx_task_executor = versions.UpgradeEntry{
 	Schema:    catalog.MOTaskDB,
 	TableName: catalog.MOSysAsyncTask,
-	UpgType:   versions.ADD_INDEX,
+	UpgType:   versions.DROP_INDEX,
 	UpgSql:    fmt.Sprintf(`ALTER TABLE %s.%s DROP INDEX idx_task_executor`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, err := versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_executor")
@@ -121,7 +121,7 @@ var upg_drop_idx_task_executor = versions.UpgradeEntry{
 var upg_drop_idx_task_epoch = versions.UpgradeEntry{
 	Schema:    catalog.MOTaskDB,
 	TableName: catalog.MOSysAsyncTask,
-	UpgType:   versions.ADD_INDEX,
+	UpgType:   versions.DROP_INDEX,
 	UpgSql:    fmt.Sprintf(`ALTER TABLE %s.%s DROP INDEX idx_task_epoch`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, err := versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_epoch")
@@ -135,7 +135,7 @@ var upg_drop_idx_task_epoch = versions.UpgradeEntry{
 var upg_drop_task_metadata_id = versions.UpgradeEntry{
 	Schema:    catalog.MOTaskDB,
 	TableName: catalog.MOSysAsyncTask,
-	UpgType:   versions.ADD_INDEX,
+	UpgType:   versions.DROP_INDEX,
 	UpgSql:    fmt.Sprintf(`ALTER TABLE %s.%s DROP INDEX task_metadata_id`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, err := versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "task_metadata_id")
