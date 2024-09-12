@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -4779,7 +4778,7 @@ func runDetectFkReferToDBSql(c *Compile, sql string) error {
 	res, err := c.runSqlWithResult(sql, NoAccountId)
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
-		return errors.Join(err, moerr.NewInvalidInput(c.proc.Ctx, sql))
+		return err
 	}
 	defer res.Close()
 
