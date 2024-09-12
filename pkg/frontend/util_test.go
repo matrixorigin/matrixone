@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
 	cvey "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1298,4 +1301,57 @@ func Test_issue3482(t *testing.T) {
 	s := issue3482SqlPrefix + " "
 	ui := UserInput{sql: s}
 	assert.True(t, ui.isIssue3482Sql())
+}
+
+func Test_BuildTableDefFromMoColumns(t *testing.T) {
+	convey.Convey("BuildTableDefFromMoColumns fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+		rm, err := NewRoutineManager(ctx)
+		assert.Nil(t, err)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
+		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
+
+		// process.
+		ses.proc = testutil.NewProc()
+		ses.proc.Base.TxnOperator = txnOperator
+
+		sql, err := getTableColumnDefSql(ctx, uint64(tenant.TenantID), "db1", "t1")
+		assert.Nil(t, err)
+
+		mrs := newMrsForPasswordOfUser([][]interface{}{{}})
+		bh.sql2result[sql] = mrs
+
+		_, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
 }
