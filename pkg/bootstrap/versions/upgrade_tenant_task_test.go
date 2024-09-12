@@ -31,24 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-func Test_getVersionUpgradesBySQL(t *testing.T) {
-	preSql := fmt.Sprintf(`select
-			id,
-			from_version,
-			to_version,
-			final_version,
-			final_version_offset,
-			state,
-			upgrade_order,
-			upgrade_cluster,
-			upgrade_tenant,
-			total_tenant,
-			ready_tenant
-			from %s
-			where state = %d
-			order by upgrade_order asc`,
-		catalog.MOUpgradeTable,
-		StateUpgradingTenant)
+func TestGetTenantCreateVersionForUpdate(t *testing.T) {
+	prefixMatchSql := fmt.Sprintf("select create_version from mo_account where account_id = %d for update", catalog.System_Account)
 
 	sid := ""
 	runtime.RunTest(
@@ -58,43 +42,51 @@ func Test_getVersionUpgradesBySQL(t *testing.T) {
 			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
 
 			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-				if strings.EqualFold(sql, preSql) {
+				if strings.EqualFold(sql, prefixMatchSql) {
 					typs := []types.Type{
-						types.New(types.T_uint64, 64, 0),
 						types.New(types.T_varchar, 50, 0),
-						types.New(types.T_varchar, 50, 0),
-						types.New(types.T_varchar, 50, 0),
-						types.New(types.T_uint32, 32, 0),
-						types.New(types.T_int32, 64, 0),
-						types.New(types.T_int32, 64, 0),
-						types.New(types.T_int32, 64, 0),
-						types.New(types.T_int32, 64, 0),
-						types.New(types.T_int32, 32, 0),
-						types.New(types.T_int32, 32, 0),
 					}
 
 					memRes := executor.NewMemResult(typs, mpool.MustNewZero())
-					memRes.NewBatchWithRowCount(2)
+					memRes.NewBatchWithRowCount(1)
 
-					executor.AppendFixedRows(memRes, 0, []uint64{10001, 10002})
-					executor.AppendStringRows(memRes, 1, []string{"1.2.1", "1.2.2"})
-					executor.AppendStringRows(memRes, 2, []string{"1.2.2", "1.2.3"})
-					executor.AppendStringRows(memRes, 3, []string{"1.2.3", "1.2.3"})
-					executor.AppendFixedRows(memRes, 4, []uint32{2, 2})
-					executor.AppendFixedRows(memRes, 5, []int32{2, 2})
-					executor.AppendFixedRows(memRes, 6, []int32{0, 1})
-					executor.AppendFixedRows(memRes, 7, []int32{0, 1})
-					executor.AppendFixedRows(memRes, 8, []int32{0, 1})
-					executor.AppendFixedRows(memRes, 9, []int32{0, 238})
-					executor.AppendFixedRows(memRes, 10, []int32{0, 0})
-
+					executor.AppendStringRows(memRes, 0, []string{"1.2.3"})
 					result := memRes.GetResult()
 					return result, nil
 				}
 				return executor.Result{}, nil
 			}, txnOperator)
+			_, err := GetTenantCreateVersionForUpdate(int32(catalog.System_Account), executor)
+			require.NoError(t, err)
+		},
+	)
+}
 
-			_, err := getVersionUpgradesBySQL(preSql, executor)
+func TestGetTenantVersion(t *testing.T) {
+	prefixMatchSql := fmt.Sprintf("select create_version from mo_account where account_id = %d", catalog.System_Account)
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if strings.EqualFold(sql, prefixMatchSql) {
+					typs := []types.Type{
+						types.New(types.T_varchar, 50, 0),
+					}
+
+					memRes := executor.NewMemResult(typs, mpool.MustNewZero())
+					memRes.NewBatchWithRowCount(1)
+
+					executor.AppendStringRows(memRes, 0, []string{"1.2.3"})
+					result := memRes.GetResult()
+					return result, nil
+				}
+				return executor.Result{}, nil
+			}, txnOperator)
+			_, err := GetTenantVersion(int32(catalog.System_Account), executor)
 			require.NoError(t, err)
 		},
 	)
