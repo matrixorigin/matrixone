@@ -16,7 +16,6 @@ package vector
 
 import (
 	"bytes"
-	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -330,9 +329,6 @@ func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vec
 			upperBound := sort.Search(len(vals), func(i int) bool {
 				return maxVal < vals[i]
 			})
-			if lowerBound > upperBound {
-				fmt.Println("xxxx", vec.GetType().Oid.String(), lowerBound, upperBound, "\n", rows)
-			}
 			subVals = vals[lowerBound:upperBound]
 		}
 
