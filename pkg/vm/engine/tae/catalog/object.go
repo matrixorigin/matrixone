@@ -566,39 +566,16 @@ func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
 	logutil.Info(s)
 }
 
-func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
+func MockObjEntryWithTbl(tbl *TableEntry, size uint64, isTombstone bool) *ObjectEntry {
 	stats := objectio.NewObjectStats()
 	objectio.SetObjectStatsSize(stats, uint32(size))
 	// to make sure pass the stats empty check
 	objectio.SetObjectStatsRowCnt(stats, uint32(1))
 	ts := types.BuildTS(time.Now().UnixNano(), 0)
 	e := &ObjectEntry{
-		table:      tbl,
-		ObjectNode: ObjectNode{},
-		EntryMVCCNode: EntryMVCCNode{
-			CreatedAt: ts,
-		},
-		ObjectMVCCNode: ObjectMVCCNode{*stats},
-		CreateNode:     *txnbase.NewTxnMVCCNodeWithTS(ts),
-		ObjectState:    ObjectState_Create_ApplyCommit,
-	}
-	return e
-}
-
-func MockTombstoneEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
-	stats := objectio.NewObjectStats()
-	objectio.SetObjectStatsSize(stats, uint32(size))
-	// to make sure pass the stats empty check
-	objectio.SetObjectStatsRowCnt(stats, uint32(1))
-	ts := types.BuildTS(time.Now().UnixNano(), 0)
-	e := &ObjectEntry{
-		table: tbl,
-		ObjectNode: ObjectNode{
-			IsTombstone: true,
-		},
-		EntryMVCCNode: EntryMVCCNode{
-			CreatedAt: ts,
-		},
+		table:          tbl,
+		ObjectNode:     ObjectNode{IsTombstone: isTombstone},
+		EntryMVCCNode:  EntryMVCCNode{CreatedAt: ts},
 		ObjectMVCCNode: ObjectMVCCNode{*stats},
 		CreateNode:     *txnbase.NewTxnMVCCNodeWithTS(ts),
 		ObjectState:    ObjectState_Create_ApplyCommit,
