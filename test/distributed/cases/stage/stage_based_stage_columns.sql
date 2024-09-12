@@ -24,13 +24,13 @@ create stage substage01 url = 'stage://stage01/stage/';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select col1, col3 from t1 into outfile 'stage://substage01/local_stage_t01.csv';
+select col1, col3 from t1 into outfile 'stage://substage01/local_stage_t001.csv';
 drop table t1;
 create table t1(
 col1 date not null,
 col3 timestamp
 );
-load data infile '$resources/into_outfile/stage/local_stage_t01.csv' into table t1 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_t001.csv' into table t1 fields terminated by ',' ignore 1 lines;
 select * from t1;
 show create table t1;
 drop table t1;
@@ -58,13 +58,13 @@ create stage substage02 url = 'stage://stage02/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select col3, col4 from t2 into outfile 'stage://substage02/local_stage_t02.csv';
+select col3, col4 from t2 into outfile 'stage://substage02/local_stage_t002.csv';
 drop table t2;
 create table t2(
 col3 decimal(5,2),
 col4 decimal(20,5)
 );
-load data infile '$resources/into_outfile/stage/local_stage_t02.csv' into table t2 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_t002.csv' into table t2 fields terminated by ',' ignore 1 lines;
 select * from t2;
 show create table t2;
 drop table t2;
@@ -92,13 +92,13 @@ create stage substage03 url = 'stage://stage03/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select col2, col3 from t3 into outfile 'stage://substage03/local_stage_t03.csv';
+select col2, col3 from t3 into outfile 'stage://substage03/local_stage_t003.csv';
 drop table t3;
 create table t3(
 col2 varchar(225),
 col3 text
 );
-load data infile '$resources/into_outfile/stage/local_stage_t03.csv' into table t3 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_t003.csv' into table t3 fields terminated by ',' ignore 1 lines;
 select * from t3;
 show create table t3;
 drop table t3;
@@ -130,7 +130,7 @@ create stage substage04 url = 'stage://stage04/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select col2, col4, col6, col8 from t4 into outfile 'stage://substage04/local_stage_t04.csv';
+select col2, col4, col6, col8 from t4 into outfile 'stage://substage04/local_stage_t004.csv';
 drop table t4;
 create table t4(
 col2 smallint,
@@ -138,7 +138,7 @@ col4 bigint,
 col6 smallint unsigned,
 col8 bigint unsigned
 );
-load data infile '$resources/into_outfile/stage/local_stage_t04.csv' into table t4 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_t004.csv' into table t4 fields terminated by ',' ignore 1 lines;
 select * from t4;
 show create table t4;
 drop table t4;
@@ -166,14 +166,14 @@ create stage substage05 url = 'stage://stage05/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select col1 from t5 into outfile 'stage://substage05/local_stage_t05.csv';
+select col1 from t5 into outfile 'stage://substage05/local_stage_t005.csv';
 drop table t5;
 create table t5 (col1 int auto_increment primary key);
 insert into t5 values (1);
 -- echo duplicate
-load data infile '$resources/into_outfile/stage/local_stage_t05.csv' into table t5 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_t005.csv' into table t5 fields terminated by ',' ignore 1 lines;
 delete from t5;
-load data infile '$resources/into_outfile/stage/local_stage_t05.csv' into table t5 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_t005.csv' into table t5 fields terminated by ',' ignore 1 lines;
 select * from t5;
 show create table t5;
 drop table t5;
@@ -196,10 +196,10 @@ create stage substage06 url = 'stage://stage06/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select col2 from t6 into outfile 'stage://substage06/local_stage_t06.csv';
+select col2 from t6 into outfile 'stage://substage06/local_stage_t006.csv';
 drop table t6;
 create table t6 (col2 varchar(20));
-load data infile '$resources/into_outfile/stage/local_stage_t06.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_t006.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
 select * from t6;
 show create table t6;
 drop table t6;
@@ -222,10 +222,10 @@ create stage substage07 url = 'stage://stage07/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select col1 from t7 into outfile 'stage://substage07/local_stage_t07.csv';
+select col1 from t7 into outfile 'stage://substage07/local_stage_t007.csv';
 drop table t7;
 create table t7(col1 text);
-load data infile '$resources/into_outfile/stage/local_stage_t07.csv' into table t7 FIELDS ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' ignore 1 lines parallel 'true';
+load data infile '$resources/into_outfile/stage/local_stage_t007.csv' into table t7 FIELDS ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' ignore 1 lines parallel 'true';
 select * from t7;
 show create table t7;
 drop table t7;
@@ -247,10 +247,10 @@ create stage substage09 url = 'stage://stage09/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select col1, col3 from t9 into outfile 'stage://substage09/local_stage_t09.csv';
+select col1, col3 from t9 into outfile 'stage://substage09/local_stage_t009.csv';
 drop table t9;
 create table t9(col1 int unique key, col3 varchar(30));
-load data infile '$resources/into_outfile/stage/local_stage_t09.csv' into table t9 fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/local_stage_t009.csv' into table t9 fields terminated by ',' lines terminated by '\n' ignore 1 lines;
 select * from t9;
 show create table t9;
 drop table t9;
