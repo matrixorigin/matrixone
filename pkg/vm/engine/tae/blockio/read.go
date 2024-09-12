@@ -149,6 +149,19 @@ func BlockDataReadNoCopy(
 	return loaded, &deleteMask, release, nil
 }
 
+func ChooseBlkDataSearchFunc(
+	filter objectio.BlockReadFilter,
+	info *objectio.BlockInfo) objectio.ReadFilterSearchFuncType {
+	var searchFunc objectio.ReadFilterSearchFuncType
+	if (filter.HasFakePK || !info.IsSorted()) && filter.UnSortedSearchFunc != nil {
+		searchFunc = filter.UnSortedSearchFunc
+	} else if info.IsSorted() && filter.SortedSearchFunc != nil {
+		searchFunc = filter.SortedSearchFunc
+	}
+
+	return searchFunc
+}
+
 // BlockDataRead only read block data from storage, don't apply deletes.
 func BlockDataRead(
 	ctx context.Context,
@@ -175,12 +188,7 @@ func BlockDataRead(
 		err  error
 	)
 
-	var searchFunc objectio.ReadFilterSearchFuncType
-	if (filter.HasFakePK || !info.IsSorted()) && filter.UnSortedSearchFunc != nil {
-		searchFunc = filter.UnSortedSearchFunc
-	} else if info.IsSorted() && filter.SortedSearchFunc != nil {
-		searchFunc = filter.SortedSearchFunc
-	}
+	searchFunc := ChooseBlkDataSearchFunc(filter, info)
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
