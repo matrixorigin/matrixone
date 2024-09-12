@@ -2303,9 +2303,9 @@ func (c *Compile) compileProbeSideForBoradcastJoin(node, left, right *plan.Node,
 			if rs[i].NodeInfo.Mcpu != 1 {
 				//product_l2 join is very time_consuming, increase the parallelism
 				rs[i].NodeInfo.Mcpu *= 8
-				if rs[i].NodeInfo.Mcpu > ncpu {
-					rs[i].NodeInfo.Mcpu = ncpu
-				}
+			}
+			if rs[i].NodeInfo.Mcpu > ncpu {
+				rs[i].NodeInfo.Mcpu = ncpu
 			}
 		}
 		c.anal.isFirst = false
