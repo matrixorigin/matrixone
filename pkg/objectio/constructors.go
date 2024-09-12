@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -64,4 +65,12 @@ func Decode(buf []byte) (any, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+func MustObjectMeta(buf []byte) ObjectMeta {
+	header := DecodeIOEntryHeader(buf)
+	if header.Type != IOET_ObjMeta {
+		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
+	}
+	return ObjectMeta(buf)
 }
