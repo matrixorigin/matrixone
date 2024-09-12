@@ -333,7 +333,7 @@ import (
 %token <str> LOW_PRIORITY HIGH_PRIORITY DELAYED
 
 // Create Table
-%token <str> CREATE ALTER DROP RENAME ANALYZE ADD RETURNS
+%token <str> CREATE ALTER DROP RENAME ANALYZE PHYPLAN ADD RETURNS
 %token <str> SCHEMA TABLE SEQUENCE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
 %token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
 %token <str> MAXVALUE PARTITION REORGANIZE LESS THAN PROCEDURE TRIGGER
@@ -3020,9 +3020,41 @@ explain_stmt:
         explainStmt.Options = options
         $$ = explainStmt
     }
+|   explain_sym PHYPLAN explainable_stmt
+    {
+        explainStmt := tree.NewExplainPhyPlan($3, "text")
+        optionElem := tree.MakeOptionElem("phyplan", "NULL")
+        options := tree.MakeOptions(optionElem)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym PHYPLAN VERBOSE explainable_stmt
+    {
+        explainStmt := tree.NewExplainPhyPlan($4, "text")
+        optionElem1 := tree.MakeOptionElem("phyplan", "NULL")
+        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem1)
+        options = append(options, optionElem2)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym PHYPLAN ANALYZE explainable_stmt
+    {
+        explainStmt := tree.NewExplainPhyPlan($4, "text")
+        optionElem1 := tree.MakeOptionElem("phyplan", "NULL")
+        optionElem2 := tree.MakeOptionElem("analyze", "NULL")
+        options := tree.MakeOptions(optionElem1)
+        options = append(options, optionElem2)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
-        if tree.IsContainAnalyze($3) {
+    	if tree.IsContainPhyPlan($3) {
+	    explainStmt := tree.NewExplainPhyPlan($5, "text")
+            explainStmt.Options = $3
+            $$ = explainStmt
+    	} else if tree.IsContainAnalyze($3) {
             explainStmt := tree.NewExplainAnalyze($5, "text")
             explainStmt.Options = $3
             $$ = explainStmt
@@ -3067,6 +3099,7 @@ explain_option_key:
     ANALYZE
 |   VERBOSE
 |   FORMAT
+|   PHYPLAN
 
 explain_foramt_value:
     JSON
