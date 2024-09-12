@@ -690,7 +690,7 @@ func (cnlabels *CnLabels) String() string {
 		sb.WriteString(acc)
 		if len(mp) > 0 {
 			sb.WriteString(":")
-			for label, _ := range mp {
+			for label := range mp {
 				sb.WriteString(label)
 				sb.WriteString(",")
 			}
