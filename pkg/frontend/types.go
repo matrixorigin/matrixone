@@ -394,7 +394,7 @@ func (prepareStmt *PrepareStmt) Close() {
 var _ buf.Allocator = &SessionAllocator{}
 
 type SessionAllocator struct {
-	allocator *malloc.ManagedAllocator
+	allocator *malloc.ManagedAllocator[malloc.Allocator]
 }
 
 func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
