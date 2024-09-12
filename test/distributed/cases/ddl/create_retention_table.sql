@@ -163,7 +163,6 @@ drop table retention09;
 
 
 -- fk table, pri table is retention table
--- @bvt:issue#18647
 drop table if exists aff01;
 drop table if exists pri01;
 create table pri01(a int primary key, b int unique key) with retention period 2 second;
@@ -179,7 +178,6 @@ select sleep(1);
 -- @ignore:2
 select * from mo_catalog.mo_retention;
 show tables;
--- @bvt:issue
 
 
 
