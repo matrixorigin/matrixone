@@ -70,7 +70,7 @@ func (ht *Int64HashMap) allocate(index int, size uint64) error {
 		panic("overwriting")
 	}
 	if ht.blockMaxElemCnt > malloc.DebugThreshHold {
-		logutil.Infof("hashmap debug : inthashmap %p is allocating, maxelecnt %v size %v", ht, ht.blockMaxElemCnt, size)
+		logutil.Infof("hashmap debug : inthashmap %p is allocating, blockcellcnt %v, maxelecnt %v size %v", ht, ht.blockCellCnt, ht.blockMaxElemCnt, size)
 	}
 	bs, de, err := ht.allocator.Allocate(size, malloc.NoHints)
 	if err != nil {
@@ -214,6 +214,11 @@ func (ht *Int64HashMap) ResizeOnDemand(n int) error {
 	}
 
 	newAlloc := int(newCellCnt * intCellSize)
+
+	if newMaxElemCnt > malloc.DebugThreshHold {
+		logutil.Infof("hashmap debug : inthashmap %p is allocating, newMaxElemCnt %v, newCellCnt %v newAlloc %v", ht, newMaxElemCnt, ht.blockMaxElemCnt, newAlloc)
+	}
+
 	if ht.blockCellCnt == maxIntCellCntPerBlock {
 		// double the blocks
 		oldBlockNum := len(ht.rawData)
