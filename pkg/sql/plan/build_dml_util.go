@@ -3925,8 +3925,6 @@ func (fk FkReferDef) String() string {
 // GetSqlForFkReferredTo returns the query that retrieves the fk relationships
 // that refer to the table
 func GetSqlForFkReferredTo(db, table string) string {
-	escapedDb := HandleEscapeCharInWhereClause(db)
-	escapedTable := HandleEscapeCharInWhereClause(table)
 	return fmt.Sprintf(
 		"select "+
 			"db_name, "+
@@ -3943,7 +3941,7 @@ func GetSqlForFkReferredTo(db, table string) string {
 			" and "+
 			"(db_name != '%s' or db_name = '%s' and table_name != '%s') "+
 			"order by db_name, table_name, constraint_name;",
-		escapedDb, escapedTable, escapedDb, escapedDb, escapedTable)
+		db, table, db, db, table)
 }
 
 // GetFkReferredTo returns the foreign key relationships that refer to the table
@@ -4052,7 +4050,7 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 					sb.WriteByte(',')
 				}
 				sb.WriteByte('\'')
-				sb.WriteString(HandleEscapeCharInWhereClause(col))
+				sb.WriteString(col)
 				sb.WriteByte('\'')
 			}
 			sb.WriteByte(')')
@@ -4064,75 +4062,63 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 // getSqlForDeleteTable returns the delete sql that deletes all the fk relationships from mo_foreign_keys
 // on the table
 func getSqlForDeleteTable(db, tbl string) string {
-	escapedDb := HandleEscapeCharInWhereClause(db)
-	escapedTable := HandleEscapeCharInWhereClause(tbl)
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
 	sb.WriteString(fmt.Sprintf(
-		"db_name = '%s' and table_name = '%s'", escapedDb, escapedTable))
+		"db_name = '%s' and table_name = '%s'", db, tbl))
 	return sb.String()
 }
 
 // getSqlForDeleteConstraint returns the delete sql that deletes the fk constraint from mo_foreign_keys
 // on the table
 func getSqlForDeleteConstraint(db, tbl, constraint string) string {
-	escapedDb := HandleEscapeCharInWhereClause(db)
-	escapedTable := HandleEscapeCharInWhereClause(tbl)
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
 	sb.WriteString(fmt.Sprintf(
 		"constraint_name = '%s' and db_name = '%s' and table_name = '%s'",
-		constraint, escapedDb, escapedTable))
+		constraint, db, tbl))
 	return sb.String()
 }
 
 // getSqlForDeleteDB returns the delete sql that deletes all the fk relationships from mo_foreign_keys
 // on the database
 func getSqlForDeleteDB(db string) string {
-	escapedDb := HandleEscapeCharInWhereClause(db)
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
-	sb.WriteString(fmt.Sprintf("db_name = '%s'", escapedDb))
+	sb.WriteString(fmt.Sprintf("db_name = '%s'", db))
 	return sb.String()
 }
 
 // getSqlForRenameTable returns the sqls that rename the table of all fk relationships in mo_foreign_keys
 func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
-	escapedDb := HandleEscapeCharInWhereClause(db)
-	escapedNewName := HandleEscapeCharInWhereClause(newName)
-	escapedOldName := HandleEscapeCharInWhereClause(oldName)
 	sb := strings.Builder{}
 	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set table_name = '%s' ", escapedNewName))
-	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' ; ", escapedDb, escapedOldName))
+	sb.WriteString(fmt.Sprintf("set table_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' ; ", db, oldName))
 	ret = append(ret, sb.String())
 
 	sb.Reset()
 	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set refer_table_name = '%s' ", escapedNewName))
-	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' ; ", escapedDb, escapedOldName))
+	sb.WriteString(fmt.Sprintf("set refer_table_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' ; ", db, oldName))
 	ret = append(ret, sb.String())
 	return
 }
 
 // getSqlForRenameColumn returns the sqls that rename the column of all fk relationships in mo_foreign_keys
 func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
-	escapedDb := HandleEscapeCharInWhereClause(db)
-	escapedTable := HandleEscapeCharInWhereClause(table)
-	escapedNewName := HandleEscapeCharInWhereClause(newName)
-	escapedOldName := HandleEscapeCharInWhereClause(oldName)
 	sb := strings.Builder{}
 	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set column_name = '%s' ", escapedNewName))
+	sb.WriteString(fmt.Sprintf("set column_name = '%s' ", newName))
 	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' and column_name = '%s' ; ",
-		escapedDb, escapedTable, escapedOldName))
+		db, table, oldName))
 	ret = append(ret, sb.String())
 
 	sb.Reset()
 	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set refer_column_name = '%s' ", escapedNewName))
+	sb.WriteString(fmt.Sprintf("set refer_column_name = '%s' ", newName))
 	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' and refer_column_name = '%s' ; ",
-		escapedDb, escapedTable, escapedOldName))
+		db, table, oldName))
 	ret = append(ret, sb.String())
 	return
 }
@@ -4140,10 +4126,9 @@ func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 // getSqlForCheckHasDBRefersTo returns the sql that checks if the database has any foreign key relationships
 // that refer to it.
 func getSqlForCheckHasDBRefersTo(db string) string {
-	escapedDb := HandleEscapeCharInWhereClause(db)
 	sb := strings.Builder{}
 	sb.WriteString("select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and db_name != '%s';", escapedDb, escapedDb))
+	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and db_name != '%s';", db, db))
 	return sb.String()
 }
 
