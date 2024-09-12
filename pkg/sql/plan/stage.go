@@ -48,7 +48,9 @@ func (builder *QueryBuilder) buildStageList(tbl *tree.TableFunction, ctx *BindCo
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		TblFuncExprList: exprs,
-		Children:        []int32{childId},
+	}
+	if childId >= 0 {
+		node.Children = []int32{childId}
 	}
 	return builder.appendNode(node, ctx), nil
 }
