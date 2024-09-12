@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -214,6 +215,8 @@ type ComputationWrapper interface {
 	GetUUID() []byte
 
 	RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error
+
+	SetExplainBuffer(buf *bytes.Buffer)
 
 	GetLoadTag() bool
 

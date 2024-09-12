@@ -5371,7 +5371,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
 		canExecInRestricted = true
-	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
+	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt, *tree.ExplainPhyPlan:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
