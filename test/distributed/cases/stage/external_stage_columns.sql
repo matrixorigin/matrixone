@@ -239,4 +239,57 @@ drop stage stage11;
 drop database db01;
 -- @session
 
+
+
+-- external table
+drop table if exists ex_table_01;
+create table ex_table_01(
+col1 tinyint,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned,
+col9 float,
+col10 double,
+col11 varchar(255),
+col12 Date,
+col13 DateTime,
+col14 timestamp,
+col15 bool,
+col16 decimal(5,2),
+col17 text,
+col18 varchar(255),
+col19 varchar(255),
+col20 varchar(255));
+load data infile '$resources/external_table_file/ex_table_sep_10.csv' into table ex_table_01 fields terminated by ',' enclosed by '\"' lines terminated by '\r\n';
+select col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 from ex_table_01;
+drop stage if exists ex_stage;
+create stage ex_stage url = 'file:///$resources/into_outfile/stage' comment = 'file stage';
+select col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 from ex_table_01 into outfile 'stage://ex_stage/ttttable01.csv';
+
+-- @ignore:0,2,5
+select * from mo_catalog.mo_stages;
+-- @ignore:1
+show stages;
+drop table ex_table_01;
+create external table ex_table_01(
+col1 tinyint,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned,
+col9 float,
+col10 double)
+infile 'stage://ex_stage/ttttable01.csv' fields terminated by ',' enclosed by '\"' lines terminated by '\r\n' ignore 1 lines;
+select * from ex_table_01;
+drop table ex_table_01;
+drop stage ex_stage;
+
+drop database test;
 drop account acc01;
