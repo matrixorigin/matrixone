@@ -389,5 +389,5 @@ infile 'stage://ex_stage/stage_t01.csv' fields terminated by ','  enclosed by '\
 select col1, col2, col3, col4, col5, col6, col7, col8, col9 from ex_table_01;
 drop stage ex_stage;
 drop table ex_table_01;
-create database test01;
+drop database test01;
 drop account acc01;
