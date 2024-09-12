@@ -1384,6 +1384,72 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
+	case plan.Node_APPLY:
+		internalMap := make(map[[2]int32][2]int32)
+
+		for _, expr := range node.TblFuncExprList {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
+
+		leftID := node.Children[0]
+		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+
+		for k, v := range leftRemapping.globalToLocal {
+			internalMap[k] = v
+		}
+
+		childProjList := builder.qry.Nodes[leftID].ProjectList
+		for i, globalRef := range leftRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+		right := builder.qry.Nodes[node.Children[1]]
+		rightTag := right.BindingTags[0]
+		for i, col := range right.TableDef.Cols {
+			globalRef := [2]int32{rightTag, int32(i)}
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+		for idx, expr := range right.TblFuncExprList {
+			increaseRefCnt(expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 	default:
 		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
 	}
@@ -3673,6 +3739,19 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 		return builder.buildJoinTable(tbl, ctx)
 
+	case *tree.ApplyTableExpr:
+		_, ok := tbl.Right.(*tree.TableFunction)
+		if !ok {
+			if _, ok = tbl.Right.(*tree.AliasedTableExpr); ok {
+				_, ok = tbl.Right.(*tree.AliasedTableExpr).Expr.(*tree.TableFunction)
+			}
+		}
+		if ok {
+			return builder.buildApplyTable(tbl, ctx)
+		} else {
+			return 0, moerr.NewInternalError(builder.GetContext(), "must apply a table function")
+		}
+
 	case *tree.TableFunction:
 		if tbl.Id() == "result_scan" {
 			return builder.buildResultScan(tbl, ctx)
@@ -4051,6 +4130,43 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	return nodeID, nil
 }
 
+func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *BindContext) (int32, error) {
+	var applyType plan.Node_JoinType
+
+	switch tbl.ApplyType {
+	case tree.APPLY_TYPE_CROSS:
+		applyType = plan.Node_INNER
+	case tree.APPLY_TYPE_OUTER:
+		applyType = plan.Node_OUTER
+	}
+
+	leftCtx := NewBindContext(builder, ctx)
+	rightCtx := NewBindContext(builder, ctx)
+
+	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
+	if err != nil {
+		return 0, err
+	}
+	ctx.views = append(ctx.views, leftCtx.views...)
+
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, -2, leftCtx)
+	if err != nil {
+		return 0, err
+	}
+	ctx.views = append(ctx.views, rightCtx.views...)
+
+	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
+	if err != nil {
+		return 0, err
+	}
+	nodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_APPLY,
+		Children: []int32{leftChildID, rightChildID},
+		JoinType: applyType,
+	}, ctx)
+	return nodeID, nil
+}
+
 func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (int32, error) {
 	var (
 		childId int32
@@ -4066,7 +4182,11 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		ctx.binder = NewTableBinder(builder, ctx)
 	} else {
 		ctx.binder = NewTableBinder(builder, leftCtx)
-		childId = builder.copyNode(ctx, preNodeId)
+		if preNodeId >= 0 {
+			childId = builder.copyNode(ctx, preNodeId)
+		} else {
+			childId = -1
+		}
 	}
 
 	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
