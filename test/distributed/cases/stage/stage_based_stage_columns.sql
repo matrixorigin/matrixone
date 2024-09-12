@@ -260,4 +260,54 @@ select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
 drop stage substage09;
+
+
+
+-- through creating external table, load data from stage-based stage
+drop table if exists ex_table_1;
+create table ex_table_1(
+col1 tinyint default 8,
+col2 smallint null,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned,
+col9 float,
+col10 double,
+col11 varchar(255),
+col12 Date,
+col13 DateTime,
+col14 timestamp,
+col15 bool,
+col16 decimal(5,2),
+col17 text,
+col18 varchar(255),
+col19 varchar(255),
+col20 varchar(255),
+primary key(col1));
+load data infile '$resources/external_table_file/ex_table_3_6.csv'into table ex_table_1 fields terminated by ',';
+select * from ex_table_1;
+drop stage if exists ex_stage01;
+create stage ex_stage01 url = 'file:///$resources/into_outfile' comment = '这是一个基于file system创建的stage';
+drop stage if exists substage01;
+create stage substage01 url = 'stage://ex_stage01/stage';
+select col1, col3, col5, col7, col9, col11, col13, col15 from ex_table_1 into outfile 'stage://substage01/sub_stage001.csv';
+drop table ex_table_1;
+create external table ex_table_1(
+col1 tinyint default 8,
+col3 int,
+col5 tinyint unsigned,
+col7 int unsigned,
+col9 float,
+col11 varchar(255),
+col13 DateTime,
+col15 bool,
+primary key(col1)
+)infile 'stage://substage01/sub_stage001.csv' fields terminated by ',' ignore 1 lines;;
+select * from ex_table_1;
+drop table ex_table_1;
+drop stage ex_stage01;
+drop stage substage01;
 drop database test;
