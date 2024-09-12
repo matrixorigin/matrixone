@@ -9493,9 +9493,10 @@ func TestRollbackMergeInQueue(t *testing.T) {
 	tae.Runtime.LockMergeService.LockFromUser(rel.ID())
 	require.Error(t, txn.Commit(ctx)) // rollback
 
-	txn, rel = tae.GetRelation()
-
+	_, rel = tae.GetRelation()
 	objH, err := rel.GetObject(obj.ID(), false)
+	require.NoError(t, err)
+
 	meta := objH.GetMeta().(*catalog.ObjectEntry)
 	require.Equal(t, catalog.ObjectState_Create_ApplyCommit, meta.ObjectState)
 	require.True(t, meta.DeletedAt.IsEmpty())
