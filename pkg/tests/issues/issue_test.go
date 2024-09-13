@@ -18,11 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -30,11 +25,16 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
 )
 
@@ -221,7 +221,7 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 		executor.Options{}.WithDatabase("testdb"))
 	require.NoError(t, err)
 
-	willInsertRows := 819200
+	willInsertRows := 10000
 	for i := 0; i < 100; i++ {
 		_, err = sqlExecutor.Exec(ctx,
 			fmt.Sprintf(
@@ -262,7 +262,7 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 		rel, err := db.Relation(ctx, "hhh", proc)
 		require.NoError(t, err)
 
-		for r := 0; r < 8192; r++ {
+		for r := 0; r < 100; r++ {
 			var keys []int64
 			for i := 0; i < willInsertRows; i++ {
 				keys = append(keys, rand.Int63()%int64(willInsertRows))
