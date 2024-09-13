@@ -566,7 +566,7 @@ func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
 	logutil.Info(s)
 }
 
-func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
+func MockObjEntryWithTbl(tbl *TableEntry, size uint64, isTombstone bool) *ObjectEntry {
 	stats := objectio.NewObjectStats()
 	objectio.SetObjectStatsSize(stats, uint32(size))
 	// to make sure pass the stats empty check
@@ -574,7 +574,7 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
 	ts := types.BuildTS(time.Now().UnixNano(), 0)
 	e := &ObjectEntry{
 		table:      tbl,
-		ObjectNode: ObjectNode{},
+		ObjectNode: ObjectNode{IsTombstone: isTombstone},
 		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: ts,
 		},

@@ -161,10 +161,6 @@ func (s *Scheduler) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 }
 
 func (s *Scheduler) onObject(objectEntry *catalog.ObjectEntry) (err error) {
-	if !objectEntry.IsActive() {
-		return moerr.GetOkStopCurrRecur()
-	}
-
 	if !objectValid(objectEntry) {
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -192,11 +188,16 @@ func (s *Scheduler) StartMerge(tbl *catalog.TableEntry) {
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
-	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry) {
+	if objectEntry.IsAppendable() {
 		return false
 	}
-
-	if objectEntry.IsAppendable() {
+	if !objectEntry.IsActive() {
+		return false
+	}
+	if !objectEntry.IsCommitted() {
+		return false
+	}
+	if objectEntry.IsCreatingOrAborted() {
 		return false
 	}
 	return true
