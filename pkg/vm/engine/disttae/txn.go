@@ -447,14 +447,12 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	txn.hasS3Op.Store(true)
 
 	dump := func(typ int) error {
-		cnt := 0
+		deleteCnt := 0
 		mp := make(map[tableKey][]*batch.Batch)
 		lastTxnWritesIndex := offset
 		write := txn.writes
 		for i := offset; i < len(txn.writes); i++ {
-			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
-				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
-				txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+			if txn.writes[i].isCatalog() {
 				write[lastTxnWritesIndex] = write[i]
 				lastTxnWritesIndex++
 				continue
@@ -478,13 +476,21 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 					size += uint64(bat.Size())
 					pkCount += bat.RowCount()
 				} else {
-					cnt += bat.RowCount()
+					deleteCnt += bat.RowCount()
 				}
-				// skip rowid
-				newBat := batch.NewWithSize(len(bat.Vecs) - 1)
-				newBat.SetAttributes(bat.Attrs[1:])
-				newBat.Vecs = bat.Vecs[1:]
-				newBat.SetRowCount(bat.Vecs[0].Length())
+				var newBat *batch.Batch
+				if typ == INSERT {
+					// skip rowid
+					newBat = batch.NewWithSize(len(bat.Vecs) - 1)
+					newBat.SetAttributes(bat.Attrs[1:])
+					newBat.Vecs = bat.Vecs[1:]
+					newBat.SetRowCount(bat.Vecs[0].Length())
+				} else {
+					newBat = batch.NewWithSize(len(bat.Vecs))
+					newBat.SetAttributes(bat.Attrs)
+					newBat.Vecs = bat.Vecs
+					newBat.SetRowCount(bat.Vecs[0].Length())
+				}
 				mp[tbKey] = append(mp[tbKey], newBat)
 				txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
 
@@ -497,7 +503,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			}
 		}
 
-		if typ == PersistedDelete && cnt < txn.engine.insertEntryMaxCount {
+		if typ == DELETE && deleteCnt < txn.engine.insertEntryMaxCount {
 			return nil
 		}
 
@@ -569,11 +575,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	}
 
 	if dumpAll {
-		if txn.approximateInMemDeleteCnt >= txn.engine.insertEntryMaxCount {
-			if err := dump(PersistedDelete); err != nil {
-				return err
-			}
-		}
+		//if txn.approximateInMemDeleteCnt >= txn.engine.insertEntryMaxCount {
+		//	if err := dump(DELETE); err != nil {
+		//		return err
+		//	}
+		//}
 		txn.approximateInMemDeleteCnt = 0
 		txn.workspaceSize = 0
 		txn.pkCount -= pkCount
@@ -647,7 +653,7 @@ func (txn *Transaction) WriteFileLocked(
 	tnStore DNStore) error {
 	txn.hasS3Op.Store(true)
 	newBat := bat
-	if typ == INSERT || typ == PersistedDelete {
+	if bat.Attrs[0] != catalog.BlockMeta_MetaLoc && bat.Attrs[0] != catalog.ObjectMeta_ObjectStats {
 		newBat = batch.NewWithSize(len(bat.Vecs))
 		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
 

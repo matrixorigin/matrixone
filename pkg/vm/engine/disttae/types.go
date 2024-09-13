@@ -65,8 +65,6 @@ const (
 	INSERT = iota
 	DELETE
 	ALTER // alter command for TN. Update batches for mo_tables and mo_columns will fall into the category of INSERT and DELETE.
-	PersistedInsert
-	PersistedDelete
 )
 
 type NoteLevel string
@@ -79,11 +77,9 @@ const (
 
 var (
 	typesNames = map[int]string{
-		INSERT:          "insert",
-		DELETE:          "delete",
-		ALTER:           "alter",
-		PersistedInsert: "persisted_insert",
-		PersistedDelete: "persisted_delete",
+		INSERT: "insert",
+		DELETE: "delete",
+		ALTER:  "alter",
 	}
 )
 
