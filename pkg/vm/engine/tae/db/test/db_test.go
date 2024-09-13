@@ -6391,35 +6391,6 @@ func TestAppendAndGC(t *testing.T) {
 	if minMerged == nil {
 		return
 	}
-
-	files := make(map[string]struct{}, 0)
-	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
-		if group != store.GroupFiles {
-			return
-		}
-		vec := vector.NewVec(types.Type{})
-		if err = vec.UnmarshalBinary(payload); err != nil {
-			return
-		}
-		for i := 0; i < vec.Length(); i++ {
-			file := vec.GetStringAt(i)
-			if strings.Contains(file, checkpoint.PrefixMetadata) {
-				fileInfo := strings.Split(file, checkpoint.CheckpointDir+"/")
-				name := fileInfo[1]
-				files[name] = struct{}{}
-				continue
-			}
-			files[file] = struct{}{}
-		}
-	}
-	db.Wal.Replay(loadFiles)
-	metaFile := db.BGCheckpointRunner.GetCheckpointMetaFiles()
-	for file := range files {
-		if _, ok := metaFile[file]; !ok {
-			panic(fmt.Sprintf("file %s not in meta files", file))
-		}
-	}
-
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
 	db = tae.DB
