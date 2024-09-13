@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -56,6 +57,8 @@ type TxnComputationWrapper struct {
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
+
+	explainBuffer *bytes.Buffer
 }
 
 func InitTxnComputationWrapper(
@@ -283,6 +286,10 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *
 	return nil
 }
 
+func (cwft *TxnComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
+	cwft.explainBuffer = buf
+}
+
 func (cwft *TxnComputationWrapper) GetUUID() []byte {
 	return cwft.uuid[:]
 }
@@ -439,6 +446,11 @@ func createCompile(
 	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(bat *batch.Batch) error { return nil }
 	}
+
+	if _, ok := stmt.(*tree.ExplainPhyPlan); ok {
+		fill = func(bat *batch.Batch) error { return nil }
+	}
+
 	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
 	if err != nil {
 		return

@@ -21,12 +21,10 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -144,6 +142,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Lock"
 	case plan.Node_DEDUP_JOIN:
 		pname = "Dedup Join"
+	case plan.Node_APPLY:
+		pname = "CROSS APPLY"
 	default:
 		panic("error node type")
 	}

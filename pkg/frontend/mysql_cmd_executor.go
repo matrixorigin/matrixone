@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -1822,6 +1823,41 @@ func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explai
 	return err
 }
 
+func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufio.Reader, session *Session, fill outputCallBackFunc) error {
+	bat := batch.New(true, []string{explainColName})
+	vs := make([][]byte, 0)
+	count := 0
+	for {
+		line, err := reader.ReadString('\n')
+		if err == io.EOF && len(line) > 0 {
+			vs = append(vs, []byte(strings.TrimSuffix(line, "\n")))
+			count++
+			break
+		}
+		if err != nil {
+			return moerr.NewInvalidInputf(execCtx.reqCtx, "Error when read explain phyplan buffer: %s", err.Error())
+		}
+
+		vs = append(vs, []byte(strings.TrimSuffix(line, "\n")))
+		count++
+	}
+
+	vs = vs[:count]
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(session.GetMemPool())
+	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
+	bat.Vecs[0] = vec
+	bat.SetRowCount(count)
+
+	err := fill(session, execCtx, bat)
+	if err != nil {
+		return err
+	}
+	// to trigger save result meta
+	err = fill(session, execCtx, nil)
+	return err
+}
+
 func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement, isExplain bool) (*plan2.Plan, error) {
 	var ret *plan2.Plan
 	var err error
@@ -1895,7 +1931,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
-		*tree.ExplainStmt, *tree.ExplainAnalyze:
+		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 		opt := plan2.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt, isPrepareStmt, isExplain)
 		if err != nil {
@@ -2594,6 +2630,8 @@ func executeStmt(ses *Session,
 		}
 	case *tree.ExplainAnalyze:
 		ses.SetData(nil)
+	case *tree.ExplainPhyPlan:
+		ses.SetData(nil)
 	case *tree.ShowTableStatus:
 		ses.SetShowStmtType(ShowTableStatus)
 		ses.SetData(nil)
@@ -2624,7 +2662,9 @@ func executeStmt(ses *Session,
 			analyzeModule := c.GetAnalyzeModule()
 			if analyzeModule != nil {
 				phyPlan = analyzeModule.GetPhyPlan()
+				execCtx.cw.SetExplainBuffer(analyzeModule.GetExplainPhyBuffer())
 			}
+
 			// Serialize the execution plan as json
 			_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx, phyPlan)
 			c.Release()

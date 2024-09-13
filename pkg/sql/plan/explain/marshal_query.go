@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
@@ -237,6 +237,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "mterial", nil
 	case plan.Node_DEDUP_JOIN:
 		return "dedup_join", nil
+	case plan.Node_APPLY:
+		return "apply", nil
 	default:
 		return "", moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -639,6 +641,11 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_DEDUP_JOIN:
 		labels = append(labels, models.Label{
 			Name:  Label_Dedup_Join,
+			Value: []string{},
+		})
+	case plan.Node_APPLY:
+		labels = append(labels, models.Label{
+			Name:  Label_Apply,
 			Value: []string{},
 		})
 	default:

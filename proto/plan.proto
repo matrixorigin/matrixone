@@ -716,6 +716,7 @@ message Node {
 		TIME_WINDOW = 50;
 		FILL = 51;
 		PARTITION = 52;
+		APPLY = 53;
 	}
 
 	enum JoinType {
@@ -727,9 +728,8 @@ message Node {
 		ANTI	= 5;
 		SINGLE	= 6;
 		MARK	= 7;
-		APPLY	= 8;
-		INDEX = 9;
-		L2 = 10;
+		INDEX = 8;
+		L2 = 9;
 	}
 
 	enum AggMode {

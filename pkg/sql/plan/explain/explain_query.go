@@ -20,7 +20,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -80,6 +79,7 @@ const (
 	Label_Unknown           = "Unknown"
 	Label_Material          = "Material"
 	Label_Dedup_Join        = "Dedup join"
+	Label_Apply             = "Apply"
 )
 
 const (
