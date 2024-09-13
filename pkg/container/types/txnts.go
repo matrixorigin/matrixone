@@ -15,7 +15,6 @@
 package types
 
 import (
-	"bytes"
 	"fmt"
 	"math"
 	"strconv"
@@ -299,7 +298,7 @@ func MockColTypes() (ct []Type) {
 	return columnTypes
 }
 
-// PXU FIXME
+// PXU FIXME Done
 func CompareTSTSAligned(a, b TS) int {
-	return bytes.Compare(a[:], b[:])
+	return a.Compare(&b)
 }
