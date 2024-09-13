@@ -91,8 +91,10 @@ func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16, bool) (v any, isNul
 func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, isNull bool, err error) {
 	return
 }
-func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                                   { return }
-func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector, containers.Vector) (err error) { return }
+func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error) { return }
+func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector, containers.Vector, handle.DeleteType) (err error) {
+	return
+}
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
 	return
 }
