@@ -1019,7 +1019,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			return
 		}
 
-		for i := u64Length-1; i != 0; i-- {
+		for i := u64Length - 1; i != 0; i-- {
 			if moreNp.Contains(i) {
 				dst.Set(i + u64offset)
 			}

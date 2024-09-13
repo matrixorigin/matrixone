@@ -177,7 +177,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 			dst.Vecs[i].SetIsBin(vec.GetIsBin())
 
 			// range src and found the same vector.
-			for j := i+1; j < len(src.Vecs); j++ {
+			for j := i + 1; j < len(src.Vecs); j++ {
 				if dst.Vecs[j] == nil && src.Vecs[j] == vec {
 					dst.Vecs[j] = dst.Vecs[i]
 				}
