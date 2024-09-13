@@ -206,3 +206,41 @@ drop pitr if exists pitr03;
 drop pitr if exists pitr04;
 -- @ignore:1,2
 show pitr;
+
+drop pitr if exists pitr05;
+create pitr pitr05 for cluster range 1 'h';
+drop pitr if exists pitr06;
+create pitr pitr06 for cluster range 1 'd';
+
+
+create database db01;
+drop pitr if exists pitr10;
+create pitr pitr10 for database db01 range 1 'h';
+drop pitr if exists pitr11;
+create pitr pitr11 for database db01 range 1 'd';
+
+create table db01.table01 (col1 int);
+drop pitr if exists pitr12;
+create pitr pitr12 for database db01 table table01 range 1 'h';
+drop pitr if exists pitr13;
+create pitr pitr13 for database db01 table table01 range 1 'd';
+
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop pitr if exists pitr14;
+create pitr pitr14 for account acc01 range 1 'h';
+drop pitr if exists pitr15;
+create pitr pitr15 for account acc01 range 1 'd';
+
+drop database if exists db01;
+drop account if exists acc01;
+drop pitr if exists pitr05;
+drop pitr if exists pitr06;
+drop pitr if exists pitr10;
+drop pitr if exists pitr11;
+drop pitr if exists pitr12;
+drop pitr if exists pitr13;
+drop pitr if exists pitr14;
+drop pitr if exists pitr15;
+-- @ignore:1,2
+show pitr;
