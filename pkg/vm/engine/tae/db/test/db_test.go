@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -6390,6 +6391,35 @@ func TestAppendAndGC(t *testing.T) {
 	if minMerged == nil {
 		return
 	}
+
+	files := make(map[string]struct{}, 0)
+	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
+		if group != store.GroupFiles {
+			return
+		}
+		vec := vector.NewVec(types.Type{})
+		if err = vec.UnmarshalBinary(payload); err != nil {
+			return
+		}
+		for i := 0; i < vec.Length(); i++ {
+			file := vec.GetStringAt(i)
+			if strings.Contains(file, checkpoint.PrefixMetadata) {
+				fileInfo := strings.Split(file, checkpoint.CheckpointDir+"/")
+				name := fileInfo[1]
+				files[name] = struct{}{}
+				continue
+			}
+			files[file] = struct{}{}
+		}
+	}
+	db.Wal.Replay(loadFiles)
+	metaFile := db.BGCheckpointRunner.GetCheckpointMetaFiles()
+	for file := range files {
+		if _, ok := metaFile[file]; !ok {
+			panic(fmt.Sprintf("file %s not in meta files", file))
+		}
+	}
+
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
 	db = tae.DB
@@ -6408,6 +6438,91 @@ func TestAppendAndGC(t *testing.T) {
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 
+}
+
+func TestAppendAndGC2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := new(options.Options)
+	opts = config.WithQuickScanAndCKPOpts(opts)
+	opts.CheckpointCfg.MinCount = 3
+	opts.CheckpointCfg.GlobalMinCount = 5
+	options.WithDisableGCCheckpoint()(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	db := tae.DB
+	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
+
+	schema1 := catalog.MockSchemaAll(13, 2)
+	schema1.BlockMaxRows = 10
+	schema1.ObjectMaxBlocks = 2
+
+	schema2 := catalog.MockSchemaAll(13, 2)
+	schema2.BlockMaxRows = 10
+	schema2.ObjectMaxBlocks = 2
+	{
+		txn, _ := db.StartTxn(nil)
+		database, err := txn.CreateDatabase("db", "", "")
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema1)
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema2)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*10-1))
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
+
+	pool, err := ants.NewPool(20)
+	assert.Nil(t, err)
+	defer pool.Release()
+	var wg sync.WaitGroup
+
+	for _, data := range bats {
+		wg.Add(2)
+		err = pool.Submit(testutil.AppendClosure(t, data, schema1.Name, db, &wg))
+		assert.Nil(t, err)
+		err = pool.Submit(testutil.AppendClosure(t, data, schema2.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+	testutils.WaitExpect(10000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+
+	files := make(map[string]struct{}, 0)
+	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
+		if group != store.GroupFiles {
+			return
+		}
+		vec := vector.NewVec(types.Type{})
+		if err = vec.UnmarshalBinary(payload); err != nil {
+			return
+		}
+		for i := 0; i < vec.Length(); i++ {
+			file := vec.GetStringAt(i)
+			if strings.Contains(file, checkpoint.PrefixMetadata) {
+				fileInfo := strings.Split(file, checkpoint.CheckpointDir+"/")
+				name := fileInfo[1]
+				files[name] = struct{}{}
+				continue
+			}
+			files[file] = struct{}{}
+		}
+	}
+	db.Wal.Replay(loadFiles)
+	metaFile := db.BGCheckpointRunner.GetCheckpointMetaFiles()
+	assert.NotEqual(t, 0, len(files))
+	for file := range metaFile {
+		if _, ok := files[file]; !ok {
+			panic(fmt.Sprintf("file %s not in meta files", file))
+		}
+		logutil.Infof("file %s in meta files", file)
+	}
 }
 
 func TestSnapshotGC(t *testing.T) {
