@@ -98,6 +98,10 @@ func (m *MemResult) NewBatch() {
 	m.res.Batches = append(m.res.Batches, newBatch(m.cols))
 }
 
+func (m *MemResult) NewBatchWithRowCount(rowcount int) {
+	m.res.Batches = append(m.res.Batches, newBatchWithRowCount(m.cols, rowcount))
+}
+
 func (m *MemResult) GetResult() Result {
 	return m.res
 }
@@ -120,6 +124,12 @@ func AppendFixedRows[T any](m *MemResult, col int, values []T) error {
 func newBatch(cols int) *batch.Batch {
 	bat := batch.NewWithSize(cols)
 	bat.SetRowCount(cols)
+	return bat
+}
+
+func newBatchWithRowCount(cols int, rowcout int) *batch.Batch {
+	bat := batch.NewWithSize(cols)
+	bat.SetRowCount(rowcout)
 	return bat
 }
 
