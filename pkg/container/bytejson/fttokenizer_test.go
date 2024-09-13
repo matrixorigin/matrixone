@@ -53,7 +53,10 @@ func TestByteJson(t *testing.T) {
 		}
 
 		var tokens []tokenizer.Token
-		tokens = bj.TokenizeValue(tokens)
+		for tk := range bj.TokenizeValue() {
+			tokens = append(tokens, tk)
+		}
+
 		if len(tokens) != len(tc.tokens) {
 			t.Fatalf("expected %d tokens, got %d", len(tc.tokens), len(tokens))
 		}

@@ -15,6 +15,7 @@
 package bytejson
 
 import (
+	"iter"
 	"strconv"
 
 	"github.com/matrixorigin/monlp/tokenizer"
@@ -23,41 +24,55 @@ import (
 // TokenizeValue tokenizes the values of the ByteJson object
 // note that we do not break word with space, do not normalize
 // case, 3-gram, etc etc, only truncate the string to 23 bytes.
-func (bj ByteJson) TokenizeValue(buf []tokenizer.Token) []tokenizer.Token {
+func (bj ByteJson) TokenizeValue() iter.Seq[tokenizer.Token] {
+	return func(yield func(tokenizer.Token) bool) {
+		tokenizeOne(bj, 1, yield)
+	}
+}
+
+func tokenizeOne(bj ByteJson, pos int32, yield func(tokenizer.Token) bool) int32 {
+	var t tokenizer.Token
+
 	switch bj.Type {
 	case TpCodeObject:
+		// object: recursively tokenize each value
 		cnt := bj.GetElemCnt()
 		for i := 0; i < cnt; i++ {
-			buf = bj.getObjectVal(i).TokenizeValue(buf)
+			nextbj := bj.getObjectVal(i)
+			pos = tokenizeOne(nextbj, pos, yield)
+			if pos == 0 {
+				return 0
+			}
 		}
+		return pos
 	case TpCodeArray:
+		// array: recursively tokenize each element
 		cnt := bj.GetElemCnt()
 		for i := 0; i < cnt; i++ {
-			buf = bj.getArrayElem(i).TokenizeValue(buf)
+			nextbj := bj.getArrayElem(i)
+			pos = tokenizeOne(nextbj, pos, yield)
+			if pos == 0 {
+				return 0
+			}
 		}
+		return pos
+
 	case TpCodeInt64:
-		var t tokenizer.Token
 		sbuf := t.TokenBytes[1:1]
 		sbuf = strconv.AppendInt(sbuf, bj.GetInt64(), 10)
 		t.TokenBytes[0] = byte(len(sbuf))
-		t.TokenPos = int32(len(buf) + 1)
-		buf = append(buf, t)
+		t.TokenPos = pos
 	case TpCodeUint64:
-		var t tokenizer.Token
 		sbuf := t.TokenBytes[1:1]
 		sbuf = strconv.AppendUint(sbuf, bj.GetUint64(), 10)
 		t.TokenBytes[0] = byte(len(sbuf))
-		t.TokenPos = int32(len(buf) + 1)
-		buf = append(buf, t)
+		t.TokenPos = pos
 	case TpCodeFloat64:
-		var t tokenizer.Token
 		sbuf := t.TokenBytes[1:1]
 		sbuf, _ = bj.toFloat64(sbuf)
 		t.TokenBytes[0] = byte(len(sbuf))
-		t.TokenPos = int32(len(buf) + 1)
-		buf = append(buf, t)
+		t.TokenPos = pos
 	case TpCodeString:
-		var t tokenizer.Token
 		s := bj.GetString()
 		copy(t.TokenBytes[1:], s)
 		if len(s) > tokenizer.MAX_TOKEN_SIZE {
@@ -65,9 +80,16 @@ func (bj ByteJson) TokenizeValue(buf []tokenizer.Token) []tokenizer.Token {
 		} else {
 			t.TokenBytes[0] = byte(len(s))
 		}
-		t.TokenPos = int32(len(buf) + 1)
-		buf = append(buf, t)
+		t.TokenPos = pos
+
 	default:
+		// ignore other types, esp literal (true, false, null), are not tokenized.
+		return pos
 	}
-	return buf
+
+	if !yield(t) {
+		// early stop
+		return 0
+	}
+	return pos + 1
 }
