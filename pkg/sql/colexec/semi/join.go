@@ -136,9 +136,12 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			if ctr.skipProbe {
 				rowCount := bat.RowCount()
+				var srcVec *vector.Vector
+				var targetVec *vector.Vector
 				for i, pos := range semiJoin.Result {
-					srcVec := bat.Vecs[pos]
-					err = ctr.rbat.Vecs[i].UnionBatch(srcVec, 0, rowCount, nil, proc.Mp())
+					srcVec = bat.Vecs[pos]
+					targetVec = ctr.rbat.Vecs[i]
+					err = targetVec.UnionBatch(srcVec, 0, rowCount, nil, proc.Mp())
 					if err != nil {
 						return result, err
 					}
