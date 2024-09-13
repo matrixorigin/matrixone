@@ -208,13 +208,7 @@ func NewSearchAccum(tblname string, pattern string, mode int64, params string) (
 		return nil, err
 	}
 
-	/*
-		for i, p := range ps {
-			accums = append(accums, NewWordAccum(int64(i), p, mode))
-		}
-	*/
-
-	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: ps, Params: params}, nil
+	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
 }
 
 // $(IDF) = LOG10(#word in collection/sum(doc_count))
@@ -304,8 +298,6 @@ func (s *SearchAccum) run(proc *process.Process) error {
 
 	logutil.Infof("SQL is %s", sql)
 
-	s.WordAccums = make(map[string]*WordAccum)
-
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
 		return err
@@ -360,17 +352,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 
 	}
 
-	/*
-		for _, w := range s.WordAccums {
-			err := w.run(proc, s.TblName, first_doc_id, last_doc_id)
-			if err != nil {
-				return err
-			}
-
-			// update first_doc_id and last_doc_id for filtering
-		}
-
-	*/
+	// we got all results for all words required.  Evaluate the Pattern against the WordAccums to get answer.
 
 	return nil
 }
