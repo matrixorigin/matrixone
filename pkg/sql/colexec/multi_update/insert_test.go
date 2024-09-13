@@ -17,7 +17,6 @@ package multi_update
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -65,27 +64,8 @@ func TestInsertPartitionTable(t *testing.T) {
 // ----- util function ----
 func buildInsertTestCase(eng engine.Engine, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) *testCase {
 	batchs, affectRows := prepareTestInsertBatchs(hasUniqueKey, hasSecondaryKey, isPartition)
-	multiUpdateCtxs := prepareTestMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
 
-	retCase := &testCase{
-		op: &MultiUpdate{
-			ctr:                    container{},
-			MultiUpdateCtx:         multiUpdateCtxs,
-			ToWriteS3:              false,
-			IsOnduplicateKeyUpdate: false,
-			Engine:                 eng,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
-		},
-		inputBatchs:  batchs,
-		expectErr:    false,
-		affectedRows: affectRows,
-	}
-
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows)
 	return retCase
 }

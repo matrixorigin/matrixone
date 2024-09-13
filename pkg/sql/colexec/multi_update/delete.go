@@ -29,7 +29,7 @@ func (update *MultiUpdate) delete_table(
 	deleteBatch *batch.Batch) (err error) {
 	deleteBatch.CleanOnlyData()
 
-	rowIdIdx := updateCtx.insertCols[0]
+	rowIdIdx := updateCtx.deleteCols[0]
 
 	if len(updateCtx.partitionTableIDs) > 0 {
 		for partIdx := range len(updateCtx.partitionTableIDs) {
@@ -44,8 +44,8 @@ func (update *MultiUpdate) delete_table(
 						return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 					} else if partition == expected {
 						if !rowIdNulls.Contains(uint64(i)) {
-							for insertIdx, inputIdx := range updateCtx.insertCols {
-								err = deleteBatch.Vecs[insertIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp())
+							for deleteIdx, inputIdx := range updateCtx.deleteCols {
+								err = deleteBatch.Vecs[deleteIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp())
 								if err != nil {
 									return err
 								}
@@ -68,8 +68,8 @@ func (update *MultiUpdate) delete_table(
 			rowIdNulls := inputBatch.Vecs[rowIdIdx].GetNulls()
 			for i := 0; i < inputBatch.RowCount(); i++ {
 				if !rowIdNulls.Contains(uint64(i)) {
-					for insertIdx, inputIdx := range updateCtx.insertCols {
-						err = deleteBatch.Vecs[insertIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp())
+					for deleteIdx, inputIdx := range updateCtx.deleteCols {
+						err = deleteBatch.Vecs[deleteIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp())
 						if err != nil {
 							return err
 						}
@@ -78,8 +78,8 @@ func (update *MultiUpdate) delete_table(
 			}
 
 		} else {
-			for insertIdx, inputIdx := range updateCtx.insertCols {
-				err = deleteBatch.Vecs[insertIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
+			for deleteIdx, inputIdx := range updateCtx.deleteCols {
+				err = deleteBatch.Vecs[deleteIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
 				if err != nil {
 					return err
 				}

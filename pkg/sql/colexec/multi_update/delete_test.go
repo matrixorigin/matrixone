@@ -17,7 +17,6 @@ package multi_update
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -67,27 +66,8 @@ func TestDeletePartitionTable(t *testing.T) {
 // ----- util function ----
 func buildDeleteTestCase(eng engine.Engine, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) *testCase {
 	batchs, affectRows := prepareTestDeleteBatchs(hasUniqueKey, hasSecondaryKey, isPartition)
-	multiUpdateCtxs := prepareTestMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
 
-	retCase := &testCase{
-		op: &MultiUpdate{
-			ctr:                    container{},
-			MultiUpdateCtx:         multiUpdateCtxs,
-			ToWriteS3:              false,
-			IsOnduplicateKeyUpdate: false,
-			Engine:                 eng,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
-		},
-		inputBatchs:  batchs,
-		expectErr:    false,
-		affectedRows: affectRows,
-	}
-
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows)
 	return retCase
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -52,14 +53,18 @@ type testCase struct {
 func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 	var err error
 	var res vm.CallResult
-	resetChildren := func(multiUpdate *MultiUpdate, bats []*batch.Batch) {
-		op := colexec.NewMockOperator().WithBatchs(bats)
-		multiUpdate.Children = nil
-		multiUpdate.AppendChild(op)
+
+	dupBatchs := func(bats []*batch.Batch) []*batch.Batch {
+		ret := make([]*batch.Batch, len(bats))
+		for i, bat := range bats {
+			ret[i], _ = bat.Dup(proc.GetMPool())
+		}
+		return ret
 	}
 
 	for _, tc := range tcs {
-		resetChildren(tc.op, tc.inputBatchs)
+		child := colexec.NewMockOperator().WithBatchs(dupBatchs(tc.inputBatchs))
+		tc.op.AppendChild(child)
 		err = tc.op.Prepare(proc)
 		require.NoError(t, err)
 		for {
@@ -79,11 +84,12 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 			continue
 		}
 		require.NoError(t, err)
-		require.Equal(t, tc.op.ctr.affectedRows, tc.affectedRows)
+		require.Equal(t, tc.op.GetAffectedRows(), tc.affectedRows)
 
+		tc.op.Children[0].Reset(proc, false, nil)
 		tc.op.Reset(proc, false, nil)
 
-		resetChildren(tc.op, tc.inputBatchs)
+		child.ResetBatchs(proc, tc.inputBatchs)
 		err = tc.op.Prepare(proc)
 		require.NoError(t, err)
 		for {
@@ -93,7 +99,9 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 			}
 		}
 		require.NoError(t, err)
+		require.Equal(t, tc.op.GetAffectedRows(), tc.affectedRows)
 
+		tc.op.Children[0].Free(proc, false, nil)
 		tc.op.Free(proc, false, nil)
 	}
 
@@ -141,17 +149,21 @@ func prepareTestEng(ctrl *gomock.Controller) engine.Engine {
 func prepareTestDeleteBatchs(hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) ([]*batch.Batch, uint64) {
 	// create table t1(a big int primary key, b varchar(10) not null, c int, d int);
 	affectRows := 0
-	bat1ColumnA := []int64{1, 2, 3}
-	bat1ColumnRowID := []string{"1a", "2b", "3c"}
+	segmentID := objectio.NewSegmentid()
 
-	bat2ColumnA := []int64{1, 2, 3}
-	bat2ColumnRowID := []string{"1a", "2b", "3c"}
+	blkId1 := objectio.NewBlockid(segmentID, 0, 1)
+	bat1ColumnA := []int64{1, 2, 3}
+	bat1ColumnRowID := []types.Rowid{*objectio.NewRowid(blkId1, 0), *objectio.NewRowid(blkId1, 1), *objectio.NewRowid(blkId1, 2)}
+
+	blkId2 := objectio.NewBlockid(segmentID, 0, 2)
+	bat2ColumnA := []int64{4, 5, 6}
+	bat2ColumnRowID := []types.Rowid{*objectio.NewRowid(blkId2, 0), *objectio.NewRowid(blkId2, 1), *objectio.NewRowid(blkId2, 2)}
 	attrs := []string{"a", "main_row_id"}
 
 	bat1 := &batch.Batch{
 		Vecs: []*vector.Vector{
+			testutil.MakeRowIdVector(bat1ColumnRowID, nil),
 			testutil.MakeInt64Vector(bat1ColumnA, nil),
-			testutil.MakeVarcharVector(bat1ColumnRowID, nil),
 		},
 		Attrs: attrs,
 		Cnt:   1,
@@ -161,8 +173,8 @@ func prepareTestDeleteBatchs(hasUniqueKey bool, hasSecondaryKey bool, isPartitio
 
 	bat2 := &batch.Batch{
 		Vecs: []*vector.Vector{
+			testutil.MakeRowIdVector(bat2ColumnRowID, nil),
 			testutil.MakeInt64Vector(bat2ColumnA, nil),
-			testutil.MakeVarcharVector(bat2ColumnRowID, nil),
 		},
 		Attrs: attrs,
 		Cnt:   1,
@@ -171,19 +183,27 @@ func prepareTestDeleteBatchs(hasUniqueKey bool, hasSecondaryKey bool, isPartitio
 	affectRows += bat2.RowCount()
 
 	if hasUniqueKey {
+		blkId3 := objectio.NewBlockid(segmentID, 0, 3)
+		bat1.Vecs = append(bat1.Vecs, testutil.MakeRowIdVector([]types.Rowid{*objectio.NewRowid(blkId3, 0), *objectio.NewRowid(blkId3, 1), *objectio.NewRowid(blkId3, 2)}, nil))
 		bat1.Vecs = append(bat1.Vecs, testutil.MakeVarcharVector([]string{"bat1_uk_1", "bat1_uk_2", "bat1_uk_3"}, nil))
-		bat1.Attrs = append(bat1.Attrs, "bat1_uk_pk")
+		bat1.Attrs = append(bat1.Attrs, "bat1_uk_rowid", "bat1_uk_pk")
 
-		bat2.Vecs = append(bat1.Vecs, testutil.MakeVarcharVector([]string{"bat2_uk_1", "bat2_uk_2", "bat2_uk_3"}, nil))
-		bat2.Attrs = append(bat1.Attrs, "bat2_uk_pk")
+		blkId4 := objectio.NewBlockid(segmentID, 0, 4)
+		bat2.Vecs = append(bat2.Vecs, testutil.MakeRowIdVector([]types.Rowid{*objectio.NewRowid(blkId4, 0), *objectio.NewRowid(blkId4, 1), *objectio.NewRowid(blkId4, 2)}, nil))
+		bat2.Vecs = append(bat2.Vecs, testutil.MakeVarcharVector([]string{"bat2_uk_1", "bat2_uk_2", "bat2_uk_3"}, nil))
+		bat2.Attrs = append(bat2.Attrs, "bat2_uk_rowid", "bat2_uk_pk")
 	}
 
 	if hasSecondaryKey {
+		blkId5 := objectio.NewBlockid(segmentID, 0, 5)
+		bat1.Vecs = append(bat1.Vecs, testutil.MakeRowIdVector([]types.Rowid{*objectio.NewRowid(blkId5, 0), *objectio.NewRowid(blkId5, 1), *objectio.NewRowid(blkId5, 2)}, nil))
 		bat1.Vecs = append(bat1.Vecs, testutil.MakeVarcharVector([]string{"bat1_sk_1", "bat1_sk_2", "bat1_sk_3"}, nil))
-		bat1.Attrs = append(bat1.Attrs, "bat1_sk_pk")
+		bat1.Attrs = append(bat1.Attrs, "bat1_sk_rowid", "bat1_sk_pk")
 
-		bat2.Vecs = append(bat1.Vecs, testutil.MakeVarcharVector([]string{"bat2_sk_1", "bat2_sk_2", "bat2_sk_3"}, nil))
-		bat2.Attrs = append(bat1.Attrs, "bat2_sk_pk")
+		blkId6 := objectio.NewBlockid(segmentID, 0, 6)
+		bat1.Vecs = append(bat2.Vecs, testutil.MakeRowIdVector([]types.Rowid{*objectio.NewRowid(blkId6, 0), *objectio.NewRowid(blkId6, 1), *objectio.NewRowid(blkId6, 2)}, nil))
+		bat2.Vecs = append(bat2.Vecs, testutil.MakeVarcharVector([]string{"bat2_sk_1", "bat2_sk_2", "bat2_sk_3"}, nil))
+		bat2.Attrs = append(bat2.Attrs, "bat2_sk_rowid", "bat2_sk_pk")
 	}
 
 	if isPartition {
@@ -237,26 +257,30 @@ func prepareTestInsertBatchs(hasUniqueKey bool, hasSecondaryKey bool, isPartitio
 		bat1.Vecs = append(bat1.Vecs, testutil.MakeVarcharVector([]string{"bat1_uk_1", "bat1_uk_2", "bat1_uk_3"}, nil))
 		bat1.Attrs = append(bat1.Attrs, "bat1_uk_pk")
 
-		bat2.Vecs = append(bat1.Vecs, testutil.MakeVarcharVector([]string{"bat2_uk_1", "bat2_uk_2", "bat2_uk_3"}, nil))
-		bat2.Attrs = append(bat1.Attrs, "bat2_uk_pk")
+		bat2.Vecs = append(bat2.Vecs, testutil.MakeVarcharVector([]string{"bat2_uk_1", "bat2_uk_2", "bat2_uk_3"}, nil))
+		bat2.Attrs = append(bat2.Attrs, "bat2_uk_pk")
 	}
 
 	if hasSecondaryKey {
 		bat1.Vecs = append(bat1.Vecs, testutil.MakeVarcharVector([]string{"bat1_sk_1", "bat1_sk_2", "bat1_sk_3"}, nil))
 		bat1.Attrs = append(bat1.Attrs, "bat1_sk_pk")
 
-		bat2.Vecs = append(bat1.Vecs, testutil.MakeVarcharVector([]string{"bat2_sk_1", "bat2_sk_2", "bat2_sk_3"}, nil))
-		bat2.Attrs = append(bat1.Attrs, "bat2_sk_pk")
+		bat2.Vecs = append(bat2.Vecs, testutil.MakeVarcharVector([]string{"bat2_sk_1", "bat2_sk_2", "bat2_sk_3"}, nil))
+		bat2.Attrs = append(bat2.Attrs, "bat2_sk_pk")
 	}
 
 	if isPartition {
-		//todo
+		bat1.Vecs = append(bat1.Vecs, testutil.MakeInt32Vector([]int32{0, 1, 2}, nil))
+		bat1.Attrs = append(bat1.Attrs, "bat1_part_idx")
+
+		bat2.Vecs = append(bat2.Vecs, testutil.MakeInt32Vector([]int32{0, 1, 2}, nil))
+		bat2.Attrs = append(bat2.Attrs, "bat2_part_idx")
 	}
 
 	return []*batch.Batch{bat1, bat2}, uint64(affectRows)
 }
 
-func prepareTestMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) []*MultiUpdateCtx {
+func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) []*MultiUpdateCtx {
 	// create table t1(a big int primary key, b varchar(10) not null, c int, d int);
 	// if has uniqueKey : t1(a big int primary key, b varchar(10) not null, c int unique key, d int);
 	// if has secondaryKey : t1(a big int primary key, b varchar(10) not null, c int, d int, key(d));
@@ -316,6 +340,77 @@ func prepareTestMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, isPartit
 			tableDef:   secondaryIdxTableDef,
 			tableType:  SecondaryIndexTable,
 			insertCols: []int{secondaryPkPos, 0},
+		})
+	}
+
+	if isPartition {
+		//todo
+	}
+
+	return updateCtxs
+}
+
+func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) []*MultiUpdateCtx {
+	// create table t1(a big int primary key, b varchar(10) not null, c int, d int);
+	// if has uniqueKey : t1(a big int primary key, b varchar(10) not null, c int unique key, d int);
+	// if has secondaryKey : t1(a big int primary key, b varchar(10) not null, c int, d int, key(d));
+	objRef, tableDef := getTestMainTable()
+
+	updateCtx := &MultiUpdateCtx{
+		ref:        objRef,
+		tableDef:   tableDef,
+		tableType:  MainTable,
+		deleteCols: []int{0, 1}, //row_id & pk
+	}
+	updateCtxs := []*MultiUpdateCtx{updateCtx}
+
+	if hasUniqueKey {
+		uniqueTblName, _ := util.BuildIndexTableName(context.TODO(), true)
+
+		tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+			IdxId:          "1",
+			IndexName:      "c",
+			Parts:          []string{"c"},
+			Unique:         true,
+			IndexTableName: uniqueTblName,
+			TableExist:     true,
+			Visible:        true,
+		})
+
+		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName)
+
+		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
+			ref:        uniqueObjRef,
+			tableDef:   uniqueTableDef,
+			tableType:  UniqueIndexTable,
+			insertCols: []int{2, 3}, //row_id & pk
+		})
+	}
+
+	if hasSecondaryKey {
+		secondaryIdxTblName, _ := util.BuildIndexTableName(context.TODO(), false)
+		tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+			IdxId:          "2",
+			IndexName:      "d",
+			Parts:          []string{"d"},
+			Unique:         false,
+			IndexTableName: secondaryIdxTblName,
+			TableExist:     true,
+			Visible:        true,
+		})
+
+		secondaryIdxObjRef, secondaryIdxTableDef := getTestSecondaryIndexTable(secondaryIdxTblName)
+
+		secondaryPkPos := []int{2, 3}
+		if hasUniqueKey {
+			secondaryPkPos[0]++
+			secondaryPkPos[1]++
+		}
+		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
+			ref:        secondaryIdxObjRef,
+			tableDef:   secondaryIdxTableDef,
+			tableType:  SecondaryIndexTable,
+			insertCols: secondaryPkPos,
 		})
 	}
 
@@ -413,4 +508,33 @@ func getTestSecondaryIndexTable(secondaryIdxTblName string) (*plan.ObjectRef, *p
 	uniqueTableDef.Name2ColIndex[catalog.Row_ID] = 2
 
 	return uniqueObjRef, uniqueTableDef
+}
+
+func buildTestCase(
+	multiUpdateCtxs []*MultiUpdateCtx,
+	eng engine.Engine,
+	inputBats []*batch.Batch,
+	affectRows uint64) *testCase {
+
+	retCase := &testCase{
+		op: &MultiUpdate{
+			ctr:                    container{},
+			MultiUpdateCtx:         multiUpdateCtxs,
+			ToWriteS3:              false,
+			IsOnduplicateKeyUpdate: false,
+			Engine:                 eng,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
+		},
+		inputBatchs:  inputBats,
+		expectErr:    false,
+		affectedRows: affectRows,
+	}
+
+	return retCase
 }

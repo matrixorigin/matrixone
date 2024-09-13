@@ -14,7 +14,29 @@
 
 package multi_update
 
+import (
+	"bytes"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/stretchr/testify/require"
+)
+
+// test simple interface
+func TestSimpleInterface(t *testing.T) {
+	op := NewArgument()
+
+	_ = op.TypeName()
+	require.Equal(t, op.OpType(), vm.MultiUpdate)
+	buf := new(bytes.Buffer)
+	op.String(buf)
+
+	op.Release()
+}
+
 // update single table
+func TestUpdateSingleTable(t *testing.T) {
+}
 
 // update table with unique key
 

@@ -136,6 +136,6 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 	update.ctr.deleteBuf = nil
 }
 
-func (update *MultiUpdate) GetAffectedRows() *uint64 {
-	return &update.ctr.affectedRows
+func (update *MultiUpdate) GetAffectedRows() uint64 {
+	return update.ctr.affectedRows
 }

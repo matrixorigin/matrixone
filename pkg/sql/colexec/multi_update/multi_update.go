@@ -33,7 +33,7 @@ func (update *MultiUpdate) String(buf *bytes.Buffer) {
 }
 
 func (update *MultiUpdate) OpType() vm.OpType {
-	return vm.Insert
+	return vm.MultiUpdate
 }
 
 func (update *MultiUpdate) Prepare(proc *process.Process) error {
@@ -152,6 +152,7 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 				bat := batch.New(false, []string{catalog.Row_ID, "pk"})
 				bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
 				bat.SetVector(1, vector.NewVec(*input.Batch.Vecs[mainPkIdx].GetType()))
+				ctr.deleteBuf[i] = bat
 			}
 			err = update.delete_table(proc, updateCtx, input.Batch, ctr.deleteBuf[i])
 		}
