@@ -52,18 +52,16 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	}
 
 	tIter := o.tblEntry.MakeTombstoneObjectIt()
+	tombstoneEntry := make([]*catalog.ObjectEntry, 0)
 	tombstoneStats := make([]objectio.ObjectStats, 0)
 	for tIter.Next() {
 		tEntry := tIter.Item()
-
-		if !tEntry.IsActive() {
-			continue
-		}
 
 		if !objectValid(tEntry) {
 			continue
 		}
 
+		tombstoneEntry = append(tombstoneEntry, tEntry)
 		tombstoneStats = append(tombstoneStats, tEntry.GetObjectStats())
 	}
 	if len(tombstoneStats) == 0 {
@@ -78,12 +76,19 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	}
 	iter := sels.Iterator()
 	tombstoneRows := uint32(0)
+	mergeForOutdatedTombstone := false
 	for iter.HasNext() {
 		i := iter.Next()
+
+		if entryOutdated(tombstoneEntry[i], config.TombstoneLifetime-time.Minute) {
+			mergeForOutdatedTombstone = true
+			break
+		}
+
 		tombstoneRows += tombstoneStats[i].Rows()
 	}
 	rows := entry.Rows()
-	if tombstoneRows > rows*5 {
+	if mergeForOutdatedTombstone || tombstoneRows > rows*5 {
 		logutil.Info("[MERGE-POLICY-REVISE]",
 			zap.String("policy", "compact"),
 			zap.String("table", o.tblEntry.GetFullName()),

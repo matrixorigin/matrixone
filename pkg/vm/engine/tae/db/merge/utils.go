@@ -16,6 +16,7 @@ package merge
 
 import (
 	"container/heap"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
@@ -96,4 +97,9 @@ func estimateMergeConsume(mobjs []*catalog.ObjectEntry) (origSize, estSize int) 
 	// each row uses 12B, so estimate size is 12 * rows.
 	estSize = rows * 12
 	return
+}
+
+func entryOutdated(entry *catalog.ObjectEntry, lifetime time.Duration) bool {
+	createdAt := entry.CreatedAt.Physical()
+	return time.Unix(0, createdAt).Add(lifetime).Before(time.Now())
 }

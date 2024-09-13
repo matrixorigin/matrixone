@@ -15,8 +15,6 @@
 package merge
 
 import (
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
@@ -40,8 +38,7 @@ func (t *tombstonePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []re
 		return nil
 	}
 	if len(t.tombstones) == 1 {
-		createdAt := t.tombstones[0].CreatedAt.Physical()
-		if time.Unix(0, createdAt).Add(config.TombstoneLifetime).After(time.Now()) {
+		if !entryOutdated(t.tombstones[0], config.TombstoneLifetime) {
 			return nil
 		}
 	}
