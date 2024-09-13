@@ -347,6 +347,13 @@ type TableStat struct {
 	Csize     int
 }
 
+func (entry *TableEntry) ObjectCnt(isTombstone bool) int {
+	if isTombstone {
+		return entry.tombstoneObjects.tree.Load().Len()
+	}
+	return entry.dataObjects.tree.Load().Len()
+}
+
 func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat TableStat, w bytes.Buffer) {
 
 	it := entry.MakeDataObjectIt()
@@ -498,7 +505,6 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		objectEntry := objIt.Item()
 		if err := processor.OnTombstone(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				objIt.Next()
 				continue
 			}
 			return err
