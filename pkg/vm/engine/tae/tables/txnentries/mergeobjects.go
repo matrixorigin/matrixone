@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 )
 
@@ -176,6 +178,19 @@ func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 		}
 	}
 	entry.pageIds = nil
+
+	fs := entry.rt.Fs.Service
+	// for io task, dispatch by round robin, scope can be nil
+	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, nil, func() error {
+		// TODO: variable as timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+
+		defer cancel()
+		for _, obj := range entry.createdObjs {
+			_ = fs.Delete(ctx, obj.ObjectName().String())
+		}
+		return nil
+	})
 	return
 }
 
@@ -384,6 +399,9 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		return nil
 	}
 
+	if entry.rt.LockMergeService.IsLockedByUser(entry.relation.ID()) {
+		return moerr.NewInternalErrorNoCtxf("LockMerge give up in queue %v", entry.taskName)
+	}
 	inst1 := time.Now()
 
 	total := time.Since(inst)
