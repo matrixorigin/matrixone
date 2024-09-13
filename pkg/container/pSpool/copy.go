@@ -115,6 +115,12 @@ func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 	cb.bytesCacheLock.Unlock()
 }
 
+type fromCacheElement struct {
+	idx int
+	dataRequire int
+	areaRequire int
+}
+
 // GetCopiedBatch get a batch from the batchPointer channel
 // and copy the data and area of the src batch to the dst batch.
 func (cb *cachedBatch) GetCopiedBatch(
@@ -153,8 +159,9 @@ func (cb *cachedBatch) GetCopiedBatch(
 		}
 
 		// copy vectors.
-		cb.bytesCacheLock.Lock()
-		defer cb.bytesCacheLock.Unlock()
+
+
+		fromCacheList := make([]fromCacheElement, 0, 2 * len(dst.Vecs))
 
 		for i := range dst.Vecs {
 			vec := src.Vecs[i]
@@ -163,22 +170,20 @@ func (cb *cachedBatch) GetCopiedBatch(
 			}
 
 			typ := *vec.GetType()
+			dst.Vecs[i] = vector.NewVec(typ)
 
 			if vec.IsConst() {
-				dst.Vecs[i] = vector.NewVec(typ)
 				if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
 					dst.Clean(cb.mp)
 					return nil, false, err
 				}
 
 			} else {
-				dst.Vecs[i] = cb.setSuitableDataAreaToVector(len(vec.GetData()), len(vec.GetArea()), vector.NewVec(typ))
-				dst.Vecs[i].Reset(typ)
-				if err = vector.GetUnionAllFunction(typ, cb.mp)(dst.Vecs[i], vec); err != nil {
-					dst.Clean(cb.mp)
-					return nil, false, err
-				}
-				dst.Vecs[i].SetSorted(vec.GetSorted())
+				fromCacheList = append(fromCacheList, fromCacheElement{
+					idx: i,
+					dataRequire: len(vec.GetData()),
+					areaRequire: len(vec.GetArea()),
+				})
 			}
 			dst.Vecs[i].SetIsBin(vec.GetIsBin())
 
@@ -190,6 +195,30 @@ func (cb *cachedBatch) GetCopiedBatch(
 			}
 		}
 
+		// use the lock as few times as possible.
+		if len(fromCacheList) > 0 {
+			cb.bytesCacheLock.Lock()
+			for i := range fromCacheList {
+				dst.Vecs[fromCacheList[i].idx] =
+					cb.setSuitableDataAreaToVector(fromCacheList[i].dataRequire, fromCacheList[i].areaRequire, dst.Vecs[i])
+			}
+			cb.bytesCacheLock.Unlock()
+
+			for i := range fromCacheList {
+				typ := *dst.Vecs[fromCacheList[i].idx].GetType()
+				index := fromCacheList[i].idx
+
+				dst.Vecs[index].Reset(typ)
+				if err = vector.GetUnionAllFunction(typ, cb.mp)(
+					dst.Vecs[index],
+					src.Vecs[index]); err != nil {
+					dst.Clean(cb.mp)
+					return nil, false, err
+				}
+
+				dst.Vecs[fromCacheList[i].idx].SetSorted(src.Vecs[index].GetSorted())
+			}
+		}
 		dst.Aggs = src.Aggs
 		src.Aggs = nil
 
