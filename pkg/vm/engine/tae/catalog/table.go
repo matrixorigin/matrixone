@@ -498,7 +498,6 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		objectEntry := objIt.Item()
 		if err := processor.OnTombstone(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				objIt.Next()
 				continue
 			}
 			return err
