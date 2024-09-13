@@ -96,7 +96,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		}()
 	}
 
-	colName2Idx, err := builder.initInsertStmt(ctx, stmt, rewriteInfo)
+	colName2Idx, err := builder.initInsertStmt(ctx, stmt, rewriteInfo, tableDefs[0])
 	if err != nil {
 		return 0, err
 	}
@@ -350,37 +350,39 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		}, ctx)
 
 		for j, idxTableDef := range idxTableDefs[i] {
-			insertCols := make([]*plan.Expr, 0, len(idxTableDef.Cols))
+			idxInsertCols := make([]*plan.Expr, 0, len(idxTableDef.Cols))
 			for _, col := range idxTableDef.Cols {
 				if col.Name == catalog.Row_ID {
 					continue
 				}
 
-				insertCols = append(insertCols, &plan.Expr{
+				idxInsertCols = append(idxInsertCols, &plan.Expr{
 					Typ: col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: selectNode.BindingTags[0],
-							ColPos: int32(colName2Idx[tableDef.Name+"."+col.Name]),
+							ColPos: int32(colName2Idx[idxTableDef.Name+"."+col.Name]),
 						},
 					},
 				})
 			}
 
+			idxObjRef := DeepCopyObjectRef(idxObjRefs[i][j])
+			idxTblDef := DeepCopyTableDef(idxTableDef, true)
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_INSERT,
 				Children: []int32{lastNodeID},
-				ObjRef:   idxObjRefs[i][j],
-				TableDef: idxTableDef,
+				ObjRef:   idxObjRef,
+				TableDef: idxTblDef,
 				InsertCtx: &plan.InsertCtx{
-					Ref:            idxObjRefs[i][j],
-					IsClusterTable: idxTableDef.TableType == catalog.SystemClusterRel,
-					TableDef:       idxTableDef,
+					Ref:            idxObjRef,
+					IsClusterTable: idxTblDef.TableType == catalog.SystemClusterRel,
+					TableDef:       idxTblDef,
 					//PartitionTableIds:   paritionTableIds,
 					//PartitionTableNames: paritionTableNames,
 					//PartitionIdx:        int32(partitionIdx),
 				},
-				InsertDeleteCols: insertCols,
+				InsertDeleteCols: idxInsertCols,
 			}, ctx)
 		}
 	}
@@ -422,12 +424,11 @@ func (builder *QueryBuilder) getInsertColsFromStmt(stmt *tree.Insert, tableDef *
 	return insertColNames, nil
 }
 
-func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) (map[string]int32, error) {
+func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo, tableDef *plan.TableDef) (map[string]int32, error) {
 	var err error
 	colName2Idx := make(map[string]int32)
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
-	tableDef := info.tblInfo.tableDefs[0]
 	colToIdx := make(map[string]int)
 	for i, col := range tableDef.Cols {
 		colToIdx[col.Name] = i
