@@ -67,27 +67,25 @@ type BlocksIter interface {
 
 // ApproxDataObjectsNum not accurate!  only used by stats
 func (p *PartitionState) ApproxDataObjectsNum() int {
-	return p.dataObjects.Len()
+	return p.dataObjectsNameIndex.Len()
 }
 func (p *PartitionState) ApproxTombstoneObjectsNum() int {
-	return p.tombstoneObjects.Len()
+	return p.tombstoneObjectsNameIndex.Len()
 }
 
-func (p *PartitionState) NewObjectsIter(
+func (p *PartitionState) newTombstoneObjectsIter(
 	ts types.TS,
-	onlyVisible bool,
-	visitTombstone bool) (ObjectsIter, error) {
+	onlyVisible bool) (ObjectsIter, error) {
 
-	if ts.Less(&p.minTS) {
-		msg := fmt.Sprintf("(%s<%s)", ts.ToString(), p.minTS.ToString())
-		return nil, moerr.NewTxnStaleNoCtx(msg)
-	}
-
-	var iter btree.IterG[ObjectEntry]
-	if visitTombstone {
-		iter = p.tombstoneObjects.Copy().Iter()
-	} else {
-		iter = p.dataObjects.Copy().Iter()
+	iter := p.tombstoneObjectDTSIndex.Copy().Iter()
+	if onlyVisible {
+		pivot := ObjectEntry{
+			ObjectInfo{
+				DeleteTime: ts,
+			},
+		}
+		iter.Seek(pivot)
+		iter.Prev()
 	}
 
 	ret := &objectsIter{
@@ -96,6 +94,36 @@ func (p *PartitionState) NewObjectsIter(
 		iter:        iter,
 	}
 	return ret, nil
+}
+
+func (p *PartitionState) newDataObjectIter(
+	snapshot types.TS,
+	onlyVisible bool) (ObjectsIter, error) {
+
+	iter := p.dataObjectsNameIndex.Copy().Iter()
+	ret := &objectsIter{
+		onlyVisible: onlyVisible,
+		ts:          snapshot,
+		iter:        iter,
+	}
+	return ret, nil
+}
+
+func (p *PartitionState) NewObjectsIter(
+	snapshot types.TS,
+	onlyVisible bool,
+	visitTombstone bool) (ObjectsIter, error) {
+
+	if snapshot.Less(&p.minTS) {
+		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.minTS.ToString())
+		return nil, moerr.NewTxnStaleNoCtx(msg)
+	}
+
+	if visitTombstone {
+		return p.newTombstoneObjectsIter(snapshot, onlyVisible)
+	} else {
+		return p.newDataObjectIter(snapshot, onlyVisible)
+	}
 }
 
 func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
@@ -116,7 +144,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	inserted = make(map[objectio.ObjectNameShort]struct{})
 	deleted = make(map[objectio.ObjectNameShort]struct{})
 
-	iter := p.objectIndexByTS.Copy().Iter()
+	iter := p.dataObjectTSIndex.Copy().Iter()
 	defer iter.Release()
 
 	for ok := iter.Seek(ObjectIndexByTSEntry{
@@ -144,7 +172,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 }
 
 func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
-	iter := p.dataObjects.Copy().Iter()
+	iter := p.dataObjectsNameIndex.Copy().Iter()
 	defer iter.Release()
 
 	pivot := ObjectEntry{}
@@ -159,7 +187,7 @@ func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
-	iter := p.dataObjects.Copy().Iter()
+	iter := p.dataObjectsNameIndex.Copy().Iter()
 	defer iter.Release()
 
 	pivot := ObjectEntry{}
