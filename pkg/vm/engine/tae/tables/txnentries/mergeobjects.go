@@ -316,7 +316,7 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		pkVec.Append(deletesPK.Get(i), false)
 	}
 	if rowIDVec != nil {
-		err = entry.relation.DeleteByPhyAddrKeys(rowIDVec, pkVec)
+		err = entry.relation.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_MergeCompact)
 	}
 	return
 }

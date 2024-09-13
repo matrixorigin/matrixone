@@ -4792,7 +4792,7 @@ func TestMergeBlocks3(t *testing.T) {
 		var pkView *containers.Batch
 		err = objHandle.Scan(ctx, &pkView, 0, []int{pkDef.Idx}, common.DefaultAllocator)
 		assert.NoError(t, err)
-		err = rel.DeleteByPhyAddrKeys(view.Vecs[0], pkView.Vecs[0])
+		err = rel.DeleteByPhyAddrKeys(view.Vecs[0], pkView.Vecs[0], handle.DT_Normal)
 		assert.NoError(t, err)
 
 		assert.NoError(t, rel.DeleteByFilter(context.Background(), filter15))
@@ -9489,7 +9489,7 @@ func TestDeleteByPhyAddrKeys(t *testing.T) {
 	rowidVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
 	rowidVec.Append(rowID, false)
 	defer rowidVec.Close()
-	err := rel.DeleteByPhyAddrKeys(rowidVec, bat.Vecs[0].CloneWindow(0, 1))
+	err := rel.DeleteByPhyAddrKeys(rowidVec, bat.Vecs[0].CloneWindow(0, 1), handle.DT_Normal)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(ctx))
 }

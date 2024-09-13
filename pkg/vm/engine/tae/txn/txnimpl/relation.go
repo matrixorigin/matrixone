@@ -274,13 +274,13 @@ func (h *txnRelation) DeleteByFilter(ctx context.Context, filter *handle.Filter)
 	return h.RangeDelete(id, row, row, handle.DT_Normal)
 }
 
-func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector) (err error) {
+func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector, dt handle.DeleteType) (err error) {
 	id := h.table.entry.AsCommonID()
 	return h.Txn.GetStore().DeleteByPhyAddrKeys(
 		id,
 		keys,
 		pkVec,
-		handle.DT_Normal,
+		dt,
 	)
 }
 

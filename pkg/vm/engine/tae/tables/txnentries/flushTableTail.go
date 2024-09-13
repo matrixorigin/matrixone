@@ -244,7 +244,7 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 		entry.nextRoundDirties[obj] = struct{}{}
 	}
 	if rowIDVec != nil {
-		err = entry.createdObjHandle.GetRelation().DeleteByPhyAddrKeys(rowIDVec, pkVec)
+		err = entry.createdObjHandle.GetRelation().DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_MergeCompact)
 	}
 	return
 }
