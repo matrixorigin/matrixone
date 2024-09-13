@@ -62,6 +62,18 @@ func NewFlushObjTask(
 	isAObj bool,
 	parentTask string,
 ) *flushObjTask {
+
+	if isAObj && meta.IsTombstone {
+		// [data rowId, pk, tombstone rowId, commitTS]
+		// remove the `tombstone rowId`
+		seqnums = append(seqnums[:2], seqnums[3:]...)
+		delete(data.Nameidx, data.Attrs[2])
+		data.Attrs = append(data.Attrs[:2], data.Attrs[3:]...)
+
+		data.Vecs[2].Close()
+		data.Vecs = append(data.Vecs[:2], data.Vecs[3:]...)
+	}
+
 	task := &flushObjTask{
 		schemaVer:   schemaVer,
 		seqnums:     seqnums,

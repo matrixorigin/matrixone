@@ -85,6 +85,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.ValueScan:               "valuescan",
 	vm.TableFunction:           "tablefunction",
 	vm.OnDuplicateKey:          "on duplicate key",
+	vm.Apply:                   "apply",
 }
 
 var debugMagicNames = map[magicType]string{
@@ -335,7 +336,10 @@ func trimLastNewline(buf *bytes.Buffer) {
 }
 
 func gapNextLine(gap int, buffer *bytes.Buffer) {
-	buffer.WriteString("\n")
+	if buffer.Len() > 0 {
+		buffer.WriteString("\n")
+	}
+
 	for i := 0; i < gap; i++ {
 		buffer.WriteString(" ")
 	}
