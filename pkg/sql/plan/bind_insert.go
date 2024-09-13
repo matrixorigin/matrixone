@@ -185,9 +185,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTablePrimaryColName] = pkPos
 
 			argsLen := len(idxDef.Parts)
-			if !idxDef.Unique {
-				argsLen++
-			}
 
 			if argsLen == 1 {
 				colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
@@ -200,7 +197,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				}
 
 				if !idxDef.Unique {
-					args[len(idxDef.Parts)] = DeepCopyExpr(selectNode.ProjectList[pkPos])
+					args[len(idxDef.Parts)-1] = DeepCopyExpr(selectNode.ProjectList[pkPos])
 				}
 
 				fnName := "serial"
@@ -592,12 +589,9 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 	// rewrite 'insert into t1(b) values (1)' to
 	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
 	projectList := make([]*Expr, 0, len(tableDef.Cols))
-	isPkCol := make(map[string]bool)
-	for _, name := range tableDef.Pkey.Names {
-		isPkCol[name] = true
-	}
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projectList))
 			projectList = append(projectList, oldExpr)
 			// if col.Typ.AutoIncr {
 			// if _, ok := pkCols[col.Name]; ok {
@@ -616,8 +610,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 			args := make([]*plan.Expr, len(tableDef.Pkey.Names))
 
 			for k, part := range tableDef.Pkey.Names {
-				colPos := colName2Idx[tableDef.Name+"."+part]
-				args[k] = DeepCopyExpr(lastNode.ProjectList[colPos])
+				args[k] = DeepCopyExpr(insertColToExpr[part])
 			}
 
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projectList))
@@ -628,8 +621,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 			args := make([]*plan.Expr, len(names))
 
 			for k, part := range names {
-				colPos := colName2Idx[tableDef.Name+"."+part]
-				args[k] = DeepCopyExpr(lastNode.ProjectList[colPos])
+				args[k] = DeepCopyExpr(insertColToExpr[part])
 			}
 
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projectList))

@@ -340,6 +340,14 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, windowSpecListInfo)
 	}
 
+	if len(ndesc.Node.InsertDeleteCols) > 0 {
+		colsInfo, err := ndesc.GetInsertDeleteColsInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, colsInfo)
+	}
+
 	// Get Filter list info
 	if len(ndesc.Node.FilterList) > 0 {
 		filterInfo, err := ndesc.GetFilterConditionInfo(ctx, options)
@@ -510,6 +518,33 @@ func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, option
 			}
 		} else {
 			buf.WriteString("all partitions")
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetInsertDeleteColsInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 512))
+	if ndesc.Node.NodeType == plan.Node_INSERT {
+		buf.WriteString("Insert Columns: ")
+	} else {
+		buf.WriteString("Delete Columns: ")
+	}
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.InsertDeleteCols {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v, options, buf)
+			if err != nil {
+				return "", err
+			}
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
