@@ -29,12 +29,13 @@ func (update *MultiUpdate) delete_table(
 	deleteBatch *batch.Batch) (err error) {
 	deleteBatch.CleanOnlyData()
 
+	rowIdIdx := updateCtx.insertCols[0]
+
 	if len(updateCtx.partitionTableIDs) > 0 {
 		for partIdx := range len(updateCtx.partitionTableIDs) {
 			deleteBatch.CleanOnlyData()
 			expected := int32(partIdx)
 			partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.partitionIdx])
-			rowIdIdx := updateCtx.insertCols[0]
 			rowIdNulls := inputBatch.Vecs[rowIdIdx].GetNulls()
 
 			for i, partition := range partTableIDs {
@@ -62,7 +63,6 @@ func (update *MultiUpdate) delete_table(
 	} else {
 		deleteBatch.CleanOnlyData()
 
-		rowIdIdx := updateCtx.insertCols[0]
 		if inputBatch.Vecs[rowIdIdx].HasNull() {
 			// multi delete
 			rowIdNulls := inputBatch.Vecs[rowIdIdx].GetNulls()

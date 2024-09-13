@@ -13,3 +13,11 @@
 // limitations under the License.
 
 package multi_update
+
+// insert single table
+
+// insert table with unique & secondary index
+
+// insert partition table
+
+// insert s3

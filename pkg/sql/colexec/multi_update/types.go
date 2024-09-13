@@ -17,7 +17,6 @@ package multi_update
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -63,7 +62,6 @@ type MultiUpdate struct {
 
 type container struct {
 	state        vm.CtrState
-	s3Writer     *colexec.S3Writer
 	affectedRows uint64
 
 	insertBuf []*batch.Batch
@@ -106,9 +104,36 @@ func (update *MultiUpdate) GetOperatorBase() *vm.OperatorBase {
 }
 
 func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	for _, buf := range update.ctr.insertBuf {
+		if buf != nil {
+			buf.CleanOnlyData()
+		}
+	}
+
+	for _, buf := range update.ctr.deleteBuf {
+		if buf != nil {
+			buf.CleanOnlyData()
+		}
+	}
+	update.ctr.state = vm.Build
+	update.ctr.affectedRows = 0
 }
 
 func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err error) {
+	mp := proc.GetMPool()
+	for _, buf := range update.ctr.insertBuf {
+		if buf != nil {
+			buf.Clean(mp)
+		}
+	}
+	update.ctr.insertBuf = nil
+
+	for _, buf := range update.ctr.deleteBuf {
+		if buf != nil {
+			buf.Clean(mp)
+		}
+	}
+	update.ctr.deleteBuf = nil
 }
 
 func (update *MultiUpdate) GetAffectedRows() *uint64 {

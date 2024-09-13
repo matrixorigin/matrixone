@@ -15,6 +15,8 @@
 package multi_update
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,10 +29,10 @@ func (update *MultiUpdate) insert_main_table(
 	proc *process.Process,
 	tableIndex int,
 	inputBatch *batch.Batch) (err error) {
-	// init buffer
 	ctr := &update.ctr
 	updateCtx := update.MultiUpdateCtx[tableIndex]
 
+	// init buffer
 	if ctr.insertBuf[tableIndex] == nil {
 		bat := batch.NewWithSize(len(updateCtx.insertCols))
 		attrs := make([]string, 0, len(updateCtx.tableDef.Cols)-1)
@@ -45,10 +47,18 @@ func (update *MultiUpdate) insert_main_table(
 		ctr.insertBuf[tableIndex] = bat
 	}
 
-	// preinsert:  fill autoIncr & check not null column
+	// preinsert: check not null column
+	for insertIdx, inputIdx := range updateCtx.insertCols {
+		col := updateCtx.tableDef.Cols[insertIdx]
+		if col.Default != nil && !col.Default.NullAbility {
+			if inputBatch.Vecs[inputIdx].HasNull() {
+				return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+			}
+		}
+	}
 
 	// insert
-	update.insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+	err = update.insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 	return
 }
 
@@ -56,24 +66,50 @@ func (update *MultiUpdate) insert_uniuqe_index_table(
 	proc *process.Process,
 	tableIndex int,
 	inputBatch *batch.Batch) (err error) {
+	ctr := &update.ctr
+	updateCtx := update.MultiUpdateCtx[tableIndex]
+
 	// init buffer
+	if ctr.insertBuf[tableIndex] == nil {
+		ctr.insertBuf[tableIndex] = batch.NewWithSize(2)
+		ctr.insertBuf[tableIndex].Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+		for insertIdx, inputIdx := range updateCtx.insertCols {
+			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType())
+		}
+	}
 
-	// preinsert: build uniuqe index table's PK
-
-	// insert
-
-	return nil
+	idxPkPos := updateCtx.insertCols[0]
+	if !inputBatch.Vecs[idxPkPos].HasNull() {
+		err = update.check_null_and_insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+	} else {
+		err = update.insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+	}
+	return
 }
 
 func (update *MultiUpdate) insert_secondary_index_table(
 	proc *process.Process,
 	tableIndex int,
 	inputBatch *batch.Batch) (err error) {
-	// preinsert:
+	ctr := &update.ctr
+	updateCtx := update.MultiUpdateCtx[tableIndex]
 
-	// insert
+	// init buf
+	if ctr.insertBuf[tableIndex] == nil {
+		ctr.insertBuf[tableIndex] = batch.NewWithSize(2)
+		ctr.insertBuf[tableIndex].Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+		for insertIdx, inputIdx := range updateCtx.insertCols {
+			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType())
+		}
+	}
 
-	return nil
+	idxPkPos := updateCtx.insertCols[0]
+	if !inputBatch.Vecs[idxPkPos].HasNull() {
+		err = update.check_null_and_insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+	} else {
+		err = update.insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+	}
+	return
 }
 
 func (update *MultiUpdate) insert_table(
@@ -86,9 +122,10 @@ func (update *MultiUpdate) insert_table(
 			insertBatch.CleanOnlyData()
 			expected := int32(partIdx)
 			partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.partitionIdx])
+			partTableNulls := inputBatch.Vecs[updateCtx.partitionIdx].GetNulls()
 
 			for i, partition := range partTableIDs {
-				if !inputBatch.Vecs[updateCtx.partitionIdx].GetNulls().Contains(uint64(i)) {
+				if !partTableNulls.Contains(uint64(i)) {
 					if partition == -1 {
 						return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 					} else if partition == expected {
@@ -115,6 +152,72 @@ func (update *MultiUpdate) insert_table(
 				return err
 			}
 		}
+		err = updateCtx.source.Write(proc.Ctx, insertBatch)
+	}
+	return
+}
+
+func (update *MultiUpdate) check_null_and_insert_table(
+	proc *process.Process,
+	updateCtx *MultiUpdateCtx,
+	inputBatch *batch.Batch,
+	insertBatch *batch.Batch) (err error) {
+
+	idxPkPos := updateCtx.insertCols[0]
+	mainPkPos := updateCtx.insertCols[1]
+	idxPkVec := inputBatch.Vecs[idxPkPos]
+	mainPkVec := inputBatch.Vecs[mainPkPos]
+	idxPkNulls := inputBatch.Vecs[updateCtx.insertCols[0]].GetNulls()
+
+	if len(updateCtx.partitionTableIDs) > 0 {
+		for partIdx := range len(updateCtx.partitionTableIDs) {
+			insertBatch.CleanOnlyData()
+			expected := int32(partIdx)
+			partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.partitionIdx])
+			partTableNulls := inputBatch.Vecs[updateCtx.partitionIdx].GetNulls()
+
+			for i, partition := range partTableIDs {
+				if !partTableNulls.Contains(uint64(i)) {
+					if partition == -1 {
+						return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+					} else if partition == expected {
+						if !idxPkNulls.Contains(uint64(i)) {
+							err = insertBatch.Vecs[0].UnionOne(idxPkVec, int64(i), proc.Mp())
+							if err != nil {
+								return err
+							}
+
+							err = insertBatch.Vecs[1].UnionOne(mainPkVec, int64(i), proc.Mp())
+							if err != nil {
+								return err
+							}
+						}
+					}
+				}
+			}
+
+			err = updateCtx.partitionSources[partIdx].Write(proc.Ctx, insertBatch)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		insertBatch.CleanOnlyData()
+		rowCount := uint64(inputBatch.RowCount())
+		for i := uint64(0); i < rowCount; i++ {
+			if !idxPkNulls.Contains(i) {
+				err = insertBatch.Vecs[0].UnionOne(idxPkVec, int64(i), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				err = insertBatch.Vecs[1].UnionOne(mainPkVec, int64(i), proc.Mp())
+				if err != nil {
+					return err
+				}
+			}
+		}
+
 		err = updateCtx.source.Write(proc.Ctx, insertBatch)
 	}
 	return
