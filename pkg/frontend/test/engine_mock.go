@@ -1032,6 +1032,21 @@ func (mr *MockRelationMockRecorder) BuildReaders(ctx, proc, expr, relData, num, 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildReaders", reflect.TypeOf((*MockRelation)(nil).BuildReaders), ctx, proc, expr, relData, num, txnOffset, orderBy, policy)
 }
 
+// BuildShardingReaders mocks base method.
+func (m *MockRelation) BuildShardingReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BuildShardingReaders", ctx, proc, expr, relData, num, txnOffset, orderBy, policy)
+	ret0, _ := ret[0].([]engine.Reader)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BuildShardingReaders indicates an expected call of BuildShardingReaders.
+func (mr *MockRelationMockRecorder) BuildShardingReaders(ctx, proc, expr, relData, num, txnOffset, orderBy, policy interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildShardingReaders", reflect.TypeOf((*MockRelation)(nil).BuildShardingReaders), ctx, proc, expr, relData, num, txnOffset, orderBy, policy)
+}
+
 // CollectChanges mocks base method.
 func (m *MockRelation) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	m.ctrl.T.Helper()
@@ -1190,6 +1205,20 @@ func (m *MockRelation) GetPrimaryKeys(arg0 context.Context) ([]*engine.Attribute
 func (mr *MockRelationMockRecorder) GetPrimaryKeys(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPrimaryKeys", reflect.TypeOf((*MockRelation)(nil).GetPrimaryKeys), arg0)
+}
+
+// GetProcess mocks base method.
+func (m *MockRelation) GetProcess() any {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetProcess")
+	ret0, _ := ret[0].(any)
+	return ret0
+}
+
+// GetProcess indicates an expected call of GetProcess.
+func (mr *MockRelationMockRecorder) GetProcess() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProcess", reflect.TypeOf((*MockRelation)(nil).GetProcess))
 }
 
 // GetTableDef mocks base method.

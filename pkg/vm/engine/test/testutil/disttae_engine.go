@@ -17,10 +17,6 @@ package testutil
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservice2 "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -46,8 +43,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TestDisttaeEngine struct {
@@ -148,6 +148,18 @@ func NewTestDisttaeEngine(
 		nil, //s.udfService
 	)
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
+
+	runtime.ServiceRuntime("").SetGlobalVariables(
+		runtime.ProcessCodecService,
+		process.NewCodecService(
+			de.txnClient,
+			fs,
+			new(mockLockService),
+			qc,
+			hakeeper,
+			nil,
+			de.Engine,
+		))
 
 	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
 	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)

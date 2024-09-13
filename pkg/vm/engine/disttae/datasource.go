@@ -98,7 +98,7 @@ func NewLocalDataSource(
 
 	source.table = table
 	source.txnOffset = txnOffset
-	source.snapshotTS = types.TimestampToTS(table.getTxn().op.SnapshotTS())
+	source.snapshotTS = types.TimestampToTS(table.db.op.SnapshotTS())
 
 	source.iteratePhase = engine.InMem
 	if skipReadMem {

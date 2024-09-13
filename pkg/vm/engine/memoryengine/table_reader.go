@@ -42,6 +42,18 @@ type IterInfo struct {
 	IterID ID
 }
 
+func (t *Table) BuildShardingReaders(
+	ctx context.Context,
+	_ any,
+	expr *plan.Expr,
+	relData engine.RelData,
+	parallel int,
+	_ int,
+	_ bool,
+	_ engine.TombstoneApplyPolicy) (readers []engine.Reader, err error) {
+	panic("Not Support")
+}
+
 func (t *Table) BuildReaders(
 	ctx context.Context,
 	_ any,
@@ -228,6 +240,10 @@ func (t *TableReader) Close() error {
 
 func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
+}
+
+func (t *Table) GetProcess() any {
+	panic("Not Support")
 }
 
 func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData, error) {

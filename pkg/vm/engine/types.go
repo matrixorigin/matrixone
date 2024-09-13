@@ -865,12 +865,25 @@ type Relation interface {
 		policy TombstoneApplyPolicy,
 	) ([]Reader, error)
 
+	BuildShardingReaders(
+		ctx context.Context,
+		proc any,
+		expr *plan.Expr,
+		relData RelData,
+		num int,
+		txnOffset int,
+		orderBy bool,
+		policy TombstoneApplyPolicy,
+	) ([]Reader, error)
+
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
 	//max and min values
 	MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error)
 
 	GetEngineType() EngineType
+
+	GetProcess() any
 
 	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
 

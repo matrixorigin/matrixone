@@ -613,6 +613,9 @@ func getTxnTable(
 	if err != nil {
 		return nil, err
 	}
+	ws := NewTxnWorkSpace(engine.(*Engine), proc)
+	proc.GetTxnOperator().AddWorkspace(ws)
+	ws.BindTxnOp(proc.GetTxnOperator())
 
 	db := &txnDatabase{
 		op:           proc.GetTxnOperator(),

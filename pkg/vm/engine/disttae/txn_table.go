@@ -456,6 +456,10 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 	return engine.Disttae
 }
 
+func (tbl *txnTable) GetProcess() any {
+	return tbl.proc.Load()
+}
+
 func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
 }
@@ -1778,6 +1782,19 @@ func (tbl *txnTable) BuildReaders(
 		rds = append(rds, rd)
 	}
 	return rds, nil
+}
+
+func (tbl *txnTable) BuildShardingReaders(
+	ctx context.Context,
+	p any,
+	expr *plan.Expr,
+	relData engine.RelData,
+	num int,
+	txnOffset int,
+	orderBy bool,
+	tombstonePolicy engine.TombstoneApplyPolicy,
+) ([]engine.Reader, error) {
+	panic("Not Support")
 }
 
 func (tbl *txnTable) getPartitionState(

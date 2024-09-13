@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -1439,8 +1440,8 @@ func waitServerReady(addr string) {
 	}
 }
 
-func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
-	tnStores := e.getTNServices()
+func (eng *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
+	tnStores := eng.getTNServices()
 	if len(tnStores) == 0 {
 		return moerr.NewInternalError(ctx, "no TN store found")
 	}
@@ -1458,22 +1459,22 @@ func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter clien
 		}
 
 		// get log tail service address.
-		if err := e.pClient.init(logTailServerAddr, timestampWaiter, e); err != nil {
+		if err := eng.pClient.init(logTailServerAddr, timestampWaiter, eng); err != nil {
 			logutil.Errorf("%s client init failed, err is %s", logTag, err)
 			continue
 		}
 		break
 	}
-	e.pClient.eng = e
-	e.pClient.subscribed.eng = e
+	eng.pClient.eng = eng
+	eng.pClient.subscribed.eng = eng
 
-	go e.pClient.connector.run(ctx)
+	go eng.pClient.connector.run(ctx)
 
 	// Start a goroutine that never stops to receive logtail from TN logtail server.
-	go e.pClient.run(ctx, e)
+	go eng.pClient.run(ctx, eng)
 
-	e.pClient.unusedTableGCTicker(ctx)
-	e.pClient.partitionStateGCTicker(ctx, e)
+	eng.pClient.unusedTableGCTicker(ctx)
+	eng.pClient.partitionStateGCTicker(ctx, eng)
 	return nil
 }
 
@@ -1746,21 +1747,21 @@ func (cmd cmdToConsumeUnSub) action(ctx context.Context, e *Engine, _ *routineCo
 	return nil
 }
 
-func (e *Engine) consumeSubscribeResponse(
+func (eng *Engine) consumeSubscribeResponse(
 	ctx context.Context,
 	rp *logtail.SubscribeResponse,
 	lazyLoad bool,
 	receiveAt time.Time) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, eng, &lt, lazyLoad, receiveAt)
 }
 
-func (e *Engine) consumeUpdateLogTail(
+func (eng *Engine) consumeUpdateLogTail(
 	ctx context.Context,
 	rp logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) error {
-	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, eng, &rp, lazyLoad, receiveAt)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
