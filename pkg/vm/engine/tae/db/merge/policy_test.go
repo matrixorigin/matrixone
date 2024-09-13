@@ -58,13 +58,12 @@ func newSortedTombstoneEntryWithTableEntry(t *testing.T, tbl *catalog.TableEntry
 	index.UpdateZM(zm, v1[:])
 	index.UpdateZM(zm, v2[:])
 	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsLocation(stats, objectio.NewRandomLocation(2, 1111)))
 	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
 	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
-	entry, err := tbl.CreateObject(txn, &objectio.CreateObjOpt{
-		Stats:       stats,
-		IsTombstone: true,
-	}, nil)
-	require.NoError(t, err)
+	entry := catalog.NewObjectEntry(tbl, txn, *stats, nil, true)
+	entry.GetLastMVCCNode().Txn = nil
+	tbl.AddEntryLocked(entry)
 	return entry
 }
 
