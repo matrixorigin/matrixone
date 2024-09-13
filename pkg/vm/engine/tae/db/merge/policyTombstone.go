@@ -15,12 +15,9 @@
 package merge
 
 import (
-	"cmp"
-	"slices"
+	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type tombstonePolicy struct {
@@ -39,48 +36,16 @@ func (t *tombstonePolicy) onObject(entry *catalog.ObjectEntry, config *BasicPoli
 }
 
 func (t *tombstonePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
-	tombstones := t.tombstones
-	slices.SortFunc(tombstones, func(a, b *catalog.ObjectEntry) int {
-		return cmp.Compare(a.GetRows(), b.GetRows())
-	})
-
-	isStandalone := common.IsStandaloneBoost.Load()
-	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
-
-	dnobjs := controlMem(tombstones, mem)
-	dnosize, _ := estimateMergeConsume(dnobjs)
-
-	schedDN := func() []reviseResult {
-		if cpu > 85 {
-			if dnosize > 25*common.Const1MBytes {
-				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
-				return nil
-			}
-		}
-		if len(dnobjs) > 1 {
-			return []reviseResult{{dnobjs, TaskHostDN}}
-		}
+	if len(t.tombstones) == 0 {
 		return nil
 	}
-
-	schedCN := func() []reviseResult {
-		cnobjs := controlMem(tombstones, int64(common.RuntimeCNMergeMemControl.Load()))
-		return []reviseResult{{cnobjs, TaskHostCN}}
+	if len(t.tombstones) == 1 {
+		createdAt := t.tombstones[0].CreatedAt.Physical()
+		if time.Unix(0, createdAt).Add(config.TombstoneLifetime).After(time.Now()) {
+			return nil
+		}
 	}
-
-	if isStandalone && mergeOnDNIfStandalone {
-		return schedDN()
-	}
-
-	// CNs come into the picture in two cases:
-	// 1.cluster deployed
-	// 2.standalone deployed but it's asked to merge on cn
-	if common.RuntimeCNTakeOverAll.Load() || dnosize > int(common.RuntimeMinCNMergeSize.Load()) {
-		return schedCN()
-	}
-
-	// CNs don't take over the task, leave it on dn.
-	return schedDN()
+	return []reviseResult{{t.tombstones, TaskHostDN}}
 }
 
 func (t *tombstonePolicy) resetForTable(*catalog.TableEntry) {
