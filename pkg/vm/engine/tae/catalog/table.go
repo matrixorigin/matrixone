@@ -346,6 +346,13 @@ type TableStat struct {
 	Csize     int
 }
 
+func (entry *TableEntry) ObjectCnt(isTombstone bool) int {
+	if isTombstone {
+		return entry.tombstoneObjects.tree.Load().Len()
+	}
+	return entry.dataObjects.tree.Load().Len()
+}
+
 func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTombstone bool) (stat TableStat, w bytes.Buffer) {
 	var it btree.IterG[*ObjectEntry]
 	if isTombstone {
@@ -355,6 +362,7 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 		w.WriteString("DATA\n")
 		it = entry.MakeDataObjectIt()
 	}
+
 	defer it.Release()
 	zonemapKind := common.ZonemapPrintKindNormal
 	if schema := entry.GetLastestSchemaLocked(isTombstone); schema.HasSortKey() && schema.GetSingleSortKey().Name == "__mo_cpkey_col" {

@@ -202,6 +202,28 @@ func (entry *ObjectEntry) PrepareCommit() error {
 	entry.table.getObjectList(entry.IsTombstone).Update(newNode, lastNode)
 	return nil
 }
+
+func (entry *ObjectEntry) PrepareRollback() (err error) {
+	lastNode := entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.SortHint)
+	if lastNode == nil {
+		panic("logic error")
+	}
+	switch lastNode.ObjectState {
+	case ObjectState_Create_Active, ObjectState_Create_PrepareCommit:
+		entry.table.getObjectList(entry.IsTombstone).Delete(lastNode)
+	case ObjectState_Delete_Active, ObjectState_Delete_PrepareCommit:
+		newEntry := entry.Clone()
+		newEntry.DeleteNode.Reset()
+		newEntry.ObjectState = ObjectState_Create_ApplyCommit
+		newEntry.DeletedAt = types.TS{}
+		entry.objData.UpdateMeta(newEntry)
+		entry.table.getObjectList(entry.IsTombstone).Update(newEntry, lastNode)
+	default:
+		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
+	}
+	return
+}
+
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
 	if z := entry.GetSortKeyZonemap(); z != nil {
@@ -352,8 +374,8 @@ func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
 		sorted = "US"
 	}
 	if level <= common.PPL1 {
-		return fmt.Sprintf("[%s-%s%d]%v[%s]%v",
-			state, sorted, entry.ObjectNode.SortHint, nameStr, entry.ID().String(), entry.EntryMVCCNode.String())
+		return fmt.Sprintf("%v[%s-%s%d]%v[%s]%v",
+			entry.ObjectState, state, sorted, entry.ObjectNode.SortHint, nameStr, entry.ID().String(), entry.EntryMVCCNode.String())
 	}
 	s := fmt.Sprintf("[%s-%s%d]%s[%s]%v%v", state, sorted, entry.ObjectNode.SortHint, nameStr, entry.ID().String(), entry.EntryMVCCNode.String(), entry.ObjectMVCCNode.String())
 	if !entry.DeleteNode.IsEmpty() {
@@ -423,25 +445,6 @@ func (entry *ObjectEntry) GetLatestCommittedNode() *txnbase.TxnMVCCNode {
 		return &entry.CreateNode
 	}
 	return nil
-}
-
-func (entry *ObjectEntry) PrepareRollback() (err error) {
-	lastNode := entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.SortHint)
-	if lastNode == nil {
-		panic("logic error")
-	}
-	switch lastNode.ObjectState {
-	case ObjectState_Create_Active, ObjectState_Create_PrepareCommit:
-		entry.table.getObjectList(entry.IsTombstone).Delete(lastNode)
-	case ObjectState_Delete_Active, ObjectState_Delete_PrepareCommit:
-		newEntry := entry.Clone()
-		newEntry.DeleteNode.Reset()
-		newEntry.ObjectState = ObjectState_Create_ApplyCommit
-		entry.table.getObjectList(entry.IsTombstone).Update(newEntry, entry)
-	default:
-		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
-	}
-	return
 }
 
 func (entry *ObjectEntry) HasDropCommitted() bool {

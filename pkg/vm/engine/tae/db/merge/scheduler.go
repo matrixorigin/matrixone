@@ -118,6 +118,12 @@ func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
+
+	if s.executor.rt.LockMergeService.IsLockedByUser(tableEntry.ID) {
+		logutil.Infof("LockMerge skip table scan due to user lock %d", tableEntry.ID)
+		return moerr.GetOkStopCurrRecur()
+	}
+
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
