@@ -708,6 +708,7 @@ func MockTableEntryWithDB(dbEntry *DBEntry, tblId uint64) *TableEntry {
 	entry := NewReplayTableEntry()
 	entry.TableNode = &TableNode{}
 	entry.TableNode.schema.Store(NewEmptySchema("test"))
+	entry.TableNode.tombstoneSchema.Store(NewEmptySchema("tombstone"))
 	entry.ID = tblId
 	entry.db = dbEntry
 	return entry
