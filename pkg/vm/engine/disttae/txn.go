@@ -132,6 +132,11 @@ func (txn *Transaction) WriteBatch(
 		}
 	}
 
+	if typ == DELETE && tableId != catalog.MO_DATABASE_ID &&
+		tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
+		txn.deleteCntApproximation += bat.RowCount()
+	}
+
 	e := Entry{
 		typ:          typ,
 		accountId:    accountId,
@@ -405,7 +410,8 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		if txn.workspaceSize < txn.engine.workspaceThreshold && txn.insertCount < txn.engine.insertEntryMaxCount {
+		if txn.workspaceSize < txn.engine.workspaceThreshold && txn.insertCount < txn.engine.insertEntryMaxCount &&
+			txn.deleteCntApproximation < txn.engine.insertEntryMaxCount {
 			return nil
 		}
 	} else {
@@ -439,114 +445,135 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		size = 0
 	}
 	txn.hasS3Op.Store(true)
-	mp := make(map[tableKey][]*batch.Batch)
 
-	lastTxnWritesIndex := offset
-	for i := offset; i < len(txn.writes); i++ {
-		if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
-			txn.writes[i].tableId == catalog.MO_TABLES_ID ||
-			txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
-			txn.writes[lastTxnWritesIndex] = txn.writes[i]
-			lastTxnWritesIndex++
-			continue
-		}
-		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-			txn.writes[lastTxnWritesIndex] = txn.writes[i]
-			lastTxnWritesIndex++
-			continue
-		}
-
-		keepElement := true
-		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			tbKey := tableKey{
-				accountId:  txn.writes[i].accountId,
-				databaseId: txn.writes[i].databaseId,
-				dbName:     txn.writes[i].databaseName,
-				name:       txn.writes[i].tableName,
+	dump := func(typ int) error {
+		cnt := 0
+		mp := make(map[tableKey][]*batch.Batch)
+		lastTxnWritesIndex := offset
+		write := txn.writes[:0]
+		for i := offset; i < len(txn.writes); i++ {
+			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
+				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
+				txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+				write = append(write, txn.writes[i])
+				lastTxnWritesIndex++
+				continue
 			}
-			bat := txn.writes[i].bat
-			size += uint64(bat.Size())
-			pkCount += bat.RowCount()
-			// skip rowid
-			newBat := batch.NewWithSize(len(bat.Vecs) - 1)
-			newBat.SetAttributes(bat.Attrs[1:])
-			newBat.Vecs = bat.Vecs[1:]
-			newBat.SetRowCount(bat.Vecs[0].Length())
-			mp[tbKey] = append(mp[tbKey], newBat)
-			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
+			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+				write = append(write, txn.writes[i])
+				lastTxnWritesIndex++
+				continue
+			}
 
-			keepElement = false
+			keepElement := true
+			if txn.writes[i].typ == typ && txn.writes[i].fileName == "" {
+				tbKey := tableKey{
+					accountId:  txn.writes[i].accountId,
+					databaseId: txn.writes[i].databaseId,
+					dbName:     txn.writes[i].databaseName,
+					name:       txn.writes[i].tableName,
+				}
+				bat := txn.writes[i].bat
+				if typ == INSERT {
+					size += uint64(bat.Size())
+					pkCount += bat.RowCount()
+				} else {
+					cnt += bat.RowCount()
+				}
+				// skip rowid
+				newBat := batch.NewWithSize(len(bat.Vecs) - 1)
+				newBat.SetAttributes(bat.Attrs[1:])
+				newBat.Vecs = bat.Vecs[1:]
+				newBat.SetRowCount(bat.Vecs[0].Length())
+				mp[tbKey] = append(mp[tbKey], newBat)
+				txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
+
+				keepElement = false
+			}
+
+			if keepElement {
+				write = append(write, txn.writes[i])
+				lastTxnWritesIndex++
+			}
 		}
 
-		if keepElement {
-			txn.writes[lastTxnWritesIndex] = txn.writes[i]
-			lastTxnWritesIndex++
+		if typ == DELETE && cnt < txn.engine.insertEntryMaxCount {
+			return nil
 		}
+
+		txn.writes = write
+		for tbKey := range mp {
+			// scenario 2 for cn write s3, more info in the comment of S3Writer
+			tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
+			if err != nil {
+				return err
+			}
+
+			tableDef := tbl.GetTableDef(txn.proc.Ctx)
+
+			s3Writer, err := colexec.NewS3Writer(tableDef, 0)
+			if err != nil {
+				return err
+			}
+			defer s3Writer.Free(txn.proc)
+			for i := 0; i < len(mp[tbKey]); i++ {
+				s3Writer.StashBatch(txn.proc, mp[tbKey][i])
+			}
+			blockInfos, stats, err := s3Writer.SortAndSync(txn.proc)
+			if err != nil {
+				return err
+			}
+			err = s3Writer.FillBlockInfoBat(blockInfos, stats, txn.proc.GetMPool())
+			if err != nil {
+				return err
+			}
+			blockInfo := s3Writer.GetBlockInfoBat()
+
+			lenVecs := len(blockInfo.Attrs)
+			// only remain the metaLoc col and object stats
+			for i := 0; i < lenVecs-2; i++ {
+				blockInfo.Vecs[i].Free(txn.proc.GetMPool())
+			}
+			blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
+			blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
+			blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
+
+			var table *txnTable
+			if v, ok := tbl.(*txnTableDelegate); ok {
+				table = v.origin
+			} else {
+				table = tbl.(*txnTable)
+			}
+			fileName := objectio.DecodeBlockInfo(blockInfo.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
+			err = table.getTxn().WriteFileLocked(
+				typ,
+				table.accountId,
+				table.db.databaseId,
+				table.tableId,
+				table.db.databaseName,
+				table.tableName,
+				fileName,
+				blockInfo,
+				table.getTxn().tnStores[0],
+			)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	txn.writes = txn.writes[:lastTxnWritesIndex]
 
-	for tbKey := range mp {
-		// scenario 2 for cn write s3, more info in the comment of S3Writer
-		tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
-		if err != nil {
-			return err
-		}
-
-		tableDef := tbl.GetTableDef(txn.proc.Ctx)
-
-		s3Writer, err := colexec.NewS3Writer(tableDef, 0)
-		if err != nil {
-			return err
-		}
-		defer s3Writer.Free(txn.proc)
-		for i := 0; i < len(mp[tbKey]); i++ {
-			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
-		}
-		blockInfos, stats, err := s3Writer.SortAndSync(txn.proc)
-		if err != nil {
-			return err
-		}
-		err = s3Writer.FillBlockInfoBat(blockInfos, stats, txn.proc.GetMPool())
-		if err != nil {
-			return err
-		}
-		blockInfo := s3Writer.GetBlockInfoBat()
-
-		lenVecs := len(blockInfo.Attrs)
-		// only remain the metaLoc col and object stats
-		for i := 0; i < lenVecs-2; i++ {
-			blockInfo.Vecs[i].Free(txn.proc.GetMPool())
-		}
-		blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
-		blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
-		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
-
-		var table *txnTable
-		if v, ok := tbl.(*txnTableDelegate); ok {
-			table = v.origin
-		} else {
-			table = tbl.(*txnTable)
-		}
-		fileName := objectio.DecodeBlockInfo(
-			blockInfo.Vecs[0].GetBytesAt(0)).
-			MetaLocation().Name().String()
-		err = table.getTxn().WriteFileLocked(
-			INSERT,
-			table.accountId,
-			table.db.databaseId,
-			table.tableId,
-			table.db.databaseName,
-			table.tableName,
-			fileName,
-			blockInfo,
-			table.getTxn().tnStores[0],
-		)
-		if err != nil {
-			return err
-		}
+	if err := dump(INSERT); err != nil {
+		return err
 	}
 
 	if dumpAll {
+		if txn.deleteCntApproximation >= txn.engine.insertEntryMaxCount {
+			if err := dump(DELETE); err != nil {
+				return err
+			}
+		}
+		txn.deleteCntApproximation = 0
 		txn.workspaceSize = 0
 		txn.pkCount -= pkCount
 		// modifies txn.writes.
