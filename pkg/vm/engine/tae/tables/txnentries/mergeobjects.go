@@ -31,6 +31,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -253,9 +254,19 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 
 	rowid := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
 	ts := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
+	deletesPK := bat.GetVectorByName(catalog.AttrPKVal)
 
 	count := len(rowid)
 	transCnt += count
+	var rowIDVec, pkVec containers.Vector
+	defer func() {
+		if rowIDVec != nil {
+			rowIDVec.Close()
+		}
+		if pkVec != nil {
+			pkVec.Close()
+		}
+	}()
 	for i := 0; i < count; i++ {
 		row := rowid[i].GetRowOffset()
 		blkOffsetInObj := int(rowid[i].GetBlockOffset())
@@ -294,11 +305,18 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		}
 		id := targetObj.Fingerprint()
 		id.SetBlockOffset(destpos.BlkIdx)
-		if err = targetObj.GetRelation().RangeDelete(
-			id, uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact,
-		); err != nil {
-			return
+		if pkVec == nil {
+			pkVec = containers.MakeVector(*deletesPK.GetType(), entry.rt.VectorPool.Small.GetMPool())
 		}
+		if rowIDVec == nil {
+			rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), entry.rt.VectorPool.Small.GetMPool())
+		}
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*targetObj.GetID(), destpos.BlkIdx, destpos.RowIdx)
+		rowIDVec.Append(rowID, false)
+		pkVec.Append(deletesPK.Get(i), false)
+	}
+	if rowIDVec != nil {
+		err = entry.relation.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	}
 	return
 }

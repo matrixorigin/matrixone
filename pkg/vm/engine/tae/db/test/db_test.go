@@ -9528,3 +9528,30 @@ func TestRollbackMergeInQueue(t *testing.T) {
 	require.True(t, meta.DeletedAt.IsEmpty())
 	require.Equal(t, 2, rel.GetMeta().(*catalog.TableEntry).ObjectCnt(false) /*Aobj(deleted), Nobj(rollbacked)*/)
 }
+
+func TestTransferInMerge(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.BlockMaxRows = 8192
+	schema.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 400000)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	{
+		tae.DeleteAll(true)
+	}
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+}
