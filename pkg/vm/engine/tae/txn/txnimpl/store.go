@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"fmt"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -48,6 +50,10 @@ var (
 			return &txnTracer{}
 		},
 	}
+)
+
+const (
+	MaxWalSize = 70 * mpool.MB
 )
 
 func getTracer() *txnTracer {
@@ -726,9 +732,22 @@ func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 			return
 		}
 	}
+	approxSize := store.approxSize()
+	if approxSize > MaxWalSize {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("WAL entry approxSize %d is too large, max is %d", approxSize, MaxWalSize))
+	}
+	if approxSize > 50*mpool.MB {
+		logutil.Warnf("[Large-WAL-Entry]txn %x, WAL entry approxSize %d", store.txn.GetID(), approxSize)
+	}
 	return
 }
-
+func (store *txnStore) approxSize() int {
+	size := 0
+	for _, db := range store.dbs {
+		size += db.approxSize()
+	}
+	return size
+}
 func (store *txnStore) PrepareCommit() (err error) {
 	if store.warChecker != nil {
 		if err = store.warChecker.checkAll(

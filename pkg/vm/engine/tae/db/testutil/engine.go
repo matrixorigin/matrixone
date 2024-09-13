@@ -345,12 +345,14 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 		pks.Append(val, false)
 	}
 
-	stats, err := MockCNDeleteInS3(e.Runtime.Fs, rowIDs, pks, e.schema, txn)
+	s3stats, err := MockCNDeleteInS3(e.Runtime.Fs, rowIDs, pks, e.schema, txn)
+	stats := objectio.NewObjectStatsWithObjectID(s3stats.ObjectName().ObjectId(), false, true, true)
+	objectio.SetObjectStats(stats, &s3stats)
 	pks.Close()
 	rowIDs.Close()
 	assert.NoError(e.T, err)
 	require.False(e.T, stats.IsZero())
-	ok, err = rel.TryDeleteByStats(firstID, stats)
+	ok, err = rel.TryDeleteByStats(firstID, *stats)
 	assert.NoError(e.T, err)
 	if !ok {
 		return ok, err

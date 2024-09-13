@@ -15,13 +15,11 @@
 package malloc
 
 import (
-	"hash/maphash"
 	"io"
 	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/google/pprof/profile"
 )
@@ -53,7 +51,8 @@ type SampleValues interface {
 }
 
 type LocationKey struct {
-	PC       uintptr
+	File     string
+	Line     int
 	Function string
 }
 
@@ -62,7 +61,7 @@ type FunctionKey struct {
 }
 
 type SampleKey struct {
-	Hash uint64
+	PCs _PCs
 }
 
 func NewProfiler[T any, P interface {
@@ -93,26 +92,15 @@ func (p *Profiler[T, P]) Sample(
 	skip += 2 // runtime.Callers, p.Sample
 
 	// full stack
-	pcs := *pcsPool.Get().(*[]uintptr)
-	defer func() {
-		pcs = pcs[:cap(pcs)]
-		pcsPool.Put(&pcs)
-	}()
-	for {
-		n := runtime.Callers(skip, pcs)
-		if n == len(pcs) {
-			pcs = append(pcs, make([]uintptr, len(pcs))...)
-			continue
-		}
-		pcs = pcs[:n]
-		break
-	}
-	return p.getSampleValueFromPCs(pcs...)
+	var pcs _PCs
+	runtime.Callers(skip, pcs[:])
+	return p.getSampleValueFromPCs(pcs)
 }
 
 func (p *Profiler[T, P]) getLocation(frame runtime.Frame) *profile.Location {
 	locationKey := LocationKey{
-		PC:       frame.PC,
+		File:     frame.File,
+		Line:     frame.Line,
 		Function: frame.Function,
 	}
 	if v, ok := p.locations.Load(locationKey); ok {
@@ -136,7 +124,6 @@ func (p *Profiler[T, P]) getLocation(frame runtime.Frame) *profile.Location {
 
 func (p *Profiler[T, P]) getMockLocation(label string) *profile.Location {
 	locationKey := LocationKey{
-		PC:       0,
 		Function: label,
 	}
 	if v, ok := p.locations.Load(locationKey); ok {
@@ -195,19 +182,9 @@ func (p *Profiler[T, P]) getMockFunction(label string) *profile.Function {
 	return v.(*profile.Function)
 }
 
-func (p *Profiler[T, P]) getSampleValueFromPCs(pcs ...uintptr) P {
-	hasher := hasherPool.Get().(*maphash.Hash)
-	defer func() {
-		hasher.Reset()
-		hasherPool.Put(hasher)
-	}()
-	for _, pc := range pcs {
-		hasher.Write(
-			unsafe.Slice((*byte)(unsafe.Pointer(&pc)), unsafe.Sizeof(pc)),
-		)
-	}
+func (p *Profiler[T, P]) getSampleValueFromPCs(pcs _PCs) P {
 	key := SampleKey{
-		Hash: hasher.Sum64(),
+		PCs: pcs,
 	}
 
 	if v, ok := p.samples.Load(key); ok {
@@ -224,9 +201,17 @@ func (p *Profiler[T, P]) getSampleValueFromPCs(pcs ...uintptr) P {
 	return v.(*SampleInfo[P]).Values
 }
 
-func (p *Profiler[T, P]) getLocationsFromPCs(pcs []uintptr) []*profile.Location {
+func (p *Profiler[T, P]) getLocationsFromPCs(pcs _PCs) []*profile.Location {
 	var locations []*profile.Location
-	frames := runtime.CallersFrames(pcs)
+	n := 0
+	for i := range pcs {
+		if pcs[i] != 0 {
+			n++
+		} else {
+			break
+		}
+	}
+	frames := runtime.CallersFrames(pcs[:n])
 	for {
 		frame, more := frames.Next()
 
@@ -282,19 +267,6 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 	})
 
 	return prof.Write(w)
-}
-
-var pcsPool = sync.Pool{
-	New: func() any {
-		slice := make([]uintptr, 128)
-		return &slice
-	},
-}
-
-var hasherPool = sync.Pool{
-	New: func() any {
-		return new(maphash.Hash)
-	},
 }
 
 func copyFunction(fn *profile.Function) *profile.Function {

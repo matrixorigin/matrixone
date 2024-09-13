@@ -815,7 +815,7 @@ func (tbl *txnTable) rangesOnePart(
 					}
 				}
 
-				blk.SetFlagByObjStats(obj.ObjectStats)
+				blk.SetFlagByObjStats(&obj.ObjectStats)
 
 				outBlocks.AppendBlockInfo(blk)
 
@@ -1727,12 +1727,15 @@ func (tbl *txnTable) BuildReaders(
 	def := tbl.GetTableDef(ctx)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
+	current := 0
 	var shard engine.RelData
 	for i := 0; i < newNum; i++ {
-		if i == 0 {
-			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
+		if i < mod {
+			shard = relData.DataSlice(current, current+divide+1)
+			current = current + divide + 1
 		} else {
-			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
+			shard = relData.DataSlice(current, current+divide)
+			current = current + divide
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, tombstonePolicy)
 		if err != nil {
@@ -1888,7 +1891,7 @@ func (tbl *txnTable) PKPersistedBetween(
 						}
 					}
 
-					blk.SetFlagByObjStats(obj.ObjectStats)
+					blk.SetFlagByObjStats(&obj.ObjectStats)
 
 					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
