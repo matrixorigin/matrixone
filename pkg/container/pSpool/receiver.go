@@ -14,24 +14,37 @@
 
 package pSpool
 
-import "sync"
-
 const (
 	noneLastPop int8 = -1
 )
 
 // receiver will be a unlimited queue for int8.
 type receiver struct {
-	sync.Mutex
-
-	lastPop int8
-	queue   []int8
+	// todo: I ensure that this elements will never be full, so there is no need set a lock here.
+	lastPop    int8
+	head, tail int
+	andBase    int
+	elements   []int8
 }
 
-func newReceivers(count int) []receiver {
+func newReceivers(count int, cp int32) []receiver {
+	// we should make sure cap will be the power of 2.
+	if cp&(cp-1) != 0 {
+		cp |= cp >> 1
+		cp |= cp >> 2
+		cp |= cp >> 4
+		cp |= cp >> 8
+		cp |= cp >> 16
+		cp++
+	}
+
 	rs := make([]receiver, count)
+	ab := int(cp - 1)
 	for i := range rs {
 		rs[i].lastPop = noneLastPop
+		rs[i].elements = make([]int8, cp)
+		rs[i].head, rs[i].tail = 0, 0
+		rs[i].andBase = ab
 	}
 	return rs
 }
@@ -41,16 +54,12 @@ func (r *receiver) getLastPop() int8 {
 }
 
 func (r *receiver) popNextIndex() int8 {
-	r.Lock()
-	r.lastPop = r.queue[0]
-	r.queue = r.queue[1:]
-	r.Unlock()
-
+	r.lastPop = r.elements[r.head]
+	r.head = (r.head + 1) & r.andBase
 	return r.lastPop
 }
 
 func (r *receiver) pushNextIndex(index int8) {
-	r.Lock()
-	r.queue = append(r.queue, index)
-	r.Unlock()
+	r.elements[r.tail] = index
+	r.tail = (r.tail + 1) & r.andBase
 }

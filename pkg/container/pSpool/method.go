@@ -49,7 +49,7 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) PipelineCommunication
 	ps2 := &pipelineSpool{
 		shardPool:    make([]pipelineSpoolMessage, bl),
 		shardRefs:    make([]atomic.Int32, bl),
-		rs:           newReceivers(receiverCnt),
+		rs:           newReceivers(receiverCnt, int32(bl)),
 		cache:        initCachedBatch(mp, bl),
 		csDoneSignal: make(chan struct{}, receiverCnt),
 	}
