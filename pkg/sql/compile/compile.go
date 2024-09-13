@@ -2375,7 +2375,7 @@ func (c *Compile) compileProbeSideForBoradcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructRight(node, leftTyps, rightTyps, c.proc)
