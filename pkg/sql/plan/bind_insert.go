@@ -114,7 +114,8 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 	}
 
 	selectNode := builder.qry.Nodes[lastNodeID]
-	idxScanNodes := make([][]*plan.Node, len(tableDefs))
+	idxObjRefs := make([][]*plan.ObjectRef, len(tableDefs))
+	idxTableDefs := make([][]*plan.TableDef, len(tableDefs))
 
 	for _, tableDef := range tableDefs {
 		for _, idxDef := range tableDef.Indexes {
@@ -172,15 +173,16 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			OnDuplicateAction: onDupAction,
 		}, ctx)
 
-		idxScanNodes[i] = make([]*plan.Node, len(tableDef.Indexes))
+		idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
+		idxTableDefs[i] = make([]*plan.TableDef, len(tableDef.Indexes))
 
 		for j, idxDef := range tableDef.Indexes {
 			if !idxDef.TableExist {
 				continue
 			}
 
-			idxObjRef, idxTableDef := builder.compCtx.Resolve(objRefs[i].SchemaName, idxDef.IndexTableName, nil)
-			colName2Idx[idxTableDef.Name+"."+catalog.IndexTablePrimaryColName] = pkPos
+			idxObjRefs[i][j], idxTableDefs[i][j] = builder.compCtx.Resolve(objRefs[i].SchemaName, idxDef.IndexTableName, nil)
+			colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTablePrimaryColName] = pkPos
 
 			argsLen := len(idxDef.Parts)
 			if !idxDef.Unique {
@@ -188,7 +190,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			}
 
 			if argsLen == 1 {
-				colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+				colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
 			} else {
 				args := make([]*plan.Expr, argsLen)
 
@@ -201,8 +203,12 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 					args[len(idxDef.Parts)] = DeepCopyExpr(selectNode.ProjectList[pkPos])
 				}
 
-				idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
-				colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(selectNode.ProjectList))
+				fnName := "serial"
+				if !idxDef.Unique {
+					fnName = "serial_full"
+				}
+				idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
+				colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName] = int32(len(selectNode.ProjectList))
 				selectNode.ProjectList = append(selectNode.ProjectList, idxExpr)
 			}
 
@@ -211,19 +217,19 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			}
 
 			idxTag := builder.genNewTag()
-			builder.addNameByColRef(idxTag, idxTableDef)
+			builder.addNameByColRef(idxTag, idxTableDefs[i][j])
 
-			idxScanNodes[i][j] = &plan.Node{
+			idxScanNode := &plan.Node{
 				NodeType:     plan.Node_TABLE_SCAN,
-				TableDef:     idxTableDef,
-				ObjRef:       idxObjRef,
+				TableDef:     idxTableDefs[i][j],
+				ObjRef:       idxObjRefs[i][j],
 				BindingTags:  []int32{idxTag},
 				ScanSnapshot: ctx.snapshot,
 			}
-			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], ctx)
+			idxTableNodeID := builder.appendNode(idxScanNode, ctx)
 
-			idxPkPos := idxTableDef.Name2ColIndex[catalog.IndexTableIndexColName]
-			pkTyp := idxTableDef.Cols[idxPkPos].Typ
+			idxPkPos := idxTableDefs[i][j].Name2ColIndex[catalog.IndexTableIndexColName]
+			pkTyp := idxTableDefs[i][j].Cols[idxPkPos].Typ
 
 			leftExpr := &plan.Expr{
 				Typ: pkTyp,
@@ -240,7 +246,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: selectNode.BindingTags[0],
-						ColPos: colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName],
+						ColPos: colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName],
 					},
 				},
 			}
@@ -285,15 +291,11 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			LockTargets: []*plan.LockTarget{lockTarget},
 		}, ctx)
 
-		for _, idxNode := range idxScanNodes[i] {
-			if idxNode == nil {
-				continue
-			}
-
-			pkPos, pkTyp := getPkPos(idxNode.TableDef, false)
+		for _, idxTableDef := range idxTableDefs[i] {
+			pkPos, pkTyp := getPkPos(idxTableDef, false)
 
 			lockTarget := &plan.LockTarget{
-				TableId:            idxNode.TableDef.TblId,
+				TableId:            idxTableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
 				PrimaryColTyp:      pkTyp,
 				RefreshTsIdxInBat:  -1, //unsupported now
@@ -314,9 +316,13 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 	}
 
 	for i, tableDef := range tableDefs {
-		insertCols := make([]*plan.Expr, len(tableDef.Cols))
-		for j, col := range tableDef.Cols {
-			insertCols[j] = &plan.Expr{
+		insertCols := make([]*plan.Expr, 0, len(tableDef.Cols))
+		for _, col := range tableDef.Cols {
+			if col.Name == catalog.Row_ID {
+				continue
+			}
+
+			insertCols = append(insertCols, &plan.Expr{
 				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
@@ -324,7 +330,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 						ColPos: int32(colName2Idx[tableDef.Name+"."+col.Name]),
 					},
 				},
-			}
+			})
 		}
 
 		lastNodeID = builder.appendNode(&plan.Node{
@@ -343,14 +349,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			InsertDeleteCols: insertCols,
 		}, ctx)
 
-		for _, idxNode := range idxScanNodes[i] {
-			if idxNode == nil {
-				continue
-			}
+		for j, idxTableDef := range idxTableDefs[i] {
+			insertCols := make([]*plan.Expr, 0, len(idxTableDef.Cols))
+			for _, col := range idxTableDef.Cols {
+				if col.Name == catalog.Row_ID {
+					continue
+				}
 
-			insertCols := make([]*plan.Expr, len(idxNode.TableDef.Cols))
-			for j, col := range idxNode.TableDef.Cols {
-				insertCols[j] = &plan.Expr{
+				insertCols = append(insertCols, &plan.Expr{
 					Typ: col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
@@ -358,18 +364,18 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 							ColPos: int32(colName2Idx[tableDef.Name+"."+col.Name]),
 						},
 					},
-				}
+				})
 			}
 
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_INSERT,
 				Children: []int32{lastNodeID},
-				ObjRef:   idxNode.ObjRef,
-				TableDef: idxNode.TableDef,
+				ObjRef:   idxObjRefs[i][j],
+				TableDef: idxTableDef,
 				InsertCtx: &plan.InsertCtx{
-					Ref:            idxNode.ObjRef,
-					IsClusterTable: idxNode.TableDef.TableType == catalog.SystemClusterRel,
-					TableDef:       idxNode.TableDef,
+					Ref:            idxObjRefs[i][j],
+					IsClusterTable: idxTableDef.TableType == catalog.SystemClusterRel,
+					TableDef:       idxTableDef,
 					//PartitionTableIds:   paritionTableIds,
 					//PartitionTableNames: paritionTableNames,
 					//PartitionIdx:        int32(partitionIdx),
@@ -427,7 +433,6 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		colToIdx[col.Name] = i
 	}
 
-	insertWithoutUniqueKeyMap := make(map[string]bool)
 	//var ifInsertFromUniqueColMap map[string]bool
 	if insertColumns, err = builder.getInsertColsFromStmt(stmt, tableDef); err != nil {
 		return nil, err
@@ -547,7 +552,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 
 	insertColToExpr := make(map[string]*Expr)
 	for i, column := range insertColumns {
-		colIdx := colToIdx[column]
+		colIdx := tableDef.Name2ColIndex[column]
 		projExpr := &plan.Expr{
 			Typ: oldProject[i].Typ,
 			Expr: &plan.Expr_Col{
@@ -579,32 +584,6 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		//}
 	}
 
-	// create table t(a int, b int unique key);
-	// insert into t(a) values (1);  -> isInsertWithoutUniqueKey = true,  then we do not need a plan to insert unique_key_hidden_table;
-	// create table t(a int, b int unique key auto_increment)	-> isInsertWithoutUniqueKey is allways false
-	// create table t(a int, b int unique key default 10) 		-> isInsertWithoutUniqueKey is allways false
-	for _, idx := range tableDef.Indexes {
-		if idx.Unique {
-			withoutUniqueCol := true
-			for _, name := range idx.Parts {
-				_, ok := insertColToExpr[name]
-				if ok {
-					withoutUniqueCol = false
-					break
-				} else {
-					// insert without unique
-					// then need check col is not auto_incr & default is not null
-					col := tableDef.Cols[tableDef.Name2ColIndex[name]]
-					if col.Typ.AutoIncr || (col.Default.Expr != nil && !isNullExpr(col.Default.Expr)) {
-						withoutUniqueCol = false
-						break
-					}
-				}
-			}
-			insertWithoutUniqueKeyMap[idx.IndexName] = withoutUniqueCol
-		}
-	}
-
 	// have tables : t1(a default 0, b int, pk(a,b)) ,  t2(j int,k int)
 	// rewrite 'insert into t1 select * from t2' to
 	// select 'select _t.j, _t.k from (select * from t2) _t(j,k)
@@ -630,6 +609,31 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 			// 	}
 			// }
 			// }
+		} else if col.Name == catalog.Row_ID {
+			continue
+		} else if col.Name == catalog.CPrimaryKeyColName {
+			args := make([]*plan.Expr, len(tableDef.Pkey.Names))
+
+			for k, part := range tableDef.Pkey.Names {
+				colPos := colName2Idx[tableDef.Name+"."+part]
+				args[k] = DeepCopyExpr(lastNode.ProjectList[colPos])
+			}
+
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projectList))
+			pkExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			projectList = append(projectList, pkExpr)
+		} else if tableDef.ClusterBy != nil && col.Name == tableDef.ClusterBy.Name {
+			names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+			args := make([]*plan.Expr, len(names))
+
+			for k, part := range names {
+				colPos := colName2Idx[tableDef.Name+"."+part]
+				args[k] = DeepCopyExpr(lastNode.ProjectList[colPos])
+			}
+
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projectList))
+			pkExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+			projectList = append(projectList, pkExpr)
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
