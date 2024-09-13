@@ -142,6 +142,10 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 	}
 
+	if o.BulkTomestoneTxnThreshold == 0 {
+		o.BulkTomestoneTxnThreshold = DefaultBulkTomestoneTxnThreshold
+	}
+
 	if o.CheckpointCfg == nil {
 		o.CheckpointCfg = new(CheckpointCfg)
 	}

@@ -1238,6 +1238,15 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileSinkNode(n, ss, step)
+	/*case plan.Node_APPLY:
+	left, err = c.compilePlanScope(step, n.Children[0], ns)
+	if err != nil {
+		return nil, err
+	}
+
+	c.setAnalyzeCurrent(left, int(curNodeIdx))
+	ss = c.compileSort(n, c.compileApply(n, ns[n.Children[1]], left))
+	return ss, nil*/
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -2297,16 +2306,23 @@ func (c *Compile) compileProbeSideForBoradcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			op := constructProductL2(node, rightTyps, c.proc)
+			op := constructProductL2(node, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
+			if rs[i].NodeInfo.Mcpu != 1 {
+				//product_l2 join is very time_consuming, increase the parallelism
+				rs[i].NodeInfo.Mcpu *= 8
+			}
+			if rs[i].NodeInfo.Mcpu > ncpu {
+				rs[i].NodeInfo.Mcpu = ncpu
+			}
 		}
 		c.anal.isFirst = false
 	case plan.Node_INDEX:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			op := constructIndexJoin(node, rightTyps, c.proc)
+			op := constructIndexJoin(node, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 		}
@@ -2359,7 +2375,7 @@ func (c *Compile) compileProbeSideForBoradcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructRight(node, leftTyps, rightTyps, c.proc)
@@ -2510,6 +2526,24 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
+/*
+	func (c *Compile) compileApply(node, right *plan.Node, probeScopes []*Scope) []*Scope {
+		rs := c.mergeScopesByCN(probeScopes)
+
+		switch node.JoinType {
+		case plan.Node_INNER:
+			for i := range rs {
+				op := constructApply(node, right, apply.CROSS, c.proc)
+				op.SetIdx(c.anal.curNodeIdx)
+				rs[i].setRootOperator(op)
+			}
+		default:
+			panic("unknown apply")
+		}
+
+		return rs
+	}
+*/
 func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -2993,6 +3027,60 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 	}
 
 	// to write S3
+	if haveSinkScanInPlan(ns, n.Children[0]) {
+		// todo : pipelines with sink scan ,must refactor this in the future
+		currentFirstFlag := c.anal.isFirst
+		c.anal.isFirst = false
+		dataScope := c.newMergeScope(ss)
+		if c.anal.qry.LoadTag {
+			// reset the channel buffer of sink for load
+			dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu)
+		}
+		parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
+		scopes := make([]*Scope, 0, parallelSize)
+		for i := 0; i < parallelSize; i++ {
+			s := c.newEmptyMergeScope()
+			mergeArg := merge.NewArgument()
+			mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			s.setRootOperator(mergeArg)
+			scopes = append(scopes, s)
+			scopes[i].Proc = c.proc.NewNoContextChildProc(1)
+			if c.anal.qry.LoadTag {
+				for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
+					rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
+				}
+			}
+		}
+		if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
+			_, arg := constructDispatchLocalAndRemote(0, scopes, dataScope)
+			arg.FuncId = dispatch.ShuffleToAllFunc
+			arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+			arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			dataScope.setRootOperator(arg)
+		} else {
+			_, dispatchArg := constructDispatchLocalAndRemote(0, scopes, dataScope)
+			dispatchArg.FuncId = dispatch.SendToAnyLocalFunc
+			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			dataScope.setRootOperator(dispatchArg)
+		}
+		dataScope.IsEnd = true
+		for i := range scopes {
+			insertArg := constructInsert(n, c.e)
+			insertArg.ToWriteS3 = true
+			insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			scopes[i].setRootOperator(insertArg)
+		}
+		currentFirstFlag = false
+		rs := c.newMergeScope(scopes)
+		rs.PreScopes = append(rs.PreScopes, dataScope)
+		rs.Magic = MergeInsert
+		mergeInsertArg := constructMergeblock(c.e, n)
+		mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		rs.setRootOperator(mergeInsertArg)
+		ss = []*Scope{rs}
+		return ss, nil
+	}
+
 	c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
 	currentFirstFlag := c.anal.isFirst
 	c.anal.isFirst = false

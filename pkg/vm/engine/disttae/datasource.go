@@ -681,7 +681,6 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		}
 	}
 
-	var minTS types.TS = types.MaxTs()
 	var batRowIdx int
 	if batRowIdx = slices.Index(outBatch.Attrs, catalog.Row_ID); batRowIdx == -1 {
 		batRowIdx = len(outBatch.Attrs)
@@ -703,11 +702,13 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 	applyPolicy := engine.TombstoneApplyPolicy(
 		engine.Policy_SkipCommittedInMemory | engine.Policy_SkipCommittedS3)
 
-	applyOffset := 0
+	var (
+		goon        bool = true
+		minTS            = types.MaxTs()
+		applyOffset      = 0
+	)
 
-	goon := true
 	for goon && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
-		//minTS = types.MaxTs()
 		for outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 			if goon = ls.pStateRows.insIter.Next(); !goon {
 				break
@@ -716,10 +717,6 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 			entry := ls.pStateRows.insIter.Entry()
 			b, o := entry.RowID.Decode()
 
-			//if minTS.Greater(&entry.Time) {
-			//	minTS = entry.Time
-			//}
-
 			sel, err = ls.ApplyTombstones(ls.ctx, b, []int64{int64(o)}, applyPolicy)
 			if err != nil {
 				return err
@@ -727,6 +724,10 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 
 			if len(sel) == 0 {
 				continue
+			}
+
+			if minTS.Greater(&entry.Time) {
+				minTS = entry.Time
 			}
 
 			for i, name := range outBatch.Attrs {
@@ -772,6 +773,8 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		}
 
 		outBatch.Shrink(deleted, true)
+
+		minTS = types.MaxTs()
 		applyOffset = outBatch.Vecs[0].Length()
 	}
 
@@ -1168,10 +1171,6 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 	minTS types.TS,
 	rowIds []objectio.Rowid,
 ) (deleted []int64, err error) {
-	//maxTombstoneTS := ls.pState.MaxTombstoneCreateTS()
-	//if maxTombstoneTS.Less(&minTS) {
-	//	return nil, nil
-	//}
 
 	if ls.pState.ApproxTombstoneObjectsNum() == 0 {
 		return nil, nil
@@ -1184,9 +1183,6 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 	defer iter.Close()
 
 	var (
-		exist    bool
-		bf       objectio.BloomFilter
-		bfIndex  index.StaticFilter
 		location objectio.Location
 
 		loaded  *batch.Batch
@@ -1205,41 +1201,23 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 	for iter.Next() && len(rowIds) > len(deleted) {
 		obj := iter.Entry()
 
+		if !obj.GetAppendable() {
+			if obj.CreateTime.Less(&minTS) {
+				continue
+			}
+		}
+
 		if !obj.ZMIsEmpty() {
 			objZM := obj.SortKeyZoneMap()
 
 			if !anyIf(func(row objectio.Rowid) bool {
-				return objZM.RowidPrefixEq(row.BorrowBlockID()[:])
+				return objZM.Contains(row)
 			}) {
 				continue
 			}
-		}
-
-		if bf, err = objectio.FastLoadBF(
-			ls.ctx, obj.Location(), false, ls.fs); err != nil {
-			return nil, err
 		}
 
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
-			buf := bf.GetBloomFilter(uint32(idx))
-			bfIndex = index.NewEmptyBloomFilterWithType(index.HBF)
-			if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
-				return nil, err
-			}
-
-			if !anyIf(func(row objectio.Rowid) bool {
-				exist, err = bfIndex.PrefixMayContainsKey(row.BorrowBlockID()[:], index.PrefixFnID_Block, 2)
-				if exist || err != nil {
-					return true
-				}
-				return false
-			}) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
 			if loaded, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
@@ -1255,7 +1233,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 			}
 
 			for i := range rowIds {
-				s, e := blockio.FindIntervalForBlock(deletedRowIds, rowIds[i].BorrowBlockID())
+				s, e := blockio.FindStartEndOfBlockFromSortedRowids(deletedRowIds, rowIds[i].BorrowBlockID())
 				for j := s; j < e; j++ {
 					if rowIds[i].EQ(&deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
 						deleted = append(deleted, int64(i))

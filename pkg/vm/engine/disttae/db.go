@@ -331,7 +331,8 @@ func (eng *Engine) getOrCreateSnapPart(
 				eng,
 				nil,
 				state,
-				entry); err != nil {
+				entry,
+				false); err != nil {
 				return err
 			}
 		}
@@ -423,7 +424,7 @@ func (eng *Engine) LazyLoadLatestCkp(
 				}
 			}()
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, eng, cache, state, entry); err != nil {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, eng, cache, state, entry, false); err != nil {
 					return err
 				}
 			}
