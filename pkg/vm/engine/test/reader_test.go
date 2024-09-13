@@ -389,6 +389,195 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 }
 
+func Test_ShardingHandler(t *testing.T) {
+	var (
+		//err          error
+		//mp           *mpool.MPool
+		accountId    = catalog.System_Account
+		tableName    = "test_reader_table"
+		databaseName = "test_reader_database"
+
+		primaryKeyIdx int = 3
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	// mock a schema with 4 columns and the 4th column as primary key
+	// the first column is the 9th column in the predefined columns in
+	// the mock function. Here we exepct the type of the primary key
+	// is types.T_char or types.T_varchar
+	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
+	schema.Name = tableName
+
+	{
+		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+		require.NoError(t, err)
+
+		disttaeEngine, taeEngine, rpcAgent, _ = testutil.CreateEngines(
+			ctx,
+			testutil.TestOptions{TaeEngineOptions: opt},
+			t,
+			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
+		)
+		defer func() {
+			disttaeEngine.Close(ctx)
+			taeEngine.Close(true)
+			rpcAgent.Close()
+		}()
+
+		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+		require.NoError(t, err)
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 10
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+
+	{
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+
+		err := rel.RangeDelete(blkId, 0, 7, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	testutil2.CompactBlocks(t, 0, taeEngine.GetDB(), databaseName, schema, false)
+
+	{
+
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+
+		err := rel.RangeDelete(blkId, 0, 1, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 10
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+
+	{
+
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		var blkId *common.ID
+		for iter.Next() {
+			if !iter.GetObject().IsAppendable() {
+				continue
+			}
+			blkId = iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+		}
+		err := rel.RangeDelete(blkId, 0, 7, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+
+	}
+	//handle collect tombstones.
+	{
+		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		pInfo, err := process.MockProcessInfoWithPro("", rel.GetProcess())
+		require.NoError(t, err)
+		readerBuildParam := shard.ReadParam{
+			Process: pInfo,
+			TxnTable: shard.TxnTable{
+				DatabaseID:   rel.GetDBID(ctx),
+				DatabaseName: databaseName,
+				AccountID:    uint64(catalog.System_Account),
+				TableName:    tableName,
+			},
+		}
+		readerBuildParam.CollectTombstonesParam.CollectPolicy =
+			engine.Policy_CollectCommittedTombstones
+
+		res, err := disttae.HandleShardingReadCollectTombstones(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readerBuildParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.NoError(t, err)
+
+		tombstones, err := disttae.UnmarshalTombstoneData(res)
+		require.NoError(t, err)
+
+		require.True(t, tombstones.HasAnyInMemoryTombstone())
+
+		readerBuildParam.GetColumMetadataScanInfoParam.ColumnName =
+			schema.ColDefs[primaryKeyIdx].Name
+
+		res, err = disttae.HandleShardingReadGetColumMetadataScanInfo(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readerBuildParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.NoError(t, err)
+
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+}
+
 func Test_ShardingRemoteReader(t *testing.T) {
 	var (
 		//err          error
