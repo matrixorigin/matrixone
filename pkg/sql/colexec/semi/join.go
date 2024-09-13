@@ -143,18 +143,14 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				ctr.rbat.SetRowCount(bat.RowCount())
 				result.Batch, err = semiJoin.EvalProjection(ctr.rbat, proc)
-				if err != nil {
+			} else {
+				if err := ctr.probe(bat, semiJoin, proc, &probeResult); err != nil {
 					return result, err
 				}
-				analyzer.Output(result.Batch)
-				return result, nil
+
+				result.Batch, err = semiJoin.EvalProjection(probeResult.Batch, proc)
 			}
 
-			if err := ctr.probe(bat, semiJoin, proc, &probeResult); err != nil {
-				return result, err
-			}
-
-			result.Batch, err = semiJoin.EvalProjection(probeResult.Batch, proc)
 			if err != nil {
 				return result, err
 			}
