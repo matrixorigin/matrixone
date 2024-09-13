@@ -83,7 +83,7 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 		if data.checkpointBat != nil && data.checkpointBat.RowCount() > 0 {
 			//FIXME: only test here
 			logutil.Info("checkpoint")
-			logutil.Info(data.checkpointBat.String())
+			//logutil.Info(data.checkpointBat.String())
 		}
 	case OutputTypeTailDone:
 		if data.insertAtmBatch != nil && data.insertAtmBatch.Rows.Len() > 0 {

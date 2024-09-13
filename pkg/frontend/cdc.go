@@ -89,6 +89,8 @@ const (
 		`account_id = %d and ` +
 		`task_id = "%s"`
 
+	getShowCdcTaskFormat = "SELECT task_id, task_name, source_uri, sink_uri, state FROM mo_catalog.mo_cdc_task where account_id = %d"
+
 	getDbIdAndTableIdFormat = "select reldatabase_id,rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s' and relname = '%s'"
 
 	getTableFormat = "select rel_id from `mo_catalog`.`mo_tables` where account_id = %d and reldatabase ='%s' and relname = '%s'"
@@ -1068,8 +1070,7 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 	defer func() {
 		cdc2.FinishTxnOp(ctx, err, txnOp, cdc.cnEngine)
 	}()
-	err = cdc.cnEngine.New(ctx, txnOp)
-	if err != nil {
+	if err = cdc.cnEngine.New(ctx, txnOp); err != nil {
 		return err
 	}
 
@@ -1625,9 +1626,9 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	timestamp := txnOp.SnapshotTS().ToStdTime().String()
 
 	// get from task table
-	sql := fmt.Sprintf("SELECT task_id, task_name, source_uri, sink_uri, state FROM %s.mo_cdc_task", catalog.MO_CATALOG)
+	sql := fmt.Sprintf(getShowCdcTaskFormat, ses.GetTenantInfo().TenantID)
 	if !st.Option.All {
-		sql += fmt.Sprintf(" where task_name = '%s'", st.Option.TaskName)
+		sql += fmt.Sprintf(" and task_name = '%s'", st.Option.TaskName)
 	}
 
 	bh.ClearExecResultSet()

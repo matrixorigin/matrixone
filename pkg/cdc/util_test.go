@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/prashantv/gostub"
@@ -36,133 +37,11 @@ import (
 
 func Test_aes(t *testing.T) {
 	data := "test ase"
-	encData, err := aesCFBEncode([]byte(data), []byte(aesKey))
+	encData, err := AesCFBEncode([]byte(data))
 	assert.NoError(t, err)
-	decData, err := aesCFBDecode(context.Background(), encData, []byte(aesKey))
+	decData, err := AesCFBDecode(context.Background(), encData)
 	assert.NoError(t, err)
 	assert.Equal(t, data, decData)
-}
-
-func TestAesCFBDecode(t *testing.T) {
-	type args struct {
-		ctx  context.Context
-		data string
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    string
-		wantErr assert.ErrorAssertionFunc
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := AesCFBDecode(tt.args.ctx, tt.args.data)
-			if !tt.wantErr(t, err, fmt.Sprintf("AesCFBDecode(%v, %v)", tt.args.ctx, tt.args.data)) {
-				return
-			}
-			assert.Equalf(t, tt.want, got, "AesCFBDecode(%v, %v)", tt.args.ctx, tt.args.data)
-		})
-	}
-}
-
-func TestAesCFBEncode(t *testing.T) {
-	type args struct {
-		data []byte
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    string
-		wantErr assert.ErrorAssertionFunc
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := AesCFBEncode(tt.args.data)
-			if !tt.wantErr(t, err, fmt.Sprintf("AesCFBEncode(%v)", tt.args.data)) {
-				return
-			}
-			assert.Equalf(t, tt.want, got, "AesCFBEncode(%v)", tt.args.data)
-		})
-	}
-}
-
-func TestGetTableDef(t *testing.T) {
-	type args struct {
-		ctx      context.Context
-		txnOp    client.TxnOperator
-		cnEngine engine.Engine
-		tblId    uint64
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    *plan.TableDef
-		wantErr assert.ErrorAssertionFunc
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := GetTableDef(tt.args.ctx, tt.args.txnOp, tt.args.cnEngine, tt.args.tblId)
-			if !tt.wantErr(t, err, fmt.Sprintf("GetTableDef(%v, %v, %v, %v)", tt.args.ctx, tt.args.txnOp, tt.args.cnEngine, tt.args.tblId)) {
-				return
-			}
-			assert.Equalf(t, tt.want, got, "GetTableDef(%v, %v, %v, %v)", tt.args.ctx, tt.args.txnOp, tt.args.cnEngine, tt.args.tblId)
-		})
-	}
-}
-
-func Test_aesCFBDecode(t *testing.T) {
-	type args struct {
-		ctx    context.Context
-		data   string
-		aesKey []byte
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    string
-		wantErr assert.ErrorAssertionFunc
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := aesCFBDecode(tt.args.ctx, tt.args.data, tt.args.aesKey)
-			if !tt.wantErr(t, err, fmt.Sprintf("aesCFBDecode(%v, %v, %v)", tt.args.ctx, tt.args.data, tt.args.aesKey)) {
-				return
-			}
-			assert.Equalf(t, tt.want, got, "aesCFBDecode(%v, %v, %v)", tt.args.ctx, tt.args.data, tt.args.aesKey)
-		})
-	}
-}
-
-func Test_aesCFBEncode(t *testing.T) {
-	type args struct {
-		data   []byte
-		aesKey []byte
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    string
-		wantErr assert.ErrorAssertionFunc
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := aesCFBEncode(tt.args.data, tt.args.aesKey)
-			if !tt.wantErr(t, err, fmt.Sprintf("aesCFBEncode(%v, %v)", tt.args.data, tt.args.aesKey)) {
-				return
-			}
-			assert.Equalf(t, tt.want, got, "aesCFBEncode(%v, %v)", tt.args.data, tt.args.aesKey)
-		})
-	}
 }
 
 func Test_appendByte(t *testing.T) {
@@ -487,7 +366,7 @@ func Test_convertColIntoSql(t *testing.T) {
 			wantErr: assert.NoError,
 		},
 		{
-			args:    args{ctx: context.Background(), data: "2023-02-03 01:23:45", typ: &types.Type{Oid: types.T_datetime}, sqlBuff: []byte{}},
+			args:    args{ctx: context.Background(), data: "2023-02-03 01:23:45", typ: &types.Type{Oid: types.T_timestamp}, sqlBuff: []byte{}},
 			want:    []byte("'2023-02-03 01:23:45'"),
 			wantErr: assert.NoError,
 		},
@@ -564,27 +443,30 @@ func Test_copyBytes(t *testing.T) {
 }
 
 func Test_extractRowFromEveryVector(t *testing.T) {
-	type args struct {
-		ctx      context.Context
-		dataSet  *batch.Batch
-		rowIndex int
-		row      []any
-	}
-	tests := []struct {
-		name    string
-		args    args
-		wantErr assert.ErrorAssertionFunc
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.wantErr(t, extractRowFromEveryVector(tt.args.ctx, tt.args.dataSet, tt.args.rowIndex, tt.args.row), fmt.Sprintf("extractRowFromEveryVector(%v, %v, %v, %v)", tt.args.ctx, tt.args.dataSet, tt.args.rowIndex, tt.args.row))
-		})
-	}
+	var err error
+	bat := batch.New(true, []string{"const_null", "const", "normal"})
+	bat.Vecs[0] = testutil.MakeScalarNull(types.T_int32, 3)
+	bat.Vecs[1] = testutil.MakeScalarInt64(1, 3)
+	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+
+	row := make([]any, 3)
+	err = extractRowFromEveryVector(context.Background(), bat, 0, row)
+	require.NoError(t, err)
+	assert.Equal(t, []any{nil, int64(1), int32(1)}, row)
 }
 
 func Test_extractRowFromVector(t *testing.T) {
+	bj, err := bytejson.ParseFromString("{\"a\": 1}")
+	require.Nil(t, err)
+
+	date, err := types.ParseDateCast("2023-02-03")
+	require.Nil(t, err)
+
+	rowid := types.BuildTestRowid(1234, 5678)
+	blockid := types.BuildTestBlockid(1234, 5678)
+
+	ts := types.BuildTS(1234, 5678)
+
 	type args struct {
 		ctx      context.Context
 		vec      *vector.Vector
@@ -595,13 +477,284 @@ func Test_extractRowFromVector(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
+		wantRow []any
 		wantErr assert.ErrorAssertionFunc
 	}{
-		// TODO: Add test cases.
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeScalarNull(types.T_int32, 3),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{nil},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeJsonVector([]string{"{\"a\": 1}"}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{bj},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeBoolVector([]bool{true}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{true},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeBitVector([]uint64{1}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{uint64(1)},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeInt8Vector([]int8{1, 2, 3}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{int8(1)},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeInt16Vector([]int16{1, 2, 3}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{int16(1)},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeInt32Vector([]int32{1, 2, 3}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{int32(1)},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeInt64Vector([]int64{1, 2, 3}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{int64(1)},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeUint8Vector([]uint8{1, 2, 3}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{uint8(1)},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeUint16Vector([]uint16{1, 2, 3}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{uint16(1)},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeUint32Vector([]uint32{1, 2, 3}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{uint32(1)},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{uint64(1)},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeFloat32Vector([]float32{1.1, 2.2, 3.3}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{float32(1.1)},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeFloat64Vector([]float64{1.1, 2.2, 3.3}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{1.1},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeVarcharVector([]string{"abc"}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{[]byte("abc")},
+			wantErr: assert.NoError,
+		},
+		// TODO vector
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeDateVector([]string{"2023-02-03 01:23:45"}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{date},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeTimeVector([]string{"2023-02-03 01:23:45"}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{"01:23:45"},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeDatetimeVector([]string{"2023-02-03 01:23:45"}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{"2023-02-03 01:23:45"},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{"2023-02-03 01:23:45"},
+			wantErr: assert.NoError,
+		},
+		// TODO decimal
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeUUIDVector([]types.Uuid{types.Uuid([]byte("1234567890123456"))}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{"31323334-3536-3738-3930-313233343536"},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeRowIdVector([]types.Rowid{rowid}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{rowid},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeBlockIdVector([]types.Blockid{blockid}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{blockid},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      testutil.MakeTSVector([]types.TS{ts}, nil),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{ts},
+			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				ctx:      context.Background(),
+				vec:      vector.NewVec(types.T_decimal256.ToType()),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{},
+			wantErr: assert.Error,
+		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.wantErr(t, extractRowFromVector(tt.args.ctx, tt.args.vec, tt.args.i, tt.args.row, tt.args.rowIndex), fmt.Sprintf("extractRowFromVector(%v, %v, %v, %v, %v)", tt.args.ctx, tt.args.vec, tt.args.i, tt.args.row, tt.args.rowIndex))
+			err = extractRowFromVector(tt.args.ctx, tt.args.vec, tt.args.i, tt.args.row, tt.args.rowIndex)
+			tt.wantErr(t, err, fmt.Sprintf("extractRowFromVector(%v, %v, %v, %v, %v)", tt.args.ctx, tt.args.vec, tt.args.i, tt.args.row, tt.args.rowIndex))
+			if err == nil {
+				assert.Equal(t, tt.wantRow, tt.args.row)
+			}
 		})
 	}
 }
@@ -628,24 +781,6 @@ func Test_floatArrayToString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equalf(t, tt.want, floatArrayToString(tt.args.arr), "floatArrayToString(%v)", tt.args.arr)
-		})
-	}
-}
-
-func Test_generateSalt(t *testing.T) {
-	type args struct {
-		n int
-	}
-	tests := []struct {
-		name string
-		args args
-		want []byte
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, generateSalt(tt.args.n), "generateSalt(%v)", tt.args.n)
 		})
 	}
 }
@@ -717,6 +852,32 @@ func TestFinishTxnOp(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			FinishTxnOp(tt.args.ctx, tt.args.inputErr, tt.args.txnOp, tt.args.cnEngine)
+		})
+	}
+}
+
+func TestGetTableDef(t *testing.T) {
+	type args struct {
+		ctx      context.Context
+		txnOp    client.TxnOperator
+		cnEngine engine.Engine
+		tblId    uint64
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    *plan.TableDef
+		wantErr assert.ErrorAssertionFunc
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := GetTableDef(tt.args.ctx, tt.args.txnOp, tt.args.cnEngine, tt.args.tblId)
+			if !tt.wantErr(t, err, fmt.Sprintf("GetTableDef(%v, %v, %v, %v)", tt.args.ctx, tt.args.txnOp, tt.args.cnEngine, tt.args.tblId)) {
+				return
+			}
+			assert.Equalf(t, tt.want, got, "GetTableDef(%v, %v, %v, %v)", tt.args.ctx, tt.args.txnOp, tt.args.cnEngine, tt.args.tblId)
 		})
 	}
 }
