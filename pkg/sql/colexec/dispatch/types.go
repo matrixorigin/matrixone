@@ -42,7 +42,7 @@ const (
 )
 
 type container struct {
-	sp pSpool.PipelineCommunication
+	sp *pSpool.PipelineSpool
 
 	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []*process.WrapCs

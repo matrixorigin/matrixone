@@ -15,38 +15,17 @@
 package pSpool
 
 import (
-	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sync/atomic"
 )
-
-type PipelineCommunication interface {
-	// SendBatch do copy for data, and send it to any or all data receiver.
-	// after sent, data can be got by method ReceiveBatch.
-	SendBatch(
-		ctx context.Context,
-		receiverID int,
-		data *batch.Batch,
-		info error) (queryDone bool, err error)
-
-	// ReceiveBatch get data from the idx-th receiver.
-	ReceiveBatch(idx int) (data *batch.Batch, info error)
-
-	// ReleaseCurrent force to release the last received one.
-	ReleaseCurrent(idx int)
-
-	// Close the sender and receivers, and do memory clean.
-	Close()
-}
 
 // InitMyPipelineSpool return a simple pipeline spool for temporary plan.
 //
 // todo: use spool package after pipeline construct process is simple.
-func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) PipelineCommunication {
+func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) *PipelineSpool {
 	bl := getBufferLength(receiverCnt)
 
-	ps2 := &pipelineSpool{
+	ps2 := &PipelineSpool{
 		shardPool:    make([]pipelineSpoolMessage, bl),
 		shardRefs:    make([]atomic.Int32, bl),
 		rs:           newReceivers(receiverCnt, int32(bl)),

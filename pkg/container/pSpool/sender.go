@@ -27,7 +27,7 @@ const (
 	SendToAnyLocal = -2
 )
 
-type pipelineSpool struct {
+type PipelineSpool struct {
 	shardPool []pipelineSpoolMessage
 	shardRefs []atomic.Int32
 
@@ -42,13 +42,15 @@ type pipelineSpool struct {
 	csDoneSignal chan struct{}
 }
 
-// pipelineSpoolMessage is the element of pipelineSpool.
+// pipelineSpoolMessage is the element of PipelineSpool.
 type pipelineSpoolMessage struct {
 	content *batch.Batch
 	err     error
 }
 
-func (ps *pipelineSpool) SendBatch(
+// SendBatch do copy for data, and send it to any or all data receiver.
+// after sent, data can be got by method ReceiveBatch.
+func (ps *PipelineSpool) SendBatch(
 	ctx context.Context, receiverID int, data *batch.Batch, info error) (queryDone bool, err error) {
 
 	if receiverID == SendToAnyLocal {
@@ -78,7 +80,8 @@ func (ps *pipelineSpool) SendBatch(
 	return queryDone, nil
 }
 
-func (ps *pipelineSpool) ReleaseCurrent(idx int) {
+// ReleaseCurrent force to release the last received one.
+func (ps *PipelineSpool) ReleaseCurrent(idx int) {
 	if last := ps.rs[idx].getLastPop(); last != noneLastPop {
 		if ps.shardRefs[last].Add(-1) == 0 {
 			ps.cache.CacheBatch(ps.shardPool[last].content)
@@ -88,7 +91,8 @@ func (ps *pipelineSpool) ReleaseCurrent(idx int) {
 	}
 }
 
-func (ps *pipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
+// ReceiveBatch get data from the idx-th receiver.
+func (ps *PipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 	ps.ReleaseCurrent(idx)
 
 	next := ps.rs[idx].popNextIndex()
@@ -98,7 +102,8 @@ func (ps *pipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 	return ps.shardPool[next].content, ps.shardPool[next].err
 }
 
-func (ps *pipelineSpool) Close() {
+// Close the sender and receivers, and do memory clean.
+func (ps *PipelineSpool) Close() {
 	// wait for all receivers done its work first.
 	requireEndingReceiver := len(ps.rs)
 	for requireEndingReceiver > 0 {
@@ -110,7 +115,7 @@ func (ps *pipelineSpool) Close() {
 	ps.cache.Free()
 }
 
-func (ps *pipelineSpool) sendToAll(ctx context.Context, msg pipelineSpoolMessage) (queryDone bool) {
+func (ps *PipelineSpool) sendToAll(ctx context.Context, msg pipelineSpoolMessage) (queryDone bool) {
 	select {
 	case <-ctx.Done():
 		return true
@@ -125,7 +130,7 @@ func (ps *pipelineSpool) sendToAll(ctx context.Context, msg pipelineSpoolMessage
 	return false
 }
 
-func (ps *pipelineSpool) sendToIdx(ctx context.Context, idx int, msg pipelineSpoolMessage) (queryDone bool) {
+func (ps *PipelineSpool) sendToIdx(ctx context.Context, idx int, msg pipelineSpoolMessage) (queryDone bool) {
 	select {
 	case <-ctx.Done():
 		return true

@@ -55,7 +55,7 @@ func initCachedBatch(mp *mpool.MPool, capacity int) *cachedBatch {
 		freeBatchPointer: make(chan *batch.Batch, capacity),
 
 		// it's a casual length I set here.
-		bytesCache: make([][]byte, 0, 4*capacity),
+		bytesCache: make([][]byte, 0, 10*capacity),
 	}
 
 	for i := 0; i < capacity; i++ {

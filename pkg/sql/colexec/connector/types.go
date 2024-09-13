@@ -33,7 +33,7 @@ type Connector struct {
 }
 
 type container struct {
-	sp pSpool.PipelineCommunication
+	sp *pSpool.PipelineSpool
 }
 
 func (connector *Connector) GetOperatorBase() *vm.OperatorBase {

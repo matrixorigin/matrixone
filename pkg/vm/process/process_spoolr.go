@@ -35,7 +35,7 @@ type PipelineSignal struct {
 
 	// for case: GetFromIndex
 	index  int
-	source pSpool.PipelineCommunication
+	source *pSpool.PipelineSpool
 
 	// for case: GetDirectly
 	mp       *mpool.MPool
@@ -43,7 +43,7 @@ type PipelineSignal struct {
 }
 
 // NewPipelineSignalToGetFromSpool return a signal indicate the receiver to get data from source by index.
-func NewPipelineSignalToGetFromSpool(source pSpool.PipelineCommunication, index int) PipelineSignal {
+func NewPipelineSignalToGetFromSpool(source *pSpool.PipelineSpool, index int) PipelineSignal {
 	return PipelineSignal{
 		typ:      GetFromIndex,
 		source:   source,
