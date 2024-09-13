@@ -13,3 +13,9 @@
 // limitations under the License.
 
 package multi_update
+
+// update single table
+
+// update table with unique key
+
+// update table s3

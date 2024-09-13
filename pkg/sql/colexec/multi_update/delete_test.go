@@ -14,12 +14,80 @@
 
 package multi_update
 
-// delete simple table
+import (
+	"testing"
 
-// delete with unique & secondary index
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
 
-// delete with partition table
+func TestDeleteSimpleTable(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t)
+	eng := prepareTestEng(ctrl)
+
+	hasUniqueKey := false
+	hasSecondaryKey := false
+	isPartition := false
+
+	case1 := buildDeleteTestCase(eng, hasUniqueKey, hasSecondaryKey, isPartition)
+
+	runTestCases(t, proc, []*testCase{case1})
+}
+
+func TestDeleteTableWithUniqueKeyAndSecondaryKey(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t)
+	eng := prepareTestEng(ctrl)
+
+	hasUniqueKey := true
+	hasSecondaryKey := true
+	isPartition := false
+
+	case1 := buildDeleteTestCase(eng, hasUniqueKey, hasSecondaryKey, isPartition)
+
+	runTestCases(t, proc, []*testCase{case1})
+}
+
+func TestDeletePartitionTable(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t)
+	eng := prepareTestEng(ctrl)
+
+	hasUniqueKey := false
+	hasSecondaryKey := false
+	isPartition := true
+
+	case1 := buildDeleteTestCase(eng, hasUniqueKey, hasSecondaryKey, isPartition)
+
+	runTestCases(t, proc, []*testCase{case1})
+}
 
 // delete s3
 
 // multi delete
+
+// ----- util function ----
+func buildDeleteTestCase(eng engine.Engine, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) *testCase {
+	batchs, affectRows := prepareTestDeleteBatchs(hasUniqueKey, hasSecondaryKey, isPartition)
+	multiUpdateCtxs := prepareTestMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+
+	retCase := &testCase{
+		op: &MultiUpdate{
+			ctr:                    container{},
+			MultiUpdateCtx:         multiUpdateCtxs,
+			ToWriteS3:              false,
+			IsOnduplicateKeyUpdate: false,
+			Engine:                 eng,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
+		},
+		inputBatchs:  batchs,
+		expectErr:    false,
+		affectedRows: affectRows,
+	}
+
+	return retCase
+}
