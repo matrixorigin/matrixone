@@ -75,7 +75,12 @@ func (tbl *baseTable) DedupWorkSpace(key containers.Vector) (err error) {
 	}
 	return
 }
-
+func (tbl *baseTable) approxSize() int {
+	if tbl == nil || tbl.tableSpace == nil || tbl.tableSpace.node == nil {
+		return 0
+	}
+	return tbl.tableSpace.node.data.ApproxSize()
+}
 func (tbl *baseTable) BatchDedupLocal(bat *containers.Batch) error {
 	if tbl.tableSpace == nil || !tbl.schema.HasPK() {
 		return nil

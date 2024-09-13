@@ -105,6 +105,7 @@ func EncodeFixed[T FixedSizeT](v T) []byte {
 	sz := unsafe.Sizeof(v)
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), sz)
 }
+
 func DecodeFixed[T FixedSizeT](v []byte) T {
 	return *(*T)(unsafe.Pointer(&v[0]))
 }
