@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -1795,7 +1796,7 @@ func (eng *Engine) consumeSubscribeResponse(
 	lazyLoad bool,
 	receiveAt time.Time) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, eng, &lt, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, eng, &lt, lazyLoad, receiveAt, true)
 }
 
 func (eng *Engine) consumeUpdateLogTail(
