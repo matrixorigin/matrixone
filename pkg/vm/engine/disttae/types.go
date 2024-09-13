@@ -65,6 +65,8 @@ const (
 	INSERT = iota
 	DELETE
 	ALTER // alter command for TN. Update batches for mo_tables and mo_columns will fall into the category of INSERT and DELETE.
+	PersistedInsert
+	PersistedDelete
 )
 
 type NoteLevel string
@@ -77,9 +79,11 @@ const (
 
 var (
 	typesNames = map[int]string{
-		INSERT: "insert",
-		DELETE: "delete",
-		ALTER:  "alter",
+		INSERT:          "insert",
+		DELETE:          "delete",
+		ALTER:           "alter",
+		PersistedInsert: "persisted_insert",
+		PersistedDelete: "persisted_delete",
 	}
 )
 
@@ -250,7 +254,7 @@ type Transaction struct {
 	// the total row count for insert entries when txn commits.
 	insertCount int
 	// the approximation of total row count for delete entries when txn commits.
-	deleteCntApproximation int
+	approximateInMemDeleteCnt int
 	// the last snapshot write offset
 	snapshotWriteOffset int
 
@@ -725,7 +729,7 @@ type Entry struct {
 	databaseId uint64
 
 	// blockName for s3 file
-	fileName string
+	fileName string // todo remove this field
 	//tuples would be applied to the table which belongs to the tenant(accountId)
 	bat       *batch.Batch
 	tnStore   DNStore

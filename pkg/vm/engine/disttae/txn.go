@@ -134,7 +134,7 @@ func (txn *Transaction) WriteBatch(
 
 	if typ == DELETE && tableId != catalog.MO_DATABASE_ID &&
 		tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
-		txn.deleteCntApproximation += bat.RowCount()
+		txn.approximateInMemDeleteCnt += bat.RowCount()
 	}
 
 	e := Entry{
@@ -411,7 +411,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	//offset < 0 indicates commit.
 	if offset < 0 {
 		if txn.workspaceSize < txn.engine.workspaceThreshold && txn.insertCount < txn.engine.insertEntryMaxCount &&
-			txn.deleteCntApproximation < txn.engine.insertEntryMaxCount {
+			txn.approximateInMemDeleteCnt < txn.engine.insertEntryMaxCount {
 			return nil
 		}
 	} else {
@@ -450,17 +450,17 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		cnt := 0
 		mp := make(map[tableKey][]*batch.Batch)
 		lastTxnWritesIndex := offset
-		write := txn.writes[:0]
+		write := txn.writes
 		for i := offset; i < len(txn.writes); i++ {
 			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
 				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
 				txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
-				write = append(write, txn.writes[i])
+				write[lastTxnWritesIndex] = write[i]
 				lastTxnWritesIndex++
 				continue
 			}
 			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-				write = append(write, txn.writes[i])
+				write[lastTxnWritesIndex] = write[i]
 				lastTxnWritesIndex++
 				continue
 			}
@@ -492,16 +492,17 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			}
 
 			if keepElement {
-				write = append(write, txn.writes[i])
+				write[lastTxnWritesIndex] = write[i]
 				lastTxnWritesIndex++
 			}
 		}
 
-		if typ == DELETE && cnt < txn.engine.insertEntryMaxCount {
+		if typ == PersistedDelete && cnt < txn.engine.insertEntryMaxCount {
 			return nil
 		}
 
-		txn.writes = write
+		txn.writes = write[:lastTxnWritesIndex]
+
 		for tbKey := range mp {
 			// scenario 2 for cn write s3, more info in the comment of S3Writer
 			tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
@@ -568,12 +569,12 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	}
 
 	if dumpAll {
-		if txn.deleteCntApproximation >= txn.engine.insertEntryMaxCount {
-			if err := dump(DELETE); err != nil {
+		if txn.approximateInMemDeleteCnt >= txn.engine.insertEntryMaxCount {
+			if err := dump(PersistedDelete); err != nil {
 				return err
 			}
 		}
-		txn.deleteCntApproximation = 0
+		txn.approximateInMemDeleteCnt = 0
 		txn.workspaceSize = 0
 		txn.pkCount -= pkCount
 		// modifies txn.writes.
@@ -646,7 +647,7 @@ func (txn *Transaction) WriteFileLocked(
 	tnStore DNStore) error {
 	txn.hasS3Op.Store(true)
 	newBat := bat
-	if typ == INSERT {
+	if typ == INSERT || typ == PersistedDelete {
 		newBat = batch.NewWithSize(len(bat.Vecs))
 		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
 
