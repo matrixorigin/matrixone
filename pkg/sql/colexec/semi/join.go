@@ -135,13 +135,15 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.skipProbe {
+				rowCount := bat.RowCount()
 				for i, pos := range semiJoin.Result {
-					err = ctr.rbat.Vecs[i].UnionBatch(bat.Vecs[pos], 0, bat.Vecs[pos].Length(), nil, proc.Mp())
+					srcVec := bat.Vecs[pos]
+					err = ctr.rbat.Vecs[i].UnionBatch(srcVec, 0, rowCount, nil, proc.Mp())
 					if err != nil {
 						return result, err
 					}
 				}
-				ctr.rbat.SetRowCount(bat.RowCount())
+				ctr.rbat.SetRowCount(rowCount)
 				result.Batch, err = semiJoin.EvalProjection(ctr.rbat, proc)
 			} else {
 				if err := ctr.probe(bat, semiJoin, proc, &probeResult); err != nil {
