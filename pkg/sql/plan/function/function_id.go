@@ -251,6 +251,7 @@ const (
 	APPROX_COUNT_DISTINCT
 
 	LOAD_FILE
+	SAVE_FILE
 
 	//information functions
 	//Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
@@ -599,6 +600,7 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
+	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
 	"md5":                            MD5,

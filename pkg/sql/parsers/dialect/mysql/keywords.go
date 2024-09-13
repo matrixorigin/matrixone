@@ -29,6 +29,7 @@ func init() {
 		"alter":                      ALTER,
 		"algorithm":                  ALGORITHM,
 		"analyze":                    ANALYZE,
+		"phyplan":                    PHYPLAN,
 		"and":                        AND,
 		"any":                        ANY,
 		"as":                         AS,
@@ -638,5 +639,6 @@ func init() {
 		"restore":                    RESTORE,
 		"pitr":                       PITR,
 		"cdc":                        CDC,
+		"apply":                      APPLY,
 	}
 }

@@ -15,8 +15,6 @@
 package compare
 
 import (
-	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -181,9 +179,9 @@ func uuidAscCompare(x, y types.Uuid) int {
 	return x.Compare(y)
 }
 
-// PXU FIXME
+// PXU FIXME Done
 func txntsAscCompare(x, y types.TS) int {
-	return bytes.Compare(x[:], y[:])
+	return x.Compare(&y)
 }
 func rowidAscCompare(x, y types.Rowid) int {
 	return x.Compare(&y)
@@ -225,8 +223,8 @@ func uuidDescCompare(x, y types.Uuid) int {
 }
 
 func txntsDescCompare(x, y types.TS) int {
-	// PXU FIXME
-	return bytes.Compare(y[:], x[:])
+	// PXU FIXME Done
+	return y.Compare(&x)
 }
 func rowidDescCompare(x, y types.Rowid) int {
 	return y.Compare(&x)

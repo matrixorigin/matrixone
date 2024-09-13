@@ -219,6 +219,7 @@ import (
     accountRole *tree.Role
     showType tree.ShowType
     joinTableExpr *tree.JoinTableExpr
+    applyTableExpr *tree.ApplyTableExpr
 
     indexHintType tree.IndexHintType
     indexHintScope tree.IndexHintScope
@@ -278,7 +279,7 @@ import (
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
-%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CROSS_L2
+%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CROSS_L2 APPLY
 %nonassoc LOWER_THAN_ON
 %nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
@@ -332,7 +333,7 @@ import (
 %token <str> LOW_PRIORITY HIGH_PRIORITY DELAYED
 
 // Create Table
-%token <str> CREATE ALTER DROP RENAME ANALYZE ADD RETURNS
+%token <str> CREATE ALTER DROP RENAME ANALYZE PHYPLAN ADD RETURNS
 %token <str> SCHEMA TABLE SEQUENCE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
 %token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
 %token <str> MAXVALUE PARTITION REORGANIZE LESS THAN PROCEDURE TRIGGER
@@ -554,8 +555,9 @@ import (
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
 %type <tableExprs> table_name_wild_list
-%type <joinTableExpr>  table_references join_table
-%type <tableExpr> into_table_name table_function table_factor table_reference escaped_table_reference
+%type <joinTableExpr>  join_table
+%type <applyTableExpr> apply_table
+%type <tableExpr> into_table_name table_function table_factor table_reference escaped_table_reference table_references
 %type <direction> asc_desc_opt
 %type <nullsPosition> nulls_first_last_opt
 %type <order> order
@@ -620,7 +622,7 @@ import (
 %type <aliasedTableExpr> aliased_table_name
 %type <unionTypeRecord> union_op
 %type <parenTableExpr> table_subquery
-%type <str> inner_join straight_join outer_join natural_join
+%type <str> inner_join straight_join outer_join natural_join apply_type
 %type <funcType> func_type_opt
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
@@ -3015,9 +3017,41 @@ explain_stmt:
         explainStmt.Options = options
         $$ = explainStmt
     }
+|   explain_sym PHYPLAN explainable_stmt
+    {
+        explainStmt := tree.NewExplainPhyPlan($3, "text")
+        optionElem := tree.MakeOptionElem("phyplan", "NULL")
+        options := tree.MakeOptions(optionElem)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym PHYPLAN VERBOSE explainable_stmt
+    {
+        explainStmt := tree.NewExplainPhyPlan($4, "text")
+        optionElem1 := tree.MakeOptionElem("phyplan", "NULL")
+        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem1)
+        options = append(options, optionElem2)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym PHYPLAN ANALYZE explainable_stmt
+    {
+        explainStmt := tree.NewExplainPhyPlan($4, "text")
+        optionElem1 := tree.MakeOptionElem("phyplan", "NULL")
+        optionElem2 := tree.MakeOptionElem("analyze", "NULL")
+        options := tree.MakeOptions(optionElem1)
+        options = append(options, optionElem2)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
-        if tree.IsContainAnalyze($3) {
+    	if tree.IsContainPhyPlan($3) {
+	    explainStmt := tree.NewExplainPhyPlan($5, "text")
+            explainStmt.Options = $3
+            $$ = explainStmt
+    	} else if tree.IsContainAnalyze($3) {
             explainStmt := tree.NewExplainAnalyze($5, "text")
             explainStmt.Options = $3
             $$ = explainStmt
@@ -3062,6 +3096,7 @@ explain_option_key:
     ANALYZE
 |   VERBOSE
 |   FORMAT
+|   PHYPLAN
 
 explain_foramt_value:
     JSON
@@ -5684,7 +5719,9 @@ table_references:
    	{
    		if t, ok := $1.(*tree.JoinTableExpr); ok {
    			$$ = t
-   		} else {
+   		} else if t, ok := $1.(*tree.ApplyTableExpr); ok {
+   			$$ = t
+        } else {
    			$$ = &tree.JoinTableExpr{Left: $1, Right: nil, JoinType: tree.JOIN_TYPE_CROSS}
    		}
     }
@@ -5702,6 +5739,10 @@ table_reference:
 	{
 		$$ = $1
 	}
+|   apply_table
+    {
+        $$ = $1
+    }
 
 join_table:
     table_reference inner_join table_factor join_condition_opt
@@ -5738,6 +5779,26 @@ join_table:
             JoinType: $2,
             Right: $3,
         }
+    }
+
+apply_table:
+    table_reference apply_type table_factor
+    {
+        $$ = &tree.ApplyTableExpr{
+            Left: $1,
+            ApplyType: $2,
+            Right: $3,
+        }
+    }
+
+apply_type:
+    CROSS APPLY
+    {
+        $$ = tree.APPLY_TYPE_CROSS
+    }
+|   OUTER APPLY
+    {
+        $$ = tree.APPLY_TYPE_OUTER
     }
 
 natural_join:
