@@ -116,7 +116,7 @@ func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 }
 
 type fromCacheElement struct {
-	idx int
+	idx         int
 	dataRequire int
 	areaRequire int
 }
@@ -159,9 +159,8 @@ func (cb *cachedBatch) GetCopiedBatch(
 		}
 
 		// copy vectors.
-
-
-		fromCacheList := make([]fromCacheElement, 0, 2 * len(dst.Vecs))
+		needBytesCount := 0
+		fromCacheList := make([]fromCacheElement, 0, 2*len(dst.Vecs))
 
 		for i := range dst.Vecs {
 			vec := src.Vecs[i]
@@ -179,11 +178,19 @@ func (cb *cachedBatch) GetCopiedBatch(
 				}
 
 			} else {
+				r1, r2 := len(vec.GetData()), len(vec.GetArea())
 				fromCacheList = append(fromCacheList, fromCacheElement{
-					idx: i,
-					dataRequire: len(vec.GetData()),
-					areaRequire: len(vec.GetArea()),
+					idx:         i,
+					dataRequire: r1,
+					areaRequire: r2,
 				})
+
+				if r1 > 0 {
+					needBytesCount++
+				}
+				if r2 > 0 {
+					needBytesCount++
+				}
 			}
 			dst.Vecs[i].SetIsBin(vec.GetIsBin())
 
@@ -197,10 +204,16 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 		// use the lock as few times as possible.
 		if len(fromCacheList) > 0 {
+			var tempCache [][]byte
+
 			cb.bytesCacheLock.Lock()
-			for i := range fromCacheList {
-				dst.Vecs[fromCacheList[i].idx] =
-					cb.setSuitableDataAreaToVector(fromCacheList[i].dataRequire, fromCacheList[i].areaRequire, dst.Vecs[i])
+			diff := len(cb.bytesCache) - needBytesCount
+			if diff > 0 {
+				tempCache = cb.bytesCache[diff:]
+				cb.bytesCache = cb.bytesCache[:diff]
+			} else {
+				tempCache = cb.bytesCache[0:]
+				cb.bytesCache = cb.bytesCache[:0]
 			}
 			cb.bytesCacheLock.Unlock()
 
@@ -208,6 +221,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 				typ := *dst.Vecs[fromCacheList[i].idx].GetType()
 				index := fromCacheList[i].idx
 
+				setSuitableDataAreaToVectorVersion2(tempCache, fromCacheList[i].dataRequire, fromCacheList[i].areaRequire, dst.Vecs[i])
 				dst.Vecs[index].Reset(typ)
 				if err = vector.GetUnionAllFunction(typ, cb.mp)(
 					dst.Vecs[index],
@@ -232,9 +246,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 	return dst, false, nil
 }
 
-// setSuitableDataAreaToVector get two long-enough bytes slices from the cache,
-// and set them to the vector.
-// if not found, set the last one to the vector.
 func (cb *cachedBatch) setSuitableDataAreaToVector(
 	dataSize, areaSize int, vec *vector.Vector) *vector.Vector {
 	setDataFirst := dataSize >= areaSize
@@ -299,6 +310,78 @@ func (cb *cachedBatch) setSuitableDataAreaToVector(
 		cb.bytesCache = cb.bytesCache[:len(cb.bytesCache)-1]
 	}
 	return vec
+}
+
+// setSuitableDataAreaToVectorVersion2 get two long-enough bytes slices from the cache, and set them to the vector.
+// if not found, set the last one to the vector.
+func setSuitableDataAreaToVectorVersion2(
+	src [][]byte, dataSize, areaSize int, vec *vector.Vector) {
+
+	if len(src) == 0 {
+		return
+	}
+
+	setDataFirst := dataSize >= areaSize
+
+	first, second := dataSize, areaSize
+	if !setDataFirst {
+		first, second = areaSize, dataSize
+	}
+
+	if first > 0 {
+		suitIdx := -1
+		suitDifference := math.MaxInt
+
+		for i, bs := range src {
+			if difference := cap(bs) - first; difference > 0 {
+				if difference < suitDifference {
+					suitIdx = i
+					suitDifference = difference
+				}
+			}
+		}
+
+		if suitIdx != -1 {
+			if setDataFirst {
+				vector.SetVecData(vec, src[suitIdx])
+			} else {
+				vector.SetVecArea(vec, src[suitIdx])
+			}
+			src = append(src[:suitIdx], src[suitIdx+1:]...)
+		}
+	}
+
+	if second > 0 {
+		suitIdx := -1
+		suitDifference := math.MaxInt
+
+		for i, bs := range src {
+			if difference := cap(bs) - second; difference > 0 {
+				if difference < suitDifference {
+					suitIdx = i
+					suitDifference = difference
+				}
+			}
+		}
+
+		if suitIdx != -1 {
+			if setDataFirst {
+				vector.SetVecArea(vec, src[suitIdx])
+			} else {
+				vector.SetVecData(vec, src[suitIdx])
+			}
+			src = append(src[:suitIdx], src[suitIdx+1:]...)
+		}
+	}
+
+	if len(src) > 0 && cap(vec.GetData()) == 0 && dataSize > 0 {
+		vector.SetVecData(vec, src[len(src)-1])
+		src = src[:len(src)-1]
+	}
+	if len(src) > 0 && cap(vec.GetArea()) == 0 && areaSize > 0 {
+		vector.SetVecArea(vec, src[len(src)-1])
+		src = src[:len(src)-1]
+	}
 }
 
 func (cb *cachedBatch) Free() {
