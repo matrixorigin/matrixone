@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"runtime"
 
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -47,9 +49,13 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	if ap.NeedHashMap {
 		ap.ctr.vecs = make([][]*vector.Vector, 0)
 		ctr := ap.ctr
+		ctr.needDupVec = false
 		ctr.executor = make([]colexec.ExpressionExecutor, len(ap.Conditions))
 		ctr.keyWidth = 0
 		for i, expr := range ap.Conditions {
+			if _, ok := ap.Conditions[i].Expr.(*pbplan.Expr_Col); !ok {
+				ctr.needDupVec = true
+			}
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
 			// todo : for varlena type, always go strhashmap
@@ -461,7 +467,14 @@ func (ctr *container) evalJoinCondition(proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			ctr.vecs[idx1][idx2] = vec
+			if ctr.needDupVec {
+				ctr.vecs[idx1][idx2], err = vec.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
+			} else {
+				ctr.vecs[idx1][idx2] = vec
+			}
 		}
 	}
 	return nil
