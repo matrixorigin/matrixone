@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -208,6 +209,8 @@ type ComputationWrapper interface {
 
 	RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error
 
+	SetExplainBuffer(buf *bytes.Buffer)
+
 	GetLoadTag() bool
 
 	GetServerStatus() uint16
@@ -391,7 +394,7 @@ func (prepareStmt *PrepareStmt) Close() {
 var _ buf.Allocator = &SessionAllocator{}
 
 type SessionAllocator struct {
-	allocator *malloc.ManagedAllocator
+	allocator *malloc.ManagedAllocator[malloc.Allocator]
 }
 
 func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
