@@ -74,7 +74,7 @@ func (cb *cachedBatch) CacheBatch(bat *batch.Batch) {
 }
 
 func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
-	toCache := make([][]byte, 0, len(bat.Vecs) * 2)
+	toCache := make([][]byte, 0, len(bat.Vecs)*2)
 
 	for i, vec := range bat.Vecs {
 		if vec == nil {
@@ -153,6 +153,9 @@ func (cb *cachedBatch) GetCopiedBatch(
 		}
 
 		// copy vectors.
+		cb.bytesCacheLock.Lock()
+		defer cb.bytesCacheLock.Unlock()
+
 		for i := range dst.Vecs {
 			vec := src.Vecs[i]
 			if vec == nil || dst.Vecs[i] != nil {
@@ -212,8 +215,6 @@ func (cb *cachedBatch) setSuitableDataAreaToVector(
 		first, second = areaSize, dataSize
 	}
 
-	cb.bytesCacheLock.Lock()
-
 	if first > 0 {
 		suitIdx := -1
 		suitDifference := math.MaxInt
@@ -268,9 +269,6 @@ func (cb *cachedBatch) setSuitableDataAreaToVector(
 		vector.SetVecArea(vec, cb.bytesCache[len(cb.bytesCache)-1])
 		cb.bytesCache = cb.bytesCache[:len(cb.bytesCache)-1]
 	}
-
-	cb.bytesCacheLock.Unlock()
-
 	return vec
 }
 
