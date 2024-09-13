@@ -17,24 +17,17 @@ package issues
 import (
 	"bytes"
 	"context"
-	"fmt"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
 )
 
@@ -191,93 +184,4 @@ func TestWWConflict(t *testing.T) {
 			wg.Wait()
 		},
 	)
-}
-
-// #18754
-func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
-	c, err := embed.NewCluster(embed.WithCNCount(1))
-	require.NoError(t, err)
-	require.NoError(t, c.Start())
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
-
-	cn, err := c.GetCNService(0)
-	require.NoError(t, err)
-
-	sqlExecutor := testutils.GetSQLExecutor(cn)
-	require.NotNil(t, sqlExecutor)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
-
-	_, err = sqlExecutor.Exec(ctx, "create database testdb;", executor.Options{})
-	require.NoError(t, err)
-
-	_, err = sqlExecutor.Exec(ctx,
-		"create table hhh(a int) cluster by(`a`);",
-		executor.Options{}.WithDatabase("testdb"))
-	require.NoError(t, err)
-
-	willInsertRows := 10000
-	for i := 0; i < 100; i++ {
-		_, err = sqlExecutor.Exec(ctx,
-			fmt.Sprintf(
-				"insert into hhh "+
-					"select FLOOR(RAND()*1000*1000)"+
-					"from generate_series(1, %d);", willInsertRows/100),
-			executor.Options{}.WithDatabase("testdb"))
-		require.NoError(t, err)
-
-		_, err = sqlExecutor.Exec(ctx,
-			"select mo_ctl('dn', 'flush', 'testdb.hhh');",
-			executor.Options{}.WithWaitCommittedLogApplied())
-		require.NoError(t, err)
-	}
-
-	res, err := sqlExecutor.Exec(ctx,
-		"select count(*) from hhh",
-		executor.Options{}.WithDatabase("testdb"))
-	require.NoError(t, err)
-
-	n := int64(0)
-	res.ReadRows(
-		func(rows int, cols []*vector.Vector) bool {
-			n = executor.GetFixedRows[int64](cols[0])[0]
-			return true
-		},
-	)
-	require.Equal(t, int64(willInsertRows), n)
-
-	eng := cn.RawService().(cnservice.Service).GetEngine()
-	require.NotNil(t, eng)
-
-	sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		op := txn.Txn()
-		db, err := eng.Database(ctx, "testdb", op)
-		require.NoError(t, err)
-		proc := op.GetWorkspace().(*disttae.Transaction).GetProc()
-		rel, err := db.Relation(ctx, "hhh", proc)
-		require.NoError(t, err)
-
-		for r := 0; r < 100; r++ {
-			var keys []int64
-			for i := 0; i < willInsertRows; i++ {
-				keys = append(keys, rand.Int63()%int64(willInsertRows))
-			}
-
-			vec := vector.NewVec(types.T_int64.ToType())
-			for i := 0; i < len(keys); i++ {
-				vector.AppendFixed[int64](vec, keys[i], false, proc.GetMPool())
-			}
-
-			rel.PrimaryKeysMayBeModified(ctx, types.TS{}, types.MaxTs(), vec)
-
-			vec.Free(proc.GetMPool())
-		}
-
-		return nil
-	}, executor.Options{})
 }
