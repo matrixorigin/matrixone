@@ -241,9 +241,9 @@ func getVersionUpgradesBySQL(
 		for i := 0; i < rows; i++ {
 			value := VersionUpgrade{}
 			value.ID = vector.GetFixedAtWithTypeCheck[uint64](cols[0], i)
-			value.FromVersion = cols[1].UnsafeGetStringAt(i)
-			value.ToVersion = cols[2].UnsafeGetStringAt(i)
-			value.FinalVersion = cols[3].UnsafeGetStringAt(i)
+			value.FromVersion = cols[1].GetStringAt(i)
+			value.ToVersion = cols[2].GetStringAt(i)
+			value.FinalVersion = cols[3].GetStringAt(i)
 			value.FinalVersionOffset = vector.GetFixedAtWithTypeCheck[uint32](cols[4], i)
 			value.State = vector.GetFixedAtWithTypeCheck[int32](cols[5], i)
 			value.UpgradeOrder = vector.GetFixedAtWithTypeCheck[int32](cols[6], i)
