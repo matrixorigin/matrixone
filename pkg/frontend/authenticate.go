@@ -1825,11 +1825,7 @@ func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
 	return fmt.Sprintf(getDbPubCountFormat, dbName), nil
 }
 
-func getTableColumnDefSql(ctx context.Context, accountId uint64, dbName, tableName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, tableName)
-	if err != nil {
-		return "", err
-	}
+func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
 	return fmt.Sprintf(getTableColumnDefFormat, accountId, dbName, tableName), nil
 }
 

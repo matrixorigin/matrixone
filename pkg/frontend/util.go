@@ -1502,7 +1502,7 @@ func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, t
 		err     error
 	)
 
-	sql, err = getTableColumnDefSql(ctx, accountId, dbName, table)
+	sql, err = getTableColumnDefSql(accountId, dbName, table)
 	if err != nil {
 		return nil, err
 	}

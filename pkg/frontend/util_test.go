@@ -1345,7 +1345,7 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		ses.proc = testutil.NewProc()
 		ses.proc.Base.TxnOperator = txnOperator
 
-		sql, err := getTableColumnDefSql(ctx, uint64(tenant.TenantID), "db1", "t1")
+		sql, err := getTableColumnDefSql(uint64(tenant.TenantID), "db1", "t1")
 		assert.Nil(t, err)
 
 		mrs := newMrsForPasswordOfUser([][]interface{}{{}})
@@ -1354,4 +1354,36 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		_, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
+}
+
+func Test_getTableColumnDefSql(t *testing.T) {
+	tests := []struct {
+		name      string
+		accountId uint64
+		dbName    string
+		tableName string
+		want      string
+		wantErr   bool
+	}{
+		{
+			name:      "1",
+			accountId: 1,
+			dbName:    "db1",
+			tableName: "tbl1",
+			want:      fmt.Sprintf(getTableColumnDefFormat, 1, "db1", "tbl1"),
+			wantErr:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getTableColumnDefSql(tt.accountId, tt.dbName, tt.tableName)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getTableColumnDefSql() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("getTableColumnDefSql() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
