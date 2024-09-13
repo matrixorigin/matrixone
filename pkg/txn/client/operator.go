@@ -241,6 +241,7 @@ type txnOperator struct {
 	fprints             footPrints
 
 	waitActiveCost time.Duration
+	runningSQL     atomic.Bool
 }
 
 func newTxnOperator(
@@ -517,6 +518,10 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
+	if tc.runningSQL.Load() {
+		tc.logger.Fatal("commit on running txn")
+	}
+
 	tc.commitCounter.addEnter()
 	defer tc.commitCounter.addExit()
 	txn := tc.getTxnMeta(false)
@@ -552,6 +557,10 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
+	if tc.runningSQL.Load() {
+		tc.logger.Fatal("commit on running txn")
+	}
+
 	tc.rollbackCounter.addEnter()
 	defer tc.rollbackCounter.addExit()
 	v2.TxnRollbackCounter.Inc()
@@ -1262,10 +1271,12 @@ func (tc *txnOperator) doCostAction(
 }
 
 func (tc *txnOperator) EnterRunSql() {
+	tc.runningSQL.Store(true)
 	tc.runSqlCounter.addEnter()
 }
 
 func (tc *txnOperator) ExitRunSql() {
+	tc.runningSQL.Store(false)
 	tc.runSqlCounter.addExit()
 }
 
