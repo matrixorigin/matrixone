@@ -74,6 +74,7 @@ func (cb *cachedBatch) CacheBatch(bat *batch.Batch) {
 }
 
 func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
+	toCache := make([][]byte, 0, len(bat.Vecs) * 2)
 
 	for i, vec := range bat.Vecs {
 		if vec == nil {
@@ -90,14 +91,12 @@ func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 		data := vector.GetAndClearVecData(vec)
 		area := vector.GetAndClearVecArea(vec)
 
-		cb.bytesCacheLock.Lock()
 		if data != nil {
-			cb.bytesCache = append(cb.bytesCache, data)
+			toCache = append(toCache, data)
 		}
 		if area != nil {
-			cb.bytesCache = append(cb.bytesCache, area)
+			toCache = append(toCache, area)
 		}
-		cb.bytesCacheLock.Unlock()
 
 		bat.ReplaceVector(vec, nil, i)
 	}
@@ -110,6 +109,10 @@ func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 		bat.Aggs[i].Free()
 	}
 	bat.Aggs = nil
+
+	cb.bytesCacheLock.Lock()
+	cb.bytesCache = append(cb.bytesCache, toCache...)
+	cb.bytesCacheLock.Unlock()
 }
 
 // GetCopiedBatch get a batch from the batchPointer channel
