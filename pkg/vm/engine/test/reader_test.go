@@ -563,6 +563,7 @@ func Test_ShardingHandler(t *testing.T) {
 		readerBuildParam.GetColumMetadataScanInfoParam.ColumnName =
 			schema.ColDefs[primaryKeyIdx].Name
 
+		var m plan.MetadataScanInfos
 		res, err = disttae.HandleShardingReadGetColumMetadataScanInfo(
 			ctx,
 			shard.TableShard{},
@@ -571,6 +572,9 @@ func Test_ShardingHandler(t *testing.T) {
 			timestamp.Timestamp{},
 			morpc.NewBuffer(),
 		)
+		require.NoError(t, err)
+
+		err = m.Unmarshal(res)
 		require.NoError(t, err)
 
 		require.NoError(t, txn.Commit(ctx))
