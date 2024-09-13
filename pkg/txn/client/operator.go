@@ -519,7 +519,7 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	if tc.runningSQL.Load() {
-		tc.logger.Fatal("commit on running txn")
+		util.GetLogger().Fatal("commit on running txn")
 	}
 
 	tc.commitCounter.addEnter()
@@ -558,7 +558,7 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
 	if tc.runningSQL.Load() {
-		tc.logger.Fatal("commit on running txn")
+		util.GetLogger().Fatal("commit on running txn")
 	}
 
 	tc.rollbackCounter.addEnter()
