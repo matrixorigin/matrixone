@@ -46,8 +46,6 @@ type pipelineSpool struct {
 type pipelineSpoolMessage struct {
 	content *batch.Batch
 	err     error
-
-	src *cachedBatch
 }
 
 func (ps *pipelineSpool) SendBatch(
@@ -66,7 +64,6 @@ func (ps *pipelineSpool) SendBatch(
 	msg := pipelineSpoolMessage{
 		content: dst,
 		err:     info,
-		src:     ps.cache,
 	}
 
 	if receiverID == SendToAllLocal {
