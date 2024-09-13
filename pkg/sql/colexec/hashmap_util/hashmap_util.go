@@ -64,6 +64,7 @@ func (hb *HashmapBuilder) GetGroupCount() uint64 {
 func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process) error {
 	var err error
 	if len(hb.executor) == 0 {
+		hb.needDupVec = false
 		hb.vecs = make([][]*vector.Vector, 0)
 		hb.executor = make([]colexec.ExpressionExecutor, len(Conditions))
 		hb.keyWidth = 0
@@ -118,6 +119,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process) {
 }
 
 func (hb *HashmapBuilder) Free(proc *process.Process) {
+	hb.needDupVec = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -150,6 +152,7 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 }
 
 func (hb *HashmapBuilder) FreeWithError(proc *process.Process) {
+	hb.needDupVec = false
 	hb.FreeHashMapAndBatches(proc)
 	hb.MultiSels = nil
 	for i := range hb.executor {
