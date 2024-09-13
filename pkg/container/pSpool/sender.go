@@ -28,8 +28,9 @@ const (
 )
 
 type PipelineSpool struct {
-	shardPool []pipelineSpoolMessage
-	shardRefs []atomic.Int32
+	shardPool  []pipelineSpoolMessage
+	shardRefs  []atomic.Int32
+	doRefCheck []bool
 
 	rs []receiver
 
@@ -83,7 +84,7 @@ func (ps *PipelineSpool) SendBatch(
 // ReleaseCurrent force to release the last received one.
 func (ps *PipelineSpool) ReleaseCurrent(idx int) {
 	if last := ps.rs[idx].getLastPop(); last != noneLastPop {
-		if ps.shardRefs[last].Add(-1) == 0 {
+		if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
 			ps.cache.CacheBatch(ps.shardPool[last].content)
 			ps.freeShardPool <- last
 		}
@@ -121,7 +122,12 @@ func (ps *PipelineSpool) sendToAll(ctx context.Context, msg pipelineSpoolMessage
 		return true
 	case index := <-ps.freeShardPool:
 		ps.shardPool[index] = msg
-		ps.shardRefs[index].Store(int32(len(ps.rs)))
+		if ps.shardRefs == nil {
+			ps.doRefCheck[index] = false
+		} else {
+			ps.shardRefs[index].Store(int32(len(ps.rs)))
+			ps.doRefCheck[index] = true
+		}
 
 		for i := 0; i < len(ps.rs); i++ {
 			ps.rs[i].pushNextIndex(index)
@@ -136,7 +142,8 @@ func (ps *PipelineSpool) sendToIdx(ctx context.Context, idx int, msg pipelineSpo
 		return true
 	case index := <-ps.freeShardPool:
 		ps.shardPool[index] = msg
-		ps.shardRefs[index].Store(1)
+		// if send to only one, there is no need to do ref check.
+		ps.doRefCheck[index] = false
 
 		ps.rs[idx].pushNextIndex(index)
 	}

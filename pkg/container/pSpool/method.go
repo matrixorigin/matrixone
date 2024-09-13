@@ -27,10 +27,17 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) *PipelineSpool {
 
 	ps2 := &PipelineSpool{
 		shardPool:    make([]pipelineSpoolMessage, bl),
-		shardRefs:    make([]atomic.Int32, bl),
+		shardRefs:    nil,
+		doRefCheck:   make([]bool, bl),
 		rs:           newReceivers(receiverCnt, int32(bl)),
 		cache:        initCachedBatch(mp, bl),
 		csDoneSignal: make(chan struct{}, receiverCnt),
+	}
+
+	// if there is only one receiver, we have no need to do reference check because it's always
+	// only one user.
+	if receiverCnt > 1 {
+		ps2.shardRefs = make([]atomic.Int32, bl)
 	}
 
 	ps2.freeShardPool = make(chan int8, len(ps2.shardPool))
