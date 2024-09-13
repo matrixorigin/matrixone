@@ -549,8 +549,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			panic("can not expand ranges on remote pipeline!")
 		}
 
-		// newExprList := plan2.DeepCopyExprList(inExprList) //base runtime filter ?
-		var newExprList []*plan.Expr
+		newExprList := plan2.DeepCopyExprList(inExprList)
 		if len(s.DataSource.node.BlockFilterList) > 0 {
 			tmp := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(s.DataSource.node.BlockFilterList))
 			tmp, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, tmp, s.Proc, true, true)
