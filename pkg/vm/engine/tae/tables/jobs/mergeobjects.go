@@ -21,6 +21,7 @@ import (
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -356,6 +357,9 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if schema.HasSortKey() {
 		sortkeyPos = schema.GetSingleSortKeyIdx()
 	}
+	if task.rt.LockMergeService.IsLockedByUser(task.rel.ID()) {
+		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
+	}
 	phaseDesc = "1-DoMergeAndWrite"
 	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task, task.isTombstone); err != nil {
 		return err
@@ -400,6 +404,9 @@ func HandleMergeEntryInTxn(
 		objID := drop.ObjectName().ObjectId()
 		obj, err := rel.GetObject(objID, isTombstone)
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				logutil.Infof("[MERGE-EOB] LockMerge %v %v", objID.ShortStringEx(), err)
+			}
 			return nil, err
 		}
 		mergedObjs = append(mergedObjs, obj.GetMeta().(*catalog.ObjectEntry))

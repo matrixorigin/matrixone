@@ -278,7 +278,16 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				}
 				return nil
 			},
-		)}
+		),
+		gc.WithCronJob(
+			"prune-lockmerge",
+			options.DefaultLockMergePruneInterval,
+			func(ctx context.Context) error {
+				db.Runtime.LockMergeService.Prune()
+				return nil
+			},
+		),
+	}
 	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
 		cronJobs = append(cronJobs,
 			gc.WithCronJob(
