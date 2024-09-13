@@ -21,18 +21,12 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/require"
-
-	"sort"
-
-	"github.com/panjf2000/ants/v2"
-	"github.com/stretchr/testify/assert"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -68,6 +63,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -7681,7 +7679,6 @@ func TestDedupSnapshot2(t *testing.T) {
 }
 
 func TestDedupSnapshot3(t *testing.T) {
-	t.Skip("TODO: jxm fix me")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -7717,9 +7714,8 @@ func TestDedupSnapshot3(t *testing.T) {
 				return
 			}
 
-			txn2, _ := tae.StartTxn(nil)
+			txn2, _ := tae.StartTxnWithStartTSAndSnapshotTS(nil, txn.GetStartTS())
 			txn2.SetDedupType(txnif.DedupPolicy_CheckIncremental)
-			txn2.SetSnapshotTS(txn.GetStartTS())
 			database, _ = txn2.GetDatabase("db")
 			rel, _ = database.GetRelationByName(schema.Name)
 			_ = rel.Append(context.Background(), bats[offset])
@@ -9419,6 +9415,58 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
 }
 
+func TestTransferS3Deletes(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	rows := 10
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	// apply deleteloc fails on ablk
+	txn, _ := tae.StartTxn(nil)
+	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, txn)
+	{
+		tae.CompactBlocks(true)
+	}
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	assert.NoError(t, txn.Commit(ctx))
+	tae.CheckRowsByScan(9, true)
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+func TestStartStopTableMerge(t *testing.T) {
+	db := testutil.InitTestDB(context.Background(), "MergeTest", t, nil)
+	defer db.Close()
+
+	scheduler := merge.NewScheduler(db.Runtime, db.CNMergeSched)
+
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 1000
+	schema.ObjectMaxBlocks = 2
+
+	txn, _ := db.StartTxn(nil)
+	database, _ := txn.CreateDatabase("db", "", "")
+	rel, _ := database.CreateRelation(schema)
+	require.NoError(t, txn.Commit(context.Background()))
+
+	tbl := rel.GetMeta().(*catalog.TableEntry)
+	scheduler.StopMerge(tbl)
+
+	require.Equal(t, moerr.GetOkStopCurrRecur(), scheduler.LoopProcessor.OnTable(tbl))
+
+	scheduler.StartMerge(tbl)
+
+	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
+}
 func TestDeleteByPhyAddrKeys(t *testing.T) {
 	ctx := context.Background()
 

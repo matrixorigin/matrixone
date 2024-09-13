@@ -383,6 +383,10 @@ func (node *ExplainAnalyze) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
 
+func (node *ExplainPhyPlan) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
 func (node *ExplainFor) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
@@ -436,6 +440,10 @@ func (node *ShowConnectors) StmtKind() StmtKind {
 }
 
 func (node *AlterTable) StmtKind() StmtKind {
+	return defaultStatusTyp
+}
+
+func (node *RenameTable) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 

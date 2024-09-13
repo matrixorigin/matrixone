@@ -106,3 +106,14 @@ func NewTombstoneBatchByPKType(pkType types.Type, mp *mpool.MPool) *containers.B
 	bat.AddVector(AttrCommitTs, commitTSVec)
 	return bat
 }
+
+// rowid, pk, commitTS
+// used in Collect Delete in Range
+func NewCNTombstoneBatchByPKType(pkType types.Type, mp *mpool.MPool) *containers.Batch {
+	bat := containers.NewBatch()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), mp)
+	pkVec := containers.MakeVector(pkType, mp)
+	bat.AddVector(AttrRowID, rowIDVec)
+	bat.AddVector(AttrPKVal, pkVec)
+	return bat
+}

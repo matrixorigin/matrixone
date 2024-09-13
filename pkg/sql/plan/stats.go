@@ -954,6 +954,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
 		}
 
+	case plan.Node_APPLY:
+		node.Stats.Outcnt = leftStats.Outcnt
+		node.Stats.Cost = leftStats.Outcnt
+		node.Stats.Selectivity = leftStats.Selectivity
+		node.Stats.BlockNum = leftStats.BlockNum
+
 	default:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.Outcnt = childStats.Outcnt
@@ -1224,6 +1230,7 @@ func DefaultHugeStats() *plan.Stats {
 	stats.Outcnt = 100000000
 	stats.Selectivity = 1
 	stats.BlockNum = 10000
+	stats.Rowsize = 10000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
@@ -1235,6 +1242,7 @@ func DefaultBigStats() *plan.Stats {
 	stats.Outcnt = float64(costThresholdForOneCN)
 	stats.Selectivity = 1
 	stats.BlockNum = int32(BlockThresholdForOneCN)
+	stats.Rowsize = 1000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
@@ -1246,6 +1254,7 @@ func DefaultStats() *plan.Stats {
 	stats.Outcnt = 1000
 	stats.Selectivity = 1
 	stats.BlockNum = 1
+	stats.Rowsize = 100
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
@@ -1257,6 +1266,7 @@ func DefaultMinimalStats() *plan.Stats {
 	stats.Outcnt = 10
 	stats.Selectivity = 0.0001
 	stats.BlockNum = 1
+	stats.Rowsize = 1
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
@@ -1406,6 +1416,18 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 		return "AP QUERY PLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
 	}
 	return "QUERY PLAN"
+}
+
+func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
+	switch GetExecType(qry, txnHaveDDL) {
+	case ExecTypeTP:
+		return "TP QURERY PHYPLAN"
+	case ExecTypeAP_ONECN:
+		return "AP QUERY PHYPLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
+	case ExecTypeAP_MULTICN:
+		return "AP QUERY PHYPLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
+	}
+	return "QUERY PHYPLAN"
 }
 
 func PrintStats(qry *plan.Query) string {
