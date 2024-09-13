@@ -575,3 +575,21 @@ id    extracted_name    extracted_age    extracted_math_score    extracted_scien
 8    Hank    25.0    80.5    88.0
 9    Ivan    25.0    null    null
 drop database test;
+create database test;
+use test;
+create table test_123(c1 json);
+insert into test_123 values ('{"a1":10, "a2":20}');
+insert into test_123 values ('{"a1":"test", "a2":"test2"}');
+select * from test_123;
+c1
+{"a1": 10, "a2": 20}
+{"a1": "test", "a2": "test2"}
+select json_extract(c1, '$.a1', '$.a2') from test_123;
+json_extract(c1, $.a1, $.a2)
+[10, 20]
+["test", "test2"]
+select json_extract_float64(c1, '$.a1', '$.a2') from test_123;
+invalid input: json_extract_value should use a path that retrives a single value
+select json_extract_string(c1, '$.a1', '$.a2') from test_123;
+invalid input: json_extract_value should use a path that retrives a single value
+drop database test;
