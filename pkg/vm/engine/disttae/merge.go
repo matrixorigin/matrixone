@@ -183,8 +183,7 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.
 		blk := iter.Entry()
 		// update delta location
 		obj := t.targets[objIdx]
-		blk.Sorted = obj.Sorted
-		blk.Appendable = obj.Appendable
+		blk.SetFlagByObjStats(&obj.ObjectStats)
 		return t.readblock(ctx, &blk)
 	}
 	return nil, nil, nil, mergesort.ErrNoMoreBlocks
@@ -258,8 +257,8 @@ func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
 func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
 	// read data
 	bat, dels, release, err = blockio.BlockDataReadNoCopy(
-		ctx, "", info, t.ds, t.colseqnums, t.coltypes,
-		t.snapshot, t.fs, t.proc.GetMPool(), nil, fileservice.Policy(0))
+		ctx, info, t.ds, t.colseqnums, t.coltypes,
+		t.snapshot, fileservice.Policy(0), t.proc.GetMPool(), t.fs)
 	if err != nil {
 		logutil.Infof("read block data failed: %v", err.Error())
 		return

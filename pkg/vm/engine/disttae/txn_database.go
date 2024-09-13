@@ -68,7 +68,7 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	}
 	sql := fmt.Sprintf(catalog.MoTablesInDBQueryFormat, aid, db.databaseName)
 
-	res, err := execReadSql(ctx, db.op, sql, false)
+	res, err := execReadSql(ctx, db.op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,13 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
-	logDebugf(db.op.Txn(), "txnDatabase.Relation table %s", name)
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug(
+			"Transaction.Relation",
+			zap.String("txn", db.op.Txn().DebugString()),
+			zap.String("name", name),
+		)
+	})
 	txn := db.getTxn()
 	if txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
@@ -540,7 +546,7 @@ func (db *txnDatabase) loadTableFromStorage(
 	{
 		tblSql := fmt.Sprintf(catalog.MoTablesAllQueryFormat, accountID, db.databaseName, name)
 		var res executor.Result
-		res, err = execReadSql(ctx, db.op, tblSql, false)
+		res, err = execReadSql(ctx, db.op, tblSql, true)
 		if err != nil {
 			return
 		}
@@ -567,7 +573,7 @@ func (db *txnDatabase) loadTableFromStorage(
 		// fresh columns
 		colSql := fmt.Sprintf(catalog.MoColumnsAllQueryFormat, accountID, db.databaseName, name, tblid)
 		var res executor.Result
-		res, err = execReadSql(ctx, db.op, colSql, false)
+		res, err = execReadSql(ctx, db.op, colSql, true)
 		if err != nil {
 			return
 		}

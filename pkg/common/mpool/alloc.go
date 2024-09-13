@@ -16,8 +16,6 @@ package mpool
 
 import (
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
 func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
@@ -29,8 +27,7 @@ func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
 	pHdr.allocSz = int32(sz)
 	pHdr.SetGuard()
 	if mp.details != nil {
-		pHdr.allocateStacktraceID = malloc.GetStacktrace(0)
-		mp.details.recordAlloc(int64(pHdr.allocSz), pHdr.allocateStacktraceID)
+		mp.details.recordAlloc(int64(pHdr.allocSz))
 	}
 	return pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
 }

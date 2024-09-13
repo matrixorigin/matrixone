@@ -75,7 +75,7 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		})
 	case types.T_Rowid:
 		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Rowid) bool {
-			return lhs.Le(rhs)
+			return lhs.LE(&rhs)
 		})
 
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:

@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -37,6 +38,15 @@ var BuildZM = index.BuildZM
 
 type ColumnMetaFetcher interface {
 	MustGetColumn(seqnum uint16) ColumnMeta
+}
+
+type ReadFilterSearchFuncType func([]*vector.Vector) []int64
+
+type BlockReadFilter struct {
+	HasFakePK          bool
+	Valid              bool
+	SortedSearchFunc   ReadFilterSearchFuncType
+	UnSortedSearchFunc ReadFilterSearchFuncType
 }
 
 type WriteOptions struct {
@@ -99,37 +109,4 @@ type Reader interface {
 	ReadAllMeta(ctx context.Context, m *mpool.MPool) (ObjectDataMeta, error)
 
 	GetObject() *Object
-}
-
-type ObjectMeta interface {
-	MustGetMeta(metaType DataMetaType) ObjectDataMeta
-
-	HeaderLength() uint32
-
-	DataMetaCount() uint16
-	TombstoneMetaCount() uint16
-
-	DataMeta() (ObjectDataMeta, bool)
-
-	MustDataMeta() ObjectDataMeta
-
-	TombstoneMeta() (ObjectDataMeta, bool)
-
-	MustTombstoneMeta() ObjectDataMeta
-
-	SetDataMetaCount(count uint16)
-
-	SetDataMetaOffset(offset uint32)
-
-	SetTombstoneMetaCount(count uint16)
-
-	SetTombstoneMetaOffset(offset uint32)
-
-	SubMeta(pos uint16) (ObjectDataMeta, bool)
-
-	SubMetaCount() uint16
-
-	SubMetaIndex() SubMetaIndex
-
-	SubMetaTypes() []uint16
 }

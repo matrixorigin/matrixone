@@ -325,42 +325,7 @@ func (e *TestEngine) TryDeleteByDeltaloc(vals []any) (ok bool, err error) {
 	return
 }
 
-// TODO replace it with TryDeleteByDeltalocWithTxn2
 func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) (ok bool, err error) {
-	rel := e.GetRelationWithTxn(txn)
-
-	idOffsetsMap := make(map[common.ID][]uint32)
-	for _, val := range vals {
-		filter := handle.NewEQFilter(val)
-		id, offset, err := rel.GetByFilter(context.Background(), filter)
-		assert.NoError(e.T, err)
-		offsets, ok := idOffsetsMap[*id]
-		if !ok {
-			offsets = make([]uint32, 0)
-		}
-		offsets = append(offsets, offset)
-		idOffsetsMap[*id] = offsets
-	}
-
-	for id, offsets := range idOffsetsMap {
-		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID(), false)
-		assert.NoError(e.T, err)
-		_, blkOffset := id.BlockID.Offsets()
-		stats, err := MockCNDeleteInS3(e.Runtime.Fs, obj.GetObjectData(), blkOffset, e.schema, txn, offsets)
-		assert.NoError(e.T, err)
-		require.False(e.T, stats.IsZero())
-		//ok, err = rel.TryDeleteByDeltaloc(&id, deltaLoc)
-		ok, err = rel.TryDeleteByStats(&id, stats)
-		assert.NoError(e.T, err)
-		if !ok {
-			return ok, err
-		}
-	}
-	ok = true
-	return
-}
-
-func (e *TestEngine) TryDeleteByDeltalocWithTxn2(vals []any, txn txnif.AsyncTxn) (ok bool, err error) {
 	rel := e.GetRelationWithTxn(txn)
 
 	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
@@ -380,10 +345,14 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn2(vals []any, txn txnif.AsyncTxn)
 		pks.Append(val, false)
 	}
 
-	stats, err := MockCNDeleteInS3_2(e.Runtime.Fs, rowIDs, pks, e.schema, txn)
+	s3stats, err := MockCNDeleteInS3(e.Runtime.Fs, rowIDs, pks, e.schema, txn)
+	stats := objectio.NewObjectStatsWithObjectID(s3stats.ObjectName().ObjectId(), false, true, true)
+	objectio.SetObjectStats(stats, &s3stats)
+	pks.Close()
+	rowIDs.Close()
 	assert.NoError(e.T, err)
 	require.False(e.T, stats.IsZero())
-	ok, err = rel.TryDeleteByStats(firstID, stats)
+	ok, err = rel.TryDeleteByStats(firstID, *stats)
 	assert.NoError(e.T, err)
 	if !ok {
 		return ok, err

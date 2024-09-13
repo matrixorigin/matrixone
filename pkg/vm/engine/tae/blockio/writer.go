@@ -17,8 +17,6 @@ package blockio
 import (
 	"context"
 	"fmt"
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -27,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"math"
 )
 
 type BlockWriter struct {
@@ -38,7 +37,6 @@ type BlockWriter struct {
 	sortKeyIdx     uint16
 	nameStr        string
 	name           objectio.ObjectName
-	objectStats    []objectio.ObjectStats
 	prefix         []index.PrefixFn
 
 	// schema data
@@ -101,8 +99,8 @@ func (w *BlockWriter) SetAppendable() {
 	w.writer.SetAppendable()
 }
 
-func (w *BlockWriter) GetObjectStats() []objectio.ObjectStats {
-	return w.objectStats
+func (w *BlockWriter) GetObjectStats(opts ...objectio.ObjectStatsOptions) objectio.ObjectStats {
+	return w.writer.GetObjectStats(opts...)
 }
 
 // WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew
@@ -143,6 +141,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
 			return nil, err
 		}
+
 		index.SetZMSum(zm, columnData.GetDownstreamVector())
 		// Update column meta zonemap
 		w.writer.UpdateBlockZM(objectio.SchemaData, int(block.GetID()), seqnums[i], zm)
@@ -182,6 +181,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			return nil, err
 		}
 	}
+
 	return block, nil
 }
 
@@ -203,8 +203,6 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 			common.OperandField("[Size=0]"), common.OperandField(w.writer.GetSeqnums()))
 		return blocks, objectio.Extent{}, err
 	}
-
-	w.objectStats = w.writer.GetObjectStats()
 
 	logutil.Debug("[WriteEnd]",
 		common.OperationField(w.String(blocks)),

@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -37,13 +38,13 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 
 		// no compress
 		if algo == compress.None {
-			cacheData = allocator.Alloc(len(data))
+			cacheData = allocator.AllocateCacheData(len(data))
 			copy(cacheData.Bytes(), data)
 			return cacheData, nil
 		}
 
 		// lz4 compress
-		decompressed := allocator.Alloc(int(size))
+		decompressed := allocator.AllocateCacheData(int(size))
 		bs, err := compress.Decompress(data, decompressed.Bytes(), compress.Lz4)
 		if err != nil {
 			return
@@ -64,4 +65,12 @@ func Decode(buf []byte) (any, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+func MustObjectMeta(buf []byte) ObjectMeta {
+	header := DecodeIOEntryHeader(buf)
+	if header.Type != IOET_ObjMeta {
+		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
+	}
+	return ObjectMeta(buf)
 }

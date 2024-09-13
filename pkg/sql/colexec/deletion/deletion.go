@@ -59,6 +59,12 @@ func (deletion *Deletion) OpType() vm.OpType {
 }
 
 func (deletion *Deletion) Prepare(proc *process.Process) error {
+	if deletion.OpAnalyzer == nil {
+		deletion.OpAnalyzer = process.NewAnalyzer(deletion.GetIdx(), deletion.IsFirst, deletion.IsLast, "deletion")
+	} else {
+		deletion.OpAnalyzer.Reset()
+	}
+
 	if deletion.RemoteDelete {
 		if deletion.ctr.blockId_type == nil {
 			deletion.ctr.blockId_type = make(map[types.Blockid]int8)
@@ -96,14 +102,14 @@ func (deletion *Deletion) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := deletion.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	var err error
 	if deletion.ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, anal)
+			result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -114,7 +120,6 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 			if result.Batch.IsEmpty() {
 				continue
 			}
-			anal.Input(result.Batch, deletion.IsFirst)
 
 			if err = deletion.SplitBatch(proc, result.Batch); err != nil {
 				return result, err
@@ -203,6 +208,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 		}
 		result.Batch = deletion.ctr.resBat
 		deletion.ctr.state = vm.End
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
@@ -215,18 +221,17 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 }
 
 func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := deletion.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, anal)
+	result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
-	anal.Input(result.Batch, deletion.IsFirst)
 
 	if deletion.ctr.resBat == nil {
 		deletion.ctr.resBat = makeDelBatch(*result.Batch.GetVector(int32(deletion.DeleteCtx.PrimaryKeyIdx)).GetType())
@@ -240,23 +245,26 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	delCtx := deletion.DeleteCtx
 
 	if len(delCtx.PartitionTableIDs) > 0 {
-		//@todo need reuse delBatches
-		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch,
-			len(delCtx.PartitionTableIDs), delCtx.PrimaryKeyIdx)
-		if err != nil {
-			return result, err
-		}
+		pkTyp := bat.Vecs[delCtx.PrimaryKeyIdx].GetType()
+		deletion.ctr.resBat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+		deletion.ctr.resBat.SetVector(1, vector.NewVec(*pkTyp))
 
-		for i, delBatch := range delBatches {
-			tempRows := uint64(delBatch.RowCount())
+		for partIdx := range len(delCtx.PartitionTableIDs) {
+			deletion.ctr.resBat.CleanOnlyData()
+			expect := int32(partIdx)
+			err = colexec.FillPartitionBatchForDelete(proc, bat, deletion.ctr.resBat, expect, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, delCtx.PrimaryKeyIdx)
+			if err != nil {
+				deletion.ctr.resBat.Clean(proc.Mp())
+				return result, err
+			}
+			tempRows := uint64(deletion.ctr.resBat.RowCount())
 			if tempRows > 0 {
 				affectedRows += tempRows
-				err = deletion.ctr.partitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+				err = deletion.ctr.partitionSources[partIdx].Delete(proc.Ctx, deletion.ctr.resBat, catalog.Row_ID)
 				if err != nil {
-					delBatch.Clean(proc.Mp())
+					deletion.ctr.resBat.Clean(proc.Mp())
 					return result, err
 				}
-				delBatch.Clean(proc.Mp())
 			}
 		}
 	} else {
@@ -277,5 +285,6 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	if delCtx.AddAffectedRows {
 		atomic.AddUint64(&deletion.ctr.affectedRows, affectedRows)
 	}
+	analyzer.Output(result.Batch)
 	return result, nil
 }

@@ -112,7 +112,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 				blk.GetID())
 			assert.Nil(t, err)
 			blkMetas = append(blkMetas, metaLoc.String())
-			stats = append(stats, writer.GetObjectStats()[objectio.SchemaData])
+			stats = append(stats, writer.GetObjectStats(objectio.WithCNCreated()))
 		}
 	}
 
@@ -182,7 +182,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 		for i := 0; i < 50; i++ {
 			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]), false)
-			stats[offset+i].SetCNCreated()
+			//stats[offset+i].SetCNCreated()
 			metaLocBat.Vecs[1].Append([]byte(stats[offset+i][:]), false)
 		}
 		offset += 50
@@ -278,7 +278,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		blocks[1].GetID(),
 	).String()
 	assert.Nil(t, err)
-	stats1 := writer.GetObjectStats()[objectio.SchemaData]
+	stats1 := writer.GetObjectStats(objectio.WithCNCreated())
 
 	//write taeBats[3] into file service
 	objName2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
@@ -296,7 +296,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		uint32(taeBats[3].Vecs[0].Length()),
 		blocks[0].GetID(),
 	).String()
-	stats3 := writer.GetObjectStats()[objectio.SchemaData]
+	stats3 := writer.GetObjectStats(objectio.WithCNCreated())
 	assert.Nil(t, err)
 
 	//create db;
@@ -395,7 +395,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc1), false)
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc2), false)
-	stats1.SetCNCreated()
+	//stats1.SetCNCreated()
 	metaLocBat1.Vecs[1].Append([]byte(stats1[:]), false)
 	metaLocBat1.Vecs[1].Append([]byte(stats1[:]), false)
 	metaLocMoBat1 := containers.ToCNBatch(metaLocBat1)
@@ -411,7 +411,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//add one non-appendable block from S3 into "tbtest" table
 	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat2.Vecs[0].Append([]byte(metaLoc3), false)
-	stats3.SetCNCreated()
+	//stats3.SetCNCreated()
 	metaLocBat2.Vecs[1].Append([]byte(stats3[:]), false)
 	metaLocMoBat2 := containers.ToCNBatch(metaLocBat2)
 	addS3BlkEntry2, err := makePBEntry(INSERT, dbTestID,
@@ -499,7 +499,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, len(physicals), len(blocks))
 
-	stats := writer.GetObjectStats()[0]
+	stats := writer.GetObjectStats()
 	require.False(t, stats.IsZero())
 
 	//prepare delete locations.
@@ -1833,7 +1833,6 @@ func TestApplyDeltaloc(t *testing.T) {
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
 	inMemoryDeleteTxns := make([]*txn.TxnMeta, 0)
-	blkIDOffsetsMap := make(map[common.ID][]uint32)
 	makeDeleteTxnFn := func(val any) {
 		filter := handle.NewEQFilter(val)
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
@@ -1855,6 +1854,10 @@ func TestApplyDeltaloc(t *testing.T) {
 	}
 	assert.NoError(t, txn0.Commit(context.Background()))
 
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
 	for i := 0; i < rowCount; i++ {
 		val := taeBat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
 		if i%5 == 0 {
@@ -1862,12 +1865,9 @@ func TestApplyDeltaloc(t *testing.T) {
 			filter := handle.NewEQFilter(val)
 			id, offset, err := rel.GetByFilter(context.Background(), filter)
 			assert.NoError(t, err)
-			offsets, ok := blkIDOffsetsMap[*id]
-			if !ok {
-				offsets = make([]uint32, 0)
-			}
-			offsets = append(offsets, offset)
-			blkIDOffsetsMap[*id] = offsets
+			rowid := types.NewRowIDWithObjectIDBlkNumAndRowID(*id.ObjectID(), id.BlockID.Sequence(), offset)
+			pkVec.Append(val, false)
+			rowIDVec.Append(rowid, false)
 		} else {
 			// in memory deletes
 			makeDeleteTxnFn(val)
@@ -1888,15 +1888,10 @@ func TestApplyDeltaloc(t *testing.T) {
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
 	delLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
-	for id, offsets := range blkIDOffsetsMap {
-		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID(), false)
-		assert.NoError(t, err)
-		_, blkOffset := id.BlockID.Offsets()
-		stats, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, obj.GetObjectData(), blkOffset, schema, txn0, offsets)
-		assert.NoError(t, err)
-		require.False(t, stats.IsZero())
-		delLocBat.Vecs[0].Append(stats.Marshal(), false)
-	}
+	stats, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, rowIDVec, pkVec, schema, txn0)
+	assert.NoError(t, err)
+	require.False(t, stats.IsZero())
+	delLocBat.Vecs[0].Append(stats.Marshal(), false)
 	deleteS3Entry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "file", containers.ToCNBatch(delLocBat))
 	assert.NoError(t, err)
 	deleteS3Txn := mock1PCTxn(h.db)

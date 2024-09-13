@@ -67,7 +67,7 @@ type Object interface {
 	Rows() (int, error)
 	CheckFlushTaskRetry(startts types.TS) bool
 
-	Prefetch(idxes []uint16, blkID uint16) error
+	Prefetch(blkID uint16) error
 	GetMeta() any
 
 	MakeAppender() (ObjectAppender, error)

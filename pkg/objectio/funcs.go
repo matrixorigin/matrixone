@@ -110,14 +110,7 @@ func ReadObjectMeta(
 	if v, err = ReadExtent(ctx, name, extent, policy, fs, constructorFactory); err != nil {
 		return
 	}
-
-	var obj any
-	obj, err = Decode(v)
-	if err != nil {
-		return
-	}
-
-	meta = obj.(ObjectMeta)
+	meta = MustObjectMeta(v)
 	return
 }
 
@@ -225,7 +218,7 @@ func ReadOneBlockWithMeta(
 				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
 					return
 				}
-				cacheData := fileservice.GetDefaultCacheDataAllocator().Alloc(buf.Len())
+				cacheData := fileservice.DefaultCacheDataAllocator().AllocateCacheData(buf.Len())
 				copy(cacheData.Bytes(), buf.Bytes())
 				filledEntries[i].CachedData = cacheData
 			}
