@@ -39,7 +39,7 @@ type Relation interface {
 
 	DeleteByPhyAddrKey(key any) error
 	GetValueByPhyAddrKey(key any, col int) (any, bool, error)
-	DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector) error
+	DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector, dt DeleteType) error
 	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
 	TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error)
 	GetByFilter(ctx context.Context, filter *Filter) (id *common.ID, offset uint32, err error)
