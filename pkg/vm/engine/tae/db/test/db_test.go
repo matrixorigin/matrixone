@@ -6460,11 +6460,13 @@ func TestAppendAndGC2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	testutils.WaitExpect(10000, func() bool {
+	testutils.WaitExpect(5000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-
+	metaFile := db.BGCheckpointRunner.GetCheckpointMetaFiles()
+	tae.Restart(ctx)
+	db = tae.DB
 	files := make(map[string]struct{}, 0)
 	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
 		if group != store.GroupFiles {
@@ -6486,7 +6488,6 @@ func TestAppendAndGC2(t *testing.T) {
 		}
 	}
 	db.Wal.Replay(loadFiles)
-	metaFile := db.BGCheckpointRunner.GetCheckpointMetaFiles()
 	assert.NotEqual(t, 0, len(files))
 	for file := range metaFile {
 		if _, ok := files[file]; !ok {
