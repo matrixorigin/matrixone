@@ -48,13 +48,13 @@ type FullTextBooleanOperator int
 
 var (
 	NoOp        = 0
-	Plus        = 1
-	Minus       = 2
-	LessThan    = 3
-	GreaterThan = 4
-	Group       = 5
+	Star        = 1
+	Plus        = 2
+	Minus       = 3
+	LessThan    = 4
+	GreaterThan = 5
 	RankLess    = 6
-	Star        = 7
+	Group       = 7
 	Phrase      = 8
 )
 
@@ -72,6 +72,18 @@ func (p *Pattern) String() string {
 	}
 	str += "]]"
 	return str
+}
+
+func (p *Pattern) GetLeafText(operator int) []string {
+	if p.Operator == operator {
+		return []string{p.Text}
+	}
+
+	var res []string
+	for _, c := range p.Children {
+		res = append(res, c.GetLeafText(operator)...)
+	}
+	return res
 }
 
 func GetOp(op rune) int {
