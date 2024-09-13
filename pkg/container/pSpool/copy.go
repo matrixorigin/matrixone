@@ -204,24 +204,24 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 		// use the lock as few times as possible.
 		if len(fromCacheList) > 0 {
-			var tempCache [][]byte
+			var tempCache = make([][]byte, 0, needBytesCount)
 
 			cb.bytesCacheLock.Lock()
 			diff := len(cb.bytesCache) - needBytesCount
 			if diff > 0 {
-				tempCache = cb.bytesCache[diff:]
+				tempCache = append(tempCache, cb.bytesCache[diff:]...)
 				cb.bytesCache = cb.bytesCache[:diff]
 			} else {
-				tempCache = cb.bytesCache[0:]
+				tempCache = append(tempCache, cb.bytesCache...)
 				cb.bytesCache = cb.bytesCache[:0]
 			}
 			cb.bytesCacheLock.Unlock()
 
 			for i := range fromCacheList {
-				typ := *dst.Vecs[fromCacheList[i].idx].GetType()
 				index := fromCacheList[i].idx
+				typ := *dst.Vecs[index].GetType()
 
-				setSuitableDataAreaToVectorVersion2(tempCache, fromCacheList[i].dataRequire, fromCacheList[i].areaRequire, dst.Vecs[i])
+				tempCache = setSuitableDataAreaToVectorVersion2(tempCache, fromCacheList[i].dataRequire, fromCacheList[i].areaRequire, dst.Vecs[index])
 				dst.Vecs[index].Reset(typ)
 				if err = vector.GetUnionAllFunction(typ, cb.mp)(
 					dst.Vecs[index],
@@ -230,7 +230,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 					return nil, false, err
 				}
 
-				dst.Vecs[fromCacheList[i].idx].SetSorted(src.Vecs[index].GetSorted())
+				dst.Vecs[index].SetSorted(src.Vecs[index].GetSorted())
 			}
 		}
 		dst.Aggs = src.Aggs
@@ -315,10 +315,10 @@ func (cb *cachedBatch) setSuitableDataAreaToVector(
 // setSuitableDataAreaToVectorVersion2 get two long-enough bytes slices from the cache, and set them to the vector.
 // if not found, set the last one to the vector.
 func setSuitableDataAreaToVectorVersion2(
-	src [][]byte, dataSize, areaSize int, vec *vector.Vector) {
+	src [][]byte, dataSize, areaSize int, vec *vector.Vector) [][]byte {
 
 	if len(src) == 0 {
-		return
+		return src
 	}
 
 	setDataFirst := dataSize >= areaSize
@@ -382,6 +382,7 @@ func setSuitableDataAreaToVectorVersion2(
 		vector.SetVecArea(vec, src[len(src)-1])
 		src = src[:len(src)-1]
 	}
+	return src
 }
 
 func (cb *cachedBatch) Free() {
