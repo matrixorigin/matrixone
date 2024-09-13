@@ -245,6 +245,7 @@ type txnOperator struct {
 		rollbackCounter      counter
 		runSqlCounter        counter
 		fprints              footPrints
+		runningSQL           atomic.Bool
 	}
 
 	opts struct {
@@ -312,6 +313,7 @@ func (tc *txnOperator) initReset() {
 	tc.reset.rollbackCounter = counter{}
 	tc.reset.runSqlCounter = counter{}
 	tc.reset.fprints = footPrints{}
+	tc.reset.runningSQL.Store(false)
 }
 
 func (tc *txnOperator) initProtectedFields() {
@@ -584,6 +586,10 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
+	if tc.reset.runningSQL.Load() {
+		tc.logger.Fatal("commit on running txn")
+	}
+
 	tc.reset.commitCounter.addEnter()
 	defer tc.reset.commitCounter.addExit()
 	txn := tc.getTxnMeta(false)
@@ -622,6 +628,10 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
+	if tc.reset.runningSQL.Load() {
+		tc.logger.Fatal("rollback on running txn")
+	}
+
 	tc.reset.rollbackCounter.addEnter()
 	defer tc.reset.rollbackCounter.addExit()
 	v2.TxnRollbackCounter.Inc()
@@ -1338,10 +1348,12 @@ func (tc *txnOperator) doCostAction(
 }
 
 func (tc *txnOperator) EnterRunSql() {
+	tc.reset.runningSQL.Store(true)
 	tc.reset.runSqlCounter.addEnter()
 }
 
 func (tc *txnOperator) ExitRunSql() {
+	tc.reset.runningSQL.Store(false)
 	tc.reset.runSqlCounter.addExit()
 }
 
