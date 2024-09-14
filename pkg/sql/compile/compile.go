@@ -3921,7 +3921,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		if partialResults != nil {
 			newRelData := relData.BuildEmptyRelData()
 			newRelData.AppendBlockInfo(relData.GetBlockInfo(0))
-
 			tombstones, err := collectTombstones(c, n, rel)
 			if err != nil {
 				return nil, nil, nil, err
