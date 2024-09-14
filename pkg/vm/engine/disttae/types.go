@@ -725,7 +725,7 @@ type Entry struct {
 	databaseId uint64
 
 	// blockName for s3 file
-	fileName string // todo remove this field
+	fileName string
 	//tuples would be applied to the table which belongs to the tenant(accountId)
 	bat       *batch.Batch
 	tnStore   DNStore
