@@ -502,9 +502,8 @@ func (txn *Transaction) dumpInsertBatchLocked(offset int, size *uint64, pkCount 
 			bat := txn.writes[i].bat
 			*size += uint64(bat.Size())
 			*pkCount += bat.RowCount()
-			var newBat *batch.Batch
 			// skip rowid
-			newBat = batch.NewWithSize(len(bat.Vecs) - 1)
+			newBat := batch.NewWithSize(len(bat.Vecs) - 1)
 			newBat.SetAttributes(bat.Attrs[1:])
 			newBat.Vecs = bat.Vecs[1:]
 			newBat.SetRowCount(bat.Vecs[0].Length())
@@ -611,8 +610,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(offset int) error {
 			bat := txn.writes[i].bat
 			deleteCnt += bat.RowCount()
 
-			var newBat *batch.Batch
-			newBat = batch.NewWithSize(len(bat.Vecs))
+			newBat := batch.NewWithSize(len(bat.Vecs))
 			newBat.SetAttributes(bat.Attrs)
 			newBat.Vecs = bat.Vecs
 			newBat.SetRowCount(bat.Vecs[0].Length())
