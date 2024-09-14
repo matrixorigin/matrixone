@@ -30,12 +30,21 @@ type objCompactPolicy struct {
 	tblEntry *catalog.TableEntry
 	objects  []*catalog.ObjectEntry
 	fs       fileservice.FileService
+
+	tombstoneEntries []*catalog.ObjectEntry
+	tombstoneStats   []objectio.ObjectStats
+
+	validTombstones map[*catalog.ObjectEntry]struct{}
 }
 
 func newObjCompactPolicy(fs fileservice.FileService) *objCompactPolicy {
 	return &objCompactPolicy{
 		objects: make([]*catalog.ObjectEntry, 0),
 		fs:      fs,
+
+		tombstoneEntries: make([]*catalog.ObjectEntry, 0),
+		tombstoneStats:   make([]objectio.ObjectStats, 0),
+		validTombstones:  make(map[*catalog.ObjectEntry]struct{}),
 	}
 }
 
@@ -46,30 +55,15 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	if entry.IsTombstone {
 		return false
 	}
-
 	if entry.OriginSize() < config.ObjectMinOsize {
 		return false
 	}
-
-	tIter := o.tblEntry.MakeTombstoneObjectIt()
-	tombstoneEntry := make([]*catalog.ObjectEntry, 0)
-	tombstoneStats := make([]objectio.ObjectStats, 0)
-	for tIter.Next() {
-		tEntry := tIter.Item()
-
-		if !objectValid(tEntry) {
-			continue
-		}
-
-		tombstoneEntry = append(tombstoneEntry, tEntry)
-		tombstoneStats = append(tombstoneStats, tEntry.GetObjectStats())
-	}
-	if len(tombstoneStats) == 0 {
+	if len(o.tombstoneStats) == 0 {
 		return false
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	sels, err := blockio.FindTombstonesOfObject(ctx, *entry.ID(), tombstoneStats, o.fs)
+	sels, err := blockio.FindTombstonesOfObject(ctx, *entry.ID(), o.tombstoneStats, o.fs)
 	cancel()
 	if err != nil {
 		return false
@@ -80,12 +74,14 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	for iter.HasNext() {
 		i := iter.Next()
 
-		if entryOutdated(tombstoneEntry[i], config.TombstoneLifetime-time.Minute) {
+		o.validTombstones[o.tombstoneEntries[i]] = struct{}{}
+
+		if entryOutdated(o.tombstoneEntries[i], config.TombstoneLifetime) {
 			mergeForOutdatedTombstone = true
 			break
 		}
 
-		tombstoneRows += tombstoneStats[i].Rows()
+		tombstoneRows += o.tombstoneStats[i].Rows()
 	}
 	rows := entry.Rows()
 	if mergeForOutdatedTombstone || tombstoneRows > rows*5 {
@@ -110,10 +106,43 @@ func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	for _, obj := range o.objects {
 		results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, TaskHostDN})
 	}
+	o.filterValidTombstones()
+	if len(o.tombstoneStats) > 0 {
+		results = append(results, reviseResult{o.tombstoneEntries, TaskHostDN})
+	}
 	return results
 }
 
 func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry) {
 	o.tblEntry = entry
 	o.objects = o.objects[:0]
+	o.tombstoneEntries = o.tombstoneEntries[:0]
+	o.tombstoneStats = o.tombstoneStats[:0]
+	clear(o.validTombstones)
+
+	tIter := entry.MakeTombstoneObjectIt()
+	for tIter.Next() {
+		tEntry := tIter.Item()
+
+		if !objectValid(tEntry) {
+			continue
+		}
+
+		o.tombstoneEntries = append(o.tombstoneEntries, tEntry)
+		o.tombstoneStats = append(o.tombstoneStats, tEntry.GetObjectStats())
+	}
+}
+
+func (o *objCompactPolicy) filterValidTombstones() {
+	i := 0
+	for _, x := range o.tombstoneEntries {
+		if _, ok := o.validTombstones[x]; !ok {
+			o.tombstoneEntries[i] = x
+			i++
+		}
+	}
+	for j := i; j < len(o.tombstoneEntries); j++ {
+		o.tombstoneEntries[j] = nil
+	}
+	o.tombstoneEntries = o.tombstoneEntries[:i]
 }

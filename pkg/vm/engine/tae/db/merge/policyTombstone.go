@@ -26,21 +26,16 @@ func (t *tombstonePolicy) onObject(entry *catalog.ObjectEntry, config *BasicPoli
 	if len(t.tombstones) == config.MergeMaxOneRun {
 		return false
 	}
-	if entry.IsTombstone {
-		t.tombstones = append(t.tombstones, entry)
-		return true
+	if !entry.IsTombstone {
+		return false
 	}
-	return false
+	t.tombstones = append(t.tombstones, entry)
+	return true
 }
 
 func (t *tombstonePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
-	if len(t.tombstones) == 0 {
+	if len(t.tombstones) < 2 {
 		return nil
-	}
-	if len(t.tombstones) == 1 {
-		if !entryOutdated(t.tombstones[0], config.TombstoneLifetime) {
-			return nil
-		}
 	}
 	return []reviseResult{{t.tombstones, TaskHostDN}}
 }
