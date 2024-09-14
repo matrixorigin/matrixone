@@ -189,6 +189,17 @@ func TestPolicyTombstone(t *testing.T) {
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 3, len(result[0].objs))
 	require.Equal(t, TaskHostDN, result[0].kind)
+
+	// tombstone is too old
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	cfg = testConfig(100, 3)
+	tombstone1 := newTestObjectEntry(t, 10, true)
+	tombstone1.CreatedAt = types.TS{}
+	require.True(t, p.onObject(tombstone1, cfg))
+	result = p.revise(0, math.MaxInt64, cfg)
+	require.Equal(t, 1, len(result))
+	require.Equal(t, 1, len(result[0].objs))
+	require.Equal(t, TaskHostDN, result[0].kind)
 }
 
 func TestPolicyGroup(t *testing.T) {
