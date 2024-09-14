@@ -93,6 +93,12 @@ func (c *Compile) initAnalyzeModule(qry *plan.Query) {
 			node.AnalyzeInfo.Reset()
 		}
 	}
+
+	if c.anal.qry.GlobalAnalyzeInfo == nil {
+		c.anal.qry.GlobalAnalyzeInfo = new(plan.GlobalAnalyzeInfo)
+	} else {
+		c.anal.qry.GlobalAnalyzeInfo.Reset()
+	}
 }
 
 func (c *Compile) GetAnalyzeModule() *AnalyzeModule {
@@ -139,10 +145,9 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TotalTimeConsumed
 		node.AnalyzeInfo.MemorySize += op.OpStats.TotalMemorySize
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
-		node.AnalyzeInfo.S3IOByte += op.OpStats.TotalS3IOByte
+		node.AnalyzeInfo.ScanBytes += op.OpStats.TotalScanBytes
 		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
 		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
-
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
 	}
@@ -198,9 +203,12 @@ func (c *Compile) fillPlanNodeAnalyzeInfo() {
 	// Summarize the S3 resources executed by SQL into curNode
 	// TODO: Actually, S3 resources may not necessarily be used by the current node.
 	// We will handle it this way for now and optimize it in the future
-	curNode := c.anal.qry.Nodes[c.anal.curNodeIdx]
-	curNode.AnalyzeInfo.S3IOInputCount = c.anal.phyPlan.S3IOInputCount
-	curNode.AnalyzeInfo.S3IOOutputCount = c.anal.phyPlan.S3IOOutputCount
+	//curNode := c.anal.qry.Nodes[c.anal.curNodeIdx]
+	//curNode.AnalyzeInfo.S3IOInputCount = c.anal.phyPlan.S3IOInputCount
+	//curNode.AnalyzeInfo.S3IOOutputCount = c.anal.phyPlan.S3IOOutputCount
+
+	c.anal.qry.GlobalAnalyzeInfo.S3IOInputCount = c.anal.phyPlan.S3IOInputCount
+	c.anal.qry.GlobalAnalyzeInfo.S3IOOutputCount = c.anal.phyPlan.S3IOOutputCount
 }
 
 //----------------------------------------------------------------------------------------------------------------------

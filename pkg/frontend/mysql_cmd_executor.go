@@ -3506,6 +3506,10 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 				stats.BytesScan += bytes
 			}
 		}
+
+		// get S3IOInputCount and S3IOOutputCount
+		s := explain.GetS3IOStatisticTrace(ctx, h.query, options)
+		statsByte.Add(&s)
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}

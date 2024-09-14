@@ -17,8 +17,9 @@ package plan
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"golang.org/x/exp/constraints"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func DeepCopyExprList(list []*Expr) []*Expr {
@@ -591,11 +592,12 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 
 func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	newQry := &plan.Query{
-		StmtType: qry.StmtType,
-		Steps:    qry.Steps,
-		Nodes:    make([]*plan.Node, len(qry.Nodes)),
-		Params:   make([]*plan.Expr, len(qry.Params)),
-		Headings: qry.Headings,
+		StmtType:          qry.StmtType,
+		Steps:             qry.Steps,
+		Nodes:             make([]*plan.Node, len(qry.Nodes)),
+		Params:            make([]*plan.Expr, len(qry.Params)),
+		Headings:          qry.Headings,
+		GlobalAnalyzeInfo: DeepCopyGlobalAnalyzeInfo(qry.GlobalAnalyzeInfo),
 	}
 	for idx, param := range qry.Params {
 		newQry.Params[idx] = DeepCopyExpr(param)
@@ -1090,12 +1092,23 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		MemorySize:             analyzeinfo.GetMemorySize(),
 		WaitTimeConsumed:       analyzeinfo.GetWaitTimeConsumed(),
 		DiskIO:                 analyzeinfo.GetDiskIO(),
-		S3IOByte:               analyzeinfo.GetS3IOByte(),
-		S3IOInputCount:         analyzeinfo.GetS3IOInputCount(),
-		S3IOOutputCount:        analyzeinfo.GetS3IOOutputCount(),
-		NetworkIO:              analyzeinfo.GetNetworkIO(),
-		ScanTime:               analyzeinfo.GetScanTime(),
-		InsertTime:             analyzeinfo.GetInsertTime(),
+		ScanBytes:              analyzeinfo.GetScanBytes(),
+		//S3IOInputCount:         analyzeinfo.GetS3IOInputCount(),
+		//S3IOOutputCount:        analyzeinfo.GetS3IOOutputCount(),
+		NetworkIO:  analyzeinfo.GetNetworkIO(),
+		ScanTime:   analyzeinfo.GetScanTime(),
+		InsertTime: analyzeinfo.GetInsertTime(),
+	}
+}
+
+func DeepCopyGlobalAnalyzeInfo(analyzeInfo *plan.GlobalAnalyzeInfo) *plan.GlobalAnalyzeInfo {
+	if analyzeInfo == nil {
+		return nil
+	}
+
+	return &plan.GlobalAnalyzeInfo{
+		S3IOInputCount:  analyzeInfo.GetS3IOInputCount(),
+		S3IOOutputCount: analyzeInfo.GetS3IOOutputCount(),
 	}
 }
 

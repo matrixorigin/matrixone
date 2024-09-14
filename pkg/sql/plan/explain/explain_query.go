@@ -146,7 +146,7 @@ func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions,
 			}
 			return errdata
 		}
-		err = graphData.StatisticsGlobalResource(ctx)
+		err = graphData.StatisticsGlobalResource(ctx, query.GlobalAnalyzeInfo)
 		if err != nil {
 			var errdata *models.ExplainData
 			if moErr, ok := err.(*moerr.Error); ok {
@@ -163,6 +163,7 @@ func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions,
 
 		expdata.Steps = append(expdata.Steps, *step)
 	}
+
 	if stats := statistic.StatsInfoFromContext(ctx); stats != nil {
 		expdata.NewPlanStats = *stats
 	}

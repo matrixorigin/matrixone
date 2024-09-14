@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -219,7 +220,7 @@ func (d *ExplainData) StatisticsRead() (rows int64, size int64) {
 }
 
 // Statistics of global resource usage, adding resources of all nodes
-func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error {
+func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context, globalAnalyze *plan.GlobalAnalyzeInfo) error {
 	if graphData == nil {
 		return moerr.NewInternalError(ctx, "explain graphData data is null")
 	} else {
@@ -289,12 +290,12 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 				if ioValue.Name == S3IOByte {
 					gS3IOByte.Value += ioValue.Value
 				}
-				if ioValue.Name == S3IOInputCount {
-					gS3IOInputCount.Value += ioValue.Value
-				}
-				if ioValue.Name == S3IOOutputCount {
-					gS3IOOutputCount.Value += ioValue.Value
-				}
+				//if ioValue.Name == S3IOInputCount {
+				//	gS3IOInputCount.Value += ioValue.Value
+				//}
+				//if ioValue.Name == S3IOOutputCount {
+				//	gS3IOOutputCount.Value += ioValue.Value
+				//}
 			}
 
 			for _, networkValue := range node.Statistics.Network {
@@ -304,6 +305,9 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 			}
 			gtotalStats.Value += node.TotalStats.Value
 		}
+
+		gS3IOInputCount.Value = globalAnalyze.S3IOInputCount
+		gS3IOOutputCount.Value = globalAnalyze.S3IOOutputCount
 
 		times := []StatisticValue{*gtimeConsumed, *gwaitTime}
 		mbps := []StatisticValue{*ginputRows, *goutputRows, *ginputSize, *goutputSize}

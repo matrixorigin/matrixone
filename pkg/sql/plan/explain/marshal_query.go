@@ -701,7 +701,7 @@ const InputSize = "Input Size"
 const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
-const S3IOByte = "S3 IO Byte"
+const ScanBytes = "Scan Bytes"
 const S3IOInputCount = "S3 IO Input Count"
 const S3IOOutputCount = "S3 IO Output Count"
 const Network = "Network"
@@ -711,9 +711,18 @@ func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOp
 	if options.Analyze && node.AnalyzeInfo != nil {
 		analyzeInfo := node.AnalyzeInfo
 		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
-			WithMemorySize(float64(analyzeInfo.MemorySize)).
-			WithS3IOInputCount(float64(analyzeInfo.S3IOInputCount)).
-			WithS3IOOutputCount(float64(analyzeInfo.S3IOOutputCount))
+			WithMemorySize(float64(analyzeInfo.MemorySize))
+		//WithS3IOInputCount(float64(analyzeInfo.S3IOInputCount)).
+		//WithS3IOOutputCount(float64(analyzeInfo.S3IOOutputCount))
+	}
+	return
+}
+
+func GetS3IOStatisticTrace(ctx context.Context, query *plan.Query, options *ExplainOptions) (s statistic.StatsArray) {
+	s.Reset()
+	if query.GlobalAnalyzeInfo != nil {
+		s.WithS3IOInputCount(float64(query.GlobalAnalyzeInfo.S3IOInputCount)).
+			WithS3IOOutputCount(float64(query.GlobalAnalyzeInfo.S3IOOutputCount))
 	}
 	return
 }
@@ -791,20 +800,20 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  Statistic_Unit_byte, //"byte",
 			},
 			{
-				Name:  S3IOByte,
-				Value: analyzeInfo.S3IOByte,
+				Name:  ScanBytes,
+				Value: analyzeInfo.ScanBytes,
 				Unit:  Statistic_Unit_byte, //"byte",
 			},
-			{
-				Name:  S3IOInputCount,
-				Value: analyzeInfo.S3IOInputCount,
-				Unit:  Statistic_Unit_count, //"count",
-			},
-			{
-				Name:  S3IOOutputCount,
-				Value: analyzeInfo.S3IOOutputCount,
-				Unit:  Statistic_Unit_count, //"count",
-			},
+			//{
+			//	Name:  S3IOInputCount,
+			//	Value: analyzeInfo.S3IOInputCount,
+			//	Unit:  Statistic_Unit_count, //"count",
+			//},
+			//{
+			//	Name:  S3IOOutputCount,
+			//	Value: analyzeInfo.S3IOOutputCount,
+			//	Unit:  Statistic_Unit_count, //"count",
+			//},
 		}
 
 		nw := []models.StatisticValue{

@@ -637,16 +637,20 @@ message AnalyzeInfo {
 	int64 memory_size = 6;
 	int64 wait_time_consumed = 7;
 	int64 diskIO = 8;
-	int64 s3IO_byte = 9;
-	int64 s3IO_input_count = 10;
-	int64 s3IO_output_count = 11;
-	int64 networkIO = 12;
-	int64 scanTime = 13;
-	int64 insertTime = 14;
-	repeated int64 time_consumed_array_major = 15;
-	repeated int64 time_consumed_array_minor = 16;
-	int64 input_blocks=17;
+	int64 scan_bytes = 9;
+	int64 networkIO = 10;
+	int64 scanTime = 11;
+	int64 insertTime = 12;
+	repeated int64 time_consumed_array_major = 13;
+	repeated int64 time_consumed_array_minor = 14;
+	int64 input_blocks=15;
 }
+
+message GlobalAnalyzeInfo {
+	int64 s3IO_input_count = 1;
+	int64 s3IO_output_count = 2;
+}
+
 
 message PartitionPrune {
 	bool isPruned = 1;
@@ -987,6 +991,9 @@ message Query {
 
 	//detectSqls are sqls detect fk self refer constraint
 	repeated string detectSqls= 8;
+
+	// sql global resource analyze info
+	GlobalAnalyzeInfo global_analyze_info = 9;
 }
 
 message TransationControl {
