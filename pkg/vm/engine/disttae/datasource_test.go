@@ -24,9 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -51,13 +51,14 @@ func TestTombstoneData1(t *testing.T) {
 	var stats []objectio.ObjectStats
 
 	var tombstoneRowIds []types.Rowid
+	int32Type := types.T_int32.ToType()
 	for i := 0; i < 3; i++ {
 		writer, err := colexec.NewS3TombstoneWriter()
 		require.NoError(t, err)
-
-		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		bat := engine_util.NewCNTombstoneBatch(
+			"pkey",
+			&int32Type,
+		)
 		for j := 0; j < 10; j++ {
 			row := types.RandomRowid()
 			tombstoneRowIds = append(tombstoneRowIds, row)
@@ -302,14 +303,17 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	}
 
 	//var stats []objectio.ObjectStats
+	int32Type := types.T_int32.ToType()
 	var tombstoneRowIds []types.Rowid
 	for i := 0; i < 3; i++ {
 		writer, err := colexec.NewS3TombstoneWriter()
 		require.NoError(t, err)
 
-		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		bat := engine_util.NewCNTombstoneBatch(
+			"pkey",
+			&int32Type,
+		)
+
 		for j := 0; j < 10; j++ {
 			row := types.RandomRowid()
 			tombstoneRowIds = append(tombstoneRowIds, row)
