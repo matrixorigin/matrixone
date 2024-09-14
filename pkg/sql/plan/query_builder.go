@@ -2975,6 +2975,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	if (ctx.initSelect || ctx.recSelect) && !ctx.unionSelect {
 		nodeID = appendSinkNodeWithTag(builder, ctx, nodeID, ctx.sinkTag)
+		builder.qry.Nodes[nodeID].RecursiveCte = ctx.recSelect
 	}
 
 	if isRoot {
