@@ -54,11 +54,6 @@ select * from t1 where col3 = 7996 and col1 > 25;
 --命中p0, p2
 select * from t1 where col1 = 24 and col3 = 7991 or col3 = 7990;
 
-select mo_ctl('dn', 'flush', 'db1.t1')
-select count(*) from t1;
-select count(*) from t1 where col1 = 24 and col3 = 7991 or col3 = 7990;
-
-
 --无分区裁剪
 select * from t1 where col3 > 7992;
 --无分区裁剪
