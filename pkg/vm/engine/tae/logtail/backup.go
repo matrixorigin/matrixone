@@ -142,14 +142,14 @@ func GetTombstonesByBlockId(
 		}
 		if !obj.ZMIsEmpty() {
 			objZM := obj.SortKeyZoneMap()
-			if skip := !objZM.PrefixEq(bid[:]); skip {
+			if skip := !objZM.RowidPrefixEq(bid[:]); skip {
 				return true, nil
 			}
 		}
 
 		for idx := 0; idx < int(obj.BlkCnt()); idx++ {
 			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](oData.data[idx].Vecs[0])
-			start, end := blockio.FindIntervalForBlock(rowids, &bid)
+			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, &bid)
 			if start == end {
 				continue
 			}

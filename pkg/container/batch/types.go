@@ -27,6 +27,12 @@ var (
 		Vecs:     make([]*vector.Vector, 0),
 		rowCount: 1,
 	}
+
+	CteEndBatch = &Batch{
+		Cnt:       1,
+		Recursive: 2,
+		rowCount:  1,
+	}
 )
 
 // Batch represents a part of a relationship

@@ -728,6 +728,7 @@ message Node {
 		FILL = 65;
 		PARTITION = 66;
 		FUZZY_FILTER = 67;
+		APPLY = 68;
 	}
 
 	enum JoinType {
@@ -739,9 +740,8 @@ message Node {
 		ANTI	= 5;
 		SINGLE	= 6;
 		MARK	= 7;
-		APPLY	= 8;
-		INDEX = 9;
-		L2 = 10;
+		INDEX = 8;
+		L2 = 9;
 	}
 
 	enum AggMode {
@@ -852,6 +852,7 @@ message Node {
 
 	Snapshot scan_snapshot = 58;
 
+	bool recursive_cte = 59;
 }
 
 // Snapshot Represents a snapshot of the database
@@ -1101,6 +1102,7 @@ message DataDefinition {
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
 		SHOW_UPGRADE = 34;
+		RENAME_TABLE = 35;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;

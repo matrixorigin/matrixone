@@ -5,7 +5,9 @@
 package mock_frontend
 
 import (
+	"bytes"
 	context "context"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
@@ -231,17 +233,29 @@ func (mr *MockComputationWrapperMockRecorder) Plan() *gomock.Call {
 }
 
 // RecordExecPlan mocks base method.
-func (m *MockComputationWrapper) RecordExecPlan(ctx context.Context) error {
+func (m *MockComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RecordExecPlan", ctx)
+	ret := m.ctrl.Call(m, "RecordExecPlan", ctx, phyPlan)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // RecordExecPlan indicates an expected call of RecordExecPlan.
-func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx interface{}) *gomock.Call {
+func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx interface{}, phyPlan interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordExecPlan", reflect.TypeOf((*MockComputationWrapper)(nil).RecordExecPlan), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordExecPlan", reflect.TypeOf((*MockComputationWrapper)(nil).RecordExecPlan), ctx, phyPlan)
+}
+
+// SetExplainBuffer mocks base method.
+func (m *MockComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetExplainBuffer", buf)
+}
+
+// SetExplainBuffer indicates an expected call of SetExplainBuffer.
+func (mr *MockComputationWrapperMockRecorder) SetExplainBuffer(buf interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExplainBuffer", reflect.TypeOf((*MockComputationWrapper)(nil).SetExplainBuffer), buf)
 }
 
 // ResetPlanAndStmt mocks base method.
