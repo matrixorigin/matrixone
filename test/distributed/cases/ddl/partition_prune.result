@@ -50,8 +50,8 @@ col1    col2    col3
 select * from t1 where col3 in (7990, 7698, 7988);
 col1    col2    col3
 23    2001-12-04    7990
-6    1981-05-01    7698
 21    1771-10-06    7988
+6    1981-05-01    7698
 select * from t1 where col3 = 7996 and col1 > 25;
 col1    col2    col3
 29    2001-11-17    7996
@@ -59,6 +59,13 @@ select * from t1 where col1 = 24 and col3 = 7991 or col3 = 7990;
 col1    col2    col3
 24    1999-08-01    7991
 23    2001-12-04    7990
+select mo_ctl('dn', 'flush', 'db1.t1')
+select count(*) from t1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 7 near "
+select count(*) from t1;";
+select count(*) from t1 where col1 = 24 and col3 = 7991 or col3 = 7990;
+count(*)
+2
 select * from t1 where col3 > 7992;
 col1    col2    col3
 27    1971-12-09    7994
@@ -289,15 +296,15 @@ id    fname    lname    hired    separated    job_code    store_id
 10025    Prasadram    Heyers    1958-10-31    1987-08-17    180    8
 select * from employees where store_id = 8 or store_id = 10;
 id    fname    lname    hired    separated    job_code    store_id
-10011    Mary    Sluis    1953-11-07    1990-01-22    120    8
-10015    Guoxiang    Nooteboom    1959-08-19    1987-07-02    140    8
-10025    Prasadram    Heyers    1958-10-31    1987-08-17    180    8
 10008    Saniya    Kalloufi    1958-02-19    1994-09-15    170    10
 10010    Duangkaew    Piveteau    1963-06-01    1989-08-24    160    10
 10017    Cristinel    Bouloucos    1958-07-06    1993-08-03    170    10
 10022    Shahaf    Famili    1952-07-08    1995-08-22    130    10
 10027    Divier    Reistad    1962-07-10    1989-07-07    180    10
 10031    Karsten    Joslin    1959-01-27    1991-09-01    110    10
+10011    Mary    Sluis    1953-11-07    1990-01-22    120    8
+10015    Guoxiang    Nooteboom    1959-08-19    1987-07-02    140    8
+10025    Prasadram    Heyers    1958-10-31    1987-08-17    180    8
 select * from employees where store_id in (1, 2, 11);
 id    fname    lname    hired    separated    job_code    store_id
 10001    Georgi    Facello    1953-09-02    1986-06-26    120    1
@@ -308,28 +315,28 @@ id    fname    lname    hired    separated    job_code    store_id
 10030    Elvis    Demeyer    1958-07-14    1994-02-17    110    1
 select * from employees where store_id in (1, 2, 6, 7);
 id    fname    lname    hired    separated    job_code    store_id
+10002    Bezalel    Simmel    1964-06-02    1985-11-21    150    7
+10007    Tzvetan    Zielinski    1957-05-23    1989-02-10    110    6
+10012    Patricio    Bridgland    1960-10-04    1992-12-18    120    7
+10038    Huan    Lortz    1960-07-20    1989-09-20    140    7
 10001    Georgi    Facello    1953-09-02    1986-06-26    120    1
 10016    Kazuhito    Cappelletti    1961-05-02    1995-01-27    140    2
 10018    Kazuhide    Peha    1954-06-19    1987-04-03    170    2
 10020    Mayuko    Warwick    1952-12-24    1991-01-26    120    1
 10030    Elvis    Demeyer    1958-07-14    1994-02-17    110    1
+select * from employees where store_id in (1, 2, 11) or store_id in (6, 7, 18);
+id    fname    lname    hired    separated    job_code    store_id
 10002    Bezalel    Simmel    1964-06-02    1985-11-21    150    7
+10005    Kyoichi    Maliniak    1955-01-21    1989-09-12    150    18
 10007    Tzvetan    Zielinski    1957-05-23    1989-02-10    110    6
 10012    Patricio    Bridgland    1960-10-04    1992-12-18    120    7
 10038    Huan    Lortz    1960-07-20    1989-09-20    140    7
-select * from employees where store_id in (1, 2, 11) or store_id in (6, 7, 18);
-id    fname    lname    hired    separated    job_code    store_id
 10001    Georgi    Facello    1953-09-02    1986-06-26    120    1
 10016    Kazuhito    Cappelletti    1961-05-02    1995-01-27    140    2
 10018    Kazuhide    Peha    1954-06-19    1987-04-03    170    2
 10020    Mayuko    Warwick    1952-12-24    1991-01-26    120    1
 10028    Domenick    Tempesti    1963-11-26    1991-10-22    110    11
 10030    Elvis    Demeyer    1958-07-14    1994-02-17    110    1
-10002    Bezalel    Simmel    1964-06-02    1985-11-21    150    7
-10005    Kyoichi    Maliniak    1955-01-21    1989-09-12    150    18
-10007    Tzvetan    Zielinski    1957-05-23    1989-02-10    110    6
-10012    Patricio    Bridgland    1960-10-04    1992-12-18    120    7
-10038    Huan    Lortz    1960-07-20    1989-09-20    140    7
 select * from employees where store_id = 3 and id = 10004 or store_id = 10;
 id    fname    lname    hired    separated    job_code    store_id
 10004    Chirstian    Koblick    1954-05-01    1986-12-01    150    3
