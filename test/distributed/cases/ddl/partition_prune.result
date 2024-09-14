@@ -59,13 +59,6 @@ select * from t1 where col1 = 24 and col3 = 7991 or col3 = 7990;
 col1    col2    col3
 24    1999-08-01    7991
 23    2001-12-04    7990
-select mo_ctl('dn', 'flush', 'db1.t1')
-select count(*) from t1;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 7 near "
-select count(*) from t1;";
-select count(*) from t1 where col1 = 24 and col3 = 7991 or col3 = 7990;
-count(*)
-2
 select * from t1 where col3 > 7992;
 col1    col2    col3
 27    1971-12-09    7994
