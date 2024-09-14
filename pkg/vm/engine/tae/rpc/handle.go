@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -546,7 +547,7 @@ func (h *Handle) HandleDropDatabase(
 	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.Bat.GetVector(1), common.WorkspaceAllocator)
 	defer pkVec.Close()
-	err = databaseTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec)
+	err = databaseTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
 
 	return
 }
@@ -645,7 +646,7 @@ func (h *Handle) HandleDropRelation(
 	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.TableBat.GetVector(1), common.WorkspaceAllocator)
 	defer pkVec.Close()
-	if err := tablesTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
+	if err := tablesTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal); err != nil {
 		return err
 	}
 	// if len(req.Cmds) > 0 {
@@ -659,7 +660,7 @@ func (h *Handle) HandleDropRelation(
 		defer rowIDVec.Close()
 		pkVec := containers.ToTNVector(bat.GetVector(1), common.WorkspaceAllocator)
 		defer pkVec.Close()
-		if err := columnsTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
+		if err := columnsTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal); err != nil {
 			return err
 		}
 	}
@@ -837,7 +838,7 @@ func (h *Handle) HandleWrite(
 					nil,
 				)
 
-				if err = tb.DeleteByPhyAddrKeys(vectors[0], vectors[1]); err != nil {
+				if err = tb.DeleteByPhyAddrKeys(vectors[0], vectors[1], handle.DT_Normal); err != nil {
 					logutil.Errorf("delete by phyaddr keys faild: %s, %s, [idx]%d, %v",
 						stats.String(), loc.String(), i, err)
 
@@ -855,7 +856,6 @@ func (h *Handle) HandleWrite(
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
 	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0), common.WorkspaceAllocator)
-	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
@@ -886,7 +886,7 @@ func (h *Handle) HandleWrite(
 			}
 		}
 	}
-	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
+	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
 	return
 }
 
