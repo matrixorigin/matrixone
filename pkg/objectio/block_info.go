@@ -172,6 +172,11 @@ func (s *BlockInfoSlice) Set(i int, info *BlockInfo) {
 	copy((*s)[i*BlockInfoSize:], EncodeBlockInfo(*info))
 }
 
+// func (s *BlockInfoSlice) SetBlockID(i int, id *types.Blockid,
+// ) {
+// 	copy((*s)[i*BlockInfoSize:], types.EncodeFixed(id))
+// }
+
 func (s *BlockInfoSlice) Len() int {
 	return len(*s) / BlockInfoSize
 }
@@ -216,3 +221,21 @@ type BackupObject struct {
 	DropTS   types.TS
 	NeedCopy bool
 }
+
+func MakeBlockInfoSlice(cnt int) BlockInfoSlice {
+	return make([]byte, cnt*BlockInfoSize)
+}
+
+// func ObjectStatsToBlockInfoSlice(stats *ObjectStats, withFirstEmpty bool) BlockInfoSlice {
+// 	offset := 0
+// 	var ret BlockInfoSlice
+// 	cnt := int(stats.BlkCnt())
+// 	if withFirstEmpty {
+// 		ret = MakeBlockInfoSlice(cnt + 1)
+// 		offset = 1
+// 	} else {
+// 		ret = MakeBlockInfoSlice(cnt)
+// 	}
+// 	for i := 0; i < cnt; i++ {
+// 	}
+// }
