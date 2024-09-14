@@ -46,26 +46,27 @@ type PipelineSpool struct {
 // pipelineSpoolMessage is the element of PipelineSpool.
 type pipelineSpoolMessage struct {
 	content *batch.Batch
+	cacheID int8
 	err     error
 }
 
 // SendBatch do copy for data, and send it to any or all data receiver.
 // after sent, data can be got by method ReceiveBatch.
 func (ps *PipelineSpool) SendBatch(
-	ctx context.Context, receiverID int, data *batch.Batch, info error) (queryDone bool, err error) {
+	ctx context.Context, receiverID int, data *batch.Batch, info error) (bool, error) {
 
 	if receiverID == SendToAnyLocal {
 		panic("do not support SendToAnyLocal for pipeline spool now.")
 	}
 
-	var dst *batch.Batch
-	dst, queryDone, err = ps.cache.GetCopiedBatch(ctx, data)
+	dst, queryDone, err := ps.cache.GetCopiedBatch(ctx, data)
 	if err != nil || queryDone {
 		return queryDone, err
 	}
 
 	msg := pipelineSpoolMessage{
-		content: dst,
+		content: dst.pointer,
+		cacheID: dst.whichCacheToUse,
 		err:     info,
 	}
 
@@ -85,7 +86,12 @@ func (ps *PipelineSpool) SendBatch(
 func (ps *PipelineSpool) ReleaseCurrent(idx int) {
 	if last := ps.rs[idx].getLastPop(); last != noneLastPop {
 		if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
-			ps.cache.CacheBatch(ps.shardPool[last].content)
+			ps.cache.CacheBatch(
+				freeBatchSignal{
+					pointer:         ps.shardPool[last].content,
+					whichCacheToUse: ps.shardPool[last].cacheID,
+				},
+			)
 			ps.freeShardPool <- last
 		}
 		ps.rs[idx].lastPop = noneLastPop

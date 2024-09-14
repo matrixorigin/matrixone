@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"math"
-	"sync"
 )
 
 // cachedBatch is just like the cachedVectorPool in the original code,
@@ -37,12 +36,24 @@ type cachedBatch struct {
 	// the capacity of the channel is the max number of batch pointers that can be copied.
 	//
 	// only support copy batch once freeBatchPointer is not empty.
-	freeBatchPointer chan *batch.Batch
+	freeBatchPointer chan freeBatchSignal
 
-	// the lock to protect the bytesCache.
-	bytesCacheLock sync.Mutex
+	// bytesCache stores the cached memory list for each batch.
+	bytesCache []oneBatchMemoryCache
+}
+
+const (
+	noNeedToCache int8 = -1
+)
+
+type freeBatchSignal struct {
+	pointer         *batch.Batch
+	whichCacheToUse int8
+}
+
+type oneBatchMemoryCache struct {
 	// bytes to copy vector's data and area to.
-	bytesCache [][]byte
+	bs [][]byte
 }
 
 func initCachedBatch(mp *mpool.MPool, capacity int) *cachedBatch {
@@ -52,30 +63,29 @@ func initCachedBatch(mp *mpool.MPool, capacity int) *cachedBatch {
 
 	cb := &cachedBatch{
 		mp:               mp,
-		freeBatchPointer: make(chan *batch.Batch, capacity),
-
-		// it's a casual length I set here.
-		bytesCache: make([][]byte, 0, 10*capacity),
+		freeBatchPointer: make(chan freeBatchSignal, capacity),
+		bytesCache:       make([]oneBatchMemoryCache, capacity),
 	}
 
 	for i := 0; i < capacity; i++ {
-		cb.freeBatchPointer <- batch.NewWithSize(0)
+		cb.freeBatchPointer <- freeBatchSignal{
+			pointer:         batch.NewWithSize(0),
+			whichCacheToUse: int8(i),
+		}
 	}
 
 	return cb
 }
 
-func (cb *cachedBatch) CacheBatch(bat *batch.Batch) {
-	if bat == nil || bat == batch.EmptyBatch || bat == batch.CteEndBatch {
+func (cb *cachedBatch) CacheBatch(signal freeBatchSignal) {
+	if signal.whichCacheToUse == noNeedToCache {
 		return
 	}
-	cb.cacheVectorsInBatch(bat)
-	cb.freeBatchPointer <- bat
+	cb.cacheVectorsInBatch(signal.pointer, signal.whichCacheToUse)
+	cb.freeBatchPointer <- signal
 }
 
-func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
-	toCache := make([][]byte, 0, len(bat.Vecs)*2)
-
+func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch, whichCacheToUse int8) {
 	for i, vec := range bat.Vecs {
 		if vec == nil {
 			continue
@@ -92,10 +102,10 @@ func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 		area := vector.GetAndClearVecArea(vec)
 
 		if data != nil {
-			toCache = append(toCache, data)
+			cb.bytesCache[whichCacheToUse].bs = append(cb.bytesCache[whichCacheToUse].bs, data)
 		}
 		if area != nil {
-			toCache = append(toCache, area)
+			cb.bytesCache[whichCacheToUse].bs = append(cb.bytesCache[whichCacheToUse].bs, area)
 		}
 
 		bat.ReplaceVector(vec, nil, i)
@@ -109,34 +119,29 @@ func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 		bat.Aggs[i].Free()
 	}
 	bat.Aggs = nil
-
-	cb.bytesCacheLock.Lock()
-	cb.bytesCache = append(cb.bytesCache, toCache...)
-	cb.bytesCacheLock.Unlock()
-}
-
-type fromCacheElement struct {
-	idx         int
-	dataRequire int
-	areaRequire int
 }
 
 // GetCopiedBatch get a batch from the batchPointer channel
 // and copy the data and area of the src batch to the dst batch.
 func (cb *cachedBatch) GetCopiedBatch(
-	senderCtx context.Context, src *batch.Batch) (dst *batch.Batch, senderDone bool, err error) {
+	senderCtx context.Context, src *batch.Batch) (signal freeBatchSignal, senderDone bool, err error) {
+
+	var dst *batch.Batch
+
 	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
+		signal.whichCacheToUse = noNeedToCache
 		dst = src
 
 	} else {
 		select {
-		case dst = <-cb.freeBatchPointer:
+		case signal = <-cb.freeBatchPointer:
+			dst = signal.pointer
 			dst.Recursive = src.Recursive
 			dst.Ro = src.Ro
 			dst.ShuffleIDX = src.ShuffleIDX
 
 		case <-senderCtx.Done():
-			return nil, true, nil
+			return signal, true, nil
 		}
 
 		if cap(dst.Vecs) >= len(src.Vecs) {
@@ -159,9 +164,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 		}
 
 		// copy vectors.
-		needBytesCount := 0
-		fromCacheList := make([]fromCacheElement, 0, 2*len(dst.Vecs))
-
 		for i := range dst.Vecs {
 			vec := src.Vecs[i]
 			if vec == nil || dst.Vecs[i] != nil {
@@ -174,23 +176,21 @@ func (cb *cachedBatch) GetCopiedBatch(
 			if vec.IsConst() {
 				if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
 					dst.Clean(cb.mp)
-					return nil, false, err
+					return signal, false, err
 				}
 
 			} else {
-				r1, r2 := len(vec.GetData()), len(vec.GetArea())
-				fromCacheList = append(fromCacheList, fromCacheElement{
-					idx:         i,
-					dataRequire: r1,
-					areaRequire: r2,
-				})
+				cb.bytesCache[signal.whichCacheToUse].setSuitableDataAreaToVector(
+					len(vec.GetData()), len(vec.GetArea()), dst.Vecs[i])
+				dst.Vecs[i].Reset(typ)
+				if err = vector.GetUnionAllFunction(typ, cb.mp)(
+					dst.Vecs[i],
+					vec); err != nil {
+					dst.Clean(cb.mp)
+					return signal, false, err
+				}
 
-				if r1 > 0 {
-					needBytesCount++
-				}
-				if r2 > 0 {
-					needBytesCount++
-				}
+				dst.Vecs[i].SetSorted(vec.GetSorted())
 			}
 			dst.Vecs[i].SetIsBin(vec.GetIsBin())
 
@@ -202,37 +202,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 			}
 		}
 
-		// use the lock as few times as possible.
-		if len(fromCacheList) > 0 {
-			var tempCache = make([][]byte, 0, needBytesCount)
-
-			cb.bytesCacheLock.Lock()
-			diff := len(cb.bytesCache) - needBytesCount
-			if diff > 0 {
-				tempCache = append(tempCache, cb.bytesCache[diff:]...)
-				cb.bytesCache = cb.bytesCache[:diff]
-			} else {
-				tempCache = append(tempCache, cb.bytesCache...)
-				cb.bytesCache = cb.bytesCache[:0]
-			}
-			cb.bytesCacheLock.Unlock()
-
-			for i := range fromCacheList {
-				index := fromCacheList[i].idx
-				typ := *dst.Vecs[index].GetType()
-
-				tempCache = setSuitableDataAreaToVectorVersion2(tempCache, fromCacheList[i].dataRequire, fromCacheList[i].areaRequire, dst.Vecs[index])
-				dst.Vecs[index].Reset(typ)
-				if err = vector.GetUnionAllFunction(typ, cb.mp)(
-					dst.Vecs[index],
-					src.Vecs[index]); err != nil {
-					dst.Clean(cb.mp)
-					return nil, false, err
-				}
-
-				dst.Vecs[index].SetSorted(src.Vecs[index].GetSorted())
-			}
-		}
 		dst.Aggs = src.Aggs
 		src.Aggs = nil
 
@@ -243,16 +212,17 @@ func (cb *cachedBatch) GetCopiedBatch(
 		dst.SetCnt(1)
 	}
 
-	return dst, false, nil
+	signal.pointer = dst
+	return signal, false, nil
 }
 
-// setSuitableDataAreaToVectorVersion2 get two long-enough bytes slices from the cache, and set them to the vector.
+// setSuitableDataAreaToVector get two long-enough bytes slices from the cache, and set them to the vector.
 // if not found, set the last one to the vector.
-func setSuitableDataAreaToVectorVersion2(
-	src [][]byte, dataSize, areaSize int, vec *vector.Vector) [][]byte {
-
-	if len(src) == 0 {
-		return src
+func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
+	dataSize, areaSize int, vec *vector.Vector) {
+	// return directly once cache was empty.
+	if len(mc.bs) == 0 {
+		return
 	}
 
 	setDataFirst := dataSize >= areaSize
@@ -266,7 +236,7 @@ func setSuitableDataAreaToVectorVersion2(
 		suitIdx := -1
 		suitDifference := math.MaxInt
 
-		for i, bs := range src {
+		for i, bs := range mc.bs {
 			if difference := cap(bs) - first; difference > 0 {
 				if difference < suitDifference {
 					suitIdx = i
@@ -276,12 +246,12 @@ func setSuitableDataAreaToVectorVersion2(
 		}
 
 		if suitIdx != -1 {
+			mem := mc.removeItemAndArrange(suitIdx)
 			if setDataFirst {
-				vector.SetVecData(vec, src[suitIdx])
+				vector.SetVecData(vec, mem)
 			} else {
-				vector.SetVecArea(vec, src[suitIdx])
+				vector.SetVecArea(vec, mem)
 			}
-			src = append(src[:suitIdx], src[suitIdx+1:]...)
 		}
 	}
 
@@ -289,7 +259,7 @@ func setSuitableDataAreaToVectorVersion2(
 		suitIdx := -1
 		suitDifference := math.MaxInt
 
-		for i, bs := range src {
+		for i, bs := range mc.bs {
 			if difference := cap(bs) - second; difference > 0 {
 				if difference < suitDifference {
 					suitIdx = i
@@ -299,37 +269,48 @@ func setSuitableDataAreaToVectorVersion2(
 		}
 
 		if suitIdx != -1 {
+			mem := mc.removeItemAndArrange(suitIdx)
 			if setDataFirst {
-				vector.SetVecArea(vec, src[suitIdx])
+				vector.SetVecArea(vec, mem)
 			} else {
-				vector.SetVecData(vec, src[suitIdx])
+				vector.SetVecData(vec, mem)
 			}
-			src = append(src[:suitIdx], src[suitIdx+1:]...)
 		}
 	}
 
-	if len(src) > 0 && cap(vec.GetData()) == 0 && dataSize > 0 {
-		vector.SetVecData(vec, src[len(src)-1])
-		src = src[:len(src)-1]
+	if len(mc.bs) > 0 && cap(vec.GetData()) == 0 && dataSize > 0 {
+		vector.SetVecData(vec, mc.bs[len(mc.bs)-1])
+		mc.bs = mc.bs[:len(mc.bs)-1]
 	}
-	if len(src) > 0 && cap(vec.GetArea()) == 0 && areaSize > 0 {
-		vector.SetVecArea(vec, src[len(src)-1])
-		src = src[:len(src)-1]
+	if len(mc.bs) > 0 && cap(vec.GetArea()) == 0 && areaSize > 0 {
+		vector.SetVecArea(vec, mc.bs[len(mc.bs)-1])
+		mc.bs = mc.bs[:len(mc.bs)-1]
 	}
-	return src
+}
+
+// removeItemAndArrange return and remove the idx item of cache.
+func (mc *oneBatchMemoryCache) removeItemAndArrange(idx int) []byte {
+	last := len(mc.bs) - 1
+	dst := mc.bs[idx]
+
+	if idx != last {
+		mc.bs[idx] = mc.bs[last]
+		mc.bs = mc.bs[:last]
+	}
+	mc.bs = mc.bs[:last]
+	return dst
 }
 
 func (cb *cachedBatch) Free() {
 	m := cap(cb.freeBatchPointer)
 	for i := 0; i < m; i++ {
 		b := <-cb.freeBatchPointer
-		b.Clean(cb.mp)
+		b.pointer.Clean(cb.mp)
 	}
 
-	cb.bytesCacheLock.Lock()
 	for i := range cb.bytesCache {
-		cb.mp.Free(cb.bytesCache[i])
+		for j := range cb.bytesCache[i].bs {
+			cb.mp.Free(cb.bytesCache[i].bs[j])
+		}
 	}
-	cb.bytesCache = nil
-	cb.bytesCacheLock.Unlock()
 }
