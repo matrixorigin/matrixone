@@ -1479,81 +1479,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-	case plan.Node_DEDUP_JOIN:
-		for _, expr := range node.OnList {
-			increaseRefCnt(expr, 1, colRefCnt)
-		}
-
-		internalMap := make(map[[2]int32][2]int32)
-
-		leftID := node.Children[0]
-		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
-		if err != nil {
-			return nil, err
-		}
-
-		for k, v := range leftRemapping.globalToLocal {
-			internalMap[k] = v
-		}
-
-		rightID := node.Children[1]
-		rightRemapping, err := builder.remapAllColRefs(rightID, step, colRefCnt, colRefBool, sinkColRef)
-		if err != nil {
-			return nil, err
-		}
-
-		for k, v := range rightRemapping.globalToLocal {
-			internalMap[k] = [2]int32{1, v[1]}
-		}
-
-		remapInfo.tip = "OnList"
-		for idx, expr := range node.OnList {
-			increaseRefCnt(expr, -1, colRefCnt)
-			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		childProjList := builder.qry.Nodes[leftID].ProjectList
-		for i, globalRef := range leftRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-
-			remapping.addColRef(globalRef)
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: childProjList[i].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(i),
-						Name:   builder.nameByColRef[globalRef],
-					},
-				},
-			})
-		}
-
-		childProjList = builder.qry.Nodes[rightID].ProjectList
-		for i, globalRef := range rightRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
-				continue
-			}
-
-			remapping.addColRef(globalRef)
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: childProjList[i].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						ColPos: int32(i),
-						Name:   builder.nameByColRef[globalRef],
-					},
-				},
-			})
-		}
-
 	case plan.Node_INSERT, plan.Node_DELETE:
 		for _, expr := range node.InsertDeleteCols {
 			increaseRefCnt(expr, 1, colRefCnt)
@@ -4182,7 +4107,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 }
 
 func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext, isRoot bool) (int32, error) {
-	var joinType plan.Node_JoinType
+	joinType := plan.Node_INNER
 
 	switch tbl.JoinType {
 	case tree.JOIN_TYPE_CROSS, tree.JOIN_TYPE_INNER, tree.JOIN_TYPE_NATURAL:
@@ -4195,6 +4120,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinType = plan.Node_RIGHT
 	case tree.JOIN_TYPE_FULL:
 		joinType = plan.Node_OUTER
+	case tree.JOIN_TYPE_DEDUP:
+		joinType = plan.Node_DEDUP
 	}
 
 	leftCtx := NewBindContext(builder, ctx)

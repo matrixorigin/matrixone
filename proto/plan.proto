@@ -681,14 +681,13 @@ message Node {
 		SAMPLE = 15;
 		SORT = 16;
 		WINDOW = 17;
-		DEDUP_JOIN = 18;
-		UNION = 19;
-		UNION_ALL = 20;
-		UNIQUE = 21;
-		INTERSECT = 22;
-		INTERSECT_ALL = 23;
-		MINUS = 24;
-		MINUS_ALL = 25;
+		UNION = 18;
+		UNION_ALL = 19;
+		UNIQUE = 20;
+		INTERSECT = 21;
+		INTERSECT_ALL = 22;
+		MINUS = 23;
+		MINUS_ALL = 24;
 
 		// DML
 		INSERT = 30;
@@ -728,8 +727,9 @@ message Node {
 		ANTI	= 5;
 		SINGLE	= 6;
 		MARK	= 7;
-		INDEX = 8;
-		L2 = 9;
+		INDEX	= 8;
+		L2		= 9;
+		DEDUP	= 10;
 	}
 
 	enum AggMode {

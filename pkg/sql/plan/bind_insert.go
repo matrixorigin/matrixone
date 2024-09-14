@@ -31,7 +31,13 @@ import (
 )
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (int32, error) {
-	if len(stmt.OnDuplicateUpdate) > 1 || (len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] != nil) {
+	var onDupAction plan.Node_OnDuplicateAction
+	if len(stmt.OnDuplicateUpdate) == 0 {
+		onDupAction = plan.Node_ERROR
+	} else if len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil {
+		onDupAction = plan.Node_IGNORE
+	} else {
+		//onDupAction = plan.Node_UPDATE
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "on duplicate key update")
 	}
 
@@ -108,11 +114,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 
 	//colName2Idx := make(map[string]int)
 
-	onDupAction := plan.Node_ERROR
-	if len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil {
-		onDupAction = plan.Node_IGNORE
-	}
-
 	selectNode := builder.qry.Nodes[lastNodeID]
 	idxObjRefs := make([][]*plan.ObjectRef, len(tableDefs))
 	idxTableDefs := make([][]*plan.TableDef, len(tableDefs))
@@ -167,8 +168,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		})
 
 		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:          plan.Node_DEDUP_JOIN,
+			NodeType:          plan.Node_JOIN,
 			Children:          []int32{scanNodeID, lastNodeID},
+			JoinType:          plan.Node_DEDUP,
 			OnList:            []*plan.Expr{joinCond},
 			OnDuplicateAction: onDupAction,
 		}, ctx)
@@ -191,8 +193,12 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			} else {
 				args := make([]*plan.Expr, argsLen)
 
-				for k, part := range idxDef.Parts {
-					colPos := colName2Idx[tableDef.Name+"."+part]
+				if !idxDef.Unique {
+					argsLen--
+				}
+
+				for k := 0; k < argsLen; k++ {
+					colPos := colName2Idx[tableDef.Name+"."+idxDef.Parts[k]]
 					args[k] = DeepCopyExpr(selectNode.ProjectList[colPos])
 				}
 
@@ -254,8 +260,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			})
 
 			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType:          plan.Node_DEDUP_JOIN,
+				NodeType:          plan.Node_JOIN,
 				Children:          []int32{idxTableNodeID, lastNodeID},
+				JoinType:          plan.Node_DEDUP,
 				OnList:            []*plan.Expr{joinCond},
 				OnDuplicateAction: onDupAction,
 			}, ctx)

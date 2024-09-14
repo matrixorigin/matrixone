@@ -93,7 +93,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 	selectCtx := NewBindContext(builder, ctx)
 	lastNodeID, err := builder.bindSelect(astSelect, selectCtx, false)
 	if err != nil {
-		return 0, nil
+		return 0, err
 	}
 
 	selectNode := builder.qry.Nodes[lastNodeID]
@@ -144,7 +144,9 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 			}
 
 			var leftExpr *plan.Expr
-			if len(idxDef.Parts) == 1 && idxDef.Unique {
+
+			argsLen := len(idxDef.Parts)
+			if argsLen == 1 && idxDef.Unique {
 				leftExpr = &plan.Expr{
 					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
@@ -155,15 +157,14 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 					},
 				}
 			} else {
-				argsLen := len(idxDef.Parts)
-				if !idxDef.Unique {
-					argsLen++
-				}
-
 				args := make([]*plan.Expr, argsLen)
 
-				for k, part := range idxDef.Parts {
-					colPos := int32(colName2Idx[i][part])
+				if !idxDef.Unique {
+					argsLen--
+				}
+
+				for k := 0; k < argsLen; k++ {
+					colPos := int32(colName2Idx[i][idxDef.Parts[k]])
 					args[k] = &plan.Expr{
 						Typ: selectNode.ProjectList[colPos].Typ,
 						Expr: &plan.Expr_Col{
@@ -177,7 +178,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 
 				if !idxDef.Unique {
 					colPos := int32(colName2Idx[i][tableDef.Pkey.PkeyColName])
-					args[len(idxDef.Parts)] = &plan.Expr{
+					args[len(idxDef.Parts)-1] = &plan.Expr{
 						Typ: selectNode.ProjectList[colPos].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
@@ -188,7 +189,11 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 					}
 				}
 
-				leftExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+				fnName := "serial"
+				if !idxDef.Unique {
+					fnName = "serial_full"
+				}
+				leftExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
 			}
 
 			joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{

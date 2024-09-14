@@ -425,6 +425,7 @@ const (
 	JOIN_TYPE_NATURAL_LEFT  = "NATURAL LEFT"
 	JOIN_TYPE_NATURAL_RIGHT = "NATURAL RIGHT"
 	JOIN_TYPE_CROSS_L2      = "CROSS_L2"
+	JOIN_TYPE_DEDUP         = "DEDUP"
 )
 
 // the table expression

@@ -535,6 +535,7 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 		"SELECT N_NAME, R_REGIONKEY FROM NATION2 join REGION using(R_REGIONKEY)",
 		"select nation.n_name from nation join nation2 on nation.n_name !='a' join region on nation.n_regionkey = region.r_regionkey",
 		"select * from nation, nation2, region",
+		"select n_name from nation dedup join region on n_regionkey = r_regionkey",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -1120,7 +1121,7 @@ func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return BuildPlan(ctx, stmts[0], false, false)
+	return BuildPlan(ctx, stmts[0], false, true)
 }
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {
