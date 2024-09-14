@@ -37,8 +37,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservice2 "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -528,6 +530,57 @@ func (ml *mockLockService) IterLocks(func(tableID uint64, keys [][]byte, lock lo
 }
 func (ml *mockLockService) CloseRemoteLockTable(group uint32, tableID uint64, version uint64) (bool, error) {
 	return false, nil
+}
+
+type mockShardService struct {
+}
+
+func MockShardService() *mockShardService {
+	return &mockShardService{}
+}
+
+func (ms *mockShardService) Config() shardservice.Config {
+	return shardservice.Config{}
+}
+
+func (ms *mockShardService) GetStorage() shardservice.ShardStorage {
+	return nil
+}
+
+func (ms *mockShardService) Read(cxt context.Context, req shardservice.ReadRequest, opts shardservice.ReadOptions) error {
+	return nil
+}
+
+func (ms *mockShardService) HasLocalReplica(tableID, shardID uint64) bool {
+	return true
+}
+
+func (ms *mockShardService) HasAllLocalReplicas(tableID uint64) bool {
+	return true
+}
+
+func (ms *mockShardService) GetShardInfo(table uint64) (uint64, pb.Policy, bool, error) {
+	return table, 1, true, nil
+}
+
+func (ms *mockShardService) Create(ctx context.Context, table uint64, txnOp client.TxnOperator) error {
+	return nil
+}
+
+func (ms *mockShardService) Delete(ctx context.Context, table uint64, txnOp client.TxnOperator) error {
+	return nil
+}
+
+func (ms *mockShardService) ReplicaCount() int64 {
+	return 1
+}
+
+func (ms *mockShardService) TableReplicaCount(tableID uint64) int64 {
+	return 1
+}
+
+func (ms *mockShardService) Close() error {
+	return nil
 }
 
 var _ logservice.CNHAKeeperClient = new(testHAKeeperClient)

@@ -92,15 +92,29 @@ type txnTableDelegate struct {
 
 func MockTableDelegate(
 	tableDelegate engine.Relation,
-	svr shardservice.ShardService,
+	service shardservice.ShardService,
 ) (engine.Relation, error) {
 	delegate := tableDelegate.(*txnTableDelegate)
 	tbl := &txnTableDelegate{
 		origin: delegate.origin,
 	}
-	tbl.isMock = true
-	return tbl, nil
+	tbl.shard.service = service
 
+	tbl.shard.service = service
+	tbl.shard.is = false
+
+	if service.Config().Enable &&
+		tbl.origin.db.databaseId != catalog.MO_CATALOG_ID {
+		tableID, policy, is, err := service.GetShardInfo(tbl.origin.tableId)
+		if err != nil {
+			return nil, err
+		}
+
+		tbl.shard.is = is
+		tbl.shard.policy = policy
+		tbl.shard.tableID = tableID
+	}
+	return tbl, nil
 }
 
 func newTxnTable(
