@@ -354,7 +354,7 @@ var (
 var (
 	MoTaskSysAsyncTaskDDL = fmt.Sprintf(`create table %s.sys_async_task (
 			task_id                     bigint primary key auto_increment,
-			task_metadata_id            varchar(50) unique not null,
+			task_metadata_id            varchar(50) not null,
 			task_metadata_executor      int,
 			task_metadata_context       blob,
 			task_metadata_option        varchar(1000),

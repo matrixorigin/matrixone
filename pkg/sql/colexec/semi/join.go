@@ -116,20 +116,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			if ctr.skipProbe {
-				newvecs := make([]*vector.Vector, len(semiJoin.Result))
-				for i, pos := range semiJoin.Result {
-					newvecs[i] = bat.Vecs[pos]
-				}
-				bat.Vecs = newvecs
-				result.Batch, err = semiJoin.EvalProjection(bat, proc)
-				if err != nil {
-					return result, err
-				}
-				analyzer.Output(result.Batch)
-				return result, nil
-			}
-
 			if ctr.mp == nil {
 				continue
 			}
@@ -148,11 +134,28 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 
-			if err := ctr.probe(bat, semiJoin, proc, &probeResult); err != nil {
-				return result, err
+			if ctr.skipProbe {
+				rowCount := bat.RowCount()
+				var srcVec *vector.Vector
+				var targetVec *vector.Vector
+				for i, pos := range semiJoin.Result {
+					srcVec = bat.Vecs[pos]
+					targetVec = ctr.rbat.Vecs[i]
+					err = targetVec.UnionBatch(srcVec, 0, rowCount, nil, proc.Mp())
+					if err != nil {
+						return result, err
+					}
+				}
+				ctr.rbat.SetRowCount(rowCount)
+				result.Batch, err = semiJoin.EvalProjection(ctr.rbat, proc)
+			} else {
+				if err := ctr.probe(bat, semiJoin, proc, &probeResult); err != nil {
+					return result, err
+				}
+
+				result.Batch, err = semiJoin.EvalProjection(probeResult.Batch, proc)
 			}
 
-			result.Batch, err = semiJoin.EvalProjection(probeResult.Batch, proc)
 			if err != nil {
 				return result, err
 			}
