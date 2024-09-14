@@ -636,7 +636,7 @@ func (tbl *txnTable) doRanges(
 		return
 	}
 
-	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
+	blocks.AppendBlockInfo(&objectio.EmptyBlockInfo)
 
 	if err = tbl.rangesOnePart(
 		ctx,
@@ -817,7 +817,7 @@ func (tbl *txnTable) rangesOnePart(
 
 				blk.SetFlagByObjStats(&obj.ObjectStats)
 
-				outBlocks.AppendBlockInfo(blk)
+				outBlocks.AppendBlockInfo(&blk)
 
 				return true
 
@@ -1646,7 +1646,7 @@ func (tbl *txnTable) buildLocalDataSource(
 	case engine.RelDataBlockList:
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
-			objectio.EncodeBlockInfo(*ranges.Get(0)), objectio.EmptyBlockInfoBytes)
+			objectio.EncodeBlockInfo(ranges.Get(0)), objectio.EmptyBlockInfoBytes)
 
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
@@ -1712,7 +1712,7 @@ func (tbl *txnTable) BuildReaders(
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
 		relData = NewEmptyBlockListRelationData()
-		relData.AppendBlockInfo(objectio.EmptyBlockInfo)
+		relData.AppendBlockInfo(&objectio.EmptyBlockInfo)
 	}
 	blkCnt := relData.DataCnt()
 	newNum := num

@@ -41,22 +41,22 @@ func FuzzEncodeInfoHeader(f *testing.F) {
 
 func TestBlockInfoSlice_Append(t *testing.T) {
 	var s BlockInfoSlice
-	s.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{1}})
+	s.AppendBlockInfo(&BlockInfo{BlockID: types.Blockid{1}})
 	require.Equal(t, 1, s.Len())
 	require.Equal(t, BlockInfoSize, s.Size())
 	require.Equal(t, &BlockInfo{BlockID: types.Blockid{1}}, s.Get(0))
 
 	var s2 BlockInfoSlice
-	s2.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{1}})
-	s2.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{2}})
+	s2.AppendBlockInfo(&BlockInfo{BlockID: types.Blockid{1}})
+	s2.AppendBlockInfo(&BlockInfo{BlockID: types.Blockid{2}})
 	require.Equal(t, 2, s2.Len())
 	require.Equal(t, BlockInfoSize*2, s2.Size())
 	require.Equal(t, &BlockInfo{BlockID: types.Blockid{1}}, s2.Get(0))
 	require.Equal(t, &BlockInfo{BlockID: types.Blockid{2}}, s2.Get(1))
 
 	var s3 BlockInfoSlice
-	s3.Append(EncodeBlockInfo(BlockInfo{BlockID: types.Blockid{1}}))
-	s3.Append(EncodeBlockInfo(BlockInfo{BlockID: types.Blockid{2}}))
+	s3.Append(EncodeBlockInfo(&BlockInfo{BlockID: types.Blockid{1}}))
+	s3.Append(EncodeBlockInfo(&BlockInfo{BlockID: types.Blockid{2}}))
 	require.Equal(t, 2, s3.Len())
 	require.Equal(t, BlockInfoSize*2, s3.Size())
 	require.Equal(t, &BlockInfo{BlockID: types.Blockid{1}}, s3.Get(0))
@@ -75,7 +75,7 @@ func intToBlockid(i int32) types.Blockid {
 func TestBlockInfoSliceTraverse(t *testing.T) {
 	var s BlockInfoSlice
 	for i := int32(0); i < 1000; i++ {
-		s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(i)})
+		s.AppendBlockInfo(&BlockInfo{BlockID: intToBlockid(i)})
 	}
 	require.Equal(t, 1000, s.Len())
 
@@ -93,7 +93,7 @@ func TestBlockInfoSliceTraverse(t *testing.T) {
 	blk := BlockInfo{BlockID: intToBlockid(1000)}
 	blk.ObjectFlags |= ObjectFlag_Appendable
 
-	s.AppendBlockInfo(blk)
+	s.AppendBlockInfo(&blk)
 
 	for i := 0; i < s.Len(); i++ {
 		require.Equal(t, true, s.Get(i).IsAppendable())
@@ -103,7 +103,7 @@ func TestBlockInfoSliceTraverse(t *testing.T) {
 func TestBytesToBlockInfoSlice(t *testing.T) {
 	bs := make([]byte, 0)
 	for i := 0; i < 1000; i++ {
-		bs = append(bs, EncodeBlockInfo(BlockInfo{BlockID: intToBlockid(int32(i))})...)
+		bs = append(bs, EncodeBlockInfo(&BlockInfo{BlockID: intToBlockid(int32(i))})...)
 	}
 
 	s := BlockInfoSlice(bs)
@@ -118,7 +118,7 @@ func TestBytesToBlockInfoSlice(t *testing.T) {
 
 	blk := BlockInfo{BlockID: intToBlockid(1000)}
 	blk.ObjectFlags |= ObjectFlag_Appendable
-	s.AppendBlockInfo(blk)
+	s.AppendBlockInfo(&blk)
 
 	for i := 0; i < s.Len(); i++ {
 		require.Equal(t, true, s.Get(i).IsAppendable())
@@ -138,7 +138,7 @@ func TestBytesToBlockInfoSlice(t *testing.T) {
 
 func TestBlockInfoSlice_Slice(t *testing.T) {
 	s := make(BlockInfoSlice, 0)
-	s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(0)})
+	s.AppendBlockInfo(&BlockInfo{BlockID: intToBlockid(0)})
 	// Get BlockInfoSlice[:1]
 	require.Equal(t, s.GetBytes(0), []byte(s.Slice(0, 1)))
 	// Get BlockInfoSlice[1:]
@@ -148,8 +148,8 @@ func TestBlockInfoSlice_Slice(t *testing.T) {
 	require.Equal(t, 0, len(s))
 	require.Equal(t, 0, s.Len())
 
-	s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(1)})
-	s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(2)})
+	s.AppendBlockInfo(&BlockInfo{BlockID: intToBlockid(1)})
+	s.AppendBlockInfo(&BlockInfo{BlockID: intToBlockid(2)})
 	require.Equal(t, s.GetBytes(0), []byte(s.Slice(0, 1)))
 	require.Equal(t, s.GetBytes(1), []byte(s.Slice(1, s.Len())))
 }
@@ -157,21 +157,21 @@ func TestBlockInfoSlice_Slice(t *testing.T) {
 func TestBlockInfoSlice_GetBytes(t *testing.T) {
 	s := make(BlockInfoSlice, 0, 10)
 	for i := 0; i < 10; i++ {
-		s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(int32(i))})
+		s.AppendBlockInfo(&BlockInfo{BlockID: intToBlockid(int32(i))})
 	}
 
 	for i := 0; i < 10; i++ {
-		require.Equal(t, EncodeBlockInfo(BlockInfo{BlockID: intToBlockid(int32(i))}), s.GetBytes(i))
+		require.Equal(t, EncodeBlockInfo(&BlockInfo{BlockID: intToBlockid(int32(i))}), s.GetBytes(i))
 		require.Equal(t, &BlockInfo{BlockID: intToBlockid(int32(i))}, DecodeBlockInfo(s.GetBytes(i)))
 		require.Equal(t, &BlockInfo{BlockID: intToBlockid(int32(i))}, s.Get(i))
-		require.Equal(t, EncodeBlockInfo(BlockInfo{BlockID: intToBlockid(int32(i))}), EncodeBlockInfo(*s.Get(i)))
+		require.Equal(t, EncodeBlockInfo(&BlockInfo{BlockID: intToBlockid(int32(i))}), EncodeBlockInfo(s.Get(i)))
 	}
 }
 
 func TestBlockInfoSlice_Remove(t *testing.T) {
 	s := make(BlockInfoSlice, 0, 10)
 	for i := 0; i < 10; i++ {
-		s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(int32(i))})
+		s.AppendBlockInfo(&BlockInfo{BlockID: intToBlockid(int32(i))})
 	}
 
 	curr := 0
@@ -264,6 +264,13 @@ func BenchmarkObjectStatsRelatedUtils(b *testing.B) {
 			}
 
 			blk.SetFlagByObjStats(stats)
+		}
+	})
+	var blk1 BlockInfo
+	b.Run("encode-block-info", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			EncodeBlockInfo(&blk1)
 		}
 	})
 }

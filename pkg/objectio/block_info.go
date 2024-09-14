@@ -47,7 +47,7 @@ func DecodeInfoHeader(h uint32) InfoHeader {
 
 var (
 	EmptyBlockInfo      = BlockInfo{}
-	EmptyBlockInfoBytes = EncodeBlockInfo(EmptyBlockInfo)
+	EmptyBlockInfoBytes = EncodeBlockInfo(&EmptyBlockInfo)
 )
 
 const (
@@ -155,11 +155,11 @@ func (b *BlockInfo) SetMetaLocation(metaLoc Location) {
 }
 
 func (b *BlockInfo) IsMemBlk() bool {
-	return bytes.Equal(EncodeBlockInfo(*b), EmptyBlockInfoBytes)
+	return bytes.Equal(EncodeBlockInfo(b), EmptyBlockInfoBytes)
 }
 
-func EncodeBlockInfo(info BlockInfo) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
+func EncodeBlockInfo(info *BlockInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(info)), BlockInfoSize)
 }
 
 func DecodeBlockInfo(buf []byte) *BlockInfo {
@@ -177,7 +177,7 @@ func (s *BlockInfoSlice) GetBytes(i int) []byte {
 }
 
 func (s *BlockInfoSlice) Set(i int, info *BlockInfo) {
-	copy((*s)[i*BlockInfoSize:], EncodeBlockInfo(*info))
+	copy((*s)[i*BlockInfoSize:], EncodeBlockInfo(info))
 }
 
 func (s *BlockInfoSlice) Len() int {
@@ -196,7 +196,7 @@ func (s *BlockInfoSlice) Append(bs []byte) {
 	*s = append(*s, bs...)
 }
 
-func (s *BlockInfoSlice) AppendBlockInfo(info BlockInfo) {
+func (s *BlockInfoSlice) AppendBlockInfo(info *BlockInfo) {
 	*s = append(*s, EncodeBlockInfo(info)...)
 }
 

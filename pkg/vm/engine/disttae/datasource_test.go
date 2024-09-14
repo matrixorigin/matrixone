@@ -245,7 +245,7 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 			PartitionNum: int16(i),
 		}
 		blkInfo.ObjectFlags |= objectio.ObjectFlag_Appendable
-		relData.AppendBlockInfo(blkInfo)
+		relData.AppendBlockInfo(&blkInfo)
 	}
 
 	tombstone := NewEmptyTombstoneData()

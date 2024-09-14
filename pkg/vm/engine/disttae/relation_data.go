@@ -91,11 +91,11 @@ func (relData *blockListRelData) GetBlockInfo(i int) objectio.BlockInfo {
 	return *relData.blklist.Get(i)
 }
 
-func (relData *blockListRelData) SetBlockInfo(i int, blk objectio.BlockInfo) {
-	relData.blklist.Set(i, &blk)
+func (relData *blockListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
+	relData.blklist.Set(i, blk)
 }
 
-func (relData *blockListRelData) AppendBlockInfo(blk objectio.BlockInfo) {
+func (relData *blockListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
 	relData.blklist.AppendBlockInfo(blk)
 }
 
@@ -201,9 +201,9 @@ func (relData *blockListRelData) GroupByPartitionNum() map[int16]engine.RelData 
 			ret[partitionNum] = &blockListRelData{
 				tombstones: relData.tombstones,
 			}
-			ret[partitionNum].AppendBlockInfo(objectio.EmptyBlockInfo)
+			ret[partitionNum].AppendBlockInfo(&objectio.EmptyBlockInfo)
 		}
-		ret[partitionNum].AppendBlockInfo(*blkInfo)
+		ret[partitionNum].AppendBlockInfo(blkInfo)
 	}
 
 	return ret

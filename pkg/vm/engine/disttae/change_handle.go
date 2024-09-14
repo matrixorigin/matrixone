@@ -141,9 +141,9 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 		return
 	}
 	relData := NewEmptyBlockListRelationData()
-	relData.AppendBlockInfo(objectio.EmptyBlockInfo) // read partition insert
+	relData.AppendBlockInfo(&objectio.EmptyBlockInfo) // read partition insert
 	for i, end := 0, blockList.Len(); i < end; i++ {
-		relData.AppendBlockInfo(*blockList.Get(i))
+		relData.AppendBlockInfo(blockList.Get(i))
 	}
 
 	readers, err := h.table.BuildReaders(

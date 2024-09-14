@@ -159,7 +159,7 @@ func FilterObjects(
 			}
 			var blk objectio.BlockInfo
 			objStats.ConstructBlockInfoTo(uint16(pos), &blk)
-			outBlocks.AppendBlockInfo(blk)
+			outBlocks.AppendBlockInfo(&blk)
 		}
 
 		return
