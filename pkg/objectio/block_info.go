@@ -71,10 +71,6 @@ func (b *BlockInfo) ConstructBlockID(name ObjectName, sequence uint16) {
 	BuildObjectBlockidTo(name, sequence, b.BlockID[:])
 }
 
-func (b *BlockInfo) SetBlockID(id *types.Blockid) {
-	b.BlockID = *id
-}
-
 func (b *BlockInfo) IsAppendable() bool {
 	return b.ObjectFlags&ObjectFlag_Appendable != 0
 }
