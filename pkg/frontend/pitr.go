@@ -537,9 +537,6 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 	}
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		if strings.Contains(err.Error(), "Duplicate entry") {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("%s already has a pitr", pitrLevel.String()))
-		}
 		return err
 	}
 
