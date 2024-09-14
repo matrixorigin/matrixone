@@ -555,7 +555,7 @@ func (tbl *txnTable) doRanges(
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
-	var blocks objectio.BlockInfoSlice
+	blocks := objectio.MakeBlockInfoSlice(1)
 
 	trace.GetService(sid).AddTxnDurationAction(
 		tbl.db.op,
@@ -635,8 +635,6 @@ func (tbl *txnTable) doRanges(
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
 	}
-
-	blocks.AppendBlockInfo(&objectio.EmptyBlockInfo)
 
 	if err = tbl.rangesOnePart(
 		ctx,
@@ -1711,8 +1709,7 @@ func (tbl *txnTable) BuildReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = NewEmptyBlockListRelationData()
-		relData.AppendBlockInfo(&objectio.EmptyBlockInfo)
+		relData = NewBlockListRelationData(1)
 	}
 	blkCnt := relData.DataCnt()
 	newNum := num

@@ -40,9 +40,10 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	}
 }
 
-func NewEmptyBlockListRelationData() *blockListRelData {
+// emptyCnt is the number of empty blocks preserved
+func NewBlockListRelationData(emptyCnt int) *blockListRelData {
 	return &blockListRelData{
-		blklist: objectio.BlockInfoSlice{},
+		blklist: objectio.MakeBlockInfoSlice(emptyCnt),
 	}
 }
 
