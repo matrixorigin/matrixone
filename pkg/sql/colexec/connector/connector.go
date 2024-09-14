@@ -16,6 +16,7 @@ package connector
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -29,17 +30,17 @@ func (connector *Connector) String(buf *bytes.Buffer) {
 	buf.WriteString(": pipe connector")
 }
 
-func (connector *Connector) Prepare(_ *process.Process) error {
+func (connector *Connector) Prepare(proc *process.Process) error {
+	if connector.ctr.sp == nil {
+		connector.ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), 1)
+	}
+
 	if connector.OpAnalyzer == nil {
 		connector.OpAnalyzer = process.NewAnalyzer(connector.GetIdx(), connector.IsFirst, connector.IsLast, "connector")
 	} else {
 		connector.OpAnalyzer.Reset()
 	}
 	return nil
-}
-
-func (connector *Connector) OpType() vm.OpType {
-	return vm.Connector
 }
 
 func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
@@ -51,45 +52,27 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	reg := connector.Reg
-
 	result, err := vm.ChildrenCall(connector.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
 
+	// pipeline ends normally.
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-
+	// batch with no data, no need to send.
 	if result.Batch.IsEmpty() {
 		result.Batch = batch.EmptyBatch
 		return result, nil
 	}
 
-	sendBat, err := result.Batch.Dup(proc.GetMPool())
-	if err != nil {
-		return vm.CancelResult, nil
+	var queryDone bool
+	queryDone, err = connector.ctr.sp.SendBatch(proc.Ctx, 0, result.Batch, nil)
+	if queryDone || err != nil {
+		return result, err
 	}
-	sendBat.Aggs = result.Batch.Aggs
-	result.Batch.Aggs = nil
-	sendBat.SetRowCount(result.Batch.RowCount())
-
-	// there is no need to log anything here.
-	// because the context is already canceled means the pipeline closed normally.
-	select {
-	case <-proc.Ctx.Done():
-		proc.PutBatch(sendBat)
-		result.Status = vm.ExecStop
-		return result, nil
-
-	case <-reg.Ctx.Done():
-		proc.PutBatch(sendBat)
-		result.Status = vm.ExecStop
-		return result, nil
-
-	case reg.Ch <- process.NewRegMsg(sendBat):
-		return result, nil
-	}
+	connector.Reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(connector.ctr.sp, 0)
+	return result, nil
 }
