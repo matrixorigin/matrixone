@@ -265,16 +265,23 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 }
 
 func builtInMoShowColUnique(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return
+	return opBinaryStrStrToFixed[bool](
+		parameters,
+		result,
+		proc,
+		length,
+		moShowColUnique,
+		selectList,
+	)
 }
 
 // p1: constrain
 // p2: column name
-func moShowColUnique(constraintStr string, colName string, proc *process.Process) (string, error) {
+func moShowColUnique(constraintStr string, colName string) bool {
 	c := &engine.ConstraintDef{}
 	err := c.UnmarshalBinary([]byte(constraintStr))
 	if err != nil {
-		return "n", nil
+		return false
 	}
 
 	contatinsCol := false
@@ -290,16 +297,15 @@ func moShowColUnique(constraintStr string, colName string, proc *process.Process
 							break
 						}
 					}
-
 				}
 			}
 		}
 	}
 
 	if contatinsCol {
-		return "u", nil
+		return true
 	} else {
-		return "n", nil
+		return false
 	}
 }
 

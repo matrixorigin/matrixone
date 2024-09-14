@@ -5761,12 +5761,12 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				volatile:   true,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return builtInMoShowVisibleBinEnum
+					return builtInMoShowColUnique
 				},
 			},
 		},
