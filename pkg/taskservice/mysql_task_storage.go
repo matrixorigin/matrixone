@@ -1093,18 +1093,25 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 	}()
 
 	taskKeyMap := make(map[CdcTaskKey]struct{}, 0)
-	affectedCdcRow, err = callback(ctx, targetStatus, taskKeyMap, tx)
-	if err != nil {
-		return 0, err
+	if callback != nil {
+		affectedCdcRow, err = callback(ctx, targetStatus, taskKeyMap, tx)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	//step3: collect daemon task that we want to update
 	daemonTasks, err := m.RunQueryDaemonTask(ctx, tx, condition...)
+	if err != nil {
+		return 0, err
+	}
 	updateTasks := make([]task.DaemonTask, 0)
 	for _, dTask := range daemonTasks {
 		details, ok := dTask.Details.Details.(*task.Details_CreateCdc)
 		if !ok {
-			continue
+			err = moerr.NewInternalError(ctx,
+				"Details not a CreateCdc task type")
+			return 0, err
 		}
 		//skip task we do not need
 		tInfo := CdcTaskKey{
@@ -1117,7 +1124,10 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 		if dTask.TaskStatus != task.TaskStatus_Canceled {
 			if (targetStatus == task.TaskStatus_ResumeRequested || targetStatus == task.TaskStatus_RestartRequested) && dTask.TaskStatus != task.TaskStatus_Paused ||
 				targetStatus == task.TaskStatus_PauseRequested && dTask.TaskStatus != task.TaskStatus_Running {
-				continue
+				err = moerr.NewInternalErrorf(ctx,
+					"status can not be change, now it is %s",
+					dTask.TaskStatus.String())
+				return 0, err
 			}
 			dTask.TaskStatus = targetStatus
 			updateTasks = append(updateTasks, dTask)
