@@ -30,12 +30,14 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -404,7 +406,7 @@ var tryConn = func(dsn string) (*sql.DB, error) {
 	return db, err
 }
 
-func GetTxnOp(
+var GetTxnOp = func(
 	ctx context.Context,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
@@ -419,7 +421,15 @@ func GetTxnOp(
 	return cnTxnClient.New(ctx, nowTs, createByOpt)
 }
 
-func FinishTxnOp(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {
+var GetTxn = func(
+	ctx context.Context,
+	cnEngine engine.Engine,
+	txnOp client.TxnOperator,
+) error {
+	return cnEngine.New(ctx, txnOp)
+}
+
+var FinishTxnOp = func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {
 	//same timeout value as it in frontend
 	ctx2, cancel := context.WithTimeout(ctx, cnEngine.Hints().CommitOrRollbackTimeout)
 	defer cancel()
@@ -428,6 +438,18 @@ func FinishTxnOp(ctx context.Context, inputErr error, txnOp client.TxnOperator, 
 	} else {
 		_ = txnOp.Commit(ctx2)
 	}
+}
+
+var GetRelationById = func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
+	return cnEngine.GetRelationById(ctx, txnOp, tableId)
+}
+
+var GetSnapshotTS = func(txnOp client.TxnOperator) timestamp.Timestamp {
+	return txnOp.SnapshotTS()
+}
+
+var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+	return rel.CollectChanges(ctx, fromTs, toTs, mp)
 }
 
 func GetTableDef(

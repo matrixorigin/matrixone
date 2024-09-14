@@ -304,7 +304,3 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 
 	require.Equal(t, count, 0)
 }
-
-func Test_changesHandle(t *testing.T) {
-	newTestChangesHandle("db", "t1", 20, 23, types.TS{}, nil, nil)
-}

@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strings"
 
 	"go.uber.org/zap"
 
@@ -39,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
@@ -811,131 +809,4 @@ func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
 		prevTableId = vector.GetFixedAtNoTypeCheck[uint64](b.Vecs[tidIdx], b.RowCount()-1)
 	}
 	return true
-}
-
-var _ engine.ChangesHandle = new(testChangesHandle)
-
-const (
-	batchCnt = 2
-	rowCnt   = 3
-)
-
-type testChangesHandle struct {
-	dbName, tblName string
-	dbId, tblId     uint64
-	data            []*batch.Batch
-	mp              *mpool.MPool
-	packer          *types.Packer
-	called          int
-	toTs            types.TS
-}
-
-func newTestChangesHandle(
-	dbName, tblName string,
-	dbId, tblId uint64,
-	toTs types.TS,
-	mp *mpool.MPool,
-	packer *types.Packer,
-) *testChangesHandle {
-	ret := &testChangesHandle{
-		dbName:  dbName,
-		tblName: tblName,
-		dbId:    dbId,
-		tblId:   tblId,
-		mp:      mp,
-		packer:  packer,
-		toTs:    toTs,
-	}
-	/*
-		assume tables looks like:
-			test.t*
-		same schema :
-			create table t1(a int,b int, primary key(a,b))
-	*/
-
-	if dbName == "test" && strings.HasPrefix(tblName, "t") {
-		ret.makeData()
-	}
-	return ret
-}
-
-func (changes *testChangesHandle) makeData() {
-	changes.packer.Reset()
-	defer func() {
-		changes.packer.Reset()
-	}()
-	//no checkpoint
-	//insert:
-	//ts,a,b,cpk
-	//delete:
-	//ts cpk
-	for i := 0; i < batchCnt; i++ {
-		bat := allocTestBatch(
-			[]string{
-				"ts",
-				"a",
-				"b",
-				"cpk",
-			},
-			[]types.Type{
-				types.T_TS.ToType(),
-				types.T_int32.ToType(),
-				types.T_int32.ToType(),
-				types.T_varchar.ToType(),
-			},
-			0,
-			changes.mp,
-		)
-		bat.SetRowCount(rowCnt)
-		for j := 0; j < rowCnt; j++ {
-			//ts
-			_ = vector.AppendFixed(bat.Vecs[0], changes.toTs, false, changes.mp)
-			//a
-			_ = vector.AppendFixed(bat.Vecs[1], int32(j), false, changes.mp)
-			//b
-			_ = vector.AppendFixed(bat.Vecs[2], int32(j), false, changes.mp)
-			//cpk
-			changes.packer.Reset()
-			changes.packer.EncodeInt32(int32(j))
-			changes.packer.EncodeInt32(int32(j))
-			_ = vector.AppendBytes(bat.Vecs[3], changes.packer.Bytes(), false, changes.mp)
-		}
-
-		changes.data = append(changes.data, bat)
-	}
-}
-
-func (changes *testChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
-	if changes.called < batchCnt {
-		data = changes.data[changes.called]
-		changes.called++
-		return data, tombstone, engine.ChangesHandle_Tail_done, nil
-	}
-	return nil, nil, engine.ChangesHandle_Tail_wip, err
-}
-
-func (changes *testChangesHandle) Close() error {
-	return nil
-}
-
-func allocTestBatch(
-	attrName []string,
-	tt []types.Type,
-	batchSize int,
-	mp *mpool.MPool,
-) *batch.Batch {
-	batchData := batch.New(true, attrName)
-
-	//alloc space for vector
-	for i := 0; i < len(attrName); i++ {
-		vec := vector.NewVec(tt[i])
-		if err := vec.PreExtend(batchSize, mp); err != nil {
-			panic(err)
-		}
-		vec.SetLength(batchSize)
-		batchData.Vecs[i] = vec
-	}
-
-	batchData.SetRowCount(batchSize)
-	return batchData
 }

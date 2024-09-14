@@ -132,7 +132,7 @@ func (reader *tableReader) readTable(
 	defer func() {
 		FinishTxnOp(ctx, err, txnOp, reader.cnEngine)
 	}()
-	err = reader.cnEngine.New(ctx, txnOp)
+	err = GetTxn(ctx, reader.cnEngine, txnOp)
 	if err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func (reader *tableReader) readTableWithTxn(
 	var rel engine.Relation
 	var changes engine.ChangesHandle
 	//step1 : get relation
-	_, _, rel, err = reader.cnEngine.GetRelationById(ctx, txnOp, reader.info.SourceTblId)
+	_, _, rel, err = GetRelationById(ctx, reader.cnEngine, txnOp, reader.info.SourceTblId)
 	if err != nil {
 		return
 	}
@@ -168,9 +168,9 @@ func (reader *tableReader) readTableWithTxn(
 	//	from = last wmark
 	//  to = txn operator snapshot ts
 	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblId)
-	toTs := types.TimestampToTS(txnOp.SnapshotTS())
+	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
 	//fmt.Fprintln(os.Stderr, reader.info, "from", fromTs.ToString(), "to", toTs.ToString())
-	changes, err = rel.CollectChanges(ctx, fromTs, toTs, reader.mp)
+	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
 	if err != nil {
 		return
 	}
@@ -200,6 +200,8 @@ func (reader *tableReader) readTableWithTxn(
 	var curHint engine.ChangesHandle_Hint
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ar.Cancel:
 			return
 		default:

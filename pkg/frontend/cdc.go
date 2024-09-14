@@ -116,8 +116,6 @@ const (
 			mo_catalog.mo_tables t 
 		on w.table_id = t.rel_id 
 		where w.account_id = %d and w.task_id = '%s'`
-
-	getTaskFormat = "SELECT task_id, task_name, source_uri, sink_uri, state FROM %s.mo_cdc_task"
 )
 
 var showCdcOutputColumns = [7]Column{
