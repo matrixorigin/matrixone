@@ -99,6 +99,16 @@ func (c *Compile) GetAnalyzeModule() *AnalyzeModule {
 	return c.anal
 }
 
+// hasValidQueryPlan Check if SQL has a query plan
+func (c *Compile) hasValidQueryPlan() bool {
+	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
+		if qry.Query.StmtType != plan.Query_REPLACE {
+			return true
+		}
+	}
+	return false
+}
+
 // setAnalyzeCurrent Update the specific scopes's instruction to true
 // then update the current idx
 func (c *Compile) setAnalyzeCurrent(updateScopes []*Scope, nextId int) {
@@ -119,9 +129,10 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
+// ----------------------------------------------------------------------------------------------------------------------
 // applyOpStatsToNode Recursive traversal of PhyOperator tree,
 // and add OpStats statistics to the corresponding NodeAnalyze Info
-func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
+func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalleInfo *ParallelScopeInfo) {
 	if op == nil {
 		return
 	}
@@ -142,14 +153,27 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
 		node.AnalyzeInfo.S3IOByte += op.OpStats.TotalS3IOByte
 		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
 		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
-
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
+
+		if _, isMinorOp := vm.MinorOpMap[op.OpName]; isMinorOp {
+			isMinor := true
+			if op.OpName == vm.OperatorToStrMap[vm.Filter] {
+				if op.OpName != vm.OperatorToStrMap[vm.TableScan] && op.OpName != vm.OperatorToStrMap[vm.External] {
+					isMinor = false // restrict operator is minor only for scan
+				}
+			}
+			if isMinor {
+				scopeParalleInfo.NodeIdxTimeConsumeMinor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+			}
+		} else if _, isMajorOp := vm.MajorOpMap[op.OpName]; isMajorOp {
+			scopeParalleInfo.NodeIdxTimeConsumeMajor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+		}
 	}
 
 	// Recursive processing of sub operators
 	for _, childOp := range op.Children {
-		applyOpStatsToNode(childOp, nodes)
+		applyOpStatsToNode(childOp, nodes, scopeParalleInfo)
 	}
 }
 
@@ -161,23 +185,22 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
-		applyOpStatsToNode(scope.RootOperator, nodes)
+		scopeParallInfo := NewParallelScopeInfo(scope.ScopeId)
+		applyOpStatsToNode(scope.RootOperator, nodes, scopeParallInfo)
+
+		for nodeIdx, timeConsumeMajor := range scopeParallInfo.NodeIdxTimeConsumeMajor {
+			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor, timeConsumeMajor)
+		}
+
+		for nodeIdx, timeConsumeMajor := range scopeParallInfo.NodeIdxTimeConsumeMinor {
+			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor, timeConsumeMajor)
+		}
 	}
 
 	// handle preScopes recursively
 	for _, preScope := range scope.PreScopes {
 		processPhyScope(&preScope, nodes)
 	}
-}
-
-// hasValidQueryPlan Check if SQL has a query plan
-func (c *Compile) hasValidQueryPlan() bool {
-	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
-		if qry.Query.StmtType != plan.Query_REPLACE {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *Compile) fillPlanNodeAnalyzeInfo() {
@@ -205,24 +228,53 @@ func (c *Compile) fillPlanNodeAnalyzeInfo() {
 
 //----------------------------------------------------------------------------------------------------------------------
 
-func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]int) models.PhyScope {
-	phyScope := models.PhyScope{
-		Magic:        scope.Magic.String(),
-		Mcpu:         int8(scope.NodeInfo.Mcpu),
-		DataSource:   ConvertSourceToPhySource(scope.DataSource),
-		PreScopes:    []models.PhyScope{},
-		RootOperator: ConvertOperatorToPhyOperator(scope.RootOp, receiverMap),
+func (c *Compile) GenPhyPlan(runC *Compile) {
+	var generateReceiverMap func(*Scope, map[*process.WaitRegister]int)
+	generateReceiverMap = func(s *Scope, mp map[*process.WaitRegister]int) {
+		for i := range s.PreScopes {
+			generateReceiverMap(s.PreScopes[i], mp)
+		}
+		if s.Proc == nil {
+			return
+		}
+		for i := range s.Proc.Reg.MergeReceivers {
+			mp[s.Proc.Reg.MergeReceivers[i]] = len(mp)
+		}
 	}
 
-	if scope.Proc != nil {
-		phyScope.Receiver = getScopeReceiver(scope, scope.Proc.Reg.MergeReceivers, receiverMap)
+	receiverMap := make(map[*process.WaitRegister]int)
+	ss := runC.scopes
+	for i := range ss {
+		generateReceiverMap(ss[i], receiverMap)
 	}
 
-	for _, preScope := range scope.PreScopes {
-		phyScope.PreScopes = append(phyScope.PreScopes, ConvertScopeToPhyScope(preScope, receiverMap))
+	//------------------------------------------------------------------------------------------------------
+	c.anal.phyPlan = models.NewPhyPlan()
+	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
+	c.anal.curNodeIdx = runC.anal.curNodeIdx
+
+	if len(runC.scopes) > 0 {
+		for i := range runC.scopes {
+			phyScope := ConvertScopeToPhyScope(runC.scopes[i], receiverMap)
+			c.anal.phyPlan.LocalScope = append(c.anal.phyPlan.LocalScope, phyScope)
+		}
 	}
 
-	return phyScope
+	// record the number of s3 requests
+	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.Put.Load()
+	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.List.Load()
+
+	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Head.Load()
+	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Get.Load()
+	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Delete.Load()
+	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.DeleteMulti.Load()
+	//-------------------------------------------------------------------------------------------
+
+	for _, remotePhy := range runC.anal.remotePhyPlans {
+		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
+		c.anal.phyPlan.S3IOInputCount += remotePhy.S3IOInputCount
+		c.anal.phyPlan.S3IOOutputCount += remotePhy.S3IOOutputCount
+	}
 }
 
 func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitRegister]int) []models.PhyReceiver {
@@ -248,39 +300,6 @@ func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.Wai
 		}
 	}
 	return receivers
-}
-
-// ConvertOperatorToPhyOperator Convert Operator to PhyOperator
-func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]int) *models.PhyOperator {
-	if op == nil {
-		return nil
-	}
-
-	phyOp := &models.PhyOperator{
-		OpName:       op.OpType().String(),
-		NodeIdx:      op.GetOperatorBase().Idx,
-		DestReceiver: getDestReceiver(op, rmp),
-	}
-
-	if op.GetOperatorBase().IsFirst {
-		phyOp.Status |= 1 << 0
-	}
-	if op.GetOperatorBase().IsLast {
-		phyOp.Status |= 1 << 1
-	}
-
-	if op.GetOperatorBase().OpAnalyzer != nil {
-		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
-	}
-
-	children := op.GetOperatorBase().Children
-	phyChildren := make([]*models.PhyOperator, len(children))
-	for i, child := range children {
-		phyChildren[i] = ConvertOperatorToPhyOperator(child, rmp)
-	}
-
-	phyOp.Children = phyChildren
-	return phyOp
 }
 
 // getDestReceiver returns the DestReceiver of the current Operator
@@ -342,53 +361,109 @@ func ConvertSourceToPhySource(source *Source) *models.PhySource {
 	}
 }
 
-func (c *Compile) GenPhyPlan(runC *Compile) {
-	var generateReceiverMap func(*Scope, map[*process.WaitRegister]int)
-	generateReceiverMap = func(s *Scope, mp map[*process.WaitRegister]int) {
-		for i := range s.PreScopes {
-			generateReceiverMap(s.PreScopes[i], mp)
-		}
-		if s.Proc == nil {
-			return
-		}
-		for i := range s.Proc.Reg.MergeReceivers {
-			mp[s.Proc.Reg.MergeReceivers[i]] = len(mp)
-		}
+func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]int) models.PhyScope {
+	phyScope := models.PhyScope{
+		Magic:        scope.Magic.String(),
+		Mcpu:         int8(scope.NodeInfo.Mcpu),
+		DataSource:   ConvertSourceToPhySource(scope.DataSource),
+		PreScopes:    []models.PhyScope{},
+		RootOperator: ConvertOperatorToPhyOperator(scope.RootOp, receiverMap),
 	}
 
-	receiverMap := make(map[*process.WaitRegister]int)
-	ss := runC.scopes
-	for i := range ss {
-		generateReceiverMap(ss[i], receiverMap)
+	if scope.Proc != nil {
+		phyScope.Receiver = getScopeReceiver(scope, scope.Proc.Reg.MergeReceivers, receiverMap)
 	}
 
-	//------------------------------------------------------------------------------------------------------
-	c.anal.phyPlan = models.NewPhyPlan()
-	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
-	c.anal.curNodeIdx = runC.anal.curNodeIdx
-
-	if len(runC.scopes) > 0 {
-		for i := range runC.scopes {
-			phyScope := ConvertScopeToPhyScope(runC.scopes[i], receiverMap)
-			c.anal.phyPlan.LocalScope = append(c.anal.phyPlan.LocalScope, phyScope)
-		}
+	for _, preScope := range scope.PreScopes {
+		phyScope.PreScopes = append(phyScope.PreScopes, ConvertScopeToPhyScope(preScope, receiverMap))
 	}
 
-	//-------------------------------------------------------------------------------------------
-	// record the number of s3 requests
-	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.Put.Load()
-	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.List.Load()
+	return phyScope
+}
 
-	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Head.Load()
-	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Get.Load()
-	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Delete.Load()
-	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.DeleteMulti.Load()
-	//-------------------------------------------------------------------------------------------
+// ConvertOperatorToPhyOperator Convert Operator to PhyOperator
+func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]int) *models.PhyOperator {
+	if op == nil {
+		return nil
+	}
 
-	for _, remotePhy := range runC.anal.remotePhyPlans {
-		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
-		c.anal.phyPlan.S3IOInputCount += remotePhy.S3IOInputCount
-		c.anal.phyPlan.S3IOOutputCount += remotePhy.S3IOOutputCount
+	phyOp := &models.PhyOperator{
+		OpName:       op.OpType().String(),
+		NodeIdx:      op.GetOperatorBase().Idx,
+		DestReceiver: getDestReceiver(op, rmp),
+	}
+
+	if op.GetOperatorBase().IsFirst {
+		phyOp.Status |= 1 << 0
+	}
+	if op.GetOperatorBase().IsLast {
+		phyOp.Status |= 1 << 1
+	}
+
+	if op.GetOperatorBase().OpAnalyzer != nil {
+		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
+	}
+
+	children := op.GetOperatorBase().Children
+	phyChildren := make([]*models.PhyOperator, len(children))
+	for i, child := range children {
+		phyChildren[i] = ConvertOperatorToPhyOperator(child, rmp)
+	}
+
+	phyOp.Children = phyChildren
+	return phyOp
+}
+
+// ----------------------------------------------------------------------------------------------------------------------
+//type IdGen struct {
+//	value int32
+//}
+//
+//func NewIdGen(initVal int32) *IdGen {
+//	return &IdGen{
+//		value: initVal,
+//	}
+//}
+//
+//func (gen *IdGen) NextID() int32 {
+//	return atomic.AddInt32(&gen.value, 1)
+//}
+//
+//func (anal *AnalyzeModule) SetPhyScopeId() {
+//	idGen := NewIdGen(-1)
+//	// handle local scopes
+//	for _, localScope := range anal.phyPlan.LocalScope {
+//		preOrderPhyScope(&localScope, idGen)
+//	}
+//
+//	// handle remote run scopes
+//	for _, remoteScope := range anal.phyPlan.RemoteScope {
+//		preOrderPhyScope(&remoteScope, idGen)
+//	}
+//}
+//
+//func preOrderPhyScope(scope *models.PhyScope, idGen *IdGen) {
+//	if scope == nil {
+//		return
+//	}
+//	scope.ScopeId = idGen.NextID()
+//	// handle preScopes recursively
+//	for _, preScope := range scope.PreScopes {
+//		preOrderPhyScope(&preScope, idGen)
+//	}
+//}
+
+type ParallelScopeInfo struct {
+	NodeIdxTimeConsumeMajor map[int]int64 // idxMapMajor := make(map[int]int, 0)
+	NodeIdxTimeConsumeMinor map[int]int64
+	scopeId                 int32
+}
+
+func NewParallelScopeInfo(scopeId int32) *ParallelScopeInfo {
+	return &ParallelScopeInfo{
+		NodeIdxTimeConsumeMajor: make(map[int]int64),
+		NodeIdxTimeConsumeMinor: make(map[int]int64),
+		scopeId:                 scopeId,
 	}
 }
 
