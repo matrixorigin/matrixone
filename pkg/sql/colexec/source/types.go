@@ -88,8 +88,9 @@ func (source *Source) Reset(proc *process.Process, pipelineFailed bool, err erro
 	}
 	ctr.status = retrieve
 	if source.ProjectList != nil {
-		anal := proc.GetAnalyze(source.GetIdx(), source.GetParallelIdx(), source.GetParallelMajor())
-		anal.Alloc(source.ProjectAllocSize)
+		if source.OpAnalyzer != nil {
+			source.OpAnalyzer.Alloc(source.ProjectAllocSize)
+		}
 		source.ResetProjection(proc)
 	}
 }

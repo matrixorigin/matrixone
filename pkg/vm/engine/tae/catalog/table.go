@@ -347,6 +347,13 @@ type TableStat struct {
 	Csize     int
 }
 
+func (entry *TableEntry) ObjectCnt(isTombstone bool) int {
+	if isTombstone {
+		return entry.tombstoneObjects.tree.Load().Len()
+	}
+	return entry.dataObjects.tree.Load().Len()
+}
+
 func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat TableStat, w bytes.Buffer) {
 
 	it := entry.MakeDataObjectIt()
@@ -483,27 +490,28 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	defer objIt.Release()
 	for objIt.Next() {
 		objectEntry := objIt.Item()
-		if err := processor.OnObject(objectEntry); err != nil {
+		if err = processor.OnObject(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				continue
 			}
 			return err
 		}
-		if err := processor.OnPostObject(objectEntry); err != nil {
+		if err = processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
 	}
-	objIt = entry.MakeTombstoneObjectIt()
-	for objIt.Next() {
-		objectEntry := objIt.Item()
-		if err := processor.OnTombstone(objectEntry); err != nil {
+
+	tombstoneIt := entry.MakeTombstoneObjectIt()
+	defer tombstoneIt.Release()
+	for tombstoneIt.Next() {
+		objectEntry := tombstoneIt.Item()
+		if err = processor.OnTombstone(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				objIt.Next()
 				continue
 			}
 			return err
 		}
-		if err := processor.OnPostObject(objectEntry); err != nil {
+		if err = processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
 	}

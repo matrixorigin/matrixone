@@ -36,7 +36,7 @@ var _ vm.Operator = new(Deletion)
 
 // make it mutable in ut
 var (
-	flushThreshold = 32 * mpool.MB
+	flushThreshold = 5 * mpool.MB
 )
 
 // SetCNFlushDeletesThreshold update threshold to n MB
@@ -263,7 +263,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			blkids = append(blkids, blkid)
 		}
 		slices.SortFunc(blkids, func(a, b types.Blockid) int {
-			return a.Compare(b)
+			return a.Compare(&b)
 		})
 		for _, blkid := range blkids {
 			bat := blockId_rowIdBatch[blkid]
