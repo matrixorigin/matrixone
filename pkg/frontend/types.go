@@ -696,9 +696,7 @@ func (ses *feSessionImpl) Close() {
 		ses.txnHandler = nil
 	}
 	if ses.txnCompileCtx != nil {
-		ses.txnCompileCtx.execCtx = nil
-		ses.txnCompileCtx.snapshot = nil
-		ses.txnCompileCtx.views = nil
+		ses.txnCompileCtx.Close()
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
