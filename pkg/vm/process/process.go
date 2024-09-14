@@ -41,15 +41,6 @@ import (
 
 const DefaultBatchSize = 8192
 
-func (wreg *WaitRegister) CleanChannel(m *mpool.MPool) {
-	for len(wreg.Ch) > 0 {
-		msg := <-wreg.Ch
-		if msg != nil && msg.Batch != nil {
-			msg.Batch.Clean(m)
-		}
-	}
-}
-
 func (proc *Process) QueryId() string {
 	return proc.Base.Id
 }
