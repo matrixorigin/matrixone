@@ -146,6 +146,18 @@ func (des *ObjectStats) ObjectLocation() Location {
 	return BuildLocation(des.ObjectName(), des.Extent(), 0, 0)
 }
 
+func (des *ObjectStats) BlockLocationTo(
+	blk uint16,
+	maxRows uint32,
+	toLoc []byte,
+) {
+	row := maxRows
+	if blk == uint16(des.BlkCnt())-1 {
+		row = des.Rows() - uint32(blk)*maxRows
+	}
+	BuildLocationTo(des.ObjectName(), des.Extent(), row, blk, toLoc)
+}
+
 func (des *ObjectStats) BlockLocation(blk uint16, maxRows uint32) Location {
 	row := maxRows
 	if blk == uint16(des.BlkCnt())-1 {

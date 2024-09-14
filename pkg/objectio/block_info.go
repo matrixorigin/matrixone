@@ -67,6 +67,14 @@ func (b *BlockInfo) SetFlagByObjStats(stats *ObjectStats) {
 	b.ObjectFlags = stats.GetFlag()
 }
 
+func (b *BlockInfo) ConstructBlockID(name ObjectName, sequence uint16) {
+	BuildObjectBlockidTo(name, sequence, b.BlockID[:])
+}
+
+func (b *BlockInfo) SetBlockID(id *types.Blockid) {
+	b.BlockID = *id
+}
+
 func (b *BlockInfo) IsAppendable() bool {
 	return b.ObjectFlags&ObjectFlag_Appendable != 0
 }
@@ -172,11 +180,6 @@ func (s *BlockInfoSlice) Set(i int, info *BlockInfo) {
 	copy((*s)[i*BlockInfoSize:], EncodeBlockInfo(*info))
 }
 
-// func (s *BlockInfoSlice) SetBlockID(i int, id *types.Blockid,
-// ) {
-// 	copy((*s)[i*BlockInfoSize:], types.EncodeFixed(id))
-// }
-
 func (s *BlockInfoSlice) Len() int {
 	return len(*s) / BlockInfoSize
 }
@@ -226,16 +229,21 @@ func MakeBlockInfoSlice(cnt int) BlockInfoSlice {
 	return make([]byte, cnt*BlockInfoSize)
 }
 
-// func ObjectStatsToBlockInfoSlice(stats *ObjectStats, withFirstEmpty bool) BlockInfoSlice {
-// 	offset := 0
-// 	var ret BlockInfoSlice
-// 	cnt := int(stats.BlkCnt())
-// 	if withFirstEmpty {
-// 		ret = MakeBlockInfoSlice(cnt + 1)
-// 		offset = 1
-// 	} else {
-// 		ret = MakeBlockInfoSlice(cnt)
-// 	}
-// 	for i := 0; i < cnt; i++ {
-// 	}
-// }
+func ObjectStatsToBlockInfoSlice(stats *ObjectStats, withFirstEmpty bool) BlockInfoSlice {
+	offset := 0
+	var ret BlockInfoSlice
+	cnt := int(stats.BlkCnt())
+	if withFirstEmpty {
+		ret = MakeBlockInfoSlice(cnt + 1)
+		offset = 1
+	} else {
+		ret = MakeBlockInfoSlice(cnt)
+	}
+	for i := 0; i < cnt; i++ {
+		blk := ret.Get(i + offset)
+		stats.BlockLocationTo(uint16(i), BlockMaxRows, blk.MetaLoc[:])
+		blk.ConstructBlockID(stats.ObjectName(), uint16(i))
+		blk.SetFlagByObjStats(stats)
+	}
+	return ret
+}
