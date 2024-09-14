@@ -57,7 +57,7 @@ var (
 
 func init() {
 	tcs = []joinTestCase{
-		newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{types.T_int32.ToType()}, []int32{0},
+		newTestCase(mpool.MustNewZero(), []bool{false}, false, []types.Type{types.T_int32.ToType()}, []int32{0},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.T_int32.ToType()),
@@ -66,7 +66,7 @@ func init() {
 					newExpr(0, types.T_int32.ToType()),
 				},
 			}),
-		newTestCase(mpool.MustNewZero(), []bool{true}, []types.Type{types.T_int32.ToType()}, []int32{0},
+		newTestCase(mpool.MustNewZero(), []bool{true}, true, []types.Type{types.T_int32.ToType()}, []int32{0},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.T_int32.ToType()),
@@ -82,10 +82,17 @@ func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
 		tc.arg.String(buf)
+
+		_ = tc.arg.TypeName()
+
+		_ = tc.arg.OpType()
 	}
 }
 
 func TestJoin(t *testing.T) {
+	arg := NewArgument()
+	arg.Release()
+
 	for _, tc := range tcs {
 
 		resetChildren(tc.arg)
@@ -207,7 +214,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) joinTestCase {
+func newTestCase(m *mpool.MPool, flgs []bool, hashOnPk bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) joinTestCase {
 	proc := testutil.NewProcessWithMPool("", m)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -263,6 +270,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 			Result:     rp,
 			Conditions: cs,
 			Cond:       cond,
+			HashOnPK:   hashOnPk,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
