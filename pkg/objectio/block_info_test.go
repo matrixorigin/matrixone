@@ -238,3 +238,32 @@ func TestObjectStatsToBlockInfoSlice(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkObjectStatsRelatedUtils(b *testing.B) {
+	stats := NewObjectStats()
+	b.Run("stats-to-blockinfo", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			stats.ConstructBlockInfo(uint16(0))
+		}
+	})
+	b.Run("stats-to-blockinfo2", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			var blk BlockInfo
+			stats.ConstructBlockInfoTo(uint16(0), &blk)
+		}
+	})
+	b.Run("stats-to-blockinfo3", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			loc := stats.BlockLocation(uint16(0), BlockMaxRows)
+			blk := BlockInfo{
+				BlockID: *BuildObjectBlockid(stats.ObjectName(), uint16(0)),
+				MetaLoc: ObjectLocation(loc),
+			}
+
+			blk.SetFlagByObjStats(stats)
+		}
+	})
+}
