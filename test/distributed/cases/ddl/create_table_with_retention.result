@@ -32,7 +32,7 @@ use test;
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
 create table t1(a int) with retention period 10 month;
-create table t2(a int) with retention period 1 second;
+create table t2(a int) with retention period 4 second;
 select sleep(2);
 sleep(2)
 0

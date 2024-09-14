@@ -22,7 +22,7 @@ use test;
 -- @ignore:2
 select * from mo_catalog.mo_retention;
 create table t1(a int) with retention period 10 month;
-create table t2(a int) with retention period 1 second;
+create table t2(a int) with retention period 4 second;
 select sleep(2);
 -- @ignore:2
 select * from mo_catalog.mo_retention;
