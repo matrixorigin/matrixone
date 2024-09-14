@@ -114,6 +114,8 @@ const (
 			mo_catalog.mo_tables t 
 		on w.table_id = t.rel_id 
 		where w.account_id = %d and w.task_id = '%s'`
+
+	getTaskFormat = "SELECT task_id, task_name, source_uri, sink_uri, state FROM %s.mo_cdc_task"
 )
 
 var showCdcOutputColumns = [7]Column{
@@ -243,20 +245,19 @@ func getSqlForDeleteWatermark(accountId uint64, taskId string) string {
 	return fmt.Sprintf(deleteWatermarkFormat, accountId, taskId)
 }
 
+func getSqlForGetWatermark(accountId uint64, taskId string) string {
+	return fmt.Sprintf(getWatermarkFormat, accountId, taskId)
+}
+
+func getSqlForGetTask(all bool, taskName string) string {
+	s := fmt.Sprintf(getTaskFormat, catalog.MO_CATALOG)
+	if !all {
+		s += fmt.Sprintf(" where task_name = '%s'", taskName)
+	}
+	return s
+}
+
 const (
-	AccountLevel      = "account"
-	ClusterLevel      = "cluster"
-	MysqlSink         = "mysql"
-	MatrixoneSink     = "matrixone"
-	ConsoleSink       = "console"
-	SourceUriPrefix   = "mysql://"
-	SinkUriPrefix     = "mysql://"
-	ConsolePrefix     = "console://" //only used in testing stage
-	EnableConsoleSink = true
-
-	SASCommon = "common"
-	SASError  = "error"
-
 	CdcRunning = "running"
 	CdcStopped = "stopped"
 )
@@ -279,7 +280,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 	cdcLevel := cdcTaskOptionsMap["Level"]
 	cdcAccount := cdcTaskOptionsMap["Account"]
 
-	if cdcLevel != AccountLevel {
+	if cdcLevel != cdc2.AccountLevel {
 		return moerr.NewInternalError(ctx, "invalid level. only support account level in 1.3")
 	}
 
@@ -872,7 +873,7 @@ func canCreateCdcTask(ctx context.Context, ses *Session, level string, account s
 }
 
 func attachAccountToFilters(ctx context.Context, ses *Session, level string, account string, pts *cdc2.PatternTuples) error {
-	if strings.EqualFold(level, ClusterLevel) {
+	if strings.EqualFold(level, cdc2.ClusterLevel) {
 		if !ses.tenant.IsMoAdminRole() {
 			return moerr.NewInternalError(ctx, "Only sys account administrator are allowed to create cluster level task")
 		}
@@ -881,7 +882,7 @@ func attachAccountToFilters(ctx context.Context, ses *Session, level string, acc
 				pt.Source.Account = ses.GetTenantName()
 			}
 		}
-	} else if strings.EqualFold(level, AccountLevel) {
+	} else if strings.EqualFold(level, cdc2.AccountLevel) {
 		if !ses.tenant.IsMoAdminRole() && ses.GetTenantName() != account {
 			return moerr.NewInternalErrorf(ctx, "No privilege to create task on %s", account)
 		}
@@ -1054,7 +1055,12 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	if firstTime {
 		// hold
 		ch := make(chan int, 1)
-		<-ch
+		select {
+		case <-ctx.Done():
+			break
+		case <-ch:
+			break
+		}
 	}
 	return
 }
@@ -1091,7 +1097,7 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 			}
 		}
 	}
-	go cdc.sunkWatermarkUpdater.Run(cdc.activeRoutine)
+	go cdc.sunkWatermarkUpdater.Run(ctx, cdc.activeRoutine)
 
 	// create exec pipelines
 	for _, info = range dbTableInfos {
@@ -1625,10 +1631,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	timestamp := txnOp.SnapshotTS().ToStdTime().String()
 
 	// get from task table
-	sql := fmt.Sprintf("SELECT task_id, task_name, source_uri, sink_uri, state FROM %s.mo_cdc_task", catalog.MO_CATALOG)
-	if !st.Option.All {
-		sql += fmt.Sprintf(" where task_name = '%s'", st.Option.TaskName)
-	}
+	sql := getSqlForGetTask(st.Option.All, string(st.Option.TaskName))
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
@@ -1694,7 +1697,7 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 
 	s = "{\n"
 
-	sql := fmt.Sprintf(getWatermarkFormat, accountId, taskId)
+	sql := getSqlForGetWatermark(uint64(accountId), taskId)
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
 		return

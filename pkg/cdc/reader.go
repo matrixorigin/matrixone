@@ -94,6 +94,8 @@ func (reader *tableReader) Run(
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ar.Cancel:
 			return
 		case <-reader.tick.C:

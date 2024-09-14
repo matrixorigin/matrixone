@@ -280,7 +280,7 @@ func TestWatermarkUpdater_Run(t *testing.T) {
 		watermarkMap: &sync.Map{},
 	}
 	ar := NewCdcActiveRoutine()
-	go u.Run(ar)
+	go u.Run(context.Background(), ar)
 
 	time.Sleep(2 * watermarkUpdateInterval)
 	ar.Cancel <- struct{}{}

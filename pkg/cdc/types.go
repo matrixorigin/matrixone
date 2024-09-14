@@ -32,18 +32,21 @@ import (
 )
 
 const (
-	AccountLevel      = "account"
-	ClusterLevel      = "cluster"
-	MysqlSink         = "mysql"
-	MatrixoneSink     = "matrixone"
-	ConsoleSink       = "console"
-	SourceUriPrefix   = "mysql://"
-	SinkUriPrefix     = "mysql://"
-	ConsolePrefix     = "console://" //only used in testing stage
-	EnableConsoleSink = true
+	AccountLevel    = "account"
+	ClusterLevel    = "cluster"
+	MysqlSink       = "mysql"
+	MatrixoneSink   = "matrixone"
+	ConsoleSink     = "console"
+	SourceUriPrefix = "mysql://"
+	SinkUriPrefix   = "mysql://"
+	ConsolePrefix   = "console://" //only used in testing stage
 
 	SASCommon = "common"
 	SASError  = "error"
+)
+
+var (
+	EnableConsoleSink = false
 )
 
 type Reader interface {

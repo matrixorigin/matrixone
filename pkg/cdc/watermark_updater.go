@@ -65,7 +65,7 @@ func NewWatermarkUpdater(accountId uint64, taskId string, ie ie.InternalExecutor
 	return u
 }
 
-func (u *WatermarkUpdater) Run(ar *ActiveRoutine) {
+func (u *WatermarkUpdater) Run(ctx context.Context, ar *ActiveRoutine) {
 	logutil.Info("^^^^^ WatermarkUpdater.Run: start")
 	defer func() {
 		u.flushAll()
@@ -74,6 +74,8 @@ func (u *WatermarkUpdater) Run(ar *ActiveRoutine) {
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ar.Cancel:
 			return
 
@@ -153,7 +155,7 @@ func (u *WatermarkUpdater) flushAll() {
 		tableId := k.(uint64)
 		ts := v.(types.TS)
 		if err := u.updateDb(tableId, ts); err != nil {
-			logutil.Errorf("flush table %d failed, current watermark: %s\n", tableId, ts.ToString())
+			logutil.Errorf("flush table %d failed, current watermark: %s err:%v\n", tableId, ts.ToString(), err)
 		}
 		return true
 	})
