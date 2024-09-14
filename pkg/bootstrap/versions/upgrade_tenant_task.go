@@ -111,7 +111,7 @@ func GetUpgradeTenantTasks(
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
 				tenants = append(tenants, vector.GetFixedAtWithTypeCheck[int32](cols[0], i))
-				versions = append(versions, cols[1].UnsafeGetStringAt(i))
+				versions = append(versions, cols[1].GetStringAt(i))
 			}
 			return true
 		})
@@ -131,7 +131,7 @@ func GetTenantCreateVersionForUpdate(
 	defer res.Close()
 	version := ""
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		version = cols[0].UnsafeGetStringAt(0)
+		version = cols[0].GetStringAt(0)
 		return true
 	})
 	if version == "" {
@@ -174,7 +174,7 @@ func GetTenantVersion(
 	defer res.Close()
 	version := ""
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		version = cols[0].UnsafeGetStringAt(0)
+		version = cols[0].GetStringAt(0)
 		return true
 	})
 	if version == "" {

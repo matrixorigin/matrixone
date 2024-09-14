@@ -21,8 +21,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type ReadOnlyAllocator struct {
-	upstream        Allocator
+type ReadOnlyAllocator[U Allocator] struct {
+	upstream        U
 	deallocatorPool *ClosureDeallocatorPool[readOnlyDeallocatorArgs, *readOnlyDeallocatorArgs]
 }
 
@@ -58,10 +58,10 @@ type freezer interface {
 
 func (*Freezer) IsTrait() {}
 
-func NewReadOnlyAllocator(
-	upstream Allocator,
-) *ReadOnlyAllocator {
-	return &ReadOnlyAllocator{
+func NewReadOnlyAllocator[U Allocator](
+	upstream U,
+) *ReadOnlyAllocator[U] {
+	return &ReadOnlyAllocator[U]{
 		upstream: upstream,
 
 		deallocatorPool: NewClosureDeallocatorPool(
@@ -79,9 +79,9 @@ func NewReadOnlyAllocator(
 	}
 }
 
-var _ Allocator = new(ReadOnlyAllocator)
+var _ Allocator = new(ReadOnlyAllocator[Allocator])
 
-func (r *ReadOnlyAllocator) Allocate(size uint64, hint Hints) ([]byte, Deallocator, error) {
+func (r *ReadOnlyAllocator[U]) Allocate(size uint64, hint Hints) ([]byte, Deallocator, error) {
 	bytes, dec, err := r.upstream.Allocate(size, hint)
 	if err != nil {
 		return nil, nil, err

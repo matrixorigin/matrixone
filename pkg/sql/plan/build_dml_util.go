@@ -2709,15 +2709,14 @@ func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, 
 		}
 
 		if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			pkNamesMap := make(map[string]int)
-			for _, name := range tableDef.Pkey.Names {
-				pkNamesMap[name] = 1
-			}
-
+			// pkNamesMap := make(map[string]int)
 			prikeyPos := make([]int, 0)
-			for i, coldef := range tableDef.Cols {
-				if _, ok := pkNamesMap[coldef.Name]; ok {
-					prikeyPos = append(prikeyPos, i)
+			for _, name := range tableDef.Pkey.Names {
+				for i, coldef := range tableDef.Cols {
+					if coldef.Name == name {
+						prikeyPos = append(prikeyPos, i)
+						break
+					}
 				}
 			}
 
@@ -2950,14 +2949,16 @@ func appendDeleteIndexTablePlan(
 		},
 	}
 
-	leftId := builder.appendNode(&plan.Node{
+	leftscan := &plan.Node{
 		NodeType:               plan.Node_TABLE_SCAN,
 		Stats:                  &plan.Stats{},
 		ObjRef:                 uniqueObjRef,
 		TableDef:               uniqueTableDef,
 		ProjectList:            scanNodeProject,
 		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
-	}, bindCtx)
+	}
+	leftId := builder.appendNode(leftscan, bindCtx)
+	leftscan.Stats.ForceOneCN = true //to avoid bugs ,maybe refactor in the future
 
 	// append projection
 	projectList = append(projectList, &plan.Expr{
