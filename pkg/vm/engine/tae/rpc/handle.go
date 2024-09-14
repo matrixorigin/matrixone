@@ -274,7 +274,7 @@ func (h *Handle) HandlePreCommitWrite(
 			if req.FileName != "" {
 				col := req.Batch.Vecs[0]
 				for i := 0; i < req.Batch.RowCount(); i++ {
-					if req.Type == db.EntryInsert {
+					if req.Batch.Attrs[0] != catalog.ObjectAttr_ObjectStats {
 						req.MetaLocs = append(req.MetaLocs, col.GetStringAt(i))
 					} else {
 						stats := objectio.ObjectStats(col.GetBytesAt(i))

@@ -575,11 +575,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	}
 
 	if dumpAll {
-		//if txn.approximateInMemDeleteCnt >= txn.engine.insertEntryMaxCount {
-		//	if err := dump(DELETE); err != nil {
-		//		return err
-		//	}
-		//}
+		if txn.approximateInMemDeleteCnt >= txn.engine.insertEntryMaxCount {
+			if err := dump(DELETE); err != nil {
+				return err
+			}
+		}
 		txn.approximateInMemDeleteCnt = 0
 		txn.workspaceSize = 0
 		txn.pkCount -= pkCount
