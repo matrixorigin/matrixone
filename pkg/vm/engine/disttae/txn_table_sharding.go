@@ -448,29 +448,6 @@ func (r *shardingLocalReader) Read(
 			if err != nil {
 				return false, err
 			}
-
-			//for UT.
-			//if r.tblDelegate.isMock {
-			//	err = r.tblDelegate.mockForwardRead(
-			//		ctx,
-			//		shardservice.ReadBuildReader,
-			//		func(param *shard.ReadParam) {
-			//			param.ReaderBuildParam.RelData = relData
-			//			param.ReaderBuildParam.Expr = expr
-			//			param.ReaderBuildParam.ScanType = int32(r.remoteScanType)
-			//			param.ReaderBuildParam.TombstoneApplyPolicy = int32(r.remoteTombApplyPolicy)
-			//		},
-			//		func(resp []byte) {
-			//			r.streamID = types.DecodeUuid(resp)
-			//		},
-			//	)
-			//	if err != nil {
-			//		return false, err
-			//	}
-			//	r.iteratePhase = InRemote
-			//	break
-			//}
-
 			err = r.tblDelegate.forwardRead(
 				ctx,
 				shardservice.ReadBuildReader,
@@ -489,36 +466,6 @@ func (r *shardingLocalReader) Read(
 			}
 			r.iteratePhase = InRemote
 		case InRemote:
-			//if r.tblDelegate.isMock {
-			//	err = r.tblDelegate.mockForwardRead(
-			//		ctx,
-			//		shardservice.ReadNext,
-			//		func(param *shard.ReadParam) {
-			//			param.ReadNextParam.Uuid = types.EncodeUuid(&r.streamID)
-			//			param.ReadNextParam.Columns = cols
-			//		},
-			//		func(resp []byte) {
-			//			isEnd = types.DecodeBool(resp)
-			//			if isEnd {
-			//				return
-			//			}
-			//			resp = resp[1:]
-			//			l := types.DecodeUint32(resp)
-			//			resp = resp[4:]
-			//			if err := bat.UnmarshalBinary(resp[:l]); err != nil {
-			//				panic(err)
-			//			}
-			//		},
-			//	)
-			//	if err != nil {
-			//		return false, err
-			//	}
-			//	if isEnd {
-			//		r.iteratePhase = InEnd
-			//	}
-			//	return
-			//}
-
 			err = r.tblDelegate.forwardRead(
 				ctx,
 				shardservice.ReadNext,
@@ -628,6 +575,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 			if bi.IsMemBlk() {
 				local.AppendBlockInfo(bi)
 				remote.AppendBlockInfo(bi)
+				return true, nil
 			}
 			if _, ok := uncommittedObjNames[*objectio.ShortName(&bi.BlockID)]; ok {
 				local.AppendBlockInfo(bi)
@@ -982,18 +930,7 @@ func (tbl *txnTableDelegate) mockForwardRead(
 	ctx context.Context,
 	method int,
 	request shardservice.ReadRequest,
-	// applyParam func(*shard.ReadParam),
-	// apply func([]byte),
 ) ([]byte, error) {
-	//request, err := tbl.getReadRequest(
-	//	method,
-	//	apply,
-	//)
-	//if err != nil {
-	//	return err
-	//}
-
-	//applyParam(&request.Param)
 
 	handles := map[int]shardservice.ReadFunc{
 		shardservice.ReadRows:                     HandleShardingReadRows,
@@ -1022,7 +959,6 @@ func (tbl *txnTableDelegate) mockForwardRead(
 	if err != nil {
 		return nil, err
 	}
-	//apply(resp)
 	return resp, nil
 }
 
