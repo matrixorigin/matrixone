@@ -422,7 +422,7 @@ import (
 %token <str> RECURSIVE CONFIG DRAINER
 
 // Source
-%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME
+%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME RESTART
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
@@ -1063,7 +1063,7 @@ resume_cdc_stmt:
     }
 
 restart_cdc_stmt:
-    RESUME CDC TASK ident STRING
+    RESTART CDC TASK ident
     {
         $$ = &tree.RestartCDC{
                     TaskName:    tree.Identifier($4.Compare()),
@@ -12250,6 +12250,7 @@ non_reserved_keyword:
 |   REPEATABLE
 |   RELEASE
 |   RESUME
+|   RESTART
 |   REVOKE
 |   REPLICATION
 |   ROW_FORMAT

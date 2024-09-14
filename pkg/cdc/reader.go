@@ -71,7 +71,7 @@ func NewTableReader(
 	}
 
 	// batch columns layout:
-	// 1. data: user defined cols | cpk (if need) | commit-ts
+	// 1. data: user defined cols | cpk (if needed) | commit-ts
 	// 2. tombstone: pk/cpk | commit-ts
 	reader.insTsColIdx, reader.insCompositedPkColIdx = len(tableDef.Cols)-1, len(tableDef.Cols)-2
 	reader.delTsColIdx, reader.delCompositedPkColIdx = 1, 0

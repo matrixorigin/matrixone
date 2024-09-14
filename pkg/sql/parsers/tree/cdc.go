@@ -186,7 +186,7 @@ type RestartCDC struct {
 }
 
 func (node *RestartCDC) Format(ctx *FmtCtx) {
-	ctx.WriteString("resume cdc")
+	ctx.WriteString("restart cdc")
 	ctx.WriteString(" task ")
 	ctx.WriteString(string(node.TaskName))
 	ctx.WriteString(" 'restart'")

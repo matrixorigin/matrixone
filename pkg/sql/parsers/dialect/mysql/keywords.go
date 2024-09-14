@@ -389,6 +389,7 @@ func init() {
 		"resignal":                   UNUSED,
 		"restrict":                   RESTRICT,
 		"resume":                     RESUME,
+		"restart":                    RESTART,
 		"recursive":                  RECURSIVE,
 		"retention":                  RETENTION,
 		"return":                     UNUSED,
