@@ -368,7 +368,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		require.Nil(t, err)
 
 		// delete two rows on the 2nd blk
-		blkid.BlockID = iter.GetObject().GetMeta().(*catalog.ObjectEntry).ConstructBlockId(uint16(1))
+		blkId.BlockID = iter.GetObject().GetMeta().(*catalog.ObjectEntry).ConstructBlockId(uint16(1))
 		err = rel.RangeDelete(blkId, 0, 1, handle.DT_Normal)
 		assert.Nil(t, err)
 
