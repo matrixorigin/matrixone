@@ -273,4 +273,13 @@ func BenchmarkObjectStatsRelatedUtils(b *testing.B) {
 			EncodeBlockInfo(&blk1)
 		}
 	})
+
+	// test BuildObjectBlockid
+	name := stats.ObjectName()
+	b.Run("BuildObjectBlockid", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			BuildObjectBlockid(name, uint16(1))
+		}
+	})
 }
