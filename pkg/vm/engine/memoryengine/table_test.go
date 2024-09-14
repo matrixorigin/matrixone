@@ -15,6 +15,7 @@
 package memoryengine
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,7 +26,7 @@ func Test_TableReader(t *testing.T) {
 	table := new(Table)
 	assert.Panics(t, func() {
 		table.BuildShardingReaders(
-			nil,
+			context.TODO(),
 			nil,
 			nil,
 			nil,
