@@ -138,8 +138,8 @@ func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.File
 
 func updateTombstoneBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 	bat.Vecs[0].Free(mp) // rowid
-	bat.Vecs[2].Free(mp) // phyaddr
-	bat.Vecs = []*vector.Vector{bat.Vecs[1], bat.Vecs[3]}
+	//bat.Vecs[2].Free(mp) // phyaddr
+	bat.Vecs = []*vector.Vector{bat.Vecs[1], bat.Vecs[2]}
 	bat.Attrs = []string{
 		catalog.AttrPKVal,
 		catalog.AttrCommitTs}

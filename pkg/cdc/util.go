@@ -42,7 +42,7 @@ import (
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
 // bat columns layout:
-// 1. data: user defined cols | cpk (if need) | commit-ts
+// 1. data: user defined cols | cpk (if needed) | commit-ts
 // 2. tombstone: pk/cpk | commit-ts
 // return user defined cols for data or only one cpk column for tombstone
 func extractRowFromEveryVector(

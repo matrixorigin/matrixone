@@ -2298,7 +2298,7 @@ func Test_handleShowCdc(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	sql := getSqlForGetTask(true, "")
+	sql := getSqlForGetTask(sysAccountID, true, "")
 	mrs := newMrsForGetTask([][]interface{}{
 		{"taskID-1", "task1", sourceUri, sinkUri, CdcRunning},
 	})
