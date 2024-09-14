@@ -1937,7 +1937,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	//read block ,check if keys exist in the block.
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
-	pkType := types.T(pkDef.Typ.Id).ToType()
+	pkType := plan2.ExprType2Type(&pkDef.Typ)
 	for _, blk := range candidateBlks {
 		bat, release, err := blockio.LoadColumns(
 			ctx,

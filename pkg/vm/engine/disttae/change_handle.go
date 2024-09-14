@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -76,7 +77,7 @@ func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 		bat := batch.NewWithSize(len(tblDef.Cols))
 		for i, col := range tblDef.Cols {
 			bat.Attrs = append(bat.Attrs, col.Name)
-			typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+			typ := plan2.ExprType2Type(&col.Typ)
 			bat.Vecs[i] = vector.NewVec(typ)
 		}
 		return bat
