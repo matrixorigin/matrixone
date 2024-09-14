@@ -551,9 +551,9 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 				bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
 				entry.deleteAt, false, common.DebugAllocator)
 			for id, delta := range entry.deltaLocation {
-				blockID := objectio.BuildObjectBlockid(entry.stats.ObjectName(), uint16(id))
+				blockID := entry.stats.ConstructBlockId(uint16(id))
 				vector.AppendFixed[types.Blockid](deltaBat.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector(),
-					*blockID, false, common.DebugAllocator)
+					blockID, false, common.DebugAllocator)
 				vector.AppendBytes(deltaBat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector(),
 					[]byte(*delta), false, common.DebugAllocator)
 				vector.AppendFixed[uint64](

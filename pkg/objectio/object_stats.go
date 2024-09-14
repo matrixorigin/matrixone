@@ -146,6 +146,12 @@ func (des *ObjectStats) ObjectLocation() Location {
 	return BuildLocation(des.ObjectName(), des.Extent(), 0, 0)
 }
 
+func (des *ObjectStats) ConstructBlockId(id uint16) Blockid {
+	var blockId Blockid
+	BuildObjectBlockidTo(des.ObjectName(), id, blockId[:])
+	return blockId
+}
+
 func (des *ObjectStats) ConstructBlockInfoTo(id uint16, blk *BlockInfo) {
 	des.BlockLocationTo(id, BlockMaxRows, blk.MetaLoc[:])
 	blk.ConstructBlockID(des.ObjectName(), id)

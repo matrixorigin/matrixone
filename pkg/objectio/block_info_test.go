@@ -274,12 +274,17 @@ func BenchmarkObjectStatsRelatedUtils(b *testing.B) {
 		}
 	})
 
-	// test BuildObjectBlockid
 	name := stats.ObjectName()
 	b.Run("BuildObjectBlockid", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			BuildObjectBlockid(name, uint16(1))
+		}
+	})
+	b.Run("ConstructBlockId", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			stats.ConstructBlockId(uint16(1))
 		}
 	})
 }
