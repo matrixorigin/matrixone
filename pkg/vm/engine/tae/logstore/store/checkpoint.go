@@ -15,13 +15,37 @@
 package store
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
-func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry entry.Entry, err error) {
+func BuildFilesEntry(files []string) (entry.Entry, error) {
+	vec := containers.NewVector(types.T_char.ToType())
+	for _, file := range files {
+		vec.Append([]byte(file), false)
+	}
+	defer vec.Close()
+	buf, err := vec.GetDownstreamVector().MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	filesEntry := entry.GetBase()
+	if err = filesEntry.SetPayload(buf); err != nil {
+		return nil, err
+	}
+	info := &entry.Info{
+		Group: GroupFiles,
+	}
+	filesEntry.SetType(entry.IOET_WALEntry_Checkpoint)
+	filesEntry.SetInfo(info)
+	return filesEntry, nil
+}
+
+func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64, files ...string) (ckpEntry entry.Entry, err error) {
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
 	drentry, _, err := w.doAppend(GroupCKP, ckpEntry)
 	if err == sm.ErrClose {
@@ -29,6 +53,17 @@ func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry ent
 	}
 	if err != nil {
 		panic(err)
+	}
+	if len(files) > 0 {
+		var fileEntry entry.Entry
+		fileEntry, err = BuildFilesEntry(files)
+		if err != nil {
+			return
+		}
+		_, _, err = w.doAppend(GroupFiles, fileEntry)
+		if err != nil {
+			return
+		}
 	}
 	_, err = w.checkpointQueue.Enqueue(drentry)
 	if err != nil {

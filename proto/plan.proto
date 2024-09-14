@@ -852,6 +852,7 @@ message Node {
 
 	Snapshot scan_snapshot = 58;
 
+	bool recursive_cte = 59;
 }
 
 // Snapshot Represents a snapshot of the database

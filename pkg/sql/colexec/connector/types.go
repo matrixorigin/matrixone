@@ -15,7 +15,9 @@
 package connector
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -24,8 +26,14 @@ var _ vm.Operator = new(Connector)
 
 // Connector pipe connector
 type Connector struct {
+	ctr container
+
 	Reg *process.WaitRegister
 	vm.OperatorBase
+}
+
+type container struct {
+	sp *pSpool.PipelineSpool
 }
 
 func (connector *Connector) GetOperatorBase() *vm.OperatorBase {
@@ -49,6 +57,10 @@ func (connector Connector) TypeName() string {
 	return opName
 }
 
+func (connector *Connector) OpType() vm.OpType {
+	return vm.Connector
+}
+
 func NewArgument() *Connector {
 	return reuse.Alloc[Connector](nil)
 }
@@ -65,12 +77,14 @@ func (connector *Connector) Release() {
 }
 
 func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	// told the next operator to stop if it is still running.
-	msg := process.NewRegMsg(nil)
-	msg.Err = err
-	select {
-	case connector.Reg.Ch <- msg:
-	case <-connector.Reg.Ctx.Done():
+	if connector.ctr.sp != nil {
+		_, _ = connector.ctr.sp.SendBatch(context.TODO(), pSpool.SendToAllLocal, nil, err)
+		connector.Reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(connector.ctr.sp, 0)
+
+		connector.ctr.sp.Close()
+		connector.ctr.sp = nil
+	} else {
+		connector.Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, proc.Mp())
 	}
 }
 
