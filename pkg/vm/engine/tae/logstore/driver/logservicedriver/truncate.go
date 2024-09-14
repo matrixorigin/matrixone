@@ -26,7 +26,7 @@ import (
 
 // driver lsn -> entry lsn
 func (d *LogServiceDriver) Truncate(lsn uint64) error {
-	logutil.Info("LogService Driver", zap.Uint64(" driver start truncate", lsn))
+	logutil.Info("TRACE-WAL-TRUNCATE", zap.Uint64(" driver start truncate", lsn))
 	if lsn > d.truncating.Load() {
 		d.truncating.Store(lsn)
 	}
@@ -66,7 +66,7 @@ func (d *LogServiceDriver) doTruncate() {
 	min := d.validLsn.Minimum()
 	max := d.validLsn.Maximum()
 	d.addrMu.RUnlock()
-	logutil.Info("LogService Driver: get LogService lsn",
+	logutil.Info("TRACE-WAL-TRUNCATE-Get LogService lsn",
 		zap.Int("loop count", loopCount),
 		zap.Uint64("driver lsn", target),
 		zap.Uint64("min", min),
@@ -82,7 +82,7 @@ func (d *LogServiceDriver) doTruncate() {
 }
 
 func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
-	logutil.Info("LogService Driver: Start Truncate", zap.Uint64("lsn", lsn))
+	logutil.Info("TRACE-WAL-TRUNCATE-Start Truncate", zap.Uint64("lsn", lsn))
 	t0 := time.Now()
 	client, err := d.clientPool.Get()
 	if err == ErrClientPoolClosed {
@@ -119,7 +119,7 @@ func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
 			panic(err)
 		}
 	}
-	logutil.Info("LogService Driver: Truncate successfully",
+	logutil.Info("TRACE-WAL-TRUNCATE-Truncate successfully",
 		zap.Uint64("lsn", lsn),
 		zap.String("duration",
 			time.Since(t0).String()))
@@ -148,6 +148,6 @@ func (d *LogServiceDriver) getLogserviceTruncate() (lsn uint64) {
 			panic(err)
 		}
 	}
-	logutil.Infof("Logservice Driver: Get Truncate %d", lsn)
+	logutil.Infof("TRACE-WAL-TRUNCATE-Get Truncate %d", lsn)
 	return
 }

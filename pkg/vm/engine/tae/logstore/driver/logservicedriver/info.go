@@ -31,9 +31,8 @@ var ErrDriverLsnNotFound = moerr.NewInternalErrorNoCtx("driver info: driver lsn 
 var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("driver info: retry time out")
 
 type driverInfo struct {
-	addr     map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
-	validLsn *roaring64.Bitmap
-
+	addr                   map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
+	validLsn               *roaring64.Bitmap
 	addrMu                 sync.RWMutex
 	driverLsn              uint64 //
 	syncing                uint64

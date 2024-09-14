@@ -50,7 +50,7 @@ func BuildFilesEntry(files []string) (entry.Entry, error) {
 }
 
 func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64, files ...string) (ckpEntry entry.Entry, err error) {
-	logutil.Info("LogService Driver: RangeCheckpoint", zap.Uint32("group", gid), zap.Uint64("lsn", end))
+	logutil.Info("TRACE-WAL-TRUNCATE-RangeCheckpoint", zap.Uint32("group", gid), zap.Uint64("lsn", end))
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
 	drentry, _, err := w.doAppend(GroupCKP, ckpEntry)
 	if err == sm.ErrClose {
@@ -98,7 +98,7 @@ func (w *StoreImpl) onLogCKPInfoQueue(items ...any) {
 		if err != nil {
 			panic(err)
 		}
-		logutil.Info("LogService Driver: ckp entry is done",
+		logutil.Info("TRACE-WAL-TRUNCATE-CKP-Entry",
 			zap.Uint32("group", e.Info.Checkpoints[0].Group),
 			zap.Uint64("lsn", e.Info.Checkpoints[0].Ranges.GetMax()))
 		w.logCheckpointInfo(e.Info)
@@ -121,7 +121,7 @@ func (w *StoreImpl) ckpCkp() {
 	if err != nil {
 		panic(err)
 	}
-	logutil.Info("LogService Driver: append internal entry",
+	logutil.Info("TRACE-WAL-TRUNCATE-Internal-Entry",
 		zap.String("duration", time.Since(t0).String()))
 	w.truncatingQueue.Enqueue(driverEntry)
 	err = e.WaitDone()
@@ -145,7 +145,7 @@ func (w *StoreImpl) onTruncatingQueue(items ...any) {
 	t0 = time.Now()
 	gid, driverLsn := w.getDriverCheckpointed()
 	tGetDriverEntry := time.Since(t0)
-	logutil.Info("Logservice Driver",
+	logutil.Info("TRACE-WAL-TRUNCATE",
 		zap.String("wait truncating entry takes", tTruncateEntry.String()),
 		zap.String("get driver lsn takes", tGetDriverEntry.String()),
 		zap.Uint64("driver lsn", driverLsn))
@@ -169,7 +169,7 @@ func (w *StoreImpl) onTruncateQueue(items ...any) {
 		}
 		t := time.Now()
 		w.gcWalDriverLsnMap(lsn)
-		logutil.Info("LogService Driver: gc store info", zap.String("duration", time.Since(t).String()))
+		logutil.Info("TRACE-WAL-TRUNCATE-GC-Store", zap.String("duration", time.Since(t).String()))
 		w.driverCheckpointed = lsn
 	}
 }
