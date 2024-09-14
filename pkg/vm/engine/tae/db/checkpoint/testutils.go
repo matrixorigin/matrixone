@@ -252,7 +252,8 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 	r.storage.entries.Set(entry)
 	r.storage.Unlock()
 
-	if fields, err = r.doIncrementalCheckpoint(entry); err != nil {
+	var files []string
+	if fields, files, err = r.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
 		return err
 	}
@@ -267,17 +268,18 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 		entry.truncateLSN = lsnToTruncate
 	}
 
-	if err = r.saveCheckpoint(
+	var file string
+	if file, err = r.saveCheckpoint(
 		entry.start, entry.end, lsn, lsnToTruncate,
 	); err != nil {
 		errPhase = "save-ckp"
 		return err
 	}
+	files = append(files, file)
 	entry.SetState(ST_Finished)
-
 	if truncate {
 		var e wal.LogEntry
-		if e, err = r.wal.RangeCheckpoint(1, lsnToTruncate); err != nil {
+		if e, err = r.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
 			errPhase = "wal-ckp"
 			fatal = true
 			return err
@@ -305,7 +307,8 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	r.storage.entries.Set(entry)
 	now := time.Now()
 	r.storage.Unlock()
-	if _, err = r.doIncrementalCheckpoint(entry); err != nil {
+	var files []string
+	if _, files, err = r.doIncrementalCheckpoint(entry); err != nil {
 		return
 	}
 	var lsn, lsnToTruncate uint64
@@ -315,9 +318,11 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	}
 	entry.ckpLSN = lsn
 	entry.truncateLSN = lsnToTruncate
-	if err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
+	var file string
+	if file, err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
 		return
 	}
+	files = append(files, file)
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
 	backup := NewCheckpointEntry(r.rt.SID(), end.Next(), currTs, ET_Incremental)
@@ -326,7 +331,7 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 		return
 	}
 	entry.SetState(ST_Finished)
-	e, err := r.wal.RangeCheckpoint(1, lsnToTruncate)
+	e, err := r.wal.RangeCheckpoint(1, lsnToTruncate, files...)
 	if err != nil {
 		panic(err)
 	}
