@@ -226,8 +226,8 @@ type Engine struct {
 	moColumnsCreatedTime  *vector.Vector
 }
 
-func (eng *Engine) SetService(svr string) {
-	eng.service = svr
+func (e *Engine) SetService(svr string) {
+	e.service = svr
 }
 
 func (txn *Transaction) String() string {

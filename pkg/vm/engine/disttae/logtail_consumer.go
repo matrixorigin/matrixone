@@ -1483,8 +1483,8 @@ func waitServerReady(addr string) {
 	}
 }
 
-func (eng *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
-	tnStores := eng.getTNServices()
+func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
+	tnStores := e.getTNServices()
 	if len(tnStores) == 0 {
 		return moerr.NewInternalError(ctx, "no TN store found")
 	}
@@ -1502,22 +1502,22 @@ func (eng *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter cli
 		}
 
 		// get log tail service address.
-		if err := eng.pClient.init(logTailServerAddr, timestampWaiter, eng); err != nil {
+		if err := e.pClient.init(logTailServerAddr, timestampWaiter, e); err != nil {
 			logutil.Errorf("%s client init failed, err is %s", logTag, err)
 			continue
 		}
 		break
 	}
-	eng.pClient.eng = eng
-	eng.pClient.subscribed.eng = eng
+	e.pClient.eng = e
+	e.pClient.subscribed.eng = e
 
-	go eng.pClient.connector.run(ctx)
+	go e.pClient.connector.run(ctx)
 
 	// Start a goroutine that never stops to receive logtail from TN logtail server.
-	go eng.pClient.run(ctx, eng)
+	go e.pClient.run(ctx, e)
 
-	eng.pClient.unusedTableGCTicker(ctx)
-	eng.pClient.partitionStateGCTicker(ctx, eng)
+	e.pClient.unusedTableGCTicker(ctx)
+	e.pClient.partitionStateGCTicker(ctx, e)
 	return nil
 }
 
@@ -1790,21 +1790,21 @@ func (cmd cmdToConsumeUnSub) action(ctx context.Context, e *Engine, _ *routineCo
 	return nil
 }
 
-func (eng *Engine) consumeSubscribeResponse(
+func (e *Engine) consumeSubscribeResponse(
 	ctx context.Context,
 	rp *logtail.SubscribeResponse,
 	lazyLoad bool,
 	receiveAt time.Time) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, eng, &lt, lazyLoad, receiveAt, true)
+	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt, true)
 }
 
-func (eng *Engine) consumeUpdateLogTail(
+func (e *Engine) consumeUpdateLogTail(
 	ctx context.Context,
 	rp logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) error {
-	return updatePartitionOfPush(ctx, eng, &rp, lazyLoad, receiveAt, false)
+	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt, false)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.

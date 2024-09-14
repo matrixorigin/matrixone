@@ -143,25 +143,25 @@ func New(
 	return e
 }
 
-func (eng *Engine) fillDefaults() {
-	if eng.insertEntryMaxCount <= 0 {
-		eng.insertEntryMaxCount = InsertEntryThreshold
+func (e *Engine) fillDefaults() {
+	if e.insertEntryMaxCount <= 0 {
+		e.insertEntryMaxCount = InsertEntryThreshold
 	}
-	if eng.workspaceThreshold <= 0 {
-		eng.workspaceThreshold = WorkspaceThreshold
+	if e.workspaceThreshold <= 0 {
+		e.workspaceThreshold = WorkspaceThreshold
 	}
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
-		zap.Int("InsertEntryMaxCount", eng.insertEntryMaxCount),
-		zap.Uint64("WorkspaceThreshold", eng.workspaceThreshold),
+		zap.Int("InsertEntryMaxCount", e.insertEntryMaxCount),
+		zap.Uint64("WorkspaceThreshold", e.workspaceThreshold),
 	)
 }
 
-func (eng *Engine) GetService() string {
-	return eng.service
+func (e *Engine) GetService() string {
+	return e.service
 }
 
-func (eng *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
+func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create database in snapshot txn")
 	}
@@ -181,7 +181,7 @@ func (eng *Engine) Create(ctx context.Context, name string, op client.TxnOperato
 	}
 
 	var packer *types.Packer
-	put := eng.packerPool.Get(&packer)
+	put := e.packerPool.Get(&packer)
 	defer put.Put()
 	bat, err := catalog.GenCreateDatabaseTuple(sql, accountId, userId, roleId,
 		name, databaseId, typ, txn.proc.Mp(), packer)
@@ -207,7 +207,7 @@ func (eng *Engine) Create(ctx context.Context, name string, op client.TxnOperato
 	return nil
 }
 
-func (eng *Engine) loadDatabaseFromStorage(
+func (e *Engine) loadDatabaseFromStorage(
 	ctx context.Context,
 	accountID uint32,
 	name string, op client.TxnOperator) (*cache.DatabaseItem, error) {
@@ -254,7 +254,7 @@ func (eng *Engine) loadDatabaseFromStorage(
 	return ret, nil
 }
 
-func (eng *Engine) Database(
+func (e *Engine) Database(
 	ctx context.Context,
 	name string,
 	op client.TxnOperator,
@@ -300,12 +300,12 @@ func (eng *Engine) Database(
 		Ts:        txn.op.SnapshotTS(),
 	}
 
-	catalog := eng.GetLatestCatalogCache()
+	catalog := e.GetLatestCatalogCache()
 
 	if ok := catalog.GetDatabase(item); !ok {
 		if !catalog.CanServe(types.TimestampToTS(op.SnapshotTS())) {
 			// read batch from storage
-			if item, err = eng.loadDatabaseFromStorage(ctx, accountId, name, op); err != nil {
+			if item, err = e.loadDatabaseFromStorage(ctx, accountId, name, op); err != nil {
 				return nil, err
 			}
 			if item == nil {
@@ -325,7 +325,7 @@ func (eng *Engine) Database(
 	}, nil
 }
 
-func (eng *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
+func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	aid, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return nil, err
@@ -348,12 +348,12 @@ func (eng *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]stri
 	return dbs, nil
 }
 
-func (eng *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
-	dbName, tblName, _, err = eng.GetRelationById(ctx, op, tableId)
+func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
+	dbName, tblName, _, err = e.GetRelationById(ctx, op, tableId)
 	return
 }
 
-func (eng *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
+func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
 	switch tableId {
 	case catalog.MO_DATABASE_ID:
 		db := &txnDatabase{
@@ -361,7 +361,7 @@ func (eng *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, t
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
-		defs := catalog.GetDefines(eng.service).MoDatabaseTableDefs
+		defs := catalog.GetDefines(e.service).MoDatabaseTableDefs
 		return catalog.MO_CATALOG, catalog.MO_DATABASE,
 			db.openSysTable(nil, tableId, catalog.MO_DATABASE, defs), nil
 	case catalog.MO_TABLES_ID:
@@ -370,7 +370,7 @@ func (eng *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, t
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
-		defs := catalog.GetDefines(eng.service).MoTablesTableDefs
+		defs := catalog.GetDefines(e.service).MoTablesTableDefs
 		return catalog.MO_CATALOG, catalog.MO_TABLES,
 			db.openSysTable(nil, tableId, catalog.MO_TABLES, defs), nil
 	case catalog.MO_COLUMNS_ID:
@@ -379,7 +379,7 @@ func (eng *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, t
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
-		defs := catalog.GetDefines(eng.service).MoColumnsTableDefs
+		defs := catalog.GetDefines(e.service).MoColumnsTableDefs
 		return catalog.MO_CATALOG, catalog.MO_COLUMNS,
 			db.openSysTable(nil, tableId, catalog.MO_COLUMNS, defs), nil
 	}
@@ -393,7 +393,7 @@ func (eng *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, t
 
 	// not found in tableOps, try cache
 	if tableName == "" {
-		cache := eng.GetLatestCatalogCache()
+		cache := e.GetLatestCatalogCache()
 		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
 		if cacheItem != nil {
 			tableName = cacheItem.Name
@@ -430,7 +430,7 @@ func (eng *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, t
 		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
 	}
 
-	txnDb, err := eng.Database(ctx, dbName, op)
+	txnDb, err := e.Database(ctx, dbName, op)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -443,11 +443,11 @@ func (eng *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, t
 	return dbName, tableName, txnTable, nil
 }
 
-func (eng *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
-	return eng.idGen.AllocateIDByKey(ctx, key)
+func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return e.idGen.AllocateIDByKey(ctx, key)
 }
 
-func (eng *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) (err error) {
+func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) (err error) {
 	defer func() {
 		if err != nil {
 			if strings.Contains(name, "sysbench_db") {
@@ -468,7 +468,7 @@ func (eng *Engine) Delete(ctx context.Context, name string, op client.TxnOperato
 	}
 
 	// Get the database to be deleted
-	toDelDB, err := eng.Database(ctx, name, op)
+	toDelDB, err := e.Database(ctx, name, op)
 	if err != nil {
 		return err
 	}
@@ -510,7 +510,7 @@ func (eng *Engine) Delete(ctx context.Context, name string, op client.TxnOperato
 
 	// write the batch to delete the database
 	var packer *types.Packer
-	put := eng.packerPool.Get(&packer)
+	put := e.packerPool.Get(&packer)
 	defer put.Put()
 	bat, err := catalog.GenDropDatabaseTuple(rowId, accountId, databaseId, name, txn.proc.Mp(), packer)
 	if err != nil {
@@ -533,7 +533,7 @@ func (eng *Engine) Delete(ctx context.Context, name string, op client.TxnOperato
 	return nil
 }
 
-func (eng *Engine) New(ctx context.Context, op client.TxnOperator) error {
+func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.New",
@@ -542,25 +542,25 @@ func (eng *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	})
 	proc := process.NewTopProcess(
 		ctx,
-		eng.mp,
-		eng.cli,
+		e.mp,
+		e.cli,
 		op,
-		eng.fs,
-		eng.ls,
-		eng.qc,
-		eng.hakeeper,
-		eng.us,
+		e.fs,
+		e.ls,
+		e.qc,
+		e.hakeeper,
+		e.us,
 		nil,
 	)
-	txn := NewTxnWorkSpace(eng, proc)
+	txn := NewTxnWorkSpace(e, proc)
 	op.AddWorkspace(txn)
 	txn.BindTxnOp(op)
 
-	eng.pClient.validLogTailMustApplied(txn.op.SnapshotTS())
+	e.pClient.validLogTailMustApplied(txn.op.SnapshotTS())
 	return nil
 }
 
-func (eng *Engine) Nodes(
+func (e *Engine) Nodes(
 	isInternal bool, tenant string, username string, cnLabel map[string]string,
 ) (engine.Nodes, error) {
 	var nodes engine.Nodes
@@ -570,7 +570,7 @@ func (eng *Engine) Nodes(
 		v2.TxnStatementNodesHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	cluster := clusterservice.GetMOCluster(eng.service)
+	cluster := clusterservice.GetMOCluster(e.service)
 	var selector clusterservice.Selector
 
 	// If the requested labels are empty, return all CN servers.
@@ -593,7 +593,7 @@ func (eng *Engine) Nodes(
 	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ_Globbing)
 	if isInternal || strings.ToLower(tenant) == "sys" {
 		route.RouteForSuperTenant(
-			eng.service,
+			e.service,
 			selector,
 			username,
 			nil,
@@ -609,7 +609,7 @@ func (eng *Engine) Nodes(
 		)
 	} else {
 		route.RouteForCommonTenant(
-			eng.service,
+			e.service,
 			selector,
 			nil,
 			func(s *metadata.CNService) {
@@ -626,7 +626,7 @@ func (eng *Engine) Nodes(
 	return nodes, nil
 }
 
-func (eng *Engine) Hints() (h engine.Hints) {
+func (e *Engine) Hints() (h engine.Hints) {
 	h.CommitOrRollbackTimeout = time.Minute * 5
 	return
 }
@@ -641,7 +641,7 @@ func determineScanType(relData engine.RelData, num int) (scanType int) {
 	return
 }
 
-func (eng *Engine) BuildBlockReaders(
+func (e *Engine) BuildBlockReaders(
 	ctx context.Context,
 	p any,
 	ts timestamp.Timestamp,
@@ -662,7 +662,7 @@ func (eng *Engine) BuildBlockReaders(
 			rds = append(rds, new(emptyReader))
 		}
 	}
-	fs, err := fileservice.Get[fileservice.FileService](eng.fs, defines.SharedFileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +685,7 @@ func (eng *Engine) BuildBlockReaders(
 		rd, err := NewReader(
 			ctx,
 			proc,
-			eng,
+			e,
 			def,
 			ts,
 			expr,
@@ -700,77 +700,77 @@ func (eng *Engine) BuildBlockReaders(
 	return rds, nil
 }
 
-func (eng *Engine) getTNServices() []DNStore {
-	cluster := clusterservice.GetMOCluster(eng.service)
+func (e *Engine) getTNServices() []DNStore {
+	cluster := clusterservice.GetMOCluster(e.service)
 	return cluster.GetAllTNServices()
 }
 
-func (eng *Engine) setPushClientStatus(ready bool) {
-	eng.Lock()
-	defer eng.Unlock()
+func (e *Engine) setPushClientStatus(ready bool) {
+	e.Lock()
+	defer e.Unlock()
 
 	if ready {
-		eng.cli.Resume()
+		e.cli.Resume()
 	} else {
-		eng.cli.Pause()
+		e.cli.Pause()
 	}
 
-	eng.pClient.receivedLogTailTime.ready.Store(ready)
-	if eng.pClient.subscriber != nil {
+	e.pClient.receivedLogTailTime.ready.Store(ready)
+	if e.pClient.subscriber != nil {
 		if ready {
-			eng.pClient.subscriber.setReady()
+			e.pClient.subscriber.setReady()
 		} else {
-			eng.pClient.subscriber.setNotReady()
+			e.pClient.subscriber.setNotReady()
 		}
 	}
 }
 
-func (eng *Engine) abortAllRunningTxn() {
-	eng.Lock()
-	defer eng.Unlock()
-	eng.cli.AbortAllRunningTxn()
+func (e *Engine) abortAllRunningTxn() {
+	e.Lock()
+	defer e.Unlock()
+	e.cli.AbortAllRunningTxn()
 }
 
-func (eng *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
-	eng.Lock()
-	defer eng.Unlock()
+func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
+	e.Lock()
+	defer e.Unlock()
 	// XXX it's probably not a good way to do that.
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
-	delete(eng.partitions, [2]uint64{dbId, tblId})
+	delete(e.partitions, [2]uint64{dbId, tblId})
 
 	//  When removing the PartitionState, you need to remove the tid in globalStats,
 	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
-	eng.globalStats.RemoveTid(tblId)
+	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
-func (eng *Engine) PushClient() *PushClient {
-	return &eng.pClient
+func (e *Engine) PushClient() *PushClient {
+	return &e.pClient
 }
 
 // TryToSubscribeTable implements the LogtailEngine interface.
-func (eng *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
-	return eng.PushClient().TryToSubscribeTable(ctx, dbID, tbID)
+func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return e.PushClient().TryToSubscribeTable(ctx, dbID, tbID)
 }
 
 // UnsubscribeTable implements the LogtailEngine interface.
-func (eng *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
-	return eng.PushClient().UnsubscribeTable(ctx, dbID, tbID)
+func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return e.PushClient().UnsubscribeTable(ctx, dbID, tbID)
 }
 
-func (eng *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
-	return eng.globalStats.Get(ctx, key, sync)
+func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return e.globalStats.Get(ctx, key, sync)
 }
 
-func (eng *Engine) GetMessageCenter() any {
-	return eng.messageCenter
+func (e *Engine) GetMessageCenter() any {
+	return e.messageCenter
 }
 
-func (eng *Engine) FS() fileservice.FileService {
-	return eng.fs
+func (e *Engine) FS() fileservice.FileService {
+	return e.fs
 }
 
-func (eng *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
-	return eng.packerPool
+func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
+	return e.packerPool
 }
