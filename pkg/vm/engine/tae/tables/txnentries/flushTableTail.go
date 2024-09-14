@@ -180,6 +180,15 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 	if entry.createdObjHandle == nil {
 		return
 	}
+	var rowIDVec, pkVec containers.Vector
+	defer func() {
+		if rowIDVec != nil {
+			rowIDVec.Close()
+		}
+		if pkVec != nil {
+			pkVec.Close()
+		}
+	}()
 	for i, obj := range entry.aobjMetas {
 		// For ablock, there is only one block in it.
 		// Checking the block mapping once is enough
@@ -206,6 +215,7 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 		}
 		rowid := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
 		ts := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
+		deletesPK := bat.GetVectorByName(catalog.AttrPKVal)
 
 		count := len(rowid)
 		transCnt += count
@@ -220,15 +230,21 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 			entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
 			id := entry.createdObjHandle.Fingerprint()
 			id.SetBlockOffset(uint16(destpos.BlkIdx))
-			if err = entry.createdObjHandle.GetRelation().RangeDelete(
-				id, uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact,
-			); err != nil {
-				bat.Close()
-				return
+			if pkVec == nil {
+				pkVec = containers.MakeVector(*deletesPK.GetType(), entry.rt.VectorPool.Small.GetMPool())
 			}
+			if rowIDVec == nil {
+				rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), entry.rt.VectorPool.Small.GetMPool())
+			}
+			rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*entry.createdObjHandle.GetID(), destpos.BlkIdx, destpos.RowIdx)
+			rowIDVec.Append(rowID, false)
+			pkVec.Append(deletesPK.Get(i), false)
 		}
 		bat.Close()
 		entry.nextRoundDirties[obj] = struct{}{}
+	}
+	if rowIDVec != nil {
+		err = entry.createdObjHandle.GetRelation().DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_MergeCompact)
 	}
 	return
 }

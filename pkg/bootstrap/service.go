@@ -67,17 +67,6 @@ var (
 		frontend.MoTaskSysAsyncTaskDDL,
 		frontend.MoTaskSysCronTaskDDL,
 		frontend.MoTaskSysDaemonTaskDDL,
-		fmt.Sprintf(`create index idx_task_status on %s.sys_async_task(task_status)`,
-			catalog.MOTaskDB),
-
-		fmt.Sprintf(`create index idx_task_runner on %s.sys_async_task(task_runner)`,
-			catalog.MOTaskDB),
-
-		fmt.Sprintf(`create index idx_task_executor on %s.sys_async_task(task_metadata_executor)`,
-			catalog.MOTaskDB),
-
-		fmt.Sprintf(`create index idx_task_epoch on %s.sys_async_task(task_epoch)`,
-			catalog.MOTaskDB),
 
 		fmt.Sprintf(`create index idx_account_id on %s.sys_daemon_task(account_id)`,
 			catalog.MOTaskDB),
