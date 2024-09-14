@@ -239,3 +239,8 @@ func (s *taskService) HeartbeatDaemonTask(ctx context.Context, t task.DaemonTask
 	}
 	return nil
 }
+
+func (s *taskService) TruncateCompletedTasks(ctx context.Context) error {
+	_, err := s.store.DeleteAsyncTask(ctx, WithTaskStatusCond(task.TaskStatus_Completed))
+	return err
+}
