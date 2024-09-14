@@ -512,6 +512,8 @@ type TaskService interface {
 	// StopScheduleCronTask stop schedule cron tasks.
 	StopScheduleCronTask()
 
+	TruncateCompletedTasks(ctx context.Context) error
+
 	// GetStorage returns the task storage
 	GetStorage() TaskStorage
 }
