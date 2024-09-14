@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -134,4 +135,26 @@ func resetChildren(arg *Insert, bat *batch.Batch) {
 	arg.Children = nil
 	arg.AppendChild(op)
 	arg.ctr.state = vm.Build
+}
+
+func TestInsert_initBufForS3(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "initialize buffer for S3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			insert := &Insert{}
+			insert.initBufForS3()
+			require.NotNil(t, insert.ctr.buf)
+			require.Equal(t, 3, len(insert.ctr.buf.Attrs))
+			require.Equal(t, catalog.BlockMeta_TableIdx_Insert, insert.ctr.buf.Attrs[0])
+			require.Equal(t, catalog.BlockMeta_BlockInfo, insert.ctr.buf.Attrs[1])
+			require.Equal(t, catalog.ObjectMeta_ObjectStats, insert.ctr.buf.Attrs[2])
+			require.Equal(t, types.T_int16, insert.ctr.buf.Vecs[0].GetType().Oid)
+			require.Equal(t, types.T_text, insert.ctr.buf.Vecs[1].GetType().Oid)
+			require.Equal(t, types.T_binary, insert.ctr.buf.Vecs[2].GetType().Oid)
+		})
+	}
 }

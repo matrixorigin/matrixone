@@ -15,6 +15,8 @@
 package compare
 
 import (
+	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -136,4 +138,60 @@ func newTestCase(desc bool, m *mpool.MPool, typ types.Type) testCase {
 		vecs: vecs,
 		proc: testutil.NewProcessWithMPool("", m),
 	}
+}
+
+func TestBlockRowIdsCompare(t *testing.T) {
+	obj := types.NewObjectid()
+	t.Run("test blk id compare", func(t *testing.T) {
+		var blks1 []types.Blockid
+		var blks2 []types.Blockid
+		for i := 0; i < 1000; i++ {
+			blks1 = append(blks1, *types.NewBlockidWithObjectID(obj, uint16(i)))
+			blks2 = append(blks2, *types.NewBlockidWithObjectID(obj, uint16(i)))
+		}
+
+		for range blks1 {
+			x, y := rand.Int()%len(blks1), rand.Int()%len(blks1)
+			blks1[x], blks1[y] = blks1[y], blks1[x]
+		}
+
+		slices.SortFunc(blks1, blockidAscCompare)
+		require.Equal(t, blks1, blks2)
+
+		{
+			slices.Reverse(blks2)
+			slices.SortFunc(blks1, blockidDescCompare)
+			require.Equal(t, blks1, blks2)
+		}
+	})
+
+	t.Run("test row id compare", func(t *testing.T) {
+		blkIdx := uint16(0)
+		var rowIds1 []types.Rowid
+		var rowIds2 []types.Rowid
+		for i := 0; i < 1000; i++ {
+			if i%10 == 0 {
+				blkIdx++
+			}
+
+			rowId := types.NewRowIDWithObjectIDBlkNumAndRowID(*obj, blkIdx, uint32(i))
+			rowIds1 = append(rowIds1, rowId)
+			rowIds2 = append(rowIds2, rowId)
+		}
+
+		for range rowIds1 {
+			x, y := rand.Int()%len(rowIds1), rand.Int()%len(rowIds1)
+			rowIds1[x], rowIds1[y] = rowIds1[y], rowIds1[x]
+		}
+
+		slices.SortFunc(rowIds1, rowidAscCompare)
+		require.Equal(t, rowIds1, rowIds2)
+
+		{
+			slices.Reverse(rowIds2)
+			slices.SortFunc(rowIds1, rowidDescCompare)
+			require.Equal(t, rowIds1, rowIds2)
+		}
+
+	})
 }

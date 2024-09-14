@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -2270,6 +2271,77 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 	return lastNodeId, nil
 }
 
+func makeCompPkeyExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) *plan.Expr {
+	if tableDef.Pkey.CompPkeyCol == nil {
+		return nil
+	}
+	args := make([]*plan.Expr, len(tableDef.Pkey.Names))
+	for i, name := range tableDef.Pkey.Names {
+		colPos := name2ColIndex[name]
+		args[i] = &plan.Expr{
+			Typ: tableDef.Cols[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &ColRef{
+					ColPos: colPos,
+				},
+			},
+		}
+	}
+
+	typ := types.T_varchar.ToType()
+	varcharTyp := MakePlan2Type(&typ)
+	return &plan.Expr{
+		Typ: varcharTyp,
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.SerialFunctionEncodeID,
+					ObjName: function.SerialFunctionName,
+				},
+				Args: args,
+			},
+		},
+	}
+}
+
+func makeClusterByExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) *plan.Expr {
+	if tableDef.ClusterBy == nil {
+		return nil
+	}
+	clusterBy := tableDef.ClusterBy.Name
+	if clusterBy == "" || !util.JudgeIsCompositeClusterByColumn(clusterBy) {
+		return nil
+	}
+
+	names := util.SplitCompositeClusterByColumnName(clusterBy)
+	args := make([]*plan.Expr, len(names))
+	for i, name := range names {
+		colPos := name2ColIndex[name]
+		args[i] = &plan.Expr{
+			Typ: tableDef.Cols[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &ColRef{
+					ColPos: colPos,
+				},
+			},
+		}
+	}
+	typ := types.T_varchar.ToType()
+	varcharTyp := MakePlan2Type(&typ)
+	return &plan.Expr{
+		Typ: varcharTyp,
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.SerialFunctionEncodeID,
+					ObjName: function.SerialFunctionName,
+				},
+				Args: args,
+			},
+		},
+	}
+}
+
 // appendPreInsertNode  append preinsert node
 func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef,
@@ -2316,15 +2388,21 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		}
 	}
 
+	name2ColIndex := make(map[string]int32, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		name2ColIndex[col.Name] = int32(i)
+	}
 	preInsertNode := &Node{
 		NodeType:    plan.Node_PRE_INSERT,
 		Children:    []int32{lastNodeId},
 		ProjectList: preInsertProjection,
 		PreInsertCtx: &plan.PreInsertCtx{
-			Ref:        objRef,
-			TableDef:   DeepCopyTableDef(tableDef, true),
-			HasAutoCol: hashAutoCol,
-			IsUpdate:   isUpdate,
+			Ref:           objRef,
+			TableDef:      DeepCopyTableDef(tableDef, true),
+			HasAutoCol:    hashAutoCol,
+			IsUpdate:      isUpdate,
+			CompPkeyExpr:  makeCompPkeyExpr(tableDef, name2ColIndex),
+			ClusterByExpr: makeClusterByExpr(tableDef, name2ColIndex),
 		},
 	}
 	lastNodeId = builder.appendNode(preInsertNode, bindCtx)
@@ -2631,15 +2709,14 @@ func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, 
 		}
 
 		if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			pkNamesMap := make(map[string]int)
-			for _, name := range tableDef.Pkey.Names {
-				pkNamesMap[name] = 1
-			}
-
+			// pkNamesMap := make(map[string]int)
 			prikeyPos := make([]int, 0)
-			for i, coldef := range tableDef.Cols {
-				if _, ok := pkNamesMap[coldef.Name]; ok {
-					prikeyPos = append(prikeyPos, i)
+			for _, name := range tableDef.Pkey.Names {
+				for i, coldef := range tableDef.Cols {
+					if coldef.Name == name {
+						prikeyPos = append(prikeyPos, i)
+						break
+					}
 				}
 			}
 
@@ -2872,14 +2949,16 @@ func appendDeleteIndexTablePlan(
 		},
 	}
 
-	leftId := builder.appendNode(&plan.Node{
+	leftscan := &plan.Node{
 		NodeType:               plan.Node_TABLE_SCAN,
 		Stats:                  &plan.Stats{},
 		ObjRef:                 uniqueObjRef,
 		TableDef:               uniqueTableDef,
 		ProjectList:            scanNodeProject,
 		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
-	}, bindCtx)
+	}
+	leftId := builder.appendNode(leftscan, bindCtx)
+	leftscan.Stats.ForceOneCN = true //to avoid bugs ,maybe refactor in the future
 
 	// append projection
 	projectList = append(projectList, &plan.Expr{

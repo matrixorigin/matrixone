@@ -85,7 +85,13 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
-	logDebugf(db.op.Txn(), "txnDatabase.Relation table %s", name)
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug(
+			"Transaction.Relation",
+			zap.String("txn", db.op.Txn().DebugString()),
+			zap.String("name", name),
+		)
+	})
 	txn := db.getTxn()
 	if txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)

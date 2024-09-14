@@ -20,8 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-type SizeBoundedAllocator struct {
-	upstream        Allocator
+type SizeBoundedAllocator[U Allocator] struct {
+	upstream        U
 	max             uint64
 	counter         *atomic.Uint64
 	deallocatorPool *ClosureDeallocatorPool[sizeBoundedDeallocatorArgs, *sizeBoundedDeallocatorArgs]
@@ -35,12 +35,16 @@ func (sizeBoundedDeallocatorArgs) As(Trait) bool {
 	return false
 }
 
-func NewSizeBoundedAllocator(upstream Allocator, maxSize uint64, counter *atomic.Uint64) (ret *SizeBoundedAllocator) {
+func NewSizeBoundedAllocator[U Allocator](
+	upstream U,
+	maxSize uint64,
+	counter *atomic.Uint64,
+) (ret *SizeBoundedAllocator[U]) {
 	if counter == nil {
 		counter = new(atomic.Uint64)
 	}
 
-	ret = &SizeBoundedAllocator{
+	ret = &SizeBoundedAllocator[U]{
 		max:      maxSize,
 		upstream: upstream,
 		counter:  counter,
@@ -55,9 +59,9 @@ func NewSizeBoundedAllocator(upstream Allocator, maxSize uint64, counter *atomic
 	return ret
 }
 
-var _ Allocator = new(SizeBoundedAllocator)
+var _ Allocator = new(SizeBoundedAllocator[Allocator])
 
-func (s *SizeBoundedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
+func (s *SizeBoundedAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	for {
 
 		cur := s.counter.Load()

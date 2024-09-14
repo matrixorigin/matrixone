@@ -383,6 +383,10 @@ func (node *ExplainAnalyze) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
 
+func (node *ExplainPhyPlan) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
 func (node *ExplainFor) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
