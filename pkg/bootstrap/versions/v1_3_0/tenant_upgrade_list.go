@@ -21,12 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_systemMetrics_server_snapshot_usage,
 	upg_mo_snapshots,
 	upg_mo_retention,
+	upg_information_schema_columns,
 }
 
 const viewServerSnapshotUsage = "server_snapshot_usage"
@@ -69,4 +71,23 @@ var upg_mo_retention = versions.UpgradeEntry{
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_RETENTION)
 	},
+}
+
+var upg_information_schema_columns = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "COLUMNS",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    sysview.InformationSchemaColumnsDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == sysview.InformationSchemaColumnsDDL {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "COLUMNS"),
 }
