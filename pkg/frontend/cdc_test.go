@@ -697,6 +697,11 @@ type testTaskService struct {
 	sqlExec    taskservice.SqlExecutor
 }
 
+func (ts *testTaskService) TruncateCompletedTasks(ctx context.Context) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (ts *testTaskService) AddCdcTask(ctx context.Context,
 	metadata task.TaskMetadata,
 	details *task.Details,
