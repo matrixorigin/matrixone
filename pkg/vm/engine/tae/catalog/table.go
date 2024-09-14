@@ -490,26 +490,28 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	defer objIt.Release()
 	for objIt.Next() {
 		objectEntry := objIt.Item()
-		if err := processor.OnObject(objectEntry); err != nil {
+		if err = processor.OnObject(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				continue
 			}
 			return err
 		}
-		if err := processor.OnPostObject(objectEntry); err != nil {
+		if err = processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
 	}
-	objIt = entry.MakeTombstoneObjectIt()
-	for objIt.Next() {
-		objectEntry := objIt.Item()
-		if err := processor.OnTombstone(objectEntry); err != nil {
+
+	tombstoneIt := entry.MakeTombstoneObjectIt()
+	defer tombstoneIt.Release()
+	for tombstoneIt.Next() {
+		objectEntry := tombstoneIt.Item()
+		if err = processor.OnTombstone(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				continue
 			}
 			return err
 		}
-		if err := processor.OnPostObject(objectEntry); err != nil {
+		if err = processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
 	}
