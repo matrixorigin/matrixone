@@ -540,7 +540,7 @@ func MockShardService() *mockShardService {
 }
 
 func (ms *mockShardService) Config() shardservice.Config {
-	return shardservice.Config{}
+	return shardservice.Config{Enable: true}
 }
 
 func (ms *mockShardService) GetStorage() shardservice.ShardStorage {
@@ -556,7 +556,7 @@ func (ms *mockShardService) HasLocalReplica(tableID, shardID uint64) bool {
 }
 
 func (ms *mockShardService) HasAllLocalReplicas(tableID uint64) bool {
-	return true
+	return false
 }
 
 func (ms *mockShardService) GetShardInfo(table uint64) (uint64, pb.Policy, bool, error) {

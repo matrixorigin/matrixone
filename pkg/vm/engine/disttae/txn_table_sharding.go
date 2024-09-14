@@ -97,6 +97,7 @@ func MockTableDelegate(
 	delegate := tableDelegate.(*txnTableDelegate)
 	tbl := &txnTableDelegate{
 		origin: delegate.origin,
+		isMock: true,
 	}
 	tbl.shard.service = service
 

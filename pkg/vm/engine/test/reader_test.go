@@ -1157,7 +1157,8 @@ func Test_ShardingLocalReader(t *testing.T) {
 	relData, err := rel.Ranges(ctx, nil, 0)
 	require.NoError(t, err)
 
-	delegate, _ := disttae.MockTableDelegate(rel, nil)
+	shardSvr := testutil.MockShardService()
+	delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
 	rds, err := delegate.BuildShardingReaders(
 		ctx,
 		rel.GetProcess(),
