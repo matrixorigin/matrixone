@@ -600,7 +600,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(offset int) error {
 		}
 
 		keepElement := true
-		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+		if txn.writes[i].typ == DELETE && txn.writes[i].fileName == "" {
 			tbKey := tableKey{
 				accountId:  txn.writes[i].accountId,
 				databaseId: txn.writes[i].databaseId,
