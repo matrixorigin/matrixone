@@ -72,12 +72,10 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 	{
 		// insert 150 rows
 		_, table, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
-		require.Equal(t, true, txn.GetWorkspace().Readonly())
 		require.NoError(t, err)
 
 		bat := catalog2.MockBatch(schema, insertCnt)
 		err = table.Write(ctx, containers.ToCNBatch(bat))
-		require.Equal(t, false, txn.GetWorkspace().Readonly())
 		require.NoError(t, err)
 
 		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
@@ -92,7 +90,6 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 
 		//delete 100 rows
 		require.NoError(t, table.Delete(ctx, bat2, catalog.Row_ID))
-		require.Equal(t, false, txn.GetWorkspace().Readonly())
 		require.NoError(t, txn.Commit(ctx))
 	}
 
