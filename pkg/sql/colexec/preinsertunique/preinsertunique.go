@@ -45,6 +45,12 @@ func (preInsertUnique *PreInsertUnique) OpType() vm.OpType {
 }
 
 func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
+	if preInsertUnique.OpAnalyzer == nil {
+		preInsertUnique.OpAnalyzer = process.NewAnalyzer(preInsertUnique.GetIdx(), preInsertUnique.IsFirst, preInsertUnique.IsLast, "pre_insert_unique")
+	} else {
+		preInsertUnique.OpAnalyzer.Reset()
+	}
+
 	return nil
 }
 
@@ -76,15 +82,14 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(preInsertUnique.GetIdx(), preInsertUnique.GetParallelIdx(), preInsertUnique.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := preInsertUnique.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCall(preInsertUnique.GetChildren(0), proc, anal)
+	result, err := vm.ChildrenCall(preInsertUnique.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
-	anal.Input(result.Batch, preInsertUnique.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
@@ -128,6 +133,6 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 		}
 	}
 	result.Batch = preInsertUnique.ctr.buf
-	anal.Output(result.Batch, preInsertUnique.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }

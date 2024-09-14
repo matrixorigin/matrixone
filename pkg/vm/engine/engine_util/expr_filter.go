@@ -28,9 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type FastFilterOp func(objectio.ObjectStats) (bool, error)
+type FastFilterOp func(*objectio.ObjectStats) (bool, error)
 type LoadOp = func(
-	context.Context, objectio.ObjectStats, objectio.ObjectMeta, objectio.BloomFilter,
+	context.Context, *objectio.ObjectStats, objectio.ObjectMeta, objectio.BloomFilter,
 ) (objectio.ObjectMeta, objectio.BloomFilter, error)
 type ObjectFilterOp func(objectio.ObjectMeta, objectio.BloomFilter) (bool, error)
 type SeekFirstBlockOp func(objectio.ObjectDataMeta) int
@@ -44,7 +44,7 @@ func init() {
 	loadMetadataAndBFOpFactory = func(fs fileservice.FileService) LoadOp {
 		return func(
 			ctx context.Context,
-			obj objectio.ObjectStats,
+			obj *objectio.ObjectStats,
 			inMeta objectio.ObjectMeta,
 			inBF objectio.BloomFilter,
 		) (outMeta objectio.ObjectMeta, outBF objectio.BloomFilter, err error) {
@@ -72,7 +72,7 @@ func init() {
 	loadMetadataOnlyOpFactory = func(fs fileservice.FileService) LoadOp {
 		return func(
 			ctx context.Context,
-			obj objectio.ObjectStats,
+			obj *objectio.ObjectStats,
 			inMeta objectio.ObjectMeta,
 			inBF objectio.BloomFilter,
 		) (outMeta objectio.ObjectMeta, outBF objectio.BloomFilter, err error) {
@@ -150,7 +150,7 @@ func CompileFilterExprs(
 		}
 		highSelectivityHint = highSelectivityHint || hsh
 	}
-	fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+	fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 		for _, op := range ops1 {
 			ok, err := op(obj)
 			if err != nil || !ok {
@@ -161,7 +161,7 @@ func CompileFilterExprs(
 	}
 	loadOp = func(
 		ctx context.Context,
-		obj objectio.ObjectStats,
+		obj *objectio.ObjectStats,
 		inMeta objectio.ObjectMeta,
 		inBF objectio.BloomFilter,
 	) (meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
@@ -261,7 +261,7 @@ func CompileFilterExpr(
 				highSelectivityHint = highSelectivityHint && hsh
 			}
 
-			fastFilterOp = func(stats objectio.ObjectStats) (bool, error) {
+			fastFilterOp = func(stats *objectio.ObjectStats) (bool, error) {
 				for idx := range fastOps {
 					if fastOps[idx] == nil {
 						continue
@@ -273,7 +273,7 @@ func CompileFilterExpr(
 				return true, nil
 			}
 
-			loadOp = func(ctx context.Context, stats objectio.ObjectStats, inMeta objectio.ObjectMeta, inBF objectio.BloomFilter) (
+			loadOp = func(ctx context.Context, stats *objectio.ObjectStats, inMeta objectio.ObjectMeta, inBF objectio.BloomFilter) (
 				meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
 				for idx := range loadOps {
 					if loadOps[idx] == nil {
@@ -354,7 +354,7 @@ func CompileFilterExpr(
 				highSelectivityHint = highSelectivityHint || hsh
 			}
 
-			fastFilterOp = func(stats objectio.ObjectStats) (bool, error) {
+			fastFilterOp = func(stats *objectio.ObjectStats) (bool, error) {
 				for idx := range fastOps {
 					if fastOps[idx] == nil {
 						continue
@@ -366,7 +366,7 @@ func CompileFilterExpr(
 				return true, nil
 			}
 
-			loadOp = func(ctx context.Context, stats objectio.ObjectStats, inMeta objectio.ObjectMeta, inBF objectio.BloomFilter) (
+			loadOp = func(ctx context.Context, stats *objectio.ObjectStats, inMeta objectio.ObjectMeta, inBF objectio.BloomFilter) (
 				meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
 				for idx := range loadOps {
 					if loadOps[idx] == nil {
@@ -434,7 +434,7 @@ func CompileFilterExpr(
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -468,7 +468,7 @@ func CompileFilterExpr(
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -507,7 +507,7 @@ func CompileFilterExpr(
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -546,7 +546,7 @@ func CompileFilterExpr(
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -580,7 +580,7 @@ func CompileFilterExpr(
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -614,7 +614,7 @@ func CompileFilterExpr(
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -647,7 +647,7 @@ func CompileFilterExpr(
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -681,7 +681,7 @@ func CompileFilterExpr(
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -761,7 +761,7 @@ func CompileFilterExpr(
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -815,7 +815,7 @@ func CompileFilterExpr(
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}

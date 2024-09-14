@@ -110,14 +110,7 @@ func ReadObjectMeta(
 	if v, err = ReadExtent(ctx, name, extent, policy, fs, constructorFactory); err != nil {
 		return
 	}
-
-	var obj any
-	obj, err = Decode(v)
-	if err != nil {
-		return
-	}
-
-	meta = obj.(ObjectMeta)
+	meta = MustObjectMeta(v)
 	return
 }
 

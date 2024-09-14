@@ -488,3 +488,10 @@ a    b
 1    1
 2    2
 3    3
+drop table if exists t1;
+create table t1 (a int, b varchar, c int, primary key (c,a), key idx_b(b));
+insert into t1 select result, result || "_a",result+100000000 from generate_series(1,10000) g;
+select * from t1 where b in ("11_a","21_a");
+a    b    c
+11    11_a    100000011
+21    21_a    100000021
