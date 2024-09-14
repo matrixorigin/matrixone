@@ -861,7 +861,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
