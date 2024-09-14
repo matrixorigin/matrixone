@@ -238,7 +238,7 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 			assert.NoError(e.T, err)
 			defer view.Close()
 			view.Compact()
-			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1])
+			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1], handle.DT_Normal)
 			assert.NoError(e.T, err)
 		}
 	}
