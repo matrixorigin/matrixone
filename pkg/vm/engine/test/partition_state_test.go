@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -369,7 +368,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		require.Nil(t, err)
 
 		// delete two rows on the 2nd blk
-		blkId.BlockID = *objectio.BuildObjectBlockid(iter.GetObject().GetMeta().(*catalog.ObjectEntry).ObjectName(), 1)
+		blkId.BlockID = iter.GetObject().GetMeta().(*catalog.ObjectEntry).ConstructBlockId(uint16(1))
 		err = rel.RangeDelete(blkId, 0, 1, handle.DT_Normal)
 		assert.Nil(t, err)
 
