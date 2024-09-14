@@ -235,7 +235,7 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	objID := location.ObjectId()
 	metaLoc := objectio.ObjectLocation(location)
 
-	relData := NewBlockListRelationData()
+	relData := NewBlockListRelationData(0)
 	blkNum := 10
 	for i := 0; i < blkNum; i++ {
 		blkID := types.NewBlockidWithObjectID(&objID, uint16(blkNum))
