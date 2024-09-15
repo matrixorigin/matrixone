@@ -1010,7 +1010,7 @@ func (tbl *txnTable) findDeletes(
 		if obj.DeletedAt.Less(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
 			continue
 		}
-		if dedupAfterSnapshotTS && objData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
+		if dedupAfterSnapshotTS && objData.CoarseCheckAllRowsCommittedBefore(snapshotTS) {
 			continue
 		}
 		skip := obj.IsCreatingOrAborted()
