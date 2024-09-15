@@ -60,9 +60,6 @@ func (entry *ObjectEntry) GetLoaded() bool {
 	return entry.Rows() != 0
 }
 
-func (entry *ObjectEntry) GetCompSize() int {
-	return int(entry.Size())
-}
 func (entry *ObjectEntry) GetLastMVCCNode() *txnbase.TxnMVCCNode {
 	if !entry.DeleteNode.Start.IsEmpty() {
 		return &entry.DeleteNode
@@ -221,7 +218,7 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 		"loaded:%t, oSize:%s, cSzie:%s rows:%d, zm: %s",
 		entry.GetLoaded(),
 		common.HumanReadableBytes(int(entry.OriginSize())),
-		common.HumanReadableBytes(entry.GetCompSize()),
+		common.HumanReadableBytes(int(entry.Size())),
 		entry.Rows(),
 		zonemapStr,
 	)

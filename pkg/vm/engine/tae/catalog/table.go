@@ -391,7 +391,7 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 			stat.Loaded += 1
 			stat.Rows += int(objectEntry.Rows())
 			stat.OSize += int(objectEntry.OriginSize())
-			stat.Csize += int(objectEntry.GetCompSize())
+			stat.Csize += int(objectEntry.Size())
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')

@@ -949,7 +949,7 @@ func (c *tableStatArg) Run() (err error) {
 	for it.Next() {
 		entry := it.Item()
 		c.ori += int(entry.OriginSize())
-		c.com += entry.GetCompSize()
+		c.com += int(entry.Size())
 		c.cnt++
 	}
 
