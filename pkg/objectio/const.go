@@ -29,4 +29,12 @@ const (
 	SEQNUM_COMMITTS = math.MaxUint16 - 2
 )
 
+const (
+	TombstoneAttr_Rowid_Idx = 0
+	TombstoneAttr_PK_Idx    = 1
+
+	// Tombstones created by CN has no commit ts column
+	TombstoneAttr_CommitTs_Idx = 2
+)
+
 const ZoneMapSize = index.ZMSize
