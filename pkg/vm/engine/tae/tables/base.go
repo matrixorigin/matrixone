@@ -154,7 +154,8 @@ func (obj *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) 
 	if !obj.meta.Load().ObjectPersisted() {
 		panic("logic error")
 	}
-	return obj.meta.Load().BlockLocation(bid, objectio.BlockMaxRows), nil
+	blkMaxRows := obj.meta.Load().GetSchema().BlockMaxRows
+	return obj.meta.Load().BlockLocation(bid, blkMaxRows), nil
 }
 
 func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector, err error) {
