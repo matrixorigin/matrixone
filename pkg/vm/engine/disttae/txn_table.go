@@ -1940,36 +1940,29 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, err
 	}
 
-	var filter objectio.ReadFilterSearchFuncType
-	buildFilter := func() (objectio.ReadFilterSearchFuncType, error) {
-		//keys must be sorted.
-		keys.InplaceSort()
-		bytes, _ := keys.MarshalBinary()
-		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
-		inExpr := plan2.MakeInExpr(
-			tbl.proc.Load().Ctx,
-			colExpr,
-			int32(keys.Length()),
-			bytes,
-			false)
+	keys.InplaceSort()
+	bytes, _ := keys.MarshalBinary()
+	colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
+	inExpr := plan2.MakeInExpr(
+		tbl.proc.Load().Ctx,
+		colExpr,
+		int32(keys.Length()),
+		bytes,
+		false)
 
-		basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
-		if err != nil {
-			return nil, err
-		}
-
-		blockReadPKFilter, err := engine_util.ConstructBlockPKFilter(
-			catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
-			basePKFilter,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		return blockReadPKFilter.SortedSearchFunc, nil
+	basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+	if err != nil {
+		return false, err
 	}
 
-	var unsortedFilter objectio.ReadFilterSearchFuncType
+	filter, err := engine_util.ConstructBlockPKFilter(
+		catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
+		basePKFilter,
+	)
+	if err != nil {
+		return false, err
+	}
+
 	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
 		return getNonSortedPKSearchFuncByPKVec(keys)
 	}
@@ -1993,36 +1986,17 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 		defer release()
 
-		if !blk.IsSorted() {
-			if unsortedFilter == nil {
-				unsortedFilter = buildUnsortedFilter()
-			}
-			sels := unsortedFilter(bat.Vecs)
-			if len(sels) > 0 {
-				return true, nil
-			}
-			continue
+		searchFunc := filter.DecideSearchFunc(blk.IsSorted())
+		if searchFunc == nil {
+			searchFunc = buildUnsortedFilter()
 		}
 
-		//for sorted block, we can use binary search to find the keys.
-		if filter == nil {
-			filter, err = buildFilter()
-			if filter == nil || err != nil {
-				logutil.Warn("build filter failed, switch to linear search",
-					zap.Uint32("accid", tbl.accountId),
-					zap.Uint64("tableid", tbl.tableId),
-					zap.String("tablename", tbl.tableName))
-				filter = buildUnsortedFilter()
-			}
-			if err != nil {
-				return false, err
-			}
-		}
-		sels := filter(bat.Vecs)
+		sels := searchFunc(bat.Vecs)
 		if len(sels) > 0 {
 			return true, nil
 		}
 	}
+
 	return false, nil
 }
 
