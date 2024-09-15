@@ -47,7 +47,7 @@ func DecodeInfoHeader(h uint32) InfoHeader {
 
 var (
 	EmptyBlockInfo      = BlockInfo{}
-	EmptyBlockInfoBytes = EncodeBlockInfo(EmptyBlockInfo)
+	EmptyBlockInfoBytes = EncodeBlockInfo(&EmptyBlockInfo)
 )
 
 const (
@@ -65,6 +65,10 @@ type BlockInfo struct {
 
 func (b *BlockInfo) SetFlagByObjStats(stats *ObjectStats) {
 	b.ObjectFlags = stats.GetFlag()
+}
+
+func (b *BlockInfo) ConstructBlockID(name ObjectName, sequence uint16) {
+	BuildObjectBlockidTo(name, sequence, b.BlockID[:])
 }
 
 func (b *BlockInfo) IsAppendable() bool {
@@ -147,11 +151,11 @@ func (b *BlockInfo) SetMetaLocation(metaLoc Location) {
 }
 
 func (b *BlockInfo) IsMemBlk() bool {
-	return bytes.Equal(EncodeBlockInfo(*b), EmptyBlockInfoBytes)
+	return bytes.Equal(EncodeBlockInfo(b), EmptyBlockInfoBytes)
 }
 
-func EncodeBlockInfo(info BlockInfo) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
+func EncodeBlockInfo(info *BlockInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(info)), BlockInfoSize)
 }
 
 func DecodeBlockInfo(buf []byte) *BlockInfo {
@@ -169,7 +173,7 @@ func (s *BlockInfoSlice) GetBytes(i int) []byte {
 }
 
 func (s *BlockInfoSlice) Set(i int, info *BlockInfo) {
-	copy((*s)[i*BlockInfoSize:], EncodeBlockInfo(*info))
+	copy((*s)[i*BlockInfoSize:], EncodeBlockInfo(info))
 }
 
 func (s *BlockInfoSlice) Len() int {
@@ -188,7 +192,7 @@ func (s *BlockInfoSlice) Append(bs []byte) {
 	*s = append(*s, bs...)
 }
 
-func (s *BlockInfoSlice) AppendBlockInfo(info BlockInfo) {
+func (s *BlockInfoSlice) AppendBlockInfo(info *BlockInfo) {
 	*s = append(*s, EncodeBlockInfo(info)...)
 }
 
@@ -215,4 +219,27 @@ type BackupObject struct {
 	CrateTS  types.TS
 	DropTS   types.TS
 	NeedCopy bool
+}
+
+func MakeBlockInfoSlice(cnt int) BlockInfoSlice {
+	return make([]byte, cnt*BlockInfoSize)
+}
+
+func ObjectStatsToBlockInfoSlice(stats *ObjectStats, withFirstEmpty bool) BlockInfoSlice {
+	offset := 0
+	var ret BlockInfoSlice
+	cnt := int(stats.BlkCnt())
+	if withFirstEmpty {
+		ret = MakeBlockInfoSlice(cnt + 1)
+		offset = 1
+	} else {
+		ret = MakeBlockInfoSlice(cnt)
+	}
+	for i := 0; i < cnt; i++ {
+		blk := ret.Get(i + offset)
+		stats.BlockLocationTo(uint16(i), BlockMaxRows, blk.MetaLoc[:])
+		blk.ConstructBlockID(stats.ObjectName(), uint16(i))
+		blk.SetFlagByObjStats(stats)
+	}
+	return ret
 }

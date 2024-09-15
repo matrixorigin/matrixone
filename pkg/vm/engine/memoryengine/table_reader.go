@@ -266,11 +266,11 @@ func (rd *MemRelationData) GetBlockInfo(i int) objectio.BlockInfo {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) SetBlockInfo(i int, blk objectio.BlockInfo) {
+func (rd *MemRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) AppendBlockInfo(blk objectio.BlockInfo) {
+func (rd *MemRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
 	panic("not supported")
 }
 
