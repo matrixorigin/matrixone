@@ -850,7 +850,7 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 	idx := tie.genIdx(s)
 	rowValues := make([]any, 0)
 	if rows.Next() {
-		if idx == mSqlIdx1 {
+		if idx == mSqlIdx1 || idx == mSqlIdx50 {
 			sinkUri := ""
 			sinkType := ""
 			sinkPwd := ""
@@ -1026,6 +1026,7 @@ const (
 	mSqlIdx47
 	mSqlIdx48
 	mSqlIdx49
+	mSqlIdx50
 )
 
 func TestRegisterCdcExecutor(t *testing.T) {
@@ -2664,4 +2665,141 @@ func TestCdcTask_Cancel(t *testing.T) {
 	}
 	err = cdc.Cancel()
 	assert.NoErrorf(t, err, "Pause()")
+}
+
+func TestCdcTask_retrieveCdcTask(t *testing.T) {
+	type fields struct {
+		logger               *zap.Logger
+		ie                   ie.InternalExecutor
+		cnUUID               string
+		cnTxnClient          client.TxnClient
+		cnEngine             engine.Engine
+		fileService          fileservice.FileService
+		cdcTask              *task.CreateCdcDetails
+		mp                   *mpool.MPool
+		packerPool           *fileservice.Pool[*types.Packer]
+		sinkUri              cdc2.UriInfo
+		tables               cdc2.PatternTuples
+		filters              cdc2.PatternTuples
+		startTs              types.TS
+		noFull               string
+		activeRoutine        *cdc2.ActiveRoutine
+		sunkWatermarkUpdater *cdc2.WatermarkUpdater
+	}
+	type args struct {
+		ctx context.Context
+	}
+
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+
+	sqlx := "select sink_uri, sink_type, sink_password, tables, filters, no_full from mo_catalog.mo_cdc_task where account_id = .* and task_id =.*"
+	sinkUri, err := cdc2.JsonEncode(&cdc2.UriInfo{
+		User: "root",
+		Ip:   "127.0.0.1",
+		Port: 3306,
+	})
+	assert.NoError(t, err)
+	pwd, err := cdc2.AesCFBEncode([]byte("111"))
+	assert.NoError(t, err)
+	tables, err := cdc2.JsonEncode(cdc2.PatternTuples{ //tables
+		Pts: []*cdc2.PatternTuple{
+			{
+				Source: cdc2.PatternTable{
+					AccountId: uint64(sysAccountID),
+					Account:   sysAccountName,
+					Database:  "db1",
+					Table:     "t1",
+				},
+			},
+		},
+	},
+	)
+	assert.NoError(t, err)
+	filters, err := cdc2.JsonEncode(cdc2.PatternTuples{})
+	assert.NoError(t, err)
+
+	mock.ExpectQuery(sqlx).WillReturnRows(sqlmock.NewRows(
+		[]string{
+			"sink_uri",
+			"sink_type",
+			"sink_password",
+			"tables",
+			"filters",
+			"no_full",
+		},
+	).AddRow(
+		sinkUri,
+		cdc2.MysqlSink,
+		pwd,
+		tables,
+		filters,
+		true,
+	),
+	)
+
+	genIdx := func(s string) int {
+		mSqlx, err := regexp.MatchString(sqlx, s)
+		assert.NoError(t, err)
+
+		if mSqlx {
+			return mSqlIdx50
+		}
+		return -1
+	}
+
+	tie := &testIE{
+		db:     db,
+		genIdx: genIdx,
+	}
+
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			fields: fields{
+				cdcTask: &task.CreateCdcDetails{
+					TaskId: "taskID_1",
+					Accounts: []*task.Account{
+						{
+							Id:   0,
+							Name: "sys",
+						},
+					},
+				},
+				ie: tie,
+			},
+			args: args{
+				ctx: context.Background(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cdc := &CdcTask{
+				logger:               tt.fields.logger,
+				ie:                   tt.fields.ie,
+				cnUUID:               tt.fields.cnUUID,
+				cnTxnClient:          tt.fields.cnTxnClient,
+				cnEngine:             tt.fields.cnEngine,
+				fileService:          tt.fields.fileService,
+				cdcTask:              tt.fields.cdcTask,
+				mp:                   tt.fields.mp,
+				packerPool:           tt.fields.packerPool,
+				sinkUri:              tt.fields.sinkUri,
+				tables:               tt.fields.tables,
+				filters:              tt.fields.filters,
+				startTs:              tt.fields.startTs,
+				noFull:               tt.fields.noFull,
+				activeRoutine:        tt.fields.activeRoutine,
+				sunkWatermarkUpdater: tt.fields.sunkWatermarkUpdater,
+			}
+			err := cdc.retrieveCdcTask(tt.args.ctx)
+			assert.NoError(t, err, fmt.Sprintf("retrieveCdcTask(%v)", tt.args.ctx))
+		})
+	}
 }

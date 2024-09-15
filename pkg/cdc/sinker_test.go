@@ -23,14 +23,16 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
-	"github.com/tidwall/btree"
 )
 
 func TestNewSinker(t *testing.T) {
@@ -713,6 +715,23 @@ func Test_mysqlSinker_sinkInsert(t *testing.T) {
 	}
 }
 
+func Test_mysqlsink(t *testing.T) {
+	wmark := NewWatermarkUpdater(0, "taskID-1", nil)
+	sink := &mysqlSinker{
+		watermarkUpdater: wmark,
+		dbTblInfo: &DbTableInfo{
+			SourceTblId: 0,
+		},
+	}
+	tts := timestamp.Timestamp{
+		PhysicalTime: 100,
+		LogicalTime:  100,
+	}
+	sink.watermarkUpdater.watermarkMap.Store(uint64(0), types.TimestampToTS(tts))
+	err := sink.Sink(context.Background(), &DecoderOutput{})
+	assert.NoError(t, err)
+}
+
 func Test_mysqlSinker_sinkRemain(t *testing.T) {
 	type fields struct {
 		mysql            Sink
@@ -736,13 +755,45 @@ func Test_mysqlSinker_sinkRemain(t *testing.T) {
 	type args struct {
 		ctx context.Context
 	}
+
+	bat := batch.New(true, []string{"a", "b", "c"})
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+	bat.SetRowCount(3)
+
+	fromTs := types.BuildTS(1, 1)
+	toTs := types.BuildTS(2, 1)
+	atomicBat := &AtomicBatch{
+		Mp:      nil,
+		From:    fromTs,
+		To:      toTs,
+		Batches: []*batch.Batch{bat},
+		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+	atomicBat.Rows.Set(AtomicBatchRow{Ts: fromTs, Pk: []byte{1}, Offset: 0, Src: bat})
+
+	f := func(ctx context.Context, sk *mysqlSinker, insertIter *atomicBatchRowIter) (err error) {
+		return nil
+	}
+
+	stub := gostub.Stub(&sinkInsert, f)
+	defer stub.Reset()
+
 	tests := []struct {
 		name    string
 		fields  fields
 		args    args
 		wantErr assert.ErrorAssertionFunc
 	}{
-		// TODO: Add test cases.
+		{
+			name: "t1",
+			fields: fields{
+				insertIters: []RowIterator{
+					atomicBat.GetRowIterator(),
+				},
+			},
+			args: args{},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -765,7 +816,8 @@ func Test_mysqlSinker_sinkRemain(t *testing.T) {
 				deleteRow:        tt.fields.deleteRow,
 				preRowType:       tt.fields.preRowType,
 			}
-			tt.wantErr(t, s.sinkRemain(tt.args.ctx), fmt.Sprintf("sinkRemain(%v)", tt.args.ctx))
+			err := s.sinkRemain(tt.args.ctx)
+			assert.NoError(t, err, fmt.Sprintf("sinkRemain(%v)", tt.args.ctx))
 		})
 	}
 }

@@ -338,6 +338,10 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 	return
 }
 
+var sinkInsert = func(ctx context.Context, sk *mysqlSinker, insertIter *atomicBatchRowIter) (err error) {
+	return sk.sinkInsert(ctx, insertIter)
+}
+
 func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter) (err error) {
 	// if last row is not insert row, need output sql first
 	if s.preRowType != InsertRow {
@@ -408,7 +412,7 @@ func (s *mysqlSinker) sinkRemain(ctx context.Context) (err error) {
 		// output sql until one iterator reach the end
 		insertIterHasNext := insertIter.Next()
 		for insertIterHasNext {
-			if err = s.sinkInsert(ctx, insertIter); err != nil {
+			if err = sinkInsert(ctx, s, insertIter); err != nil {
 				return
 			}
 			// get next item
