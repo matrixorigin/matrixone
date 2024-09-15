@@ -361,28 +361,23 @@ func (entry *ObjectEntry) String() string {
 }
 
 func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
-	nameStr := "OBJ"
+	nameStr := "DATA"
 	if entry.IsTombstone {
 		nameStr = "TOMBSTONE"
 	}
-	state := "A"
-	if !entry.IsAppendable() {
-		state = "NA"
-	}
-	sorted := "S"
-	if !entry.IsSorted() {
-		sorted = "US"
-	}
+	s := fmt.Sprintf(
+		"%s|OS(%d)|Hint(%d)|%s|%s",
+		nameStr, entry.ObjectState, entry.ObjectNode.SortHint,
+		entry.ObjectStats.String(), entry.ObjectMVCCNode.String(),
+	)
 	if level <= common.PPL1 {
-		return fmt.Sprintf("%v[%s-%s%d]%v[%s]%v",
-			entry.ObjectState, state, sorted, entry.ObjectNode.SortHint, nameStr, entry.ID().String(), entry.EntryMVCCNode.String())
+		return s
 	}
-	s := fmt.Sprintf("[%s-%s%d]%s[%s]%v%v", state, sorted, entry.ObjectNode.SortHint, nameStr, entry.ID().String(), entry.EntryMVCCNode.String(), entry.ObjectMVCCNode.String())
 	if !entry.DeleteNode.IsEmpty() {
-		s = fmt.Sprintf("%s -> %s", s, entry.DeleteNode.String())
+		s = fmt.Sprintf("%s -> [DNODE]:%s", s, entry.DeleteNode.String())
 	}
 
-	s = fmt.Sprintf("%s -> %s", s, entry.CreateNode.String())
+	s = fmt.Sprintf("%s -> [CNODE]:%s", s, entry.CreateNode.String())
 	return s
 }
 func (entry *ObjectEntry) IsVisible(txn txnif.TxnReader) bool {
