@@ -138,8 +138,8 @@ func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	}
 }
 func (e *ObjectMVCCNode) String() string {
-	if e == nil || e.IsEmpty() {
-		return "empty"
+	if e == nil {
+		return "[OBJ(nil)]"
 	}
 	return e.ObjectStats.String()
 }
