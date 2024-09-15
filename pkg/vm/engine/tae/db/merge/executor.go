@@ -180,8 +180,8 @@ func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.Object
 		stats := make([][]byte, 0, len(mobjs))
 		cids := make([]common.ID, 0, len(mobjs))
 		for _, obj := range mobjs {
-			stat := obj.GetObjectStats()
-			stats = append(stats, stat.Clone().Marshal())
+			stat := *obj.GetObjectStats()
+			stats = append(stats, stat[:])
 			cids = append(cids, *obj.AsCommonID())
 		}
 		if e.rt.Scheduler.CheckAsyncScopes(cids) != nil {

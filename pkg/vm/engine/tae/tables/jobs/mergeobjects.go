@@ -291,8 +291,8 @@ func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
 	commitEntry.TableName = schema.Name
 	commitEntry.StartTs = task.txn.GetStartTS().ToTimestamp()
 	for _, o := range task.mergedObjs {
-		obj := o.GetObjectStats()
-		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj.Clone().Marshal())
+		obj := *o.GetObjectStats()
+		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj[:])
 	}
 	task.commitEntry = commitEntry
 	// leave mapping to ReadMergeAndWrite

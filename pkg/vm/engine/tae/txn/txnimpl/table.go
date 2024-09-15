@@ -1013,8 +1013,9 @@ func (tbl *txnTable) findDeletes(
 		if skip {
 			continue
 		}
-		stats := obj.GetObjectStats()
-		if !stats.ObjectLocation().IsEmpty() {
+		// PXU TODO: jxm need to double check this logic
+		// if !obj.ObjectLocation().IsEmpty() {
+		if obj.Rows() != 0 {
 			var skip bool
 			if skip, err = quickSkipThisObject(ctx, keysZM, obj); err != nil {
 				return

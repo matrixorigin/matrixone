@@ -59,28 +59,23 @@ func (entry *ObjectEntry) GetCreatedAt() types.TS {
 	return entry.CreatedAt
 }
 func (entry *ObjectEntry) GetLoaded() bool {
-	stats := entry.GetObjectStats()
-	return stats.Rows() != 0
+	return entry.Rows() != 0
 }
 
 func (entry *ObjectEntry) GetSortKeyZonemap() index.ZM {
-	stats := entry.GetObjectStats()
-	return stats.SortKeyZoneMap()
+	return entry.SortKeyZoneMap()
 }
 
 func (entry *ObjectEntry) GetRows() int {
-	stats := entry.GetObjectStats()
-	return int(stats.Rows())
+	return int(entry.Rows())
 }
 
 func (entry *ObjectEntry) GetOriginSize() int {
-	stats := entry.GetObjectStats()
-	return int(stats.OriginSize())
+	return int(entry.OriginSize())
 }
 
 func (entry *ObjectEntry) GetCompSize() int {
-	stats := entry.GetObjectStats()
-	return int(stats.Size())
+	return int(entry.Size())
 }
 func (entry *ObjectEntry) GetLastMVCCNode() *txnbase.TxnMVCCNode {
 	if !entry.DeleteNode.Start.IsEmpty() {
@@ -314,8 +309,8 @@ func (entry *ObjectEntry) HasPersistedData() bool {
 	return entry.ObjectPersisted()
 }
 func (entry *ObjectEntry) GetObjectData() data.Object { return entry.objData }
-func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
-	return entry.ObjectStats
+func (entry *ObjectEntry) GetObjectStats() (stats *objectio.ObjectStats) {
+	return &entry.ObjectStats
 }
 
 func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
@@ -521,17 +516,11 @@ func (entry *ObjectEntry) HasCommittedPersistedData() bool {
 		return entry.IsCommitted()
 	}
 }
-func (entry *ObjectEntry) MustGetObjectStats() (objectio.ObjectStats, error) {
-	return entry.GetObjectStats(), nil
-}
 
 func (entry *ObjectEntry) GetPKZoneMap(
 	ctx context.Context,
 ) (zm index.ZM, err error) {
-	stats, err := entry.MustGetObjectStats()
-	if err != nil {
-		return
-	}
+	stats := entry.GetObjectStats()
 	return stats.SortKeyZoneMap(), nil
 }
 

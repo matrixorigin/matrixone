@@ -429,9 +429,8 @@ func (c *objectPruneArg) Run() error {
 		stale++
 		selected++
 		selectedObjs = append(selectedObjs, obj)
-		stat := obj.GetObjectStats()
-		rw := int(stat.Rows())
-		sz := int(stat.OriginSize())
+		rw := int(obj.Rows())
+		sz := int(obj.OriginSize())
 		if minR == 0 || rw < minR {
 			minR = rw
 		}
