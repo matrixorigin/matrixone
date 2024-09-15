@@ -259,7 +259,7 @@ func (e *executor) scheduleMergeObjects(scopes []common.ID, mobjs []*catalog.Obj
 	}
 	e.addActiveTask(task.ID(), blkCnt, esize)
 	for _, obj := range mobjs {
-		e.roundMergeRows += uint64(obj.GetRows())
+		e.roundMergeRows += uint64(obj.Rows())
 	}
 	logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
@@ -286,7 +286,7 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 	rows := 0
 	infoBuf := &bytes.Buffer{}
 	for _, obj := range merges {
-		r := obj.GetRows()
+		r := int(obj.Rows())
 		rows += r
 		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, obj.ID().ShortStringEx()))
 	}

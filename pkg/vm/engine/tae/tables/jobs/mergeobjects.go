@@ -474,7 +474,7 @@ func (task *mergeObjectsTask) GetTotalSize() uint64 {
 func (task *mergeObjectsTask) GetTotalRowCnt() uint32 {
 	totalRowCnt := 0
 	for _, obj := range task.mergedObjs {
-		totalRowCnt += obj.GetRows()
+		totalRowCnt += int(obj.Rows())
 	}
 	return uint32(totalRowCnt)
 }

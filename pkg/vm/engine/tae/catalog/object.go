@@ -60,10 +60,6 @@ func (entry *ObjectEntry) GetLoaded() bool {
 	return entry.Rows() != 0
 }
 
-func (entry *ObjectEntry) GetRows() int {
-	return int(entry.Rows())
-}
-
 func (entry *ObjectEntry) GetOriginSize() int {
 	return int(entry.OriginSize())
 }
@@ -230,7 +226,7 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 		entry.GetLoaded(),
 		common.HumanReadableBytes(entry.GetOriginSize()),
 		common.HumanReadableBytes(entry.GetCompSize()),
-		entry.GetRows(),
+		entry.Rows(),
 		zonemapStr,
 	)
 }

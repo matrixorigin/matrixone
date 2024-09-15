@@ -5120,7 +5120,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneTombstoneMeta(rel)
-		assert.Equal(t, 10, meta.GetRows())
+		assert.Equal(t, 10, int(meta.Rows()))
 		assert.NoError(t, txn.Commit(ctx))
 	}
 	logutil.Info(tae.Catalog.SimplePPString(3))
@@ -5129,7 +5129,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneTombstoneMeta(rel)
-		assert.Equal(t, 10, meta.GetRows())
+		assert.Equal(t, 10, int(meta.Rows()))
 		assert.NoError(t, txn.Commit(ctx))
 	}
 }
