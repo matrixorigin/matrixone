@@ -1585,10 +1585,12 @@ func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls
 	}
 	if tbl.tombstoneTable.tableSpace.node != nil {
 		node := tbl.tombstoneTable.tableSpace.node
-		for i := 0; i < node.data.Length(); i++ {
-			rowID := node.data.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
-			if *rowID.BorrowBlockID() == blkID {
-				_, row := rowID.Decode()
+		rowVec := vector.MustFixedColWithTypeCheck[types.Rowid](
+			node.data.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
+		)
+		for i := range rowVec {
+			if *rowVec[i].BorrowBlockID() == blkID {
+				row := rowVec[i].GetRowOffset()
 				if *deletes == nil {
 					*deletes = &nulls.Nulls{}
 				}
