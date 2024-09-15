@@ -729,11 +729,9 @@ func (c *infoArg) Run() error {
 
 		schema := c.obj.GetSchema()
 		if schema.HasSortKey() {
-			zm, err := c.obj.GetPKZoneMap(context.Background())
+			zm := c.obj.SortKeyZoneMap()
 			var zmstr string
-			if err != nil {
-				zmstr = err.Error()
-			} else if c.verbose <= common.PPL1 {
+			if c.verbose <= common.PPL1 {
 				zmstr = zm.String()
 			} else if c.verbose == common.PPL2 {
 				zmstr = zm.StringForCompose()

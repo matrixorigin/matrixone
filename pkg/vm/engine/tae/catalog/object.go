@@ -16,7 +16,6 @@ package catalog
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -28,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -60,10 +58,6 @@ func (entry *ObjectEntry) GetCreatedAt() types.TS {
 }
 func (entry *ObjectEntry) GetLoaded() bool {
 	return entry.Rows() != 0
-}
-
-func (entry *ObjectEntry) GetSortKeyZonemap() index.ZM {
-	return entry.SortKeyZoneMap()
 }
 
 func (entry *ObjectEntry) GetRows() int {
@@ -221,7 +215,7 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
-	if z := entry.GetSortKeyZonemap(); z != nil {
+	if z := entry.SortKeyZoneMap(); z != nil {
 		switch zonemapKind {
 		case common.ZonemapPrintKindNormal:
 			zonemapStr = z.String()
@@ -515,13 +509,6 @@ func (entry *ObjectEntry) HasCommittedPersistedData() bool {
 	} else {
 		return entry.IsCommitted()
 	}
-}
-
-func (entry *ObjectEntry) GetPKZoneMap(
-	ctx context.Context,
-) (zm index.ZM, err error) {
-	stats := entry.GetObjectStats()
-	return stats.SortKeyZoneMap(), nil
 }
 
 // TODO: REMOVEME

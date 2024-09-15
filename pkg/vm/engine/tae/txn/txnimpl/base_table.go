@@ -311,10 +311,6 @@ func quickSkipThisObject(
 	keysZM index.ZM,
 	meta *catalog.ObjectEntry,
 ) (ok bool, err error) {
-	zm, err := meta.GetPKZoneMap(ctx)
-	if err != nil {
-		return
-	}
-	ok = !zm.FastIntersect(keysZM)
+	ok = !meta.SortKeyZoneMap().FastIntersect(keysZM)
 	return
 }

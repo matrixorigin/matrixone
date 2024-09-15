@@ -47,7 +47,7 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	if obj.OriginSize() < config.ObjectMinOsize {
 		return false
 	}
-	if !obj.GetSortKeyZonemap().IsInited() {
+	if !obj.SortKeyZoneMap().IsInited() {
 		return false
 	}
 	m.objects = append(m.objects, obj)
@@ -70,10 +70,10 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) ([]
 }
 
 func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
-	t := m.objects[0].GetSortKeyZonemap().GetType()
+	t := m.objects[0].SortKeyZoneMap().GetType()
 	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
-		zmA := a.GetSortKeyZonemap()
-		zmB := b.GetSortKeyZonemap()
+		zmA := a.SortKeyZoneMap()
+		zmB := b.SortKeyZoneMap()
 		if c := zmA.CompareMin(zmB); c != 0 {
 			return c
 		}
@@ -86,7 +86,7 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 			continue
 		}
 
-		if compute.CompareGeneric(set.maxValue, obj.GetSortKeyZonemap().GetMin(), t) > 0 {
+		if compute.CompareGeneric(set.maxValue, obj.SortKeyZoneMap().GetMin(), t) > 0 {
 			// zm is overlapped
 			set.add(t, obj)
 			continue
@@ -149,7 +149,7 @@ func (s *entrySet) reset(t types.T) {
 func (s *entrySet) add(t types.T, obj *catalog.ObjectEntry) {
 	s.entries = append(s.entries, obj)
 	s.size += obj.GetOriginSize()
-	zmMax := obj.GetSortKeyZonemap().GetMax()
+	zmMax := obj.SortKeyZoneMap().GetMax()
 	if compute.CompareGeneric(s.maxValue, zmMax, t) < 0 {
 		s.maxValue = zmMax
 	}
