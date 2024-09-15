@@ -588,14 +588,14 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		remote = rd.BuildEmptyRelData()
 		engine.ForRangeBlockInfo(0, rd.DataCnt(), rd, func(bi objectio.BlockInfo) (bool, error) {
 			if bi.IsMemBlk() {
-				local.AppendBlockInfo(bi)
-				remote.AppendBlockInfo(bi)
+				local.AppendBlockInfo(&bi)
+				remote.AppendBlockInfo(&bi)
 				return true, nil
 			}
 			if _, ok := uncommittedObjNames[*objectio.ShortName(&bi.BlockID)]; ok {
-				local.AppendBlockInfo(bi)
+				local.AppendBlockInfo(&bi)
 			} else {
-				remote.AppendBlockInfo(bi)
+				remote.AppendBlockInfo(&bi)
 			}
 			return true, nil
 		})
@@ -604,8 +604,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = NewEmptyBlockListRelationData()
-		relData.AppendBlockInfo(objectio.EmptyBlockInfo)
+		relData = NewBlockListRelationData(1)
 	}
 
 	blkCnt := relData.DataCnt()
