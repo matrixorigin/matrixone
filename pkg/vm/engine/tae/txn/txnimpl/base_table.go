@@ -169,6 +169,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 	); err != nil {
 		return
 	}
+	snapshotTS := tbl.txnTable.store.txn.GetSnapshotTS()
 	maxAObjectHint, maxNAObjectHint := uint64(0), uint64(0)
 	for it.Next() {
 		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
@@ -182,6 +183,9 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 				maxNAObjectHint = objectHint
 			}
 		}
+		if obj.DeletedAt.Less(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
+			continue
+		}
 		objData := obj.GetObjectData()
 		if objData == nil {
 			continue
@@ -191,7 +195,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 		// coarse check whether all rows in this block are committed before the snapshot timestamp
 		// if true, skip this block's deduplication
 		if dedupAfterSnapshotTS &&
-			objData.CoarseCheckAllRowsCommittedBefore(tbl.txnTable.store.txn.GetSnapshotTS()) {
+			objData.CoarseCheckAllRowsCommittedBefore(snapshotTS) {
 			continue
 		}
 		if obj.HasCommittedPersistedData() {

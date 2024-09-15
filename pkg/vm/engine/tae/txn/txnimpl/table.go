@@ -999,6 +999,7 @@ func (tbl *txnTable) findDeletes(
 		return
 	}
 	tbl.contains(ctx, rowIDs, keysZM, common.WorkspaceAllocator)
+	snapshotTS := tbl.store.txn.GetSnapshotTS()
 	it := tbl.entry.MakeTombstoneObjectIt()
 	for it.Next() {
 		obj := it.Item()
@@ -1006,7 +1007,10 @@ func (tbl *txnTable) findDeletes(
 		if objData == nil {
 			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
 		}
-		if dedupAfterSnapshotTS && objData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
+		if obj.DeletedAt.Less(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
+			continue
+		}
+		if dedupAfterSnapshotTS && objData.CoarseCheckAllRowsCommittedBefore(snapshotTS) {
 			continue
 		}
 		skip := obj.IsCreatingOrAborted()
