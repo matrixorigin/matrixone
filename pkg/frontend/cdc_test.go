@@ -643,6 +643,25 @@ func Test_handleCreateCdc(t *testing.T) {
 	}
 	setGlobalPu(&pu)
 
+	create := &tree.CreateCDC{
+		IfNotExists: false,
+		TaskName:    "task1",
+		SourceUri:   "mysql://root:111@127.0.0.1:6001",
+		SinkType:    cdc2.MysqlSink,
+		SinkUri:     "mysql://root:111@127.0.0.1:3306",
+		Tables:      "db1.t1:db1.t1,db1.t2",
+		Option: []string{
+			"Level",
+			cdc2.AccountLevel,
+			"Account",
+			sysAccountName,
+			"Rules",
+			"db2.t3,db2.t4",
+		},
+	}
+
+	ses.GetTxnCompileCtx().execCtx.stmt = create
+
 	tests := []struct {
 		name    string
 		args    args
@@ -653,29 +672,16 @@ func Test_handleCreateCdc(t *testing.T) {
 			args: args{
 				ses:     ses,
 				execCtx: ses.GetTxnCompileCtx().execCtx,
-				create: &tree.CreateCDC{
-					IfNotExists: false,
-					TaskName:    "task1",
-					SourceUri:   "mysql://root:111@127.0.0.1:6001",
-					SinkType:    cdc2.MysqlSink,
-					SinkUri:     "mysql://root:111@127.0.0.1:3306",
-					Tables:      "db1.t1:db1.t1,db1.t2",
-					Option: []string{
-						"Level",
-						cdc2.AccountLevel,
-						"Account",
-						sysAccountName,
-						"Rules",
-						"db2.t3,db2.t4",
-					},
-				},
+				create:  create,
 			},
 			wantErr: assert.NoError,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.wantErr(t, handleCreateCdc(tt.args.ses, tt.args.execCtx, tt.args.create), fmt.Sprintf("handleCreateCdc(%v, %v, %v)", tt.args.ses, tt.args.execCtx, tt.args.create))
+			tt.wantErr(t,
+				execInFrontend(tt.args.ses, tt.args.execCtx),
+				fmt.Sprintf("handleCreateCdc(%v, %v, %v)", tt.args.ses, tt.args.execCtx, tt.args.create))
 		})
 	}
 }
@@ -1611,8 +1617,15 @@ func Test_updateCdc_cancel(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
 
+	drop := &tree.DropCDC{
+		Option: &tree.AllOrNotCDC{
+			TaskName: "task1",
+		},
+	}
+
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 		reqCtx: context.Background(),
+		stmt:   drop,
 	}
 
 	db, mock, err := sqlmock.New()
@@ -1673,17 +1686,13 @@ func Test_updateCdc_cancel(t *testing.T) {
 			args: args{
 				ctx: ses.GetTxnCompileCtx().execCtx.reqCtx,
 				ses: ses,
-				st: &tree.DropCDC{
-					Option: &tree.AllOrNotCDC{
-						TaskName: "task1",
-					},
-				},
+				st:  drop,
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = updateCdc(tt.args.ctx, tt.args.ses, tt.args.st)
+			err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
 			assert.NoError(t, err, fmt.Sprintf("updateCdc(%v, %v, %v)", tt.args.ctx, tt.args.ses, tt.args.st))
 		})
 	}
@@ -1793,8 +1802,15 @@ func Test_updateCdc_pause(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
 
+	pause := &tree.PauseCDC{
+		Option: &tree.AllOrNotCDC{
+			TaskName: "task1",
+		},
+	}
+
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 		reqCtx: context.Background(),
+		stmt:   pause,
 	}
 
 	db, mock, err := sqlmock.New()
@@ -1861,17 +1877,13 @@ func Test_updateCdc_pause(t *testing.T) {
 			args: args{
 				ctx: ses.GetTxnCompileCtx().execCtx.reqCtx,
 				ses: ses,
-				st: &tree.PauseCDC{
-					Option: &tree.AllOrNotCDC{
-						TaskName: "task1",
-					},
-				},
+				st:  pause,
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = updateCdc(tt.args.ctx, tt.args.ses, tt.args.st)
+			err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
 			assert.NoError(t, err, fmt.Sprintf("updateCdc(%v, %v, %v)", tt.args.ctx, tt.args.ses, tt.args.st))
 		})
 	}
@@ -1987,8 +1999,13 @@ func Test_updateCdc_restart(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
 
+	restart := &tree.RestartCDC{
+		TaskName: "task1",
+	}
+
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 		reqCtx: context.Background(),
+		stmt:   restart,
 	}
 
 	db, mock, err := sqlmock.New()
@@ -2055,15 +2072,13 @@ func Test_updateCdc_restart(t *testing.T) {
 			args: args{
 				ctx: ses.GetTxnCompileCtx().execCtx.reqCtx,
 				ses: ses,
-				st: &tree.RestartCDC{
-					TaskName: "task1",
-				},
+				st:  restart,
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = updateCdc(tt.args.ctx, tt.args.ses, tt.args.st)
+			err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
 			assert.NoError(t, err, fmt.Sprintf("updateCdc(%v, %v, %v)", tt.args.ctx, tt.args.ses, tt.args.st))
 		})
 	}
@@ -2082,8 +2097,13 @@ func Test_updateCdc_resume(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
 
+	resume := &tree.ResumeCDC{
+		TaskName: "task1",
+	}
+
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 		reqCtx: context.Background(),
+		stmt:   resume,
 	}
 
 	db, mock, err := sqlmock.New()
@@ -2150,15 +2170,13 @@ func Test_updateCdc_resume(t *testing.T) {
 			args: args{
 				ctx: ses.GetTxnCompileCtx().execCtx.reqCtx,
 				ses: ses,
-				st: &tree.ResumeCDC{
-					TaskName: "task1",
-				},
+				st:  resume,
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = updateCdc(tt.args.ctx, tt.args.ses, tt.args.st)
+			err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
 			assert.NoError(t, err, fmt.Sprintf("updateCdc(%v, %v, %v)", tt.args.ctx, tt.args.ses, tt.args.st))
 		})
 	}
@@ -2282,8 +2300,13 @@ func Test_handleShowCdc(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
 
+	show := &tree.ShowCDC{
+		Option: &tree.AllOrNotCDC{All: true},
+	}
+
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 		reqCtx: context.Background(),
+		stmt:   show,
 	}
 
 	bh := &backgroundExecTest{}
@@ -2370,16 +2393,15 @@ func Test_handleShowCdc(t *testing.T) {
 			args: args{
 				ses:     ses,
 				execCtx: ses.GetTxnCompileCtx().execCtx,
-				st: &tree.ShowCDC{
-					Option: &tree.AllOrNotCDC{All: true},
-				},
+				st:      show,
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.NoErrorf(t, handleShowCdc(tt.args.ses, tt.args.execCtx, tt.args.st), fmt.Sprintf("handleShowCdc(%v, %v, %v)", tt.args.ses, tt.args.execCtx, tt.args.st))
+			err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
+			assert.NoError(t, err)
 			rs := tt.args.ses.GetMysqlResultSet()
 			taskId, err := rs.GetString(tt.args.execCtx.reqCtx, 0, 0)
 			assert.NoError(t, err)

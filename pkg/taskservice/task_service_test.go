@@ -561,3 +561,26 @@ func TestAddCdcTask1(t *testing.T) {
 	_ = s.Close()
 	_ = store.Close()
 }
+
+func Test_conditions(t *testing.T) {
+
+	conds := []Condition{
+		WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
+		WithTaskType(EQ, task.TaskType_CreateCdc.String()),
+		WithAccountID(EQ, catalog.System_Account),
+		WithAccount(EQ, "sys"),
+		WithLastHeartbeat(EQ, 10),
+		WithCronTaskId(EQ, 10),
+		WithTaskMetadataId(EQ, "taskID-1"),
+		WithTaskName(EQ, "task1"),
+		WithLabels(EQ, nil),
+		WithTaskIDDesc(),
+	}
+
+	condObj := newConditions(conds...)
+
+	for _, cond := range *condObj {
+		cond.sql()
+		cond.eval(nil)
+	}
+}

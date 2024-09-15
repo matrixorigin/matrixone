@@ -956,7 +956,7 @@ func (m *mysqlTaskStorage) RunQueryDaemonTask(ctx context.Context, db SqlExecuto
 			if canRunCdc {
 				tasks = append(tasks, t)
 			} else {
-				logutil.Errorf("cn %s can not run cdc %s %s %s",
+				logutil.Infof("cn %s can not run cdc %s %s %s",
 					labels.cnUUID,
 					createCdcDetails.CreateCdc.TaskName,
 					createCdcDetails.CreateCdc.Accounts[0].GetName(),

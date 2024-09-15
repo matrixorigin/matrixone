@@ -671,6 +671,7 @@ func (cnlabels *CnLabels) Add(cn string, labels []string) {
 			cnMap[cn] = struct{}{}
 		} else {
 			cnlabels.labels[label] = make(map[string]struct{})
+			cnMap = cnlabels.labels[label]
 			cnMap[cn] = struct{}{}
 		}
 	}
@@ -682,7 +683,10 @@ func (cnlabels *CnLabels) HasAccount(account string) (bool, map[string]struct{})
 }
 
 func (cnlabels *CnLabels) String() string {
-	if cnlabels == nil || cnlabels.labels == nil {
+	if cnlabels == nil {
+		return "empty labels"
+	}
+	if cnlabels.labels == nil {
 		return cnlabels.cnUUID
 	}
 	sb := strings.Builder{}
