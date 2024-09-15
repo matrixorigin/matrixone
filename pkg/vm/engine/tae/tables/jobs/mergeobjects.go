@@ -466,7 +466,7 @@ func HandleMergeEntryInTxn(
 func (task *mergeObjectsTask) GetTotalSize() uint64 {
 	totalSize := uint64(0)
 	for _, obj := range task.mergedObjs {
-		totalSize += uint64(obj.GetOriginSize())
+		totalSize += uint64(obj.OriginSize())
 	}
 	return totalSize
 }

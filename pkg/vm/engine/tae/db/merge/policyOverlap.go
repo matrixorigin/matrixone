@@ -148,7 +148,7 @@ func (s *entrySet) reset(t types.T) {
 
 func (s *entrySet) add(t types.T, obj *catalog.ObjectEntry) {
 	s.entries = append(s.entries, obj)
-	s.size += obj.GetOriginSize()
+	s.size += int(obj.OriginSize())
 	zmMax := obj.SortKeyZoneMap().GetMax()
 	if compute.CompareGeneric(s.maxValue, zmMax, t) < 0 {
 		s.maxValue = zmMax

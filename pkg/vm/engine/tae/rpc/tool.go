@@ -17,6 +17,11 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
 	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,10 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/spf13/cobra"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
 )
 
 const (
@@ -947,7 +948,7 @@ func (c *tableStatArg) Run() (err error) {
 	defer it.Release()
 	for it.Next() {
 		entry := it.Item()
-		c.ori += entry.GetOriginSize()
+		c.ori += int(entry.OriginSize())
 		c.com += entry.GetCompSize()
 		c.cnt++
 	}

@@ -390,7 +390,7 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 		if objectEntry.GetLoaded() {
 			stat.Loaded += 1
 			stat.Rows += int(objectEntry.Rows())
-			stat.OSize += int(objectEntry.GetOriginSize())
+			stat.OSize += int(objectEntry.OriginSize())
 			stat.Csize += int(objectEntry.GetCompSize())
 		}
 		if level > common.PPL0 {

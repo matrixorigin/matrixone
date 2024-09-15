@@ -127,7 +127,7 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 		return false
 	}
 
-	osize := obj.GetOriginSize()
+	osize := int(obj.OriginSize())
 
 	isCandidate := func() bool {
 		if osize < int(config.ObjectMinOsize) {
