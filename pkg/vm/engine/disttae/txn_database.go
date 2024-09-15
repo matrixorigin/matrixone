@@ -485,8 +485,12 @@ func (db *txnDatabase) createWithID(
 	return nil
 }
 
-func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
-	defs []engine.TableDef) engine.Relation {
+func (db *txnDatabase) openSysTable(
+	p *process.Process,
+	id uint64,
+	name string,
+	defs []engine.TableDef,
+) engine.Relation {
 	item := &cache.TableItem{
 		AccountId:  catalog.System_Account,
 		DatabaseId: catalog.MO_CATALOG_ID,
@@ -517,7 +521,7 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 	case catalog.MO_COLUMNS:
 		tbl.constraint = catalog.GetDefines(p.GetService()).MoColumnConstraint
 	}
-	tbl.GetTableDef(context.TODO())
+	tbl.GetTableDef(p.Ctx)
 	tbl.proc.Store(p)
 	return tbl
 }
@@ -525,7 +529,8 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 func (db *txnDatabase) loadTableFromStorage(
 	ctx context.Context,
 	accountID uint32,
-	name string) (tableitem *cache.TableItem, err error) {
+	name string,
+) (tableitem *cache.TableItem, err error) {
 	now := time.Now()
 	defer func() {
 		if time.Since(now) > time.Second {

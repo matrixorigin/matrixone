@@ -15,6 +15,8 @@
 package dispatch
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,6 +42,8 @@ const (
 )
 
 type container struct {
+	sp *pSpool.PipelineSpool
+
 	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []*process.WrapCs
 	// sendFunc is the rule you want to send batch
@@ -68,8 +72,10 @@ type Dispatch struct {
 
 	// IsSink means this is a Sink Node
 	IsSink bool
-	// RecSink means this is a Recursive Sink Node
+	// RecSink means this is the dispatch operator for `mergeRecursive` pipeline.
 	RecSink bool
+	// RecCTE means this is the dispatch operator for `mergeCTE` pipeline.
+	RecCTE bool
 
 	ShuffleType int32
 	// FuncId means the sendFunc you want to call
@@ -106,6 +112,10 @@ func (dispatch Dispatch) TypeName() string {
 	return opName
 }
 
+func (dispatch *Dispatch) OpType() vm.OpType {
+	return vm.Dispatch
+}
+
 func NewArgument() *Dispatch {
 	return reuse.Alloc[Dispatch](nil)
 }
@@ -129,19 +139,23 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 			}
 			colexec.Get().DeleteUuids(uuids)
 		}
-
-		dispatch.ctr = nil
 	}
 
 	// told the local receiver to stop if it is still running.
-	msg := process.NewRegMsg(nil)
-	msg.Err = err
-	for i := range dispatch.LocalRegs {
-		select {
-		case <-dispatch.LocalRegs[i].Ctx.Done():
-		case dispatch.LocalRegs[i].Ch <- msg:
+	if dispatch.ctr != nil && dispatch.ctr.sp != nil {
+		_, _ = dispatch.ctr.sp.SendBatch(context.TODO(), pSpool.SendToAllLocal, nil, err)
+		for i, reg := range dispatch.LocalRegs {
+			reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(dispatch.ctr.sp, i)
+		}
+
+		dispatch.ctr.sp.Close()
+		dispatch.ctr.sp = nil
+	} else {
+		for _, reg := range dispatch.LocalRegs {
+			reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, proc.Mp())
 		}
 	}
+	dispatch.ctr = nil
 }
 
 func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {

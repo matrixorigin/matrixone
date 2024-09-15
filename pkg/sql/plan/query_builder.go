@@ -1598,11 +1598,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
-
 		builder.partitionPrune(rootID)
-
-		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
-		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
@@ -1612,6 +1608,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
+		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
@@ -2977,6 +2975,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	if (ctx.initSelect || ctx.recSelect) && !ctx.unionSelect {
 		nodeID = appendSinkNodeWithTag(builder, ctx, nodeID, ctx.sinkTag)
+		builder.qry.Nodes[nodeID].RecursiveCte = ctx.recSelect
 	}
 
 	if isRoot {
