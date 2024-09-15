@@ -5020,7 +5020,7 @@ func TestMergeMemsize(t *testing.T) {
 			obj := it.GetObject()
 			defer obj.Close()
 			meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-			blkCnt += int(meta.BlkCnt())
+			blkcnt += int(meta.BlkCnt())
 			metas = append(metas, meta)
 
 		}
