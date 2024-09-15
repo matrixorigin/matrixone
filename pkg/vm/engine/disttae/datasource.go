@@ -80,7 +80,7 @@ func NewLocalDataSource(
 
 	if rangesSlice != nil && rangesSlice.Len() > 0 {
 		if bytes.Equal(
-			objectio.EncodeBlockInfo(*rangesSlice.Get(0)),
+			objectio.EncodeBlockInfo(rangesSlice.Get(0)),
 			objectio.EmptyBlockInfoBytes) {
 			rangesSlice = rangesSlice.Slice(1, rangesSlice.Len())
 		}

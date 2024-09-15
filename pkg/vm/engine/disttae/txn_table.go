@@ -572,7 +572,7 @@ func (tbl *txnTable) doRanges(
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
-	var blocks objectio.BlockInfoSlice
+	blocks := objectio.MakeBlockInfoSlice(1)
 
 	trace.GetService(sid).AddTxnDurationAction(
 		tbl.db.op,
@@ -652,8 +652,6 @@ func (tbl *txnTable) doRanges(
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
 	}
-
-	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
 	if err = tbl.rangesOnePart(
 		ctx,
@@ -834,7 +832,7 @@ func (tbl *txnTable) rangesOnePart(
 
 				blk.SetFlagByObjStats(&obj.ObjectStats)
 
-				outBlocks.AppendBlockInfo(blk)
+				outBlocks.AppendBlockInfo(&blk)
 
 				return true
 
@@ -1671,7 +1669,7 @@ func (tbl *txnTable) buildLocalDataSource(
 	case engine.RelDataBlockList:
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
-			objectio.EncodeBlockInfo(*ranges.Get(0)), objectio.EmptyBlockInfoBytes)
+			objectio.EncodeBlockInfo(ranges.Get(0)), objectio.EmptyBlockInfoBytes)
 
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
@@ -1738,8 +1736,7 @@ func (tbl *txnTable) BuildReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = NewEmptyBlockListRelationData()
-		relData.AppendBlockInfo(objectio.EmptyBlockInfo)
+		relData = NewBlockListRelationData(1)
 	}
 	blkCnt := relData.DataCnt()
 	newNum := num
@@ -1980,7 +1977,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	//read block ,check if keys exist in the block.
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
-	pkType := types.T(pkDef.Typ.Id).ToType()
+	pkType := plan2.ExprType2Type(&pkDef.Typ)
 	for _, blk := range candidateBlks {
 		bat, release, err := blockio.LoadColumns(
 			ctx,

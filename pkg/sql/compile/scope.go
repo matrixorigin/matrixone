@@ -341,11 +341,11 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	case <-s.Proc.Ctx.Done():
 		// this clean-up action shouldn't be called before context check.
 		// because the clean-up action will cancel the context, and error will be suppressed.
-		p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
+		p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
 		runErr = nil
 
 	default:
-		p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
+		p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
 	}
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
@@ -657,12 +657,7 @@ func (s *Scope) ReplaceLeafOp(dstLeafOp vm.Operator) {
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		if reg != nil {
-			select {
-			case <-s.Proc.Ctx.Done():
-			case reg.Ch <- nil:
-			}
-		}
+		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, s.Proc.Mp())
 
 		select {
 		case <-s.Proc.Ctx.Done():
@@ -714,7 +709,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 				sender.safeToClose = false
 				sender.alreadyClose = false
 
-				err = receiveMsgAndForward(s.Proc, sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch)
+				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch2)
 				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
@@ -726,26 +721,14 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	}
 }
 
-func receiveMsgAndForward(proc *process.Process, sender *messageSenderOnClient, forwardCh chan *process.RegisterMessage) error {
+func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
 	for {
 		bat, end, err := sender.receiveBatch()
-		if err != nil {
+		if err != nil || end || bat == nil {
 			return err
 		}
-		if end {
-			return nil
-		}
 
-		if forwardCh != nil {
-			msg := &process.RegisterMessage{Batch: bat}
-			select {
-			case <-proc.Ctx.Done():
-				bat.Clean(proc.Mp())
-				return nil
-
-			case forwardCh <- msg:
-			}
-		}
+		forwardCh <- process.NewPipelineSignalToDirectly(bat, sender.mp)
 	}
 }
 
