@@ -1245,12 +1245,16 @@ func needSkipThisTable(accountName, dbName, tblName string, filters *cdc2.Patter
 	return false
 }
 
+var Start = func(ctx context.Context, cdc *CdcTask, firstTime bool) error {
+	return cdc.Start(ctx, firstTime)
+}
+
 // Resume cdc task from last recorded watermark
 func (cdc *CdcTask) Resume() (err error) {
 	for {
 		// closed in Pause, need renew
 		cdc.activeRoutine.Cancel = make(chan struct{})
-		if err = cdc.Start(context.Background(), false); err == nil {
+		if err = Start(context.Background(), cdc, false); err == nil {
 			return
 		}
 		time.Sleep(time.Second)
@@ -1264,7 +1268,7 @@ func (cdc *CdcTask) Restart() (err error) {
 		cdc.activeRoutine.Cancel = make(chan struct{})
 		// delete previous records
 		if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err == nil {
-			if err = cdc.Start(context.Background(), false); err == nil {
+			if err = Start(context.Background(), cdc, false); err == nil {
 				return
 			}
 		}

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -2408,4 +2409,259 @@ func Test_handleShowCdc(t *testing.T) {
 			assert.Equal(t, "taskID-1", taskId)
 		})
 	}
+}
+
+func TestCdcTask_ResetWatermarkForTable(t *testing.T) {
+	type fields struct {
+		logger               *zap.Logger
+		ie                   ie.InternalExecutor
+		cnUUID               string
+		cnTxnClient          client.TxnClient
+		cnEngine             engine.Engine
+		fileService          fileservice.FileService
+		cdcTask              *task.CreateCdcDetails
+		mp                   *mpool.MPool
+		packerPool           *fileservice.Pool[*types.Packer]
+		sinkUri              cdc2.UriInfo
+		tables               cdc2.PatternTuples
+		filters              cdc2.PatternTuples
+		startTs              types.TS
+		noFull               string
+		activeRoutine        *cdc2.ActiveRoutine
+		sunkWatermarkUpdater *cdc2.WatermarkUpdater
+	}
+	type args struct {
+		info *cdc2.DbTableInfo
+	}
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+
+	tie := &testIE{
+		db: db,
+	}
+
+	sqlx := "delete from mo_catalog.mo_cdc_watermark where account_id = .* and task_id = .* and table_id = .*"
+	mock.ExpectExec(sqlx).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	sqlx1 := "insert into mo_catalog.mo_cdc_watermark values .*"
+	mock.ExpectExec(sqlx1).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			fields: fields{
+				sunkWatermarkUpdater: cdc2.NewWatermarkUpdater(
+					sysAccountID, "taskID-1", tie,
+				),
+				ie: tie,
+			},
+			args: args{
+				info: &cdc2.DbTableInfo{
+					SourceTblId: 10,
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cdc := &CdcTask{
+				logger:               tt.fields.logger,
+				ie:                   tt.fields.ie,
+				cnUUID:               tt.fields.cnUUID,
+				cnTxnClient:          tt.fields.cnTxnClient,
+				cnEngine:             tt.fields.cnEngine,
+				fileService:          tt.fields.fileService,
+				cdcTask:              tt.fields.cdcTask,
+				mp:                   tt.fields.mp,
+				packerPool:           tt.fields.packerPool,
+				sinkUri:              tt.fields.sinkUri,
+				tables:               tt.fields.tables,
+				filters:              tt.fields.filters,
+				startTs:              tt.fields.startTs,
+				noFull:               tt.fields.noFull,
+				activeRoutine:        tt.fields.activeRoutine,
+				sunkWatermarkUpdater: tt.fields.sunkWatermarkUpdater,
+			}
+			err := cdc.ResetWatermarkForTable(tt.args.info)
+			assert.NoErrorf(t, err, fmt.Sprintf("ResetWatermarkForTable(%v)", tt.args.info))
+		})
+	}
+}
+
+func TestCdcTask_Resume(t *testing.T) {
+	type fields struct {
+		logger               *zap.Logger
+		ie                   ie.InternalExecutor
+		cnUUID               string
+		cnTxnClient          client.TxnClient
+		cnEngine             engine.Engine
+		fileService          fileservice.FileService
+		cdcTask              *task.CreateCdcDetails
+		mp                   *mpool.MPool
+		packerPool           *fileservice.Pool[*types.Packer]
+		sinkUri              cdc2.UriInfo
+		tables               cdc2.PatternTuples
+		filters              cdc2.PatternTuples
+		startTs              types.TS
+		noFull               string
+		activeRoutine        *cdc2.ActiveRoutine
+		sunkWatermarkUpdater *cdc2.WatermarkUpdater
+	}
+
+	stub1 := gostub.Stub(&Start,
+		func(_ context.Context, _ *CdcTask, _ bool) error {
+			return nil
+		})
+	defer stub1.Reset()
+
+	tests := []struct {
+		name    string
+		fields  fields
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			fields: fields{
+				activeRoutine: cdc2.NewCdcActiveRoutine(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cdc := &CdcTask{
+				logger:               tt.fields.logger,
+				ie:                   tt.fields.ie,
+				cnUUID:               tt.fields.cnUUID,
+				cnTxnClient:          tt.fields.cnTxnClient,
+				cnEngine:             tt.fields.cnEngine,
+				fileService:          tt.fields.fileService,
+				cdcTask:              tt.fields.cdcTask,
+				mp:                   tt.fields.mp,
+				packerPool:           tt.fields.packerPool,
+				sinkUri:              tt.fields.sinkUri,
+				tables:               tt.fields.tables,
+				filters:              tt.fields.filters,
+				startTs:              tt.fields.startTs,
+				noFull:               tt.fields.noFull,
+				activeRoutine:        tt.fields.activeRoutine,
+				sunkWatermarkUpdater: tt.fields.sunkWatermarkUpdater,
+			}
+
+			err := cdc.Resume()
+			assert.NoErrorf(t, err, "Resume()")
+		})
+	}
+}
+
+func TestCdcTask_Restart(t *testing.T) {
+	type fields struct {
+		logger               *zap.Logger
+		ie                   ie.InternalExecutor
+		cnUUID               string
+		cnTxnClient          client.TxnClient
+		cnEngine             engine.Engine
+		fileService          fileservice.FileService
+		cdcTask              *task.CreateCdcDetails
+		mp                   *mpool.MPool
+		packerPool           *fileservice.Pool[*types.Packer]
+		sinkUri              cdc2.UriInfo
+		tables               cdc2.PatternTuples
+		filters              cdc2.PatternTuples
+		startTs              types.TS
+		noFull               string
+		activeRoutine        *cdc2.ActiveRoutine
+		sunkWatermarkUpdater *cdc2.WatermarkUpdater
+	}
+
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+
+	sqlx := "delete from mo_catalog.mo_cdc_watermark where account_id = .* and task_id = .*"
+	mock.ExpectExec(sqlx).WillReturnResult(sqlmock.NewResult(1, 1))
+	tie := &testIE{
+		db: db,
+	}
+
+	stub1 := gostub.Stub(&Start,
+		func(_ context.Context, _ *CdcTask, _ bool) error {
+			return nil
+		})
+	defer stub1.Reset()
+
+	tests := []struct {
+		name    string
+		fields  fields
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			fields: fields{
+				activeRoutine: cdc2.NewCdcActiveRoutine(),
+				sunkWatermarkUpdater: cdc2.NewWatermarkUpdater(
+					sysAccountID,
+					"taskID-0",
+					tie,
+				),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cdc := &CdcTask{
+				logger:               tt.fields.logger,
+				ie:                   tt.fields.ie,
+				cnUUID:               tt.fields.cnUUID,
+				cnTxnClient:          tt.fields.cnTxnClient,
+				cnEngine:             tt.fields.cnEngine,
+				fileService:          tt.fields.fileService,
+				cdcTask:              tt.fields.cdcTask,
+				mp:                   tt.fields.mp,
+				packerPool:           tt.fields.packerPool,
+				sinkUri:              tt.fields.sinkUri,
+				tables:               tt.fields.tables,
+				filters:              tt.fields.filters,
+				startTs:              tt.fields.startTs,
+				noFull:               tt.fields.noFull,
+				activeRoutine:        tt.fields.activeRoutine,
+				sunkWatermarkUpdater: tt.fields.sunkWatermarkUpdater,
+			}
+
+			err = cdc.Restart()
+			assert.NoErrorf(t, err, "Restart()")
+		})
+	}
+}
+
+func TestCdcTask_Pause(t *testing.T) {
+	cdc := &CdcTask{
+		activeRoutine: cdc2.NewCdcActiveRoutine(),
+	}
+	err := cdc.Pause()
+	assert.NoErrorf(t, err, "Pause()")
+}
+
+func TestCdcTask_Cancel(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+
+	sqlx := "delete from mo_catalog.mo_cdc_watermark where account_id = .* and task_id = .*"
+	mock.ExpectExec(sqlx).WillReturnResult(sqlmock.NewResult(1, 1))
+	tie := &testIE{
+		db: db,
+	}
+	cdc := &CdcTask{
+		activeRoutine: cdc2.NewCdcActiveRoutine(),
+		sunkWatermarkUpdater: cdc2.NewWatermarkUpdater(
+			sysAccountID,
+			"taskID-1",
+			tie,
+		),
+	}
+	err = cdc.Cancel()
+	assert.NoErrorf(t, err, "Pause()")
 }
