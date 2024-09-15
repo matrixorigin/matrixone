@@ -431,6 +431,11 @@ type shardingLocalReader struct {
 	remoteScanType        int
 }
 
+// TODO::
+func MockShardingLocalReader() engine.Reader {
+	return &shardingLocalReader{}
+}
+
 func (r *shardingLocalReader) Read(
 	ctx context.Context,
 	cols []string,
@@ -448,12 +453,14 @@ func (r *shardingLocalReader) Read(
 
 		switch r.iteratePhase {
 		case InLocal:
-			isEnd, err = r.lrd.Read(ctx, cols, expr, mp, bat)
-			if err != nil {
-				return
-			}
-			if !isEnd {
-				return
+			if r.lrd != nil {
+				isEnd, err = r.lrd.Read(ctx, cols, expr, mp, bat)
+				if err != nil {
+					return
+				}
+				if !isEnd {
+					return
+				}
 			}
 			if r.remoteRelData == nil || r.remoteRelData.DataCnt() == 0 {
 				r.iteratePhase = InEnd
@@ -522,35 +529,36 @@ func (r *shardingLocalReader) Close() error {
 
 func (r *shardingLocalReader) close() error {
 	if !r.closed {
-		r.lrd.Close()
-		err := r.tblDelegate.forwardRead(
-			context.Background(),
-			shardservice.ReadClose,
-			func(param *shard.ReadParam) {
-				param.ReadCloseParam.Uuid = types.EncodeUuid(&r.streamID)
-			},
-			func(resp []byte) {
-			},
-		)
-		if err != nil {
-			return err
+		if r.lrd != nil {
+			r.lrd.Close()
+		}
+		if r.remoteRelData != nil {
+			err := r.tblDelegate.forwardRead(
+				context.Background(),
+				shardservice.ReadClose,
+				func(param *shard.ReadParam) {
+					param.ReadCloseParam.Uuid = types.EncodeUuid(&r.streamID)
+				},
+				func(resp []byte) {
+				},
+			)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
 func (r *shardingLocalReader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	//r.source.SetOrderBy(orderby)
 	panic("not implemented")
 }
 
 func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {
-	//return r.source.GetOrderBy()
 	panic("not implemented")
 }
 
 func (r *shardingLocalReader) SetFilterZM(zm objectio.ZoneMap) {
-	//r.source.SetFilterZM(zm)
 	panic("not implemented")
 }
 
@@ -629,35 +637,43 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 
 		localRelData, remoteRelData := group(shard)
 
-		ds, err := tbl.origin.buildLocalDataSource(
-			ctx,
-			txnOffset,
-			localRelData,
-			policy|engine.Policy_SkipCommittedInMemory|engine.Policy_SkipCommittedS3,
-			engine.ShardingLocalDataSource)
-		if err != nil {
-			return nil, err
-		}
-		lrd, err := NewReader(
-			ctx,
-			proc,
-			tbl.origin.getTxn().engine,
-			tbl.origin.GetTableDef(ctx),
-			tbl.origin.db.op.SnapshotTS(),
-			expr,
-			ds,
-		)
-		if err != nil {
-			return nil, err
-		}
-		lrd.scanType = scanType
-		remoteRelData.AttachTombstones(uncommittedTombstones)
 		srd := &shardingLocalReader{
-			lrd:                   lrd,
-			tblDelegate:           tbl,
-			remoteRelData:         remoteRelData,
+			//lrd:                   lrd,
+			tblDelegate: tbl,
+			//remoteRelData:         remoteRelData,
 			remoteTombApplyPolicy: engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3,
 			remoteScanType:        scanType,
+		}
+
+		if localRelData.DataCnt() > 0 {
+			ds, err := tbl.origin.buildLocalDataSource(
+				ctx,
+				txnOffset,
+				localRelData,
+				policy|engine.Policy_SkipCommittedInMemory|engine.Policy_SkipCommittedS3,
+				engine.ShardingLocalDataSource)
+			if err != nil {
+				return nil, err
+			}
+			lrd, err := NewReader(
+				ctx,
+				proc,
+				tbl.origin.getTxn().engine,
+				tbl.origin.GetTableDef(ctx),
+				tbl.origin.db.op.SnapshotTS(),
+				expr,
+				ds,
+			)
+			if err != nil {
+				return nil, err
+			}
+			lrd.scanType = scanType
+			srd.lrd = lrd
+		}
+
+		if remoteRelData.DataCnt() > 0 {
+			remoteRelData.AttachTombstones(uncommittedTombstones)
+			srd.remoteRelData = remoteRelData
 		}
 		rds = append(rds, srd)
 	}

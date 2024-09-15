@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -841,6 +842,47 @@ func Test_ShardingRemoteReader(t *testing.T) {
 			bat.Clean(mp)
 		}
 		require.Equal(t, 2, rows)
+
+		readCloseParam := shard.ReadParam{
+			Process: pInfo,
+			TxnTable: shard.TxnTable{
+				DatabaseID:   rel.GetDBID(ctx),
+				DatabaseName: databaseName,
+				AccountID:    uint64(catalog.System_Account),
+				TableName:    tableName,
+			},
+		}
+		readCloseParam.ReadCloseParam.Uuid = types.EncodeUuid(&streamID)
+		_, err = disttae.HandleShardingReadClose(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readCloseParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.NoError(t, err)
+
+		_, err = disttae.HandleShardingReadNext(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readNextParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.Error(t, err)
+
+		_, err = disttae.HandleShardingReadClose(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readCloseParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.Error(t, err)
+
 		require.NoError(t, txn.Commit(ctx))
 	}
 
@@ -1150,57 +1192,78 @@ func Test_ShardingLocalReader(t *testing.T) {
 		require.NoError(t, txn.Commit(context.Background()))
 
 	}
-	//start to build sharding readers.
-	_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
-	require.NoError(t, err)
 
-	relData, err := rel.Ranges(ctx, nil, 0)
-	require.NoError(t, err)
+	{
+		//start to build sharding readers.
+		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
 
-	shardSvr := testutil.MockShardService()
-	delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
-	rds, err := delegate.BuildShardingReaders(
-		ctx,
-		rel.GetProcess(),
-		nil,
-		relData,
-		1,
-		0,
-		false,
-		0,
-	)
-	require.NoError(t, err)
+		relData, err := rel.Ranges(ctx, nil, 0)
+		require.NoError(t, err)
 
-	rows := 0
-	buildBatch := func() *batch.Batch {
-		bat := batch.NewWithSize(1)
-		for _, col := range schema.ColDefs {
-			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
-				vec := vector.NewVec(col.Type)
-				bat.Vecs[0] = vec
-				bat.Attrs = []string{col.Name}
-				break
-			}
-		}
-		return bat
-	}
-	for {
-		bat := buildBatch()
-		isEnd, err := rds[0].Read(
+		shardSvr := testutil.MockShardService()
+		delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
+		num := 10
+		rds, err := delegate.BuildShardingReaders(
 			ctx,
-			[]string{schema.ColDefs[primaryKeyIdx].Name},
+			rel.GetProcess(),
 			nil,
-			mp,
-			bat,
+			relData,
+			num,
+			0,
+			false,
+			0,
 		)
 		require.NoError(t, err)
-		if isEnd {
-			break
-		}
-		rows += int(bat.RowCount())
-	}
-	require.Equal(t, 2, rows)
 
-	err = txn.Commit(ctx)
-	require.Nil(t, err)
+		rows := 0
+		buildBatch := func() *batch.Batch {
+			bat := batch.NewWithSize(1)
+			for _, col := range schema.ColDefs {
+				if col.Name == schema.ColDefs[primaryKeyIdx].Name {
+					vec := vector.NewVec(col.Type)
+					bat.Vecs[0] = vec
+					bat.Attrs = []string{col.Name}
+					break
+				}
+			}
+			return bat
+		}
+
+		for _, r := range rds {
+			for {
+				bat := buildBatch()
+				isEnd, err := r.Read(
+					ctx,
+					[]string{schema.ColDefs[primaryKeyIdx].Name},
+					nil,
+					mp,
+					bat,
+				)
+				require.NoError(t, err)
+
+				if isEnd {
+					break
+				}
+				rows += int(bat.RowCount())
+			}
+		}
+
+		require.Equal(t, 2, rows)
+
+		err = txn.Commit(ctx)
+		require.Nil(t, err)
+	}
+
+	//test set orderby
+	shardingLRD := disttae.MockShardingLocalReader()
+	assert.Panics(t, func() {
+		shardingLRD.SetOrderBy(nil)
+	})
+	assert.Panics(t, func() {
+		shardingLRD.GetOrderBy()
+	})
+	assert.Panics(t, func() {
+		shardingLRD.SetFilterZM(nil)
+	})
 }
