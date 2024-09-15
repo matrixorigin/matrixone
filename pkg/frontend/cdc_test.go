@@ -2803,3 +2803,40 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		})
 	}
 }
+
+func Test_execFrontend(t *testing.T) {
+	pu := config.ParameterUnit{}
+	setGlobalPu(&pu)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+		reqCtx: context.Background(),
+	}
+
+	stmts := []tree.Statement{
+		&tree.CreateCDC{},
+		&tree.PauseCDC{},
+		&tree.DropCDC{},
+		&tree.RestartCDC{},
+		&tree.ResumeCDC{},
+		&tree.ShowCDC{},
+	}
+
+	txnOpStub := gostub.Stub(&cdc2.GetTxnOp,
+		func(ctx context.Context, cnEngine engine.Engine, cnTxnClient client.TxnClient, info string) (client.TxnOperator, error) {
+			return nil, moerr.NewInternalError(ctx, "error")
+		})
+	defer txnOpStub.Reset()
+
+	for _, stmt := range stmts {
+		ses.GetTxnCompileCtx().execCtx.stmt = stmt
+		err := execInFrontend(ses, ses.GetTxnCompileCtx().execCtx)
+		assert.Error(t, err)
+	}
+
+}

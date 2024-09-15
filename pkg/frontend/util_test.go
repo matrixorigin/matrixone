@@ -1384,3 +1384,48 @@ func Test_replaceStr(t *testing.T) {
 		})
 	}
 }
+
+func Test_islegal(t *testing.T) {
+	assert.False(t, isLegal("", []string{}))
+	assert.False(t, isLegal("abc", []string{}))
+}
+
+func Test_accountNameIsLegal(t *testing.T) {
+	assert.False(t, accountNameIsLegal(",."))
+	assert.False(t, dbNameIsLegal(",."))
+	assert.False(t, tableNameIsLegal(",."))
+}
+
+func Test_compUriInfo(t *testing.T) {
+	ret, _ := compositedUriInfo("", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefix", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:65536", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:4", "prefix")
+	assert.True(t, ret)
+}
+
+func Test_replaceStr2(t *testing.T) {
+	assert.Equal(t, replaceStr("", 1, 0, "a"), "")
+	assert.Equal(t, replaceStr("abc", 0, 4, "a"), "abc")
+}
+
+func Test_uriHasPrefix(t *testing.T) {
+	assert.False(t, uriHasPrefix("ab", "abc"))
+}
+
+func Test_extractUriInfo(t *testing.T) {
+	_, _, err := extractUriInfo(context.Background(), "abc", "t")
+	assert.Error(t, err)
+}

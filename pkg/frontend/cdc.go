@@ -1382,6 +1382,9 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 	switch stmt := st.(type) {
 	case *tree.DropCDC:
 		targetTaskStatus = task.TaskStatus_CancelRequested
+		if stmt.Option == nil {
+			return moerr.NewInternalErrorf(ctx, "invalid cdc option")
+		}
 		if stmt.Option.All {
 			appendCond(
 				taskservice.WithAccountID(taskservice.EQ, accountId),
@@ -1397,6 +1400,9 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		}
 	case *tree.PauseCDC:
 		targetTaskStatus = task.TaskStatus_PauseRequested
+		if stmt.Option == nil {
+			return moerr.NewInternalErrorf(ctx, "invalid cdc option")
+		}
 		if stmt.Option.All {
 			appendCond(
 				taskservice.WithAccountID(taskservice.EQ, accountId),
@@ -1412,6 +1418,9 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 	case *tree.RestartCDC:
 		targetTaskStatus = task.TaskStatus_RestartRequested
 		taskName = stmt.TaskName.String()
+		if len(taskName) == 0 {
+			return moerr.NewInternalErrorf(ctx, "invalid task name")
+		}
 		appendCond(
 			taskservice.WithAccountID(taskservice.EQ, accountId),
 			taskservice.WithTaskName(taskservice.EQ, stmt.TaskName.String()),
@@ -1420,6 +1429,9 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 	case *tree.ResumeCDC:
 		targetTaskStatus = task.TaskStatus_ResumeRequested
 		taskName = stmt.TaskName.String()
+		if len(taskName) == 0 {
+			return moerr.NewInternalErrorf(ctx, "invalid task name")
+		}
 		appendCond(
 			taskservice.WithAccountID(taskservice.EQ, accountId),
 			taskservice.WithTaskName(taskservice.EQ, stmt.TaskName.String()),
