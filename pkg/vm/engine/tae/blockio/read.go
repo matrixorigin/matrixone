@@ -18,7 +18,6 @@ import (
 	"context"
 	"math"
 	"time"
-	"unsafe"
 
 	"go.uber.org/zap"
 
@@ -569,14 +568,10 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 
 	noTSCheck := false
 	if end-start > 10 {
-		// PXU FIXME: the idx should be objectio.TombstoneAttr_CommitTs_Idx but now objectio.TombstoneAttr_CommitTs_Idx-1
-		maxBuf := meta.MustGetColumn(objectio.TombstoneAttr_CommitTs_Idx - 1).ZoneMap().GetMaxBuf()
-		maxTS := (*types.TS)(unsafe.Pointer(&maxBuf[0]))
 		// fast path is true if the maxTS is less than the snapshotTS
 		// this means that all the rows between start and end are visible
-		if ts.GreaterEq(maxTS) {
-			noTSCheck = true
-		}
+		idx := objectio.GetTombstoneCommitTSAttrIdx(meta.GetMetaColumnCount())
+		noTSCheck = meta.MustGetColumn(idx).ZoneMap().FastLEValue(ts[:], 0)
 	}
 	if noTSCheck {
 		for i := end - 1; i >= start; i-- {
