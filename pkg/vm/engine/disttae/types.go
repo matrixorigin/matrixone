@@ -254,6 +254,8 @@ type Transaction struct {
 	workspaceSize uint64
 	// the total row count for insert entries when txn commits.
 	insertCount int
+	// the approximation of total row count for delete entries when txn commits.
+	approximateInMemDeleteCnt int
 	// the last snapshot write offset
 	snapshotWriteOffset int
 
