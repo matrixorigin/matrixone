@@ -227,7 +227,7 @@ func (d *DeltaLocDataSource) getAndApplyTombstones(
 		return nil, nil
 	}
 	logutil.Infof("deltaLoc: %v, id is %d", deltaLoc.String(), bid.Sequence())
-	deletes, release, err := blockio.ReadDeletes(ctx, deltaLoc, d.fs, false)
+	deletes, meta, release, err := blockio.ReadDeletes(ctx, deltaLoc, d.fs, false)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +235,7 @@ func (d *DeltaLocDataSource) getAndApplyTombstones(
 	if ts.IsEmpty() {
 		ts = d.ts
 	}
-	return blockio.EvalDeleteMaskFromDNCreatedTombstones(deletes, ts, &bid), nil
+	return blockio.EvalDeleteMaskFromDNCreatedTombstones(deletes, meta, ts, &bid), nil
 }
 
 func (d *DeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
