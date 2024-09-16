@@ -544,10 +544,10 @@ func ReadDeletes(
 	var typs []types.Type
 
 	if isPersistedByCN {
-		cols = []uint16{objectio.TombstoneAttr_Rowid_Idx}
+		cols = []uint16{objectio.TombstoneAttr_Rowid_SeqNum}
 		typs = []types.Type{objectio.RowidType}
 	} else {
-		cols = []uint16{objectio.TombstoneAttr_Rowid_Idx, objectio.SEQNUM_COMMITTS}
+		cols = []uint16{objectio.TombstoneAttr_Rowid_SeqNum, objectio.TombstoneAttr_CommitTs_SeqNum}
 		typs = []types.Type{objectio.RowidType, objectio.TSType}
 	}
 	return LoadTombstoneColumns(
@@ -569,7 +569,7 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 
 	noTSCheck := false
 	if end-start > 10 {
-		maxBuf := meta.MustGetColumn(objectio.SEQNUM_COMMITTS).ZoneMap().GetMaxBuf()
+		maxBuf := meta.MustGetColumn(objectio.TombstoneAttr_CommitTs_SeqNum).ZoneMap().GetMaxBuf()
 		maxTS := (*types.TS)(unsafe.Pointer(&maxBuf[0]))
 		// fast path is true if the maxTS is less than the snapshotTS
 		// this means that all the rows between start and end are visible

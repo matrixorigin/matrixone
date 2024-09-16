@@ -33,8 +33,18 @@ const (
 	TombstoneAttr_Rowid_Idx = 0
 	TombstoneAttr_PK_Idx    = 1
 
-	// Tombstones created by CN has no commit ts column
-	TombstoneAttr_CommitTs_Idx = 2
+	// TN created only
+	TombstoneAttr_PhyAddr_Idx  = 2
+	TombstoneAttr_CommitTs_Idx = 3
+	TombstoneAttr_Abort_Idx    = 4
+
+	TombstoneAttr_Rowid_SeqNum = TombstoneAttr_Rowid_Idx
+	TombstoneAttr_PK_SeqNum    = TombstoneAttr_PK_Idx
+
+	// TN created only
+	TombstoneAttr_PhyAddr_SeqNum  = TombstoneAttr_PhyAddr_Idx
+	TombstoneAttr_CommitTs_SeqNum = SEQNUM_COMMITTS
+	TombstoneAttr_Abort_SeqNum    = SEQNUM_ABORT
 )
 
 const ZoneMapSize = index.ZMSize
