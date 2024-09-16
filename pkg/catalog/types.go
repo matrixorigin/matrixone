@@ -150,6 +150,9 @@ const (
 	MO_PITR = "mo_pitr"
 
 	MO_RETENTION = "mo_retention"
+
+	MO_CDC_TASK      = "mo_cdc_task"
+	MO_CDC_WATERMARK = "mo_cdc_watermark"
 )
 
 const (

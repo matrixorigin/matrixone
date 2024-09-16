@@ -1064,10 +1064,6 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	tbl *txnTable,
 ) (SubscribeState, *logtailreplay.PartitionState, error) {
 
-	//part, err := c.eng.lazyLoadLatestCkp(ctx, tbl)
-	//if err != nil {
-	//	return InvalidSubState, nil, err
-	//}
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
 	v, exist := c.subscribed.m[tableId]
