@@ -17,6 +17,7 @@ package blockio
 import (
 	"context"
 	"math"
+	"sort"
 	"time"
 
 	"go.uber.org/zap"
@@ -645,6 +646,43 @@ func FindStartEndOfBlockFromSortedRowids(rowids []types.Rowid, id *types.Blockid
 		}
 	}
 	end = i
+	return
+}
+
+func IsRowDeletedByLocation(
+	ctx context.Context,
+	snapshotTS *types.TS,
+	row *objectio.Rowid,
+	location objectio.Location,
+	fs fileservice.FileService,
+	createdByCN bool,
+) (deleted bool, err error) {
+	data, _, release, err := ReadDeletes(ctx, location, fs, createdByCN)
+	if err != nil {
+		return
+	}
+	defer release()
+	if data.RowCount() == 0 {
+		return
+	}
+	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[0])
+	idx := sort.Search(len(rowids), func(i int) bool {
+		return rowids[i].EQ(row)
+	})
+	if createdByCN {
+		deleted = idx < len(rowids)
+	} else {
+		tss := vector.MustFixedColNoTypeCheck[types.TS](data.Vecs[1])
+		for i := idx; i < len(rowids); i++ {
+			if !rowids[i].EQ(row) {
+				break
+			}
+			if tss[i].LessEq(snapshotTS) {
+				deleted = true
+				break
+			}
+		}
+	}
 	return
 }
 

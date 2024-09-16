@@ -26,6 +26,50 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+func IsRowDeleted(
+	ctx context.Context,
+	ts *types.TS,
+	row *types.Rowid,
+	getTombstoneFileFn func() (*objectio.ObjectStats, error),
+	fs fileservice.FileService,
+) (bool, error) {
+	var deleted bool
+	loadedBlkCnt := 0
+	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
+		var err error
+		location := tombstoneObject.BlockLocation(uint16(pos), objectio.BlockMaxRows)
+		if deleted, err = IsRowDeletedByLocation(
+			ctx, ts, row, location, fs, tombstoneObject.GetCNCreated(),
+		); err != nil {
+			return false, err
+		}
+		loadedBlkCnt++
+		// if deleted, stop searching
+		if deleted {
+			return false, nil
+		}
+		return true, nil
+	}
+
+	tombstoneObjectCnt, skipObjectCnt, totalBlkCnt, err := CheckTombstoneFile(
+		ctx, row[:], getTombstoneFileFn, onBlockSelectedFn, fs,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	v2.TxnReaderEachBLKLoadedTombstoneHistogram.Observe(float64(loadedBlkCnt))
+	v2.TxnReaderScannedTotalTombstoneHistogram.Observe(float64(tombstoneObjectCnt))
+	if tombstoneObjectCnt > 0 {
+		v2.TxnReaderTombstoneZMSelectivityHistogram.Observe(float64(skipObjectCnt) / float64(tombstoneObjectCnt))
+	}
+	if totalBlkCnt > 0 {
+		v2.TxnReaderTombstoneBLSelectivityHistogram.Observe(float64(loadedBlkCnt) / float64(totalBlkCnt))
+	}
+
+	return deleted, nil
+}
+
 func GetTombstonesByBlockId(
 	ctx context.Context,
 	ts types.TS,
