@@ -46,11 +46,9 @@ Find rows that contain the exact phrase “some words” (for example, rows that
 */
 
 type Word struct {
-	DocId      any
-	Position   []int64
-	DocCount   int32
-	FirstDocId any
-	LastDocId  any
+	DocId    any
+	Position []int64
+	DocCount int32
 }
 
 type WordAccum struct {
@@ -180,8 +178,10 @@ func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float3
 		idf := math.Log10(float64(s.Nrow) / float64(sum_doc_count))
 		tfidf := float32(tf * idf * idf)
 		result[doc_id] = weight * tfidf
+		fmt.Printf("Word: %v doc_count %d, sum = %d, idf = %f, tfidf=%f\n", doc_id, acc.Words[doc_id].DocCount, sum_doc_count, idf, tfidf)
 	}
 
+	fmt.Printf("EvalLeaf: %v\n", result)
 	return result, nil
 }
 

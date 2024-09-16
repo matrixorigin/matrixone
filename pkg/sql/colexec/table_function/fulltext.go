@@ -143,14 +143,16 @@ func (s *SearchAccum) run(proc *process.Process) error {
 		}
 	}
 
-	union = append(union, fmt.Sprintf("SELECT doc_id, pos, doc_count, first_doc_id, last_doc_id, word FROM %s WHERE word IN (%s)",
-		s.TblName, strings.Join(keywords, ",")))
+	if len(keywords) > 0 {
+		union = append(union, fmt.Sprintf("SELECT doc_id, pos, word FROM %s WHERE word IN (%s)",
+			s.TblName, strings.Join(keywords, ",")))
+	}
 
-	sqlfmt := "SELECT doc_id, pos, doc_count, first_doc_id, last_doc_id, '%s' FROM %s WHERE word LIKE '%s'"
+	sqlfmt := "SELECT doc_id, pos, '%s' FROM %s WHERE prefix_eq(word, '%s')"
 	for _, p := range s.Pattern {
 		ssStar := p.GetLeafText(Star)
 		for _, w := range ssStar {
-			like := strings.ReplaceAll(w, "*", "%")
+			like := strings.ReplaceAll(w, "*", "")
 			union = append(union, fmt.Sprintf(sqlfmt, w, s.TblName, like))
 		}
 	}
@@ -166,7 +168,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 
 	for _, bat := range res.Batches {
 
-		if len(bat.Vecs) != 6 {
+		if len(bat.Vecs) != 3 {
 			return moerr.NewInternalError(proc.Ctx, "output vector columns not match")
 		}
 
@@ -184,17 +186,8 @@ func (s *SearchAccum) run(proc *process.Process) error {
 			// pos int64
 			pos := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[1], i)
 
-			// doc_count int32
-			doc_count := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[2], i)
-
-			// first_doc_id any
-			first_doc_id := vector.GetAny(bat.Vecs[3], i)
-
-			// last_doc_id any
-			last_doc_id := vector.GetAny(bat.Vecs[4], i)
-
 			// word string
-			word := bat.Vecs[5].GetStringAt(i)
+			word := bat.Vecs[2].GetStringAt(i)
 			//logutil.Infof("ID:%d, DOC_ID:%v, POS:%d, DOC_COUNT:%d, FIRST: %v, LAST: %v", id, doc_id, pos, doc_count, first_doc_id, last_doc_id)
 
 			w, ok := s.WordAccums[word]
@@ -205,8 +198,9 @@ func (s *SearchAccum) run(proc *process.Process) error {
 			_, ok = w.Words[doc_id]
 			if ok {
 				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
+				w.Words[doc_id].DocCount += 1
 			} else {
-				w.Words[doc_id] = &Word{DocId: doc_id, Position: []int64{pos}, DocCount: doc_count, FirstDocId: first_doc_id, LastDocId: last_doc_id}
+				w.Words[doc_id] = &Word{DocId: doc_id, Position: []int64{pos}, DocCount: 1}
 			}
 		}
 
