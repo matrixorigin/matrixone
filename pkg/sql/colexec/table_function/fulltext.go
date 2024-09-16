@@ -15,9 +15,7 @@
 package table_function
 
 import (
-	"context"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -102,6 +100,7 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
+/*
 type Word struct {
 	DocId      any
 	Position   []int64
@@ -128,6 +127,7 @@ type SearchAccum struct {
 func NewWordAccum(id int64, mode int64) *WordAccum {
 	return &WordAccum{Id: id, Mode: mode, Words: make(map[any]*Word)}
 }
+*/
 
 /*
 // run each word
@@ -193,7 +193,6 @@ func (w *WordAccum) run(proc *process.Process, tblname string, first_doc_id, las
 	}
 	return nil
 }
-*/
 
 func NewSearchAccum(tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
 
@@ -210,47 +209,66 @@ func NewSearchAccum(tblname string, pattern string, mode int64, params string) (
 
 	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
 }
+*/
 
 // $(IDF) = LOG10(#word in collection/sum(doc_count))
 // $(TF) = number of nword match in record (doc_count)
 // $(rank) = $(TF) * $(IDF) * %(IDF)
-func (s *SearchAccum) score(proc *process.Process) map[any]float32 {
-	score := make(map[any]float32)
+func (s *SearchAccum) score(proc *process.Process) (map[any]float32, error) {
+	var result map[any]float32
+	var err error
 
 	if s.Nrow == 0 {
-		return score
+		return result, nil
 	}
 
-	// calculate sum(doc_count)
-	sum_count := make([]int32, len(s.WordAccums))
-	i := 0
-	for key := range s.WordAccums {
-		acc := s.WordAccums[key]
-		logutil.Infof("%v", acc)
-		for doc_id := range acc.Words {
-			sum_count[i] += acc.Words[doc_id].DocCount
+	s.calculateDocCount()
+
+	for _, p := range s.Pattern {
+		result, err = p.Eval(s, float32(1.0), result)
+		if err != nil {
+			return nil, err
 		}
-		i++
 	}
 
-	// calculate the score
-	i = 0
-	for key := range s.WordAccums {
-		acc := s.WordAccums[key]
-		logutil.Infof("%v", acc)
-		for doc_id := range acc.Words {
-			tf := float64(acc.Words[doc_id].DocCount)
-			idf := math.Log10(float64(s.Nrow) / float64(sum_count[i]))
-			tfidf := float32(tf * idf * idf)
-			_, ok := score[doc_id]
-			if ok {
-				score[doc_id] += tfidf
-			} else {
-				score[doc_id] = tfidf
+	return result, nil
+
+	/*
+
+
+		// calculate sum(doc_count)
+		sum_count := make([]int32, len(s.WordAccums))
+		i := 0
+		for key := range s.WordAccums {
+			acc := s.WordAccums[key]
+			logutil.Infof("%v", acc)
+			for doc_id := range acc.Words {
+				sum_count[i] += acc.Words[doc_id].DocCount
 			}
+			i++
 		}
-		i++
-	}
+
+
+		// calculate the score
+		i = 0
+		for key := range s.WordAccums {
+			acc := s.WordAccums[key]
+			logutil.Infof("%v", acc)
+			for doc_id := range acc.Words {
+				tf := float64(acc.Words[doc_id].DocCount)
+				idf := math.Log10(float64(s.Nrow) / float64(sum_count[i]))
+				tfidf := float32(tf * idf * idf)
+				_, ok := score[doc_id]
+				if ok {
+					score[doc_id] += tfidf
+				} else {
+					score[doc_id] = tfidf
+				}
+			}
+			i++
+		}
+
+	*/
 
 	/*
 		// sort by value
@@ -261,7 +279,7 @@ func (s *SearchAccum) score(proc *process.Process) map[any]float32 {
 		sort.Slice(keys, func(i, j int) bool { return score[keys[i]] < score[keys[j]] })
 	*/
 
-	return score
+	//return score
 }
 
 func (s *SearchAccum) run(proc *process.Process) error {
@@ -278,11 +296,14 @@ func (s *SearchAccum) run(proc *process.Process) error {
 	var filters []string
 	for _, p := range s.Pattern {
 
+		// ERIC TODO: how about IN(w1, w2, w3,...wN)
 		ssNoOp := p.GetLeafText(NoOp)
 		for _, w := range ssNoOp {
 			filters = append(filters, fmt.Sprintf("word = '%s'", w))
 		}
 
+		// ERIC TODO: bug here. Result cannot be hash.. e.g. apple*  but the result is applet
+		// use UNION
 		ssStar := p.GetLeafText(Star)
 		for _, w := range ssStar {
 			like := strings.ReplaceAll(w, "*", "%")
@@ -391,7 +412,10 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tbl
 
 	s.run(proc)
 
-	scoremap := s.score(proc)
+	scoremap, err := s.score(proc)
+	if err != nil {
+		return err
+	}
 
 	if bat.VectorCount() == 1 {
 		// only doc_id returned

@@ -3,6 +3,7 @@ package table_function
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,6 +45,80 @@ Find rows that contain words such as “apple”, “apples”, “applesauce”
 Find rows that contain the exact phrase “some words” (for example, rows that contain “some words of wisdom” but not “some noise words”). Note that the " characters that enclose the phrase are operator characters that delimit the phrase. They are not the quotation marks that enclose the search string itself.
 */
 
+type Word struct {
+	DocId      any
+	Position   []int64
+	DocCount   int32
+	FirstDocId any
+	LastDocId  any
+}
+
+type WordAccum struct {
+	Id    int64
+	Mode  int64
+	Words map[any]*Word
+}
+
+type SearchAccum struct {
+	TblName     string
+	Mode        int64
+	Pattern     []*Pattern
+	Params      string
+	WordAccums  map[string]*WordAccum
+	SumDocCount map[string]int32
+	Nrow        int64
+}
+
+func NewWordAccum(id int64, mode int64) *WordAccum {
+	return &WordAccum{Id: id, Mode: mode, Words: make(map[any]*Word)}
+}
+
+func NewSearchAccum(tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
+
+	// TODO: tokenize the pattern based on mode and params
+	// use space as separator for now
+	if mode != 0 {
+		return nil, moerr.NewNotSupported(context.TODO(), "mode not supported")
+	}
+
+	pattern = strings.ToLower(pattern)
+	ps, err := ParsePatternInBooleanMode(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: re-arrange the pattern with the precedency Phrase > Plus > NoOp,Star,Group,RankLess > Minus
+	// Group can only have LessThan and GreaterThan children
+	// Plus, Minus, RankLess can only have NoOp, Star and Group Children and only have Single Child
+
+	// TODO: Validate the patterns
+
+	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
+}
+
+func (s *SearchAccum) calculateDocCount() {
+	sum_count := make(map[string]int32)
+
+	for key := range s.WordAccums {
+		acc := s.WordAccums[key]
+		sum_count[key] = 0
+		for doc_id := range acc.Words {
+			sum_count[key] += acc.Words[doc_id].DocCount
+		}
+	}
+
+	s.SumDocCount = sum_count
+}
+
+func (s *SearchAccum) PatternAnyPlus() bool {
+	for _, p := range s.Pattern {
+		if p.Operator == Plus {
+			return true
+		}
+	}
+	return false
+}
+
 type FullTextBooleanOperator int
 
 var (
@@ -84,6 +159,215 @@ func (p *Pattern) GetLeafText(operator int) []string {
 		res = append(res, c.GetLeafText(operator)...)
 	}
 	return res
+}
+
+func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
+
+	key := p.Text
+	acc, ok := s.WordAccums[key]
+	if !ok {
+		return result, nil
+	}
+
+	sum_doc_count := s.SumDocCount[key]
+
+	if result == nil {
+		result = make(map[any]float32)
+	}
+
+	for doc_id := range acc.Words {
+		tf := float64(acc.Words[doc_id].DocCount)
+		idf := math.Log10(float64(s.Nrow) / float64(sum_doc_count))
+		tfidf := float32(tf * idf * idf)
+		result[doc_id] = weight * tfidf
+	}
+
+	return result, nil
+}
+
+func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
+
+	if result == nil {
+		return nil, nil
+	}
+
+	var keys []any
+	for key := range result {
+		keys = append(keys, key)
+	}
+	for doc_id := range keys {
+		_, ok := arg[doc_id]
+		if ok {
+			result[doc_id] += arg[doc_id]
+		} else {
+			delete(result, doc_id)
+		}
+	}
+	fmt.Printf("EvalPlusPlus: %v, %v\n", p, result)
+	return result, nil
+}
+
+func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
+
+	if result == nil {
+		return nil, nil
+	}
+
+	var keys []any
+	for key := range result {
+		keys = append(keys, key)
+	}
+	for doc_id := range keys {
+		_, ok := arg[doc_id]
+		if ok {
+			result[doc_id] += arg[doc_id]
+		}
+	}
+	fmt.Printf("EvalPlusOR: %v %v\n", p, result)
+	return result, nil
+}
+
+func (p *Pattern) EvalMinus(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
+
+	if result == nil {
+		return result, nil
+	}
+
+	fmt.Printf("EvalMinus: %v %v %v\n", p, arg, result)
+	for doc_id := range arg {
+		_, ok := result[doc_id]
+		if ok {
+			// remove from result
+			delete(result, doc_id)
+		}
+	}
+	fmt.Printf("EvalMinus Result: %v %v\n", p, result)
+	return result, nil
+}
+
+func (p *Pattern) EvalOR(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
+	if result == nil {
+		result = make(map[any]float32)
+	}
+
+	for doc_id := range arg {
+		_, ok := result[doc_id]
+		if ok {
+			result[doc_id] += arg[doc_id]
+		} else {
+			result[doc_id] = arg[doc_id]
+		}
+	}
+
+	fmt.Printf("EvalOR: %v %v\n", p, result)
+
+	return result, nil
+}
+
+func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
+	var err error
+
+	nchild := len(p.Children)
+	// create, init a result map and pattern must not be Minus Type
+	if result == nil && p.Operator == Minus {
+		return nil, moerr.NewInternalError(context.TODO(), "Pattern cannot be inited with '-' operator")
+	}
+
+	if nchild == 0 {
+		// leaf node: NoOp, Star
+		// calculate the score with weight
+		fmt.Printf("EvalLEAF %v\n", p)
+		if result == nil {
+			return p.EvalLeaf(accum, weight, result)
+		} else {
+			child_result, err := p.EvalLeaf(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+			if accum.PatternAnyPlus() {
+				return p.EvalPlusOR(accum, child_result, result)
+			} else {
+				return p.EvalOR(accum, child_result, result)
+			}
+		}
+
+	} else if nchild == 1 {
+		// Plus, Minus, LessThan, GreaterThan, RankLess
+		// TODO: set weight by type
+		weight := float32(1.0)
+
+		if result == nil {
+			fmt.Printf("NULL RESULT FIRST %v\n", p)
+			// LessThan, GreaterThan and RankLess
+			return p.Children[0].Eval(accum, weight, nil)
+
+		} else {
+			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			// do Plus (AND) and Minus operation (REMOVE HASH) and OR operation
+			if p.Operator == Plus {
+				// AND
+				return p.EvalPlusPlus(accum, child_result, result)
+			} else if p.Operator == Minus {
+				// MINUS
+				return p.EvalMinus(accum, child_result, result)
+			} else if p.Operator == Group || p.Operator == LessThan || p.Operator == GreaterThan {
+				return p.EvalOR(accum, child_result, result)
+			} else {
+				// OR
+				if accum.PatternAnyPlus() {
+					return p.EvalPlusOR(accum, child_result, result)
+				} else {
+					return p.EvalOR(accum, child_result, result)
+				}
+			}
+		}
+		return nil, moerr.NewInternalError(context.TODO(), "Pattern.Eval(): operator not supported")
+	} else {
+		// Group, Phrase
+
+		if p.Operator == Group {
+			// OR mode
+			child_result := make(map[any]float32)
+			for _, c := range p.Children {
+				child_result, err = c.Eval(accum, weight, child_result)
+				if err != nil {
+					return nil, err
+				}
+			}
+			fmt.Printf("GROUP %v %v\n", p, child_result)
+
+			return child_result, nil
+		}
+
+		if p.Operator == Phrase {
+			// all children are NoOp and AND operations
+			for i, c := range p.Children {
+				child_result, err := c.Eval(accum, weight, nil)
+				if err != nil {
+					return nil, err
+				}
+
+				if i == 0 {
+					result = child_result
+				} else {
+					// AND operators with the results
+					result, err = c.EvalPlusPlus(accum, child_result, result)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+
+			return result, nil
+		}
+
+	}
+
+	return nil, moerr.NewInternalError(context.TODO(), "Eval() not handled")
 }
 
 func GetOp(op rune) int {
@@ -199,7 +483,6 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 				if i == len(runeSlice)-1 {
 					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
 				}
-				continue
 			} else {
 				// found ()
 				end = i
@@ -213,23 +496,25 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 
 				bracket = false
 				isspace = true
-				continue
-			}
-		}
-
-		if i == len(runeSlice)-1 {
-			if isspace == false {
-				end = i
-				//fmt.Printf("word (%d, %d), ", offset, end)
-				//tokens = append(tokens, string(runeSlice[offset:end+1]))
-				p, err := CreatePattern(string(runeSlice[offset : end+1]))
-				if err != nil {
-					return nil, err
-				}
-				tokens = append(tokens, p)
 			}
 			continue
 		}
+
+		/*
+			if i == len(runeSlice)-1 {
+				if isspace == false {
+					end = i
+					//fmt.Printf("word (%d, %d), ", offset, end)
+					//tokens = append(tokens, string(runeSlice[offset:end+1]))
+					p, err := CreatePattern(string(runeSlice[offset : end+1]))
+					if err != nil {
+						return nil, err
+					}
+					tokens = append(tokens, p)
+				}
+				continue
+			}
+		*/
 
 		if isspace == false {
 			if r == ' ' {
@@ -244,15 +529,28 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 				}
 				tokens = append(tokens, p)
 			} else if r == '(' {
+				if i == len(runeSlice)-1 {
+					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
+				}
+
 				bracket = true
 				end = i
 			} else {
 				end = i
+				if i == len(runeSlice)-1 {
+					p, err := CreatePattern(string(runeSlice[offset : end+1]))
+					if err != nil {
+						return nil, err
+					}
+					tokens = append(tokens, p)
+				}
 			}
 
 			continue
 		}
-		if isspace && r == ' ' {
+
+		// isspace == true && curent character is ' '
+		if r == ' ' {
 			// skipping space
 			continue
 		}
@@ -264,6 +562,10 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 
 		if bracket == false {
 			if r == '(' {
+				if i == len(runeSlice)-1 {
+					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
+				}
+
 				// open bracket found and find next close bracket
 				bracket = true
 			}
