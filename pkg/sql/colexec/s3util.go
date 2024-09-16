@@ -517,7 +517,7 @@ func (w *S3Writer) FillBlockInfoBat(blkInfos []objectio.BlockInfo, stats objecti
 		}
 		if err := vector.AppendBytes(
 			w.blockInfoBat.Vecs[1],
-			objectio.EncodeBlockInfo(blkInfo),
+			objectio.EncodeBlockInfo(&blkInfo),
 			false,
 			mpool); err != nil {
 			return err
