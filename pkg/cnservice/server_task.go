@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,7 +40,6 @@ import (
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"go.uber.org/zap"
 )
 
 func (s *service) adjustSQLAddress() {
@@ -209,6 +210,12 @@ func (s *service) startTaskRunner() {
 			s.cfg.TaskRunner.HeartbeatInterval.Duration,
 			s.cfg.TaskRunner.HeartbeatTimeout.Duration,
 		),
+		taskservice.WithHaKeeperClient(
+			func() util.HAKeeperClient {
+				client, _ := s.getHAKeeperClient()
+				return client
+			}),
+		taskservice.WithCnUUID(s.cfg.UUID),
 	)
 
 	s.registerExecutorsLocked()
@@ -296,6 +303,7 @@ func (s *service) registerExecutorsLocked() {
 			return err
 		},
 	)
+
 	s.task.runner.RegisterExecutor(task.TaskCode_Retention, func(ctx context.Context, task task.Task) error {
 		ctx1, cancel1 := context.WithTimeout(ctx, 10*time.Second)
 		result, err := s.sqlExecutor.Exec(ctx1, "select account_id from mo_catalog.mo_account;",
@@ -357,4 +365,17 @@ func (s *service) registerExecutorsLocked() {
 		}
 		return nil
 	})
+
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
+		frontend.RegisterCdcExecutor(
+			s.logger,
+			ts,
+			ieFactory,
+			s.task.runner.Attach,
+			s.cfg.UUID,
+			s.fileService,
+			s._txnClient,
+			s.storeEngine,
+			s.distributeTaeMp,
+		))
 }
