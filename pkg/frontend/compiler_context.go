@@ -26,6 +26,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
@@ -43,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
@@ -61,7 +62,17 @@ type TxnCompilerContext struct {
 	mu      sync.Mutex
 }
 
+func (tcc *TxnCompilerContext) Close() {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.execCtx = nil
+	tcc.snapshot = nil
+	tcc.views = nil
+}
+
 func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		val = int64(1)

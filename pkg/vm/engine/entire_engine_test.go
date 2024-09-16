@@ -325,6 +325,10 @@ func (e *testEngine) GetService() string {
 	return ""
 }
 
+func (e *testEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 func newtestOperator() *testOperator {
 	return &testOperator{}
 }
