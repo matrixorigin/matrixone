@@ -557,7 +557,7 @@ func ReadDeletes(
 
 func EvalDeleteMaskFromDNCreatedTombstones(
 	deletes *batch.Batch,
-	meta objectio.ObjectDataMeta,
+	meta objectio.BlockObject,
 	ts types.TS,
 	blockid *types.Blockid,
 ) (rows *nulls.Bitmap) {
@@ -569,7 +569,8 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 
 	noTSCheck := false
 	if end-start > 10 {
-		maxBuf := meta.MustGetColumn(objectio.TombstoneAttr_CommitTs_SeqNum).ZoneMap().GetMaxBuf()
+		// PXU FIXME: the idx should be objectio.TombstoneAttr_CommitTs_Idx but now objectio.TombstoneAttr_CommitTs_Idx-1
+		maxBuf := meta.MustGetColumn(objectio.TombstoneAttr_CommitTs_Idx - 1).ZoneMap().GetMaxBuf()
 		maxTS := (*types.TS)(unsafe.Pointer(&maxBuf[0]))
 		// fast path is true if the maxTS is less than the snapshotTS
 		// this means that all the rows between start and end are visible
@@ -677,7 +678,7 @@ func FillBlockDeleteMask(
 			rows = EvalDeleteMaskFromCNCreatedTombstones(blockId, persistedDeletes)
 		} else {
 			rows = EvalDeleteMaskFromDNCreatedTombstones(
-				persistedDeletes, meta, snapshotTS, &blockId,
+				persistedDeletes, meta.GetBlockMeta(uint32(location.ID())), snapshotTS, &blockId,
 			)
 		}
 

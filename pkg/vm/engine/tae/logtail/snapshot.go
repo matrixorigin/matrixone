@@ -235,7 +235,9 @@ func (d *DeltaLocDataSource) getAndApplyTombstones(
 	if ts.IsEmpty() {
 		ts = d.ts
 	}
-	return blockio.EvalDeleteMaskFromDNCreatedTombstones(deletes, meta, ts, &bid), nil
+	return blockio.EvalDeleteMaskFromDNCreatedTombstones(
+		deletes, meta.GetBlockMeta(uint32(deltaLoc.ID())), ts, &bid,
+	), nil
 }
 
 func (d *DeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
