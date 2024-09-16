@@ -388,6 +388,10 @@ const (
 	BITMAP_CONSTRUCT_AGG
 	BITMAP_OR_AGG
 
+	LLM_CHUNK
+	LLM_EMBEDDING
+	LLM_EXTRACT_TEXT
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -704,4 +708,7 @@ var functionIdRegister = map[string]int32{
 	"bitmap_count":         BITMAP_COUNT,
 	"bitmap_construct_agg": BITMAP_CONSTRUCT_AGG,
 	"bitmap_or_agg":        BITMAP_OR_AGG,
+	"llm_chunk":            LLM_CHUNK,
+	"llm_embedding":        LLM_EMBEDDING,
+	"llm_extract_text":     LLM_EXTRACT_TEXT,
 }
