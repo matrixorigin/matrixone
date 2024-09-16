@@ -176,9 +176,7 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 		}
 		expr.resultVector.Free()
 	}
-	if !expr.timeDependent {
-		expr.folded.canFold = true
-	}
+	expr.folded.canFold = true
 
 	return nil
 }
