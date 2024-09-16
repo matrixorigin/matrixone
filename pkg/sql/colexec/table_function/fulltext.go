@@ -100,117 +100,6 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
-/*
-type Word struct {
-	DocId      any
-	Position   []int64
-	DocCount   int32
-	FirstDocId any
-	LastDocId  any
-}
-
-type WordAccum struct {
-	Id    int64
-	Mode  int64
-	Words map[any]*Word
-}
-
-type SearchAccum struct {
-	TblName    string
-	Mode       int64
-	Pattern    []*Pattern
-	Params     string
-	WordAccums map[string]*WordAccum
-	Nrow       int64
-}
-
-func NewWordAccum(id int64, mode int64) *WordAccum {
-	return &WordAccum{Id: id, Mode: mode, Words: make(map[any]*Word)}
-}
-*/
-
-/*
-// run each word
-func (w *WordAccum) run(proc *process.Process, tblname string, first_doc_id, last_doc_id any) error {
-
-	ssNoOp := w.Pattern.GetLeafText(NoOp)
-
-	ssStar := w.Pattern.GetLeafText(Star)
-
-	ss := append(ssNoOp, ssStar...)
-	if len(ss) != 1 {
-		return moerr.NewInternalError(proc.Ctx, "pattern is array. Not supported")
-	}
-	sqlWord := ss[0]
-
-	sql := fmt.Sprintf(default_mode_sql, tblname, sqlWord)
-
-	res, err := ft_runSql(proc, sql)
-	if err != nil {
-		return err
-	}
-	defer res.Close()
-
-	for _, bat := range res.Batches {
-
-		if len(bat.Vecs) != 5 {
-			return moerr.NewInternalError(proc.Ctx, "output vector columns not match")
-		}
-
-		for i := 0; i < bat.RowCount(); i++ {
-			// doc_id any
-			doc_id := vector.GetAny(bat.Vecs[0], i)
-
-			bytes, ok := doc_id.([]byte)
-			if ok {
-				// change it to string
-				key := string(bytes)
-				doc_id = key
-			}
-
-			// pos int64
-			pos := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[1], i)
-
-			// doc_count int32
-			doc_count := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[2], i)
-
-			// first_doc_id any
-			first_doc_id := vector.GetAny(bat.Vecs[3], i)
-
-			// last_doc_id any
-			last_doc_id := vector.GetAny(bat.Vecs[4], i)
-
-			//logutil.Infof("ID:%d, DOC_ID:%v, POS:%d, DOC_COUNT:%d, FIRST: %v, LAST: %v", id, doc_id, pos, doc_count, first_doc_id, last_doc_id)
-
-			_, ok = w.Words[doc_id]
-			if ok {
-				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
-			} else {
-				w.Words[doc_id] = &Word{DocId: doc_id, Position: []int64{pos}, DocCount: doc_count, FirstDocId: first_doc_id, LastDocId: last_doc_id}
-			}
-		}
-
-	}
-	return nil
-}
-
-func NewSearchAccum(tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
-
-	// TODO: tokenize the pattern based on mode and params
-	// use space as separator for now
-	if mode != 0 {
-		return nil, moerr.NewNotSupported(context.TODO(), "mode not supported")
-	}
-
-	ps, err := ParsePatternInBooleanMode(pattern)
-	if err != nil {
-		return nil, err
-	}
-
-	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
-}
-*/
-
 // $(IDF) = LOG10(#word in collection/sum(doc_count))
 // $(TF) = number of nword match in record (doc_count)
 // $(rank) = $(TF) * $(IDF) * %(IDF)
@@ -232,54 +121,6 @@ func (s *SearchAccum) score(proc *process.Process) (map[any]float32, error) {
 	}
 
 	return result, nil
-
-	/*
-
-
-		// calculate sum(doc_count)
-		sum_count := make([]int32, len(s.WordAccums))
-		i := 0
-		for key := range s.WordAccums {
-			acc := s.WordAccums[key]
-			logutil.Infof("%v", acc)
-			for doc_id := range acc.Words {
-				sum_count[i] += acc.Words[doc_id].DocCount
-			}
-			i++
-		}
-
-
-		// calculate the score
-		i = 0
-		for key := range s.WordAccums {
-			acc := s.WordAccums[key]
-			logutil.Infof("%v", acc)
-			for doc_id := range acc.Words {
-				tf := float64(acc.Words[doc_id].DocCount)
-				idf := math.Log10(float64(s.Nrow) / float64(sum_count[i]))
-				tfidf := float32(tf * idf * idf)
-				_, ok := score[doc_id]
-				if ok {
-					score[doc_id] += tfidf
-				} else {
-					score[doc_id] = tfidf
-				}
-			}
-			i++
-		}
-
-	*/
-
-	/*
-		// sort by value
-		keys := make([]any, 0, len(score))
-		for key := range score {
-			keys = append(keys, key)
-		}
-		sort.Slice(keys, func(i, j int) bool { return score[keys[i]] < score[keys[j]] })
-	*/
-
-	//return score
 }
 
 func (s *SearchAccum) run(proc *process.Process) error {
@@ -292,31 +133,29 @@ func (s *SearchAccum) run(proc *process.Process) error {
 
 	s.Nrow = nrow
 
-	// filtering WHERE word = w1 OR word = w2 OR word = w3
-	var filters []string
-	for _, p := range s.Pattern {
+	var union []string
 
-		// ERIC TODO: how about IN(w1, w2, w3,...wN)
+	var keywords []string
+	for _, p := range s.Pattern {
 		ssNoOp := p.GetLeafText(NoOp)
 		for _, w := range ssNoOp {
-			filters = append(filters, fmt.Sprintf("word = '%s'", w))
-		}
-
-		// ERIC TODO: bug here. Result cannot be hash.. e.g. apple*  but the result is applet
-		// use UNION
-		ssStar := p.GetLeafText(Star)
-		for _, w := range ssStar {
-			like := strings.ReplaceAll(w, "*", "%")
-			filters = append(filters, fmt.Sprintf("word LIKE '%s'", like))
+			keywords = append(keywords, "'"+w+"'")
 		}
 	}
 
-	whereClauses := strings.Join(filters, " OR ")
+	union = append(union, fmt.Sprintf("SELECT doc_id, pos, doc_count, first_doc_id, last_doc_id, word FROM %s WHERE word IN (%s)",
+		s.TblName, strings.Join(keywords, ",")))
 
-	sql := fmt.Sprintf(default_mode_sql, s.TblName)
-	sql += " "
-	sql += whereClauses
+	sqlfmt := "SELECT doc_id, pos, doc_count, first_doc_id, last_doc_id, '%s' FROM %s WHERE word LIKE '%s'"
+	for _, p := range s.Pattern {
+		ssStar := p.GetLeafText(Star)
+		for _, w := range ssStar {
+			like := strings.ReplaceAll(w, "*", "%")
+			union = append(union, fmt.Sprintf(sqlfmt, w, s.TblName, like))
+		}
+	}
 
+	sql := strings.Join(union, " UNION ")
 	logutil.Infof("SQL is %s", sql)
 
 	res, err := ft_runSql(proc, sql)

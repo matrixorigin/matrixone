@@ -195,7 +195,7 @@ func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map
 	for key := range result {
 		keys = append(keys, key)
 	}
-	for doc_id := range keys {
+	for _, doc_id := range keys {
 		_, ok := arg[doc_id]
 		if ok {
 			result[doc_id] += arg[doc_id]
@@ -217,7 +217,7 @@ func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[a
 	for key := range result {
 		keys = append(keys, key)
 	}
-	for doc_id := range keys {
+	for _, doc_id := range keys {
 		_, ok := arg[doc_id]
 		if ok {
 			result[doc_id] += arg[doc_id]
@@ -325,12 +325,11 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 				}
 			}
 		}
-		return nil, moerr.NewInternalError(context.TODO(), "Pattern.Eval(): operator not supported")
 	} else {
 		// Group, Phrase
 
 		if p.Operator == Group {
-			// OR mode
+			// TODO: FIXME  use COMBINE instead of OR mode
 			child_result := make(map[any]float32)
 			for _, c := range p.Children {
 				child_result, err = c.Eval(accum, weight, child_result)
@@ -499,22 +498,6 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 			}
 			continue
 		}
-
-		/*
-			if i == len(runeSlice)-1 {
-				if isspace == false {
-					end = i
-					//fmt.Printf("word (%d, %d), ", offset, end)
-					//tokens = append(tokens, string(runeSlice[offset:end+1]))
-					p, err := CreatePattern(string(runeSlice[offset : end+1]))
-					if err != nil {
-						return nil, err
-					}
-					tokens = append(tokens, p)
-				}
-				continue
-			}
-		*/
 
 		if isspace == false {
 			if r == ' ' {
