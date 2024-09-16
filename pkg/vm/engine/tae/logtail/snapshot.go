@@ -459,24 +459,12 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 		checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 		ds := NewDeltaLocDataSource(ctx, fs, checkpointTS, NewOMapDeltaSource(objectMap))
 		for _, object := range objectMap {
-			location := object.stats.ObjectLocation()
-			name := object.stats.ObjectName()
 			for i := uint32(0); i < object.stats.BlkCnt(); i++ {
-				loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
-				blk := objectio.BlockInfo{
-					BlockID: *objectio.BuildObjectBlockid(name, uint16(i)),
-					MetaLoc: objectio.ObjectLocation(loc),
-				}
-
-				var vp engine.VectorPool
+				blk := object.stats.ConstructBlockInfo(uint16(i))
 				buildBatch := func() *batch.Batch {
 					result := batch.NewWithSize(len(colTypes))
 					for i, typ := range colTypes {
-						if vp == nil {
-							result.Vecs[i] = vector.NewVec(typ)
-						} else {
-							result.Vecs[i] = vp.GetVector(typ)
-						}
+						result.Vecs[i] = vector.NewVec(typ)
 					}
 					return result
 				}
@@ -563,9 +551,9 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 				bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
 				entry.deleteAt, false, common.DebugAllocator)
 			for id, delta := range entry.deltaLocation {
-				blockID := objectio.BuildObjectBlockid(entry.stats.ObjectName(), uint16(id))
+				blockID := entry.stats.ConstructBlockId(uint16(id))
 				vector.AppendFixed[types.Blockid](deltaBat.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector(),
-					*blockID, false, common.DebugAllocator)
+					blockID, false, common.DebugAllocator)
 				vector.AppendBytes(deltaBat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector(),
 					[]byte(*delta), false, common.DebugAllocator)
 				vector.AppendFixed[uint64](

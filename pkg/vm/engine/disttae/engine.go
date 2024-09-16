@@ -41,13 +41,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
@@ -554,43 +552,9 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.us,
 		nil,
 	)
-
-	id := objectio.NewSegmentid()
-	bytes := types.EncodeUuid(id)
-	txn := &Transaction{
-		op:     op,
-		proc:   proc,
-		engine: e,
-		//meta:     op.TxnRef(),
-		idGen:              e.idGen,
-		tnStores:           e.getTNServices(),
-		tableCache:         new(sync.Map),
-		databaseMap:        new(sync.Map),
-		deletedDatabaseMap: new(sync.Map),
-		tableOps:           newTableOps(),
-		tablesInVain:       make(map[uint64]int),
-		rowId: [6]uint32{
-			types.DecodeUint32(bytes[0:4]),
-			types.DecodeUint32(bytes[4:8]),
-			types.DecodeUint32(bytes[8:12]),
-			types.DecodeUint32(bytes[12:16]),
-			0,
-			0,
-		},
-		segId: *id,
-		deletedBlocks: &deletedBlocks{
-			offsets: map[types.Blockid][]int64{},
-		},
-		cnBlkId_Pos:          map[types.Blockid]Pos{},
-		batchSelectList:      make(map[*batch.Batch][]int64),
-		toFreeBatches:        make(map[tableKey][]*batch.Batch),
-		syncCommittedTSCount: e.cli.GetSyncLatestCommitTSTimes(),
-	}
-
-	txn.readOnly.Store(true)
-	// transaction's local segment for raw batch.
-	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
+	txn := NewTxnWorkSpace(e, proc)
 	op.AddWorkspace(txn)
+	txn.BindTxnOp(op)
 
 	e.pClient.validLogTailMustApplied(txn.op.SnapshotTS())
 	return nil

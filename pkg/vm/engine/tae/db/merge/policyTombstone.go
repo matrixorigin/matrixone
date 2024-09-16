@@ -41,7 +41,7 @@ func (t *tombstone) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConf
 func (t *tombstone) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
 	tombstones := t.tombstones
 	slices.SortFunc(tombstones, func(a, b *catalog.ObjectEntry) int {
-		return cmp.Compare(a.GetRows(), b.GetRows())
+		return cmp.Compare(a.Rows(), b.Rows())
 	})
 
 	isStandalone := common.IsStandaloneBoost.Load()

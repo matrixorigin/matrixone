@@ -186,7 +186,9 @@ func makeRecursiveBatch(proc *process.Process) *batch.Batch {
 		"recursive_col",
 	}
 	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-	vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
+	if err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool()); err != nil {
+		panic(err)
+	}
 	batch.SetLength(b, 1)
 	b.SetLast()
 	return b
