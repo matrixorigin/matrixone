@@ -33,19 +33,24 @@ func IsRowDeleted(
 	getTombstoneFileFn func() (*objectio.ObjectStats, error),
 	fs fileservice.FileService,
 ) (bool, error) {
-	var deleted bool
+	var isDeleted bool
 	loadedBlkCnt := 0
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
+		if isDeleted {
+			return false, nil
+		}
 		var err error
 		location := tombstoneObject.BlockLocation(uint16(pos), objectio.BlockMaxRows)
-		if deleted, err = IsRowDeletedByLocation(
+		deleted, err := IsRowDeletedByLocation(
 			ctx, ts, row, location, fs, tombstoneObject.GetCNCreated(),
-		); err != nil {
+		)
+		if err != nil {
 			return false, err
 		}
 		loadedBlkCnt++
 		// if deleted, stop searching
 		if deleted {
+			isDeleted = true
 			return false, nil
 		}
 		return true, nil
@@ -67,7 +72,7 @@ func IsRowDeleted(
 		v2.TxnReaderTombstoneBLSelectivityHistogram.Observe(float64(loadedBlkCnt) / float64(totalBlkCnt))
 	}
 
-	return deleted, nil
+	return isDeleted, nil
 }
 
 func GetTombstonesByBlockId(

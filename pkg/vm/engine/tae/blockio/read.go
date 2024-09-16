@@ -667,7 +667,7 @@ func IsRowDeletedByLocation(
 	}
 	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[0])
 	idx := sort.Search(len(rowids), func(i int) bool {
-		return rowids[i].EQ(row)
+		return rowids[i].GE(row)
 	})
 	if createdByCN {
 		deleted = idx < len(rowids)
