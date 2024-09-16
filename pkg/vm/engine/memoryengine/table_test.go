@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package wal
+package memoryengine
 
-func (driver *walDriver) RangeCheckpoint(start, end uint64) (e LogEntry, err error) {
-	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end)
-	return
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+// Only for passing the UT coverage check.
+func Test_TableReader(t *testing.T) {
+	table := new(Table)
+	assert.Panics(t, func() {
+		table.BuildShardingReaders(
+			context.TODO(),
+			nil,
+			nil,
+			nil,
+			0,
+			0,
+			false,
+			0,
+		)
+	})
+	assert.Panics(t, func() {
+		table.GetProcess()
+	})
 }

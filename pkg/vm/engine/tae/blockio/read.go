@@ -175,12 +175,7 @@ func BlockDataRead(
 		err  error
 	)
 
-	var searchFunc objectio.ReadFilterSearchFuncType
-	if (filter.HasFakePK || !info.IsSorted()) && filter.UnSortedSearchFunc != nil {
-		searchFunc = filter.UnSortedSearchFunc
-	} else if info.IsSorted() && filter.SortedSearchFunc != nil {
-		searchFunc = filter.SortedSearchFunc
-	}
+	searchFunc := filter.DecideSearchFunc(info.IsSorted())
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(

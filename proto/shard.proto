@@ -229,8 +229,11 @@ message ReadParam {
     GetColumMetadataScanInfoParam  GetColumMetadataScanInfoParam = 6 [(gogoproto.nullable) = false];
     MergeObjectsParam              MergeObjectsParam             = 7 [(gogoproto.nullable) = false];
     KeyParam                       KeyParam                      = 8 [(gogoproto.nullable) = false];
-    ReaderParam                    ReaderParam                   = 9 [(gogoproto.nullable) = false];
+    ReaderBuildParam               ReaderBuildParam                   = 9 [(gogoproto.nullable) = false];
     PrimaryKeysMayBeModifiedParam   PrimaryKeysMayBeModifiedParam  = 10 [(gogoproto.nullable) = false];
+    ReadNextParam                  ReadNextParam                 = 11 [(gogoproto.nullable) = false];
+    ReadCloseParam                 ReadCloseParam                = 12 [(gogoproto.nullable) = false];
+    CollectTombstonesParam         CollectTombstonesParam        = 13 [(gogoproto.nullable) = false];
 }
 
 message TxnTable {
@@ -253,6 +256,10 @@ message RangesParam {
     bytes UncommittedObjects = 2;
 }
 
+message CollectTombstonesParam {
+    uint64 collectPolicy = 1;
+}
+
 message GetColumMetadataScanInfoParam {
     string columnName = 1;
 }
@@ -261,12 +268,28 @@ message KeyParam {
     bytes Key = 1;
 }
 
-message ReaderParam {
-    int32 num        = 1;
-    plan.Expr expr   = 2 [(gogoproto.nullable) = false];
-    bytes ranges     = 3;
-    bool orderedScan = 4;
-    int32 txnOffset  = 5;
+message ReaderBuildParam {
+    bytes relData = 1;
+    plan.Expr expr = 2;
+    int32 scanType = 3;
+    int32 tombstoneApplyPolicy = 4;
+}
+
+message ReaderBuildResult {
+    bytes uuid = 1;
+}
+
+message ReadNextParam {
+    bytes uuid = 1;
+    repeated string columns = 2;
+}
+
+message ReadNextResult {
+    bytes result = 1;
+}
+
+message ReadCloseParam {
+    bytes uuid = 1;
 }
 
 message PrimaryKeysMayBeModifiedParam {

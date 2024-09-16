@@ -1038,7 +1038,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 			for _, blkInfo := range createdBlks {
 				vector.AppendBytes(
 					bat.GetVector(0),
-					objectio.EncodeBlockInfo(blkInfo),
+					objectio.EncodeBlockInfo(&blkInfo),
 					false,
 					tbl.getTxn().proc.GetMPool())
 			}

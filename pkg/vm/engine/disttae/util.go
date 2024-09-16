@@ -497,11 +497,10 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 		i.curBlkRows = i.meta.GetBlockMeta(uint32(i.cur)).GetRows()
 	}
 
-	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
-	blk := objectio.BlockInfo{
-		BlockID: *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
-		MetaLoc: objectio.ObjectLocation(loc),
-	}
+	var blk objectio.BlockInfo
+	objectio.BuildLocationTo(i.name, i.extent, i.curBlkRows, uint16(i.cur), blk.MetaLoc[:])
+	objectio.BuildObjectBlockidTo(i.name, uint16(i.cur), blk.BlockID[:])
+
 	return blk
 }
 

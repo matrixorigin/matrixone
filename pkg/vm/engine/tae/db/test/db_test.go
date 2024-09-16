@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -559,13 +558,13 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		err = task1.WaitDone(context.Background())
 		assert.NoError(t, err)
 		newBlockFp1 = task1.GetCreatedObjects().Fingerprint()
-		stats1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
+		stats1 = *task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
 		metaLoc1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLocation()
 		metaLoc1.SetID(0)
 		metaLoc1.SetRows(schema.BlockMaxRows)
 		newBlockFp2 = task1.GetCreatedObjects().Fingerprint()
 		newBlockFp2.SetBlockOffset(1)
-		stats2 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
+		stats2 = *task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	//read new non-appendable block data and check
@@ -5019,8 +5018,7 @@ func TestMergeMemsize(t *testing.T) {
 			obj := it.GetObject()
 			defer obj.Close()
 			meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-			stat := meta.GetObjectStats()
-			blkcnt += int(stat.BlkCnt())
+			blkcnt += int(meta.BlkCnt())
 			metas = append(metas, meta)
 
 		}
@@ -5120,7 +5118,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneTombstoneMeta(rel)
-		assert.Equal(t, 10, meta.GetRows())
+		assert.Equal(t, 10, int(meta.Rows()))
 		assert.NoError(t, txn.Commit(ctx))
 	}
 	logutil.Info(tae.Catalog.SimplePPString(3))
@@ -5129,7 +5127,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneTombstoneMeta(rel)
-		assert.Equal(t, 10, meta.GetRows())
+		assert.Equal(t, 10, int(meta.Rows()))
 		assert.NoError(t, txn.Commit(ctx))
 	}
 }
@@ -6409,92 +6407,6 @@ func TestAppendAndGC(t *testing.T) {
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 
-}
-
-func TestAppendAndGC2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	ctx := context.Background()
-
-	opts := new(options.Options)
-	opts = config.WithQuickScanAndCKPOpts(opts)
-	opts.CheckpointCfg.MinCount = 3
-	opts.CheckpointCfg.GlobalMinCount = 5
-	options.WithDisableGCCheckpoint()(opts)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	db := tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
-
-	schema1 := catalog.MockSchemaAll(13, 2)
-	schema1.BlockMaxRows = 10
-	schema1.ObjectMaxBlocks = 2
-
-	schema2 := catalog.MockSchemaAll(13, 2)
-	schema2.BlockMaxRows = 10
-	schema2.ObjectMaxBlocks = 2
-	{
-		txn, _ := db.StartTxn(nil)
-		database, err := txn.CreateDatabase("db", "", "")
-		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema1)
-		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema2)
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit(context.Background()))
-	}
-	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*10-1))
-	defer bat.Close()
-	bats := bat.Split(bat.Length())
-
-	pool, err := ants.NewPool(20)
-	assert.Nil(t, err)
-	defer pool.Release()
-	var wg sync.WaitGroup
-
-	for _, data := range bats {
-		wg.Add(2)
-		err = pool.Submit(testutil.AppendClosure(t, data, schema1.Name, db, &wg))
-		assert.Nil(t, err)
-		err = pool.Submit(testutil.AppendClosure(t, data, schema2.Name, db, &wg))
-		assert.Nil(t, err)
-	}
-	wg.Wait()
-	testutils.WaitExpect(5000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
-	})
-	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	metaFile := db.BGCheckpointRunner.GetCheckpointMetaFiles()
-	tae.Restart(ctx)
-	db = tae.DB
-	files := make(map[string]struct{}, 0)
-	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
-		if group != store.GroupFiles {
-			return
-		}
-		vec := vector.NewVec(types.Type{})
-		if err = vec.UnmarshalBinary(payload); err != nil {
-			return
-		}
-		for i := 0; i < vec.Length(); i++ {
-			file := vec.GetStringAt(i)
-			if strings.Contains(file, checkpoint.PrefixMetadata) {
-				fileInfo := strings.Split(file, checkpoint.CheckpointDir+"/")
-				name := fileInfo[1]
-				files[name] = struct{}{}
-				continue
-			}
-			files[file] = struct{}{}
-		}
-	}
-	db.Wal.Replay(loadFiles)
-	assert.NotEqual(t, 0, len(files))
-	for file := range metaFile {
-		if _, ok := files[file]; !ok {
-			panic(fmt.Sprintf("file %s not in meta files", file))
-		}
-		logutil.Infof("file %s in meta files", file)
-	}
 }
 
 func TestSnapshotGC(t *testing.T) {

@@ -3643,8 +3643,9 @@ func collectTombstones(
 	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		zeroTS := timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}
+		snapTS := c.proc.GetTxnOperator().Txn().SnapshotTS
+		if !n.ScanSnapshot.TS.Equal(zeroTS) && n.ScanSnapshot.TS.Less(snapTS) {
 			if c.proc.GetCloneTxnOperator() != nil {
 				txnOp = c.proc.GetCloneTxnOperator()
 			} else {
@@ -3673,7 +3674,7 @@ func collectTombstones(
 	if err != nil {
 		return nil, err
 	}
-	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset)
+	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, engine.Policy_CollectAllTombstones)
 	if err != nil {
 		return nil, err
 	}
@@ -3686,7 +3687,7 @@ func collectTombstones(
 				if err != nil {
 					return nil, err
 				}
-				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset)
+				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset, engine.Policy_CollectAllTombstones)
 				if err != nil {
 					return nil, err
 				}
@@ -3705,7 +3706,7 @@ func collectTombstones(
 				if err != nil {
 					return nil, err
 				}
-				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset)
+				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset, engine.Policy_CollectAllTombstones)
 				if err != nil {
 					return nil, err
 				}
@@ -3785,7 +3786,7 @@ func (c *Compile) expandRanges(
 				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
 					func(blk objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
-						relData.AppendBlockInfo(blk)
+						relData.AppendBlockInfo(&blk)
 						return true, nil
 					})
 			}
@@ -3807,7 +3808,7 @@ func (c *Compile) expandRanges(
 				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
 					func(blk objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
-						relData.AppendBlockInfo(blk)
+						relData.AppendBlockInfo(&blk)
 						return true, nil
 					})
 			}
@@ -3904,7 +3905,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		partialResults, partialResultTypes, columnMap = checkAggOptimize(n)
 		if partialResults != nil {
 			newRelData := relData.BuildEmptyRelData()
-			newRelData.AppendBlockInfo(relData.GetBlockInfo(0))
+			blk := relData.GetBlockInfo(0)
+			newRelData.AppendBlockInfo(&blk)
 
 			tombstones, err := collectTombstones(c, n, rel)
 			if err != nil {
@@ -3927,7 +3929,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				); err2 != nil {
 					return false, err2
 				} else if blk.IsAppendable() || hasTombstone {
-					newRelData.AppendBlockInfo(blk)
+					newRelData.AppendBlockInfo(&blk)
 					return true, nil
 				}
 				if c.evalAggOptimize(n, blk, partialResults, partialResultTypes, columnMap) != nil {
@@ -4438,7 +4440,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	})
 	// add memory table block
 	nodes[0].Data = relData.BuildEmptyRelData()
-	nodes[0].Data.AppendBlockInfo(objectio.EmptyBlockInfo)
+	nodes[0].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
 	// only memory table block
 	if relData.DataCnt() == 1 {
 		return nodes, nil
@@ -4447,7 +4449,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	if len(c.cnList) == 1 {
 		engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
 			func(blk objectio.BlockInfo) (bool, error) {
-				nodes[0].Data.AppendBlockInfo(blk)
+				nodes[0].Data.AppendBlockInfo(&blk)
 				return true, nil
 			})
 
@@ -4532,7 +4534,7 @@ func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes)
 			location := blk.MetaLocation()
 			objTimeStamp := location.Name()[:7]
 			index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
-			nodes[index].Data.AppendBlockInfo(blk)
+			nodes[index].Data.AppendBlockInfo(&blk)
 			return true, nil
 		})
 }
@@ -4555,7 +4557,7 @@ func shuffleBlocksByMoCtl(relData engine.RelData, cnt int, nodes engine.Nodes) e
 		cnt,
 		relData,
 		func(blk objectio.BlockInfo) (bool, error) {
-			nodes[1].Data.AppendBlockInfo(blk)
+			nodes[1].Data.AppendBlockInfo(&blk)
 			return true, nil
 		})
 
@@ -4588,7 +4590,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 			zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
 			if !zm.IsInited() {
 				// a block with all null will send to first CN
-				nodes[0].Data.AppendBlockInfo(blk)
+				nodes[0].Data.AppendBlockInfo(&blk)
 				return false, nil
 			}
 			if !init {
@@ -4607,7 +4609,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 			} else {
 				index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 			}
-			nodes[index].Data.AppendBlockInfo(blk)
+			nodes[index].Data.AppendBlockInfo(&blk)
 			return true, nil
 		})
 
