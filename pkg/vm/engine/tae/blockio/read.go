@@ -543,13 +543,15 @@ func ReadDeletes(
 	var typs []types.Type
 
 	if isPersistedByCN {
-		cols = []uint16{0}
-		typs = []types.Type{types.T_Rowid.ToType()}
+		cols = []uint16{objectio.TombstoneAttr_Rowid_Idx}
+		typs = []types.Type{objectio.RowidType}
 	} else {
-		cols = []uint16{0, objectio.SEQNUM_COMMITTS}
-		typs = []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType()}
+		cols = []uint16{objectio.TombstoneAttr_Rowid_Idx, objectio.SEQNUM_COMMITTS}
+		typs = []types.Type{objectio.RowidType, objectio.TSType}
 	}
-	bat, release, err = LoadTombstoneColumns(ctx, cols, typs, fs, deltaLoc, nil, fileservice.Policy(0))
+	bat, release, err = LoadTombstoneColumns(
+		ctx, cols, typs, fs, deltaLoc, nil, fileservice.Policy(0),
+	)
 	return
 }
 
