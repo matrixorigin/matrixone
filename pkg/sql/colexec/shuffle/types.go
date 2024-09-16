@@ -89,9 +89,7 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	if shuffle.ctr.buf != nil {
 		shuffle.ctr.buf.Clean(proc.Mp())
 	}
-	if shuffle.ctr.shufflePool != nil {
-		shuffle.ctr.shufflePool.Reset(proc.Mp())
-	}
+	shuffle.ctr.shufflePool.Reset(proc.Mp())
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
 }
