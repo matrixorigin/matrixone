@@ -21,9 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,14 +33,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/shard"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
@@ -109,8 +117,8 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	// }
 
 	expr := []*plan.Expr{
-		disttae.MakeFunctionExprForTest("=", []*plan.Expr{
-			disttae.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
+		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
+			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
 		}),
 	}
@@ -129,7 +137,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	resultHit := 0
 	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
 	for idx := 0; idx < blockCnt; idx++ {
-		_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, nil, ret)
+		_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, ret)
 		require.NoError(t, err)
 
 		resultHit += int(ret.RowCount())
@@ -205,8 +213,8 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	}
 
 	expr := []*plan.Expr{
-		disttae.MakeFunctionExprForTest("=", []*plan.Expr{
-			disttae.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
+		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
+			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bat1.Vecs[primaryKeyIdx].Get(9).(int64)),
 		}),
 	}
@@ -223,7 +231,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-	_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, nil, ret)
+	_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, ret)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, int(ret.RowCount()))
@@ -333,7 +341,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 				break
 			}
 		}
-		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, nil, ret)
+		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, ret)
 		require.NoError(t, err)
 		require.True(t, ret.Allocated() > 0)
 
@@ -375,9 +383,887 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
 
 		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-		_, err = reader.Read(ctx, ret.Attrs, nil, nmp, nil, ret)
+		_, err = reader.Read(ctx, ret.Attrs, nil, nmp, ret)
 		require.Error(t, err)
 		require.NoError(t, txn.Commit(ctx))
 	}
 
+}
+
+func Test_ShardingHandler(t *testing.T) {
+	var (
+		//err          error
+		//mp           *mpool.MPool
+		accountId    = catalog.System_Account
+		tableName    = "test_reader_table"
+		databaseName = "test_reader_database"
+
+		primaryKeyIdx int = 3
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	// mock a schema with 4 columns and the 4th column as primary key
+	// the first column is the 9th column in the predefined columns in
+	// the mock function. Here we exepct the type of the primary key
+	// is types.T_char or types.T_varchar
+	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
+	schema.Name = tableName
+
+	{
+		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+		require.NoError(t, err)
+
+		disttaeEngine, taeEngine, rpcAgent, _ = testutil.CreateEngines(
+			ctx,
+			testutil.TestOptions{TaeEngineOptions: opt},
+			t,
+			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
+		)
+		defer func() {
+			disttaeEngine.Close(ctx)
+			taeEngine.Close(true)
+			rpcAgent.Close()
+		}()
+
+		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+		require.NoError(t, err)
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 10
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+
+	{
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+
+		err := rel.RangeDelete(blkId, 0, 7, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	testutil2.CompactBlocks(t, 0, taeEngine.GetDB(), databaseName, schema, false)
+
+	{
+
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+
+		err := rel.RangeDelete(blkId, 0, 1, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 10
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+
+	{
+
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		var blkId *common.ID
+		for iter.Next() {
+			if !iter.GetObject().IsAppendable() {
+				continue
+			}
+			blkId = iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+		}
+		err := rel.RangeDelete(blkId, 0, 7, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+
+	}
+	//handle collect tombstones.
+	{
+		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		pInfo, err := process.MockProcessInfoWithPro("", rel.GetProcess())
+		require.NoError(t, err)
+		readerBuildParam := shard.ReadParam{
+			Process: pInfo,
+			TxnTable: shard.TxnTable{
+				DatabaseID:   rel.GetDBID(ctx),
+				DatabaseName: databaseName,
+				AccountID:    uint64(catalog.System_Account),
+				TableName:    tableName,
+			},
+		}
+		readerBuildParam.CollectTombstonesParam.CollectPolicy =
+			engine.Policy_CollectCommittedTombstones
+
+		res, err := disttae.HandleShardingReadCollectTombstones(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readerBuildParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.NoError(t, err)
+
+		tombstones, err := disttae.UnmarshalTombstoneData(res)
+		require.NoError(t, err)
+
+		require.True(t, tombstones.HasAnyInMemoryTombstone())
+
+		readerBuildParam.GetColumMetadataScanInfoParam.ColumnName =
+			schema.ColDefs[primaryKeyIdx].Name
+
+		var m plan.MetadataScanInfos
+		res, err = disttae.HandleShardingReadGetColumMetadataScanInfo(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readerBuildParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.NoError(t, err)
+
+		err = m.Unmarshal(res)
+		require.NoError(t, err)
+
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+}
+
+func Test_ShardingRemoteReader(t *testing.T) {
+	var (
+		//err          error
+		mp           *mpool.MPool
+		accountId    = catalog.System_Account
+		tableName    = "test_reader_table"
+		databaseName = "test_reader_database"
+
+		primaryKeyIdx int = 3
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	// mock a schema with 4 columns and the 4th column as primary key
+	// the first column is the 9th column in the predefined columns in
+	// the mock function. Here we exepct the type of the primary key
+	// is types.T_char or types.T_varchar
+	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
+	schema.Name = tableName
+
+	{
+		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+		require.NoError(t, err)
+
+		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+			ctx,
+			testutil.TestOptions{TaeEngineOptions: opt},
+			t,
+			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
+		)
+		defer func() {
+			disttaeEngine.Close(ctx)
+			taeEngine.Close(true)
+			rpcAgent.Close()
+		}()
+
+		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+		require.NoError(t, err)
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 10
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+
+	{
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+
+		err := rel.RangeDelete(blkId, 0, 7, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	testutil2.CompactBlocks(t, 0, taeEngine.GetDB(), databaseName, schema, false)
+
+	{
+
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+
+		err := rel.RangeDelete(blkId, 0, 1, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 10
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+
+	{
+
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		var blkId *common.ID
+		for iter.Next() {
+			if !iter.GetObject().IsAppendable() {
+				continue
+			}
+			blkId = iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+		}
+		err := rel.RangeDelete(blkId, 0, 7, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+
+	}
+
+	{
+
+		txn, _, reader, err := testutil.GetTableTxnReader(
+			ctx,
+			disttaeEngine,
+			databaseName,
+			tableName,
+			nil,
+			mp,
+			t,
+		)
+		require.NoError(t, err)
+
+		ret := batch.NewWithSize(1)
+		for _, col := range schema.ColDefs {
+			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
+				vec := vector.NewVec(col.Type)
+				ret.Vecs[0] = vec
+				ret.Attrs = []string{col.Name}
+				break
+			}
+		}
+		_, err = reader.Read(ctx, []string{
+			schema.ColDefs[primaryKeyIdx].Name}, nil, mp, ret)
+		require.NoError(t, err)
+		require.True(t, ret.Allocated() > 0)
+
+		require.Equal(t, 2, ret.RowCount())
+		require.NoError(t, txn.Commit(ctx))
+		ret.Clean(mp)
+	}
+
+	{
+		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		pInfo, err := process.MockProcessInfoWithPro("", rel.GetProcess())
+		require.NoError(t, err)
+		readerBuildParam := shard.ReadParam{
+			Process: pInfo,
+			TxnTable: shard.TxnTable{
+				DatabaseID:   rel.GetDBID(ctx),
+				DatabaseName: databaseName,
+				AccountID:    uint64(catalog.System_Account),
+				TableName:    tableName,
+			},
+		}
+		relData, err := rel.Ranges(ctx, nil, 0)
+		require.NoError(t, err)
+		//TODO:: attach tombstones.
+		//tombstones, err := rel.CollectTombstones(
+		//	ctx,
+		//	0,
+		//	engine.Policy_CollectAllTombstones)
+		data, err := relData.MarshalBinary()
+		require.NoError(t, err)
+		readerBuildParam.ReaderBuildParam.RelData = data
+		readerBuildParam.ReaderBuildParam.ScanType = disttae.SMALL
+		readerBuildParam.ReaderBuildParam.TombstoneApplyPolicy =
+			int32(engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3)
+		res, err := disttae.HandleShardingReadBuildReader(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readerBuildParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.NoError(t, err)
+		streamID := types.DecodeUuid(res)
+		//readNext
+		readNextParam := shard.ReadParam{
+			Process: pInfo,
+			TxnTable: shard.TxnTable{
+				DatabaseID:   rel.GetDBID(ctx),
+				DatabaseName: databaseName,
+				AccountID:    uint64(catalog.System_Account),
+				TableName:    tableName,
+			},
+		}
+		readNextParam.ReadNextParam.Uuid = types.EncodeUuid(&streamID)
+		readNextParam.ReadNextParam.Columns = []string{
+			schema.ColDefs[primaryKeyIdx].Name}
+		buildBatch := func() *batch.Batch {
+			bat := batch.NewWithSize(1)
+			for _, col := range schema.ColDefs {
+				if col.Name == schema.ColDefs[primaryKeyIdx].Name {
+					vec := vector.NewVec(col.Type)
+					bat.Vecs[0] = vec
+					bat.Attrs = []string{col.Name}
+					break
+				}
+			}
+			return bat
+		}
+		rows := 0
+		for {
+			bat := buildBatch()
+			res, err := disttae.HandleShardingReadNext(
+				ctx,
+				shard.TableShard{},
+				disttaeEngine.Engine,
+				readNextParam,
+				timestamp.Timestamp{},
+				morpc.NewBuffer(),
+			)
+			require.NoError(t, err)
+			isEnd := types.DecodeBool(res)
+			if isEnd {
+				break
+			}
+			res = res[1:]
+			l := types.DecodeUint32(res)
+			res = res[4:]
+			if err := bat.UnmarshalBinary(res[:l]); err != nil {
+				panic(err)
+			}
+			rows += int(bat.RowCount())
+			bat.Clean(mp)
+		}
+		require.Equal(t, 2, rows)
+
+		readCloseParam := shard.ReadParam{
+			Process: pInfo,
+			TxnTable: shard.TxnTable{
+				DatabaseID:   rel.GetDBID(ctx),
+				DatabaseName: databaseName,
+				AccountID:    uint64(catalog.System_Account),
+				TableName:    tableName,
+			},
+		}
+		readCloseParam.ReadCloseParam.Uuid = types.EncodeUuid(&streamID)
+		_, err = disttae.HandleShardingReadClose(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readCloseParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.NoError(t, err)
+
+		_, err = disttae.HandleShardingReadNext(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readNextParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.Error(t, err)
+
+		_, err = disttae.HandleShardingReadClose(
+			ctx,
+			shard.TableShard{},
+			disttaeEngine.Engine,
+			readCloseParam,
+			timestamp.Timestamp{},
+			morpc.NewBuffer(),
+		)
+		require.Error(t, err)
+
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+}
+
+func Test_ShardingTableDelegate(t *testing.T) {
+	var (
+		//err          error
+		//mp           *mpool.MPool
+		accountId    = catalog.System_Account
+		tableName    = "test_reader_table"
+		databaseName = "test_reader_database"
+
+		primaryKeyIdx int = 3
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	// mock a schema with 4 columns and the 4th column as primary key
+	// the first column is the 9th column in the predefined columns in
+	// the mock function. Here we exepct the type of the primary key
+	// is types.T_char or types.T_varchar
+	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
+	schema.Name = tableName
+
+	{
+		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+		require.NoError(t, err)
+
+		disttaeEngine, taeEngine, rpcAgent, _ = testutil.CreateEngines(
+			ctx,
+			testutil.TestOptions{TaeEngineOptions: opt},
+			t,
+			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
+		)
+		defer func() {
+			disttaeEngine.Close(ctx)
+			taeEngine.Close(true)
+			rpcAgent.Close()
+		}()
+
+		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+		require.NoError(t, err)
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 10
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+
+	{
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+
+		err := rel.RangeDelete(blkId, 0, 7, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	testutil2.CompactBlocks(t, 0, taeEngine.GetDB(), databaseName, schema, false)
+
+	{
+
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+
+		err := rel.RangeDelete(blkId, 0, 1, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 10
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+
+	{
+
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		var blkId *common.ID
+		for iter.Next() {
+			if !iter.GetObject().IsAppendable() {
+				continue
+			}
+			blkId = iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+		}
+		err := rel.RangeDelete(blkId, 0, 7, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+
+	}
+	//start to build sharding readers.
+	_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+
+	//relData, err := rel.Ranges(ctx, nil, 0)
+	//require.NoError(t, err)
+	shardSvr := testutil.MockShardService()
+	delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
+
+	relData, err := delegate.Ranges(ctx, nil, 0)
+	require.NoError(t, err)
+
+	tomb, err := delegate.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
+	require.NoError(t, err)
+	require.True(t, tomb.HasAnyInMemoryTombstone())
+
+	_, err = delegate.BuildReaders(
+		ctx,
+		rel.GetProcess(),
+		nil,
+		relData,
+		1,
+		0,
+		false,
+		0,
+	)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctx))
+}
+
+func Test_ShardingLocalReader(t *testing.T) {
+	var (
+		//err          error
+		mp           *mpool.MPool
+		accountId    = catalog.System_Account
+		tableName    = "test_reader_table"
+		databaseName = "test_reader_database"
+
+		primaryKeyIdx int = 3
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	// mock a schema with 4 columns and the 4th column as primary key
+	// the first column is the 9th column in the predefined columns in
+	// the mock function. Here we exepct the type of the primary key
+	// is types.T_char or types.T_varchar
+	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
+	schema.Name = tableName
+
+	{
+		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+		require.NoError(t, err)
+
+		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+			ctx,
+			testutil.TestOptions{TaeEngineOptions: opt},
+			t,
+			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
+		)
+		defer func() {
+			disttaeEngine.Close(ctx)
+			taeEngine.Close(true)
+			rpcAgent.Close()
+		}()
+
+		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+		require.NoError(t, err)
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 10
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+
+	{
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+
+		err := rel.RangeDelete(blkId, 0, 7, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	testutil2.CompactBlocks(t, 0, taeEngine.GetDB(), databaseName, schema, false)
+
+	{
+
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+
+		err := rel.RangeDelete(blkId, 0, 1, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 10
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+
+	{
+
+		txn, _ := taeEngine.StartTxn()
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		iter := rel.MakeObjectIt(false)
+		var blkId *common.ID
+		for iter.Next() {
+			if !iter.GetObject().IsAppendable() {
+				continue
+			}
+			blkId = iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
+		}
+		err := rel.RangeDelete(blkId, 0, 7, handle.DT_Normal)
+		require.Nil(t, err)
+
+		require.NoError(t, txn.Commit(context.Background()))
+
+	}
+
+	{
+		//start to build sharding readers.
+		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		relData, err := rel.Ranges(ctx, nil, 0)
+		require.NoError(t, err)
+
+		shardSvr := testutil.MockShardService()
+		delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
+		num := 10
+		rds, err := delegate.BuildShardingReaders(
+			ctx,
+			rel.GetProcess(),
+			nil,
+			relData,
+			num,
+			0,
+			false,
+			0,
+		)
+		require.NoError(t, err)
+
+		rows := 0
+		buildBatch := func() *batch.Batch {
+			bat := batch.NewWithSize(1)
+			for _, col := range schema.ColDefs {
+				if col.Name == schema.ColDefs[primaryKeyIdx].Name {
+					vec := vector.NewVec(col.Type)
+					bat.Vecs[0] = vec
+					bat.Attrs = []string{col.Name}
+					break
+				}
+			}
+			return bat
+		}
+
+		for _, r := range rds {
+			for {
+				bat := buildBatch()
+				isEnd, err := r.Read(
+					ctx,
+					[]string{schema.ColDefs[primaryKeyIdx].Name},
+					nil,
+					mp,
+					bat,
+				)
+				require.NoError(t, err)
+
+				if isEnd {
+					break
+				}
+				rows += int(bat.RowCount())
+			}
+		}
+
+		require.Equal(t, 2, rows)
+
+		err = txn.Commit(ctx)
+		require.Nil(t, err)
+	}
+
+	//test set orderby
+	shardingLRD := disttae.MockShardingLocalReader()
+	assert.Panics(t, func() {
+		shardingLRD.SetOrderBy(nil)
+	})
+	assert.Panics(t, func() {
+		shardingLRD.GetOrderBy()
+	})
+	assert.Panics(t, func() {
+		shardingLRD.SetFilterZM(nil)
+	})
 }

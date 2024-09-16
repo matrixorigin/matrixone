@@ -42,6 +42,18 @@ type IterInfo struct {
 	IterID ID
 }
 
+func (t *Table) BuildShardingReaders(
+	ctx context.Context,
+	_ any,
+	expr *plan.Expr,
+	relData engine.RelData,
+	parallel int,
+	_ int,
+	_ bool,
+	_ engine.TombstoneApplyPolicy) (readers []engine.Reader, err error) {
+	panic("Not Support")
+}
+
 func (t *Table) BuildReaders(
 	ctx context.Context,
 	_ any,
@@ -151,7 +163,6 @@ func (t *TableReader) Read(
 	colNames []string,
 	plan *plan.Expr,
 	mp *mpool.MPool,
-	_ engine.VectorPool,
 	bat *batch.Batch) (bool, error) {
 	if t == nil {
 		return true, nil
@@ -231,6 +242,10 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
+func (t *Table) GetProcess() any {
+	panic("Not Support")
+}
+
 func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData, error) {
 	rd := &MemRelationData{}
 	nodes := getTNServices(t.engine.cluster)
@@ -246,7 +261,11 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData
 	return rd, nil
 }
 
-func (t *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
+func (t *Table) CollectTombstones(
+	_ context.Context,
+	_ int,
+	_ engine.TombstoneCollectPolicy,
+) (engine.Tombstoner, error) {
 	panic("implement me")
 }
 
@@ -267,11 +286,11 @@ func (rd *MemRelationData) GetBlockInfo(i int) objectio.BlockInfo {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) SetBlockInfo(i int, blk objectio.BlockInfo) {
+func (rd *MemRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) AppendBlockInfo(blk objectio.BlockInfo) {
+func (rd *MemRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
 	panic("not supported")
 }
 

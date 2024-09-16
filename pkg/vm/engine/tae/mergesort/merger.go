@@ -38,7 +38,7 @@ type releasableBatch struct {
 	releaseF func()
 }
 
-type merger[T any] struct {
+type merger[T comparable] struct {
 	heap *heapSlice[T]
 
 	cols    [][]T
@@ -68,7 +68,7 @@ type merger[T any] struct {
 	stats       mergeStats
 }
 
-func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, isTombstone bool, mustColFunc func(*vector.Vector) []T) Merger {
+func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, isTombstone bool, mustColFunc func(*vector.Vector) []T) Merger {
 	size := host.GetObjectCnt()
 	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	m := &merger[T]{
@@ -296,11 +296,9 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 	if _, _, err := m.writer.Sync(ctx); err != nil {
 		return err
 	}
-	cobjstats := m.writer.GetObjectStats()[:objectio.SchemaTombstone]
+	cobjstats := m.writer.GetObjectStats()
 	commitEntry := m.host.GetCommitEntry()
-	for _, cobj := range cobjstats {
-		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
-	}
+	commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobjstats.Clone().Marshal())
 	m.writer = nil
 	return nil
 }

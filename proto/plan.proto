@@ -728,6 +728,7 @@ message Node {
 		FILL = 65;
 		PARTITION = 66;
 		FUZZY_FILTER = 67;
+		APPLY = 68;
 	}
 
 	enum JoinType {
@@ -739,9 +740,8 @@ message Node {
 		ANTI	= 5;
 		SINGLE	= 6;
 		MARK	= 7;
-		APPLY	= 8;
-		INDEX = 9;
-		L2 = 10;
+		INDEX = 8;
+		L2 = 9;
 	}
 
 	enum AggMode {
@@ -852,6 +852,7 @@ message Node {
 
 	Snapshot scan_snapshot = 58;
 
+	bool recursive_cte = 59;
 }
 
 // Snapshot Represents a snapshot of the database
@@ -912,6 +913,8 @@ message PreInsertCtx {
 	TableDef table_def 		= 2;
 	bool has_auto_col		= 3;
 	bool is_update			= 4;
+	Expr comp_pkey_expr     = 5;
+	Expr cluster_by_expr    = 6;
 }
 
 message RuntimeFilterSpec {
@@ -1099,6 +1102,7 @@ message DataDefinition {
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
 		SHOW_UPGRADE = 34;
+		RENAME_TABLE = 35;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -1127,6 +1131,7 @@ message DataDefinition {
 		DropSequence   drop_sequence    = 18;
 		AlterSequence  alter_sequence   = 19;
 		CreateView  create_view         = 20;
+		RenameTable rename_table 	    = 21;
 	}
 }
 
@@ -1287,6 +1292,10 @@ message AlterAddColumn {
 message AlterDropColumn {
 	uint32 idx = 1;
 	uint32 seq = 2;
+}
+
+message RenameTable {
+	repeated AlterTable alter_tables = 1;
 }
 
 message AlterTable {

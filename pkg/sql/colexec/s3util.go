@@ -517,7 +517,7 @@ func (w *S3Writer) FillBlockInfoBat(blkInfos []objectio.BlockInfo, stats objecti
 		}
 		if err := vector.AppendBytes(
 			w.blockInfoBat.Vecs[1],
-			objectio.EncodeBlockInfo(blkInfo),
+			objectio.EncodeBlockInfo(&blkInfo),
 			false,
 			mpool); err != nil {
 			return err
@@ -547,18 +547,12 @@ func (w *S3Writer) sync(proc *process.Process) ([]objectio.BlockInfo, objectio.O
 		)
 	}
 
-	stats := w.writer.GetObjectStats()
-
-	var i = -1
-	for i = range stats {
-		if !stats[i].IsZero() {
-			stats[i].SetCNCreated()
-			if w.sortIndex != -1 {
-				stats[i].SetSorted()
-			}
-			break
-		}
+	var stats objectio.ObjectStats
+	if w.sortIndex != -1 {
+		stats = w.writer.GetObjectStats(objectio.WithCNCreated(), objectio.WithSorted())
+	} else {
+		stats = w.writer.GetObjectStats(objectio.WithCNCreated())
 	}
 
-	return blkInfos, stats[i], err
+	return blkInfos, stats, err
 }

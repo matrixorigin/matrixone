@@ -17,15 +17,16 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"testing"
-	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -50,13 +51,14 @@ func TestTombstoneData1(t *testing.T) {
 	var stats []objectio.ObjectStats
 
 	var tombstoneRowIds []types.Rowid
+	int32Type := types.T_int32.ToType()
 	for i := 0; i < 3; i++ {
 		writer, err := colexec.NewS3TombstoneWriter()
 		require.NoError(t, err)
-
-		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		bat := engine_util.NewCNTombstoneBatch(
+			"pkey",
+			&int32Type,
+		)
 		for j := 0; j < 10; j++ {
 			row := types.RandomRowid()
 			tombstoneRowIds = append(tombstoneRowIds, row)
@@ -129,7 +131,7 @@ func TestTombstoneData1(t *testing.T) {
 	tombstones1.SortInMemory()
 	last := tombstones1.rowids[0]
 	for i := 1; i < len(tombstones1.rowids); i++ {
-		require.True(t, last.Le(tombstones1.rowids[i]))
+		require.True(t, last.LE(&tombstones1.rowids[i]))
 	}
 
 	tombstones2 := NewEmptyTombstoneData()
@@ -147,7 +149,7 @@ func TestTombstoneData1(t *testing.T) {
 	tombstones2.SortInMemory()
 	last = tombstones2.rowids[0]
 	for i := 1; i < len(tombstones2.rowids); i++ {
-		require.True(t, last.Le(tombstones2.rowids[i]))
+		require.True(t, last.LE(&tombstones2.rowids[i]))
 	}
 
 	// Test Merge
@@ -155,7 +157,7 @@ func TestTombstoneData1(t *testing.T) {
 	tombstones1.SortInMemory()
 	last = tombstones1.rowids[0]
 	for i := 1; i < len(tombstones1.rowids); i++ {
-		require.True(t, last.Le(tombstones1.rowids[i]))
+		require.True(t, last.LE(&tombstones1.rowids[i]))
 	}
 
 	// Test MarshalBinary and UnmarshalBinary
@@ -234,18 +236,17 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	objID := location.ObjectId()
 	metaLoc := objectio.ObjectLocation(location)
 
-	relData := NewEmptyBlockListRelationData()
+	relData := NewBlockListRelationData(0)
 	blkNum := 10
 	for i := 0; i < blkNum; i++ {
 		blkID := types.NewBlockidWithObjectID(&objID, uint16(blkNum))
 		blkInfo := objectio.BlockInfo{
 			BlockID:      *blkID,
-			Appendable:   true,
-			Sorted:       false,
 			MetaLoc:      metaLoc,
 			PartitionNum: int16(i),
 		}
-		relData.AppendBlockInfo(blkInfo)
+		blkInfo.ObjectFlags |= objectio.ObjectFlag_Appendable
+		relData.AppendBlockInfo(&blkInfo)
 	}
 
 	tombstone := NewEmptyTombstoneData()
@@ -302,14 +303,17 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	}
 
 	//var stats []objectio.ObjectStats
+	int32Type := types.T_int32.ToType()
 	var tombstoneRowIds []types.Rowid
 	for i := 0; i < 3; i++ {
 		writer, err := colexec.NewS3TombstoneWriter()
 		require.NoError(t, err)
 
-		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		bat := engine_util.NewCNTombstoneBatch(
+			"pkey",
+			&int32Type,
+		)
+
 		for j := 0; j < 10; j++ {
 			row := types.RandomRowid()
 			tombstoneRowIds = append(tombstoneRowIds, row)

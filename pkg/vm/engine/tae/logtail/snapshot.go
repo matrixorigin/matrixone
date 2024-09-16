@@ -175,7 +175,6 @@ func (d *DeltaLocDataSource) Next(
 	_ []uint16,
 	_ any,
 	_ *mpool.MPool,
-	_ engine.VectorPool,
 	_ *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 	return nil, engine.Persisted, nil
@@ -228,7 +227,7 @@ func (d *DeltaLocDataSource) getAndApplyTombstones(
 		return nil, nil
 	}
 	logutil.Infof("deltaLoc: %v, id is %d", deltaLoc.String(), bid.Sequence())
-	deletes, _, release, err := blockio.ReadBlockDelete(ctx, deltaLoc, d.fs)
+	deletes, release, err := blockio.ReadDeletes(ctx, deltaLoc, d.fs, false)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +235,7 @@ func (d *DeltaLocDataSource) getAndApplyTombstones(
 	if ts.IsEmpty() {
 		ts = d.ts
 	}
-	return blockio.EvalDeleteRowsByTimestamp(deletes, ts, &bid), nil
+	return blockio.EvalDeleteMaskFromDNCreatedTombstones(deletes, ts, &bid), nil
 }
 
 func (d *DeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
@@ -460,32 +459,22 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 		checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 		ds := NewDeltaLocDataSource(ctx, fs, checkpointTS, NewOMapDeltaSource(objectMap))
 		for _, object := range objectMap {
-			location := object.stats.ObjectLocation()
-			name := object.stats.ObjectName()
 			for i := uint32(0); i < object.stats.BlkCnt(); i++ {
-				loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
-				blk := objectio.BlockInfo{
-					BlockID: *objectio.BuildObjectBlockid(name, uint16(i)),
-					MetaLoc: objectio.ObjectLocation(loc),
-				}
-
-				var vp engine.VectorPool
+				blk := object.stats.ConstructBlockInfo(uint16(i))
 				buildBatch := func() *batch.Batch {
 					result := batch.NewWithSize(len(colTypes))
 					for i, typ := range colTypes {
-						if vp == nil {
-							result.Vecs[i] = vector.NewVec(typ)
-						} else {
-							result.Vecs[i] = vp.GetVector(typ)
-						}
+						result.Vecs[i] = vector.NewVec(typ)
 					}
 					return result
 				}
 
 				bat := buildBatch()
 				defer bat.Clean(mp)
-				err := blockio.BlockDataRead(ctx, sid, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
-					nil, nil, blockio.BlockReadFilter{}, fs, mp, nil, fileservice.Policy(0), "", bat)
+				err := blockio.BlockDataRead(
+					ctx, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
+					nil, nil, objectio.BlockReadFilter{}, fileservice.Policy(0), "", bat, mp, fs,
+				)
 				if err != nil {
 					return nil, err
 				}
@@ -562,9 +551,9 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 				bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
 				entry.deleteAt, false, common.DebugAllocator)
 			for id, delta := range entry.deltaLocation {
-				blockID := objectio.BuildObjectBlockid(entry.stats.ObjectName(), uint16(id))
+				blockID := entry.stats.ConstructBlockId(uint16(id))
 				vector.AppendFixed[types.Blockid](deltaBat.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector(),
-					*blockID, false, common.DebugAllocator)
+					blockID, false, common.DebugAllocator)
 				vector.AppendBytes(deltaBat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector(),
 					[]byte(*delta), false, common.DebugAllocator)
 				vector.AppendFixed[uint64](
@@ -596,7 +585,8 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 	if err != nil {
 		return 0, err
 	}
-	size := writer.GetObjectStats()[0].OriginSize()
+	ss := writer.GetObjectStats()
+	size := ss.OriginSize()
 	return size, err
 }
 
@@ -664,7 +654,8 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	if err != nil {
 		return 0, err
 	}
-	size := writer.GetObjectStats()[0].OriginSize()
+	ss := writer.GetObjectStats()
+	size := ss.OriginSize()
 	return size, err
 }
 

@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,8 +46,7 @@ import (
 // -----------------------------------------------------------------
 
 func (mixin *withFilterMixin) reset() {
-	mixin.filterState.evaluated = false
-	mixin.filterState.filter = blockio.BlockReadFilter{}
+	mixin.filterState.filter = objectio.BlockReadFilter{}
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
@@ -70,7 +70,6 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
 	v2.TaskSelColumnTotal.Add(float64(ctotal))
 	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
-	blockio.RecordColumnSelectivity(mixin.proc.GetService(), chit, ctotal)
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
@@ -95,7 +94,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 				// primary key is in the cols
 				mixin.columns.pkPos = i
 			}
-			mixin.columns.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+			mixin.columns.colTypes[i] = plan2.ExprType2Type(&colDef.Typ)
 			mixin.columns.colTypes[i].Scale = colDef.Typ.Scale
 			mixin.columns.colTypes[i].Width = colDef.Typ.Width
 		}
@@ -106,13 +105,8 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 		// use the search function to find the offset of the primary key.
 		// it returns the offset of the primary key in the pk vector.
 		// if the primary key is not found, it returns empty slice
-		mixin.filterState.evaluated = true
-		//mixin.filterState.filter = filter
 		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
 		mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
-
-		// records how many blks one reader needs to read when having filter
-		//objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
 	}
 }
 
@@ -139,7 +133,6 @@ func (r *emptyReader) Read(
 	_ []string,
 	_ *plan.Expr,
 	_ *mpool.MPool,
-	_ engine.VectorPool,
 	_ *batch.Batch,
 ) (bool, error) {
 	return true, nil
@@ -207,8 +200,7 @@ func (r *mergeReader) Read(
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
-	bat *batch.Batch,
+	outBatch *batch.Batch,
 ) (bool, error) {
 	start := time.Now()
 	defer func() {
@@ -219,7 +211,7 @@ func (r *mergeReader) Read(
 		return true, nil
 	}
 	for len(r.rds) > 0 {
-		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, vp, bat)
+		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, outBatch)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()
@@ -230,7 +222,7 @@ func (r *mergeReader) Read(
 			r.rds = r.rds[1:]
 		} else {
 			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-				logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
+				logutil.Debug(testutil.OperatorCatchBatch("merge reader", outBatch))
 			}
 			return false, nil
 		}
@@ -251,7 +243,7 @@ func NewReader(
 	source engine.DataSource,
 ) (*reader, error) {
 
-	baseFilter, err := newBasePKFilter(
+	baseFilter, err := engine_util.ConstructBasePKFilter(
 		expr,
 		tableDef,
 		proc,
@@ -271,8 +263,8 @@ func NewReader(
 		return nil, err
 	}
 
-	blockFilter, err := newBlockReadPKFilter(
-		tableDef.Pkey.PkeyColName,
+	blockFilter, err := engine_util.ConstructBlockPKFilter(
+		catalog.IsFakePkName(tableDef.Pkey.PkeyColName),
 		baseFilter,
 	)
 	if err != nil {
@@ -320,8 +312,7 @@ func (r *reader) Read(
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
-	bat *batch.Batch,
+	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
 
 	var dataState engine.DataState
@@ -343,8 +334,7 @@ func (r *reader) Read(
 		r.columns.seqnums,
 		r.memFilter,
 		mp,
-		vp,
-		bat)
+		outBatch)
 
 	dataState = state
 
@@ -374,7 +364,6 @@ func (r *reader) Read(
 
 	err = blockio.BlockDataRead(
 		statsCtx,
-		r.withFilterMixin.proc.GetService(),
 		blkInfo,
 		r.source,
 		r.columns.seqnums,
@@ -383,9 +372,11 @@ func (r *reader) Read(
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
-		r.fs, mp, vp, policy,
+		policy,
 		r.tableDef.Name,
-		bat,
+		outBatch,
+		mp,
+		r.fs,
 	)
 	if err != nil {
 		return false, err
@@ -396,14 +387,14 @@ func (r *reader) Read(
 		gatherStats(numRead, numHit)
 	}
 
-	bat.SetAttributes(cols)
+	outBatch.SetAttributes(cols)
 
-	if blkInfo.Sorted && r.columns.indexOfFirstSortedColumn != -1 {
-		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
+	if blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
+		outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
 	}
 
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
+		logutil.Debug(testutil.OperatorCatchBatch("block reader", outBatch))
 	}
 
 	return false, nil

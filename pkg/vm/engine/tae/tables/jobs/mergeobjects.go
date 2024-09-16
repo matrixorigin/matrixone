@@ -21,6 +21,7 @@ import (
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -199,10 +200,10 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 		return nil, nil, nil, mergesort.ErrNoMoreBlocks
 	}
 	var err error
-	var view *containers.Batch
+	var data *containers.Batch
 	releaseF := func() {
-		if view != nil {
-			view.Close()
+		if data != nil {
+			data.Close()
 		}
 	}
 	defer func() {
@@ -213,35 +214,35 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 
 	obj := task.mergedObjsHandle[objIdx]
 	if task.isTombstone {
-		err = obj.Scan(ctx, &view, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
+		err = obj.Scan(ctx, &data, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
 	} else {
-		err = obj.HybridScan(ctx, &view, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
+		err = obj.HybridScan(ctx, &data, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
 	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if task.isTombstone {
-		rowIDs := view.Vecs[0]
+		rowIDs := data.Vecs[0]
 		tbl := task.rel.GetMeta().(*catalog.TableEntry)
 		rowIDs.Foreach(func(v any, isNull bool, row int) error {
 			rowID := v.(types.Rowid)
 			objectID := rowID.BorrowObjectID()
 			obj, err := tbl.GetObjectByID(objectID, false)
 			if err != nil {
-				view.Deletes.Add(uint64(row))
+				data.Deletes.Add(uint64(row))
 				return nil
 			}
 			if obj.HasDropCommitted() {
-				if view.Deletes == nil {
-					view.Deletes = &nulls.Nulls{}
+				if data.Deletes == nil {
+					data.Deletes = &nulls.Nulls{}
 				}
-				view.Deletes.Add(uint64(row))
+				data.Deletes.Add(uint64(row))
 			}
 			return nil
 		}, nil)
 	}
-	if len(task.attrs) != len(view.Vecs) {
-		panic(fmt.Sprintf("mismatch %v, %v, %v", task.attrs, len(task.attrs), len(view.Vecs)))
+	if len(task.attrs) != len(data.Vecs) {
+		panic(fmt.Sprintf("mismatch %v, %v, %v", task.attrs, len(task.attrs), len(data.Vecs)))
 	}
 	task.nMergedBlk[objIdx]++
 
@@ -254,14 +255,14 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 					id = i
 				}
 			}
-			bat.Vecs[id] = view.Vecs[i].GetDownstreamVector()
+			bat.Vecs[id] = data.Vecs[i].GetDownstreamVector()
 		} else {
 
-			bat.Vecs[idx] = view.Vecs[i].GetDownstreamVector()
+			bat.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
 		}
 	}
-	bat.SetRowCount(view.Length())
-	return bat, view.Deletes, releaseF, nil
+	bat.SetRowCount(data.Length())
+	return bat, data.Deletes, releaseF, nil
 }
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
@@ -290,8 +291,8 @@ func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
 	commitEntry.TableName = schema.Name
 	commitEntry.StartTs = task.txn.GetStartTS().ToTimestamp()
 	for _, o := range task.mergedObjs {
-		obj := o.GetObjectStats()
-		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj.Clone().Marshal())
+		obj := *o.GetObjectStats()
+		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj[:])
 	}
 	task.commitEntry = commitEntry
 	// leave mapping to ReadMergeAndWrite
@@ -356,6 +357,9 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if schema.HasSortKey() {
 		sortkeyPos = schema.GetSingleSortKeyIdx()
 	}
+	if task.rt.LockMergeService.IsLockedByUser(task.rel.ID()) {
+		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
+	}
 	phaseDesc = "1-DoMergeAndWrite"
 	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task, task.isTombstone); err != nil {
 		return err
@@ -400,6 +404,9 @@ func HandleMergeEntryInTxn(
 		objID := drop.ObjectName().ObjectId()
 		obj, err := rel.GetObject(objID, isTombstone)
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				logutil.Infof("[MERGE-EOB] LockMerge %v %v", objID.ShortStringEx(), err)
+			}
 			return nil, err
 		}
 		mergedObjs = append(mergedObjs, obj.GetMeta().(*catalog.ObjectEntry))
@@ -459,7 +466,7 @@ func HandleMergeEntryInTxn(
 func (task *mergeObjectsTask) GetTotalSize() uint64 {
 	totalSize := uint64(0)
 	for _, obj := range task.mergedObjs {
-		totalSize += uint64(obj.GetOriginSize())
+		totalSize += uint64(obj.OriginSize())
 	}
 	return totalSize
 }
@@ -467,7 +474,7 @@ func (task *mergeObjectsTask) GetTotalSize() uint64 {
 func (task *mergeObjectsTask) GetTotalRowCnt() uint32 {
 	totalRowCnt := 0
 	for _, obj := range task.mergedObjs {
-		totalRowCnt += obj.GetRows()
+		totalRowCnt += int(obj.Rows())
 	}
 	return uint32(totalRowCnt)
 }

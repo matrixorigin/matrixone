@@ -84,7 +84,6 @@ func (d *BackupDeltaLocDataSource) Next(
 	_ []uint16,
 	_ any,
 	_ *mpool.MPool,
-	_ engine.VectorPool,
 	_ *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 	return nil, engine.Persisted, nil
@@ -143,14 +142,14 @@ func GetTombstonesByBlockId(
 		}
 		if !obj.ZMIsEmpty() {
 			objZM := obj.SortKeyZoneMap()
-			if skip := !objZM.PrefixEq(bid[:]); skip {
+			if skip := !objZM.RowidPrefixEq(bid[:]); skip {
 				return true, nil
 			}
 		}
 
 		for idx := 0; idx < int(obj.BlkCnt()); idx++ {
 			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](oData.data[idx].Vecs[0])
-			start, end := blockio.FindIntervalForBlock(rowids, &bid)
+			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, &bid)
 			if start == end {
 				continue
 			}
@@ -551,7 +550,8 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 			files = append(files, name.String())
 			blockLocation := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
-			objectData.stats = &writer.GetObjectStats()[objectio.SchemaData]
+			ss := writer.GetObjectStats()
+			objectData.stats = &ss
 			objectio.SetObjectStatsLocation(objectData.stats, blockLocation)
 			insertObjBatch[objectData.tid] = append(insertObjBatch[objectData.tid], objectData)
 		}
@@ -562,14 +562,8 @@ func ReWriteCheckpointAndBlockFromKey(
 		objectsData,
 		func(oData *objData, writer *blockio.BlockWriter) (bool, error) {
 			ds := NewBackupDeltaLocDataSource(ctx, fs, ts, tombstonesData)
-			location := oData.stats.ObjectLocation()
-			name := oData.stats.ObjectName()
-			metaLoc := objectio.BuildLocation(name, location.Extent(), 0, uint16(0))
-			blk := objectio.BlockInfo{
-				BlockID: *objectio.BuildObjectBlockid(name, uint16(0)),
-				MetaLoc: objectio.ObjectLocation(metaLoc),
-			}
-			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, sid, &blk, ds, ts, fs)
+			blk := oData.stats.ConstructBlockInfo(uint16(0))
+			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, ts, fs)
 			if err != nil {
 				return true, err
 			}
@@ -656,7 +650,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					} else {
 						appendValToBatch(oldMeta, newMeta, i)
 						row := newMeta.Length() - 1
-						insertObjData[i].stats.SetSorted()
+						objectio.WithSorted()(insertObjData[i].stats)
 						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, insertObjData[i].stats[:], false)
 						newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
 					}

@@ -186,10 +186,7 @@ func (e *CheckpointEntry) Prefetch(
 	data *logtail.CheckpointData,
 ) (err error) {
 	if err = data.PrefetchFrom(
-		ctx,
-		e.version,
 		fs.Service,
-		e.tnLocation,
 	); err != nil {
 		return
 	}
@@ -224,8 +221,6 @@ func (e *CheckpointEntry) PrefetchMetaIdx(
 ) (data *logtail.CheckpointData, err error) {
 	data = logtail.NewCheckpointData(e.sid, common.CheckpointAllocator)
 	if err = data.PrefetchMeta(
-		ctx,
-		e.version,
 		fs.Service,
 		e.tnLocation,
 	); err != nil {

@@ -31,6 +31,7 @@ import (
 )
 
 type HashmapBuilder struct {
+	needDupVec         bool
 	InputBatchRowCount int
 	vecs               [][]*vector.Vector
 	IntHashMap         *hashmap.IntHashMap
@@ -63,10 +64,14 @@ func (hb *HashmapBuilder) GetGroupCount() uint64 {
 func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process) error {
 	var err error
 	if len(hb.executor) == 0 {
+		hb.needDupVec = false
 		hb.vecs = make([][]*vector.Vector, 0)
 		hb.executor = make([]colexec.ExpressionExecutor, len(Conditions))
 		hb.keyWidth = 0
 		for i, expr := range Conditions {
+			if _, ok := Conditions[i].Expr.(*pbplan.Expr_Col); !ok {
+				hb.needDupVec = true
+			}
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
 			// todo : for varlena type, always go strhashmap
@@ -84,6 +89,13 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 }
 
 func (hb *HashmapBuilder) Reset(proc *process.Process) {
+	if hb.needDupVec {
+		for i := range hb.vecs {
+			for j := range hb.vecs[i] {
+				hb.vecs[i][j].Free(proc.Mp())
+			}
+		}
+	}
 	if hb.InputBatchRowCount == 0 {
 		hb.FreeHashMapAndBatches(proc)
 	}
@@ -107,6 +119,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process) {
 }
 
 func (hb *HashmapBuilder) Free(proc *process.Process) {
+	hb.needDupVec = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -139,6 +152,7 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 }
 
 func (hb *HashmapBuilder) FreeWithError(proc *process.Process) {
+	hb.needDupVec = false
 	hb.FreeHashMapAndBatches(proc)
 	hb.MultiSels = nil
 	for i := range hb.executor {
@@ -168,7 +182,14 @@ func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			hb.vecs[idx1][idx2] = vec
+			if hb.needDupVec {
+				hb.vecs[idx1][idx2], err = vec.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
+			} else {
+				hb.vecs[idx1][idx2] = vec
+			}
 		}
 	}
 	return nil
@@ -186,12 +207,12 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 
 	var itr hashmap.Iterator
 	if hb.keyWidth <= 8 {
-		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
+		if hb.IntHashMap, err = hashmap.NewIntHashMap(false); err != nil {
 			return err
 		}
 		itr = hb.IntHashMap.NewIterator()
 	} else {
-		if hb.StrHashMap, err = hashmap.NewStrMap(false, proc.Mp()); err != nil {
+		if hb.StrHashMap, err = hashmap.NewStrMap(false); err != nil {
 			return err
 		}
 		itr = hb.StrHashMap.NewIterator()
@@ -200,12 +221,12 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 	if hashOnPK {
 		// if hash on primary key, prealloc hashmap size to the count of batch
 		if hb.keyWidth <= 8 {
-			err = hb.IntHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
+			err = hb.IntHashMap.PreAlloc(uint64(hb.InputBatchRowCount))
 			if err != nil {
 				return err
 			}
 		} else {
-			err = hb.StrHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
+			err = hb.StrHashMap.PreAlloc(uint64(hb.InputBatchRowCount))
 			if err != nil {
 				return err
 			}
@@ -238,7 +259,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 				rate := float64(groupCount) / float64(i)
 				hashmapCount := uint64(float64(hb.InputBatchRowCount) * rate)
 				if hashmapCount > groupCount {
-					err := hb.IntHashMap.PreAlloc(hashmapCount-groupCount, proc.Mp())
+					err := hb.IntHashMap.PreAlloc(hashmapCount - groupCount)
 					if err != nil {
 						return err
 					}
@@ -248,7 +269,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 				rate := float64(groupCount) / float64(i)
 				hashmapCount := uint64(float64(hb.InputBatchRowCount) * rate)
 				if hashmapCount > groupCount {
-					err := hb.StrHashMap.PreAlloc(hashmapCount-groupCount, proc.Mp())
+					err := hb.StrHashMap.PreAlloc(hashmapCount - groupCount)
 					if err != nil {
 						return err
 					}
