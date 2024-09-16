@@ -40,9 +40,10 @@ func IsRowDeleted(
 			return false, nil
 		}
 		var err error
-		location := tombstoneObject.BlockLocation(uint16(pos), objectio.BlockMaxRows)
+		var location objectio.ObjectLocation
+		tombstoneObject.BlockLocationTo(uint16(pos), objectio.BlockMaxRows, location[:])
 		deleted, err := IsRowDeletedByLocation(
-			ctx, ts, row, location, fs, tombstoneObject.GetCNCreated(),
+			ctx, ts, row, location[:], fs, tombstoneObject.GetCNCreated(),
 		)
 		if err != nil {
 			return false, err
@@ -85,9 +86,10 @@ func GetTombstonesByBlockId(
 ) (err error) {
 	loadedBlkCnt := 0
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
-		location := tombstoneObject.BlockLocation(uint16(pos), objectio.BlockMaxRows)
+		var location objectio.ObjectLocation
+		tombstoneObject.BlockLocationTo(uint16(pos), objectio.BlockMaxRows, location[:])
 		if mask, err := FillBlockDeleteMask(
-			ctx, ts, blockId, location, fs, tombstoneObject.GetCNCreated(),
+			ctx, ts, blockId, location[:], fs, tombstoneObject.GetCNCreated(),
 		); err != nil {
 			return false, err
 		} else {
