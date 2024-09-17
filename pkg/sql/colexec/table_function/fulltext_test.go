@@ -53,7 +53,7 @@ func TestPatternBoolean(t *testing.T) {
 		},
 		TestCase{
 			pattern: "Matrix +(<Origin >One)",
-			expect:  "(text matrix) (+ (group (< (text origin)) (> (text one))))",
+			expect:  "(+ (group (< (text origin)) (> (text one)))) (text matrix)",
 		},
 		TestCase{
 			pattern: "+Matrix +Origin",

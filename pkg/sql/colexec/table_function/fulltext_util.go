@@ -80,19 +80,7 @@ func NewSearchAccum(tblname string, pattern string, mode int64, params string) (
 		return nil, err
 	}
 
-	// re-order the pattern with the precedency PHRASE > PLUS > TEXT,STAR,GROUP,RANKLESS > MINUS
-	// GROUP can only have LESSTHAN and GREATERTHAN children
-	// PLUS, MINUS, RANKLESS can only have TEXT, STAR and GROUP Children and only have Single Child
-	plus := findPatternByOperator(ps, PLUS)
-	minus := findPatternByOperator(ps, MINUS)
-	values := findValuePattern(ps)
-
-	var finalp []*Pattern
-	finalp = append(finalp, plus...)
-	finalp = append(finalp, values...)
-	finalp = append(finalp, minus...)
-
-	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: finalp, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
+	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
 }
 
 func findPatternByOperator(ps []*Pattern, op int) []*Pattern {
@@ -738,7 +726,20 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 				return nil, err
 			}
 		}
-		return ps, nil
+
+		// re-order the pattern with the precedency PHRASE > PLUS > TEXT,STAR,GROUP,RANKLESS > MINUS
+		// GROUP can only have LESSTHAN and GREATERTHAN children
+		// PLUS, MINUS, RANKLESS can only have TEXT, STAR and GROUP Children and only have Single Child
+		plus := findPatternByOperator(ps, PLUS)
+		minus := findPatternByOperator(ps, MINUS)
+		values := findValuePattern(ps)
+
+		var finalp []*Pattern
+		finalp = append(finalp, plus...)
+		finalp = append(finalp, values...)
+		finalp = append(finalp, minus...)
+
+		return finalp, nil
 	}
 
 	return nil, moerr.NewInternalError(context.TODO(), "invalid fulltext search mode")
