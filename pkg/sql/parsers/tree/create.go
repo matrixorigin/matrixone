@@ -2016,6 +2016,8 @@ func (it IndexType) ToString() string {
 		return "zonemap"
 	case INDEX_TYPE_IVFFLAT:
 		return "ivfflat"
+	case INDEX_TYPE_LLM:
+		return "llm"
 	case INDEX_TYPE_MASTER:
 		return "master"
 	case INDEX_TYPE_INVALID:
@@ -2034,6 +2036,7 @@ const (
 	INDEX_TYPE_ZONEMAP
 	INDEX_TYPE_IVFFLAT
 	INDEX_TYPE_MASTER
+	INDEX_TYPE_LLM
 )
 
 type VisibleType int

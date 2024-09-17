@@ -326,6 +326,20 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
+
+	/************ 3. LLM Secondary Index ************/
+	// LLM table type
+	SystemSI_LLM_TblType_Basic               = "basic"
+	SystemSI_LLM_TblType_DataChunksEmbedding = "llmtable"
+
+	// LLM index basic table columns
+	SystemSI_LLM_TblCol_Basic_key = "primary_key"
+	SystemSI_LLM_TblCol_Basic_url = "url"
+
+	// LLM index embedding table columns
+	SystemSI_LLM_TblCol_DataChunksEmbedding_primary   = "tbl_pk"
+	SystemSI_LLM_TblCol_DataChunksEmbedding_chunk     = "chunk"
+	SystemSI_LLM_TblCol_DataChunksEmbedding_embedding = "embedding"
 )
 
 const (

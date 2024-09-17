@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"github.com/ledongthuc/pdf"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"io"
 	"strconv"
@@ -435,4 +438,243 @@ func readPdfToString(path string) (string, error) {
 	}
 
 	return textBuilder.String(), nil
+}
+
+//func LLMTest(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+//	rs := vector.MustFunctionResult[types.Varlena](result)
+//
+//	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.InternalSQLExecutor)
+//	if !ok {
+//		return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+//	}
+//	exec := v.(executor.SQLExecutor)
+//
+//	selectObj := func(tbl *table.Table) (string, error) {
+//		var result string
+//		selectSQL := fmt.Sprintf("SELECT " +
+//			"index_table_name " +
+//			"FROM mo_catalog.mo_indexes " +
+//			"WHERE algo_table_type = 'llmtable' " +
+//			"AND name = 'idx1';")
+//		opts := executor.Options{}.WithDatabase(tbl.Database).WithTimeZone(proc.GetSessionInfo().TimeZone)
+//		res, err := exec.Exec(proc.Ctx, selectSQL, opts)
+//		if err != nil {
+//			return "", err
+//		}
+//		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+//			for i := 0; i < rows; i++ {
+//				result += executor.GetStringRows(cols[0])[i]
+//			}
+//			return true
+//		})
+//		res.Close()
+//		return result, nil
+//	}
+//
+//	extractObj := func(tbl *table.Table, llmTable string) (string, error) {
+//		var result string
+//		extractSQL := fmt.Sprintf("SELECT chunk "+
+//			"FROM `%s` "+
+//			"ORDER BY l2_distance(embedding, llm_embedding(\"推荐阅读\n从下面的文章中选择一篇，开始您的 MatrixOne 之旅。如果您：\")) "+
+//			"ASC LIMIT 1;",
+//			llmTable)
+//		opts := executor.Options{}.WithDatabase(tbl.Database)
+//		res, err := exec.Exec(proc.Ctx, extractSQL, opts)
+//		if err != nil {
+//			return "", err
+//		}
+//		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+//			for i := 0; i < rows; i++ {
+//				result += executor.GetStringRows(cols[0])[i]
+//			}
+//			return true
+//		})
+//		res.Close()
+//		return result, nil
+//	}
+//
+//	for i := uint64(0); i < uint64(length); i++ {
+//		tables := table.GetAllTables()
+//		llmTableNames := make(map[int]string)
+//		for i, tbl := range tables {
+//			llmTableName, err := selectObj(tbl)
+//
+//			if err != nil {
+//				return err
+//			}
+//
+//			llmTableNames[i] = llmTableName
+//
+//		}
+//
+//		for i, tbl := range tables {
+//			llmTableName := llmTableNames[i]
+//			result, err := extractObj(tbl, llmTableName)
+//
+//			if err != nil {
+//				return err
+//			}
+//			rs.AppendMustBytesValue(util.UnsafeStringToBytes(result))
+//		}
+//
+//	}
+//
+//	return nil
+//}
+
+func LLMAsk(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+	}
+	exec := v.(executor.SQLExecutor)
+
+	extractObj := func(tbl *table.Table) (string, error) {
+		var result string
+		//extractSQL := fmt.Sprintf("SELECT chunk "+
+		//	"FROM `%s` "+
+		//	"ORDER BY l2_distance(embedding, llm_embedding(\"推荐阅读\n从下面的文章中选择一篇，开始您的 MatrixOne 之旅。如果您：\")) "+
+		//	"ASC LIMIT 1;",
+		//	llmTable)
+		//extractSQL := fmt.Sprintf("select b from indextest3.t6;")
+		extractSQL := fmt.Sprintf("SELECT chunk FROM `indextest3`.`__mo_index_secondary_0191feff-79bf-7799-a07c-6da193ad097a` ORDER BY l2_distance(embedding, llm_embedding(\"推荐阅读\n从下面的文章中选择一篇，开始您的 MatrixOne 之旅。如果您：\")) ASC LIMIT 1;")
+		opts := executor.Options{}.WithDatabase(tbl.Database)
+		res, err := exec.Exec(proc.Ctx, extractSQL, opts)
+		if err != nil {
+			return "", err
+		}
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				result += executor.GetStringRows(cols[0])[i]
+			}
+			return true
+		})
+		res.Close()
+		return result, nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		tables := table.GetAllTables()
+
+		for _, tbl := range tables {
+			//llmTableName := llmTableNames[i]
+			result, err := extractObj(tbl)
+
+			if err != nil {
+				return err
+			}
+			rs.AppendMustBytesValue(util.UnsafeStringToBytes(result))
+		}
+
+	}
+
+	return nil
+}
+
+func LLMAsk3Arguments(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	databaseInput := vector.GenerateFunctionStrParameter(parameters[0])
+	indexInput := vector.GenerateFunctionStrParameter(parameters[1])
+	questionInput := vector.GenerateFunctionStrParameter(parameters[2])
+
+	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+	}
+	exec := v.(executor.SQLExecutor)
+
+	selectObj := func(tbl *table.Table, llmIndexName string) (string, error) {
+		var result string
+		selectSQL := fmt.Sprintf("SELECT "+
+			"index_table_name "+
+			"FROM mo_catalog.mo_indexes "+
+			"WHERE algo_table_type = 'llmtable' "+
+			"AND name = '%s';",
+			llmIndexName)
+		opts := executor.Options{}.WithDatabase(tbl.Database).WithTimeZone(proc.GetSessionInfo().TimeZone)
+		res, err := exec.Exec(proc.Ctx, selectSQL, opts)
+		if err != nil {
+			return "", err
+		}
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				result += executor.GetStringRows(cols[0])[i]
+			}
+			return true
+		})
+		res.Close()
+		return result, nil
+	}
+
+	extractObj := func(tbl *table.Table, llmDatabaseName string, llmTableName string, llmQuestion string) (string, error) {
+		var result string
+		//extractSQL := fmt.Sprintf("SELECT chunk "+
+		//	"FROM `%s` "+
+		//	"ORDER BY l2_distance(embedding, llm_embedding(\"推荐阅读\n从下面的文章中选择一篇，开始您的 MatrixOne 之旅。如果您：\")) "+
+		//	"ASC LIMIT 1;",
+		//	llmTable)
+		//extractSQL := fmt.Sprintf("select b from indextest3.t6;")
+		extractSQL := fmt.Sprintf("SELECT chunk "+
+			"FROM `%s`.`%s` "+
+			"ORDER BY l2_distance(embedding, llm_embedding(\"%s\")) "+
+			"ASC LIMIT 1;",
+			llmDatabaseName,
+			llmTableName,
+			llmQuestion)
+		opts := executor.Options{}.WithDatabase(tbl.Database)
+		res, err := exec.Exec(proc.Ctx, extractSQL, opts)
+		if err != nil {
+			return "", err
+		}
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				result += executor.GetStringRows(cols[0])[i]
+			}
+			return true
+		})
+		res.Close()
+		return result, nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		tables := table.GetAllTables()
+		databaseInputBytes, null1 := databaseInput.GetStrValue(i)
+		indexInputBytes, null2 := indexInput.GetStrValue(i)
+		questionInputBytes, null3 := questionInput.GetStrValue(i)
+
+		if null1 || null2 || null3 {
+			return moerr.NewInvalidInputNoCtxf("Wrong Input Bytes.")
+		}
+
+		database := string(databaseInputBytes)
+		index := string(indexInputBytes)
+		question := string(questionInputBytes)
+
+		llmTableNames := make(map[int]string)
+		for i, tbl := range tables {
+			llmTableName, err := selectObj(tbl, index)
+
+			if err != nil {
+				return err
+			}
+
+			llmTableNames[i] = llmTableName
+
+		}
+
+		for i, tbl := range tables {
+			llmTableName := llmTableNames[i]
+			result, err := extractObj(tbl, database, llmTableName, question)
+
+			if err != nil {
+				return err
+			}
+			rs.AppendMustBytesValue(util.UnsafeStringToBytes(result))
+		}
+
+	}
+
+	return nil
 }

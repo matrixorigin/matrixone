@@ -27,6 +27,7 @@ import (
 
 const (
 	ivfFlatIndexFlag = "experimental_ivf_index"
+	llmIndexFlag     = "experimental_llm_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(c *Compile,
@@ -342,6 +343,122 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	return nil
 }
 
+func (s *Scope) handleLLMIndexBasicTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) error {
+
+	/*
+		Sample SQL:
+		CREATE TABLE basic (`primary_key` int, `url` DATALINK, PRIMARY KEY (`primary_key`));
+		insert into qryDatabase.basic (`primary_key`, `url`)
+		select `primary_key`, `datalink column`
+		from qryDatabase.original_table
+		The table will have two columns:
+		1. primary_key: Corresponds to the primary key of the original table.
+		2. url: The DATALINK column used to store URLs for LLM indexing.
+	*/
+	// 1. Insert into LLM index basic table
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`)",
+		qryDatabase,
+		indexDef.IndexTableName,
+		catalog.SystemSI_LLM_TblCol_Basic_key,
+		catalog.SystemSI_LLM_TblCol_Basic_url,
+	)
+
+	// 2. Select from original table's b column (datalink column) to populate the hidden table
+	datalinkColumnName := indexDef.Parts[0]
+	selectSQL := fmt.Sprintf("SELECT "+
+		"ROW_NUMBER() OVER() as `%s`, "+
+		"`%s` "+
+		"FROM `%s`.`%s`",
+		catalog.SystemSI_LLM_TblCol_Basic_key,
+		datalinkColumnName,
+		qryDatabase,
+		originalTableDef.Name,
+	)
+
+	// 3. Final SQL that inserts selected rows into the hidden table
+	finalSQL := fmt.Sprintf("%s %s;",
+		insertSQL,
+		selectSQL,
+	)
+
+	// 4. Execute the SQL to populate the hidden table
+	err := c.runSql(finalSQL)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Scope) handleLLMIndexChunkEmbeddingTable(c *Compile, indexDef *plan.IndexDef,
+	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, basicTableName string) error {
+	// TODO should be done with Embedding() sql function
+	/*
+		Sample SQL:
+		CREATE TABLE llmtable (
+		`tbl_pk` INT,
+		`chunk` DATALINK,
+		`embedding` VECF32(4096),
+		);
+		INSERT INTO qryDatabase.llmtable (`tbl_pk`, `chunk`, `embedding`)
+		SELECT
+		    `primary_key` AS `tbl_pk`,
+		    `url` AS `chunk`,
+		    CAST(embedding(`url`) AS VECF32(4096)) AS `embedding`
+		FROM
+		    basictable;
+	*/
+
+	// 1. Construct the insert SQL statement with the new columns `tbl_pk`, `chunk`, and `embedding`
+	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`)",
+		qryDatabase,
+		indexDef.IndexTableName,
+		catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_primary,
+		catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_chunk,
+		catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_embedding,
+	)
+
+	// 2. Select from original table's primary key and datalink column to populate the hidden table
+	//selectSQL := fmt.Sprintf("SELECT "+
+	//	"`%s` AS `tbl_pk`, "+
+	//	"`%s` AS `chunk`, "+
+	//	"CAST(embedding(`%s`) AS VECF32(4096)) AS `embedding` "+
+	//	"FROM `%s`.`%s`",
+	//	catalog.SystemSI_LLM_TblCol_Basic_key,
+	//	catalog.SystemSI_LLM_TblCol_Basic_url,
+	//	catalog.SystemSI_LLM_TblCol_Basic_url,
+	//	qryDatabase,
+	//	basicTableName,
+	//)
+
+	selectSQL := fmt.Sprintf("SELECT "+
+		"`%s` AS `tbl_pk`, "+
+		"`%s` AS `chunk`, "+
+		"llm_embedding(`%s`) AS `embedding` "+
+		"FROM `%s`.`%s`",
+		catalog.SystemSI_LLM_TblCol_Basic_key,
+		catalog.SystemSI_LLM_TblCol_Basic_url,
+		catalog.SystemSI_LLM_TblCol_Basic_url,
+		qryDatabase,
+		basicTableName,
+	)
+
+	// 3. Final SQL that inserts selected rows into the hidden table
+	finalSQL := fmt.Sprintf("%s %s;",
+		insertSQL,
+		selectSQL,
+	)
+
+	// 4. Execute the SQL to populate the hidden table
+	err := c.runSql(finalSQL)
+	if err != nil {
+		return err
+	}
+
+	return nil
+
+}
+
 func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {
 	return c.runSql(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+
 		" VALUES ('%s', NOW()) "+
@@ -420,6 +537,57 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
 	if err != nil {
 		return err
 	}
+
+	return nil
+}
+
+func (s *Scope) handleLLMIndexDeleteOldInfo(c *Compile,
+	metadataTableName string,
+	centroidsTableName string,
+	qryDatabase string) error {
+
+	//pruneCentroidsTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+	//	"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+	//	qryDatabase,
+	//	centroidsTableName,
+	//	catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+	//
+	//	catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	//	qryDatabase,
+	//	metadataTableName,
+	//	catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	//)
+	//
+	//pruneEntriesTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+	//	"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+	//	qryDatabase,
+	//	catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+	//
+	//	catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	//	qryDatabase,
+	//	metadataTableName,
+	//	catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	//)
+	//
+	//err := s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_start")
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//err = c.runSql(pruneCentroidsTbl)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//err = c.runSql(pruneEntriesTbl)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//err = s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_end")
+	//if err != nil {
+	//	return err
+	//}
 
 	return nil
 }

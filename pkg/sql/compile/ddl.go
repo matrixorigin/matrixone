@@ -477,6 +477,16 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					}
 					multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 
+				} else if !indexDef.Unique && catalog.IsLLMIndexAlgo(indexDef.IndexAlgo) {
+					// 5. LLM indexDefs are aggregated and handled later
+					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+							IndexDefs: make(map[string]*plan.IndexDef),
+						}
+					}
+					multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+
 				}
 				if err != nil {
 					return err
@@ -486,6 +496,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
 				case catalog.MoIndexIvfFlatAlgo.ToString():
 					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, indexInfo)
+				case catalog.MOIndexLLMAlgo.ToString():
+					err = s.handleDatalinkLLMIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, indexInfo)
 				}
 
 				if err != nil {
@@ -553,6 +565,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					switch catalog.ToLower(indexAlgo) {
 					case catalog.MoIndexIvfFlatAlgo.ToString():
 						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+					case catalog.MOIndexLLMAlgo.ToString():
+						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
 					default:
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
@@ -594,6 +608,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				switch multiTableIndex.IndexAlgo {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
 					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
+				case catalog.MOIndexLLMAlgo.ToString():
+					err = s.handleDatalinkLLMIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				}
 
 				if err != nil {
@@ -1530,6 +1546,14 @@ func (s *Scope) CreateIndex(c *Compile) error {
 				}
 			}
 			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+		} else if !indexDef.Unique && catalog.IsLLMIndexAlgo(indexAlgo) {
+			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+					IndexDefs: make(map[string]*plan.IndexDef),
+				}
+			}
+			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		}
 		if err != nil {
 			return err
@@ -1540,6 +1564,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
 			err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+		case catalog.MOIndexLLMAlgo.ToString():
+			err = s.handleDatalinkLLMIndex(c, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {
@@ -1644,6 +1670,68 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName,
+		qryDatabase)
+	if err != nil {
+		return err
+	}
+
+	return nil
+
+}
+
+func (s *Scope) handleDatalinkLLMIndex(c *Compile, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+	if ok, err := s.isExperimentalEnabled(c, llmIndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("LLM index is not enabled")
+	}
+
+	// 1. static check
+	if len(indexDefs) != 2 {
+		return moerr.NewInternalErrorNoCtx("invalid llm index table definition")
+	} else if len(indexDefs[catalog.SystemSI_LLM_TblType_Basic].Parts) != 1 {
+		return moerr.NewInternalErrorNoCtx("invalid llm index table definition")
+	}
+
+	// 2. create hidden tables
+	if indexInfo != nil {
+
+		tables := make([]string, 2)
+		tables[0] = genCreateIndexTableSqlForLLMIndex(indexInfo.GetIndexTables()[0], indexDefs[catalog.SystemSI_LLM_TblType_Basic], qryDatabase)
+		tables[1] = genCreateIndexTableSqlForLLMIndex(indexInfo.GetIndexTables()[1], indexDefs[catalog.SystemSI_LLM_TblType_DataChunksEmbedding], qryDatabase)
+
+		for _, createTableSql := range tables {
+			err := c.runSql(createTableSql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// 3. get count of secondary index column in original table
+	totalCnt, err := s.handleIndexColCount(c, indexDefs[catalog.SystemSI_LLM_TblType_Basic], qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
+
+	// 4.a populate basic table
+	err = s.handleLLMIndexBasicTable(c, indexDefs[catalog.SystemSI_LLM_TblType_Basic], qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
+
+	// 4.b populate chunk and embedding columns
+	err = s.handleLLMIndexChunkEmbeddingTable(c, indexDefs[catalog.SystemSI_LLM_TblType_DataChunksEmbedding], qryDatabase, originalTableDef,
+		totalCnt,
+		indexDefs[catalog.SystemSI_LLM_TblType_Basic].IndexTableName)
+	if err != nil {
+		return err
+	}
+
+	// 4.d delete older llm info in index table.
+	err = s.handleLLMIndexDeleteOldInfo(c,
+		indexDefs[catalog.SystemSI_LLM_TblType_Basic].IndexTableName,
+		indexDefs[catalog.SystemSI_LLM_TblType_DataChunksEmbedding].IndexTableName,
 		qryDatabase)
 	if err != nil {
 		return err

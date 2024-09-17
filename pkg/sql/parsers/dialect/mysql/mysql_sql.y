@@ -358,7 +358,7 @@ import (
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER LLM
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX
 
 
@@ -3677,6 +3677,18 @@ alter_table_alter:
 		return 1
     	}
         var keyType = tree.INDEX_TYPE_IVFFLAT
+        var algoParamList = val
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, algoParamList)
+    }
+| REINDEX ident LLM LISTS equal_opt INTEGRAL
+    {
+    	val := int64($6.(int64))
+    	if val <= 0 {
+		yylex.Error("LISTS should be greater than 0")
+		return 1
+    	}
+        var keyType = tree.INDEX_TYPE_LLM
         var algoParamList = val
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, keyType, algoParamList)
@@ -7341,6 +7353,10 @@ using_opt:
     {
 	$$ = tree.INDEX_TYPE_IVFFLAT
     }
+|   USING LLM
+    {
+	$$ = tree.INDEX_TYPE_LLM
+    }
 |   USING MASTER
     {
 	$$ = tree.INDEX_TYPE_MASTER
@@ -8713,6 +8729,8 @@ index_def:
             	keyTyp = tree.INDEX_TYPE_BTREE
 	    case "ivfflat":
 		keyTyp = tree.INDEX_TYPE_IVFFLAT
+	    case "llm":
+            	keyTyp = tree.INDEX_TYPE_LLM
 	    case "master":
 	    	keyTyp = tree.INDEX_TYPE_MASTER
             case "hash":
@@ -8752,6 +8770,8 @@ index_def:
 		keyTyp = tree.INDEX_TYPE_BTREE
 	     case "ivfflat":
 		keyTyp = tree.INDEX_TYPE_IVFFLAT
+	     case "llm":
+             	keyTyp = tree.INDEX_TYPE_LLM
 	     case "master":
         	keyTyp = tree.INDEX_TYPE_MASTER
 	     case "hash":
@@ -8924,6 +8944,7 @@ index_type:
 |   RTREE
 |   ZONEMAP
 |   IVFFLAT
+|   LLM
 |   MASTER
 |   BSI
 
@@ -12356,6 +12377,7 @@ non_reserved_keyword:
 |	BOOLEAN
 |   BTREE
 |	IVFFLAT
+|	LLM
 |	MASTER
 |	COALESCE
 |	CONNECT

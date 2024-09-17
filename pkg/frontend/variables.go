@@ -3518,6 +3518,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
+	"experimental_llm_index": {
+		Name:              "experimental_llm_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_llm_index"),
+		Default:           int64(0),
+	},
 	"llm_embedding_platform": {
 		Name:              "llm_embedding_platform",
 		Scope:             ScopeBoth,

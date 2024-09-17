@@ -391,6 +391,8 @@ const (
 	LLM_CHUNK
 	LLM_EMBEDDING
 	LLM_EXTRACT_TEXT
+	LLM_ASK
+	LLM_TEST
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -711,4 +713,6 @@ var functionIdRegister = map[string]int32{
 	"llm_chunk":            LLM_CHUNK,
 	"llm_embedding":        LLM_EMBEDDING,
 	"llm_extract_text":     LLM_EXTRACT_TEXT,
+	"llm_ask":              LLM_ASK,
+	"llm_test":             LLM_TEST,
 }

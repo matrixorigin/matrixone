@@ -1711,6 +1711,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		case tree.INDEX_TYPE_MASTER:
 			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+		case tree.INDEX_TYPE_LLM:
+			indexDef, tableDef, err = buildLLMSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
 		}
@@ -2234,6 +2236,162 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	return indexDefs, tableDefs, nil
 }
 
+func buildLLMSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+
+	indexParts := make([]string, 1)
+
+	// 0. validate indexInfo and colMap
+	{
+		// only support 1 column index
+		if len(indexInfo.KeyParts) != 1 {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column LLM index")
+		}
+
+		colName := indexInfo.KeyParts[0].ColName.ColName()
+		indexParts[0] = colName
+		if _, ok := colMap[colName]; !ok {
+			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), fmt.Sprintf("column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin()))
+		}
+
+		// TODO there is no datalink in plan.proto, needs validation of datalink type
+	}
+
+	// init index and table definition slices,
+	indexDefs := make([]*plan.IndexDef, 2)
+	tableDefs := make([]*TableDef, 2)
+
+	// 1. create LLM mo index table
+	{
+		// 1.a table consists of 2 columns: primary key id, and text url datalink
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		tableDefs[0] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.SystemSI_LLM_TblType_Basic,
+			Cols:      make([]*ColDef, 2),
+		}
+
+		// 1.b indexDef0 init
+		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_LLM_TblType_Basic, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 1.c columns: key(PK), url datalink
+		tableDefs[0].Cols[0] = &ColDef{
+			Name: catalog.SystemSI_LLM_TblCol_Basic_key,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id: int32(types.T_int64),
+				//Width: types.MaxVarcharLen,
+			},
+			Primary: true,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[0].Cols[1] = &ColDef{
+			Name: catalog.SystemSI_LLM_TblCol_Basic_url,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id: int32(types.T_datalink),
+				//Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		// 1.d set primary key definition
+		tableDefs[0].Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.SystemSI_LLM_TblCol_Basic_key},
+			PkeyColName: catalog.SystemSI_LLM_TblCol_Basic_key,
+		}
+	}
+
+	// 2. create LLM chunk and embedding table
+	{
+		// 2.a table consists of 3 columns: original primary key int, chunk datalink, embedding vecf32(4096)
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		tableDefs[1] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.SystemSI_LLM_TblType_DataChunksEmbedding,
+			Cols:      make([]*ColDef, 3),
+		}
+
+		// 1.b indexDef0 init
+
+		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_LLM_TblType_DataChunksEmbedding, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 1.c columns: primary key, chunk, embedding
+		tableDefs[1].Cols[0] = &ColDef{
+			Name: catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_primary,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id: int32(types.T_int64),
+				//Width: types.MaxVarcharLen,
+			},
+			Primary: true,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[1].Cols[1] = &ColDef{
+			Name: catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_chunk,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id: int32(types.T_datalink),
+				//Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[1].Cols[2] = &ColDef{
+			Name: catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_embedding,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_array_float32),
+				Width: 4096,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		// 1.d set primary key definition
+		tableDefs[1].Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_primary},
+			PkeyColName: catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_primary,
+		}
+	}
+
+	return indexDefs, tableDefs, nil
+}
+
 func CreateIndexDef(indexInfo *tree.Index,
 	indexTableName, indexAlgoTableType string,
 	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
@@ -2273,6 +2431,12 @@ func CreateIndexDef(indexInfo *tree.Index,
 		case catalog.MoIndexIvfFlatAlgo:
 			var err error
 			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())
+			if err != nil {
+				return nil, err
+			}
+		case catalog.MOIndexLLMAlgo:
+			var err error
+			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultLLMIndexAlgoOptions())
 			if err != nil {
 				return nil, err
 			}

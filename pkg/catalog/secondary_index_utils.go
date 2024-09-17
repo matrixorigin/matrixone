@@ -29,6 +29,7 @@ const (
 	MoIndexBTreeAlgo   = tree.INDEX_TYPE_BTREE   // used for Mocking MySQL behaviour.
 	MoIndexIvfFlatAlgo = tree.INDEX_TYPE_IVFFLAT // used for IVF flat index on Vector/Array columns
 	MOIndexMasterAlgo  = tree.INDEX_TYPE_MASTER  // used for Master Index on VARCHAR columns
+	MOIndexLLMAlgo     = tree.INDEX_TYPE_LLM     // userd for LLM index on datalink columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -55,6 +56,11 @@ func IsRegularIndexAlgo(algo string) bool {
 func IsIvfIndexAlgo(algo string) bool {
 	_algo := ToLower(algo)
 	return _algo == MoIndexIvfFlatAlgo.ToString()
+}
+
+func IsLLMIndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MOIndexLLMAlgo.ToString()
 }
 
 func IsMasterIndexAlgo(algo string) bool {
@@ -202,6 +208,35 @@ func indexParamsToMap(def *tree.Index) (map[string]string, error) {
 		} else {
 			res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
 		}
+	case tree.INDEX_TYPE_LLM:
+		if def.IndexOption.AlgoParamList == 0 {
+			// NOTE: Similar to IVFFLAT
+			// 1. In the parser, we added the failure check for list=0 scenario. So if user tries to explicit
+			// set list=0, it will fail.
+			// 2. However, if user didn't use the list option (we will get it as 0 here), then we will
+			// set the default value as 1.
+			res[IndexAlgoParamLists] = strconv.FormatInt(1, 10)
+		} else if def.IndexOption.AlgoParamList > 0 {
+			res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
+		} else {
+			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
+		}
+
+		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {
+			opType := ToLower(def.IndexOption.AlgoParamVectorOpType)
+			if opType != IndexAlgoParamOpType_l2 {
+				//opType != IndexAlgoParamOpType_ip &&
+				//opType != IndexAlgoParamOpType_cos &&
+
+				return nil, moerr.NewInternalErrorNoCtxf("invalid op_type. not of type '%s'",
+					IndexAlgoParamOpType_l2,
+					//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
+				)
+			}
+			res[IndexAlgoParamOpType] = def.IndexOption.AlgoParamVectorOpType
+		} else {
+			res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
+		}
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid index type")
 	}
@@ -209,6 +244,13 @@ func indexParamsToMap(def *tree.Index) (map[string]string, error) {
 }
 
 func DefaultIvfIndexAlgoOptions() map[string]string {
+	res := make(map[string]string)
+	res[IndexAlgoParamLists] = "1"                      // set lists = 1 as default
+	res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
+	return res
+}
+
+func DefaultLLMIndexAlgoOptions() map[string]string {
 	res := make(map[string]string)
 	res[IndexAlgoParamLists] = "1"                      // set lists = 1 as default
 	res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default

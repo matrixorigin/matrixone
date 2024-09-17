@@ -25,32 +25,34 @@ func NewEmbeddingService(modelStr string) (EmbeddingService, error) {
 }
 
 func getLLMGlobalVariable(proc *process.Process) (string, string, string, error) {
-	platform, err := proc.GetResolveVariableFunc()("llm_embedding_platform", true, false)
-	if err != nil {
-		return "", "", "", err
-	}
-	platformStr, ok := platform.(string)
-	if !ok {
-		return "", "", "", moerr.NewInvalidInputf(proc.Ctx, "unexpected type for llm_embedding_platform: %T", platform)
-	}
+	//platform, err := proc.GetResolveVariableFunc()("llm_embedding_platform", true, false)
+	//if err != nil {
+	//	return "", "", "", err
+	//}
+	//platformStr, ok := platform.(string)
+	//if !ok {
+	//	return "", "", "", moerr.NewInvalidInputf(proc.Ctx, "unexpected type for llm_embedding_platform: %T", platform)
+	//}
+	//
+	//proxy, err1 := proc.GetResolveVariableFunc()("llm_server_proxy", true, false)
+	//if err1 != nil {
+	//	return "", "", "", err1
+	//}
+	//proxyStr, ok := proxy.(string)
+	//if !ok {
+	//	return "", "", "", moerr.NewInvalidInputf(proc.Ctx, "unexpected type for llm_server_proxy: %T", proxy)
+	//}
+	//
+	//llmModel, err1 := proc.GetResolveVariableFunc()("llm_model", true, false)
+	//if err1 != nil {
+	//	return "", "", "", err1
+	//}
+	//llmModelStr, ok := llmModel.(string)
+	//if !ok {
+	//	return "", "", "", moerr.NewInvalidInputf(proc.Ctx, "unexpected type for llm_model: %T", llmModel)
+	//}
+	//
+	//return platformStr, proxyStr, llmModelStr, nil
+	return "ollama", "http://localhost:11434/api/embed", "llama3", nil
 
-	proxy, err1 := proc.GetResolveVariableFunc()("llm_server_proxy", true, false)
-	if err1 != nil {
-		return "", "", "", err1
-	}
-	proxyStr, ok := proxy.(string)
-	if !ok {
-		return "", "", "", moerr.NewInvalidInputf(proc.Ctx, "unexpected type for llm_server_proxy: %T", proxy)
-	}
-
-	llmModel, err1 := proc.GetResolveVariableFunc()("llm_model", true, false)
-	if err1 != nil {
-		return "", "", "", err1
-	}
-	llmModelStr, ok := llmModel.(string)
-	if !ok {
-		return "", "", "", moerr.NewInvalidInputf(proc.Ctx, "unexpected type for llm_model: %T", llmModel)
-	}
-
-	return platformStr, proxyStr, llmModelStr, nil
 }
