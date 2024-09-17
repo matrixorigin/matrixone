@@ -420,7 +420,7 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 	return nil, moerr.NewInternalError(context.TODO(), "Eval() not handled")
 }
 
-func (p *Pattern) Valid() error {
+func (p *Pattern) Validate() error {
 	if p.Operator == PLUS || p.Operator == MINUS {
 		if len(p.Children) == 0 {
 			return moerr.NewInternalError(context.TODO(), "+/- must have children with value")
@@ -432,7 +432,7 @@ func (p *Pattern) Valid() error {
 		}
 
 		for _, c := range p.Children {
-			err := c.Valid()
+			err := c.Validate()
 			if err != nil {
 				return err
 			}
@@ -460,7 +460,7 @@ func (p *Pattern) Valid() error {
 		}
 
 		for _, c := range p.Children {
-			err := c.Valid()
+			err := c.Validate()
 			if err != nil {
 				return err
 			}
@@ -475,7 +475,7 @@ func (p *Pattern) Valid() error {
 		}
 
 		for _, c := range p.Children {
-			err := c.Valid()
+			err := c.Validate()
 			if err != nil {
 				return err
 			}
@@ -687,7 +687,7 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 
 	// Validate the patterns
 	for _, p := range ps {
-		err = p.Valid()
+		err = p.Validate()
 		if err != nil {
 			return nil, err
 		}
