@@ -34,7 +34,7 @@ func TestListExpressionExecutor(t *testing.T) {
 		[]types.Type{types.T_int64.ToType()},
 		true, 10, proc.Mp())
 
-	//build plan_list
+	// build plan_list
 	exprList := []*plan.Expr{
 		makePlan2Int64ConstExprWithType(1),
 		makePlan2Int64ConstExprWithType(2),
@@ -54,6 +54,9 @@ func TestListExpressionExecutor(t *testing.T) {
 	curr := proc.Mp().CurrNB()
 
 	listExprExecutor, err := NewExpressionExecutor(proc, evalExpr)
+	tree, err := DebugShowExecutor(listExprExecutor)
+	require.NoError(t, err)
+	t.Log(tree)
 	require.NoError(t, err)
 	require.Equal(t, listExprExecutor.IsColumnExpr(), false)
 
@@ -67,6 +70,9 @@ func TestListExpressionExecutor(t *testing.T) {
 
 	vec, err = listExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
 	require.NoError(t, err)
+	tree, err = DebugShowExecutor(listExprExecutor)
+	require.NoError(t, err)
+	t.Log(tree)
 	vals = vector.MustFixedColNoTypeCheck[int64](vec)
 	require.Equal(t, int64(1), vals[0])
 	require.Equal(t, int64(2), vals[1])
@@ -90,6 +96,9 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	con := makePlan2Int64ConstExprWithType(218311)
 	conExprExecutor, err := NewExpressionExecutor(proc, con)
 	require.NoError(t, err)
+	tree, err := DebugShowExecutor(conExprExecutor)
+	require.NoError(t, err)
+	t.Log(tree)
 
 	emptyBatch := &batch.Batch{}
 	emptyBatch.SetRowCount(10)
@@ -104,6 +113,9 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	}
 	_, err = conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
 	require.NoError(t, err)
+	tree, err = DebugShowExecutor(conExprExecutor)
+	require.NoError(t, err)
+	t.Log(tree)
 	require.Equal(t, curr1, proc.Mp().CurrNB()) // check memory reuse
 	conExprExecutor.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -125,6 +137,9 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	emptyBatch.SetRowCount(5)
 	vec, err = typExpressionExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
 	require.NoError(t, err)
+	tree, err = DebugShowExecutor(typExpressionExecutor)
+	require.NoError(t, err)
+	t.Log(tree)
 	{
 		require.Equal(t, 5, vec.Length())
 		require.Equal(t, types.T_decimal128, vec.GetType().Oid)
@@ -152,6 +167,9 @@ func TestColumnExpressionExecutor(t *testing.T) {
 	}
 	colExprExecutor, err := NewExpressionExecutor(proc, col)
 	require.NoError(t, err)
+	tree, err := DebugShowExecutor(colExprExecutor)
+	require.NoError(t, err)
+	t.Log(tree)
 
 	bat := testutil.NewBatch(
 		[]types.Type{types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType()},
@@ -159,6 +177,9 @@ func TestColumnExpressionExecutor(t *testing.T) {
 	curr := proc.Mp().CurrNB()
 	vec, err := colExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
 	require.NoError(t, err)
+	tree, err = DebugShowExecutor(colExprExecutor)
+	require.NoError(t, err)
+	t.Log(tree)
 	{
 		require.Equal(t, types.T_int32.ToType(), *vec.GetType())
 		require.Equal(t, 10, vec.Length())
@@ -223,8 +244,16 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		fExprExecutor.SetParameter(0, executor1)
 		fExprExecutor.SetParameter(1, executor2)
 
+		tree, err := DebugShowExecutor(fExprExecutor)
+		require.NoError(t, err)
+		t.Log(tree)
+
 		vec, err := fExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
 		require.NoError(t, err)
+		tree, err = DebugShowExecutor(fExprExecutor)
+		require.NoError(t, err)
+		t.Log(tree)
+
 		curr3 := proc.Mp().CurrNB()
 		{
 			require.Equal(t, 2, vec.Length())
@@ -301,9 +330,17 @@ func TestExpressionReset(t *testing.T) {
 		executor, err := NewExpressionExecutor(proc, fExpr)
 		require.NoError(t, err)
 
+		tree, err := DebugShowExecutor(executor)
+		require.NoError(t, err)
+		t.Log(tree)
+
 		result, err := executor.Eval(proc, nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, true, result != nil && result.IsConst() && result.Length() == 1)
+
+		tree, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		t.Log(tree)
 
 		inputs := []*batch.Batch{
 			batch.New(true, nil),
