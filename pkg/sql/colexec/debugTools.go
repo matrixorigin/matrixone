@@ -171,6 +171,18 @@ func printFunctionExpressionExecutor(buffer *bytes.Buffer, expr *FunctionExpress
 		buffer.WriteString(fmt.Sprintf(prefix + "  resultVector is nil\n"))
 	}
 
+	buffer.WriteString(prefix + "  parameterResults:\n")
+	for i, p := range expr.parameterResults {
+		if p != nil {
+			if p.GetType() != nil {
+				buffer.WriteString(fmt.Sprintf(prefix+"    parameter[%d].typ: %s\n", i, p.GetType().String()))
+			} else {
+				buffer.WriteString(fmt.Sprintf(prefix+"    parameter[%d].typ is nil\n", i))
+			}
+			buffer.WriteString(fmt.Sprintf(prefix+"    parameter[%d].value: %s\n", i, p.String()))
+		}
+	}
+
 	buffer.WriteString(prefix + "  parameterExecutor:\n")
 	for i, param := range expr.parameterExecutor {
 		printExpressionExecutor(buffer, param, prefix, i == len(expr.parameterExecutor)-1, false)

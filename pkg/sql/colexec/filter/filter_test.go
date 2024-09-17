@@ -362,6 +362,41 @@ func MakeFilterMockBatchs() *batch.Batch {
 	return bat
 }
 
+func TestIssue18454(t *testing.T) {
+	mp, _ := mpool.NewMPool("", 0, 0)
+	proc := testutil.NewProcessWithMPool("", mp)
+	proc.SetBaseProcessRunningStatus(true)
+	newParamForFoldCase2(proc)
+	expr := generateFoldCase2()
+
+	executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
+	require.NoError(t, err)
+
+	tree, err := colexec.DebugShowExecutor(executor[0])
+	require.NoError(t, err)
+	t.Log(tree)
+
+	_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+	require.NoError(t, err)
+
+	tree, err = colexec.DebugShowExecutor(executor[0])
+	require.NoError(t, err)
+	t.Log(tree)
+
+	executor[0].ResetForNextQuery()
+	tree, err = colexec.DebugShowExecutor(executor[0])
+	require.NoError(t, err)
+	t.Log(tree)
+
+	// _, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+	// require.NoError(t, err)
+	// executor[0].ResetForNextQuery()
+
+	// tree, err = colexec.DebugShowExecutor(executor[0])
+	// require.NoError(t, err)
+	// t.Log(tree)
+}
+
 func BenchmarkPlanConstandFold1(b *testing.B) {
 	mp, _ := mpool.NewMPool("", 0, 0)
 	proc := testutil.NewProcessWithMPool("", mp)
@@ -372,7 +407,7 @@ func BenchmarkPlanConstandFold1(b *testing.B) {
 		require.NoError(b, err)
 		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
 		require.NoError(b, err)
-		_, err = executor[0].Eval(proc, newBatchForFoldCase(proc, 1), nil)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
 		require.NoError(b, err)
 	}
 }
@@ -386,37 +421,32 @@ func BenchmarkExecutorConstandFold1(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
 		require.NoError(b, err)
-		_, err = executor[0].Eval(proc, newBatchForFoldCase(proc, 1), nil)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
 		require.NoError(b, err)
 	}
 }
 
-func Test2(t *testing.T) {
+func BenchmarkExecutorConstandFold2_Reuse(b *testing.B) {
 	mp, _ := mpool.NewMPool("", 0, 0)
 	proc := testutil.NewProcessWithMPool("", mp)
-	newParamForFoldCase2(proc)
-	expr := generateFoldCase2()
-	filterExpr, err := plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(expr), proc, true, true)
-	require.NoError(t, err)
-	executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
-	require.NoError(t, err)
-	_, err = executor[0].Eval(proc, newBatchForFoldCase(proc, 1), nil)
-	require.NoError(t, err)
-}
-
-func BenchmarkPlanConstandFold2(b *testing.B) {
-	mp, _ := mpool.NewMPool("", 0, 0)
-	proc := testutil.NewProcessWithMPool("", mp)
+	proc.SetBaseProcessRunningStatus(true)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		filterExpr, err := plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(expr), proc, true, true)
+		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
 		require.NoError(b, err)
-		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
 		require.NoError(b, err)
-		_, err = executor[0].Eval(proc, newBatchForFoldCase(proc, 1), nil)
+		executor[0].ResetForNextQuery()
+
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
 		require.NoError(b, err)
+		executor[0].ResetForNextQuery()
+
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+		require.NoError(b, err)
+		executor[0].Free()
 	}
 }
 
@@ -430,46 +460,22 @@ func BenchmarkExecutorConstandFold2_NoFree(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
 		require.NoError(b, err)
-		_, err = executor[0].Eval(proc, newBatchForFoldCase(proc, 1), nil)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
 		require.NoError(b, err)
 
 		executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
 		require.NoError(b, err)
-		_, err = executor[0].Eval(proc, newBatchForFoldCase(proc, 1), nil)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
 		require.NoError(b, err)
 
 		executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
 		require.NoError(b, err)
-		_, err = executor[0].Eval(proc, newBatchForFoldCase(proc, 1), nil)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
 		require.NoError(b, err)
 	}
 }
 
-func BenchmarkExecutorConstandFold2_Free(b *testing.B) {
-	mp, _ := mpool.NewMPool("", 0, 0)
-	proc := testutil.NewProcessWithMPool("", mp)
-	newParamForFoldCase2(proc)
-	expr := generateFoldCase2()
-	proc.SetBaseProcessRunningStatus(true)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
-		require.NoError(b, err)
-		_, err = executor[0].Eval(proc, newBatchForFoldCase(proc, 1), nil)
-		require.NoError(b, err)
-		executor[0].ResetForNextQuery()
-
-		// _, err = executor[0].Eval(proc, newBatchForFoldCase(proc, 1), nil)
-		// require.NoError(b, err)
-		// executor[0].ResetForNextQuery()
-
-		_, err = executor[0].Eval(proc, newBatchForFoldCase(proc, 1), nil)
-		require.NoError(b, err)
-		executor[0].Free()
-	}
-}
-
-func newBatchForFoldCase(proc *process.Process, rows int64) []*batch.Batch {
+func newBatch(proc *process.Process, rows int64) []*batch.Batch {
 	ts := []types.Type{types.New(types.T_varchar, 65535, 0), types.New(types.T_varchar, 65535, 0)}
 	bat := testutil.NewBatch(ts, false, int(rows), proc.Mp())
 	pkAttr := make([]string, 2)
