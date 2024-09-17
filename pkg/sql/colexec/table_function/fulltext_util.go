@@ -8,6 +8,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/monlp/tokenizer"
 )
 
 /*
@@ -674,27 +675,57 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 	return tokens, nil
 }
 
+func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
+	runeSlice := []rune(pattern)
+	ngram_size := 3
+	// if number of character is small than Ngram size = 3, do prefix search
+	if len(runeSlice) < ngram_size {
+		return []*Pattern{&Pattern{Text: pattern + "*", Operator: STAR}}, nil
+	}
+
+	var list []*Pattern
+	tok, _ := tokenizer.NewSimpleTokenizer([]byte(pattern))
+	for t := range tok.Tokenize() {
+
+		slen := t.TokenBytes[0]
+		word := string(t.TokenBytes[1 : slen+1])
+
+		list = append(list, &Pattern{Text: word, Operator: TEXT})
+	}
+
+	return list, nil
+}
+
 func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 	if mode == int64(tree.FULLTEXT_NL) {
-		return nil, moerr.NewInternalError(context.TODO(), "Natural Language mode not supported yet")
-	} else if mode != int64(tree.FULLTEXT_DEFAULT) && mode != int64(tree.FULLTEXT_BOOLEAN) {
-		return nil, moerr.NewInternalError(context.TODO(), "Query Expansion mode not supported")
-	}
-
-	lowerp := strings.ToLower(pattern)
-
-	ps, err := ParsePatternInBooleanMode(lowerp)
-	if err != nil {
-		return nil, err
-	}
-
-	// Validate the patterns
-	for _, p := range ps {
-		err = p.Validate()
+		// Natural Language Mode
+		ps, err := ParsePatternInNLMode(pattern)
 		if err != nil {
 			return nil, err
 		}
-	}
+		return ps, nil
 
-	return ps, nil
+		//return nil, moerr.NewInternalError(context.TODO(), "Natural Language mode not supported yet")
+
+	} else if mode == int64(tree.FULLTEXT_QUERY_EXPANSION) || mode == int64(tree.FULLTEXT_NL_QUERY_EXPANSION) {
+		return nil, moerr.NewInternalError(context.TODO(), "Query Expansion mode not supported")
+	} else {
+		// BOOLEAN MODE
+
+		lowerp := strings.ToLower(pattern)
+
+		ps, err := ParsePatternInBooleanMode(lowerp)
+		if err != nil {
+			return nil, err
+		}
+
+		// Validate the patterns
+		for _, p := range ps {
+			err = p.Validate()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return ps, nil
+	}
 }

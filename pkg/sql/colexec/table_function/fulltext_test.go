@@ -93,13 +93,18 @@ func TestPatternNL(t *testing.T) {
 		},
 		TestCase{
 			pattern: "读写汉字 学中文",
-			expect:  "(+ (text 读写汉字)) (- (text 学中文))",
+			expect:  "(text 读写汉) (text 写汉字) (text 汉字) (text 字) (text 学中文) (text 中文) (text 文)",
+		},
+		TestCase{
+			pattern: "读写",
+			expect:  "(* 读写*)",
 		},
 	}
 
 	for _, c := range tests {
-		_, err := PatternToString(c.pattern, int64(tree.FULLTEXT_NL))
-		require.NotNil(t, err)
+		result, err := PatternToString(c.pattern, int64(tree.FULLTEXT_NL))
+		require.Nil(t, err)
+		assert.Equal(t, c.expect, result)
 	}
 }
 
