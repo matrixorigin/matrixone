@@ -712,16 +712,13 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 }
 
 func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
-	if mode == int64(tree.FULLTEXT_NL) {
-		// Natural Language Mode
+	if mode == int64(tree.FULLTEXT_NL) || mode == int64(0) {
+		// Natural Language Mode or default mode
 		ps, err := ParsePatternInNLMode(pattern)
 		if err != nil {
 			return nil, err
 		}
 		return ps, nil
-
-		//return nil, moerr.NewInternalError(context.TODO(), "Natural Language mode not supported yet")
-
 	} else if mode == int64(tree.FULLTEXT_QUERY_EXPANSION) || mode == int64(tree.FULLTEXT_NL_QUERY_EXPANSION) {
 		return nil, moerr.NewInternalError(context.TODO(), "Query Expansion mode not supported")
 	} else {
