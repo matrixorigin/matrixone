@@ -205,10 +205,54 @@ func TestCalcDocCount(t *testing.T) {
 	assert.Equal(t, s.SumDocCount["happy"], int32(10))
 }
 
-func TestFullTextOr(t *testing.T) {
+func TestFullTextNL(t *testing.T) {
 
 	pattern := "apple banana"
 	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_NL), "")
+	require.Nil(t, err)
+
+	//fmt.Println(PatternListToString(s.Pattern))
+
+	// pretend adding records from database
+	// init the word "apple"
+	word := "apple"
+	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
+	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
+
+	// init the word "banana"
+	word = "banana"
+	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
+	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
+	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
+
+	s.Nrow = 100
+	s.calculateDocCount()
+
+	// eval
+	var result map[any]float32
+	for _, p := range s.Pattern {
+		result, err = p.Eval(s, float32(1.0), result)
+		require.Nil(t, err)
+	}
+
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
+	_, ok = result[1]
+	assert.Equal(t, ok, true)
+	_, ok = result[11]
+	assert.Equal(t, ok, true)
+	_, ok = result[12]
+	assert.Equal(t, ok, true)
+
+}
+
+func TestFullTextOr(t *testing.T) {
+
+	pattern := "apple banana"
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
