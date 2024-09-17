@@ -311,6 +311,17 @@ func (p *Pattern) EvalOR(s *SearchAccum, arg, result map[any]float32) (map[any]f
 	return result, nil
 }
 
+func (p *Pattern) GetWeight() float32 {
+	if p.Operator == LESSTHAN {
+		return float32(0.9)
+	} else if p.Operator == GREATERTHAN {
+		return float32(1.1)
+	} else if p.Operator == RANKLESS {
+		return float32(0.9)
+	}
+	return float32(1.0)
+}
+
 func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
 	var err error
 
@@ -335,8 +346,8 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 
 	} else if nchild == 1 {
 		// PLUS, MINUS, LESSTHAN, GREATERTHAN, RANKLESS
-		// TODO: set weight by type
-		weight := float32(1.0)
+		// get weight by type
+		weight := p.GetWeight()
 
 		if result == nil {
 			// LESSTHAN, GREATERTHAN and RANKLESS
