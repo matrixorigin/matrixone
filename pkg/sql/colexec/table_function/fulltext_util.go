@@ -73,30 +73,14 @@ func NewWordAccum(id int64, mode int64) *WordAccum {
 
 func NewSearchAccum(tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
 
-	// TODO: tokenize the pattern based on mode and params
-	// use space as separator for now
-	if mode != 0 {
-		return nil, moerr.NewNotSupported(context.TODO(), "mode not supported")
-	}
-
 	ps, err := ParsePattern(pattern, mode)
 	if err != nil {
 		return nil, err
 	}
 
-	/*
-		pattern = strings.ToLower(pattern)
-		ps, err := ParsePatternInBooleanMode(pattern)
-		if err != nil {
-			return nil, err
-		}
-	*/
-
 	// TODO: re-arrange the pattern with the precedency Phrase > Plus > NoOp,Star,Group,RankLess > Minus
 	// Group can only have LessThan and GreaterThan children
 	// Plus, Minus, RankLess can only have NoOp, Star and Group Children and only have Single Child
-
-	// TODO: Validate the patterns
 
 	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
 }
@@ -397,6 +381,71 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 	return nil, moerr.NewInternalError(context.TODO(), "Eval() not handled")
 }
 
+func (p *Pattern) Valid() error {
+	if p.Operator == Plus || p.Operator == Minus {
+		if len(p.Children) == 0 {
+			return moerr.NewInternalError(context.TODO(), "+/- must have children with value")
+		}
+		for _, c := range p.Children {
+			if c.Operator == Plus || c.Operator == Minus || c.Operator == Phrase {
+				return moerr.NewInternalError(context.TODO(), "double +/- operator")
+			}
+		}
+
+		for _, c := range p.Children {
+			err := c.Valid()
+			if err != nil {
+				return err
+			}
+		}
+
+	} else if p.Operator == NoOp || p.Operator == Star {
+		if len(p.Children) > 0 {
+			return moerr.NewInternalError(context.TODO(), "text Pattern cannot have children")
+		}
+	} else if p.Operator == Phrase {
+		for _, c := range p.Children {
+			if c.Operator != NoOp {
+				return moerr.NewInternalError(context.TODO(), "Phrase can only have text Pattern")
+			}
+		}
+	} else if p.Operator == Group {
+		if len(p.Children) == 0 {
+			return moerr.NewInternalError(context.TODO(), "sub-query is empty")
+		}
+
+		for _, c := range p.Children {
+			if c.Operator == Plus || c.Operator == Minus || c.Operator == Phrase {
+				return moerr.NewInternalError(context.TODO(), "sub-query cannot have +/-/phrase operator")
+			}
+		}
+
+		for _, c := range p.Children {
+			err := c.Valid()
+			if err != nil {
+				return err
+			}
+		}
+
+	} else {
+		// LessThan, GreaterThan, RankLess
+		for _, c := range p.Children {
+			if c.Operator != Group && c.Operator != NoOp && c.Operator != Star {
+				return moerr.NewInternalError(context.TODO(), "double operator")
+			}
+		}
+
+		for _, c := range p.Children {
+			err := c.Valid()
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 func GetOp(op rune) int {
 	switch op {
 	case '+':
@@ -585,71 +634,6 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 	return tokens, nil
 }
 
-func (p *Pattern) Valid() error {
-	if p.Operator == Plus || p.Operator == Minus {
-		if len(p.Children) == 0 {
-			return moerr.NewInternalError(context.TODO(), "+/- must have children with value")
-		}
-		for _, c := range p.Children {
-			if c.Operator == Plus || c.Operator == Minus || c.Operator == Phrase {
-				return moerr.NewInternalError(context.TODO(), "double +/- operator")
-			}
-		}
-
-		for _, c := range p.Children {
-			err := c.Valid()
-			if err != nil {
-				return err
-			}
-		}
-
-	} else if p.Operator == NoOp || p.Operator == Star {
-		if len(p.Children) > 0 {
-			return moerr.NewInternalError(context.TODO(), "text Pattern cannot have children")
-		}
-	} else if p.Operator == Phrase {
-		for _, c := range p.Children {
-			if c.Operator != NoOp {
-				return moerr.NewInternalError(context.TODO(), "Phrase can only have text Pattern")
-			}
-		}
-	} else if p.Operator == Group {
-		if len(p.Children) == 0 {
-			return moerr.NewInternalError(context.TODO(), "sub-query is empty")
-		}
-
-		for _, c := range p.Children {
-			if c.Operator == Plus || c.Operator == Minus || c.Operator == Phrase {
-				return moerr.NewInternalError(context.TODO(), "sub-query cannot have +/-/phrase operator")
-			}
-		}
-
-		for _, c := range p.Children {
-			err := c.Valid()
-			if err != nil {
-				return err
-			}
-		}
-
-	} else {
-		// LessThan, GreaterThan, RankLess
-		for _, c := range p.Children {
-			if c.Operator != Group && c.Operator != NoOp && c.Operator != Star {
-				return moerr.NewInternalError(context.TODO(), "double operator")
-			}
-		}
-
-		for _, c := range p.Children {
-			err := c.Valid()
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 	if mode != 0 {
 		return nil, moerr.NewInternalError(context.TODO(), "only support default mode 0")
@@ -662,17 +646,13 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 		return nil, err
 	}
 
-	// TODO: Validate the patterns
+	// Validate the patterns
 	for _, p := range ps {
 		err = p.Valid()
 		if err != nil {
 			return nil, err
 		}
 	}
-
-	// TODO: re-arrange the pattern with the precedency Phrase > Plus > NoOp,Star,Group,RankLess > Minus
-	// Group can only have LessThan and GreaterThan children
-	// Plus, Minus, RankLess can only have NoOp, Star and Group Children and only have Single Child
 
 	return ps, nil
 }

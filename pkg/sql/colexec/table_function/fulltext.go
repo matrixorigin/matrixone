@@ -30,9 +30,6 @@ import (
 )
 
 const (
-	default_mode_sql = "SELECT doc_id, pos, doc_count, first_doc_id, last_doc_id, word FROM %s WHERE"
-	//default_mode_sql = "SELECT doc_id, pos, doc_count, first_doc_id, last_doc_id FROM %s WHERE word = '%s'"
-
 	countstar_sql = "SELECT COUNT(*) FROM %s"
 )
 
