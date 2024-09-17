@@ -317,7 +317,7 @@ func (p *Pattern) GetWeight() float32 {
 	} else if p.Operator == GREATERTHAN {
 		return float32(1.1)
 	} else if p.Operator == RANKLESS {
-		return float32(0.9)
+		return float32(-1.0)
 	}
 	return float32(1.0)
 }
