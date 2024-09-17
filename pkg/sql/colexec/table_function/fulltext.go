@@ -15,7 +15,6 @@
 package table_function
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -153,7 +152,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 			// remove the last character which should be '*' for prefix search
 			slen := len(w)
 			if w[slen-1] != '*' {
-				return moerr.NewInternalError(context.TODO(), "wildcard search without character *")
+				return moerr.NewInternalError(proc.Ctx, "wildcard search without character *")
 			}
 			// prefix search
 			prefix := w[0 : slen-1]
