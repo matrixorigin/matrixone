@@ -216,6 +216,7 @@ func (p *Pattern) GetLeafText(operator int) []string {
 	return res
 }
 
+// Eval leaf node.  compute the tfidf from the data in WordAccums and return result as map[doc_id]float32
 func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
 
 	key := p.Text
@@ -240,6 +241,8 @@ func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float3
 	return result, nil
 }
 
+// Eval Plus Plus operation.  Basically AND operation between input argument and result from the previous Eval()
+// e.g. (+ (text apple)) (+ (text banana))
 func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
 
 	if result == nil {
@@ -261,6 +264,8 @@ func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map
 	return result, nil
 }
 
+// Eval Plus OR.  The previous result from Eval() is a Plus Operator and current Pattern is a Text or Star.
+// e.g. (+ (text apple)) (text banana)
 func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
 
 	if result == nil {
@@ -280,6 +285,8 @@ func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[a
 	return result, nil
 }
 
+// Minus operation.  Remove the result when doc_id is present in argument
+// e.g. (+ (text apple)) (- (text banana))
 func (p *Pattern) EvalMinus(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
 
 	if result == nil {
@@ -296,6 +303,8 @@ func (p *Pattern) EvalMinus(s *SearchAccum, arg, result map[any]float32) (map[an
 	return result, nil
 }
 
+// OR operation. Either apple and banana can be the result
+// e.g. (text apple) (text banana)
 func (p *Pattern) EvalOR(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
 	if result == nil {
 		result = make(map[any]float32)
@@ -313,6 +322,10 @@ func (p *Pattern) EvalOR(s *SearchAccum, arg, result map[any]float32) (map[any]f
 	return result, nil
 }
 
+// Get the weight for compute the TFIDF
+// LESSTHAN is lower the ranking
+// GREATERTHAN is higher the ranking
+// RANKLESS is to discourage the ranking but not delete such as Minus. weight is negative to discourage the ranking.
 func (p *Pattern) GetWeight() float32 {
 	if p.Operator == LESSTHAN {
 		return float32(0.9)
@@ -324,6 +337,7 @@ func (p *Pattern) GetWeight() float32 {
 	return float32(1.0)
 }
 
+// Eval() function to evaluate the previous result from Eval and the current pattern (with data from datasource)  and return map[doc_id]float32
 func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
 	var err error
 
@@ -422,6 +436,7 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 	return nil, moerr.NewInternalError(context.TODO(), "Eval() not handled")
 }
 
+// validate the Pattern
 func (p *Pattern) Validate() error {
 	if p.Operator == PLUS || p.Operator == MINUS {
 		if len(p.Children) == 0 {
