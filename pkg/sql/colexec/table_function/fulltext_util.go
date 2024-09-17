@@ -79,11 +79,18 @@ func NewSearchAccum(tblname string, pattern string, mode int64, params string) (
 		return nil, moerr.NewNotSupported(context.TODO(), "mode not supported")
 	}
 
-	pattern = strings.ToLower(pattern)
-	ps, err := ParsePatternInBooleanMode(pattern)
+	ps, err := ParsePattern(pattern, mode)
 	if err != nil {
 		return nil, err
 	}
+
+	/*
+		pattern = strings.ToLower(pattern)
+		ps, err := ParsePatternInBooleanMode(pattern)
+		if err != nil {
+			return nil, err
+		}
+	*/
 
 	// TODO: re-arrange the pattern with the precedency Phrase > Plus > NoOp,Star,Group,RankLess > Minus
 	// Group can only have LessThan and GreaterThan children
@@ -131,6 +138,31 @@ var (
 	Phrase      = 8
 )
 
+func OperatorToString(op int) string {
+	switch op {
+	case NoOp:
+		return "text"
+	case Star:
+		return "*"
+	case Plus:
+		return "+"
+	case Minus:
+		return "-"
+	case LessThan:
+		return "<"
+	case GreaterThan:
+		return ">"
+	case RankLess:
+		return "~"
+	case Group:
+		return "group"
+	case Phrase:
+		return "phrase"
+	default:
+		return ""
+	}
+}
+
 type Pattern struct {
 	Text     string
 	Operator int
@@ -138,12 +170,19 @@ type Pattern struct {
 }
 
 func (p *Pattern) String() string {
-	str := fmt.Sprintf("[Text:%s, Operator:%d, Children:[", p.Text, p.Operator)
-	for _, c := range p.Children {
-		str += c.String()
-		str += ", "
+	if p.Operator == NoOp || p.Operator == Star {
+		return fmt.Sprintf("(%s %s)", OperatorToString(p.Operator), p.Text)
 	}
-	str += "]]"
+
+	str := fmt.Sprintf("(%s ", OperatorToString(p.Operator))
+	for i, c := range p.Children {
+		if i > 0 {
+			str += " "
+		}
+		str += c.String()
+
+	}
+	str += ")"
 	return str
 }
 
@@ -471,30 +510,38 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 	isspace := false
 	offset := 0
 	end := 0
-	bracket := false
+	bracket := 0
 
 	var tokens []*Pattern
 
 	for i, r := range runeSlice {
 
-		if bracket {
+		if bracket > 0 {
+			if r == '(' {
+				bracket += 1
+				continue
+			}
+
 			if r != ')' {
 				if i == len(runeSlice)-1 {
 					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
 				}
 			} else {
-				// found ()
-				end = i
-				//fmt.Printf("bracket (%d, %d)", offset, end)
-				//tokens = append(tokens, string(runeSlice[offset:end+1]))
-				p, err := CreatePattern(string(runeSlice[offset : end+1]))
-				if err != nil {
-					return nil, err
-				}
-				tokens = append(tokens, p)
+				bracket -= 1
+				if bracket == 0 {
+					// found ()
+					end = i
+					//fmt.Printf("bracket (%d, %d)", offset, end)
+					//tokens = append(tokens, string(runeSlice[offset:end+1]))
+					p, err := CreatePattern(string(runeSlice[offset : end+1]))
+					if err != nil {
+						return nil, err
+					}
+					tokens = append(tokens, p)
 
-				bracket = false
-				isspace = true
+					bracket = 0
+					isspace = true
+				}
 			}
 			continue
 		}
@@ -516,7 +563,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
 				}
 
-				bracket = true
+				bracket += 1
 				end = i
 			} else {
 				end = i
@@ -543,17 +590,110 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 		offset = i
 		end = i
 
-		if bracket == false {
+		if bracket == 0 {
 			if r == '(' {
 				if i == len(runeSlice)-1 {
 					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
 				}
 
 				// open bracket found and find next close bracket
-				bracket = true
+				bracket += 1
 			}
 		}
 
 	}
 	return tokens, nil
+}
+
+func (p *Pattern) Valid() error {
+	if p.Operator == Plus || p.Operator == Minus {
+		if len(p.Children) == 0 {
+			return moerr.NewInternalError(context.TODO(), "+/- must have children with value")
+		}
+		for _, c := range p.Children {
+			if c.Operator == Plus || c.Operator == Minus || c.Operator == Phrase {
+				return moerr.NewInternalError(context.TODO(), "double +/- operator")
+			}
+		}
+
+		for _, c := range p.Children {
+			err := c.Valid()
+			if err != nil {
+				return err
+			}
+		}
+
+	} else if p.Operator == NoOp || p.Operator == Star {
+		if len(p.Children) > 0 {
+			return moerr.NewInternalError(context.TODO(), "text Pattern cannot have children")
+		}
+	} else if p.Operator == Phrase {
+		for _, c := range p.Children {
+			if c.Operator != NoOp {
+				return moerr.NewInternalError(context.TODO(), "Phrase can only have text Pattern")
+			}
+		}
+	} else if p.Operator == Group {
+		if len(p.Children) == 0 {
+			return moerr.NewInternalError(context.TODO(), "sub-query is empty")
+		}
+
+		for _, c := range p.Children {
+			if c.Operator == Plus || c.Operator == Minus || c.Operator == Phrase {
+				return moerr.NewInternalError(context.TODO(), "sub-query cannot have +/-/phrase operator")
+			}
+		}
+
+		for _, c := range p.Children {
+			err := c.Valid()
+			if err != nil {
+				return err
+			}
+		}
+
+	} else {
+		// LessThan, GreaterThan, RankLess
+		for _, c := range p.Children {
+			if c.Operator != Group && c.Operator != NoOp && c.Operator != Star {
+				return moerr.NewInternalError(context.TODO(), "double operator")
+			}
+		}
+
+		for _, c := range p.Children {
+			err := c.Valid()
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
+	if mode != 0 {
+		return nil, moerr.NewInternalError(context.TODO(), "only support default mode 0")
+	}
+
+	lowerp := strings.ToLower(pattern)
+
+	ps, err := ParsePatternInBooleanMode(lowerp)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: Validate the patterns
+	for _, p := range ps {
+		fmt.Println(p.String())
+		err = p.Valid()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// TODO: re-arrange the pattern with the precedency Phrase > Plus > NoOp,Star,Group,RankLess > Minus
+	// Group can only have LessThan and GreaterThan children
+	// Plus, Minus, RankLess can only have NoOp, Star and Group Children and only have Single Child
+
+	return ps, nil
 }

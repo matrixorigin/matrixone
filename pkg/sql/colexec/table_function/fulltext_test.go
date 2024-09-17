@@ -2,11 +2,108 @@ package table_function
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type TestCase struct {
+	pattern string
+	expect  string
+}
+
+func PatternToString(pattern string, mode int64) (string, error) {
+	ps, err := ParsePattern(pattern, mode)
+	if err != nil {
+		return "", err
+	}
+
+	var ss []string
+	for _, p := range ps {
+		ss = append(ss, p.String())
+	}
+
+	return strings.Join(ss, " "), nil
+}
+
+func TestPattern(t *testing.T) {
+
+	tests := []TestCase{
+		TestCase{
+			pattern: "Matrix Origin",
+			expect:  "(text matrix) (text origin)",
+		},
+		TestCase{
+			pattern: "+Matrix Origin",
+			expect:  "(+ (text matrix)) (text origin)",
+		},
+		TestCase{
+			pattern: "+Matrix -Origin",
+			expect:  "(+ (text matrix)) (- (text origin))",
+		},
+		TestCase{
+			pattern: "Matrix ~Origin",
+			expect:  "(text matrix) (~ (text origin))",
+		},
+		TestCase{
+			pattern: "Matrix +(<Origin >One)",
+			expect:  "(text matrix) (+ (group (< (text origin)) (> (text one))))",
+		},
+		TestCase{
+			pattern: "+Matrix +Origin",
+			expect:  "(+ (text matrix)) (+ (text origin))",
+		},
+		TestCase{
+			pattern: "\"Matrix origin\"",
+			expect:  "(phrase (text matrix) (text origin))",
+		},
+		TestCase{
+			pattern: "Matrix Origin*",
+			expect:  "(text matrix) (* origin*)",
+		},
+		TestCase{
+			pattern: "+Matrix +(Origin (One Two))",
+			expect:  "(+ (text matrix)) (+ (group (text origin) (group (text one) (text two))))",
+		},
+	}
+
+	for _, c := range tests {
+		result, err := PatternToString(c.pattern, int64(0))
+		require.Nil(t, err)
+		assert.Equal(t, c.expect, result)
+	}
+}
+
+func TestPatternFail(t *testing.T) {
+
+	tests := []TestCase{
+		TestCase{
+			pattern: "Matrix Origin( ",
+		},
+		TestCase{
+			pattern: "(+Matrix Origin",
+		},
+		TestCase{
+			pattern: "++Matrix -Origin",
+		},
+		TestCase{
+			pattern: "Matrix ~~Origin",
+		},
+		TestCase{
+			pattern: "Matrix +(<(+Origin -apple) >One)",
+		},
+		TestCase{
+			pattern: "+Matrix --Origin",
+		},
+	}
+
+	for _, c := range tests {
+		_, err := PatternToString(c.pattern, int64(0))
+		require.NotNil(t, err)
+	}
+}
 
 func TestCalcDocCount(t *testing.T) {
 
