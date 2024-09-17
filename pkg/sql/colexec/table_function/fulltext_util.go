@@ -712,7 +712,7 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 }
 
 func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
-	if mode == int64(tree.FULLTEXT_NL) || mode == int64(0) {
+	if mode == int64(tree.FULLTEXT_NL) || mode == int64(tree.FULLTEXT_DEFAULT) {
 		// Natural Language Mode or default mode
 		ps, err := ParsePatternInNLMode(pattern)
 		if err != nil {
@@ -721,7 +721,7 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 		return ps, nil
 	} else if mode == int64(tree.FULLTEXT_QUERY_EXPANSION) || mode == int64(tree.FULLTEXT_NL_QUERY_EXPANSION) {
 		return nil, moerr.NewInternalError(context.TODO(), "Query Expansion mode not supported")
-	} else {
+	} else if mode == int64(tree.FULLTEXT_BOOLEAN) {
 		// BOOLEAN MODE
 
 		lowerp := strings.ToLower(pattern)
@@ -740,4 +740,6 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 		}
 		return ps, nil
 	}
+
+	return nil, moerr.NewInternalError(context.TODO(), "invalid fulltext search mode")
 }

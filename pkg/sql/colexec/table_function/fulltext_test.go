@@ -151,7 +151,7 @@ func TestPatternFail(t *testing.T) {
 	}
 
 	for _, c := range tests {
-		_, err := PatternToString(c.pattern, int64(0))
+		_, err := PatternToString(c.pattern, int64(tree.FULLTEXT_BOOLEAN))
 		require.NotNil(t, err)
 	}
 }
@@ -159,7 +159,7 @@ func TestPatternFail(t *testing.T) {
 func TestCalcDocCount(t *testing.T) {
 
 	pattern := "we aRe so Happy"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_NL), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -208,7 +208,7 @@ func TestCalcDocCount(t *testing.T) {
 func TestFullTextOr(t *testing.T) {
 
 	pattern := "apple banana"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_NL), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -252,7 +252,7 @@ func TestFullTextOr(t *testing.T) {
 func TestFullTextPlusPlus(t *testing.T) {
 
 	pattern := "+apple +banana"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -289,7 +289,7 @@ func TestFullTextPlusPlus(t *testing.T) {
 func TestFullTextPlusOr(t *testing.T) {
 
 	pattern := "+apple banana"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -328,7 +328,7 @@ func TestFullTextPlusOr(t *testing.T) {
 func TestFullTextMinus(t *testing.T) {
 
 	pattern := "-banana +apple"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -365,7 +365,7 @@ func TestFullTextMinus(t *testing.T) {
 func TestFullTextTilda(t *testing.T) {
 
 	pattern := "+apple ~banana"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -404,7 +404,7 @@ func TestFullTextTilda(t *testing.T) {
 func TestFullText1(t *testing.T) {
 
 	pattern := "we aRe so Happy"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -462,7 +462,7 @@ func TestFullText1(t *testing.T) {
 func TestFullText2(t *testing.T) {
 
 	pattern := "+we +aRe +so +Happy"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -515,7 +515,7 @@ func TestFullText2(t *testing.T) {
 func TestFullText3(t *testing.T) {
 
 	pattern := "+we -aRe -so -Happy"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -568,7 +568,7 @@ func TestFullText3(t *testing.T) {
 func TestFullText4(t *testing.T) {
 
 	pattern := "we -aRe so Happy"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -591,7 +591,7 @@ func TestFullText4(t *testing.T) {
 func TestFullText5(t *testing.T) {
 
 	pattern := "we aRe so +Happy"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -630,7 +630,7 @@ func TestFullText5(t *testing.T) {
 func TestFullTextGroup(t *testing.T) {
 
 	pattern := "+we +(<are >so)"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -677,7 +677,7 @@ func TestFullTextGroup(t *testing.T) {
 func TestFullTextStar(t *testing.T) {
 
 	pattern := "apple*"
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -709,7 +709,7 @@ func TestFullTextStar(t *testing.T) {
 func TestFullTextPhrase(t *testing.T) {
 
 	pattern := "\"we aRe so Happy\""
-	s, err := NewSearchAccum("index", pattern, 0, "")
+	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
