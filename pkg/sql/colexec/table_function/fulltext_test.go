@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +32,7 @@ func PatternToString(pattern string, mode int64) (string, error) {
 	return PatternListToString(ps), nil
 }
 
-func TestPattern(t *testing.T) {
+func TestPatternBoolean(t *testing.T) {
 
 	tests := []TestCase{
 		TestCase{
@@ -77,9 +78,47 @@ func TestPattern(t *testing.T) {
 	}
 
 	for _, c := range tests {
-		result, err := PatternToString(c.pattern, int64(0))
+		result, err := PatternToString(c.pattern, int64(tree.FULLTEXT_BOOLEAN))
 		require.Nil(t, err)
 		assert.Equal(t, c.expect, result)
+	}
+}
+
+func TestPatternNL(t *testing.T) {
+
+	tests := []TestCase{
+		TestCase{
+			pattern: "Matrix Origin",
+			expect:  "(text matrix) (text origin)",
+		},
+		TestCase{
+			pattern: "读写汉字 学中文",
+			expect:  "(+ (text 读写汉字)) (- (text 学中文))",
+		},
+	}
+
+	for _, c := range tests {
+		_, err := PatternToString(c.pattern, int64(tree.FULLTEXT_NL))
+		require.NotNil(t, err)
+	}
+}
+
+func TestPatternQueryExpansion(t *testing.T) {
+
+	tests := []TestCase{
+		TestCase{
+			pattern: "Matrix Origin",
+			expect:  "(text matrix) (text origin)",
+		},
+		TestCase{
+			pattern: "读写汉字 学中文",
+			expect:  "(+ (text 读写汉字)) (- (text 学中文))",
+		},
+	}
+
+	for _, c := range tests {
+		_, err := PatternToString(c.pattern, int64(tree.FULLTEXT_QUERY_EXPANSION))
+		require.NotNil(t, err)
 	}
 }
 

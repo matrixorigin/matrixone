@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 /*
@@ -674,8 +675,10 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 }
 
 func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
-	if mode != 0 {
-		return nil, moerr.NewInternalError(context.TODO(), "only support default mode 0")
+	if mode == int64(tree.FULLTEXT_NL) {
+		return nil, moerr.NewInternalError(context.TODO(), "Natural Language mode not supported yet")
+	} else if mode != int64(tree.FULLTEXT_DEFAULT) && mode != int64(tree.FULLTEXT_BOOLEAN) {
+		return nil, moerr.NewInternalError(context.TODO(), "Query Expansion mode not supported")
 	}
 
 	lowerp := strings.ToLower(pattern)
