@@ -99,6 +99,10 @@ func TestPatternNL(t *testing.T) {
 			pattern: "读写",
 			expect:  "(* 读写*)",
 		},
+		TestCase{
+			pattern: "\"读写汉字 学中文\"",
+			expect:  "(phrase (text 读写汉字) (text 学中文))",
+		},
 	}
 
 	for _, c := range tests {

@@ -679,6 +679,18 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 }
 
 func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
+	if strings.HasPrefix(pattern, "\"") && strings.HasSuffix(pattern, "\"") {
+		// phrase here
+		ss := strings.Split(pattern[1:len(pattern)-1], " ")
+		var children []*Pattern
+
+		for _, s := range ss {
+			children = append(children, &Pattern{Text: s, Operator: TEXT})
+		}
+
+		return []*Pattern{&Pattern{Text: pattern, Operator: PHRASE, Children: children}}, nil
+	}
+
 	runeSlice := []rune(pattern)
 	ngram_size := 3
 	// if number of character is small than Ngram size = 3, do prefix search
