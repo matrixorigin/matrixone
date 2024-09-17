@@ -194,7 +194,16 @@ func TestFullTextOr(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
+	_, ok = result[1]
+	assert.Equal(t, ok, true)
+	_, ok = result[11]
+	assert.Equal(t, ok, true)
+	_, ok = result[12]
+	assert.Equal(t, ok, true)
+
 }
 
 func TestFullTextPlusPlus(t *testing.T) {
@@ -229,7 +238,9 @@ func TestFullTextPlusPlus(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
 }
 
 func TestFullTextPlusOr(t *testing.T) {
@@ -264,7 +275,11 @@ func TestFullTextPlusOr(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
+	_, ok = result[1]
+	assert.Equal(t, ok, true)
 }
 
 func TestFullTextMinus(t *testing.T) {
@@ -299,7 +314,9 @@ func TestFullTextMinus(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[1]
+	assert.Equal(t, ok, true)
 }
 
 func TestFullTextTilda(t *testing.T) {
@@ -334,7 +351,11 @@ func TestFullTextTilda(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
+	_, ok = result[1]
+	assert.Equal(t, ok, true)
 }
 
 func TestFullText1(t *testing.T) {
@@ -385,7 +406,14 @@ func TestFullText1(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	ids := []int{0, 1, 10, 11, 12, 20, 21, 22, 23, 30, 31, 32, 33}
+
+	for _, id := range ids {
+		_, ok = result[id]
+		assert.Equal(t, ok, true)
+	}
+
 }
 
 func TestFullText2(t *testing.T) {
@@ -436,7 +464,9 @@ func TestFullText2(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
 }
 
 func TestFullText3(t *testing.T) {
@@ -487,7 +517,9 @@ func TestFullText3(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[1]
+	assert.Equal(t, ok, true)
 }
 
 func TestFullText4(t *testing.T) {
@@ -510,7 +542,7 @@ func TestFullText4(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	assert.Equal(t, len(result), int(0))
 }
 
 func TestFullText5(t *testing.T) {
@@ -545,7 +577,11 @@ func TestFullText5(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
+	_, ok = result[1]
+	assert.Equal(t, ok, true)
 }
 
 func TestFullTextGroup(t *testing.T) {
@@ -588,7 +624,11 @@ func TestFullTextGroup(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
+	_, ok = result[1]
+	assert.Equal(t, ok, true)
 }
 
 func TestFullTextStar(t *testing.T) {
@@ -616,7 +656,11 @@ func TestFullTextStar(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
+	_, ok = result[1]
+	assert.Equal(t, ok, true)
 }
 
 func TestFullTextPhrase(t *testing.T) {
@@ -667,5 +711,7 @@ func TestFullTextPhrase(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	fmt.Println(result)
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
 }
