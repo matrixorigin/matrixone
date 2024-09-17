@@ -217,10 +217,8 @@ func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float3
 		idf := math.Log10(float64(s.Nrow) / float64(sum_doc_count))
 		tfidf := float32(tf * idf * idf)
 		result[doc_id] = weight * tfidf
-		fmt.Printf("Word: %v doc_count %d, sum = %d, idf = %f, tfidf=%f\n", doc_id, acc.Words[doc_id].DocCount, sum_doc_count, idf, tfidf)
 	}
 
-	fmt.Printf("EvalLeaf: %v\n", result)
 	return result, nil
 }
 
@@ -242,7 +240,6 @@ func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map
 			delete(result, doc_id)
 		}
 	}
-	fmt.Printf("EvalPlusPlus: %v, %v\n", p, result)
 	return result, nil
 }
 
@@ -262,7 +259,6 @@ func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[a
 			result[doc_id] += arg[doc_id]
 		}
 	}
-	fmt.Printf("EvalPlusOR: %v %v\n", p, result)
 	return result, nil
 }
 
@@ -272,7 +268,6 @@ func (p *Pattern) EvalMinus(s *SearchAccum, arg, result map[any]float32) (map[an
 		return result, nil
 	}
 
-	fmt.Printf("EvalMinus: %v %v %v\n", p, arg, result)
 	for doc_id := range arg {
 		_, ok := result[doc_id]
 		if ok {
@@ -280,7 +275,6 @@ func (p *Pattern) EvalMinus(s *SearchAccum, arg, result map[any]float32) (map[an
 			delete(result, doc_id)
 		}
 	}
-	fmt.Printf("EvalMinus Result: %v %v\n", p, result)
 	return result, nil
 }
 
@@ -298,8 +292,6 @@ func (p *Pattern) EvalOR(s *SearchAccum, arg, result map[any]float32) (map[any]f
 		}
 	}
 
-	fmt.Printf("EvalOR: %v %v\n", p, result)
-
 	return result, nil
 }
 
@@ -315,7 +307,6 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 	if nchild == 0 {
 		// leaf node: NoOp, Star
 		// calculate the score with weight
-		fmt.Printf("EvalLEAF %v\n", p)
 		if result == nil {
 			return p.EvalLeaf(accum, weight, result)
 		} else {
@@ -336,7 +327,6 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 		weight := float32(1.0)
 
 		if result == nil {
-			fmt.Printf("NULL RESULT FIRST %v\n", p)
 			// LessThan, GreaterThan and RankLess
 			return p.Children[0].Eval(accum, weight, nil)
 
@@ -376,7 +366,6 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 					return nil, err
 				}
 			}
-			fmt.Printf("GROUP %v %v\n", p, child_result)
 
 			return child_result, nil
 		}
@@ -444,8 +433,6 @@ func IsSubExpression(pattern string) bool {
 
 // first character is a operator
 func CreatePattern(pattern string) (*Pattern, error) {
-	fmt.Printf("PATTERN %s\n", pattern)
-
 	if len(pattern) == 0 {
 		return nil, moerr.NewInternalError(context.TODO(), "pattern is empty")
 	}
@@ -485,7 +472,6 @@ func CreatePattern(pattern string) (*Pattern, error) {
 	if err != nil {
 		return nil, err
 	}
-	//fmt.Printf("OP: %c, Operator: %d, Word: *%s*\n", op, operator, word)
 	return &Pattern{Text: pattern, Operator: operator, Children: p}, nil
 }
 
@@ -504,8 +490,6 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 	}
 
 	runeSlice := []rune(pattern)
-
-	//fmt.Printf("len = %d\n", len(runeSlice))
 
 	isspace := false
 	offset := 0
@@ -531,8 +515,6 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 				if bracket == 0 {
 					// found ()
 					end = i
-					//fmt.Printf("bracket (%d, %d)", offset, end)
-					//tokens = append(tokens, string(runeSlice[offset:end+1]))
 					p, err := CreatePattern(string(runeSlice[offset : end+1]))
 					if err != nil {
 						return nil, err
@@ -551,8 +533,6 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 				// something here
 				isspace = true
 
-				//fmt.Printf("word (%d, %d), ", offset, end)
-				//tokens = append(tokens, string(runeSlice[offset:end+1]))
 				p, err := CreatePattern(string(runeSlice[offset : end+1]))
 				if err != nil {
 					return nil, err
@@ -684,7 +664,6 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 
 	// TODO: Validate the patterns
 	for _, p := range ps {
-		fmt.Println(p.String())
 		err = p.Valid()
 		if err != nil {
 			return nil, err
