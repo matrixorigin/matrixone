@@ -78,11 +78,43 @@ func NewSearchAccum(tblname string, pattern string, mode int64, params string) (
 		return nil, err
 	}
 
-	// TODO: re-arrange the pattern with the precedency PHRASE > PLUS > TEXT,STAR,GROUP,RANKLESS > MINUS
+	// re-order the pattern with the precedency PHRASE > PLUS > TEXT,STAR,GROUP,RANKLESS > MINUS
 	// GROUP can only have LESSTHAN and GREATERTHAN children
 	// PLUS, MINUS, RANKLESS can only have TEXT, STAR and GROUP Children and only have Single Child
+	plus := findPatternByOperator(ps, PLUS)
+	minus := findPatternByOperator(ps, MINUS)
+	values := findValuePattern(ps)
 
-	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
+	var finalp []*Pattern
+	finalp = append(finalp, plus...)
+	finalp = append(finalp, values...)
+	finalp = append(finalp, minus...)
+
+	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: finalp, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
+}
+
+func findPatternByOperator(ps []*Pattern, op int) []*Pattern {
+	var result []*Pattern
+
+	for _, p := range ps {
+		if p.Operator == op {
+			result = append(result, p)
+		}
+	}
+
+	return result
+}
+
+func findValuePattern(ps []*Pattern) []*Pattern {
+	var result []*Pattern
+
+	for _, p := range ps {
+		if p.Operator != PLUS && p.Operator != MINUS {
+			result = append(result, p)
+		}
+	}
+
+	return result
 }
 
 func (s *SearchAccum) calculateDocCount() {

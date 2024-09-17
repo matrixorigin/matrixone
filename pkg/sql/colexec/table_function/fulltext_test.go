@@ -269,7 +269,7 @@ func TestFullTextPlusOr(t *testing.T) {
 
 func TestFullTextMinus(t *testing.T) {
 
-	pattern := "+apple -banana"
+	pattern := "-banana +apple"
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
@@ -515,7 +515,7 @@ func TestFullText4(t *testing.T) {
 
 func TestFullText5(t *testing.T) {
 
-	pattern := "we aRe so Happy"
+	pattern := "we aRe so +Happy"
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
