@@ -134,7 +134,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 
 	var keywords []string
 	for _, p := range s.Pattern {
-		ssNoOp := p.GetLeafText(NoOp)
+		ssNoOp := p.GetLeafText(TEXT)
 		for _, w := range ssNoOp {
 			keywords = append(keywords, "'"+w+"'")
 		}
@@ -147,7 +147,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 
 	sqlfmt := "SELECT doc_id, pos, '%s' FROM %s WHERE prefix_eq(word, '%s')"
 	for _, p := range s.Pattern {
-		ssStar := p.GetLeafText(Star)
+		ssStar := p.GetLeafText(STAR)
 		for _, w := range ssStar {
 			like := strings.ReplaceAll(w, "*", "")
 			union = append(union, fmt.Sprintf(sqlfmt, w, s.TblName, like))

@@ -78,9 +78,9 @@ func NewSearchAccum(tblname string, pattern string, mode int64, params string) (
 		return nil, err
 	}
 
-	// TODO: re-arrange the pattern with the precedency Phrase > Plus > NoOp,Star,Group,RankLess > Minus
-	// Group can only have LessThan and GreaterThan children
-	// Plus, Minus, RankLess can only have NoOp, Star and Group Children and only have Single Child
+	// TODO: re-arrange the pattern with the precedency PHRASE > PLUS > TEXT,STAR,GROUP,RANKLESS > MINUS
+	// GROUP can only have LESSTHAN and GREATERTHAN children
+	// PLUS, MINUS, RANKLESS can only have TEXT, STAR and GROUP Children and only have Single Child
 
 	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
 }
@@ -101,7 +101,7 @@ func (s *SearchAccum) calculateDocCount() {
 
 func (s *SearchAccum) PatternAnyPlus() bool {
 	for _, p := range s.Pattern {
-		if p.Operator == Plus {
+		if p.Operator == PLUS {
 			return true
 		}
 	}
@@ -111,36 +111,36 @@ func (s *SearchAccum) PatternAnyPlus() bool {
 type FullTextBooleanOperator int
 
 var (
-	NoOp        = 0
-	Star        = 1
-	Plus        = 2
-	Minus       = 3
-	LessThan    = 4
-	GreaterThan = 5
-	RankLess    = 6
-	Group       = 7
-	Phrase      = 8
+	TEXT        = 0
+	STAR        = 1
+	PLUS        = 2
+	MINUS       = 3
+	LESSTHAN    = 4
+	GREATERTHAN = 5
+	RANKLESS    = 6
+	GROUP       = 7
+	PHRASE      = 8
 )
 
 func OperatorToString(op int) string {
 	switch op {
-	case NoOp:
+	case TEXT:
 		return "text"
-	case Star:
+	case STAR:
 		return "*"
-	case Plus:
+	case PLUS:
 		return "+"
-	case Minus:
+	case MINUS:
 		return "-"
-	case LessThan:
+	case LESSTHAN:
 		return "<"
-	case GreaterThan:
+	case GREATERTHAN:
 		return ">"
-	case RankLess:
+	case RANKLESS:
 		return "~"
-	case Group:
+	case GROUP:
 		return "group"
-	case Phrase:
+	case PHRASE:
 		return "phrase"
 	default:
 		return ""
@@ -154,7 +154,7 @@ type Pattern struct {
 }
 
 func (p *Pattern) String() string {
-	if p.Operator == NoOp || p.Operator == Star {
+	if p.Operator == TEXT || p.Operator == STAR {
 		return fmt.Sprintf("(%s %s)", OperatorToString(p.Operator), p.Text)
 	}
 
@@ -283,13 +283,13 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 	var err error
 
 	nchild := len(p.Children)
-	// create, init a result map and pattern must not be Minus Type
-	if result == nil && p.Operator == Minus {
+	// create, init a result map and pattern must not be MINUS Type
+	if result == nil && p.Operator == MINUS {
 		return nil, moerr.NewInternalError(context.TODO(), "Pattern cannot be inited with '-' operator")
 	}
 
 	if nchild == 0 {
-		// leaf node: NoOp, Star
+		// leaf node: TEXT, STAR
 		// calculate the score with weight
 		if result == nil {
 			return p.EvalLeaf(accum, weight, result)
@@ -306,12 +306,12 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 		}
 
 	} else if nchild == 1 {
-		// Plus, Minus, LessThan, GreaterThan, RankLess
+		// PLUS, MINUS, LESSTHAN, GREATERTHAN, RANKLESS
 		// TODO: set weight by type
 		weight := float32(1.0)
 
 		if result == nil {
-			// LessThan, GreaterThan and RankLess
+			// LESSTHAN, GREATERTHAN and RANKLESS
 			return p.Children[0].Eval(accum, weight, nil)
 
 		} else {
@@ -320,14 +320,14 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 				return nil, err
 			}
 
-			// do Plus (AND) and Minus operation (REMOVE HASH) and OR operation
-			if p.Operator == Plus {
+			// do PLUS (AND) and MINUS operation (REMOVE HASH) and OR operation
+			if p.Operator == PLUS {
 				// AND
 				return p.EvalPlusPlus(accum, child_result, result)
-			} else if p.Operator == Minus {
+			} else if p.Operator == MINUS {
 				// MINUS
 				return p.EvalMinus(accum, child_result, result)
-			} else if p.Operator == Group || p.Operator == LessThan || p.Operator == GreaterThan {
+			} else if p.Operator == GROUP || p.Operator == LESSTHAN || p.Operator == GREATERTHAN {
 				return p.EvalOR(accum, child_result, result)
 			} else {
 				// OR
@@ -339,9 +339,9 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 			}
 		}
 	} else {
-		// Group, Phrase
+		// GROUP, PHRASE
 
-		if p.Operator == Group {
+		if p.Operator == GROUP {
 			// TODO: FIXME  use COMBINE instead of OR mode
 			child_result := make(map[any]float32)
 			for _, c := range p.Children {
@@ -354,8 +354,8 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 			return child_result, nil
 		}
 
-		if p.Operator == Phrase {
-			// all children are NoOp and AND operations
+		if p.Operator == PHRASE {
+			// all children are TEXT and AND operations
 			for i, c := range p.Children {
 				child_result, err := c.Eval(accum, weight, nil)
 				if err != nil {
@@ -382,12 +382,12 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 }
 
 func (p *Pattern) Valid() error {
-	if p.Operator == Plus || p.Operator == Minus {
+	if p.Operator == PLUS || p.Operator == MINUS {
 		if len(p.Children) == 0 {
 			return moerr.NewInternalError(context.TODO(), "+/- must have children with value")
 		}
 		for _, c := range p.Children {
-			if c.Operator == Plus || c.Operator == Minus || c.Operator == Phrase {
+			if c.Operator == PLUS || c.Operator == MINUS || c.Operator == PHRASE {
 				return moerr.NewInternalError(context.TODO(), "double +/- operator")
 			}
 		}
@@ -399,23 +399,23 @@ func (p *Pattern) Valid() error {
 			}
 		}
 
-	} else if p.Operator == NoOp || p.Operator == Star {
+	} else if p.Operator == TEXT || p.Operator == STAR {
 		if len(p.Children) > 0 {
 			return moerr.NewInternalError(context.TODO(), "text Pattern cannot have children")
 		}
-	} else if p.Operator == Phrase {
+	} else if p.Operator == PHRASE {
 		for _, c := range p.Children {
-			if c.Operator != NoOp {
-				return moerr.NewInternalError(context.TODO(), "Phrase can only have text Pattern")
+			if c.Operator != TEXT {
+				return moerr.NewInternalError(context.TODO(), "PHRASE can only have text Pattern")
 			}
 		}
-	} else if p.Operator == Group {
+	} else if p.Operator == GROUP {
 		if len(p.Children) == 0 {
 			return moerr.NewInternalError(context.TODO(), "sub-query is empty")
 		}
 
 		for _, c := range p.Children {
-			if c.Operator == Plus || c.Operator == Minus || c.Operator == Phrase {
+			if c.Operator == PLUS || c.Operator == MINUS || c.Operator == PHRASE {
 				return moerr.NewInternalError(context.TODO(), "sub-query cannot have +/-/phrase operator")
 			}
 		}
@@ -428,9 +428,9 @@ func (p *Pattern) Valid() error {
 		}
 
 	} else {
-		// LessThan, GreaterThan, RankLess
+		// LESSTHAN, GREATERTHAN, RANKLESS
 		for _, c := range p.Children {
-			if c.Operator != Group && c.Operator != NoOp && c.Operator != Star {
+			if c.Operator != GROUP && c.Operator != TEXT && c.Operator != STAR {
 				return moerr.NewInternalError(context.TODO(), "double operator")
 			}
 		}
@@ -449,25 +449,25 @@ func (p *Pattern) Valid() error {
 func GetOp(op rune) int {
 	switch op {
 	case '+':
-		return Plus
+		return PLUS
 	case '-':
-		return Minus
+		return MINUS
 	case '<':
-		return LessThan
+		return LESSTHAN
 	case '>':
-		return GreaterThan
+		return GREATERTHAN
 	case '~':
-		return RankLess
+		return RANKLESS
 	/*
 		case '*':
-			return Star
+			return STAR
 		case '"':
-			return Phrase
+			return PHRASE
 		case '(':
-			return Group
+			return GROUP
 	*/
 	default:
-		return NoOp
+		return TEXT
 	}
 }
 
@@ -494,22 +494,22 @@ func CreatePattern(pattern string) (*Pattern, error) {
 	var operator int
 	var word string
 	if op == '(' && lastop == ')' {
-		operator = Group
+		operator = GROUP
 		word = strings.TrimSpace(string(runeSlice[1 : strlen-1]))
 
 		p, err := ParsePatternInBooleanMode(word)
 		if err != nil {
 			return nil, err
 		}
-		return &Pattern{Text: pattern, Operator: Group, Children: p}, nil
+		return &Pattern{Text: pattern, Operator: GROUP, Children: p}, nil
 
 	}
 
 	word = string(runeSlice[1:])
 	operator = GetOp(op)
-	if operator == NoOp {
+	if operator == TEXT {
 		if lastop == '*' {
-			operator = Star
+			operator = STAR
 		}
 		word = string(runeSlice)
 		return &Pattern{Text: pattern, Operator: operator}, nil
@@ -532,10 +532,10 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 		var children []*Pattern
 
 		for _, s := range ss {
-			children = append(children, &Pattern{Text: s, Operator: NoOp})
+			children = append(children, &Pattern{Text: s, Operator: TEXT})
 		}
 
-		return []*Pattern{&Pattern{Text: pattern, Operator: Phrase, Children: children}}, nil
+		return []*Pattern{&Pattern{Text: pattern, Operator: PHRASE, Children: children}}, nil
 	}
 
 	runeSlice := []rune(pattern)
