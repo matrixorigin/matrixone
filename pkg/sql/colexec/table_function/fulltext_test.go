@@ -67,6 +67,10 @@ func TestPattern(t *testing.T) {
 			pattern: "+Matrix +(Origin (One Two))",
 			expect:  "(+ (text matrix)) (+ (group (text origin) (group (text one) (text two))))",
 		},
+		TestCase{
+			pattern: "+读写汉字 -学中文",
+			expect:  "(+ (text 读写汉字)) (- (text 学中文))",
+		},
 	}
 
 	for _, c := range tests {
