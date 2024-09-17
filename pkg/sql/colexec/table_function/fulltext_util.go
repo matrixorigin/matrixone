@@ -283,10 +283,6 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 	var err error
 
 	nchild := len(p.Children)
-	// create, init a result map and pattern must not be MINUS Type
-	if result == nil && p.Operator == MINUS {
-		return nil, moerr.NewInternalError(context.TODO(), "Pattern cannot be inited with '-' operator")
-	}
 
 	if nchild == 0 {
 		// leaf node: TEXT, STAR

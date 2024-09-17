@@ -14,18 +14,22 @@ type TestCase struct {
 	expect  string
 }
 
+func PatternListToString(ps []*Pattern) string {
+	var ss []string
+	for _, p := range ps {
+		ss = append(ss, p.String())
+	}
+
+	return strings.Join(ss, " ")
+}
+
 func PatternToString(pattern string, mode int64) (string, error) {
 	ps, err := ParsePattern(pattern, mode)
 	if err != nil {
 		return "", err
 	}
 
-	var ss []string
-	for _, p := range ps {
-		ss = append(ss, p.String())
-	}
-
-	return strings.Join(ss, " "), nil
+	return PatternListToString(ps), nil
 }
 
 func TestPattern(t *testing.T) {
@@ -115,9 +119,7 @@ func TestCalcDocCount(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "we"
@@ -166,9 +168,7 @@ func TestFullTextOr(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "apple"
@@ -203,9 +203,7 @@ func TestFullTextPlusPlus(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "apple"
@@ -240,9 +238,7 @@ func TestFullTextPlusOr(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "apple"
@@ -277,9 +273,7 @@ func TestFullTextMinus(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "apple"
@@ -314,9 +308,7 @@ func TestFullTextTilda(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "apple"
@@ -351,9 +343,7 @@ func TestFullText1(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "we"
@@ -404,9 +394,7 @@ func TestFullText2(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "we"
@@ -457,9 +445,7 @@ func TestFullText3(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "we"
@@ -504,15 +490,71 @@ func TestFullText3(t *testing.T) {
 	fmt.Println(result)
 }
 
+func TestFullText4(t *testing.T) {
+
+	pattern := "we -aRe so Happy"
+	s, err := NewSearchAccum("index", pattern, 0, "")
+	require.Nil(t, err)
+
+	fmt.Println(PatternListToString(s.Pattern))
+
+	// no words found
+
+	s.Nrow = 100
+	s.calculateDocCount()
+
+	// eval
+	var result map[any]float32
+	for _, p := range s.Pattern {
+		result, err = p.Eval(s, float32(1.0), result)
+		require.Nil(t, err)
+	}
+
+	fmt.Println(result)
+}
+
+func TestFullText5(t *testing.T) {
+
+	pattern := "we aRe so Happy"
+	s, err := NewSearchAccum("index", pattern, 0, "")
+	require.Nil(t, err)
+
+	fmt.Println(PatternListToString(s.Pattern))
+
+	// pretend adding records from database
+	// init the word "we"
+	word := "we"
+	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
+	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
+
+	// init the word "are"
+	word = "are"
+	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word].Words[10] = &Word{DocId: 10, Position: []int64{0, 4, 6}, DocCount: 2}
+	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
+	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
+
+	s.Nrow = 100
+	s.calculateDocCount()
+
+	// eval
+	var result map[any]float32
+	for _, p := range s.Pattern {
+		result, err = p.Eval(s, float32(1.0), result)
+		require.Nil(t, err)
+	}
+
+	fmt.Println(result)
+}
+
 func TestFullTextGroup(t *testing.T) {
 
 	pattern := "+we +(<are >so)"
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "we"
@@ -555,9 +597,7 @@ func TestFullTextStar(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "apple"
@@ -585,9 +625,7 @@ func TestFullTextPhrase(t *testing.T) {
 	s, err := NewSearchAccum("index", pattern, 0, "")
 	require.Nil(t, err)
 
-	for _, p := range s.Pattern {
-		fmt.Printf("%v", p)
-	}
+	fmt.Println(PatternListToString(s.Pattern))
 
 	// pretend adding records from database
 	// init the word "we"
