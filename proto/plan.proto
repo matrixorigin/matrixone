@@ -848,8 +848,9 @@ message Node {
 
 	Snapshot scan_snapshot = 58;
 
-	OnDuplicateAction on_duplicate_action = 59;
-
+	bool recursive_cte = 59;
+	
+	OnDuplicateAction on_duplicate_action = 60;
 }
 
 // Snapshot Represents a snapshot of the database

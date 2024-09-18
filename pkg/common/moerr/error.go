@@ -285,6 +285,9 @@ const (
 	// Group 12: The error code that rarely appears
 	ErrTooLargeObjectSize uint16 = 22001
 
+	// Group 13: CDC
+	ErrStaleRead uint16 = 22101
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -515,6 +518,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 12: The error code that rarely appears
 	ErrTooLargeObjectSize: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "objectio: too large object size %d"},
 
+	// Group 13: CDC
+	ErrStaleRead: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC handle: stale read, min TS is %v, receive %v"},
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
 }

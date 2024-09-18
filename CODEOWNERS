@@ -39,6 +39,9 @@
 # pkg/catalog
 /pkg/catalog @XuPeng-SH
 
+#pkg/cdc
+/pkg/cdc @daviszhen @ck89119
+
 # pkg/cnservice
 /pkg/cnservice @reusee @daviszhen
 

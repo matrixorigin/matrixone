@@ -698,7 +698,7 @@ func updateInfoFromZoneMap(
 				objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] = int64(objColMeta.NullCnt())
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
-				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
+				info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
 					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())

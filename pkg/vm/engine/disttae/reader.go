@@ -94,7 +94,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 				// primary key is in the cols
 				mixin.columns.pkPos = i
 			}
-			mixin.columns.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+			mixin.columns.colTypes[i] = plan2.ExprType2Type(&colDef.Typ)
 			mixin.columns.colTypes[i].Scale = colDef.Typ.Scale
 			mixin.columns.colTypes[i].Width = colDef.Typ.Width
 		}

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -55,6 +56,8 @@ var (
 	alterPitrFormat = `update mo_catalog.mo_pitr set modified_time = '%s', pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s' and create_account = %d;`
 
 	getPitrFormat = `select * from mo_catalog.mo_pitr`
+
+	checkDupPitrFormat = `select pitr_id from mo_catalog.mo_pitr where create_account = %d and obj_id = %d;`
 
 	getSqlForCheckDatabaseFmt = `select dat_id from mo_catalog.mo_database {MO_TS = %d} where datname = '%s';`
 
@@ -131,6 +134,35 @@ func getSqlForCheckAccountWithPitr(ctx context.Context, ts int64, accountName st
 	return fmt.Sprintf(getSqlForCheckAccountFmt, ts, accountName), nil
 }
 
+func getSqlForCheckDupPitrFormat(accountId, objId uint64) string {
+	return fmt.Sprintf(checkDupPitrFormat, accountId, objId)
+}
+
+func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccountId, objId uint64) (bool, error) {
+	sql := getSqlForCheckDupPitrFormat(createAccountId, objId)
+
+	var newCtx = ctx
+	if createAccountId != sysAccountID {
+		newCtx = defines.AttachAccountId(newCtx, sysAccountID)
+	}
+
+	bh.ClearExecResultSet()
+	err := bh.Exec(newCtx, sql)
+	if err != nil {
+		return false, err
+	}
+
+	erArray, err := getResultSet(newCtx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		return true, nil
+	}
+	return false, nil
+}
+
 func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string, accountId uint64) (bool, error) {
 	var sql string
 	var erArray []ExecResult
@@ -143,6 +175,7 @@ func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string
 	if accountId != sysAccountID {
 		newCtx = defines.AttachAccountId(newCtx, sysAccountID)
 	}
+
 	bh.ClearExecResultSet()
 	err = bh.Exec(newCtx, sql)
 	if err != nil {
@@ -170,6 +203,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 	var databaseName string
 	var tableName string
 	var sql string
+	var isDup bool
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -241,6 +275,13 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 
 	switch pitrLevel {
 	case tree.PITRLEVELCLUSTER:
+		isDup, err = checkPitrDup(ctx, bh, uint64(createAcc), math.MaxUint64)
+		if err != nil {
+			return err
+		}
+		if isDup {
+			return moerr.NewInternalError(ctx, "cluster level pitr already exists")
+		}
 		sql, err = getSqlForCreatePitr(
 			ctx,
 			newUUid.String(),
@@ -253,7 +294,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 			accountName,
 			databaseName,
 			tableName,
-			0,
+			math.MaxUint64,
 			uint8(pitrVal),
 			pitrUnit)
 		if err != nil {
@@ -299,6 +340,14 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 				return rntErr
 			}
 
+			isDup, err = checkPitrDup(ctx, bh, uint64(createAcc), accountId)
+			if err != nil {
+				return err
+			}
+			if isDup {
+				return moerr.NewInternalError(ctx, fmt.Sprintf("account `%s` already has a pitr", pitrForAccount))
+			}
+
 			sql, err = getSqlForCreatePitr(
 				ctx,
 				newUUid.String(),
@@ -319,6 +368,13 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 			}
 		} else {
 			// create pitr for current account
+			isDup, err = checkPitrDup(ctx, bh, uint64(createAcc), uint64(createAcc))
+			if err != nil {
+				return err
+			}
+			if isDup {
+				return moerr.NewInternalError(ctx, fmt.Sprintf("account `%s` already has a pitr", currentAccount))
+			}
 			sql, err = getSqlForCreatePitr(
 				ctx,
 				newUUid.String(),
@@ -374,6 +430,14 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		dbId, rtnErr := getDatabaseIdFunc(databaseName)
 		if rtnErr != nil {
 			return rtnErr
+		}
+
+		isDup, err = checkPitrDup(ctx, bh, uint64(createAcc), dbId)
+		if err != nil {
+			return err
+		}
+		if isDup {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("database `%s` already has a pitr", databaseName))
 		}
 
 		sql, err = getSqlForCreatePitr(
@@ -432,6 +496,14 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		tblId, rtnErr := getTableIdFunc(databaseName, tableName)
 		if rtnErr != nil {
 			return rtnErr
+		}
+
+		isDup, err = checkPitrDup(ctx, bh, uint64(createAcc), tblId)
+		if err != nil {
+			return err
+		}
+		if isDup {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("database `%s` table `%s` already has a pitr", databaseName, tableName))
 		}
 
 		sql, err = getSqlForCreatePitr(
