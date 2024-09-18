@@ -15,8 +15,9 @@ package colexec
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -86,6 +87,53 @@ func TestSetStatsCNCreated(t *testing.T) {
 	require.Equal(t, uint32(bat.VectorCount()), stats.BlkCnt())
 	require.Equal(t, uint32(bat.Vecs[0].Length()), stats.Rows())
 
+}
+
+func TestMergeSortBatches(t *testing.T) {
+	pool, err := mpool.NewMPool("", mpool.GB, 0)
+	require.NoError(t, err)
+	var restult *batch.Batch
+	sinker := func(bat *batch.Batch) error {
+		var err2 error
+		if restult != nil {
+			restult.Clean(pool)
+		}
+		restult, err2 = bat.Dup(pool)
+		if err2 != nil {
+			return err2
+		}
+		return nil
+	}
+	// Test bool
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_bool.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], true, false, pool)
+		vector.AppendFixed(bat2.Vecs[1], false, false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{1, 2}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []bool{false, true}, vector.MustFixedColWithTypeCheck[bool](restult.Vecs[1]))
+
+	}
 }
 
 func TestS3Writer_SortAndSync(t *testing.T) {
