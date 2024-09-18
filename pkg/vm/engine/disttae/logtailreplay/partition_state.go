@@ -319,6 +319,12 @@ func (p *PartitionState) HandleTombstoneObjectList(
 		}
 
 		p.tombstoneObjectsNameIndex.Set(objEntry)
+		if !objEntry.DeleteTime.IsEmpty() {
+			// if already exists, delete it first
+			tmpObj := objEntry
+			tmpObj.DeleteTime = types.MaxTs()
+			p.tombstoneObjectsNameIndex.Delete(tmpObj)
+		}
 		p.tombstoneObjectDTSIndex.Set(objEntry)
 
 		if objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty() {
