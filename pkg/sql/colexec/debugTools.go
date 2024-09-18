@@ -86,13 +86,13 @@ func printExpressionExecutor(buffer *bytes.Buffer, executor ExpressionExecutor, 
 func printFixedVectorExpressionExecutor(buffer *bytes.Buffer, expr *FixedVectorExpressionExecutor, prefix string) error {
 	buffer.WriteString("FixedVectorExpressionExecutor\n")
 
-	buffer.WriteString(fmt.Sprintf(prefix+"  noNeedToSetLength: %v\n", expr.noNeedToSetLength))
+	buffer.WriteString(fmt.Sprintf("%s  noNeedToSetLength: %v\n", prefix, expr.noNeedToSetLength))
 	if expr.resultVector.GetType() != nil {
-		buffer.WriteString(fmt.Sprintf(prefix+"  resultVector.typ: %s\n", expr.resultVector.GetType().String()))
+		buffer.WriteString(fmt.Sprintf("%s  resultVector.typ: %s\n", prefix, expr.resultVector.GetType().String()))
 	} else {
 		buffer.WriteString(fmt.Sprintf("%s  resultVector.typ is nil\n", prefix))
 	}
-	buffer.WriteString(fmt.Sprintf(prefix+"  resultVector.value: %s\n", expr.resultVector.String()))
+	buffer.WriteString(fmt.Sprintf("%s  resultVector.value: %s\n", prefix, expr.resultVector.String()))
 
 	return nil
 }
@@ -103,12 +103,12 @@ func printFunctionExpressionExecutor(buffer *bytes.Buffer, expr *FunctionExpress
 
 	// functionInformationForEval
 	buffer.WriteString(fmt.Sprintf("%s  functionInformationForEval\n", prefix))
-	buffer.WriteString(fmt.Sprintf(prefix+"    fid: %v\n", expr.fid))
+	buffer.WriteString(fmt.Sprintf("%s    fid: %v\n", prefix, expr.fid))
 	evalFn, freeFn := expr.evalFn, expr.freeFn
 
 	if evalFn != nil {
 		if fn := runtime.FuncForPC(uintptr(reflect.ValueOf(evalFn).Pointer())); fn != nil {
-			buffer.WriteString(fmt.Sprintf(prefix+"    evalFn: %s\n", fn.Name()))
+			buffer.WriteString(fmt.Sprintf("%s    evalFn: %s\n", prefix, fn.Name()))
 		} else {
 			buffer.WriteString(fmt.Sprintf("%s    evalFn: Unkown\n", prefix))
 		}
@@ -118,72 +118,72 @@ func printFunctionExpressionExecutor(buffer *bytes.Buffer, expr *FunctionExpress
 
 	if freeFn != nil {
 		if fn := runtime.FuncForPC(uintptr(reflect.ValueOf(freeFn).Pointer())); fn != nil {
-			buffer.WriteString(fmt.Sprintf(prefix+"    freeFn: %s\n", fn.Name()))
+			buffer.WriteString(fmt.Sprintf("%s    freeFn: %s\n", prefix, fn.Name()))
 		} else {
-			buffer.WriteString(fmt.Sprintf(prefix + "    freeFn: Unkown\n"))
+			buffer.WriteString(fmt.Sprintf("%s    freeFn: Unkown\n", prefix))
 		}
 	} else {
-		buffer.WriteString(fmt.Sprintf(prefix + "    freeFn: is nil\n"))
+		buffer.WriteString(fmt.Sprintf("%s    freeFn: is nil\n", prefix))
 	}
 
 	volatile, timeDependent := expr.volatile, expr.timeDependent
-	buffer.WriteString(fmt.Sprintf(prefix+"  volatile: %v\n", volatile))
-	buffer.WriteString(fmt.Sprintf(prefix+"  timeDependent: %v\n", timeDependent))
+	buffer.WriteString(fmt.Sprintf("%s  volatile: %v\n", prefix, volatile))
+	buffer.WriteString(fmt.Sprintf("%s  timeDependent: %v\n", prefix, timeDependent))
 
 	// foloded
-	buffer.WriteString(fmt.Sprintf(prefix + "  folded\n"))
+	buffer.WriteString(fmt.Sprintf("%s  folded\n", prefix))
 
-	buffer.WriteString(fmt.Sprintf(prefix+"    needFoldingCheck: %v\n", expr.folded.needFoldingCheck))
-	buffer.WriteString(fmt.Sprintf(prefix+"    canFold: %v\n", expr.folded.canFold))
+	buffer.WriteString(fmt.Sprintf("%s    needFoldingCheck: %v\n", prefix, expr.folded.needFoldingCheck))
+	buffer.WriteString(fmt.Sprintf("%s    canFold: %v\n", prefix, expr.folded.canFold))
 	if expr.folded.foldVector != nil {
 		if expr.folded.foldVector.GetType() != nil {
-			buffer.WriteString(fmt.Sprintf(prefix+"    foldVector.typ: %s\n", expr.folded.foldVector.GetType().String()))
+			buffer.WriteString(fmt.Sprintf("%s    foldVector.typ: %s\n", prefix, expr.folded.foldVector.GetType().String()))
 		}
-		buffer.WriteString(fmt.Sprintf(prefix+"    foldVector.value: %s\n", expr.folded.foldVector.String()))
+		buffer.WriteString(fmt.Sprintf("%s    foldVector.value: %s\n", prefix, expr.folded.foldVector.String()))
 	} else {
-		buffer.WriteString(fmt.Sprintf(prefix + "    foldVector is nil\n"))
+		buffer.WriteString(fmt.Sprintf("%s    foldVector is nil\n", prefix))
 	}
 
 	// selectList1, selectList2
-	buffer.WriteString(fmt.Sprintf(prefix+"  selectList1: %v\n", expr.selectList1))
-	buffer.WriteString(fmt.Sprintf(prefix+"  selectList2: %v\n", expr.selectList2))
+	buffer.WriteString(fmt.Sprintf("%s  selectList1: %v\n", prefix, expr.selectList1))
+	buffer.WriteString(fmt.Sprintf("%s  selectList2: %v\n", prefix, expr.selectList2))
 
 	// selectList
-	buffer.WriteString(fmt.Sprintf(prefix + "  selectList\n"))
-	buffer.WriteString(fmt.Sprintf(prefix+"    anynull: %v\n", expr.selectList.AnyNull))
-	buffer.WriteString(fmt.Sprintf(prefix+"    allnull: %v\n", expr.selectList.AllNull))
-	buffer.WriteString(fmt.Sprintf(prefix+"    selectList: %v\n", expr.selectList.SelectList))
+	buffer.WriteString(fmt.Sprintf("%s  selectList\n", prefix))
+	buffer.WriteString(fmt.Sprintf("%s    anynull: %v\n", prefix, expr.selectList.AnyNull))
+	buffer.WriteString(fmt.Sprintf("%s    allnull: %v\n", prefix, expr.selectList.AllNull))
+	buffer.WriteString(fmt.Sprintf("%s    selectList: %v\n", prefix, expr.selectList.SelectList))
 
 	// resultVector
 	if expr.resultVector != nil {
 		vec := expr.resultVector.GetResultVector()
 		if vec != nil {
 			if vec.GetType() != nil {
-				buffer.WriteString(fmt.Sprintf(prefix+"  resultVector.typ: %s\n", vec.GetType().String()))
+				buffer.WriteString(fmt.Sprintf("%s  resultVector.typ: %s\n", prefix, vec.GetType().String()))
 			} else {
-				buffer.WriteString(fmt.Sprintf(prefix + "  resultVector.typ is nil\n"))
+				buffer.WriteString(fmt.Sprintf("%s  resultVector.typ is nil\n", prefix))
 			}
-			buffer.WriteString(fmt.Sprintf(prefix+"  resultVector.value: %s\n", vec.String()))
+			buffer.WriteString(fmt.Sprintf("%s  resultVector.value: %s\n", prefix, vec.String()))
 		} else {
-			buffer.WriteString(fmt.Sprintf(prefix + "  resultVector is nil\n"))
+			buffer.WriteString(fmt.Sprintf("%s  resultVector is nil\n", prefix))
 		}
 	} else {
-		buffer.WriteString(fmt.Sprintf(prefix + "  resultVector is nil\n"))
+		buffer.WriteString(fmt.Sprintf("%s  resultVector is nil\n", prefix))
 	}
 
-	buffer.WriteString(prefix + "  parameterResults:\n")
+	buffer.WriteString("%s  parameterResults:\n")
 	for i, p := range expr.parameterResults {
 		if p != nil {
 			if p.GetType() != nil {
-				buffer.WriteString(fmt.Sprintf(prefix+"    parameter[%d].typ: %s\n", i, p.GetType().String()))
+				buffer.WriteString(fmt.Sprintf("%s    parameter[%d].typ: %s\n", prefix, i, p.GetType().String()))
 			} else {
-				buffer.WriteString(fmt.Sprintf(prefix+"    parameter[%d].typ is nil\n", i))
+				buffer.WriteString(fmt.Sprintf("%s    parameter[%d].typ is nil\n", prefix, i))
 			}
-			buffer.WriteString(fmt.Sprintf(prefix+"    parameter[%d].value: %s\n", i, p.String()))
+			buffer.WriteString(fmt.Sprintf("%s    parameter[%d].value: %s\n", prefix, i, p.String()))
 		}
 	}
 
-	buffer.WriteString(prefix + "  parameterExecutor:\n")
+	buffer.WriteString("%s  parameterExecutor:\n")
 	for i, param := range expr.parameterExecutor {
 		printExpressionExecutor(buffer, param, prefix, i == len(expr.parameterExecutor)-1, false)
 	}
@@ -195,14 +195,14 @@ func printFunctionExpressionExecutor(buffer *bytes.Buffer, expr *FunctionExpress
 func printColumnExpressionExecutor(buffer *bytes.Buffer, expr *ColumnExpressionExecutor, prefix string) error {
 	buffer.WriteString("ColumnExpressionExecutor\n")
 
-	buffer.WriteString(fmt.Sprintf(prefix+"  relIndex: %d\n", expr.relIndex))
-	buffer.WriteString(fmt.Sprintf(prefix+"  colIndex: %d\n", expr.colIndex))
-	buffer.WriteString(fmt.Sprintf(prefix+"  typ: %s\n", expr.typ.String()))
+	buffer.WriteString(fmt.Sprintf("%s  relIndex: %d\n", prefix, expr.relIndex))
+	buffer.WriteString(fmt.Sprintf("%s  colIndex: %d\n", prefix, expr.colIndex))
+	buffer.WriteString(fmt.Sprintf("%s  typ: %s\n", prefix, expr.typ.String()))
 
 	if expr.nullVecCache != nil {
-		buffer.WriteString(fmt.Sprintf(prefix+"  nullVecCache: %s\n", expr.nullVecCache.String()))
+		buffer.WriteString(fmt.Sprintf("%s  nullVecCache: %s\n", prefix, expr.nullVecCache.String()))
 	} else {
-		buffer.WriteString(fmt.Sprintf(prefix + "  nullVecCache is nil\n"))
+		buffer.WriteString(fmt.Sprintf("%s  nullVecCache is nil\n", prefix))
 	}
 
 	return nil
@@ -212,19 +212,19 @@ func printColumnExpressionExecutor(buffer *bytes.Buffer, expr *ColumnExpressionE
 func printParamExpressionExecutor(buffer *bytes.Buffer, expr *ParamExpressionExecutor, prefix string) error {
 	buffer.WriteString("ParamExpressionExecutor\n")
 
-	buffer.WriteString(fmt.Sprintf(prefix+"  pos: %d\n", expr.pos))
-	buffer.WriteString(fmt.Sprintf(prefix+"  typ: %s\n", expr.typ.String()))
+	buffer.WriteString(fmt.Sprintf("%s  pos: %d\n", prefix, expr.pos))
+	buffer.WriteString(fmt.Sprintf("%s  typ: %s\n", prefix, expr.typ.String()))
 
 	if expr.null != nil {
-		buffer.WriteString(fmt.Sprintf(prefix+"  null: %s\n", expr.null.String()))
+		buffer.WriteString(fmt.Sprintf("%s  null: %s\n", prefix, expr.null.String()))
 	} else {
-		buffer.WriteString(fmt.Sprintf(prefix + "  null is nil\n"))
+		buffer.WriteString(fmt.Sprintf("%s  null is nil\n", prefix))
 	}
 
 	if expr.vec != nil {
-		buffer.WriteString(fmt.Sprintf(prefix+"  vec: %s\n", expr.vec.String()))
+		buffer.WriteString(fmt.Sprintf("%s  vec: %s\n", prefix, expr.vec.String()))
 	} else {
-		buffer.WriteString(fmt.Sprintf(prefix + "  vec is nil\n"))
+		buffer.WriteString(fmt.Sprintf("%s  vec is nil\n", prefix))
 	}
 
 	return nil
@@ -234,21 +234,21 @@ func printParamExpressionExecutor(buffer *bytes.Buffer, expr *ParamExpressionExe
 func printVarExpressionExecutor(buffer *bytes.Buffer, expr *VarExpressionExecutor, prefix string) error {
 	buffer.WriteString("VarExpressionExecutor\n")
 
-	buffer.WriteString(fmt.Sprintf(prefix+"  name: %s\n", expr.name))
-	buffer.WriteString(fmt.Sprintf(prefix+"  system: %s\n", expr.system))
-	buffer.WriteString(fmt.Sprintf(prefix+"  global: %s\n", expr.global))
-	buffer.WriteString(fmt.Sprintf(prefix+"  typ: %s\n", expr.typ.String()))
+	buffer.WriteString(fmt.Sprintf("%s  name: %s\n", prefix, expr.name))
+	buffer.WriteString(fmt.Sprintf("%s  system: %v\n", prefix, expr.system))
+	buffer.WriteString(fmt.Sprintf("%s  global: %v\n", prefix, expr.global))
+	buffer.WriteString(fmt.Sprintf("%s  typ: %s\n", prefix, expr.typ.String()))
 
 	if expr.null != nil {
-		buffer.WriteString(fmt.Sprintf(prefix+"  null: %s\n", expr.null.String()))
+		buffer.WriteString(fmt.Sprintf("%s  null: %s\n", prefix, expr.null.String()))
 	} else {
-		buffer.WriteString(fmt.Sprintf(prefix + "  null is nil\n"))
+		buffer.WriteString(fmt.Sprintf("%s  null is nil\n", prefix))
 	}
 
 	if expr.vec != nil {
-		buffer.WriteString(fmt.Sprintf(prefix+"  vec: %s\n", expr.vec.String()))
+		buffer.WriteString(fmt.Sprintf("%s  vec: %s\n", prefix, expr.vec.String()))
 	} else {
-		buffer.WriteString(fmt.Sprintf(prefix + "  vec is nil\n"))
+		buffer.WriteString(fmt.Sprintf("%s  vec is nil\n", prefix))
 	}
 
 	return nil
@@ -258,17 +258,17 @@ func printVarExpressionExecutor(buffer *bytes.Buffer, expr *VarExpressionExecuto
 func printListExpressionExecutor(buffer *bytes.Buffer, expr *ListExpressionExecutor, prefix string) error {
 	buffer.WriteString("ListExpressionExecutor\n")
 
-	buffer.WriteString(fmt.Sprintf(prefix+"  typ: %s\n", expr.typ.String()))
+	buffer.WriteString(fmt.Sprintf("%s  typ: %s\n", prefix, expr.typ.String()))
 
 	if expr.resultVector != nil {
 		if expr.resultVector.GetType() != nil {
-			buffer.WriteString(fmt.Sprintf(prefix+"  resultVector.typ: %s\n", expr.resultVector.GetType().String()))
+			buffer.WriteString(fmt.Sprintf("%s  resultVector.typ: %s\n", prefix, expr.resultVector.GetType().String()))
 		} else {
-			buffer.WriteString(fmt.Sprintf(prefix + "  resultVector.typ is nil\n"))
+			buffer.WriteString(fmt.Sprintf("%s  resultVector.typ is nil\n", prefix))
 		}
-		buffer.WriteString(fmt.Sprintf(prefix+"  resultVector.value: %s\n", expr.resultVector.String()))
+		buffer.WriteString(fmt.Sprintf("%s  resultVector.value: %s\n", prefix, expr.resultVector.String()))
 	} else {
-		buffer.WriteString(fmt.Sprintf(prefix + "  resultVector is nil\n"))
+		buffer.WriteString(fmt.Sprintf("%s  resultVector is nil\n", prefix))
 	}
 
 	for i, exec := range expr.parameterExecutor {
