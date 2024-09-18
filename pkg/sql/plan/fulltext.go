@@ -94,27 +94,14 @@ var (
 	}
 )
 
-// arg list [index_table_name, search_against, mode]
+// arg list [source_table_name, index_table_name, search_against, mode]
 func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 
-	if len(exprs) != 3 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
+	if len(exprs) != 4 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 4).")
 	}
 
 	colDefs := _getColDefs(ftIndexColdefs)
-
-	/*
-		val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
-		if err == nil {
-			if v, _ := val.(int8); v == 0 {
-				return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
-			} else {
-				logutil.Infof("buildMetaScan : save query result: %v", v)
-			}
-		} else {
-			return 0, err
-		}
-	*/
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
@@ -135,6 +122,7 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 	return builder.appendNode(node, ctx), nil
 }
 
+/*
 // seems coldef just check the name but not type.  don't need to change primary key type to match with source table.
 func (builder *QueryBuilder) getFullTextColDefs(fn *tree.FuncExpr) ([]*plan.ColDef, error) {
 
@@ -153,6 +141,7 @@ func (builder *QueryBuilder) getFullTextColDefs(fn *tree.FuncExpr) ([]*plan.ColD
 
 	return coldefs, nil
 }
+*/
 
 // select * from index_table, fulltext_index_tokenize(doc_id, concat(body, ' ', title))
 // arg list [params, doc_id, content]
@@ -176,21 +165,10 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	pkType := scanNode.TableDef.Cols[pkPos].Typ
 	colDefs[0].Typ = pkType
+
+	// TODO: remove first_doc_id, last_doc_id
 	colDefs[4].Typ = pkType
 	colDefs[5].Typ = pkType
-
-	/*
-	   val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
-	   if err == nil {
-	           if v, _ := val.(int8); v == 0 {
-	                   return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
-	           } else {
-	                   logutil.Infof("buildMetaScan : save query result: %v", v)
-	           }
-	   } else {
-	           return 0, err
-	   }
-	*/
 
 	// remove the first argment and put the first argument to Param
 	exprs = exprs[1:]

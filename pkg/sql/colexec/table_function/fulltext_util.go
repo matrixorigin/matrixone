@@ -65,27 +65,27 @@ type WordAccum struct {
 }
 
 type SearchAccum struct {
-	TblName     string
-	Mode        int64
-	Pattern     []*Pattern
-	Params      string
-	WordAccums  map[string]*WordAccum
-	SumDocCount map[string]int32
-	Nrow        int64
+	SrcTblName string
+	TblName    string
+	Mode       int64
+	Pattern    []*Pattern
+	Params     string
+	WordAccums map[string]*WordAccum
+	Nrow       int64
 }
 
 func NewWordAccum(id int64, mode int64) *WordAccum {
 	return &WordAccum{Id: id, Mode: mode, Words: make(map[any]*Word)}
 }
 
-func NewSearchAccum(tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
+func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
 
 	ps, err := ParsePattern(pattern, mode)
 	if err != nil {
 		return nil, err
 	}
 
-	return &SearchAccum{TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
+	return &SearchAccum{SrcTblName: srctbl, TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
 }
 
 func findPatternByOperator(ps []*Pattern, op int) []*Pattern {
@@ -110,20 +110,6 @@ func findValuePattern(ps []*Pattern) []*Pattern {
 	}
 
 	return result
-}
-
-func (s *SearchAccum) calculateDocCount() {
-	sum_count := make(map[string]int32)
-
-	for key := range s.WordAccums {
-		acc := s.WordAccums[key]
-		sum_count[key] = 0
-		for doc_id := range acc.Words {
-			sum_count[key] += acc.Words[doc_id].DocCount
-		}
-	}
-
-	s.SumDocCount = sum_count
 }
 
 func (s *SearchAccum) PatternAnyPlus() bool {
@@ -218,15 +204,14 @@ func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float3
 		return result, nil
 	}
 
-	sum_doc_count := s.SumDocCount[key]
-
 	if result == nil {
 		result = make(map[any]float32)
 	}
 
+	nmatch := float64(len(acc.Words))
 	for doc_id := range acc.Words {
 		tf := float64(acc.Words[doc_id].DocCount)
-		idf := math.Log10(float64(s.Nrow) / float64(sum_doc_count))
+		idf := math.Log10(float64(s.Nrow) / nmatch)
 		tfidf := float32(tf * idf * idf)
 		result[doc_id] = weight * tfidf
 	}

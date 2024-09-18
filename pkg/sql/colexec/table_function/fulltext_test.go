@@ -156,59 +156,10 @@ func TestPatternFail(t *testing.T) {
 	}
 }
 
-func TestCalcDocCount(t *testing.T) {
-
-	pattern := "we aRe so Happy"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_NL), "")
-	require.Nil(t, err)
-
-	//fmt.Println(PatternListToString(s.Pattern))
-
-	// pretend adding records from database
-	// init the word "we"
-	word := "we"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
-	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
-	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
-
-	// init the word "are"
-	word = "are"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
-	s.WordAccums[word].Words[10] = &Word{DocId: 10, Position: []int64{0, 4, 6}, DocCount: 2}
-	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
-	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
-
-	// init the word "so"
-	word = "so"
-	s.WordAccums[word] = &WordAccum{Id: 2, Mode: 0, Words: make(map[any]*Word)}
-	s.WordAccums[word].Words[20] = &Word{DocId: 20, Position: []int64{0, 4, 6}, DocCount: 5}
-	s.WordAccums[word].Words[21] = &Word{DocId: 21, Position: []int64{0, 4, 6}, DocCount: 6}
-	s.WordAccums[word].Words[22] = &Word{DocId: 22, Position: []int64{0, 4, 6}, DocCount: 7}
-	s.WordAccums[word].Words[23] = &Word{DocId: 23, Position: []int64{0, 4, 6}, DocCount: 8}
-
-	// init the word "happy"
-	word = "happy"
-	s.WordAccums[word] = &WordAccum{Id: 3, Mode: 0, Words: make(map[any]*Word)}
-	s.WordAccums[word].Words[30] = &Word{DocId: 30, Position: []int64{0, 4, 6}, DocCount: 1}
-	s.WordAccums[word].Words[31] = &Word{DocId: 31, Position: []int64{0, 4, 6}, DocCount: 2}
-	s.WordAccums[word].Words[32] = &Word{DocId: 32, Position: []int64{0, 4, 6}, DocCount: 3}
-	s.WordAccums[word].Words[33] = &Word{DocId: 33, Position: []int64{0, 4, 6}, DocCount: 4}
-
-	s.Nrow = 100
-	s.calculateDocCount()
-
-	//fmt.Println(s.SumDocCount)
-
-	assert.Equal(t, s.SumDocCount["we"], int32(5))
-	assert.Equal(t, s.SumDocCount["are"], int32(9))
-	assert.Equal(t, s.SumDocCount["so"], int32(26))
-	assert.Equal(t, s.SumDocCount["happy"], int32(10))
-}
-
 func TestFullTextNL(t *testing.T) {
 
 	pattern := "apple banana"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_NL), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_NL), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -228,7 +179,6 @@ func TestFullTextNL(t *testing.T) {
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -252,7 +202,7 @@ func TestFullTextNL(t *testing.T) {
 func TestFullTextOr(t *testing.T) {
 
 	pattern := "apple banana"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -272,7 +222,6 @@ func TestFullTextOr(t *testing.T) {
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -296,7 +245,7 @@ func TestFullTextOr(t *testing.T) {
 func TestFullTextPlusPlus(t *testing.T) {
 
 	pattern := "+apple +banana"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -316,7 +265,6 @@ func TestFullTextPlusPlus(t *testing.T) {
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -333,7 +281,7 @@ func TestFullTextPlusPlus(t *testing.T) {
 func TestFullTextPlusOr(t *testing.T) {
 
 	pattern := "+apple banana"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -353,7 +301,6 @@ func TestFullTextPlusOr(t *testing.T) {
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -372,7 +319,7 @@ func TestFullTextPlusOr(t *testing.T) {
 func TestFullTextMinus(t *testing.T) {
 
 	pattern := "-banana +apple"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -392,7 +339,6 @@ func TestFullTextMinus(t *testing.T) {
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -409,7 +355,7 @@ func TestFullTextMinus(t *testing.T) {
 func TestFullTextTilda(t *testing.T) {
 
 	pattern := "+apple ~banana"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -429,7 +375,6 @@ func TestFullTextTilda(t *testing.T) {
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -448,7 +393,7 @@ func TestFullTextTilda(t *testing.T) {
 func TestFullText1(t *testing.T) {
 
 	pattern := "we aRe so Happy"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -484,7 +429,6 @@ func TestFullText1(t *testing.T) {
 	s.WordAccums[word].Words[33] = &Word{DocId: 33, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -506,7 +450,7 @@ func TestFullText1(t *testing.T) {
 func TestFullText2(t *testing.T) {
 
 	pattern := "+we +aRe +so +Happy"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -542,7 +486,6 @@ func TestFullText2(t *testing.T) {
 	s.WordAccums[word].Words[33] = &Word{DocId: 33, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -559,7 +502,7 @@ func TestFullText2(t *testing.T) {
 func TestFullText3(t *testing.T) {
 
 	pattern := "+we -aRe -so -Happy"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -595,7 +538,6 @@ func TestFullText3(t *testing.T) {
 	s.WordAccums[word].Words[33] = &Word{DocId: 33, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -612,7 +554,7 @@ func TestFullText3(t *testing.T) {
 func TestFullText4(t *testing.T) {
 
 	pattern := "we -aRe so Happy"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -620,7 +562,6 @@ func TestFullText4(t *testing.T) {
 	// no words found
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -635,7 +576,7 @@ func TestFullText4(t *testing.T) {
 func TestFullText5(t *testing.T) {
 
 	pattern := "we aRe so +Happy"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -655,7 +596,6 @@ func TestFullText5(t *testing.T) {
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -674,7 +614,7 @@ func TestFullText5(t *testing.T) {
 func TestFullTextGroup(t *testing.T) {
 
 	pattern := "+we +(<are >so)"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -702,7 +642,6 @@ func TestFullTextGroup(t *testing.T) {
 	s.WordAccums[word].Words[23] = &Word{DocId: 23, Position: []int64{0, 4, 6}, DocCount: 8}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -721,7 +660,7 @@ func TestFullTextGroup(t *testing.T) {
 func TestFullTextStar(t *testing.T) {
 
 	pattern := "apple*"
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -734,7 +673,6 @@ func TestFullTextStar(t *testing.T) {
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32
@@ -753,7 +691,7 @@ func TestFullTextStar(t *testing.T) {
 func TestFullTextPhrase(t *testing.T) {
 
 	pattern := "\"we aRe so Happy\""
-	s, err := NewSearchAccum("index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -789,7 +727,6 @@ func TestFullTextPhrase(t *testing.T) {
 	s.WordAccums[word].Words[33] = &Word{DocId: 33, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	s.Nrow = 100
-	s.calculateDocCount()
 
 	// eval
 	var result map[any]float32

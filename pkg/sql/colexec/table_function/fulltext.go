@@ -48,21 +48,27 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
 	}
-	index_table := v.UnsafeGetStringAt(0)
+	source_table := v.UnsafeGetStringAt(0)
 
 	v = tf.ctr.argVecs[1]
+	if v.GetType().Oid != types.T_varchar {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
+	}
+	index_table := v.UnsafeGetStringAt(0)
+
+	v = tf.ctr.argVecs[2]
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: second argument (pattern) must be string, but got %s", v.GetType().String()))
 	}
 	pattern := v.UnsafeGetStringAt(0)
 
-	v = tf.ctr.argVecs[2]
+	v = tf.ctr.argVecs[3]
 	if v.GetType().Oid != types.T_int64 {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: third argument (mode) must be int64, but got %s", v.GetType().String()))
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
-	err = fulltextIndexMatch(proc, tf, index_table, pattern, mode, u.batch)
+	err = fulltextIndexMatch(proc, tf, source_table, index_table, pattern, mode, u.batch)
 
 	return err
 }
@@ -107,8 +113,6 @@ func (s *SearchAccum) score(proc *process.Process) (map[any]float32, error) {
 	if s.Nrow == 0 {
 		return result, nil
 	}
-
-	s.calculateDocCount()
 
 	for _, p := range s.Pattern {
 		result, err = p.Eval(s, float32(1.0), result)
@@ -217,7 +221,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 func (s *SearchAccum) runCountStar(proc *process.Process) (int64, error) {
 	var nrow int64
 	nrow = 0
-	sql := fmt.Sprintf(countstar_sql, s.TblName)
+	sql := fmt.Sprintf(countstar_sql, s.SrcTblName)
 	logutil.Infof("COUNT STAR: %s", sql)
 
 	res, err := ft_runSql(proc, sql)
@@ -239,9 +243,9 @@ func (s *SearchAccum) runCountStar(proc *process.Process) (int64, error) {
 	return nrow, nil
 }
 
-func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tblname, pattern string, mode int64, bat *batch.Batch) (err error) {
+func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string, mode int64, bat *batch.Batch) (err error) {
 
-	s, err := NewSearchAccum(tblname, pattern, mode, "")
+	s, err := NewSearchAccum(srctbl, tblname, pattern, mode, "")
 	if err != nil {
 		return err
 	}

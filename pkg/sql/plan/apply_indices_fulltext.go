@@ -199,7 +199,8 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	for i := 0; i < len(ft_filters); i++ {
 		ftidxscan := ft_filters[i]
 		idxdef := indexDefs[i]
-		idxtblname := fmt.Sprintf("`%s`", idxdef.IndexTableName)
+		idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
+		srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
 		fn := ftidxscan.GetF()
 		pattern := fn.Args[0].GetLit().GetSval()
 		mode := fn.Args[1].GetLit().GetI64Val()
@@ -208,6 +209,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
 
 		var exprs tree.Exprs
+		exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
