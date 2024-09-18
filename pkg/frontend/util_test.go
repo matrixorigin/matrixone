@@ -1531,8 +1531,34 @@ func Test_extractTableDefColumns(t *testing.T) {
 			def := new(plan2.Default)
 
 			result := newMrsForPasswordOfUser([][]interface{}{{
-				uint8(0),
+				def,
 				typByte,
+				uint64(1),
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
+
+	// typ error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				"id",
+				def,
 				uint64(1),
 				uint8(1),
 				def.String(),
@@ -1561,7 +1587,7 @@ func Test_extractTableDefColumns(t *testing.T) {
 			result := newMrsForPasswordOfUser([][]interface{}{{
 				"id",
 				typByte,
-				"1",
+				def,
 				uint8(1),
 				def.String(),
 				uint8(0),
@@ -1604,5 +1630,4 @@ func Test_extractTableDefColumns(t *testing.T) {
 		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
 		assert.NotNil(t, err)
 	})
-
 }
