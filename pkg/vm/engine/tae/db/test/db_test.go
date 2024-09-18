@@ -113,7 +113,7 @@ func TestAppend2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
+	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
@@ -128,7 +128,7 @@ func TestAppend2(t *testing.T) {
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 10
-	testutil.CreateRelation(t, db, "db", schema, true)
+	testutil.CreateRelation(t, db.DB, "db", schema, true)
 
 	totalRows := uint64(schema.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
@@ -142,13 +142,13 @@ func TestAppend2(t *testing.T) {
 	start := time.Now()
 	for _, data := range bats {
 		wg.Add(1)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db, &wg))
+		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
 		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 	{
-		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
+		txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 		testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -164,10 +164,55 @@ func TestAppend2(t *testing.T) {
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	wg.Add(1)
-	testutil.AppendFailClosure(t, bats[0], schema.Name, db, &wg)()
+	testutil.AppendFailClosure(t, bats[0], schema.Name, db.DB, &wg)()
 	wg.Wait()
+
+	db.Restart(ctx)
+	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 }
 
+func TestTruncate1(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer db.Close()
+
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 10
+	db.BindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+
+	db.CreateRelAndAppend(bat, true)
+
+	now := time.Now()
+	testutils.WaitExpect(20000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	t.Logf("Checkpointed: %d", db.Runtime.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+	db.DoAppend(bat)
+
+	now = time.Now()
+	testutils.WaitExpect(20000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	t.Logf("Checkpointed: %d", db.Runtime.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+
+	assert.GreaterOrEqual(t, db.Wal.GetTruncated(), uint64(4))
+}
 func TestAppend3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)

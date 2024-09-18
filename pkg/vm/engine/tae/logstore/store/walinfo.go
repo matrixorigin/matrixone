@@ -263,7 +263,9 @@ func (w *StoreInfo) onCheckpoint() {
 	}
 	w.ckpcntMu.Unlock()
 }
-
+func (w *StoreInfo) GetTruncated() uint64 {
+	return w.driverCheckpointed
+}
 func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	groups := make(map[uint32]uint64, 0)
 	w.lsnmu.Lock()
