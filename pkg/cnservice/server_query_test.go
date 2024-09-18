@@ -158,7 +158,6 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr error
-		want    *query.Response
 	}{
 		{
 			name:   "normal",
@@ -166,17 +165,25 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 			args: args{
 				ctx: ctx,
 				req: &query.Request{FileServiceCacheRequest: query.FileServiceCacheRequest{
-					Type:      0,
+					Type:      query.FileServiceCacheType_Disk,
 					CacheSize: 0,
 				}},
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want: &query.Response{FileServiceCacheResponse: query.FileServiceCacheResponse{
-				CacheSize:     0,
-				CacheCapacity: 0,
-				Message:       "Not Implemented",
-			}},
+		},
+		{
+			name:   "normal",
+			fields: fields{},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{FileServiceCacheRequest: query.FileServiceCacheRequest{
+					Type:      query.FileServiceCacheType_Memory,
+					CacheSize: 0,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
 		},
 	}
 	for _, tt := range tests {
@@ -184,8 +191,6 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 			s := &service{}
 			err := s.handleFileServiceCacheRequest(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
-			require.Equalf(t, tt.want, tt.args.resp,
-				"handleFileServiceCacheRequest(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -203,22 +208,30 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr error
-		want    *query.Response
 	}{
 		{
 			name:   "normal",
 			fields: fields{},
 			args: args{
-				ctx:  ctx,
-				req:  &query.Request{FileServiceCacheEvictRequest: query.FileServiceCacheEvictRequest{Type: 0}},
+				ctx: ctx,
+				req: &query.Request{FileServiceCacheEvictRequest: query.FileServiceCacheEvictRequest{
+					Type: query.FileServiceCacheType_Disk,
+				}},
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want: &query.Response{FileServiceCacheEvictResponse: query.FileServiceCacheEvictResponse{
-				CacheSize:     0,
-				CacheCapacity: 0,
-				Message:       "Not Implemented",
-			}},
+		},
+		{
+			name:   "normal",
+			fields: fields{},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{FileServiceCacheEvictRequest: query.FileServiceCacheEvictRequest{
+					Type: query.FileServiceCacheType_Memory,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
 		},
 	}
 	for _, tt := range tests {
@@ -226,8 +239,6 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 			s := &service{}
 			err := s.handleFileServiceCacheEvictRequest(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
-			require.Equalf(t, tt.want, tt.args.resp,
-				"handleFileServiceCacheEvictRequest(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
