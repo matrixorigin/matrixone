@@ -1596,7 +1596,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
 	}
 
-	//get variable ngram_token_size. Default is 2.
+	//get variable ngram_token_size. Default is 3.
 	val, err := ctx.GetProcess().GetResolveVariableFunc()("ngram_token_size", true, true)
 	if err != nil {
 		return err
@@ -1629,10 +1629,9 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			// set parser ngram
 			parsername = strings.ToLower(indexInfo.IndexOption.ParserName)
 			logutil.Infof("Parser %s", indexInfo.IndexOption.ParserName)
-			if parsername != "ngram" {
+			if parsername != "ngram" && parsername != "default" && parsername != "json" {
 				return moerr.NewInternalErrorNoCtx(fmt.Sprintf("Fulltext parser %s not supported", parsername))
 			}
-
 		}
 	}
 
@@ -1662,7 +1661,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
 		if indexInfo.IndexOption != nil {
-			if indexInfo.IndexOption.ParserName != "" && strings.ToLower(indexInfo.IndexOption.ParserName) == "ngram" {
+			if indexInfo.IndexOption.ParserName != "" {
 				indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(ngram_token_size)}
 				indexDef.IndexAlgoParams, err = catalog.IndexParamsToJsonString(indexInfo)
 				if err != nil {

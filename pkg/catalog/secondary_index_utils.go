@@ -178,12 +178,12 @@ func fullTextIndexParamsToMap(def *tree.FullTextIndex) (map[string]string, error
 	// fulltext index here
 	if def.IndexOption != nil {
 		parsername := strings.ToLower(def.IndexOption.ParserName)
-		if parsername != "ngram" {
+		if parsername != "ngram" && parsername != "default" && parsername != "json" {
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", parsername))
 		}
 		res["parser"] = parsername
-		// TODO: get variable ngram_token_size.  default is 2.
-		res["ngram_token_size"] = strconv.FormatInt(2, 10)
+		// TODO: get variable ngram_token_size.  default is 3.
+		res["ngram_token_size"] = strconv.FormatInt(3, 10)
 	}
 	return res, nil
 }

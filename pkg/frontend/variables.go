@@ -2540,7 +2540,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("ngram_token_size", 1, 10, false),
-		Default:           int64(2),
+		Default:           int64(3),
 	},
 	"offline_mode": {
 		Name:              "offline_mode",
