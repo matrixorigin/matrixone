@@ -490,7 +490,6 @@ func newParamForFoldCase2(proc *process.Process) {
 	rowCount := len(values)
 	prepareParams := testutil.NewVector(rowCount, types.New(types.T_text, types.MaxVarcharLen, 0), proc.GetMPool(), false, values)
 	proc.SetPrepareParams(prepareParams)
-	return
 }
 
 // util function to generate expr to test constand fold performance

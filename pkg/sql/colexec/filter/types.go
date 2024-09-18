@@ -99,10 +99,11 @@ func (ctr *container) cleanExecutor() {
 	ctr.executors = nil
 }
 
-func (ctr *container) resetExecutor() {
-	for i := range ctr.executors {
-		if ctr.executors[i] != nil {
-			ctr.executors[i].ResetForNextQuery()
-		}
-	}
-}
+// func (ctr *container) resetExecutor() {
+// 	for i := range ctr.executors {
+// 		if ctr.executors[i] != nil {
+// 			ctr.executors[i].ResetForNextQuery()
+// 		}
+// 	}
+// 	ctr.executors = nil
+// }

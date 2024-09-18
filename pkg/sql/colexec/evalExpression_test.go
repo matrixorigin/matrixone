@@ -54,6 +54,7 @@ func TestListExpressionExecutor(t *testing.T) {
 	curr := proc.Mp().CurrNB()
 
 	listExprExecutor, err := NewExpressionExecutor(proc, evalExpr)
+	require.NoError(t, err)
 	tree, err := DebugShowExecutor(listExprExecutor)
 	require.NoError(t, err)
 	t.Log(tree)

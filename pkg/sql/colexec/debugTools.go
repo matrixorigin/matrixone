@@ -90,7 +90,7 @@ func printFixedVectorExpressionExecutor(buffer *bytes.Buffer, expr *FixedVectorE
 	if expr.resultVector.GetType() != nil {
 		buffer.WriteString(fmt.Sprintf(prefix+"  resultVector.typ: %s\n", expr.resultVector.GetType().String()))
 	} else {
-		buffer.WriteString(fmt.Sprintf(prefix + "  resultVector.typ is nil\n"))
+		buffer.WriteString(fmt.Sprintf("%s  resultVector.typ is nil\n", prefix))
 	}
 	buffer.WriteString(fmt.Sprintf(prefix+"  resultVector.value: %s\n", expr.resultVector.String()))
 
@@ -102,7 +102,7 @@ func printFunctionExpressionExecutor(buffer *bytes.Buffer, expr *FunctionExpress
 	buffer.WriteString("FunctionExpressionExecutor\n")
 
 	// functionInformationForEval
-	buffer.WriteString(fmt.Sprintf(prefix + "  functionInformationForEval\n"))
+	buffer.WriteString(fmt.Sprintf("%s  functionInformationForEval\n", prefix))
 	buffer.WriteString(fmt.Sprintf(prefix+"    fid: %v\n", expr.fid))
 	evalFn, freeFn := expr.evalFn, expr.freeFn
 
@@ -110,7 +110,7 @@ func printFunctionExpressionExecutor(buffer *bytes.Buffer, expr *FunctionExpress
 		if fn := runtime.FuncForPC(uintptr(reflect.ValueOf(evalFn).Pointer())); fn != nil {
 			buffer.WriteString(fmt.Sprintf(prefix+"    evalFn: %s\n", fn.Name()))
 		} else {
-			buffer.WriteString(fmt.Sprintf(prefix + "    evalFn: Unkown\n"))
+			buffer.WriteString(fmt.Sprintf("%s    evalFn: Unkown\n", prefix))
 		}
 	} else {
 		return moerr.NewInternalErrorNoCtx("Function pointer for evalFn is nil, which should not happen")
