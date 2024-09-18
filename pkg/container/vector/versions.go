@@ -15,63 +15,115 @@
 package vector
 
 import (
-	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func (v *Vector) MarshalBinaryV1() ([]byte, error) {
-	var buf bytes.Buffer
-	err := v.MarshalBinaryWithBuffer(&buf)
-	if err != nil {
-		return nil, err
+func (v *Vector) UnmarshalBinaryV1(data []byte) error {
+	// read class
+	v.class = int(data[0])
+	data = data[1:]
+
+	// read typ
+	v.typ = types.DecodeType(data[:types.TSize])
+	data = data[types.TSize:]
+
+	// read length
+	v.length = int(types.DecodeUint32(data[:4]))
+	data = data[4:]
+
+	// read data
+	dataLen := types.DecodeUint32(data[:4])
+	data = data[4:]
+	if dataLen > 0 {
+		v.data = data[:dataLen]
+		v.setupFromData()
+		data = data[dataLen:]
 	}
-	return buf.Bytes(), nil
+
+	// read area
+	areaLen := types.DecodeUint32(data[:4])
+	data = data[4:]
+	if areaLen > 0 {
+		v.area = data[:areaLen]
+		data = data[areaLen:]
+	}
+
+	// read nsp
+	nspLen := types.DecodeUint32(data[:4])
+	data = data[4:]
+	if nspLen > 0 {
+		if err := v.nsp.ReadNoCopyV1(data[:nspLen]); err != nil {
+			return err
+		}
+		data = data[nspLen:]
+	} else {
+		v.nsp.Reset()
+	}
+
+	v.sorted = types.DecodeBool(data[:1])
+	//data = data[1:]
+
+	v.cantFreeData = true
+	v.cantFreeArea = true
+
+	return nil
 }
 
-func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
+func (v *Vector) UnmarshalBinaryWithCopyV1(data []byte, mp *mpool.MPool) error {
+	var err error
 
-	// write class
-	buf.WriteByte(uint8(v.class))
+	// read class
+	v.class = int(data[0])
+	data = data[1:]
 
-	// write type
-	data := types.EncodeType(&v.typ)
-	buf.Write(data)
+	// read typ
+	v.typ = types.DecodeType(data[:types.TSize])
+	data = data[types.TSize:]
 
-	// write length
-	length := uint32(v.length)
-	buf.Write(types.EncodeUint32(&length))
+	// read length
+	v.length = int(types.DecodeUint32(data[:4]))
+	data = data[4:]
 
-	// write dataLen, data
-	dataLen := uint32(v.typ.TypeSize())
-	if !v.IsConst() {
-		dataLen *= uint32(v.length)
-	} else if v.IsConstNull() {
-		dataLen = 0
-	}
-	buf.Write(types.EncodeUint32(&dataLen))
+	// read data
+	dataLen := int(types.DecodeUint32(data[:4]))
+	data = data[4:]
 	if dataLen > 0 {
-		buf.Write(v.data[:dataLen])
+		v.data, err = mp.Alloc(dataLen)
+		if err != nil {
+			return err
+		}
+		copy(v.data, data[:dataLen])
+		v.setupFromData()
+		data = data[dataLen:]
 	}
 
-	// write areaLen, area
-	areaLen := uint32(len(v.area))
-	buf.Write(types.EncodeUint32(&areaLen))
+	// read area
+	areaLen := int(types.DecodeUint32(data[:4]))
+	data = data[4:]
 	if areaLen > 0 {
-		buf.Write(v.area)
+		v.area, err = mp.Alloc(areaLen)
+		if err != nil {
+			return err
+		}
+		copy(v.area, data[:areaLen])
+		data = data[areaLen:]
 	}
 
-	// write nspLen, nsp
-	nspData, err := v.nsp.Show()
-	if err != nil {
-		return err
-	}
-	nspLen := uint32(len(nspData))
-	buf.Write(types.EncodeUint32(&nspLen))
+	// read nsp
+	nspLen := types.DecodeUint32(data[:4])
+	data = data[4:]
 	if nspLen > 0 {
-		buf.Write(nspData)
+		if err := v.nsp.ReadV1(data[:nspLen]); err != nil {
+			return err
+		}
+		data = data[nspLen:]
+	} else {
+		v.nsp.Reset()
 	}
 
-	buf.Write(types.EncodeBool(&v.sorted))
+	v.sorted = types.DecodeBool(data[:1])
+	//data = data[1:]
 
 	return nil
 }
