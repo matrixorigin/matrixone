@@ -15,13 +15,11 @@
 package v1_3_0
 
 import (
-	"context"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -166,10 +164,8 @@ func Test_UpgEntry(t *testing.T) {
 			upg_drop_task_metadata_id.Upgrade(executor, uint32(0))
 		},
 	)
-}
 
-func Test_HandleTenantUpgradeError(t *testing.T) {
-	sid := ""
+	// test upg_information_schema_columns update
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {
@@ -177,12 +173,21 @@ func Test_HandleTenantUpgradeError(t *testing.T) {
 			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
 
 			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-				return executor.Result{}, moerr.NewInvalidInputNoCtx("return error")
-			}, txnOperator)
+				if strings.HasPrefix(strings.ToLower(sql), strings.ToLower(indexCheckPrefixMatchSql)) {
+					typs := []types.Type{
+						types.New(types.T_varchar, 64, 0),
+					}
 
-			if err := Handler.HandleTenantUpgrade(context.Background(), 0, executor); err == nil {
-				t.Errorf("HandleTenantUpgrade() should reprot error")
-			}
+					memRes := executor.NewMemResult(
+						typs,
+						mpool.MustNewZero())
+					memRes.NewBatch()
+					executor.AppendStringRows(memRes, 0, []string{""})
+					return memRes.GetResult(), nil
+				}
+				return executor.Result{}, nil
+			}, txnOperator)
+			upg_information_schema_columns.Upgrade(executor, uint32(0))
 		},
 	)
 }
