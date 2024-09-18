@@ -1765,16 +1765,6 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 				return nil, err
 			}
 
-			arrOnUpdate, err := result.GetString(ctx, i, 7)
-			if err != nil {
-				return nil, err
-			}
-			onUpdate := new(plan.OnUpdate)
-			err = types.Decode([]byte(arrOnUpdate), onUpdate)
-			if err != nil {
-				return nil, err
-			}
-
 			cols = append(cols, &plan.ColDef{
 				TblName:    table,
 				DbName:     dbName,
@@ -1789,8 +1779,7 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 					Table:       table,
 					NotNullable: !def.NullAbility,
 				},
-				Default:  def,
-				OnUpdate: onUpdate,
+				Default: def,
 			})
 		}
 	}

@@ -1530,7 +1530,6 @@ func Test_extractTableDefColumns(t *testing.T) {
 
 			def := new(plan2.Default)
 
-			onUpdate := new(plan2.OnUpdate)
 			result := newMrsForPasswordOfUser([][]interface{}{{
 				uint8(0),
 				typByte,
@@ -1539,36 +1538,6 @@ func Test_extractTableDefColumns(t *testing.T) {
 				def.String(),
 				uint8(0),
 				uint8(0),
-				onUpdate.String(),
-				uint8(0),
-			}})
-			return result
-		}
-
-		ctx := context.Background()
-		er := newTestExecResult()
-		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
-		assert.NotNil(t, err)
-	})
-
-	// plan type error
-	convey.Convey("extractTableDefColumns fail", t, func() {
-		typ := new(types.Type)
-		typByte, _ := typ.Marshal()
-
-		var newTestExecResult = func() ExecResult {
-			def := new(plan2.Default)
-
-			onUpdate := new(plan2.OnUpdate)
-			result := newMrsForPasswordOfUser([][]interface{}{{
-				"id",
-				typByte,
-				uint64(1),
-				uint8(1),
-				def.String(),
-				uint8(0),
-				uint8(0),
-				onUpdate.String(),
 				uint8(0),
 			}})
 			return result
@@ -1589,7 +1558,6 @@ func Test_extractTableDefColumns(t *testing.T) {
 
 			def := new(plan2.Default)
 
-			onUpdate := new(plan2.OnUpdate)
 			result := newMrsForPasswordOfUser([][]interface{}{{
 				"id",
 				typByte,
@@ -1598,7 +1566,6 @@ func Test_extractTableDefColumns(t *testing.T) {
 				def.String(),
 				uint8(0),
 				uint8(0),
-				onUpdate.String(),
 				uint8(0),
 			}})
 			return result
@@ -1619,7 +1586,6 @@ func Test_extractTableDefColumns(t *testing.T) {
 
 			def := new(plan2.Default)
 
-			onUpdate := new(plan2.OnUpdate)
 			result := newMrsForPasswordOfUser([][]interface{}{{
 				"id",
 				typByte,
@@ -1628,7 +1594,6 @@ func Test_extractTableDefColumns(t *testing.T) {
 				def.String(),
 				uint8(0),
 				uint8(0),
-				onUpdate.String(),
 				uint8(0),
 			}})
 			return result
@@ -1640,33 +1605,4 @@ func Test_extractTableDefColumns(t *testing.T) {
 		assert.NotNil(t, err)
 	})
 
-	convey.Convey("extractTableDefColumns fail", t, func() {
-
-		var newTestExecResult = func() ExecResult {
-			typ := new(types.Type)
-			typByte, _ := typ.Marshal()
-
-			def := new(plan2.Default)
-			defByte, _ := def.Marshal()
-
-			onUpdate := new(plan2.OnUpdate)
-			result := newMrsForPasswordOfUser([][]interface{}{{
-				"id",
-				typByte,
-				uint64(1),
-				uint8(1),
-				defByte,
-				uint8(0),
-				uint8(0),
-				onUpdate.String(),
-				uint8(0),
-			}})
-			return result
-		}
-
-		ctx := context.Background()
-		er := newTestExecResult()
-		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
-		assert.NotNil(t, err)
-	})
 }
