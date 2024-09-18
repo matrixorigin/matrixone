@@ -119,7 +119,6 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-// ----------------------------------------------------------------------------------------------------------------------
 // applyOpStatsToNode Recursive traversal of PhyOperator tree,
 // and add OpStats statistics to the corresponding NodeAnalyze Info
 func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalleInfo *ParallelScopeInfo) {
@@ -175,15 +174,15 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
-		scopeParallInfo := NewParallelScopeInfo(scope.ScopeId)
+		scopeParallInfo := NewParallelScopeInfo()
 		applyOpStatsToNode(scope.RootOperator, nodes, scopeParallInfo)
 
 		for nodeIdx, timeConsumeMajor := range scopeParallInfo.NodeIdxTimeConsumeMajor {
 			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor, timeConsumeMajor)
 		}
 
-		for nodeIdx, timeConsumeMajor := range scopeParallInfo.NodeIdxTimeConsumeMinor {
-			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor, timeConsumeMajor)
+		for nodeIdx, timeConsumeMinor := range scopeParallInfo.NodeIdxTimeConsumeMinor {
+			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor, timeConsumeMinor)
 		}
 	}
 
@@ -415,16 +414,15 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 }
 
 type ParallelScopeInfo struct {
-	NodeIdxTimeConsumeMajor map[int]int64 // idxMapMajor := make(map[int]int, 0)
+	NodeIdxTimeConsumeMajor map[int]int64
 	NodeIdxTimeConsumeMinor map[int]int64
-	scopeId                 int32
+	//scopeId                 int32
 }
 
-func NewParallelScopeInfo(scopeId int32) *ParallelScopeInfo {
+func NewParallelScopeInfo() *ParallelScopeInfo {
 	return &ParallelScopeInfo{
 		NodeIdxTimeConsumeMajor: make(map[int]int64),
 		NodeIdxTimeConsumeMinor: make(map[int]int64),
-		scopeId:                 scopeId,
 	}
 }
 

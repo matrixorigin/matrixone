@@ -69,6 +69,7 @@ require (
 	github.com/spkg/bom v1.0.0
 	github.com/stretchr/testify v1.9.0
 	github.com/ti-mo/conntrack v0.5.1
+	github.com/ti-mo/netfilter v0.5.2
 	github.com/tidwall/btree v1.6.0
 	github.com/tidwall/pretty v1.2.1
 	go.uber.org/automaxprocs v1.5.3
@@ -115,7 +116,6 @@ require (
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	github.com/tetratelabs/wazero v1.7.3 // indirect
-	github.com/ti-mo/netfilter v0.5.2 // indirect
 	golang.org/x/crypto v0.23.0 // indirect
 	golang.org/x/text v0.15.0 // indirect
 	golang.org/x/time v0.3.0 // indirect

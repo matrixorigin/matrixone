@@ -110,6 +110,8 @@ const (
 
 var OperatorToStrMap map[OpType]string
 var StrToOperatorMap map[string]OpType
+var MinorOpMap map[string]struct{}
+var MajorOpMap map[string]struct{}
 
 func init() {
 	// Initialize OperatorToStrMap
@@ -183,36 +185,36 @@ func init() {
 	for op, str := range OperatorToStrMap {
 		StrToOperatorMap[str] = op
 	}
-}
 
-// Minor operators map (small impact on time consumption)
-var MinorOpMap = map[string]struct{}{
-	OperatorToStrMap[HashBuild]:    {},
-	OperatorToStrMap[ShuffleBuild]: {},
-	OperatorToStrMap[IndexBuild]:   {},
-	OperatorToStrMap[Filter]:       {},
-	OperatorToStrMap[MergeGroup]:   {},
-	OperatorToStrMap[MergeOrder]:   {},
-}
+	// Initialize MinorOpMap (small impact on time consumption)
+	MinorOpMap = map[string]struct{}{
+		OperatorToStrMap[HashBuild]:    {},
+		OperatorToStrMap[ShuffleBuild]: {},
+		OperatorToStrMap[IndexBuild]:   {},
+		OperatorToStrMap[Filter]:       {},
+		OperatorToStrMap[MergeGroup]:   {},
+		OperatorToStrMap[MergeOrder]:   {},
+	}
 
-// Major operators map (large impact on time consumption)
-var MajorOpMap = map[string]struct{}{
-	OperatorToStrMap[TableScan]: {},
-	OperatorToStrMap[External]:  {},
-	OperatorToStrMap[Order]:     {},
-	OperatorToStrMap[Window]:    {},
-	OperatorToStrMap[Group]:     {},
-	OperatorToStrMap[Join]:      {},
-	OperatorToStrMap[LoopJoin]:  {},
-	OperatorToStrMap[Left]:      {},
-	OperatorToStrMap[Single]:    {},
-	OperatorToStrMap[Semi]:      {},
-	OperatorToStrMap[RightSemi]: {},
-	OperatorToStrMap[Anti]:      {},
-	OperatorToStrMap[RightAnti]: {},
-	OperatorToStrMap[Mark]:      {},
-	OperatorToStrMap[Product]:   {},
-	OperatorToStrMap[ProductL2]: {},
+	// Initialize MajorOpMap (large impact on time consumption)
+	MajorOpMap = map[string]struct{}{
+		OperatorToStrMap[TableScan]: {},
+		OperatorToStrMap[External]:  {},
+		OperatorToStrMap[Order]:     {},
+		OperatorToStrMap[Window]:    {},
+		OperatorToStrMap[Group]:     {},
+		OperatorToStrMap[Join]:      {},
+		OperatorToStrMap[LoopJoin]:  {},
+		OperatorToStrMap[Left]:      {},
+		OperatorToStrMap[Single]:    {},
+		OperatorToStrMap[Semi]:      {},
+		OperatorToStrMap[RightSemi]: {},
+		OperatorToStrMap[Anti]:      {},
+		OperatorToStrMap[RightAnti]: {},
+		OperatorToStrMap[Mark]:      {},
+		OperatorToStrMap[Product]:   {},
+		OperatorToStrMap[ProductL2]: {},
+	}
 }
 
 func (op OpType) String() string {
