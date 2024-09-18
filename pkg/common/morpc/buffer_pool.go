@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"github.com/fagongzi/goetty/v2/buf"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
@@ -91,5 +92,8 @@ func (b *Buffer) Mark() {
 }
 
 func (b *Buffer) GetMarkedData() []byte {
+	if b.markIdx == b.buf.GetWriteIndex() {
+		return nil
+	}
 	return b.buf.RawSlice(b.markIdx, b.buf.GetWriteIndex())
 }

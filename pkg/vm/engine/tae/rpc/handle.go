@@ -726,10 +726,9 @@ func (h *Handle) HandleWrite(
 				}
 				metalocations[location.Name().String()] = struct{}{}
 			}
-			statsCNVec := req.Batch.Vecs[1]
-			statsVec := containers.ToTNVector(statsCNVec, common.WorkspaceAllocator)
+			statsVec := req.Batch.Vecs[1]
 			for i := 0; i < statsVec.Length(); i++ {
-				s := objectio.ObjectStats(statsVec.Get(i).([]byte))
+				s := objectio.ObjectStats(statsVec.GetBytesAt(i))
 				if !s.GetCNCreated() {
 					logutil.Fatal("the `CNCreated` mask not set")
 				}
@@ -744,7 +743,10 @@ func (h *Handle) HandleWrite(
 				err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
 				return
 			}
-			err = tb.AddObjsWithMetaLoc(ctx, statsVec)
+			err = tb.AddObjsWithMetaLoc(
+				ctx,
+				containers.ToTNVector(statsVec, common.WorkspaceAllocator),
+			)
 			return
 		}
 		//check the input batch passed by cn is valid.

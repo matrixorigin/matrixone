@@ -17,6 +17,7 @@ package blockio
 import (
 	"context"
 	"math"
+	"sort"
 	"time"
 
 	"go.uber.org/zap"
@@ -175,12 +176,7 @@ func BlockDataRead(
 		err  error
 	)
 
-	var searchFunc objectio.ReadFilterSearchFuncType
-	if (filter.HasFakePK || !info.IsSorted()) && filter.UnSortedSearchFunc != nil {
-		searchFunc = filter.UnSortedSearchFunc
-	} else if info.IsSorted() && filter.SortedSearchFunc != nil {
-		searchFunc = filter.SortedSearchFunc
-	}
+	searchFunc := filter.DecideSearchFunc(info.IsSorted())
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
@@ -542,43 +538,62 @@ func ReadDeletes(
 	deltaLoc objectio.Location,
 	fs fileservice.FileService,
 	isPersistedByCN bool,
-) (bat *batch.Batch, release func(), err error) {
+) (*batch.Batch, objectio.ObjectDataMeta, func(), error) {
 
 	var cols []uint16
 	var typs []types.Type
 
 	if isPersistedByCN {
-		cols = []uint16{0}
-		typs = []types.Type{types.T_Rowid.ToType()}
+		cols = []uint16{objectio.TombstoneAttr_Rowid_SeqNum}
+		typs = []types.Type{objectio.RowidType}
 	} else {
-		cols = []uint16{0, objectio.SEQNUM_COMMITTS}
-		typs = []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType()}
+		cols = []uint16{objectio.TombstoneAttr_Rowid_SeqNum, objectio.TombstoneAttr_CommitTs_SeqNum}
+		typs = []types.Type{objectio.RowidType, objectio.TSType}
 	}
-	bat, release, err = LoadTombstoneColumns(ctx, cols, typs, fs, deltaLoc, nil, fileservice.Policy(0))
-	return
+	return LoadTombstoneColumns(
+		ctx, cols, typs, fs, deltaLoc, nil, fileservice.Policy(0),
+	)
 }
 
 func EvalDeleteMaskFromDNCreatedTombstones(
-	deletes *batch.Batch, ts types.TS, blockid *types.Blockid,
+	deletes *batch.Batch,
+	meta objectio.BlockObject,
+	ts types.TS,
+	blockid *types.Blockid,
 ) (rows *nulls.Bitmap) {
 	if deletes == nil {
 		return
 	}
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0])
-	tss := vector.MustFixedColWithTypeCheck[types.TS](deletes.Vecs[1])
-	//aborts := deletes.Vecs[3]
-
 	start, end := FindStartEndOfBlockFromSortedRowids(rowids, blockid)
 
-	for i := end - 1; i >= start; i-- {
-		if tss[i].Greater(&ts) {
-			continue
+	noTSCheck := false
+	if end-start > 10 {
+		// fast path is true if the maxTS is less than the snapshotTS
+		// this means that all the rows between start and end are visible
+		idx := objectio.GetTombstoneCommitTSAttrIdx(meta.GetMetaColumnCount())
+		noTSCheck = meta.MustGetColumn(idx).ZoneMap().FastLEValue(ts[:], 0)
+	}
+	if noTSCheck {
+		for i := end - 1; i >= start; i-- {
+			row := rowids[i].GetRowOffset()
+			if rows == nil {
+				rows = nulls.NewWithSize(int(row) + 1)
+			}
+			rows.Add(uint64(row))
 		}
-		row := rowids[i].GetRowOffset()
-		if rows == nil {
-			rows = nulls.NewWithSize(int(row) + 1)
+	} else {
+		tss := vector.MustFixedColWithTypeCheck[types.TS](deletes.Vecs[1])
+		for i := end - 1; i >= start; i-- {
+			if tss[i].Greater(&ts) {
+				continue
+			}
+			row := rowids[i].GetRowOffset()
+			if rows == nil {
+				rows = nulls.NewWithSize(int(row) + 1)
+			}
+			rows.Add(uint64(row))
 		}
-		rows.Add(uint64(row))
 	}
 
 	return
@@ -634,6 +649,43 @@ func FindStartEndOfBlockFromSortedRowids(rowids []types.Rowid, id *types.Blockid
 	return
 }
 
+func IsRowDeletedByLocation(
+	ctx context.Context,
+	snapshotTS *types.TS,
+	row *objectio.Rowid,
+	location objectio.Location,
+	fs fileservice.FileService,
+	createdByCN bool,
+) (deleted bool, err error) {
+	data, _, release, err := ReadDeletes(ctx, location, fs, createdByCN)
+	if err != nil {
+		return
+	}
+	defer release()
+	if data.RowCount() == 0 {
+		return
+	}
+	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[0])
+	idx := sort.Search(len(rowids), func(i int) bool {
+		return rowids[i].GE(row)
+	})
+	if createdByCN {
+		deleted = idx < len(rowids)
+	} else {
+		tss := vector.MustFixedColNoTypeCheck[types.TS](data.Vecs[1])
+		for i := idx; i < len(rowids); i++ {
+			if !rowids[i].EQ(row) {
+				break
+			}
+			if tss[i].LessEq(snapshotTS) {
+				deleted = true
+				break
+			}
+		}
+	}
+	return
+}
+
 func FillBlockDeleteMask(
 	ctx context.Context,
 	snapshotTS types.TS,
@@ -646,10 +698,11 @@ func FillBlockDeleteMask(
 		rows             *nulls.Nulls
 		release          func()
 		persistedDeletes *batch.Batch
+		meta             objectio.ObjectDataMeta
 	)
 
 	if !location.IsEmpty() {
-		if persistedDeletes, release, err = ReadDeletes(ctx, location, fs, createdByCN); err != nil {
+		if persistedDeletes, meta, release, err = ReadDeletes(ctx, location, fs, createdByCN); err != nil {
 			return nil, err
 		}
 		defer release()
@@ -657,7 +710,9 @@ func FillBlockDeleteMask(
 		if createdByCN {
 			rows = EvalDeleteMaskFromCNCreatedTombstones(blockId, persistedDeletes)
 		} else {
-			rows = EvalDeleteMaskFromDNCreatedTombstones(persistedDeletes, snapshotTS, &blockId)
+			rows = EvalDeleteMaskFromDNCreatedTombstones(
+				persistedDeletes, meta.GetBlockMeta(uint32(location.ID())), snapshotTS, &blockId,
+			)
 		}
 
 		if rows != nil {

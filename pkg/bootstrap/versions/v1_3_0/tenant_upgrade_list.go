@@ -28,6 +28,8 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_systemMetrics_server_snapshot_usage,
 	upg_mo_snapshots,
 	upg_mo_retention,
+	upg_mo_cdc_task,
+	upg_mo_cdc_watermark,
 	upg_information_schema_columns,
 }
 
@@ -70,6 +72,26 @@ var upg_mo_retention = versions.UpgradeEntry{
 	UpgSql:    frontend.MoCatalogMoRetentionDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_RETENTION)
+	},
+}
+
+var upg_mo_cdc_task = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_CDC_TASK,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoCdcTaskDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_CDC_TASK)
+	},
+}
+
+var upg_mo_cdc_watermark = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_CDC_WATERMARK,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoCdcWatermarkDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_CDC_WATERMARK)
 	},
 }
 

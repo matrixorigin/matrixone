@@ -264,9 +264,13 @@ func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
-	if ses.gSysVars, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx); err != nil {
+	var sv *SystemVariables
+	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx); err != nil {
 		return
 	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.gSysVars = sv
 	ses.sesSysVars = ses.gSysVars.Clone()
 	return
 }

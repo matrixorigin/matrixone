@@ -430,6 +430,10 @@ func NewErrTooLargeObjectSizeNoCtx(option uint64) *Error {
 	return newError(Context(), ErrTooLargeObjectSize, option)
 }
 
+func NewErrStaleReadNoCtx(minTS, start string) *Error {
+	return newError(Context(), ErrStaleRead, minTS, start)
+}
+
 func NewArenaFullNoCtx() *Error {
 	return newError(Context(), ErrArenaFull)
 }
