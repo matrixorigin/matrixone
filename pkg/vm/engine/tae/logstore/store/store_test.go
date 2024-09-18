@@ -165,7 +165,7 @@ func TestTruncate(t *testing.T) {
 	wal := NewStore(driver)
 	defer wal.Close()
 	entryCount := 5
-	group := entry.GTCustomizedStart
+	group := entry.GTCustomized
 	for i := 0; i < entryCount; i++ {
 		e := mockEntry()
 		lsn, err := wal.Append(group, e)
