@@ -310,10 +310,9 @@ func (n *Bitmap) Or(m *Bitmap) {
 	n.TryExpand(m)
 	size := (int(m.len) + 63) / 64
 	for i := 0; i < size; i++ {
-		if n.data[i] == 0 && m.data[i] != 0 {
-			n.count++
-		}
+		cnt := bits.OnesCount64(n.data[i])
 		n.data[i] |= m.data[i]
+		n.count += int64(bits.OnesCount64(n.data[i]) - cnt)
 	}
 }
 
@@ -321,10 +320,9 @@ func (n *Bitmap) And(m *Bitmap) {
 	n.TryExpand(m)
 	size := (int(m.len) + 63) / 64
 	for i := 0; i < size; i++ {
-		if n.data[i] != 0 && m.data[i] == 0 {
-			n.count--
-		}
+		cnt := bits.OnesCount64(n.data[i])
 		n.data[i] &= m.data[i]
+		n.count += int64(bits.OnesCount64(n.data[i]) - cnt)
 	}
 	for i := size; i < len(n.data); i++ {
 		n.count -= int64(bits.OnesCount64(n.data[i]))

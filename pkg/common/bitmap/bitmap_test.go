@@ -158,3 +158,25 @@ func TestBitmap_Clear(t *testing.T) {
 	require.True(t, np.IsEmpty())
 	require.Equal(t, 0, np.Count())
 }
+
+func TestBitmap_Or(t *testing.T) {
+	np := newBm(BenchmarkRows)
+	np.AddRange(100, 1000)
+	require.Equal(t, 900, np.Count())
+	np2 := newBm(BenchmarkRows)
+	np2.AddRange(500, 1500)
+	require.Equal(t, 1000, np2.Count())
+	np.Or(np2)
+	require.Equal(t, 1400, np.Count())
+}
+
+func TestBitmap_And(t *testing.T) {
+	np := newBm(BenchmarkRows)
+	np.AddRange(100, 1000)
+	require.Equal(t, 900, np.Count())
+	np2 := newBm(BenchmarkRows)
+	np2.AddRange(500, 1500)
+	require.Equal(t, 1000, np2.Count())
+	np.And(np2)
+	require.Equal(t, 500, np.Count())
+}
