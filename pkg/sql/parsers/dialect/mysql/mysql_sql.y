@@ -42,6 +42,8 @@ import (
     alterColPosition *tree.ColumnPosition
     alterColumnOrderBy []*tree.AlterColumnOrder
     alterColumnOrder *tree.AlterColumnOrder
+    renameTableOptions []*tree.AlterTable
+    renameTableOption *tree.AlterTable
 
     PartitionNames tree.IdentifierList
 
@@ -217,6 +219,7 @@ import (
     accountRole *tree.Role
     showType tree.ShowType
     joinTableExpr *tree.JoinTableExpr
+    applyTableExpr *tree.ApplyTableExpr
 
     indexHintType tree.IndexHintType
     indexHintScope tree.IndexHintScope
@@ -276,7 +279,7 @@ import (
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
-%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CROSS_L2
+%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CROSS_L2 APPLY
 %nonassoc LOWER_THAN_ON
 %nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
@@ -330,7 +333,7 @@ import (
 %token <str> LOW_PRIORITY HIGH_PRIORITY DELAYED
 
 // Create Table
-%token <str> CREATE ALTER DROP RENAME ANALYZE ADD RETURNS
+%token <str> CREATE ALTER DROP RENAME ANALYZE PHYPLAN ADD RETURNS
 %token <str> SCHEMA TABLE SEQUENCE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
 %token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
 %token <str> MAXVALUE PARTITION REORGANIZE LESS THAN PROCEDURE TRIGGER
@@ -501,7 +504,7 @@ import (
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt show_connectors_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt rename_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt
@@ -555,8 +558,9 @@ import (
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
 %type <tableExprs> table_name_wild_list
-%type <joinTableExpr>  table_references join_table
-%type <tableExpr> into_table_name table_function table_factor table_reference escaped_table_reference
+%type <joinTableExpr>  join_table
+%type <applyTableExpr> apply_table
+%type <tableExpr> into_table_name table_function table_factor table_reference escaped_table_reference table_references
 %type <direction> asc_desc_opt
 %type <nullsPosition> nulls_first_last_opt
 %type <order> order
@@ -603,6 +607,8 @@ import (
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
+%type <renameTableOptions> rename_table_list
+%type <renameTableOption> rename_option
 %type <alterPartitionOption> alter_partition_option partition_option
 %type <alterColPosition> column_position
 %type <alterColumnOrder> alter_column_order
@@ -619,7 +625,7 @@ import (
 %type <aliasedTableExpr> aliased_table_name
 %type <unionTypeRecord> union_op
 %type <parenTableExpr> table_subquery
-%type <str> inner_join straight_join outer_join natural_join
+%type <str> inner_join straight_join outer_join natural_join apply_type
 %type <funcType> func_type_opt
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
@@ -978,11 +984,11 @@ backup_timestamp_opt:
     }
 
 create_cdc_stmt:
-    CREATE CDC not_exists_opt STRING STRING STRING STRING STRING '{' create_cdc_opts '}'
+    CREATE CDC not_exists_opt ident STRING STRING STRING STRING '{' create_cdc_opts '}'
     {
         $$ = &tree.CreateCDC{
              		IfNotExists: $3,
-             		TaskName:    $4,
+             		TaskName:    tree.Identifier($4.Compare()),
              		SourceUri:   $5,
              		SinkType:    $6,
              		SinkUri:     $7,
@@ -1011,27 +1017,25 @@ create_cdc_opt:
     }
 
 show_cdc_stmt:
-    SHOW CDC STRING all_cdc_opt
+    SHOW CDC all_cdc_opt
     {
         $$ = &tree.ShowCDC{
-                    SourceUri:   $3,
-                    Option:      $4,
+                    Option:      $3,
         }
     }
 
 pause_cdc_stmt:
-    PAUSE CDC STRING all_cdc_opt
+    PAUSE CDC all_cdc_opt
     {
         $$ = &tree.PauseCDC{
-                    SourceUri:   $3,
-                    Option:      $4,
+                    Option:      $3,
         }
     }
 
 drop_cdc_stmt:
-    DROP CDC STRING all_cdc_opt
+    DROP CDC all_cdc_opt
     {
-        $$ = tree.NewDropCDC($3, $4)
+        $$ = tree.NewDropCDC($3)
     }
 
 all_cdc_opt:
@@ -1042,29 +1046,27 @@ all_cdc_opt:
                     TaskName: "",
         }
     }
-|   TASK STRING
+|   TASK ident
     {
         $$ = &tree.AllOrNotCDC{
             All: false,
-            TaskName: $2,
+            TaskName: tree.Identifier($2.Compare()),
         }
     }
 
 resume_cdc_stmt:
-    RESUME CDC STRING TASK STRING
+    RESUME CDC TASK ident
     {
         $$ = &tree.ResumeCDC{
-                    SourceUri:   $3,
-                    TaskName:    $5,
+                    TaskName:    tree.Identifier($4.Compare()),
         }
     }
 
 restart_cdc_stmt:
-    RESUME CDC STRING TASK STRING STRING
+    RESUME CDC TASK ident STRING
     {
         $$ = &tree.RestartCDC{
-                    SourceUri:   $3,
-                    TaskName:    $5,
+                    TaskName:    tree.Identifier($4.Compare()),
         }
     }
 
@@ -3014,9 +3016,41 @@ explain_stmt:
         explainStmt.Options = options
         $$ = explainStmt
     }
+|   explain_sym PHYPLAN explainable_stmt
+    {
+        explainStmt := tree.NewExplainPhyPlan($3, "text")
+        optionElem := tree.MakeOptionElem("phyplan", "NULL")
+        options := tree.MakeOptions(optionElem)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym PHYPLAN VERBOSE explainable_stmt
+    {
+        explainStmt := tree.NewExplainPhyPlan($4, "text")
+        optionElem1 := tree.MakeOptionElem("phyplan", "NULL")
+        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem1)
+        options = append(options, optionElem2)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym PHYPLAN ANALYZE explainable_stmt
+    {
+        explainStmt := tree.NewExplainPhyPlan($4, "text")
+        optionElem1 := tree.MakeOptionElem("phyplan", "NULL")
+        optionElem2 := tree.MakeOptionElem("analyze", "NULL")
+        options := tree.MakeOptions(optionElem1)
+        options = append(options, optionElem2)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
-        if tree.IsContainAnalyze($3) {
+    	if tree.IsContainPhyPlan($3) {
+	    explainStmt := tree.NewExplainPhyPlan($5, "text")
+            explainStmt.Options = $3
+            $$ = explainStmt
+    	} else if tree.IsContainAnalyze($3) {
             explainStmt := tree.NewExplainAnalyze($5, "text")
             explainStmt.Options = $3
             $$ = explainStmt
@@ -3061,6 +3095,7 @@ explain_option_key:
     ANALYZE
 |   VERBOSE
 |   FORMAT
+|   PHYPLAN
 
 explain_foramt_value:
     JSON
@@ -3168,6 +3203,7 @@ alter_stmt:
 |   alter_stage_stmt
 |   alter_sequence_stmt
 |   alter_pitr_stmt
+|   rename_stmt
 // |    alter_ddl_stmt
 
 alter_sequence_stmt:
@@ -3218,14 +3254,35 @@ alter_table_stmt:
         alterTable.PartitionOption = $4
         $$ = alterTable
     }
-|   RENAME TABLE table_name TO alter_table_rename
+
+rename_stmt:
+    RENAME TABLE rename_table_list
     {
-        var table = $3
+        alterTables := $3
+        renameTables := tree.NewRenameTable(alterTables)
+        $$ = renameTables
+    }
+
+rename_table_list:
+    rename_option
+    {
+        $$ = []*tree.AlterTable{$1}
+    }
+|   rename_table_list ',' rename_option
+    {
+        $$ = append($1, $3)
+    }
+
+rename_option:
+    table_name TO alter_table_rename
+    {
+        var table = $1
         alterTable := tree.NewAlterTable(table)
-        opt := tree.AlterTableOption($5)
+        opt := tree.AlterTableOption($3)
         alterTable.Options = []tree.AlterTableOption{opt}
         $$ = alterTable
     }
+
 
 alter_option_list:
     alter_option
@@ -5664,7 +5721,9 @@ table_references:
    	{
    		if t, ok := $1.(*tree.JoinTableExpr); ok {
    			$$ = t
-   		} else {
+   		} else if t, ok := $1.(*tree.ApplyTableExpr); ok {
+   			$$ = t
+        } else {
    			$$ = &tree.JoinTableExpr{Left: $1, Right: nil, JoinType: tree.JOIN_TYPE_CROSS}
    		}
     }
@@ -5682,6 +5741,10 @@ table_reference:
 	{
 		$$ = $1
 	}
+|   apply_table
+    {
+        $$ = $1
+    }
 
 join_table:
     table_reference inner_join table_factor join_condition_opt
@@ -5718,6 +5781,26 @@ join_table:
             JoinType: $2,
             Right: $3,
         }
+    }
+
+apply_table:
+    table_reference apply_type table_factor
+    {
+        $$ = &tree.ApplyTableExpr{
+            Left: $1,
+            ApplyType: $2,
+            Right: $3,
+        }
+    }
+
+apply_type:
+    CROSS APPLY
+    {
+        $$ = tree.APPLY_TYPE_CROSS
+    }
+|   OUTER APPLY
+    {
+        $$ = tree.APPLY_TYPE_OUTER
     }
 
 natural_join:
@@ -12153,6 +12236,7 @@ non_reserved_keyword:
 |   POLYGON
 |   PROCEDURE
 |   PROXY
+|	PERIOD
 |   QUERY
 |   PAUSE
 |   PROFILES

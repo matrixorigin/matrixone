@@ -325,6 +325,10 @@ func (e *testEngine) GetService() string {
 	return ""
 }
 
+func (e *testEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 func newtestOperator() *testOperator {
 	return &testOperator{}
 }
@@ -399,6 +403,10 @@ func (o *testOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.Se
 
 func (o *testOperator) AddLockTable(lock.LockTable) error {
 	return nil
+}
+
+func (o *testOperator) HasLockTable(table uint64) bool {
+	return true
 }
 
 func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {

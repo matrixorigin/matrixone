@@ -16,9 +16,10 @@ package frontend
 
 import (
 	"context"
-	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"sync"
+
+	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -120,6 +121,10 @@ func (res *internalExecResult) Row(ctx context.Context, i uint64) ([]interface{}
 
 func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint64) (interface{}, error) {
 	return res.resultSet.GetValue(ctx, ridx, cidx)
+}
+
+func (res *internalExecResult) GetUint64(ctx context.Context, ridx uint64, cidx uint64) (uint64, error) {
+	return res.resultSet.GetUint64(ctx, ridx, cidx)
 }
 
 func (res *internalExecResult) GetString(ctx context.Context, ridx uint64, cidx uint64) (string, error) {

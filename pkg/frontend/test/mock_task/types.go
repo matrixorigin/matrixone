@@ -317,6 +317,20 @@ func (mr *MockTaskServiceMockRecorder) StopScheduleCronTask() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StopScheduleCronTask", reflect.TypeOf((*MockTaskService)(nil).StopScheduleCronTask))
 }
 
+// TruncateCompletedTasks mocks base method.
+func (m *MockTaskService) TruncateCompletedTasks(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TruncateCompletedTasks", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// TruncateCompletedTasks indicates an expected call of TruncateCompletedTasks.
+func (mr *MockTaskServiceMockRecorder) TruncateCompletedTasks(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TruncateCompletedTasks", reflect.TypeOf((*MockTaskService)(nil).TruncateCompletedTasks), ctx)
+}
+
 // UpdateDaemonTask mocks base method.
 func (m *MockTaskService) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, cond ...taskservice.Condition) (int, error) {
 	m.ctrl.T.Helper()

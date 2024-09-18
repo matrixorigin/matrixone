@@ -22,6 +22,8 @@ import (
 	"runtime/trace"
 	"sync/atomic"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/tidwall/btree"
 )
 
 type PartitionState struct {
@@ -749,10 +750,10 @@ func (p *PartitionState) PKExistInMemBetween(
 					}
 				}
 				row := rowIter.Item()
-				if row.BlockID.Compare(entry.BlockID) != 0 {
+				if row.BlockID.Compare(&entry.BlockID) != 0 {
 					break
 				}
-				if !row.RowID.Equal(entry.RowID) {
+				if !row.RowID.EQ(&entry.RowID) {
 					break
 				}
 				if row.Time.GreaterEq(&from) {

@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"reflect"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"go.uber.org/zap"
 )
 
 func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []int64 {
@@ -406,13 +407,6 @@ func getNonSortedPKSearchFuncByPKVec(
 	return nil
 }
 
-func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		infos = append(infos, txnMeta.DebugString())
-		logutil.Debugf(msg+" %s", infos...)
-	}
-}
-
 // ListTnService gets all tn service in the cluster
 func ListTnService(
 	service string,
@@ -504,11 +498,10 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 		i.curBlkRows = i.meta.GetBlockMeta(uint32(i.cur)).GetRows()
 	}
 
-	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
-	blk := objectio.BlockInfo{
-		BlockID: *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
-		MetaLoc: objectio.ObjectLocation(loc),
-	}
+	var blk objectio.BlockInfo
+	objectio.BuildLocationTo(i.name, i.extent, i.curBlkRows, uint16(i.cur), blk.MetaLoc[:])
+	objectio.BuildObjectBlockidTo(i.name, uint16(i.cur), blk.BlockID[:])
+
 	return blk
 }
 

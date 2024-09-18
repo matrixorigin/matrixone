@@ -94,9 +94,9 @@ func TestMergeBlock(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil),
 			testutil.MakeTextVector([]string{
-				string(objectio.EncodeBlockInfo(blkInfo1)),
-				string(objectio.EncodeBlockInfo(blkInfo2)),
-				string(objectio.EncodeBlockInfo(blkInfo3))},
+				string(objectio.EncodeBlockInfo(&blkInfo1)),
+				string(objectio.EncodeBlockInfo(&blkInfo2)),
+				string(objectio.EncodeBlockInfo(&blkInfo3))},
 				nil),
 			testutil.MakeTextVector([]string{
 				string(objectio.ZeroObjectStats[:]),
@@ -127,6 +127,7 @@ func TestMergeBlock(t *testing.T) {
 	resetChildren(&argument1, batch1)
 
 	// argument1.Prepare(proc)
+	argument1.OpAnalyzer = process.NewAnalyzer(0, false, false, "mergeblock")
 	_, err := argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15*3), argument1.container.affectedRows)

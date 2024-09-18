@@ -86,6 +86,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select period from t1",
+		output: "select period from t1",
+	}, {
 		input:  "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name='admin' identified by '123456';",
 		output: "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name 'admin' identified by '******'",
 	}, {
@@ -333,6 +336,24 @@ var (
 		}, {
 			input:  "explain (analyze true,verbose false,format json) select * from emp",
 			output: "explain (analyze true,verbose false,format json) select * from emp",
+		}, {
+			input:  "explain phyplan select * from emp where sal > 3000",
+			output: "explain (phyplan) select * from emp where sal > 3000",
+		}, {
+			input:  "explain phyplan verbose select * from emp",
+			output: "explain (phyplan,verbose) select * from emp",
+		}, {
+			input:  "explain phyplan analyze select * from emp",
+			output: "explain (phyplan,analyze) select * from emp",
+		}, {
+			input:  "explain (phyplan true,verbose false) select * from emp",
+			output: "explain (phyplan true,verbose false) select * from emp",
+		}, {
+			input:  "explain (phyplan true,verbose false,format json) select * from emp",
+			output: "explain (phyplan true,verbose false,format json) select * from emp",
+		}, {
+			input:  "explain (phyplan true,analyze true,verbose true) select * from emp",
+			output: "explain (phyplan true,analyze true,verbose true) select * from emp",
 		}, {
 			input:  "with t11 as (select * from t1) update t11 join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
 			output: "with t11 as (select * from t1) update t11 inner join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
@@ -2405,7 +2426,11 @@ var (
 		},
 		{
 			input:  "Rename table nation to nations",
-			output: "alter table nation rename to nations",
+			output: "rename table nation rename to nations",
+		},
+		{
+			input:  "rename table rename_table_01 to rename01,rename_table_02 to rename02,rename_table_03 to rename03,rename_table_04 to rename04,rename_table_05 to rename05",
+			output: "rename table rename_table_01 rename to rename01, rename_table_02 rename to rename02, rename_table_03 rename to rename03, rename_table_04 rename to rename04, rename_table_05 rename to rename05",
 		},
 		{
 			input:  "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'p1 comment', partition p2 values less than maxvalue comment 'p3 comment')",
@@ -2534,31 +2559,31 @@ var (
 			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
 		},
 		{
-			input: `create cdc 'test_create_task' 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0',};`,
+			input: `create cdc test_create_task 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0',};`,
 		},
 		{
-			input: `show cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+			input: `show cdc all;`,
 		},
 		{
-			input: `show cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `show cdc task t1;`,
 		},
 		{
-			input: `drop cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+			input: `drop cdc all;`,
 		},
 		{
-			input: `drop cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `drop cdc task t1;`,
 		},
 		{
-			input: `pause cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+			input: `pause cdc all;`,
 		},
 		{
-			input: `pause cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `pause cdc task t1;`,
 		},
 		{
-			input: `resume cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `resume cdc task t1;`,
 		},
 		{
-			input: `resume cdc 'mysql://dump:111@127.0.0.1:6001' task 't1' 'restart';`,
+			input: `resume cdc task t1 'restart';`,
 		},
 		{
 			input: "alter publication pub1 account add acc0, acc1",

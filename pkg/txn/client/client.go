@@ -213,7 +213,7 @@ func (client *txnClient) GetState() TxnState {
 	}
 	wt := make([]string, 0, len(client.mu.waitActiveTxns))
 	for _, v := range client.mu.waitActiveTxns {
-		wt = append(wt, hex.EncodeToString(v.txnID))
+		wt = append(wt, hex.EncodeToString(v.reset.txnID))
 	}
 	return TxnState{
 		State:          int(client.mu.state),
@@ -267,6 +267,43 @@ func (client *txnClient) New(
 	minTS timestamp.Timestamp,
 	options ...TxnOption,
 ) (TxnOperator, error) {
+	op := newTxnOperator(
+		client.sid,
+		client.clock,
+		client.sender,
+		client.newTxnMeta(),
+		client.getTxnOptions(options)...,
+	)
+	return client.doCreateTxn(
+		ctx,
+		op,
+		minTS,
+	)
+}
+
+func (client *txnClient) RestartTxn(
+	ctx context.Context,
+	txnOp TxnOperator,
+	minTS timestamp.Timestamp,
+	options ...TxnOption,
+) (TxnOperator, error) {
+	op := txnOp.(*txnOperator)
+	op.init(
+		client.newTxnMeta(),
+		client.getTxnOptions(options)...,
+	)
+	return client.doCreateTxn(
+		ctx,
+		op,
+		minTS,
+	)
+}
+
+func (client *txnClient) doCreateTxn(
+	ctx context.Context,
+	op *txnOperator,
+	minTS timestamp.Timestamp,
+) (TxnOperator, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnCreateTotalDurationHistogram.Observe(time.Since(start).Seconds())
@@ -275,28 +312,6 @@ func (client *txnClient) New(
 	// we take a token from the limiter to control the number of transactions created per second.
 	client.limiter.Take()
 
-	txnMeta := txn.TxnMeta{}
-	txnMeta.ID = client.generator.Generate()
-	txnMeta.Mode = client.getTxnMode()
-	txnMeta.Isolation = client.getTxnIsolation()
-	if client.lockService != nil {
-		txnMeta.LockService = client.lockService.GetServiceID()
-	}
-
-	options = append(options,
-		WithTxnCNCoordinator(),
-		WithTxnLockService(client.lockService))
-	if client.enableCheckDup {
-		options = append(options, WithTxnEnableCheckDup())
-	}
-
-	op := newTxnOperator(
-		client.sid,
-		client.clock,
-		client.sender,
-		txnMeta,
-		options...,
-	)
 	op.timestampWaiter = client.timestampWaiter
 	op.AppendEventCallback(ClosedEvent,
 		client.updateLastCommitTS,
@@ -315,7 +330,7 @@ func (client *txnClient) New(
 		_ = op.Rollback(ctx)
 		return nil, err
 	}
-	if !op.skipWaitPushClient {
+	if !op.opts.skipWaitPushClient {
 		if err := op.UpdateSnapshot(ctx, ts); err != nil {
 			_ = op.Rollback(ctx)
 			return nil, err
@@ -480,23 +495,23 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 		client.mu.Unlock()
 	}()
 
-	if !op.skipWaitPushClient {
+	if !op.opts.skipWaitPushClient {
 		for client.mu.state == paused {
 			if client.normalStateNoWait {
 				return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
 			}
 
 			client.logger.Warn("txn client is in pause state, wait for it to be ready",
-				zap.String("txn ID", hex.EncodeToString(op.txnID)))
+				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
 			// Wait until the txn client's state changed to normal, and it will probably take
 			// no more than 5 seconds in theory.
 			client.mu.cond.Wait()
 			client.logger.Warn("txn client is in ready state",
-				zap.String("txn ID", hex.EncodeToString(op.txnID)))
+				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
 		}
 	}
 
-	if !op.options.UserTxn() ||
+	if !op.opts.options.UserTxn() ||
 		client.mu.users < client.maxActiveTxn {
 		client.addActiveTxnLocked(op)
 		return nil
@@ -508,8 +523,8 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 			return moerr.NewWaiterPausedNoCtx()
 		}
 	}
-	op.waiter = newWaiter(timestamp.Timestamp{}, cancelC)
-	op.waiter.ref()
+	op.reset.waiter = newWaiter(timestamp.Timestamp{}, cancelC)
+	op.reset.waiter.ref()
 	client.mu.waitActiveTxns = append(client.mu.waitActiveTxns, op)
 	return nil
 }
@@ -527,11 +542,11 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 	key := string(txn.ID)
 	op, ok := client.mu.activeTxns[key]
 	if ok {
-		v2.TxnLifeCycleDurationHistogram.Observe(time.Since(op.createAt).Seconds())
+		v2.TxnLifeCycleDurationHistogram.Observe(time.Since(op.reset.createAt).Seconds())
 
 		delete(client.mu.activeTxns, key)
 		client.removeFromLeakCheck(txn.ID)
-		if !op.options.UserTxn() {
+		if !op.opts.options.UserTxn() {
 			return
 		}
 		client.mu.users--
@@ -557,10 +572,10 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 }
 
 func (client *txnClient) addActiveTxnLocked(op *txnOperator) {
-	if op.options.UserTxn() {
+	if op.opts.options.UserTxn() {
 		client.mu.users++
 	}
-	client.mu.activeTxns[string(op.txnID)] = op
+	client.mu.activeTxns[string(op.reset.txnID)] = op
 	client.addToLeakCheck(op)
 }
 
@@ -629,14 +644,14 @@ func (client *txnClient) AbortAllRunningTxn() {
 	runningPipelines.ResumeService()
 
 	for _, op := range ops {
-		op.cannotCleanWorkspace = true
+		op.reset.cannotCleanWorkspace = true
 		_ = op.Rollback(context.Background())
-		op.cannotCleanWorkspace = false
+		op.reset.cannotCleanWorkspace = false
 	}
 	for _, op := range waitOps {
-		op.cannotCleanWorkspace = true
+		op.reset.cannotCleanWorkspace = true
 		_ = op.Rollback(context.Background())
-		op.cannotCleanWorkspace = false
+		op.reset.cannotCleanWorkspace = false
 		op.notifyActive()
 	}
 
@@ -654,7 +669,7 @@ func (client *txnClient) startLeakChecker() {
 
 func (client *txnClient) addToLeakCheck(op *txnOperator) {
 	if client.leakChecker != nil {
-		client.leakChecker.txnOpened(op, op.txnID, op.options)
+		client.leakChecker.txnOpened(op, op.reset.txnID, op.opts.options)
 	}
 }
 
@@ -684,4 +699,27 @@ func (client *txnClient) getAllTxnOperators() []*txnOperator {
 	}
 	ops = append(ops, client.mu.waitActiveTxns...)
 	return ops
+}
+
+func (client *txnClient) newTxnMeta() txn.TxnMeta {
+	txnMeta := txn.TxnMeta{}
+	txnMeta.ID = client.generator.Generate()
+	txnMeta.Mode = client.getTxnMode()
+	txnMeta.Isolation = client.getTxnIsolation()
+	if client.lockService != nil {
+		txnMeta.LockService = client.lockService.GetServiceID()
+	}
+	return txnMeta
+}
+
+func (client *txnClient) getTxnOptions(
+	options []TxnOption,
+) []TxnOption {
+	options = append(options,
+		WithTxnCNCoordinator(),
+		WithTxnLockService(client.lockService))
+	if client.enableCheckDup {
+		options = append(options, WithTxnEnableCheckDup())
+	}
+	return options
 }

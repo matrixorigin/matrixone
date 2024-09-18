@@ -19,13 +19,14 @@ import (
 	"fmt"
 	"sync"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"go.uber.org/zap"
 )
 
 var (
@@ -379,6 +380,50 @@ func (s *refreshableTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks 
 		s.maybeRefresh(lastAddress)
 	}
 	return v, err
+}
+
+func (s *refreshableTaskStorage) AddCdcTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
+	v, lastAddress, err := s.AddCdcTaskSub(ctx, dt, callback)
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) AddCdcTaskSub(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, string, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.AddCdcTask(ctx, dt, callback)
+	}
+	return v, lastAddress, err
+}
+
+func (s *refreshableTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, callback func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), conditions ...Condition) (int, error) {
+	v, lastAddress, err := s.UpdateCdcTaskSub(ctx, targetStatus, callback, conditions...)
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) UpdateCdcTaskSub(ctx context.Context, targetStatus task.TaskStatus, callback func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), conditions ...Condition) (int, string, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.UpdateCdcTask(ctx, targetStatus, callback, conditions...)
+	}
+	return v, lastAddress, err
 }
 
 func (s *refreshableTaskStorage) maybeRefresh(lastAddress string) bool {

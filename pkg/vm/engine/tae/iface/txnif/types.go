@@ -66,6 +66,7 @@ type TxnReader interface {
 	GetParticipants() []uint64
 	GetSnapshotTS() types.TS
 	SetSnapshotTS(types.TS)
+	SetStartTS(types.TS)
 	HasSnapshotLag() bool
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState
@@ -268,6 +269,10 @@ type TxnStore interface {
 	RangeDelete(
 		id *common.ID, start, end uint32, pkVec containers.Vector, dt handle.DeleteType,
 	) error
+	DeleteByPhyAddrKeys(
+		id *common.ID,
+		rowIDVec, pkVec containers.Vector, dt handle.DeleteType,
+	) (err error)
 	TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error)
 	//TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
 	GetByFilter(

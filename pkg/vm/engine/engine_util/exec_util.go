@@ -27,25 +27,25 @@ import (
 var ErrNoMore = moerr.NewInternalErrorNoCtx("no more")
 
 func ForeachObjectsExecute(
-	onObject func(objectio.ObjectStats) error,
+	onObject func(*objectio.ObjectStats) error,
 	nextObjectFn func() (objectio.ObjectStats, error),
 	latestObjects []objectio.ObjectStats,
 	extraObjects []objectio.ObjectStats,
 ) (err error) {
-	var obj objectio.ObjectStats
-	for _, obj = range latestObjects {
-		if err = onObject(obj); err != nil {
+	for _, obj := range latestObjects {
+		if err = onObject(&obj); err != nil {
 			return
 		}
 	}
 	for _, obj := range extraObjects {
-		if err = onObject(obj); err != nil {
+		if err = onObject(&obj); err != nil {
 			return
 		}
 	}
 	if nextObjectFn != nil {
+		var obj objectio.ObjectStats
 		for obj, err = nextObjectFn(); err == nil; obj, err = nextObjectFn() {
-			if err = onObject(obj); err != nil {
+			if err = onObject(&obj); err != nil {
 				return
 			}
 		}
@@ -80,7 +80,7 @@ func FilterObjects(
 	fastFilterHit int,
 	err error,
 ) {
-	onObject := func(objStats objectio.ObjectStats) (err error) {
+	onObject := func(objStats *objectio.ObjectStats) (err error) {
 		var ok bool
 		totalBlocks += int(objStats.BlkCnt())
 		if fastFilterOp != nil {
@@ -130,7 +130,7 @@ func FilterObjects(
 		}
 
 		if objStats.Rows() == 0 {
-			logutil.Errorf("object stats has zero rows: %s", objStats.String())
+			logutil.Errorf("object stats has zero rows: %s", objStats.ObjectName().String())
 			util.EnableCoreDump()
 			util.CoreDump()
 		}
@@ -157,14 +157,9 @@ func FilterObjects(
 					continue
 				}
 			}
-			loc := objStats.BlockLocation(uint16(pos), objectio.BlockMaxRows)
-			blk := objectio.BlockInfo{
-				BlockID: *objectio.BuildObjectBlockid(objStats.ObjectName(), uint16(pos)),
-				MetaLoc: objectio.ObjectLocation(loc),
-			}
-
-			blk.SetFlagByObjStats(objStats)
-			outBlocks.AppendBlockInfo(blk)
+			var blk objectio.BlockInfo
+			objStats.ConstructBlockInfoTo(uint16(pos), &blk)
+			outBlocks.AppendBlockInfo(&blk)
 		}
 
 		return

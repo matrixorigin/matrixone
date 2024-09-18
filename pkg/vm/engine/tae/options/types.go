@@ -32,6 +32,9 @@ import (
 const (
 	DefaultIndexCacheSize = 256 * mpool.MB
 
+	DefaultBulkTomestoneTxnThreshold = 10000 // rows
+	DefaultLockMergePruneInterval    = time.Minute
+
 	DefaultBlockMaxRows    = objectio.BlockMaxRows
 	DefaultBlocksPerObject = uint16(256)
 
@@ -53,7 +56,7 @@ const (
 	DefaultIOWorkers    = int(16)
 	DefaultAsyncWorkers = int(16)
 
-	DefaultLogtailTxnPageSize = 100
+	DefaultLogtailTxnPageSize = 256
 
 	DefaultLogstoreType = LogstoreBatchStore
 )
@@ -74,6 +77,7 @@ type Options struct {
 	MergeCfg      *MergeConfig
 	CatalogCfg    *CatalogCfg
 
+	BulkTomestoneTxnThreshold uint64
 	// MaxMessageSize is the size of max message which is sent to log-service.
 	MaxMessageSize   uint64
 	TransferTableTTL time.Duration

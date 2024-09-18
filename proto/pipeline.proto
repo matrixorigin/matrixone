@@ -79,6 +79,7 @@ message Dispatch {
   int32 shuffle_type=6;
   bool  is_sink = 7;
   bool  rec_sink = 8;
+  bool  rec_cte = 9;
 }
 
 message Merge {
@@ -163,6 +164,8 @@ message PreInsert {
   bool has_auto_col          = 5;
   bool is_update             = 6;
   int64 estimated_row_count  = 7;
+  plan.Expr comp_pkey_expr   = 8;
+  plan.Expr cluster_by_expr  = 9;
 }
 
 message LockTarget {
@@ -539,9 +542,8 @@ message ProcessInfo {
   uint32 account_id = 5;
   txn.CNTxnSnapshot snapshot = 6 [(gogoproto.nullable) = false];
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
-  repeated int32 analysis_node_list = 8;
-  SessionLoggerInfo session_logger = 9 [(gogoproto.nullable) = false];
-  PrepareParamInfo prepare_params = 10 [(gogoproto.nullable) = false];
+  SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
+  PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
 }
 
 message SessionInfo {

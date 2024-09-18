@@ -18,9 +18,8 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -106,7 +105,246 @@ const (
 	Sample
 	ProductL2
 	Mock
+	Apply
 )
+
+var OperatorToStrMap map[OpType]string
+var StrToOperatorMap map[string]OpType
+var MinorOpMap map[string]struct{}
+var MajorOpMap map[string]struct{}
+
+func init() {
+	// Initialize OperatorToStrMap
+	OperatorToStrMap = map[OpType]string{
+		Top:                     "Top",
+		Limit:                   "Limit",
+		Order:                   "Order",
+		Group:                   "Group",
+		Window:                  "Window",
+		TimeWin:                 "TimeWin",
+		Fill:                    "Fill",
+		Output:                  "Output",
+		Offset:                  "Offset",
+		Product:                 "Product",
+		Filter:                  "Filter",
+		Dispatch:                "Dispatch",
+		Connector:               "Connector",
+		Projection:              "Projection",
+		Join:                    "Join",
+		LoopJoin:                "LoopJoin",
+		Left:                    "Left",
+		Single:                  "Single",
+		Semi:                    "Semi",
+		RightSemi:               "RightSemi",
+		Anti:                    "Anti",
+		RightAnti:               "RightAnti",
+		Mark:                    "Mark",
+		IndexJoin:               "IndexJoin",
+		IndexBuild:              "IndexBuild",
+		Merge:                   "Merge",
+		MergeTop:                "MergeTop",
+		MergeLimit:              "MergeLimit",
+		MergeOrder:              "MergeOrder",
+		MergeGroup:              "MergeGroup",
+		MergeOffset:             "MergeOffset",
+		MergeRecursive:          "MergeRecursive",
+		MergeCTE:                "MergeCTE",
+		Partition:               "Partition",
+		Deletion:                "Deletion",
+		Insert:                  "Insert",
+		External:                "External",
+		Source:                  "Source",
+		Minus:                   "Minus",
+		Intersect:               "Intersect",
+		IntersectAll:            "IntersectAll",
+		UnionAll:                "UnionAll",
+		HashBuild:               "HashBuild",
+		ShuffleBuild:            "ShuffleBuild",
+		TableFunction:           "TableFunction",
+		TableScan:               "TableScan",
+		ValueScan:               "ValueScan",
+		MergeBlock:              "MergeBlock",
+		MergeDelete:             "MergeDelete",
+		Right:                   "Right",
+		OnDuplicateKey:          "OnDuplicateKey",
+		FuzzyFilter:             "FuzzyFilter",
+		PreInsert:               "PreInsert",
+		PreInsertUnique:         "PreInsertUnique",
+		PreInsertSecondaryIndex: "PreInsertSecondaryIndex",
+		LastInstructionOp:       "LastInstructionOp",
+		LockOp:                  "LockOp",
+		Shuffle:                 "Shuffle",
+		Sample:                  "Sample",
+		ProductL2:               "ProductL2",
+		Mock:                    "Mock",
+		Apply:                   "Apply",
+	}
+
+	// Initialize StrToOperatorMap
+	StrToOperatorMap = make(map[string]OpType)
+	for op, str := range OperatorToStrMap {
+		StrToOperatorMap[str] = op
+	}
+
+	// Initialize MinorOpMap (small impact on time consumption)
+	MinorOpMap = map[string]struct{}{
+		OperatorToStrMap[HashBuild]:    {},
+		OperatorToStrMap[ShuffleBuild]: {},
+		OperatorToStrMap[IndexBuild]:   {},
+		OperatorToStrMap[Filter]:       {},
+		OperatorToStrMap[MergeGroup]:   {},
+		OperatorToStrMap[MergeOrder]:   {},
+	}
+
+	// Initialize MajorOpMap (large impact on time consumption)
+	MajorOpMap = map[string]struct{}{
+		OperatorToStrMap[TableScan]: {},
+		OperatorToStrMap[External]:  {},
+		OperatorToStrMap[Order]:     {},
+		OperatorToStrMap[Window]:    {},
+		OperatorToStrMap[Group]:     {},
+		OperatorToStrMap[Join]:      {},
+		OperatorToStrMap[LoopJoin]:  {},
+		OperatorToStrMap[Left]:      {},
+		OperatorToStrMap[Single]:    {},
+		OperatorToStrMap[Semi]:      {},
+		OperatorToStrMap[RightSemi]: {},
+		OperatorToStrMap[Anti]:      {},
+		OperatorToStrMap[RightAnti]: {},
+		OperatorToStrMap[Mark]:      {},
+		OperatorToStrMap[Product]:   {},
+		OperatorToStrMap[ProductL2]: {},
+	}
+}
+
+func (op OpType) String() string {
+	switch op {
+	case Top:
+		return "Top"
+	case Limit:
+		return "Limit"
+	case Order:
+		return "Order"
+	case Group:
+		return "Group"
+	case Window:
+		return "Window"
+	case TimeWin:
+		return "TimeWin"
+	case Fill:
+		return "Fill"
+	case Output:
+		return "Output"
+	case Offset:
+		return "Offset"
+	case Product:
+		return "Product"
+	case Filter:
+		return "Filter"
+	case Dispatch:
+		return "Dispatch"
+	case Connector:
+		return "Connector"
+	case Projection:
+		return "Projection"
+	case Join:
+		return "Join"
+	case LoopJoin:
+		return "LoopJoin"
+	case Left:
+		return "Left"
+	case Single:
+		return "Single"
+	case Semi:
+		return "Semi"
+	case RightSemi:
+		return "RightSemi"
+	case Anti:
+		return "Anti"
+	case RightAnti:
+		return "RightAnti"
+	case Mark:
+		return "Mark"
+	case IndexJoin:
+		return "IndexJoin"
+	case IndexBuild:
+		return "IndexBuild"
+	case Merge:
+		return "Merge"
+	case MergeTop:
+		return "MergeTop"
+	case MergeLimit:
+		return "MergeLimit"
+	case MergeOrder:
+		return "MergeOrder"
+	case MergeGroup:
+		return "MergeGroup"
+	case MergeOffset:
+		return "MergeOffset"
+	case MergeRecursive:
+		return "MergeRecursive"
+	case MergeCTE:
+		return "MergeCTE"
+	case Partition:
+		return "Partition"
+	case Deletion:
+		return "Deletion"
+	case Insert:
+		return "Insert"
+	case External:
+		return "External"
+	case Source:
+		return "Source"
+	case Minus:
+		return "Minus"
+	case Intersect:
+		return "Intersect"
+	case IntersectAll:
+		return "IntersectAll"
+	case UnionAll:
+		return "UnionAll"
+	case HashBuild:
+		return "HashBuild"
+	case ShuffleBuild:
+		return "ShuffleBuild"
+	case TableFunction:
+		return "TableFunction"
+	case TableScan:
+		return "TableScan"
+	case ValueScan:
+		return "ValueScan"
+	case MergeBlock:
+		return "MergeBlock"
+	case MergeDelete:
+		return "MergeDelete"
+	case Right:
+		return "Right"
+	case OnDuplicateKey:
+		return "OnDuplicateKey"
+	case FuzzyFilter:
+		return "FuzzyFilter"
+	case PreInsert:
+		return "PreInsert"
+	case PreInsertUnique:
+		return "PreInsertUnique"
+	case PreInsertSecondaryIndex:
+		return "PreInsertSecondaryIndex"
+	case LastInstructionOp:
+		return "LastInstructionOp"
+	case LockOp:
+		return "LockOp"
+	case Shuffle:
+		return "Shuffle"
+	case Sample:
+		return "Sample"
+	case ProductL2:
+		return "ProductL2"
+	case Mock:
+		return "Mock"
+	default:
+		return "Unknown"
+	}
+}
 
 type Operator interface {
 	// Free release all the memory allocated from mPool in an operator.
@@ -140,7 +378,8 @@ type Operator interface {
 
 type OperatorBase struct {
 	OperatorInfo
-	Children []Operator
+	OpAnalyzer process.Analyzer
+	Children   []Operator
 }
 
 func (o *OperatorBase) SetInfo(info *OperatorInfo) {
@@ -211,14 +450,6 @@ func (o *OperatorBase) SetIdx(idx int) {
 	o.Idx = idx
 }
 
-func (o *OperatorBase) GetParallelIdx() int {
-	return o.ParallelIdx
-}
-
-func (o *OperatorBase) GetParallelMajor() bool {
-	return o.ParallelMajor
-}
-
 func (o *OperatorBase) GetIsFirst() bool {
 	return o.IsFirst
 }
@@ -253,10 +484,13 @@ func CancelCheck(proc *process.Process) (error, bool) {
 	}
 }
 
-func ChildrenCall(o Operator, proc *process.Process, anal process.Analyze) (CallResult, error) {
+func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
 	beforeChildrenCall := time.Now()
-	result, err := o.Call(proc)
+	result, err := op.Call(proc)
 	anal.ChildrenCallStop(beforeChildrenCall)
+	if err == nil {
+		anal.Input(result.Batch)
+	}
 	return result, err
 }
 
@@ -288,11 +522,9 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Idx           int // plan node index to which the pipeline operator belongs
-	ParallelIdx   int
-	ParallelMajor bool
-	IsFirst       bool
-	IsLast        bool
+	Idx     int // plan node index to which the pipeline operator belongs
+	IsFirst bool
+	IsLast  bool
 
 	CnAddr      string
 	OperatorID  int32
@@ -310,7 +542,7 @@ func (info OperatorInfo) GetAddress() message.MessageAddress {
 
 func CannotRemote(op Operator) bool {
 	// todo: I think we should add more operators here.
-	return op.OpType() == LockOp
+	return op.OpType() == LockOp || op.OpType() == MergeRecursive || op.OpType() == MergeCTE
 }
 
 type ModificationArgument interface {

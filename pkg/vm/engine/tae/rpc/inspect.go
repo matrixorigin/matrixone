@@ -276,7 +276,7 @@ func (c *objStatArg) String() string {
 func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
-		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl).(*merge.BasicPolicyConfig)
+		p := c.ctx.db.MergeScheduler.GetPolicy(c.tbl)
 		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
@@ -429,9 +429,8 @@ func (c *objectPruneArg) Run() error {
 		stale++
 		selected++
 		selectedObjs = append(selectedObjs, obj)
-		stat := obj.GetObjectStats()
-		rw := int(stat.Rows())
-		sz := int(stat.OriginSize())
+		rw := int(obj.Rows())
+		sz := int(obj.OriginSize())
 		if minR == 0 || rw < minR {
 			minR = rw
 		}
@@ -730,11 +729,9 @@ func (c *infoArg) Run() error {
 
 		schema := c.obj.GetSchema()
 		if schema.HasSortKey() {
-			zm, err := c.obj.GetPKZoneMap(context.Background())
+			zm := c.obj.SortKeyZoneMap()
 			var zmstr string
-			if err != nil {
-				zmstr = err.Error()
-			} else if c.verbose <= common.PPL1 {
+			if c.verbose <= common.PPL1 {
 				zmstr = zm.String()
 			} else if c.verbose == common.PPL2 {
 				zmstr = zm.StringForCompose()
@@ -831,7 +828,11 @@ func (c *mergePolicyArg) Run() error {
 			merge.StopMerge.Store(false)
 		}
 	} else {
-		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl, &merge.BasicPolicyConfig{
+		txn, err := c.ctx.db.StartTxn(nil)
+		if err != nil {
+			return err
+		}
+		c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
 			MergeMaxOneRun:    int(c.maxMergeObjN),
 			ObjectMinOsize:    minosize,
 			MaxOsizeMergedObj: maxosize,
