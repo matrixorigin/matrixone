@@ -1196,7 +1196,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
 			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 				stats.Outcnt = float64(c.U64Val)
-				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
+				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows * 100) + 1)
 				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
 			}
 		}
