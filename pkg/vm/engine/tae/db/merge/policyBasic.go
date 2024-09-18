@@ -129,7 +129,7 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 		return false
 	}
 
-	osize := obj.GetOriginSize()
+	osize := int(obj.OriginSize())
 
 	isCandidate := func() bool {
 		if osize < int(config.ObjectMinOsize) {
@@ -145,7 +145,7 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 
 	if isCandidate() {
 		o.objHeap.pushWithCap(&mItem[*catalog.ObjectEntry]{
-			row:   obj.GetRows(),
+			row:   int(obj.Rows()),
 			entry: obj,
 		}, config.MergeMaxOneRun)
 		return true
@@ -202,7 +202,7 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry, config *BasicPolicyConfig)
 	// objs are sorted by remaining rows
 	o.accBuf = o.accBuf[:1]
 	for i, obj := range objs {
-		o.accBuf = append(o.accBuf, o.accBuf[i]+obj.GetRows())
+		o.accBuf = append(o.accBuf, o.accBuf[i]+int(obj.Rows()))
 	}
 	acc := o.accBuf
 

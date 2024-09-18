@@ -272,14 +272,14 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 func (bat *Batch) Clean(m *mpool.MPool) {
 	// situations that batch was still in use.
 	// we use `!= 0` but not `>0` to avoid the situation that the batch was cleaned more than required.
-	if bat == EmptyBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
+	if bat == EmptyBatch || bat == CteEndBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
 	}
 
-	for _, vec := range bat.Vecs {
+	for i, vec := range bat.Vecs {
 		if vec != nil {
+			bat.ReplaceVector(vec, nil, i)
 			vec.Free(m)
-			bat.ReplaceVector(vec, nil)
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -449,9 +449,9 @@ func (bat *Batch) GetCnt() int64 {
 	return atomic.LoadInt64(&bat.Cnt)
 }
 
-func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
-	for i, vec := range bat.Vecs {
-		if vec == oldVec {
+func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector, startIndex int) {
+	for i := startIndex; i < len(bat.Vecs); i++ {
+		if bat.Vecs[i] == oldVec {
 			bat.SetVector(int32(i), newVec)
 		}
 	}

@@ -129,7 +129,7 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry) {
 		}
 
 		o.tombstoneEntries = append(o.tombstoneEntries, tEntry)
-		o.tombstoneStats = append(o.tombstoneStats, tEntry.GetObjectStats())
+		o.tombstoneStats = append(o.tombstoneStats, *tEntry.GetObjectStats())
 	}
 }
 

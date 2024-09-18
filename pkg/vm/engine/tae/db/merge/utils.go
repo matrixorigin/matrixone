@@ -90,8 +90,8 @@ func estimateMergeConsume(mobjs []*catalog.ObjectEntry) (origSize, estSize int) 
 	}
 	rows := 0
 	for _, m := range mobjs {
-		rows += m.GetRows()
-		origSize += m.GetOriginSize()
+		rows += int(m.Rows())
+		origSize += int(m.OriginSize())
 	}
 	// the main memory consumption is transfer table.
 	// each row uses 12B, so estimate size is 12 * rows.
