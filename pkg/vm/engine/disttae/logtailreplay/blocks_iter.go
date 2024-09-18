@@ -68,6 +68,7 @@ type BlocksIter interface {
 func (p *PartitionState) ApproxDataObjectsNum() int {
 	return p.dataObjectsNameIndex.Len()
 }
+
 func (p *PartitionState) ApproxTombstoneObjectsNum() int {
 	return p.tombstoneObjectsNameIndex.Len()
 }
@@ -85,7 +86,7 @@ func (p *PartitionState) newTombstoneObjectsIter(
 		}
 
 		iter.Seek(pivot)
-		if !iter.Prev() && p.tombstoneObjectsNameIndex.Len() > 0 {
+		if !iter.Prev() && p.tombstoneObjectDTSIndex.Len() > 0 {
 			// reset iter only when seeked to the first item
 			iter.Release()
 			iter = p.tombstoneObjectDTSIndex.Copy().Iter()

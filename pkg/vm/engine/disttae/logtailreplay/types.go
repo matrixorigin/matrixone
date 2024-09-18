@@ -57,9 +57,13 @@ func (o ObjectEntry) ObjectNameIndexLess(than ObjectEntry) bool {
 // 2. ascending object with delete ts.
 // 3. ascending object with name when same dts.
 //
-// sort by DELETE time and name
+// compare with delete ts only between different objects
 func (o ObjectEntry) ObjectDTSIndexLess(than ObjectEntry) bool {
-	// (c, d), (c, d), (c, d), (c, inf), (c, inf) ...
+	nameCmp := bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:])
+	if nameCmp == 0 {
+		return false
+	}
+
 	x, y := o.DeleteTime, than.DeleteTime
 	if x.IsEmpty() {
 		x = types.MaxTs()
@@ -67,12 +71,11 @@ func (o ObjectEntry) ObjectDTSIndexLess(than ObjectEntry) bool {
 	if y.IsEmpty() {
 		y = types.MaxTs()
 	}
-
 	if !x.Equal(&y) {
 		return x.Less(&y)
 	}
 
-	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
+	return nameCmp < 0
 }
 
 func (o ObjectEntry) IsEmpty() bool {
