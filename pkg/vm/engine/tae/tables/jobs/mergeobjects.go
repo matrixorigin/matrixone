@@ -291,8 +291,8 @@ func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
 	commitEntry.TableName = schema.Name
 	commitEntry.StartTs = task.txn.GetStartTS().ToTimestamp()
 	for _, o := range task.mergedObjs {
-		obj := o.GetObjectStats()
-		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj.Clone().Marshal())
+		obj := *o.GetObjectStats()
+		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj[:])
 	}
 	task.commitEntry = commitEntry
 	// leave mapping to ReadMergeAndWrite
@@ -466,7 +466,7 @@ func HandleMergeEntryInTxn(
 func (task *mergeObjectsTask) GetTotalSize() uint64 {
 	totalSize := uint64(0)
 	for _, obj := range task.mergedObjs {
-		totalSize += uint64(obj.GetOriginSize())
+		totalSize += uint64(obj.OriginSize())
 	}
 	return totalSize
 }
@@ -474,7 +474,7 @@ func (task *mergeObjectsTask) GetTotalSize() uint64 {
 func (task *mergeObjectsTask) GetTotalRowCnt() uint32 {
 	totalRowCnt := 0
 	for _, obj := range task.mergedObjs {
-		totalRowCnt += obj.GetRows()
+		totalRowCnt += int(obj.Rows())
 	}
 	return uint32(totalRowCnt)
 }

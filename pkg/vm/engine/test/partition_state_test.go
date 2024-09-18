@@ -22,10 +22,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -39,9 +43,6 @@ import (
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
-	"github.com/panjf2000/ants/v2"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_Append(t *testing.T) {
@@ -369,7 +370,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		require.Nil(t, err)
 
 		// delete two rows on the 2nd blk
-		blkId.BlockID = *objectio.BuildObjectBlockid(iter.GetObject().GetMeta().(*catalog.ObjectEntry).ObjectName(), 1)
+		blkId.BlockID = iter.GetObject().GetMeta().(*catalog.ObjectEntry).ConstructBlockId(uint16(1))
 		err = rel.RangeDelete(blkId, 0, 1, handle.DT_Normal)
 		assert.Nil(t, err)
 

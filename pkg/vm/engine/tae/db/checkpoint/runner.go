@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"math/rand"
 	"slices"
 	"strconv"
@@ -449,9 +448,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		}
 	}()
 
-	var files []string
-	var file string
-	if fields, files, err = r.doIncrementalCheckpoint(entry); err != nil {
+	if fields, err = r.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
 		return
 	}
@@ -463,16 +460,15 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	entry.SetLSN(lsn, lsnToTruncate)
 	entry.SetState(ST_Finished)
 
-	if file, err = r.saveCheckpoint(
+	if err = r.saveCheckpoint(
 		entry.start, entry.end, lsn, lsnToTruncate,
 	); err != nil {
 		errPhase = "save-ckp"
 		return
 	}
-	files = append(files, file)
 
 	var logEntry wal.LogEntry
-	if logEntry, err = r.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
+	if logEntry, err = r.wal.RangeCheckpoint(1, lsnToTruncate); err != nil {
 		errPhase = "wal-ckp"
 		fatal = true
 		return
@@ -551,13 +547,13 @@ func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.
 	return
 }
 
-func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (name string, err error) {
+func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (err error) {
 	bat := r.collectCheckpointMetadata(start, end, ckpLSN, truncateLSN)
 	defer bat.Close()
-	name = blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
+	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
 	if err != nil {
-		return
+		return err
 	}
 	if _, err = writer.Write(containers.ToCNBatch(bat)); err != nil {
 		return
@@ -573,7 +569,7 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 	return
 }
 
-func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, files []string, err error) {
+func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(r.rt.SID(), entry.start, entry.end, true)
 	data, err := factory(r.catalog)
 	if err != nil {
@@ -581,12 +577,10 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.F
 	}
 	fields = data.ExportStats("")
 	defer data.Close()
-	var cnLocation, tnLocation objectio.Location
-	cnLocation, tnLocation, files, err = data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
 		return
 	}
-	files = append(files, cnLocation.Name().String())
 	entry.SetLocation(cnLocation, tnLocation)
 
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
@@ -660,7 +654,7 @@ func (r *runner) doGlobalCheckpoint(
 	fields = data.ExportStats("")
 	defer data.Close()
 
-	cnLocation, tnLocation, files, err := data.WriteTo(
+	cnLocation, tnLocation, _, err := data.WriteTo(
 		r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize,
 	)
 	if err != nil {
@@ -671,21 +665,12 @@ func (r *runner) doGlobalCheckpoint(
 	entry.SetLocation(cnLocation, tnLocation)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
-	var name string
-	if name, err = r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
+
+	if err = r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
 		errPhase = "save"
 		return
 	}
-	files = append(files, name)
 
-	fileEntry, err := store.BuildFilesEntry(files)
-	if err != nil {
-		return
-	}
-	_, err = r.wal.AppendEntry(store.GroupFiles, fileEntry)
-	if err != nil {
-		return
-	}
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DoGlobalCheckPoint.Add(1)
 	})
