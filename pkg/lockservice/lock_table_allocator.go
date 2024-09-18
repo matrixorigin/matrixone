@@ -17,7 +17,6 @@ package lockservice
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -37,6 +36,7 @@ type lockTableAllocator struct {
 	address         string
 	server          Server
 	client          Client
+	inactiveService sync.Map // lock service id -> inactive time
 	ctl             sync.Map // lock service id -> *commitCtl
 	version         uint64
 	mu              struct {
@@ -162,6 +162,12 @@ func (l *lockTableAllocator) Valid(
 
 	if len(invalid) > 0 {
 		return invalid, nil
+	}
+
+	if _, ok := l.inactiveService.Load(serviceID); ok {
+		l.logger.Info("inactive service",
+			zap.String("serviceID", serviceID))
+		return nil, moerr.NewCannotCommitOrphanNoCtx()
 	}
 
 	c := l.getCtl(serviceID)
@@ -527,43 +533,62 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+			l.logger.Info("clean commit state")
+
 			var services []string
 			var invalidServices []string
 			activeTxnMap := make(map[string]map[string]struct{})
 
 			l.ctl.Range(func(key, value any) bool {
-				c := value.(*commitCtl)
-				ok, at := c.disconnected()
-				if !ok {
-					services = append(services, key.(string))
-				} else if time.Since(at) > removeDisconnectDuration {
-					c.states.Range(func(key, value any) bool {
-						if value.(ctlState) == cannotCommitState {
-							logCleanCannotCommitTxn(key.(string), int(value.(ctlState)))
-						}
-						return true
-					})
-					l.ctl.Delete(key)
+				services = append(services, key.(string))
+				return true
+			})
+
+			l.inactiveService.Range(func(key, value any) bool {
+				if time.Since(value.(time.Time)) > removeDisconnectDuration {
+					l.logger.Error("remove inactive service",
+						zap.String("serviceID", key.(string)))
+					l.inactiveService.Delete(key)
 				}
 				return true
 			})
 
+			retry := false
 			for _, sid := range services {
-				valid, actives, err := getActiveTxnFunc(sid)
-				if err == nil {
-					if !valid {
-						invalidServices = append(invalidServices, sid)
-					} else {
-						m := make(map[string]struct{}, len(actives))
-						for _, txn := range actives {
-							m[util.UnsafeBytesToString(txn)] = struct{}{}
+				for {
+					valid, actives, err := getActiveTxnFunc(sid)
+					if isRetryError(err) {
+						// retry err
+						l.logger.Error("retry to check service if alive",
+							zap.String("serviceID", sid),
+							zap.Error(err))
+						if !retry {
+							// retry
+							retry = true
+							continue
 						}
-						activeTxnMap[sid] = m
+						retry = false
+						l.inactiveService.Store(sid, time.Now())
+						l.ctl.Delete(sid)
+					} else if err == nil {
+						if !valid {
+							invalidServices = append(invalidServices, sid)
+						} else {
+							m := make(map[string]struct{}, len(actives))
+							for _, txn := range actives {
+								m[util.UnsafeBytesToString(txn)] = struct{}{}
+							}
+							activeTxnMap[sid] = m
+						}
+					} else {
+						// is not retry err
+						l.logger.Error("get active txn failed",
+							zap.String("serviceID", sid),
+							zap.Error(err))
+						l.inactiveService.Store(sid, struct{}{})
+						l.ctl.Delete(sid)
 					}
-				} else if !isRetryError(err) {
-					l.logger.Error("get cannot commit txn failed",
-						zap.String("serviceID", sid))
-					l.getCtl(sid).disconnect()
+					break
 				}
 			}
 
@@ -924,9 +949,6 @@ var (
 )
 
 type commitCtl struct {
-	// disconnectAt indicates whether the service is disconnected, never connect
-	// to the service again.
-	disconnectAt atomic.Pointer[time.Time]
 	// txn id -> state, 0: cannot commit, 1: committed
 	states sync.Map
 }
@@ -947,19 +969,6 @@ func (c *commitCtl) getCtlState(
 		return old.(ctlState), true
 	}
 	return ctlState(0), false
-}
-
-func (c *commitCtl) disconnect() {
-	at := time.Now()
-	c.disconnectAt.Store(&at)
-}
-
-func (c *commitCtl) disconnected() (bool, time.Time) {
-	v := c.disconnectAt.Load()
-	if v == nil {
-		return false, time.Time{}
-	}
-	return true, *v
 }
 
 func (l *lockTableAllocator) canGetBind(serviceID string) bool {
