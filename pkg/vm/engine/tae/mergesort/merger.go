@@ -38,7 +38,7 @@ type releasableBatch struct {
 	releaseF func()
 }
 
-type merger[T any] struct {
+type merger[T comparable] struct {
 	heap *heapSlice[T]
 
 	cols    [][]T
@@ -68,7 +68,7 @@ type merger[T any] struct {
 	stats       mergeStats
 }
 
-func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, isTombstone bool, mustColFunc func(*vector.Vector) []T) Merger {
+func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, isTombstone bool, mustColFunc func(*vector.Vector) []T) Merger {
 	size := host.GetObjectCnt()
 	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	m := &merger[T]{

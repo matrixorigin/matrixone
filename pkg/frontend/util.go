@@ -33,6 +33,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -48,6 +49,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1491,6 +1494,195 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetDecimal(col.Typ.Scale)
 	convertMysqlTextTypeToBlobType(c)
 	return c, nil
+}
+
+// isLegal checks if the sqls are legal parsed by the mo parser.
+// if there is at least one sql can be parsed, it returns true
+func isLegal(name string, sqls []string) bool {
+	name = strings.TrimSpace(name)
+	if len(name) == 0 || len(sqls) == 0 {
+		return false
+	}
+	for _, sql := range sqls {
+		if len(sql) == 0 {
+			return false
+		}
+	}
+	yes := false
+	for _, sql := range sqls {
+		_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		if err != nil {
+			continue
+		}
+		yes = true
+		break
+	}
+	return yes
+}
+
+// hasSpecialChars checks the string have special characters (','  '.'  ':' '`')
+func hasSpecialChars(s string) bool {
+	return strings.ContainsAny(s, ",.:`")
+}
+
+/*
+accountNameIsLegal checks the account name legal or not.
+rule:
+
+	if create account name or create account `name` can succeed,
+	it is legal.
+
+	it means all most all string can be legal.
+*/
+func accountNameIsLegal(name string) bool {
+	if hasSpecialChars(name) {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	createAccountSqls := []string{
+		"create account " + name + " ADMIN_NAME 'admin' IDENTIFIED BY '111'",
+		"create account `" + name + "` ADMIN_NAME 'admin' IDENTIFIED BY '111'",
+	}
+	return isLegal(name, createAccountSqls)
+}
+
+/*
+dbNameIsLegal checks the database name legal or not.
+rule:
+
+	if create database name or create database `name` can succeed,
+	it is legal.
+
+	it means all most all string can be legal.
+*/
+func dbNameIsLegal(name string) bool {
+	if hasSpecialChars(name) {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	createDBSqls := []string{
+		"create database " + name,
+		"create database `" + name + "`",
+	}
+	return isLegal(name, createDBSqls)
+}
+
+/*
+tableNameIsLegal checks the table name legal or not.
+rule:
+
+	if create table name or create table `name` can succeed,
+	it is legal.
+
+	it means all most all string can be legal.
+*/
+func tableNameIsLegal(name string) bool {
+	if hasSpecialChars(name) {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	createTableSqls := []string{
+		"create table " + name + "(a int)",
+		"create table `" + name + "`(a int)",
+	}
+	return isLegal(name, createTableSqls)
+}
+
+//func tableNameIsRegexpr(s string) bool {
+//	if len(s) < 2 {
+//		return false
+//	}
+//	if strings.HasPrefix(s, "/") && strings.HasSuffix(s, "/") {
+//		_, err := regexp.Compile(s)
+//		if err != nil {
+//			return false
+//		}
+//		return true
+//	}
+//	return false
+//}
+
+// compositedUriInfo uri according to the format: mysql://root:111@127.0.0.1:6001
+// if valid, return true and extracted info
+// !!!NOTE!!!
+// user and password does not have the special character ( ':' '@' )
+func compositedUriInfo(uri string, uriPrefix string) (bool, cdc.UriInfo) {
+	if !uriHasPrefix(uri, uriPrefix) {
+		return false, cdc.UriInfo{}
+	}
+	//locate user password
+	rest := uri[len(uriPrefix):]
+	seps := strings.Split(rest, "@")
+	if len(seps) != 2 || len(seps[0]) == 0 || len(seps[1]) == 0 {
+		return false, cdc.UriInfo{}
+	}
+	seps2 := strings.Split(seps[0], ":")
+	if len(seps2) != 2 || len(seps2[0]) == 0 {
+		return false, cdc.UriInfo{}
+	}
+	userName := seps2[0]
+	password := seps2[1]
+	passwordStart := len(uriPrefix) + len(userName) + 1
+	passwordEnd := passwordStart + len(password)
+	if passwordEnd > len(uri) ||
+		password != uri[passwordStart:passwordEnd] {
+		return false, cdc.UriInfo{}
+	}
+
+	sep3 := strings.Split(seps[1], ":")
+	if len(sep3) != 2 || len(sep3[0]) == 0 || len(sep3[1]) == 0 {
+		return false, cdc.UriInfo{}
+	}
+	ip := sep3[0]
+	port := sep3[1]
+	portInt32, err := strconv.ParseUint(port, 10, 32)
+	if err != nil || portInt32 > 65535 {
+		return false, cdc.UriInfo{}
+	}
+	return true, cdc.UriInfo{
+		User:          userName,
+		Password:      password,
+		Ip:            ip,
+		Port:          int(portInt32),
+		PasswordStart: passwordStart,
+		PasswordEnd:   passwordEnd,
+	}
+}
+
+// replaceStr replaces s[start:end] by s2
+func replaceStr(s string, start, end int, s2 string) string {
+	if start >= end || start < 0 || end < 0 {
+		return s
+	}
+	if end <= len(s) {
+		return s[:start] + s2 + s[end:]
+	}
+	return s
+}
+
+// uriHasPrefix
+func uriHasPrefix(uri string, prefix string) bool {
+	if len(uri) < len(prefix) || strings.ToLower(uri[:len(prefix)]) != prefix {
+		return false
+	}
+	return true
+}
+
+/*
+extractUriInfo extracts the uriInfo
+return serialized uriInfo
+*/
+func extractUriInfo(ctx context.Context, uri string, uriPrefix string) (string, cdc.UriInfo, error) {
+	ok, uriInfo := compositedUriInfo(uri, uriPrefix)
+	if !ok {
+		return "", cdc.UriInfo{}, moerr.NewInternalError(ctx, "source uri is invalid format")
+	}
+
+	jsonUriInfo, err := cdc.JsonEncode(&uriInfo)
+	if err != nil {
+		return "", cdc.UriInfo{}, err
+	}
+	return jsonUriInfo, uriInfo, nil
 }
 
 func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, table string, ses FeSession) (*plan.TableDef, error) {

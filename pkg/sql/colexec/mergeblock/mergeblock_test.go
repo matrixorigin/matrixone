@@ -94,9 +94,9 @@ func TestMergeBlock(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil),
 			testutil.MakeTextVector([]string{
-				string(objectio.EncodeBlockInfo(blkInfo1)),
-				string(objectio.EncodeBlockInfo(blkInfo2)),
-				string(objectio.EncodeBlockInfo(blkInfo3))},
+				string(objectio.EncodeBlockInfo(&blkInfo1)),
+				string(objectio.EncodeBlockInfo(&blkInfo2)),
+				string(objectio.EncodeBlockInfo(&blkInfo3))},
 				nil),
 			testutil.MakeTextVector([]string{
 				string(objectio.ZeroObjectStats[:]),
