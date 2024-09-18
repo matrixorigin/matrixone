@@ -139,6 +139,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
 			&config.CacheCallbacks,
 			l.perfCounterSets,
+			l.name,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", l.name),
@@ -159,6 +160,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			l.perfCounterSets,
 			true,
 			l,
+			l.name,
 		)
 		if err != nil {
 			return err
@@ -1037,7 +1039,12 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 var _ CachingFileService = new(LocalFS)
 
 func (l *LocalFS) Close() {
-	l.FlushCache()
+	if l.memCache != nil {
+		l.memCache.Close()
+	}
+	if l.diskCache != nil {
+		l.diskCache.Close()
+	}
 }
 
 func (l *LocalFS) FlushCache() {
