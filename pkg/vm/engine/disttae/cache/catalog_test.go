@@ -17,6 +17,8 @@ package cache
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
 )
 
 const (

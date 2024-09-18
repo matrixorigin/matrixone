@@ -61,7 +61,6 @@ func (rightSemi *RightSemi) Prepare(proc *process.Process) (err error) {
 		}
 		rightSemi.ctr.tmpBatches = make([]*batch.Batch, 2)
 	}
-	rightSemi.ctr.InitProc(proc)
 	return err
 }
 
@@ -180,7 +179,7 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyzer pr
 			return true, nil
 		} else {
 			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
-				v := ctr.ReceiveBitmapFromChannel(ap.Channel)
+				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
 				if v != nil {
 					ctr.matched.Or(v)
 				} else {

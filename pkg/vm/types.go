@@ -542,7 +542,7 @@ func (info OperatorInfo) GetAddress() message.MessageAddress {
 
 func CannotRemote(op Operator) bool {
 	// todo: I think we should add more operators here.
-	return op.OpType() == LockOp
+	return op.OpType() == LockOp || op.OpType() == MergeRecursive || op.OpType() == MergeCTE
 }
 
 type ModificationArgument interface {

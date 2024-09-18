@@ -49,6 +49,18 @@ type BlockReadFilter struct {
 	UnSortedSearchFunc ReadFilterSearchFuncType
 }
 
+func (f BlockReadFilter) DecideSearchFunc(isSortedBlk bool) ReadFilterSearchFuncType {
+	if (f.HasFakePK || !isSortedBlk) && f.UnSortedSearchFunc != nil {
+		return f.UnSortedSearchFunc
+	}
+
+	if isSortedBlk && f.SortedSearchFunc != nil {
+		return f.SortedSearchFunc
+	}
+
+	return nil
+}
+
 type WriteOptions struct {
 	Type WriteType
 	Val  any

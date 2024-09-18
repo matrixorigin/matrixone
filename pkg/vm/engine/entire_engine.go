@@ -38,6 +38,10 @@ func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
 	return err
 }
 
+func (e *EntireEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return e.Engine.LatestLogtailAppliedTime()
+}
+
 func (e *EntireEngine) Delete(ctx context.Context, databaseName string, op client.TxnOperator) error {
 	return e.Engine.Delete(ctx, databaseName, op)
 }

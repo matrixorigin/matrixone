@@ -139,7 +139,7 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TotalTimeConsumed
 		node.AnalyzeInfo.MemorySize += op.OpStats.TotalMemorySize
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
-		node.AnalyzeInfo.S3IOByte += op.OpStats.TotalS3IOByte
+		node.AnalyzeInfo.ScanBytes += op.OpStats.TotalScanBytes
 		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
 		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
