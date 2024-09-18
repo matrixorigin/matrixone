@@ -1133,14 +1133,6 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if InternalTable(node.TableDef) {
 		return DefaultStats()
 	}
-	if shouldReturnMinimalStats(node) {
-		return DefaultMinimalStats()
-	}
-
-	//ts := timestamp.Timestamp{}
-	//if node.ScanTS != nil {
-	//	ts = *node.ScanTS
-	//}
 
 	var scanSnapshot *plan.Snapshot
 	if node.ScanSnapshot != nil {
@@ -1152,8 +1144,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		return DefaultStats()
 	}
 
-	stats := new(plan.Stats)
-	stats.TableCnt = s.TableCnt
+	newstats := new(plan.Stats)
+	newstats.TableCnt = s.TableCnt
 	var blockSel float64 = 1
 
 	var blockExprList []*plan.Expr
@@ -1186,16 +1178,12 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	node.BlockFilterList = blockExprList
-	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
-	stats.Outcnt = stats.Selectivity * stats.TableCnt
-	stats.Cost = stats.TableCnt * blockSel
-	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
+	newstats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
+	newstats.Outcnt = newstats.Selectivity * newstats.TableCnt
+	newstats.Cost = newstats.TableCnt * blockSel
+	newstats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 
-	return stats
-}
-
-func shouldReturnMinimalStats(node *plan.Node) bool {
-	return false
+	return newstats
 }
 
 func InternalTable(tableDef *TableDef) bool {
@@ -1214,23 +1202,23 @@ func InternalTable(tableDef *TableDef) bool {
 
 func DefaultHugeStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 100000000
-	stats.Cost = 100000000
-	stats.Outcnt = 100000000
+	stats.TableCnt = 1000000000
+	stats.Cost = 1000000000
+	stats.Outcnt = 1000000000
 	stats.Selectivity = 1
-	stats.BlockNum = 10000
-	stats.Rowsize = 10000
+	stats.BlockNum = 100000
+	stats.Rowsize = 100000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
 
 func DefaultBigStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 10000000
-	stats.Cost = float64(costThresholdForOneCN)
-	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.TableCnt = 1000000
+	stats.Cost = float64(costThresholdForOneCN) - 1
+	stats.Outcnt = float64(costThresholdForOneCN) - 1
 	stats.Selectivity = 1
-	stats.BlockNum = int32(BlockThresholdForOneCN)
+	stats.BlockNum = int32(BlockThresholdForOneCN) - 1
 	stats.Rowsize = 1000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
@@ -1238,9 +1226,9 @@ func DefaultBigStats() *plan.Stats {
 
 func DefaultStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 1000
-	stats.Cost = 1000
-	stats.Outcnt = 1000
+	stats.TableCnt = 10000
+	stats.Cost = 100
+	stats.Outcnt = 100
 	stats.Selectivity = 1
 	stats.BlockNum = 1
 	stats.Rowsize = 100
@@ -1250,9 +1238,9 @@ func DefaultStats() *plan.Stats {
 
 func DefaultMinimalStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 100000
-	stats.Cost = 10
-	stats.Outcnt = 10
+	stats.TableCnt = 100
+	stats.Cost = 1
+	stats.Outcnt = 1
 	stats.Selectivity = 0.0001
 	stats.BlockNum = 1
 	stats.Rowsize = 1
