@@ -652,7 +652,6 @@ func (p *PartitionState) truncateTombstoneObjects(
 			zap.String("ts", ts.ToString()),
 			zap.String("files", gcLog.String()))
 	}
-	return
 }
 
 func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
