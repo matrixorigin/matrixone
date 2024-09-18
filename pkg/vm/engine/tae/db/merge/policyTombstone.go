@@ -23,10 +23,10 @@ type tombstonePolicy struct {
 }
 
 func (t *tombstonePolicy) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
-	if len(t.tombstones) == config.MergeMaxOneRun {
+	if !entry.IsTombstone {
 		return false
 	}
-	if !entry.IsTombstone {
+	if len(t.tombstones) == config.MergeMaxOneRun {
 		return false
 	}
 	t.tombstones = append(t.tombstones, entry)

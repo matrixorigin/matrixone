@@ -15,7 +15,9 @@
 package merge
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -110,16 +112,16 @@ func (g *policyGroup) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
 type basic struct {
 	schema  *catalog.Schema
 	hist    *common.MergeHistory
-	objHeap *heapBuilder[*catalog.ObjectEntry]
-	accBuf  []int
+	objects []*catalog.ObjectEntry
+
+	objectsSize int
+	accBuf      []int
 }
 
 func newBasicPolicy() policy {
 	return &basic{
-		objHeap: &heapBuilder[*catalog.ObjectEntry]{
-			items: make(itemSet[*catalog.ObjectEntry], 0, 32),
-		},
-		accBuf: make([]int, 1, 32),
+		objects: make([]*catalog.ObjectEntry, 0, 16),
+		accBuf:  make([]int, 1, 32),
 	}
 }
 
@@ -132,7 +134,14 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 	osize := int(obj.OriginSize())
 
 	isCandidate := func() bool {
+		if len(o.objects) >= config.MergeMaxOneRun {
+			return false
+		}
 		if osize < int(config.ObjectMinOsize) {
+			if o.objectsSize > 2*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
+				return false
+			}
+			o.objectsSize += osize
 			return true
 		}
 		// skip big object as an insurance
@@ -144,17 +153,17 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 	}
 
 	if isCandidate() {
-		o.objHeap.pushWithCap(&mItem[*catalog.ObjectEntry]{
-			row:   int(obj.Rows()),
-			entry: obj,
-		}, config.MergeMaxOneRun)
+		o.objects = append(o.objects, obj)
 		return true
 	}
 	return false
 }
 
 func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
-	objs := o.objHeap.finish()
+	slices.SortFunc(o.objects, func(a, b *catalog.ObjectEntry) int {
+		return cmp.Compare(a.Rows(), b.Rows())
+	})
+	objs := o.objects
 
 	isStandalone := common.IsStandaloneBoost.Load()
 	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
@@ -251,5 +260,6 @@ func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 func (o *basic) resetForTable(entry *catalog.TableEntry) {
 	o.schema = entry.GetLastestSchemaLocked(false)
 	o.hist = entry.Stats.GetLastMerge()
-	o.objHeap.reset()
+	o.objects = o.objects[:0]
+	o.objectsSize = 0
 }

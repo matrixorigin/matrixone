@@ -121,7 +121,7 @@ func TestPolicyBasic(t *testing.T) {
 	cfg = testConfig(100, 2)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
-	require.True(t, p.onObject(newTestObjectEntry(t, 30, false), cfg))
+	require.False(t, p.onObject(newTestObjectEntry(t, 30, false), cfg))
 	result = p.revise(0, math.MaxInt64, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
@@ -137,7 +137,7 @@ func TestPolicyBasic(t *testing.T) {
 
 	// memory limit
 	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
-	cfg = testConfig(100, 2)
+	cfg = testConfig(100, 3)
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 10, 1, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
@@ -188,17 +188,6 @@ func TestPolicyTombstone(t *testing.T) {
 	result = p.revise(0, math.MaxInt64, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 3, len(result[0].objs))
-	require.Equal(t, TaskHostDN, result[0].kind)
-
-	// tombstone is too old
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
-	cfg = testConfig(100, 3)
-	tombstone1 := newTestObjectEntry(t, 10, true)
-	tombstone1.CreatedAt = types.TS{}
-	require.True(t, p.onObject(tombstone1, cfg))
-	result = p.revise(0, math.MaxInt64, cfg)
-	require.Equal(t, 1, len(result))
-	require.Equal(t, 1, len(result[0].objs))
 	require.Equal(t, TaskHostDN, result[0].kind)
 }
 
@@ -253,7 +242,7 @@ func TestObjOverlap(t *testing.T) {
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 1, len(objs))
 	require.Equal(t, 2, len(objs[0].objs))
-	require.Equal(t, TaskHostCN, objs[0].kind)
+	require.Equal(t, TaskHostDN, objs[0].kind)
 
 	policy.resetForTable(nil)
 

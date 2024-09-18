@@ -22,13 +22,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
 var _ policy = (*objOverlapPolicy)(nil)
 
 type objOverlapPolicy struct {
-	objects []*catalog.ObjectEntry
+	objects     []*catalog.ObjectEntry
+	objectsSize int
 
 	overlappingObjsSet [][]*catalog.ObjectEntry
 }
@@ -50,7 +52,11 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	if !obj.SortKeyZoneMap().IsInited() {
 		return false
 	}
+	if m.objectsSize > 10*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
+		return false
+	}
 	m.objects = append(m.objects, obj)
+	m.objectsSize += int(obj.OriginSize())
 	return true
 }
 
@@ -126,12 +132,13 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 	if len(objs) > config.MergeMaxOneRun {
 		objs = objs[:config.MergeMaxOneRun]
 	}
-	return objs, TaskHostCN
+	return objs, TaskHostDN
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry) {
 	m.objects = m.objects[:0]
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
+	m.objectsSize = 0
 }
 
 type entrySet struct {
