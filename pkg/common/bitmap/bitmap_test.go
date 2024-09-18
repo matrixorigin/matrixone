@@ -152,8 +152,8 @@ func TestBitmapIterator_Next(t *testing.T) {
 
 func TestBitmap_Clear(t *testing.T) {
 	np := newBm(BenchmarkRows)
-	np.AddRange(0, 64)
-
+	np.AddRange(100, 1000)
+	require.Equal(t, 900, np.Count())
 	np.Clear()
 	require.True(t, np.IsEmpty())
 	require.Equal(t, 0, np.Count())

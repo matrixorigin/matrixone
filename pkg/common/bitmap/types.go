@@ -16,6 +16,9 @@ package bitmap
 
 import "sync/atomic"
 
+type Bitmap = BitmapV2
+type BitmapIterator = BitmapV2Iterator
+
 type Iterator interface {
 	HasNext() bool
 	Next() uint64
@@ -29,14 +32,26 @@ const (
 )
 
 // Bitmap represents line numbers of tuple's is null
-type Bitmap struct {
+type BitmapV1 struct {
 	emptyFlag atomic.Int32 //default 0, not sure  when set to 1, must be empty. when set to -1, must be not empty
 	// len represents the size of bitmap
 	len  int64
 	data []uint64
 }
 
-type BitmapIterator struct {
+type BitmapV1Iterator struct {
+	i        uint64
+	bm       *BitmapV1
+	has_next bool
+}
+
+type BitmapV2 struct {
+	count int64
+	len   int64
+	data  []uint64
+}
+
+type BitmapV2Iterator struct {
 	i        uint64
 	bm       *Bitmap
 	has_next bool

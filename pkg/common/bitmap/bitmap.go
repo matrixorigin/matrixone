@@ -57,30 +57,30 @@ var rightmost_one_pos_8 = [256]uint8{
 	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
 }
 
-func (n *Bitmap) InitWith(other *Bitmap) {
+func (n *BitmapV1) InitWith(other *BitmapV1) {
 	n.len = other.len
 	n.emptyFlag.Store(other.emptyFlag.Load())
 	n.data = append([]uint64(nil), other.data...)
 }
 
-func (n *Bitmap) InitWithSize(len int64) {
+func (n *BitmapV1) InitWithSize(len int64) {
 	n.len = len
 	n.emptyFlag.Store(kEmptyFlagEmpty)
 	n.data = make([]uint64, (len+63)/64)
 }
 
-func (n *Bitmap) Clone() *Bitmap {
+func (n *BitmapV1) Clone() *BitmapV1 {
 	if n == nil {
 		return nil
 	}
-	var ret Bitmap
+	var ret BitmapV1
 	ret.InitWith(n)
 	return &ret
 }
 
-func (n *Bitmap) Iterator() Iterator {
+func (n *BitmapV1) Iterator() Iterator {
 	// When initialization, the itr.i is set to the first rightmost_one position.
-	itr := BitmapIterator{i: 0, bm: n}
+	itr := BitmapV1Iterator{i: 0, bm: n}
 	if first_1_pos, has_next := itr.hasNext(0); has_next {
 		itr.i = first_1_pos
 		itr.has_next = true
@@ -108,7 +108,7 @@ func rightmost_one_pos_64(word uint64) uint64 {
 	return result
 }
 
-func (itr *BitmapIterator) hasNext(i uint64) (uint64, bool) {
+func (itr *BitmapV1Iterator) hasNext(i uint64) (uint64, bool) {
 	// if the uint64 is 0, move forward to next word
 	// if the uint64 is not 0, then calculate the rightest_one position in a word, add up prev result and return.
 	// when there is 1 in bitmap, return true, otherwise bitmap is empty and return false.
@@ -131,19 +131,19 @@ func (itr *BitmapIterator) hasNext(i uint64) (uint64, bool) {
 	return result, false
 }
 
-func (itr *BitmapIterator) HasNext() bool {
+func (itr *BitmapV1Iterator) HasNext() bool {
 	// maintain a bool var to avoid unnecessary calculations.
 	return itr.has_next
 }
 
-func (itr *BitmapIterator) PeekNext() uint64 {
+func (itr *BitmapV1Iterator) PeekNext() uint64 {
 	if itr.has_next {
 		return itr.i
 	}
 	return 0
 }
 
-func (itr *BitmapIterator) Next() uint64 {
+func (itr *BitmapV1Iterator) Next() uint64 {
 	// When a iterator is initialized, the itr.i is set to the first rightmost_one pos.
 	// so current itr.i is a rightmost_one pos, cal the next one pos and return current pos.
 	pos := itr.i
@@ -157,24 +157,24 @@ func (itr *BitmapIterator) Next() uint64 {
 }
 
 // Reset set n.data to nil
-func (n *Bitmap) Reset() {
+func (n *BitmapV1) Reset() {
 	n.len = 0
 	n.emptyFlag.Store(kEmptyFlagEmpty)
 	n.data = nil
 }
 
-// Len returns the number of bits in the Bitmap.
-func (n *Bitmap) Len() int64 {
+// Len returns the number of bits in the BitmapV1.
+func (n *BitmapV1) Len() int64 {
 	return n.len
 }
 
 // Size return number of bytes in n.data
 // XXX WTF Note that this size is not the same as InitWithSize.
-func (n *Bitmap) Size() int {
+func (n *BitmapV1) Size() int {
 	return len(n.data) * 8
 }
 
-func (n *Bitmap) Ptr() *uint64 {
+func (n *BitmapV1) Ptr() *uint64 {
 	if n == nil || len(n.data) == 0 {
 		return nil
 	}
@@ -183,12 +183,12 @@ func (n *Bitmap) Ptr() *uint64 {
 
 // EmptyByFlag is a quick and dirty way to check if the bitmap is empty.
 // If it retruns true, the bitmap is empty.  Otherwise, it may or may not be empty.
-func (n *Bitmap) EmptyByFlag() bool {
+func (n *BitmapV1) EmptyByFlag() bool {
 	return n == nil || n.emptyFlag.Load() == kEmptyFlagEmpty || len(n.data) == 0
 }
 
-// IsEmpty returns true if no bit in the Bitmap is set, otherwise it will return false.
-func (n *Bitmap) IsEmpty() bool {
+// IsEmpty returns true if no bit in the BitmapV1 is set, otherwise it will return false.
+func (n *BitmapV1) IsEmpty() bool {
 	flag := n.emptyFlag.Load()
 	if flag == kEmptyFlagEmpty {
 		return true
@@ -206,19 +206,19 @@ func (n *Bitmap) IsEmpty() bool {
 }
 
 // We always assume that bitmap has been extended to at least row.
-func (n *Bitmap) Add(row uint64) {
+func (n *BitmapV1) Add(row uint64) {
 	n.data[row>>6] |= 1 << (row & 0x3F)
 	n.emptyFlag.Store(kEmptyFlagNotEmpty)
 }
 
-func (n *Bitmap) AddMany(rows []uint64) {
+func (n *BitmapV1) AddMany(rows []uint64) {
 	for _, row := range rows {
 		n.data[row>>6] |= 1 << (row & 0x3F)
 	}
 	n.emptyFlag.Store(kEmptyFlagNotEmpty)
 }
 
-func (n *Bitmap) Remove(row uint64) {
+func (n *BitmapV1) Remove(row uint64) {
 	if row >= uint64(n.len) {
 		return
 	}
@@ -226,8 +226,8 @@ func (n *Bitmap) Remove(row uint64) {
 	n.emptyFlag.CompareAndSwap(kEmptyFlagNotEmpty, kEmptyFlagUnknown)
 }
 
-// Contains returns true if the row is contained in the Bitmap
-func (n *Bitmap) Contains(row uint64) bool {
+// Contains returns true if the row is contained in the BitmapV1
+func (n *BitmapV1) Contains(row uint64) bool {
 	if row >= uint64(n.len) {
 		return false
 	}
@@ -235,7 +235,7 @@ func (n *Bitmap) Contains(row uint64) bool {
 	return (n.data[idx] & (1 << (row & 0x3F))) != 0
 }
 
-func (n *Bitmap) AddRange(start, end uint64) {
+func (n *BitmapV1) AddRange(start, end uint64) {
 	if start >= end {
 		return
 	}
@@ -254,7 +254,7 @@ func (n *Bitmap) AddRange(start, end uint64) {
 	n.emptyFlag.Store(kEmptyFlagNotEmpty)
 }
 
-func (n *Bitmap) RemoveRange(start, end uint64) {
+func (n *BitmapV1) RemoveRange(start, end uint64) {
 	if end > uint64(n.len) {
 		end = uint64(n.len)
 	}
@@ -275,7 +275,7 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 	n.emptyFlag.CompareAndSwap(kEmptyFlagNotEmpty, kEmptyFlagUnknown)
 }
 
-func (n *Bitmap) IsSame(m *Bitmap) bool {
+func (n *BitmapV1) IsSame(m *BitmapV1) bool {
 	//if n.len != m.len ||
 	if len(m.data) != len(n.data) {
 		return false
@@ -288,7 +288,7 @@ func (n *Bitmap) IsSame(m *Bitmap) bool {
 	return true
 }
 
-func (n *Bitmap) Or(m *Bitmap) {
+func (n *BitmapV1) Or(m *BitmapV1) {
 	n.TryExpand(m)
 	size := (int(m.len) + 63) / 64
 	for i := 0; i < size; i++ {
@@ -297,7 +297,7 @@ func (n *Bitmap) Or(m *Bitmap) {
 	n.emptyFlag.CompareAndSwap(kEmptyFlagEmpty, kEmptyFlagUnknown)
 }
 
-func (n *Bitmap) And(m *Bitmap) {
+func (n *BitmapV1) And(m *BitmapV1) {
 	n.TryExpand(m)
 	size := (int(m.len) + 63) / 64
 	for i := 0; i < size; i++ {
@@ -309,7 +309,7 @@ func (n *Bitmap) And(m *Bitmap) {
 	n.emptyFlag.CompareAndSwap(kEmptyFlagNotEmpty, kEmptyFlagUnknown)
 }
 
-func (n *Bitmap) Negate() {
+func (n *BitmapV1) Negate() {
 	nBlock, nTail := int(n.len)/64, int(n.len)%64
 	for i := 0; i < nBlock; i++ {
 		n.data[i] = ^n.data[i]
@@ -320,11 +320,11 @@ func (n *Bitmap) Negate() {
 	}
 }
 
-func (n *Bitmap) TryExpand(m *Bitmap) {
+func (n *BitmapV1) TryExpand(m *BitmapV1) {
 	n.TryExpandWithSize(int(m.len))
 }
 
-func (n *Bitmap) TryExpandWithSize(size int) {
+func (n *BitmapV1) TryExpandWithSize(size int) {
 	if int(n.len) >= size {
 		return
 	}
@@ -341,8 +341,8 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 	}
 }
 
-func (n *Bitmap) Filter(sels []int64) *Bitmap {
-	var m Bitmap
+func (n *BitmapV1) Filter(sels []int64) *BitmapV1 {
+	var m BitmapV1
 	m.InitWithSize(n.len)
 	for i, sel := range sels {
 		if n.Contains(uint64(sel)) {
@@ -352,7 +352,7 @@ func (n *Bitmap) Filter(sels []int64) *Bitmap {
 	return &m
 }
 
-func (n *Bitmap) Count() int {
+func (n *BitmapV1) Count() int {
 	var cnt int
 	if n.emptyFlag.Load() == kEmptyFlagEmpty { //must be empty
 		return 0
@@ -376,7 +376,7 @@ func (n *Bitmap) Count() int {
 	return cnt
 }
 
-func (n *Bitmap) ToArray() []uint64 {
+func (n *BitmapV1) ToArray() []uint64 {
 	var rows []uint64
 	if n.EmptyByFlag() {
 		return rows
@@ -390,7 +390,7 @@ func (n *Bitmap) ToArray() []uint64 {
 	return rows
 }
 
-func (n *Bitmap) ToI64Arrary() []int64 {
+func (n *BitmapV1) ToI64Arrary() []int64 {
 	var rows []int64
 	if n.EmptyByFlag() {
 		return rows
@@ -404,7 +404,7 @@ func (n *Bitmap) ToI64Arrary() []int64 {
 	return rows
 }
 
-func (n *Bitmap) Marshal() []byte {
+func (n *BitmapV1) Marshal() []byte {
 	var buf bytes.Buffer
 	flag := n.emptyFlag.Load()
 	u1 := uint64(n.len)
@@ -416,7 +416,7 @@ func (n *Bitmap) Marshal() []byte {
 	return buf.Bytes()
 }
 
-func (n *Bitmap) Unmarshal(data []byte) {
+func (n *BitmapV1) Unmarshal(data []byte) {
 	n.emptyFlag.Store(types.DecodeInt32(data[:4]))
 	data = data[4:]
 	n.len = int64(types.DecodeUint64(data[:8]))
@@ -430,7 +430,7 @@ func (n *Bitmap) Unmarshal(data []byte) {
 	}
 }
 
-func (n *Bitmap) UnmarshalNoCopy(data []byte) {
+func (n *BitmapV1) UnmarshalNoCopy(data []byte) {
 	n.emptyFlag.Store(types.DecodeInt32(data[:4]))
 	data = data[4:]
 	n.len = int64(types.DecodeUint64(data[:8]))
@@ -444,19 +444,19 @@ func (n *Bitmap) UnmarshalNoCopy(data []byte) {
 	}
 }
 
-func (n *Bitmap) String() string {
+func (n *BitmapV1) String() string {
 	return fmt.Sprintf("%v", n.ToArray())
 }
 
-var _ encoding.BinaryMarshaler = new(Bitmap)
+var _ encoding.BinaryMarshaler = new(BitmapV1)
 
-func (n *Bitmap) MarshalBinary() ([]byte, error) {
+func (n *BitmapV1) MarshalBinary() ([]byte, error) {
 	return n.Marshal(), nil
 }
 
-var _ encoding.BinaryUnmarshaler = new(Bitmap)
+var _ encoding.BinaryUnmarshaler = new(BitmapV1)
 
-func (n *Bitmap) UnmarshalBinary(data []byte) error {
+func (n *BitmapV1) UnmarshalBinary(data []byte) error {
 	n.Unmarshal(data)
 	return nil
 }
