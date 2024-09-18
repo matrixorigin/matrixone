@@ -19,6 +19,8 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,14 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/stretchr/testify/require"
 )
 
 func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
 	var info objectio.BlockInfo
 	info.SetMetaLocation(location)
-	data := objectio.EncodeBlockInfo(info)
+	data := objectio.EncodeBlockInfo(&info)
 	info2 := objectio.DecodeBlockInfo(data)
 	require.Equal(t, info, *info2)
 }

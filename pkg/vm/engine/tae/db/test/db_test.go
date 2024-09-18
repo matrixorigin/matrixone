@@ -558,13 +558,13 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		err = task1.WaitDone(context.Background())
 		assert.NoError(t, err)
 		newBlockFp1 = task1.GetCreatedObjects().Fingerprint()
-		stats1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
+		stats1 = *task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
 		metaLoc1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLocation()
 		metaLoc1.SetID(0)
 		metaLoc1.SetRows(schema.BlockMaxRows)
 		newBlockFp2 = task1.GetCreatedObjects().Fingerprint()
 		newBlockFp2.SetBlockOffset(1)
-		stats2 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
+		stats2 = *task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	//read new non-appendable block data and check
@@ -4792,7 +4792,7 @@ func TestMergeBlocks3(t *testing.T) {
 		var pkView *containers.Batch
 		err = objHandle.Scan(ctx, &pkView, 0, []int{pkDef.Idx}, common.DefaultAllocator)
 		assert.NoError(t, err)
-		err = rel.DeleteByPhyAddrKeys(view.Vecs[0], pkView.Vecs[0])
+		err = rel.DeleteByPhyAddrKeys(view.Vecs[0], pkView.Vecs[0], handle.DT_Normal)
 		assert.NoError(t, err)
 
 		assert.NoError(t, rel.DeleteByFilter(context.Background(), filter15))
@@ -5018,8 +5018,7 @@ func TestMergeMemsize(t *testing.T) {
 			obj := it.GetObject()
 			defer obj.Close()
 			meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-			stat := meta.GetObjectStats()
-			blkcnt += int(stat.BlkCnt())
+			blkcnt += int(meta.BlkCnt())
 			metas = append(metas, meta)
 
 		}
@@ -5119,7 +5118,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneTombstoneMeta(rel)
-		assert.Equal(t, 10, meta.GetRows())
+		assert.Equal(t, 10, int(meta.Rows()))
 		assert.NoError(t, txn.Commit(ctx))
 	}
 	logutil.Info(tae.Catalog.SimplePPString(3))
@@ -5128,7 +5127,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneTombstoneMeta(rel)
-		assert.Equal(t, 10, meta.GetRows())
+		assert.Equal(t, 10, int(meta.Rows()))
 		assert.NoError(t, txn.Commit(ctx))
 	}
 }
@@ -9466,4 +9465,92 @@ func TestStartStopTableMerge(t *testing.T) {
 	scheduler.StartMerge(tbl)
 
 	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
+}
+func TestDeleteByPhyAddrKeys(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 1
+	schema.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, db := tae.GetDB("db")
+	rel, _ := db.GetRelationByName(schema.Name)
+	db.DropRelationByName(schema.Name)
+	obj := testutil.GetOneBlockMeta(rel)
+	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*obj.ID(), 0, 0)
+	rowidVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	rowidVec.Append(rowID, false)
+	defer rowidVec.Close()
+	err := rel.DeleteByPhyAddrKeys(rowidVec, bat.Vecs[0].CloneWindow(0, 1), handle.DT_Normal)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+}
+
+func TestRollbackMergeInQueue(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 20
+	schema.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+
+	err = task.OnExec(context.Background())
+	require.NoError(t, err)
+	tae.Runtime.LockMergeService.LockFromUser(rel.ID())
+	require.Error(t, txn.Commit(ctx)) // rollback
+
+	_, rel = tae.GetRelation()
+	objH, err := rel.GetObject(obj.ID(), false)
+	require.NoError(t, err)
+
+	meta := objH.GetMeta().(*catalog.ObjectEntry)
+	require.Equal(t, catalog.ObjectState_Create_ApplyCommit, meta.ObjectState)
+	require.True(t, meta.DeletedAt.IsEmpty())
+	require.Equal(t, 2, rel.GetMeta().(*catalog.TableEntry).ObjectCnt(false) /*Aobj(deleted), Nobj(rollbacked)*/)
+}
+
+func TestTransferInMerge(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.BlockMaxRows = 8192
+	schema.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 400000)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	{
+		tae.DeleteAll(true)
+	}
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
 }

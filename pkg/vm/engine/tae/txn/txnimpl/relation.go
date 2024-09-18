@@ -274,27 +274,14 @@ func (h *txnRelation) DeleteByFilter(ctx context.Context, filter *handle.Filter)
 	return h.RangeDelete(id, row, row, handle.DT_Normal)
 }
 
-func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector) (err error) {
+func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector, dt handle.DeleteType) (err error) {
 	id := h.table.entry.AsCommonID()
-	var row uint32
-	var pk containers.Vector
-	err = containers.ForeachVectorWindow(
-		keys, 0, keys.Length(),
-		func(rid types.Rowid, _ bool, offset int) (err error) {
-			id.BlockID, row = rid.Decode()
-			if pkVec != nil && pkVec.Length() > 0 {
-				pk = pkVec.Window(offset, 1)
-			}
-			err = h.Txn.GetStore().RangeDelete(
-				id,
-				row,
-				row,
-				pk,
-				handle.DT_Normal,
-			)
-			return
-		}, nil, nil)
-	return
+	return h.Txn.GetStore().DeleteByPhyAddrKeys(
+		id,
+		keys,
+		pkVec,
+		dt,
+	)
 }
 
 // Only used by test.
