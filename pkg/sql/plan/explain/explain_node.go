@@ -711,7 +711,7 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		}
 
 		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
-			buf.WriteString(" shuffle: REUSE ")
+			buf.WriteString(" shuffle: REUSE")
 		}
 	}
 	return buf.String(), nil
