@@ -46,7 +46,7 @@ type Analyzer interface {
 	Reset()
 
 	InputBlock()
-	S3IOByte(*batch.Batch) // delete it, unused
+	ScanBytes(*batch.Batch)
 }
 
 // Operator Resource operatorAnalyzer
@@ -158,13 +158,13 @@ func (opAlyzr *operatorAnalyzer) ChildrenCallStop(start time.Time) {
 	opAlyzr.childrenCallDuration += time.Since(start)
 }
 
-func (opAlyzr *operatorAnalyzer) S3IOByte(bat *batch.Batch) {
+func (opAlyzr *operatorAnalyzer) ScanBytes(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.S3IOByte: operatorAnalyzer.opStats is nil")
 	}
 
 	if bat != nil {
-		opAlyzr.opStats.TotalS3IOByte += int64(bat.Size())
+		opAlyzr.opStats.TotalScanBytes += int64(bat.Size())
 	}
 }
 
@@ -221,7 +221,7 @@ type OperatorStats struct {
 	TotalOutputSize       int64                `json:"TotalOutputSize,omitempty"`
 	TotalNetworkIO        int64                `json:"TotalNetworkIO,omitempty"`
 	TotalInputBlocks      int64                `json:"-"`
-	TotalS3IOByte         int64                `json:"-"`
+	TotalScanBytes        int64                `json:"-"`
 	OperatorMetrics       map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
 }
 
@@ -277,7 +277,7 @@ func (ps *OperatorStats) String() string {
 		"InBlock:%d "+
 		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
-		"S3IOByte:%dbytes "+
+		"ScanBytes:%dbytes "+
 		"NetworkIO:%dbytes"+
 		"%s",
 		ps.CallNum,
@@ -289,7 +289,7 @@ func (ps *OperatorStats) String() string {
 		ps.TotalInputBlocks,
 		ps.TotalOutputSize,
 		ps.TotalMemorySize,
-		ps.TotalS3IOByte,
+		ps.TotalScanBytes,
 		ps.TotalNetworkIO,
 		metricsStr)
 }

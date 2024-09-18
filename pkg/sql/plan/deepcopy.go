@@ -17,8 +17,9 @@ package plan
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"golang.org/x/exp/constraints"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func DeepCopyExprList(list []*Expr) []*Expr {
@@ -1090,7 +1091,7 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		MemorySize:             analyzeinfo.GetMemorySize(),
 		WaitTimeConsumed:       analyzeinfo.GetWaitTimeConsumed(),
 		DiskIO:                 analyzeinfo.GetDiskIO(),
-		S3IOByte:               analyzeinfo.GetS3IOByte(),
+		ScanBytes:              analyzeinfo.GetScanBytes(),
 		S3IOInputCount:         analyzeinfo.GetS3IOInputCount(),
 		S3IOOutputCount:        analyzeinfo.GetS3IOOutputCount(),
 		NetworkIO:              analyzeinfo.GetNetworkIO(),
