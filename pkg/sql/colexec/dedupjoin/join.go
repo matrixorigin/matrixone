@@ -58,7 +58,6 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
-	dedupJoin.ctr.InitProc(proc)
 	return err
 }
 
