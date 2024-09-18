@@ -69,28 +69,6 @@ var (
 				NotNullable: false,
 			},
 		},
-		{
-			Name: "doc_count",
-			Typ: plan.Type{
-				Id:          int32(types.T_int32),
-				NotNullable: false,
-				Width:       4,
-			},
-		},
-		{
-			Name: "first_doc_id",
-			Typ: plan.Type{
-				Id:          int32(types.T_any),
-				NotNullable: false,
-			},
-		},
-		{
-			Name: "last_doc_id",
-			Typ: plan.Type{
-				Id:          int32(types.T_any),
-				NotNullable: false,
-			},
-		},
 	}
 )
 
@@ -122,27 +100,6 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 	return builder.appendNode(node, ctx), nil
 }
 
-/*
-// seems coldef just check the name but not type.  don't need to change primary key type to match with source table.
-func (builder *QueryBuilder) getFullTextColDefs(fn *tree.FuncExpr) ([]*plan.ColDef, error) {
-
-	coldefs := _getColDefs(ftIndexColdefs)
-
-	if val, ok := fn.Exprs[3].(*tree.NumVal); ok {
-		oid, ok := val.Int64()
-		if !ok {
-			return nil, moerr.NewNoConfig(builder.GetContext(), "invalid primary key type (not int64)")
-		}
-
-		coldefs[0].Typ.Id = int32(oid)
-	} else {
-		return nil, moerr.NewNoConfig(builder.GetContext(), "invalid primary key type (not NumVal)")
-	}
-
-	return coldefs, nil
-}
-*/
-
 // select * from index_table, fulltext_index_tokenize(doc_id, concat(body, ' ', title))
 // arg list [params, doc_id, content]
 func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
@@ -164,11 +121,9 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 
 	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	pkType := scanNode.TableDef.Cols[pkPos].Typ
-	colDefs[0].Typ = pkType
 
-	// TODO: remove first_doc_id, last_doc_id
-	colDefs[4].Typ = pkType
-	colDefs[5].Typ = pkType
+	// set type to source table primary key
+	colDefs[0].Typ = pkType
 
 	// remove the first argment and put the first argument to Param
 	exprs = exprs[1:]

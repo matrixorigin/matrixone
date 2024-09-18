@@ -1674,7 +1674,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		}
 
 		// create fulltext index hidden table definition
-		// doc_id, pos, word, doc_count, first_doc_id, last_doc_id
+		// doc_id, pos, word
 		tableDef := &TableDef{
 			Name: indexTableName,
 		}
@@ -1723,60 +1723,6 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			Typ: plan.Type{
 				Id:    int32(types.T_varchar),
 				Width: types.MaxVarcharLen,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		// doc_count (int32)
-		keyName = catalog.FullTextIndex_TabCol_DocCount
-		colDef = &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_int32),
-				Width: 32,
-				Scale: -1,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		// first_doc_id (same as pkey)
-		keyName = catalog.FullTextIndex_TabCol_Firstrowid
-		colDef = &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		// last_doc_id (same as pkey)
-		keyName = catalog.FullTextIndex_TabCol_Lastrowid
-		colDef = &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,

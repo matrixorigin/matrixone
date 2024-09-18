@@ -92,7 +92,6 @@ var (
 var (
 	//insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` (doc_id, pos, word, doc_count) SELECT f.* FROM `%s`.`%s` AS src CROSS APPLY fulltext_index_tokenize(%s) as f;"
 	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS JOIN fulltext_index_tokenize('%s', %s, %s) AS f WHERE %s = f.doc_id;"
-	updateFullTextIndexTableFormat     = "UPDATE `%s`.`%s` AS dst, (SELECT word, min(doc_id) AS first_doc_id, max(doc_id) as last_doc_id FROM `%s`.`%s` GROUP BY word) AS src SET dst.first_doc_id = src.first_doc_id, dst.last_doc_id = src.last_doc_id WHERE dst.word = src.word;"
 )
 
 // genCreateIndexTableSql: Generate ddl statements for creating index table
@@ -656,12 +655,11 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 
 	var concat string
 	if len(parts) > 1 {
-		concat = "CONCAT(" + strings.Join(parts, ", ' ', ") + ")"
+		concat = "CONCAT(" + strings.Join(parts, ", '\n', ") + ")"
 	} else {
 		concat = parts[0]
 	}
 
-	var sqls []string
 	sql := fmt.Sprintf(insertIntoFullTextIndexTableFormat,
 		qryDatabase, tblname,
 		qryDatabase, originalTableDef.Name,
@@ -671,17 +669,5 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 		concat,
 		pkColName)
 
-	sqls = append(sqls, sql)
-
-	//logutil.Infof("GEN INSERT %s", sql)
-
-	sql = fmt.Sprintf(updateFullTextIndexTableFormat,
-		qryDatabase, tblname,
-		qryDatabase, tblname)
-
-	//logutil.Infof("GEN UPDATE %s", sql)
-
-	sqls = append(sqls, sql)
-
-	return sqls
+	return []string{sql}
 }

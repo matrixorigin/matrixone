@@ -13,17 +13,10 @@ import (
 	"github.com/matrixorigin/monlp/tokenizer"
 )
 
-type SeenIds struct {
-	FirstDocId any
-	LastDocId  any
-}
-
 type FullTextEntry struct {
-	DocId    any
-	Pos      int32
-	Word     string
-	DocCount int32
-	SeenIds
+	DocId any
+	Pos   int32
+	Word  string
 }
 
 type Document struct {
@@ -109,7 +102,6 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	c := contentVec.GetStringAt(nthRow)
 
 	var doc Document
-	doc_count := make(map[string]int32)
 
 	if u.param.Parser == "" || u.param.Parser == "ngram" || u.param.Parser == "default" {
 
@@ -119,23 +111,12 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			slen := t.TokenBytes[0]
 			word := string(t.TokenBytes[1 : slen+1])
 
-			if _, ok := doc_count[word]; ok {
-				doc_count[word] += 1
-			} else {
-				doc_count[word] = 1
-			}
-			//doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos, SeenIds: SeenIds{FirstDocId: id, LastDocId: id}})
 			doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
 		}
 	} else if u.param.Parser == "json" {
 		return moerr.NewInternalError(proc.Ctx, "json fulltext parser not implemented yet")
 	} else {
 		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser ")
-	}
-
-	// update doc_count
-	for i := range doc.Words {
-		doc.Words[i].DocCount = doc_count[doc.Words[i].Word]
 	}
 
 	// write the batch
@@ -147,12 +128,6 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		vector.AppendFixed[int32](u.batch.Vecs[1], doc.Words[i].Pos, false, proc.Mp())
 		// word
 		vector.AppendBytes(u.batch.Vecs[2], []byte(doc.Words[i].Word), false, proc.Mp())
-		// doc_count
-		vector.AppendFixed[int32](u.batch.Vecs[3], doc.Words[i].DocCount, false, proc.Mp())
-		// first_doc_id
-		vector.AppendAny(u.batch.Vecs[4], nil, true, proc.Mp())
-		// last_doc_id
-		vector.AppendAny(u.batch.Vecs[5], nil, true, proc.Mp())
 	}
 
 	u.batch.SetRowCount(len(doc.Words))
