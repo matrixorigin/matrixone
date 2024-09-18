@@ -1,11 +1,12 @@
 package table_function
 
 import (
+	"encoding/json"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,6 +33,7 @@ type Document struct {
 type tokenizeState struct {
 	inited bool
 	called bool
+	param  FullTextParserParam
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -78,7 +80,13 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	if !u.inited {
 
-		logutil.Infof("TOKEN PARAMS %s", tf.Params)
+		if len(tf.Params) > 0 {
+			err := json.Unmarshal([]byte(tf.Params), &u.param)
+			if err != nil {
+				return err
+			}
+		}
+
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -103,19 +111,26 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	var doc Document
 	doc_count := make(map[string]int32)
 
-	tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))
-	for t := range tok.Tokenize() {
+	if u.param.Parser == "" || u.param.Parser == "ngram" || u.param.Parser == "default" {
 
-		slen := t.TokenBytes[0]
-		word := string(t.TokenBytes[1 : slen+1])
+		tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))
+		for t := range tok.Tokenize() {
 
-		if _, ok := doc_count[word]; ok {
-			doc_count[word] += 1
-		} else {
-			doc_count[word] = 1
+			slen := t.TokenBytes[0]
+			word := string(t.TokenBytes[1 : slen+1])
+
+			if _, ok := doc_count[word]; ok {
+				doc_count[word] += 1
+			} else {
+				doc_count[word] = 1
+			}
+			//doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos, SeenIds: SeenIds{FirstDocId: id, LastDocId: id}})
+			doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
 		}
-		//doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos, SeenIds: SeenIds{FirstDocId: id, LastDocId: id}})
-		doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
+	} else if u.param.Parser == "json" {
+		return moerr.NewInternalError(proc.Ctx, "json fulltext parser not implemented yet")
+	} else {
+		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser ")
 	}
 
 	// update doc_count

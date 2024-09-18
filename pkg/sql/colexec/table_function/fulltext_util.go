@@ -47,6 +47,11 @@ Find rows that contain words such as “apple”, “apples”, “applesauce”
 Find rows that contain the exact phrase “some words” (for example, rows that contain “some words of wisdom” but not “some noise words”). Note that the " characters that enclose the phrase are operator characters that delimit the phrase. They are not the quotation marks that enclose the search string itself.
 */
 
+type FullTextParserParam struct {
+	Parser         string `json:"parser"`
+	NgramTokenSize string `json:"ngram_token_size"`
+}
+
 type Word struct {
 	DocId    any
 	Position []int64
