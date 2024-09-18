@@ -1199,9 +1199,8 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 	var (
 		location objectio.Location
 
-		loaded      *batch.Batch
-		release     func()
-		applyOffset int
+		loaded  *batch.Batch
+		release func()
 	)
 
 	anyIf := func(check func(row objectio.Rowid) bool) bool {
@@ -1213,7 +1212,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		return false
 	}
 
-	for iter.Next() && applyOffset < len(rowIds) {
+	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
 
 		if !obj.GetAppendable() {
@@ -1247,14 +1246,14 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				commit = vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[1])
 			}
 
-			for ; applyOffset < len(rowIds); applyOffset++ {
+			for i := 0; i < len(rowIds); i++ {
 				s, e := blockio.FindStartEndOfBlockFromSortedRowids(
-					deletedRowIds, rowIds[applyOffset].BorrowBlockID())
+					deletedRowIds, rowIds[i].BorrowBlockID())
 
 				for j := s; j < e; j++ {
-					if rowIds[applyOffset].EQ(&deletedRowIds[j]) &&
+					if rowIds[i].EQ(&deletedRowIds[j]) &&
 						(commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
-						deleted = append(deleted, int64(applyOffset))
+						deleted = append(deleted, int64(i))
 						break
 					}
 				}
