@@ -670,14 +670,11 @@ func (e *Engine) BuildBlockReaders(
 	scanType := determineScanType(relData, newNum)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
-	current := 0
 	for i := 0; i < newNum; i++ {
-		if i < mod {
-			shard = relData.DataSlice(current, current+divide+1)
-			current = current + divide + 1
+		if i == 0 {
+			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {
-			shard = relData.DataSlice(current, current+divide)
-			current = current + divide
+			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
 		ds := NewRemoteDataSource(
 			ctx,
