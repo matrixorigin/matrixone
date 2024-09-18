@@ -161,7 +161,7 @@ func (w *StoreImpl) onTruncatingQueue(items ...any) {
 
 func (w *StoreImpl) onTruncateQueue(items ...any) {
 	lsn := w.driverCheckpointing.Load()
-	if lsn != w.driverCheckpointed {
+	if lsn != w.driverCheckpointed.Load() {
 		err := w.driver.Truncate(lsn)
 		for err != nil {
 			lsn = w.driverCheckpointing.Load()
@@ -170,6 +170,6 @@ func (w *StoreImpl) onTruncateQueue(items ...any) {
 		t := time.Now()
 		w.gcWalDriverLsnMap(lsn)
 		logutil.Info("TRACE-WAL-TRUNCATE-GC-Store", zap.String("duration", time.Since(t).String()))
-		w.driverCheckpointed = lsn
+		w.driverCheckpointed.Store(lsn)
 	}
 }

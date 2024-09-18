@@ -220,5 +220,5 @@ func TestTruncate(t *testing.T) {
 	truncated, err = driver.GetTruncated()
 	assert.NoError(t, err)
 	t.Logf("truncated %d, current %d", truncated, drcurrLsn)
-	assert.GreaterOrEqual(t, truncated, drcurrLsn)
+	assert.GreaterOrEqual(t, truncated, currLsn)
 }

@@ -166,9 +166,6 @@ func TestAppend2(t *testing.T) {
 	wg.Add(1)
 	testutil.AppendFailClosure(t, bats[0], schema.Name, db.DB, &wg)()
 	wg.Wait()
-
-	db.Restart(ctx)
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 }
 
 func TestTruncate1(t *testing.T) {

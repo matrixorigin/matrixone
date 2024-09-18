@@ -40,7 +40,7 @@ type StoreInfo struct {
 	walDriverLsnMap     map[uint32]map[uint64]uint64
 	lsnMu               sync.RWMutex
 	driverCheckpointing atomic.Uint64
-	driverCheckpointed  uint64
+	driverCheckpointed  atomic.Uint64
 	walCurrentLsn       map[uint32]uint64 //todo
 	lsnmu               sync.RWMutex
 	syncing             map[uint32]uint64 //todo
@@ -264,7 +264,7 @@ func (w *StoreInfo) onCheckpoint() {
 	w.ckpcntMu.Unlock()
 }
 func (w *StoreInfo) GetTruncated() uint64 {
-	return w.driverCheckpointed
+	return w.driverCheckpointed.Load()
 }
 func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	groups := make(map[uint32]uint64, 0)
