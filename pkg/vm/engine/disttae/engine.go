@@ -774,3 +774,7 @@ func (e *Engine) FS() fileservice.FileService {
 func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
 	return e.packerPool
 }
+
+func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return e.pClient.LatestLogtailAppliedTime()
+}

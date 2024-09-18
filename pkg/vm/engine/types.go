@@ -978,6 +978,8 @@ type Engine interface {
 	GetMessageCenter() any
 
 	GetService() string
+
+	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
 type VectorPool interface {

@@ -1084,11 +1084,6 @@ func (ls *LocalDataSource) applyPStateTombstoneObjects(
 	offsets []int64,
 	deletedRows *nulls.Nulls,
 ) ([]int64, error) {
-
-	//if ls.rc.SkipPStateDeletes {
-	//	return offsets, nil
-	//}
-
 	if ls.pState.ApproxTombstoneObjectsNum() == 0 {
 		return offsets, nil
 	}
@@ -1114,6 +1109,25 @@ func (ls *LocalDataSource) applyPStateTombstoneObjects(
 			iter.Close()
 		}
 	}()
+
+	// PXU TODO: handle len(offsets) < 10 or 20, 30?
+	if len(offsets) == 1 {
+		rowid := objectio.NewRowid(&bid, uint32(offsets[0]))
+		deleted, err := blockio.IsRowDeleted(
+			ls.ctx,
+			&ls.snapshotTS,
+			rowid,
+			getTombstone,
+			ls.fs,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if deleted {
+			return nil, nil
+		}
+		return offsets, nil
+	}
 
 	if deletedRows == nil {
 		deletedRows = &nulls.Nulls{}
@@ -1220,7 +1234,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
-			if loaded, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
+			if loaded, _, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
 				return nil, err
 			}
 

@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"container/list"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -1298,4 +1299,133 @@ func Test_issue3482(t *testing.T) {
 	s := issue3482SqlPrefix + " "
 	ui := UserInput{sql: s}
 	assert.True(t, ui.isIssue3482Sql())
+}
+
+func Test_xxx(t *testing.T) {
+	list.New()
+}
+
+func Test_isLegal(t *testing.T) {
+	type args struct {
+		name string
+	}
+	trueNames := []string{
+		"abc",
+		"0b",
+		"0b0a1fg",
+		"123",
+		"b'00011011'",
+		"b\\\\a9''", //b\\a9''
+		"\\0",       //\0
+		"\\\\'",     //\\'
+		"\\Z",       //\Z
+		"/000/",
+	}
+
+	type kase struct {
+		name string
+		args args
+		want bool
+	}
+
+	tests := []kase{}
+	for i, name := range trueNames {
+		tests = append(tests, kase{
+			name: fmt.Sprintf("t%d", i),
+			args: args{
+				name: name,
+			},
+			want: true,
+		})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, accountNameIsLegal(tt.args.name), "accountNameIsLegal(%v)", tt.args.name)
+			assert.Equalf(t, tt.want, dbNameIsLegal(tt.args.name), "dbNameIsLegal(%v)", tt.args.name)
+			assert.Equalf(t, tt.want, tableNameIsLegal(tt.args.name), "tableNameIsLegal(%v)", tt.args.name)
+		})
+	}
+}
+
+func Test_parser(t *testing.T) {
+	sql := "select db_name, table_name, constraint_name, column_name, refer_column_name, on_delete, on_update from `mo_catalog`.`mo_foreign_keys` where refer_db_name = `test` and refer_table_name = `b'00011011'`  and (db_name != `test` or db_name = `test` and table_name != `b'00011011'`) order by db_name, table_name, constraint_name;"
+	x, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	assert.NoError(t, err)
+	fmt.Println(x)
+
+}
+
+func Test_replaceStr(t *testing.T) {
+	type args struct {
+		s     string
+		start int
+		end   int
+		s2    string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "t1",
+			args: args{
+				s:     "mysql://root:111@127.0.0.1:6001",
+				start: 13,
+				end:   16,
+				s2:    "******",
+			},
+			want: "mysql://root:******@127.0.0.1:6001",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, replaceStr(tt.args.s, tt.args.start, tt.args.end, tt.args.s2), "replaceStr(%v, %v, %v, %v)", tt.args.s, tt.args.start, tt.args.end, tt.args.s2)
+		})
+	}
+}
+
+func Test_islegal(t *testing.T) {
+	assert.False(t, isLegal("", []string{}))
+	assert.False(t, isLegal("abc", []string{}))
+}
+
+func Test_accountNameIsLegal(t *testing.T) {
+	assert.False(t, accountNameIsLegal(",."))
+	assert.False(t, dbNameIsLegal(",."))
+	assert.False(t, tableNameIsLegal(",."))
+}
+
+func Test_compUriInfo(t *testing.T) {
+	ret, _ := compositedUriInfo("", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefix", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:65536", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:4", "prefix")
+	assert.True(t, ret)
+}
+
+func Test_replaceStr2(t *testing.T) {
+	assert.Equal(t, replaceStr("", 1, 0, "a"), "")
+	assert.Equal(t, replaceStr("abc", 0, 4, "a"), "abc")
+}
+
+func Test_uriHasPrefix(t *testing.T) {
+	assert.False(t, uriHasPrefix("ab", "abc"))
+}
+
+func Test_extractUriInfo(t *testing.T) {
+	_, _, err := extractUriInfo(context.Background(), "abc", "t")
+	assert.Error(t, err)
 }
