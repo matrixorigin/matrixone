@@ -84,9 +84,13 @@ func newCNMergeTask(
 	targets []logtailreplay.ObjectInfo,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
-	relData := NewEmptyBlockListRelationData()
-	relData.AppendBlockInfo(objectio.EmptyBlockInfo)
-	source, err := tbl.buildLocalDataSource(ctx, 0, relData, engine.Policy_CheckAll)
+	relData := NewBlockListRelationData(1)
+	source, err := tbl.buildLocalDataSource(
+		ctx,
+		0,
+		relData,
+		engine.Policy_CheckAll,
+		engine.GeneralLocalDataSource)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +187,7 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.
 		blk := iter.Entry()
 		// update delta location
 		obj := t.targets[objIdx]
-		blk.SetFlagByObjStats(obj.ObjectStats)
+		blk.SetFlagByObjStats(&obj.ObjectStats)
 		return t.readblock(ctx, &blk)
 	}
 	return nil, nil, nil, mergesort.ErrNoMoreBlocks

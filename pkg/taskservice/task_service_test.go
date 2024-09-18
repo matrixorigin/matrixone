@@ -22,10 +22,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestCreateAsyncTask(t *testing.T) {
@@ -513,4 +515,72 @@ func TestHeartbeatDaemonTask(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(ts))
 	assert.False(t, ts[0].LastHeartbeat.IsZero())
+}
+
+func TestAddCdcTask1(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	details := &task.Details{
+		AccountID: catalog.System_Account,
+		Account:   "sys",
+		Username:  "root",
+		Details: &task.Details_CreateCdc{
+			CreateCdc: &task.CreateCdcDetails{
+				TaskName: "task1",
+				TaskId:   "taskID-1",
+				Accounts: []*task.Account{
+					{
+						Id:   uint64(catalog.System_Account),
+						Name: "sys",
+					},
+				},
+			},
+		},
+	}
+
+	cnt, err := s.AddCdcTask(
+		ctx,
+		newTestTaskMetadata("t1"),
+		details,
+		nil,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, cnt, 0)
+
+	cnt, err = s.UpdateCdcTask(context.Background(), task.TaskStatus_Canceled, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, cnt, 0)
+
+	_ = s.Close()
+	_ = store.Close()
+}
+
+func Test_conditions(t *testing.T) {
+
+	conds := []Condition{
+		WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
+		WithTaskType(EQ, task.TaskType_CreateCdc.String()),
+		WithAccountID(EQ, catalog.System_Account),
+		WithAccount(EQ, "sys"),
+		WithLastHeartbeat(EQ, 10),
+		WithCronTaskId(EQ, 10),
+		WithTaskMetadataId(EQ, "taskID-1"),
+		WithTaskName(EQ, "task1"),
+		WithLabels(EQ, nil),
+		WithTaskIDDesc(),
+	}
+
+	condObj := newConditions(conds...)
+
+	for _, cond := range *condObj {
+		cond.sql()
+		cond.eval(nil)
+	}
 }

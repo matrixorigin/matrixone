@@ -557,6 +557,22 @@ func partsToColsStr(parts []string) string {
 	return temp
 }
 
+// haveSinkScanInPlan Start from the `curNodeIdx` node, recursively check its Subtree all nodes,
+// determine if they contain `SINK_SCAN` node in the subtree
+func haveSinkScanInPlan(nodes []*plan.Node, curNodeIdx int32) bool {
+	node := nodes[curNodeIdx]
+	if node.NodeType == plan.Node_SINK_SCAN {
+		return true
+	}
+	for _, newIdx := range node.Children {
+		flag := haveSinkScanInPlan(nodes, newIdx)
+		if flag {
+			return flag
+		}
+	}
+	return false
+}
+
 // genInsertMoTablePartitionsSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_table_partitions`
 func genInsertMoTablePartitionsSql(databaseId string, tableId uint64, partitionByDef *plan2.PartitionByDef, partitions []*plan.PartitionItem) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 2048))

@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -30,11 +31,13 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 )
 
@@ -176,6 +179,19 @@ func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 		}
 	}
 	entry.pageIds = nil
+
+	fs := entry.rt.Fs.Service
+	// for io task, dispatch by round robin, scope can be nil
+	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, nil, func() error {
+		// TODO: variable as timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+
+		defer cancel()
+		for _, obj := range entry.createdObjs {
+			_ = fs.Delete(ctx, obj.ObjectName().String())
+		}
+		return nil
+	})
 	return
 }
 
@@ -238,9 +254,19 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 
 	rowid := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
 	ts := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
+	deletesPK := bat.GetVectorByName(catalog.AttrPKVal)
 
 	count := len(rowid)
 	transCnt += count
+	var rowIDVec, pkVec containers.Vector
+	defer func() {
+		if rowIDVec != nil {
+			rowIDVec.Close()
+		}
+		if pkVec != nil {
+			pkVec.Close()
+		}
+	}()
 	for i := 0; i < count; i++ {
 		row := rowid[i].GetRowOffset()
 		blkOffsetInObj := int(rowid[i].GetBlockOffset())
@@ -279,11 +305,18 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		}
 		id := targetObj.Fingerprint()
 		id.SetBlockOffset(destpos.BlkIdx)
-		if err = targetObj.GetRelation().RangeDelete(
-			id, uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact,
-		); err != nil {
-			return
+		if pkVec == nil {
+			pkVec = containers.MakeVector(*deletesPK.GetType(), entry.rt.VectorPool.Small.GetMPool())
 		}
+		if rowIDVec == nil {
+			rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), entry.rt.VectorPool.Small.GetMPool())
+		}
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*targetObj.GetID(), destpos.BlkIdx, destpos.RowIdx)
+		rowIDVec.Append(rowID, false)
+		pkVec.Append(deletesPK.Get(i), false)
+	}
+	if rowIDVec != nil {
+		err = entry.relation.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_MergeCompact)
 	}
 	return
 }
@@ -384,6 +417,9 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		return nil
 	}
 
+	if entry.rt.LockMergeService.IsLockedByUser(entry.relation.ID()) {
+		return moerr.NewInternalErrorNoCtxf("LockMerge give up in queue %v", entry.taskName)
+	}
 	inst1 := time.Now()
 
 	total := time.Since(inst)

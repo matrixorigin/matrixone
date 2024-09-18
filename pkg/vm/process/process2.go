@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -104,7 +105,7 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
 		for i := range child.Reg.MergeReceivers {
 			child.Reg.MergeReceivers[i] = &WaitRegister{
-				Ch: make(chan *RegisterMessage, 1),
+				Ch2: make(chan PipelineSignal, 1),
 			}
 		}
 	}
@@ -125,7 +126,7 @@ func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channe
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
 		for i := range child.Reg.MergeReceivers {
 			child.Reg.MergeReceivers[i] = &WaitRegister{
-				Ch:          make(chan *RegisterMessage, channelBufferSize[i]),
+				Ch2:         make(chan PipelineSignal, channelBufferSize[i]),
 				NilBatchCnt: int(nilbatchCnt[i]),
 			}
 		}
@@ -151,14 +152,6 @@ func (proc *Process) BuildPipelineContext(parentContext context.Context) context
 		proc.Cancel()
 	}
 	proc.Ctx, proc.Cancel = context.WithCancel(parentContext)
-
-	// update the context held by this process's data producers.
-	for _, sender := range proc.Reg.MergeReceivers {
-		sender.Ctx = proc.Ctx
-
-		// do not clean the channel here, because we cannot ensure that sender was not in progress.
-		//sender.CleanChannel(mp)
-	}
 	return proc.Ctx
 }
 
@@ -205,13 +198,6 @@ func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {
 func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.CancelFunc) {
 	proc.Ctx = ctx
 	proc.Cancel = cancel
-
-	for _, sender := range proc.Reg.MergeReceivers {
-		sender.Ctx = proc.Ctx
-
-		// do not clean the channel here, because we cannot ensure that sender was not in progress.
-		//sender.CleanChannel(mp)
-	}
 }
 
 // GetQueryContextError return error once top context or query context with error.
@@ -255,15 +241,39 @@ type QueryBaseContext struct {
 	// Once query was began to run, the query context and query cancel will be refreshed by calling BuildQueryCtx() method.
 	queryContext context.Context
 	queryCancel  context.CancelFunc
+
+	// TODO: this is a hack here for resolving pipeline loop of recursive cte.
+	// 	we do a special clean-up for the first return pipeline in this pipeline-loop to get rid of deadlock.
+	//
+	// if pipelineLoopBreak is true, this means no need to do special cleanup yet.
+	sync.RWMutex
+	pipelineLoopBreak bool
+	isOnMergeCTE      bool
 }
 
 func (bp *BaseProcess) GetContextBase() *QueryBaseContext {
 	return &bp.sqlContext
 }
 
+func (qbCtx *QueryBaseContext) DoSpecialCleanUp(isMergeCTE bool) bool {
+	qbCtx.Lock()
+	defer qbCtx.Unlock()
+
+	if qbCtx.pipelineLoopBreak {
+		return qbCtx.isOnMergeCTE == isMergeCTE
+	}
+	qbCtx.pipelineLoopBreak = true
+	qbCtx.isOnMergeCTE = isMergeCTE
+	return true
+}
+
 // BuildQueryCtx refreshes the query context and cancellation method after the outer context was ready to run the query.
 func (qbCtx *QueryBaseContext) BuildQueryCtx() context.Context {
 	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(qbCtx.outerContext)
+
+	qbCtx.Lock()
+	qbCtx.pipelineLoopBreak = false
+	qbCtx.Unlock()
 	return qbCtx.queryContext
 }
 
@@ -290,9 +300,9 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 		return
 	}
 
-	for _, vec := range bat.Vecs {
+	for i, vec := range bat.Vecs {
 		if vec != nil {
-			bat.ReplaceVector(vec, nil)
+			bat.ReplaceVector(vec, nil, i)
 			vec.Free(proc.GetMPool())
 		}
 	}

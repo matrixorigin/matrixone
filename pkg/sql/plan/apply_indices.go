@@ -646,6 +646,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 END0:
+	if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
+		// for cluster by table, make it less prone to go index
+		if node.Stats.Selectivity > 0.0001 || node.Stats.Outcnt > 1000 {
+			return nodeID
+		}
+	}
 	if node.Stats.Selectivity > InFilterSelectivityLimit || node.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(sid, node.Stats.TableCnt)) {
 		return nodeID
 	}

@@ -35,43 +35,43 @@ func PatternToString(pattern string, mode int64) (string, error) {
 func TestPatternBoolean(t *testing.T) {
 
 	tests := []TestCase{
-		TestCase{
+		{
 			pattern: "Matrix Origin",
 			expect:  "(text matrix) (text origin)",
 		},
-		TestCase{
+		{
 			pattern: "+Matrix Origin",
 			expect:  "(+ (text matrix)) (text origin)",
 		},
-		TestCase{
+		{
 			pattern: "+Matrix -Origin",
 			expect:  "(+ (text matrix)) (- (text origin))",
 		},
-		TestCase{
+		{
 			pattern: "Matrix ~Origin",
 			expect:  "(text matrix) (~ (text origin))",
 		},
-		TestCase{
+		{
 			pattern: "Matrix +(<Origin >One)",
 			expect:  "(+ (group (< (text origin)) (> (text one)))) (text matrix)",
 		},
-		TestCase{
+		{
 			pattern: "+Matrix +Origin",
 			expect:  "(+ (text matrix)) (+ (text origin))",
 		},
-		TestCase{
+		{
 			pattern: "\"Matrix origin\"",
 			expect:  "(phrase (text matrix) (text origin))",
 		},
-		TestCase{
+		{
 			pattern: "Matrix Origin*",
 			expect:  "(text matrix) (* origin*)",
 		},
-		TestCase{
+		{
 			pattern: "+Matrix +(Origin (One Two))",
 			expect:  "(+ (text matrix)) (+ (group (text origin) (group (text one) (text two))))",
 		},
-		TestCase{
+		{
 			pattern: "+读写汉字 -学中文",
 			expect:  "(+ (text 读写汉字)) (- (text 学中文))",
 		},
@@ -87,15 +87,15 @@ func TestPatternBoolean(t *testing.T) {
 func TestPatternNL(t *testing.T) {
 
 	tests := []TestCase{
-		TestCase{
+		{
 			pattern: "Matrix Origin",
 			expect:  "(text matrix) (text origin)",
 		},
-		TestCase{
+		{
 			pattern: "读写汉字 学中文",
 			expect:  "(text 读写汉) (text 写汉字) (text 汉字) (text 字) (text 学中文) (text 中文) (text 文)",
 		},
-		TestCase{
+		{
 			pattern: "读写",
 			expect:  "(* 读写*)",
 		},
@@ -111,11 +111,11 @@ func TestPatternNL(t *testing.T) {
 func TestPatternQueryExpansion(t *testing.T) {
 
 	tests := []TestCase{
-		TestCase{
+		{
 			pattern: "Matrix Origin",
 			expect:  "(text matrix) (text origin)",
 		},
-		TestCase{
+		{
 			pattern: "读写汉字 学中文",
 			expect:  "(+ (text 读写汉字)) (- (text 学中文))",
 		},
@@ -130,22 +130,22 @@ func TestPatternQueryExpansion(t *testing.T) {
 func TestPatternFail(t *testing.T) {
 
 	tests := []TestCase{
-		TestCase{
+		{
 			pattern: "Matrix Origin( ",
 		},
-		TestCase{
+		{
 			pattern: "(+Matrix Origin",
 		},
-		TestCase{
+		{
 			pattern: "++Matrix -Origin",
 		},
-		TestCase{
+		{
 			pattern: "Matrix ~~Origin",
 		},
-		TestCase{
+		{
 			pattern: "Matrix +(<(+Origin -apple) >One)",
 		},
-		TestCase{
+		{
 			pattern: "+Matrix --Origin",
 		},
 	}

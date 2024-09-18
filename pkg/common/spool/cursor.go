@@ -30,14 +30,7 @@ func (c *Cursor[T]) Next() (ret T, ok bool) {
 	}
 
 	for {
-
-		// decrease reference of last node
-		if c.last != nil {
-			c.last.numCursors.Add(-1)
-		}
-
-		// check free
-		c.spool.checkFree()
+		c.FreeCurrent()
 
 		// wait value ok
 		c.next.mu.Lock()
@@ -77,6 +70,18 @@ func (c *Cursor[T]) Next() (ret T, ok bool) {
 	}
 }
 
+// FreeCurrent decrease reference for last node and check free.
+func (c *Cursor[T]) FreeCurrent() {
+	// decrease reference of last node
+	if c.last != nil {
+		c.last.numCursors.Add(-1)
+		c.last = nil
+	}
+
+	// check free
+	c.spool.checkFree()
+}
+
 // Peek returns the next value if available
 // Peek does not block if no value is available
 func (c *Cursor[T]) Peek() (ret T, ok bool) {
@@ -95,6 +100,31 @@ func (c *Cursor[T]) Peek() (ret T, ok bool) {
 		return ret, false
 	}
 	return c.next.value, true
+}
+
+func (c *Cursor[T]) SkipNext() {
+	if c.closed {
+		return
+	}
+
+	c.FreeCurrent()
+	// check readability
+	skip := false
+	if n := c.next.maxConsumer.Add(-1); n < 0 {
+		skip = true
+	}
+	if c.next.target != nil && c.next.target != c {
+		skip = true
+	}
+
+	if !skip {
+		panic("cannot skip this element from cursor.")
+	}
+
+	c.last = c.next
+	c.next = c.next.next
+	c.next.numCursors.Add(1)
+	c.FreeCurrent()
 }
 
 // Close closes the cursor

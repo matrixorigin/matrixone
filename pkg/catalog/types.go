@@ -150,6 +150,9 @@ const (
 	MO_PITR = "mo_pitr"
 
 	MO_RETENTION = "mo_retention"
+
+	MO_CDC_TASK      = "mo_cdc_task"
+	MO_CDC_WATERMARK = "mo_cdc_watermark"
 )
 
 const (
@@ -349,6 +352,10 @@ const (
 	// MO_RESERVED_MAX is the max reserved table ID.
 	MO_RESERVED_MAX = 100
 )
+
+func IsSystemTable(id uint64) bool {
+	return id == MO_DATABASE_ID || id == MO_TABLES_ID || id == MO_COLUMNS_ID
+}
 
 // index use to update constraint
 const (

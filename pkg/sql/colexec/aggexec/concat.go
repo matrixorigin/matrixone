@@ -24,10 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-const (
-	groupConcatMaxLen = 1024
-)
-
 // group_concat is a special string aggregation function.
 type groupConcatExec struct {
 	multiAggInfo
@@ -117,9 +113,6 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	exec.ret.groupToSet = groupIndex
 	exec.ret.setGroupNotEmpty(groupIndex)
 	r := exec.ret.aggGet()
-	if len(r) > groupConcatMaxLen {
-		return nil
-	}
 	if len(r) > 0 {
 		r = append(r, exec.separator...)
 	}
@@ -173,7 +166,7 @@ func (exec *groupConcatExec) merge(other *groupConcatExec, idx1, idx2 int) error
 
 	v1 := exec.ret.aggGet()
 	v2 := other.ret.aggGet()
-	if len(v2) == 0 || len(v1) > groupConcatMaxLen {
+	if len(v2) == 0 {
 		return nil
 	}
 	if len(v1) > 0 && len(v2) > 0 {

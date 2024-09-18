@@ -579,7 +579,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 			children = append(children, &Pattern{Text: s, Operator: TEXT})
 		}
 
-		return []*Pattern{&Pattern{Text: pattern, Operator: PHRASE, Children: children}}, nil
+		return []*Pattern{{Text: pattern, Operator: PHRASE, Children: children}}, nil
 	}
 
 	runeSlice := []rune(pattern)
@@ -683,7 +683,7 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 	ngram_size := 3
 	// if number of character is small than Ngram size = 3, do prefix search
 	if len(runeSlice) < ngram_size {
-		return []*Pattern{&Pattern{Text: pattern + "*", Operator: STAR}}, nil
+		return []*Pattern{{Text: pattern + "*", Operator: STAR}}, nil
 	}
 
 	var list []*Pattern

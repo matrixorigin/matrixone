@@ -89,7 +89,7 @@ func TestBatch_ReplaceVector(t *testing.T) {
 			v2,
 		},
 	}
-	bat.ReplaceVector(bat.Vecs[0], v3)
+	bat.ReplaceVector(bat.Vecs[0], v3, 0)
 	require.Equal(t, v3, bat.Vecs[0])
 	require.Equal(t, v3, bat.Vecs[1])
 	require.Equal(t, v3, bat.Vecs[2])
