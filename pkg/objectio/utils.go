@@ -31,10 +31,12 @@ import (
 
 var (
 	RowidType types.Type
+	TSType    types.Type
 )
 
 func init() {
 	RowidType = types.T_Rowid.ToType()
+	TSType = types.T_TS.ToType()
 }
 
 type CreateObjOpt struct {

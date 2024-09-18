@@ -64,11 +64,15 @@ func NewLocalDataSource(
 	table *txnTable,
 	txnOffset int,
 	rangesSlice objectio.BlockInfoSlice,
+	extraTombstones engine.Tombstoner,
 	skipReadMem bool,
 	policy engine.TombstoneApplyPolicy,
+	category engine.DataSourceType,
 ) (source *LocalDataSource, err error) {
 
 	source = &LocalDataSource{}
+	source.category = category
+	source.extraTombstones = extraTombstones
 	source.fs = table.getTxn().engine.fs
 	source.ctx = ctx
 	source.mp = table.proc.Load().Mp()
@@ -84,15 +88,17 @@ func NewLocalDataSource(
 		source.rangeSlice = rangesSlice
 	}
 
-	state, err := table.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
+	if source.category != engine.ShardingLocalDataSource {
+		state, err := table.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+		source.pState = state
 	}
 
 	source.table = table
-	source.pState = state
 	source.txnOffset = txnOffset
-	source.snapshotTS = types.TimestampToTS(table.getTxn().op.SnapshotTS())
+	source.snapshotTS = types.TimestampToTS(table.db.op.SnapshotTS())
 
 	source.iteratePhase = engine.InMem
 	if skipReadMem {
@@ -261,8 +267,10 @@ func (rs *RemoteDataSource) SetFilterZM(_ objectio.ZoneMap) {
 // --------------------------------------------------------------------------------
 
 type LocalDataSource struct {
-	rangeSlice objectio.BlockInfoSlice
-	pState     *logtailreplay.PartitionState
+	category        engine.DataSourceType
+	extraTombstones engine.Tombstoner
+	rangeSlice      objectio.BlockInfoSlice
+	pState          *logtailreplay.PartitionState
 
 	memPKFilter *MemPKFilter
 	pStateRows  struct {
@@ -515,12 +523,16 @@ func (ls *LocalDataSource) iterateInMemData(
 
 	outBatch.SetRowCount(0)
 
-	if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, mp, outBatch); err != nil {
-		return err
+	if ls.category != engine.ShardingRemoteDataSource {
+		if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, mp, outBatch); err != nil {
+			return err
+		}
 	}
 
-	if err = ls.filterInMemCommittedInserts(ctx, colTypes, seqNums, mp, outBatch); err != nil {
-		return err
+	if ls.category != engine.ShardingLocalDataSource {
+		if err = ls.filterInMemCommittedInserts(ctx, colTypes, seqNums, mp, outBatch); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -795,6 +807,19 @@ func (ls *LocalDataSource) ApplyTombstones(
 
 	var err error
 
+	if ls.category == engine.ShardingRemoteDataSource {
+		if ls.extraTombstones != nil {
+			rowsOffset = ls.extraTombstones.ApplyInMemTombstones(bid, rowsOffset, nil)
+			rowsOffset, err = ls.extraTombstones.ApplyPersistedTombstones(ctx, ls.fs, ls.snapshotTS, bid, rowsOffset, nil)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if len(rowsOffset) == 0 {
+			return nil, nil
+		}
+	}
+
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 &&
 		dynamicPolicy&engine.Policy_SkipUncommitedInMemory == 0 {
 		rowsOffset = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
@@ -844,6 +869,16 @@ func (ls *LocalDataSource) GetTombstones(
 
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)
+
+	if ls.category == engine.ShardingRemoteDataSource {
+		if ls.extraTombstones != nil {
+			ls.extraTombstones.ApplyInMemTombstones(bid, nil, deletedRows)
+			_, err = ls.extraTombstones.ApplyPersistedTombstones(ctx, ls.fs, ls.snapshotTS, bid, nil, deletedRows)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
 		ls.applyWorkspaceEntryDeletes(bid, nil, deletedRows)
@@ -1049,11 +1084,6 @@ func (ls *LocalDataSource) applyPStateTombstoneObjects(
 	offsets []int64,
 	deletedRows *nulls.Nulls,
 ) ([]int64, error) {
-
-	//if ls.rc.SkipPStateDeletes {
-	//	return offsets, nil
-	//}
-
 	if ls.pState.ApproxTombstoneObjectsNum() == 0 {
 		return offsets, nil
 	}
@@ -1079,6 +1109,25 @@ func (ls *LocalDataSource) applyPStateTombstoneObjects(
 			iter.Close()
 		}
 	}()
+
+	// PXU TODO: handle len(offsets) < 10 or 20, 30?
+	if len(offsets) == 1 {
+		rowid := objectio.NewRowid(&bid, uint32(offsets[0]))
+		deleted, err := blockio.IsRowDeleted(
+			ls.ctx,
+			&ls.snapshotTS,
+			rowid,
+			getTombstone,
+			ls.fs,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if deleted {
+			return nil, nil
+		}
+		return offsets, nil
+	}
 
 	if deletedRows == nil {
 		deletedRows = &nulls.Nulls{}
@@ -1185,7 +1234,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
-			if loaded, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
+			if loaded, _, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
 				return nil, err
 			}
 

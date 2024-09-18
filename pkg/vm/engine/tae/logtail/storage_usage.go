@@ -911,7 +911,7 @@ func Objects2Usages(objs []*catalog.ObjectEntry, isGlobal bool) (usages []UsageD
 	toUsage := func(obj *catalog.ObjectEntry) UsageData {
 		usage := UsageData{
 			DbId:  obj.GetTable().GetDB().GetID(),
-			Size:  uint64(obj.GetCompSize()),
+			Size:  uint64(obj.Size()),
 			TblId: obj.GetTable().GetID(),
 			AccId: uint64(obj.GetTable().GetDB().GetTenantID()),
 		}
@@ -920,7 +920,7 @@ func Objects2Usages(objs []*catalog.ObjectEntry, isGlobal bool) (usages []UsageD
 			usage.ObjectAbstract = ObjectAbstract{
 				TotalBlkCnt:  int(obj.BlkCnt()),
 				TotalObjCnt:  1,
-				TotalObjSize: int(obj.GetCompSize()),
+				TotalObjSize: int(obj.Size()),
 				TotalRowCnt:  int(obj.Rows()),
 			}
 		}

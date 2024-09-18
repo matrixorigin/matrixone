@@ -85,7 +85,12 @@ func newCNMergeTask(
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
 	relData := NewBlockListRelationData(1)
-	source, err := tbl.buildLocalDataSource(ctx, 0, relData, engine.Policy_CheckAll)
+	source, err := tbl.buildLocalDataSource(
+		ctx,
+		0,
+		relData,
+		engine.Policy_CheckAll,
+		engine.GeneralLocalDataSource)
 	if err != nil {
 		return nil, err
 	}

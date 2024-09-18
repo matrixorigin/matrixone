@@ -26,6 +26,56 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+func IsRowDeleted(
+	ctx context.Context,
+	ts *types.TS,
+	row *types.Rowid,
+	getTombstoneFileFn func() (*objectio.ObjectStats, error),
+	fs fileservice.FileService,
+) (bool, error) {
+	var isDeleted bool
+	loadedBlkCnt := 0
+	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
+		if isDeleted {
+			return false, nil
+		}
+		var err error
+		var location objectio.ObjectLocation
+		tombstoneObject.BlockLocationTo(uint16(pos), objectio.BlockMaxRows, location[:])
+		deleted, err := IsRowDeletedByLocation(
+			ctx, ts, row, location[:], fs, tombstoneObject.GetCNCreated(),
+		)
+		if err != nil {
+			return false, err
+		}
+		loadedBlkCnt++
+		// if deleted, stop searching
+		if deleted {
+			isDeleted = true
+			return false, nil
+		}
+		return true, nil
+	}
+
+	tombstoneObjectCnt, skipObjectCnt, totalBlkCnt, err := CheckTombstoneFile(
+		ctx, row[:], getTombstoneFileFn, onBlockSelectedFn, fs,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	v2.TxnReaderEachBLKLoadedTombstoneHistogram.Observe(float64(loadedBlkCnt))
+	v2.TxnReaderScannedTotalTombstoneHistogram.Observe(float64(tombstoneObjectCnt))
+	if tombstoneObjectCnt > 0 {
+		v2.TxnReaderTombstoneZMSelectivityHistogram.Observe(float64(skipObjectCnt) / float64(tombstoneObjectCnt))
+	}
+	if totalBlkCnt > 0 {
+		v2.TxnReaderTombstoneBLSelectivityHistogram.Observe(float64(loadedBlkCnt) / float64(totalBlkCnt))
+	}
+
+	return isDeleted, nil
+}
+
 func GetTombstonesByBlockId(
 	ctx context.Context,
 	ts types.TS,
@@ -36,9 +86,10 @@ func GetTombstonesByBlockId(
 ) (err error) {
 	loadedBlkCnt := 0
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
-		location := tombstoneObject.BlockLocation(uint16(pos), objectio.BlockMaxRows)
+		var location objectio.ObjectLocation
+		tombstoneObject.BlockLocationTo(uint16(pos), objectio.BlockMaxRows, location[:])
 		if mask, err := FillBlockDeleteMask(
-			ctx, ts, blockId, location, fs, tombstoneObject.GetCNCreated(),
+			ctx, ts, blockId, location[:], fs, tombstoneObject.GetCNCreated(),
 		); err != nil {
 			return false, err
 		} else {

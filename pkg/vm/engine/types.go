@@ -583,6 +583,14 @@ const (
 	TombstoneData
 )
 
+type TombstoneCollectPolicy uint64
+
+const (
+	Policy_CollectUncommittedTombstones = 1 << iota
+	Policy_CollectCommittedTombstones
+	Policy_CollectAllTombstones = Policy_CollectUncommittedTombstones | Policy_CollectCommittedTombstones
+)
+
 type TombstoneApplyPolicy uint64
 
 const (
@@ -728,6 +736,14 @@ const (
 	End
 )
 
+type DataSourceType uint8
+
+const (
+	GeneralLocalDataSource DataSourceType = iota
+	ShardingLocalDataSource
+	ShardingRemoteDataSource
+)
+
 type DataSource interface {
 	Next(
 		ctx context.Context,
@@ -789,6 +805,7 @@ type ChangesHandle interface {
 	Next(ctx context.Context, mp *mpool.MPool) (data *batch.Batch, tombstone *batch.Batch, hint ChangesHandle_Hint, err error)
 	Close() error
 }
+
 type Relation interface {
 	Statistics
 
@@ -798,8 +815,10 @@ type Relation interface {
 	// third parameter: Transaction offset used to specify the starting position for reading data.
 	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
 
-	CollectTombstones(ctx context.Context, txnOffset int) (Tombstoner, error)
+	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
+
 	CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (ChangesHandle, error)
+
 	TableDefs(context.Context) ([]TableDef, error)
 
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc
@@ -846,12 +865,25 @@ type Relation interface {
 		policy TombstoneApplyPolicy,
 	) ([]Reader, error)
 
+	BuildShardingReaders(
+		ctx context.Context,
+		proc any,
+		expr *plan.Expr,
+		relData RelData,
+		num int,
+		txnOffset int,
+		orderBy bool,
+		policy TombstoneApplyPolicy,
+	) ([]Reader, error)
+
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
 	//max and min values
 	MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error)
 
 	GetEngineType() EngineType
+
+	GetProcess() any
 
 	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
 
@@ -946,6 +978,8 @@ type Engine interface {
 	GetMessageCenter() any
 
 	GetService() string
+
+	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
 type VectorPool interface {
