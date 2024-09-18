@@ -566,11 +566,21 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
 
-			if cExpr, ok := child.Limit.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-					child.Stats.Outcnt = float64(c.U64Val)
-					child.Stats.BlockNum = int32(((child.Stats.Outcnt / child.Stats.Selectivity) / DefaultBlockMaxRows * 100) + 1)
-					child.Stats.Cost = float64(child.Stats.BlockNum * DefaultBlockMaxRows)
+			// if there is a limit, outcnt is limit number
+			if child.Limit != nil {
+				if cExpr, ok := child.Limit.Expr.(*plan.Expr_Lit); ok {
+					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+						child.Stats.Outcnt = float64(c.U64Val)
+						if child.Stats.Selectivity < 0.5 {
+							newblockNum := int32(c.U64Val / 2)
+							if newblockNum < child.Stats.BlockNum {
+								child.Stats.BlockNum = newblockNum
+							}
+						} else {
+							child.Stats.BlockNum = 1
+						}
+						child.Stats.Cost = float64(child.Stats.BlockNum * DefaultBlockMaxRows)
+					}
 				}
 			}
 		}
