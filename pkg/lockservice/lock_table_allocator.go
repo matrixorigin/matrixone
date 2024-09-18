@@ -567,21 +567,17 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 				return true
 			})
 
-			retry := false
 			for _, sid := range services {
-				for {
+				for i := 0; i < 2; i++ {
 					valid, actives, err := getActiveTxnFunc(sid)
 					if isRetryError(err) {
 						// retry err
 						l.logger.Error("retry to check service if alive",
 							zap.String("serviceID", sid),
 							zap.Error(err))
-						if !retry {
-							// retry
-							retry = true
+						if i < 1 {
 							continue
 						}
-						retry = false
 						l.inactiveService.Store(sid, time.Now())
 						l.ctl.Delete(sid)
 					} else if err == nil {
@@ -599,7 +595,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 						l.logger.Error("get active txn failed",
 							zap.String("serviceID", sid),
 							zap.Error(err))
-						l.inactiveService.Store(sid, struct{}{})
+						l.inactiveService.Store(sid, time.Now())
 						l.ctl.Delete(sid)
 					}
 					break
