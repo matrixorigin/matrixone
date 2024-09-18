@@ -39,8 +39,13 @@ id    body    title    score
 select *, match(body) against('遠東兒童中文' in natural language mode) from src;
 id    body    title    score
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    19.990349
-select * from src where match(body, title) against('+red +blue' in boolean mode);
+select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
+3    blue is not red    colorful
+0    color is red    t1
+select * from src where match(body, title) against('re*' in boolean mode);
+id    body    title
+0    color is red    t1
 3    blue is not red    colorful
 select * from src where match(body, title) against('+red -blue' in boolean mode);
 id    body    title
@@ -54,6 +59,10 @@ id    body    title
 3    blue is not red    colorful
 select * from src where match(body, title) against('+red -(<blue >is)' in boolean mode);
 id    body    title
+select * from src where match(body, title) against('+red +(<blue >is)' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+0    color is red    t1
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 id    body    title
 3    blue is not red    colorful

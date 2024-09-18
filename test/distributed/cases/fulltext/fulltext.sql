@@ -35,7 +35,9 @@ select *, match(body, title) against('遠東兒童中文' in natural language mo
 select *, match(body) against('遠東兒童中文' in natural language mode) from src;
 
 -- boolean mode
-select * from src where match(body, title) against('+red +blue' in boolean mode);
+select * from src where match(body, title) against('+red blue' in boolean mode);
+
+select * from src where match(body, title) against('re*' in boolean mode);
 
 select * from src where match(body, title) against('+red -blue' in boolean mode);
 
@@ -44,6 +46,8 @@ select * from src where match(body, title) against('+red +blue' in boolean mode)
 select * from src where match(body, title) against('+red ~blue' in boolean mode);
 
 select * from src where match(body, title) against('+red -(<blue >is)' in boolean mode);
+
+select * from src where match(body, title) against('+red +(<blue >is)' in boolean mode);
 
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 
