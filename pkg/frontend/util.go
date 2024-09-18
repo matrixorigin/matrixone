@@ -1713,6 +1713,19 @@ func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, t
 		return nil, moerr.NewNoSuchTable(ctx, dbName, table)
 	}
 
+	cols, err := extractTableDefColumns(erArray, ctx, dbName, table)
+	if err != nil {
+		return nil, err
+	}
+
+	return &plan.TableDef{
+		Name:   table,
+		DbName: dbName,
+		Cols:   cols,
+	}, nil
+}
+
+func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, table string) ([]*plan.ColDef, error) {
 	cols := make([]*plan.ColDef, 0)
 	for _, result := range erArray {
 		for i := uint64(0); i < result.GetRowCount(); i++ {
@@ -1781,9 +1794,5 @@ func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, t
 			})
 		}
 	}
-	return &plan.TableDef{
-		Name:   table,
-		DbName: dbName,
-		Cols:   cols,
-	}, nil
+	return cols, nil
 }
