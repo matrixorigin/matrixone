@@ -15,8 +15,10 @@
 package colexec
 
 import (
+	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -149,6 +151,64 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	}
 	typExpressionExecutor.Free()
 	require.Equal(t, curr2, proc.Mp().CurrNB())
+}
+
+func TestVarExpressionExecutor(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	// Create a variable expression
+	varExpr := &plan.Expr{
+		Expr: &plan.Expr_V{
+			V: &plan.VarRef{
+				Name:   "test_var",
+				System: false,
+				Global: false,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int64),
+			NotNullable: true,
+		},
+	}
+
+	// Mock the variable resolution function
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		if name == "test_var" {
+			return int64(12345), nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("variable not found")
+	})
+
+	varExprExecutor, err := NewExpressionExecutor(proc, varExpr)
+	require.NoError(t, err)
+	tree, err := DebugShowExecutor(varExprExecutor)
+	require.NoError(t, err)
+	t.Log(tree)
+
+	emptyBatch := &batch.Batch{}
+	emptyBatch.SetRowCount(1)
+	vec, err := varExprExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
+	require.NoError(t, err)
+	curr := proc.Mp().CurrNB()
+	{
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, types.T_int64.ToType(), *vec.GetType())
+		val := string(vec.GetBytesAt(0))
+		result, err := strconv.ParseInt(val, 10, 64)
+		require.NoError(t, err)
+		require.Equal(t, int64(12345), result)
+		require.Equal(t, false, vec.GetNulls().Contains(0))
+	}
+
+	varExprExecutor.ResetForNextQuery()
+	_, err = varExprExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
+	require.NoError(t, err)
+	tree, err = DebugShowExecutor(varExprExecutor)
+	require.NoError(t, err)
+	t.Log(tree)
+	require.Equal(t, curr, proc.Mp().CurrNB()) // check memory reuse
+	varExprExecutor.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func TestColumnExpressionExecutor(t *testing.T) {
