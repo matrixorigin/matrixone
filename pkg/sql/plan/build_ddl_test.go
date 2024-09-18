@@ -121,6 +121,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().SetViews(gomock.Any()).AnyTimes()
 	ctx.EXPECT().SetSnapshot(gomock.Any()).AnyTimes()
 	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
+	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 
 	ctx.EXPECT().GetRootSql().Return(sql1).AnyTimes()
 	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1, 1)
