@@ -553,15 +553,17 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 				return true
 			})
 
+			retryCount := 1
+
 			for _, sid := range services {
-				for i := 0; i < 2; i++ {
+				for i := 0; i < retryCount+1; i++ {
 					valid, actives, err := getActiveTxnFunc(sid)
 					if isRetryError(err) {
 						// retry err
 						l.logger.Error("retry to check service if alive",
 							zap.String("serviceID", sid),
 							zap.Error(err))
-						if i < 1 {
+						if i < retryCount {
 							// retry
 							continue
 						}
