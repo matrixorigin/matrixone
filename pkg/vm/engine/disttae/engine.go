@@ -631,11 +631,11 @@ func (e *Engine) Hints() (h engine.Hints) {
 	return
 }
 
-func determineScanType(relData engine.RelData, num int) (scanType int) {
+func determineScanType(relData engine.RelData, readerNum int) (scanType int) {
 	scanType = NORMAL
-	if relData.DataCnt() < num*SMALLSCAN_THRESHOLD {
+	if relData.DataCnt() < readerNum*SMALLSCAN_THRESHOLD || readerNum == 1 {
 		scanType = SMALL
-	} else if (num * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
+	} else if (readerNum * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
 		scanType = LARGE
 	}
 	return
@@ -670,11 +670,14 @@ func (e *Engine) BuildBlockReaders(
 	scanType := determineScanType(relData, newNum)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
+	current := 0
 	for i := 0; i < newNum; i++ {
-		if i == 0 {
-			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
+		if i < mod {
+			shard = relData.DataSlice(current, current+divide+1)
+			current = current + divide + 1
 		} else {
-			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
+			shard = relData.DataSlice(current, current+divide)
+			current = current + divide
 		}
 		ds := NewRemoteDataSource(
 			ctx,

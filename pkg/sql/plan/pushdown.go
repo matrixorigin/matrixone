@@ -565,6 +565,8 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
+			child.Stats = calcScanStats(child, builder)
+			resetHashMapStats(child.Stats)
 		}
 	}
 }
