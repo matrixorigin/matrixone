@@ -636,7 +636,7 @@ func (p *PartitionState) truncateTombstoneObjects(
 
 		gcLog.WriteString(fmt.Sprintf("%s; ", entry.ObjectName().String()))
 
-		p.tombstoneObjectDTSIndex.Delete(entry)
+		p.tombstoneObjectsNameIndex.Delete(entry)
 		p.tombstoneObjectDTSIndex.Delete(entry)
 	}
 

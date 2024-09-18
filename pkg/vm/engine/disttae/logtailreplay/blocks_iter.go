@@ -17,7 +17,6 @@ package logtailreplay
 import (
 	"bytes"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -74,23 +73,28 @@ func (p *PartitionState) ApproxTombstoneObjectsNum() int {
 }
 
 func (p *PartitionState) newTombstoneObjectsIter(
-	ts types.TS,
+	snapshot types.TS,
 	onlyVisible bool) (ObjectsIter, error) {
 
 	iter := p.tombstoneObjectDTSIndex.Copy().Iter()
 	if onlyVisible {
 		pivot := ObjectEntry{
 			ObjectInfo{
-				DeleteTime: ts,
+				DeleteTime: snapshot,
 			},
 		}
+
 		iter.Seek(pivot)
-		iter.Prev()
+		if !iter.Prev() && p.tombstoneObjectsNameIndex.Len() > 0 {
+			// reset iter only when seeked to the first item
+			iter.Release()
+			iter = p.tombstoneObjectDTSIndex.Copy().Iter()
+		}
 	}
 
 	ret := &objectsIter{
 		onlyVisible: onlyVisible,
-		ts:          ts,
+		ts:          snapshot,
 		iter:        iter,
 	}
 	return ret, nil
