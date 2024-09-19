@@ -778,7 +778,6 @@ func Test_ShardingRemoteReader(t *testing.T) {
 		data, err := relData.MarshalBinary()
 		require.NoError(t, err)
 		readerBuildParam.ReaderBuildParam.RelData = data
-		readerBuildParam.ReaderBuildParam.ScanType = disttae.SMALL
 		readerBuildParam.ReaderBuildParam.TombstoneApplyPolicy =
 			int32(engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3)
 		res, err := disttae.HandleShardingReadBuildReader(
