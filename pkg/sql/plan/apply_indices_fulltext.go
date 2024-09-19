@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+// ERIC TODO: check duplicate fulltext_match() function and merge it
+
 // The idea is as follows:
 // 1. Find fulltext_match() function from projection (projNode) and filters (ScanNode)
 // and then convert fulltext_match() to table function fulltext_index_scan().
