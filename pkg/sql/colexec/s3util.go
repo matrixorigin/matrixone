@@ -341,48 +341,22 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 
 	w.initBuffers(proc, w.batches[0])
 
-	nulls := make([]*nulls.Nulls, 0, len(w.batches))
-	for i := 0; i < len(w.batches); i++ {
-		nulls = append(nulls, w.batches[i].Vecs[w.sortIndex].GetNulls())
-	}
-	merge := GetNewMergeFromBatchs(w.batches, w.sortIndex, nulls)
 	if _, err := w.generateWriter(proc); err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}
-	lens := 0
-	size := len(w.batches)
-	w.buffer.CleanOnlyData()
-	var batchIndex int
-	var rowIndex int
-	for size > 0 {
-		batchIndex, rowIndex, size = merge.GetNextPos()
-		for i := range w.buffer.Vecs {
-			err := w.buffer.Vecs[i].UnionOne(w.batches[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
-			if err != nil {
-				return nil, objectio.ObjectStats{}, err
-			}
-		}
-		// all data in w.batches[batchIndex] are used. Clean it.
-		if rowIndex+1 == w.batches[batchIndex].RowCount() {
-			w.batches[batchIndex].Clean(proc.GetMPool())
-		}
-		lens++
-		if lens == options.DefaultBlockMaxRows {
-			lens = 0
-			w.buffer.SetRowCount(options.DefaultBlockMaxRows)
-			if _, err := w.writer.WriteBatch(w.buffer); err != nil {
-				return nil, objectio.ObjectStats{}, err
-			}
-			// force clean
-			w.buffer.CleanOnlyData()
-		}
+
+	sinker := func(bat *batch.Batch) error {
+		_, err := w.writer.WriteBatch(bat)
+		return err
 	}
-	if lens > 0 {
-		w.buffer.SetRowCount(lens)
-		if _, err := w.writer.WriteBatch(w.buffer); err != nil {
-			return nil, objectio.ObjectStats{}, err
-		}
-		w.buffer.CleanOnlyData()
+	if err := MergeSortBatches(
+		w.batches,
+		w.sortIndex,
+		w.buffer,
+		sinker,
+		proc.GetMPool(),
+	); err != nil {
+		return nil, objectio.ObjectStats{}, err
 	}
 	return w.sync(proc)
 }
@@ -463,7 +437,7 @@ func (w *S3Writer) FillBlockInfoBat(blkInfos []objectio.BlockInfo, stats objecti
 		}
 		if err := vector.AppendBytes(
 			w.blockInfoBat.Vecs[1],
-			objectio.EncodeBlockInfo(blkInfo),
+			objectio.EncodeBlockInfo(&blkInfo),
 			false,
 			mpool); err != nil {
 			return err

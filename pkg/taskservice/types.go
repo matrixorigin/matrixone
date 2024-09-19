@@ -20,9 +20,10 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/exp/constraints"
+
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"golang.org/x/exp/constraints"
 )
 
 // Condition options for query tasks
@@ -303,6 +304,31 @@ func (c *taskMetadataIDCond) sql() string {
 	return fmt.Sprintf("task_metadata_id %s '%s'", OpName[c.op], c.taskMetadataID)
 }
 
+type taskNameCond struct {
+	op       Op
+	taskName string
+}
+
+func (c *taskNameCond) eval(v any) bool {
+	return false
+}
+
+func (c *taskNameCond) sql() string {
+	return fmt.Sprintf("task_name %s '%s'", OpName[c.op], c.taskName)
+}
+
+type cnLabelsCond struct {
+	op     Op
+	labels *CnLabels
+}
+
+func (c *cnLabelsCond) eval(v any) bool {
+	return false
+}
+func (c *cnLabelsCond) sql() string {
+	return fmt.Sprintf("%v", c.labels)
+}
+
 func compare[T constraints.Ordered](op Op, a T, b T) bool {
 	switch op {
 	case EQ:
@@ -337,6 +363,8 @@ const (
 	CondLastHeartbeat
 	CondCronTaskId
 	CondTaskMetadataId
+	CondCdcTaskName
+	CondCnLabels
 )
 
 var (
@@ -468,6 +496,18 @@ func WithTaskMetadataId(op Op, value string) Condition {
 	}
 }
 
+func WithTaskName(op Op, value string) Condition {
+	return func(c *conditions) {
+		(*c)[CondCdcTaskName] = &taskNameCond{op: op, taskName: value}
+	}
+}
+
+func WithLabels(op Op, labels *CnLabels) Condition {
+	return func(c *conditions) {
+		(*c)[CondCnLabels] = &cnLabelsCond{op: op, labels: labels}
+	}
+}
+
 // TaskService Asynchronous Task Service, which provides scheduling execution and management of
 // asynchronous tasks. CN, DN, HAKeeper, LogService will all hold this service.
 type TaskService interface {
@@ -512,8 +552,16 @@ type TaskService interface {
 	// StopScheduleCronTask stop schedule cron tasks.
 	StopScheduleCronTask()
 
+	TruncateCompletedTasks(ctx context.Context) error
+
 	// GetStorage returns the task storage
 	GetStorage() TaskStorage
+
+	// AddCdcTask Update cdc task in one transaction
+	AddCdcTask(context.Context, task.TaskMetadata, *task.Details, func(context.Context, SqlExecutor) (int, error)) (int, error)
+
+	// UpdateCdcTask Update cdc task in one transaction
+	UpdateCdcTask(context.Context, task.TaskStatus, func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), ...Condition) (int, error)
 }
 
 // TaskExecutor which is responsible for the execution logic of a specific Task, and the function exists to
@@ -578,6 +626,10 @@ type TaskStorage interface {
 	QueryDaemonTask(ctx context.Context, condition ...Condition) ([]task.DaemonTask, error)
 	// HeartbeatDaemonTask update the last heartbeat field of the task.
 	HeartbeatDaemonTask(ctx context.Context, task []task.DaemonTask) (int, error)
+	// AddCdcTask insert cdcTask and daemonTask
+	AddCdcTask(context.Context, task.DaemonTask, func(context.Context, SqlExecutor) (int, error)) (int, error)
+	// UpdateCdcTask Update cdc task in one transaction
+	UpdateCdcTask(context.Context, task.TaskStatus, func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), ...Condition) (int, error)
 }
 
 // TaskServiceHolder create and hold the task service in the cn, tn and log node. Create
@@ -596,3 +648,64 @@ type TaskStorageFactory interface {
 }
 
 type Getter func() (TaskService, bool)
+
+type CnLabels struct {
+	cnUUID string
+	//account -> cn map. in all cn
+	labels map[string]map[string]struct{}
+}
+
+func NewCnLabels(cnUUID string) *CnLabels {
+	return &CnLabels{
+		cnUUID: cnUUID,
+		labels: make(map[string]map[string]struct{}),
+	}
+}
+
+func (cnlabels *CnLabels) Add(cn string, labels []string) {
+	for _, label := range labels {
+		if len(label) == 0 {
+			continue
+		}
+		if cnMap, has := cnlabels.labels[label]; has {
+			cnMap[cn] = struct{}{}
+		} else {
+			cnlabels.labels[label] = make(map[string]struct{})
+			cnMap = cnlabels.labels[label]
+			cnMap[cn] = struct{}{}
+		}
+	}
+}
+
+func (cnlabels *CnLabels) HasAccount(account string) (bool, map[string]struct{}) {
+	cnMap, has := cnlabels.labels[account]
+	return has, cnMap
+}
+
+func (cnlabels *CnLabels) String() string {
+	if cnlabels == nil {
+		return "empty labels"
+	}
+	if cnlabels.labels == nil {
+		return cnlabels.cnUUID
+	}
+	sb := strings.Builder{}
+	sb.WriteString(cnlabels.cnUUID)
+	sb.WriteString(":>")
+	for acc, mp := range cnlabels.labels {
+		sb.WriteString(acc)
+		if len(mp) > 0 {
+			sb.WriteString(":")
+			for label := range mp {
+				sb.WriteString(label)
+				sb.WriteString(",")
+			}
+		}
+	}
+	return sb.String()
+}
+
+type CdcTaskKey struct {
+	AccountId uint64
+	TaskId    string
+}

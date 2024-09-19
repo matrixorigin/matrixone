@@ -121,6 +121,7 @@ func (l *LocalFS) AllocateCacheData(size int) fscache.Data {
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
 
+	// remote
 	if config.RemoteCacheEnabled {
 		if config.QueryClient == nil {
 			return moerr.NewInternalError(ctx, "query client is nil")
@@ -131,11 +132,14 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 		)
 	}
 
-	if *config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
+	// memory
+	if config.MemoryCapacity != nil &&
+		*config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
 		l.memCache = NewMemCache(
 			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
 			&config.CacheCallbacks,
 			l.perfCounterSets,
+			l.name,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", l.name),
@@ -143,25 +147,28 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 		)
 	}
 
-	if config.enableDiskCacheForLocalFS {
-		if *config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
-			var err error
-			l.diskCache, err = NewDiskCache(
-				ctx,
-				*config.DiskPath,
-				fscache.ConstCapacity(int64(*config.DiskCapacity)),
-				l.perfCounterSets,
-				true,
-				l,
-			)
-			if err != nil {
-				return err
-			}
-			logutil.Info("fileservice: disk cache initialized",
-				zap.Any("fs-name", l.name),
-				zap.Any("config", config),
-			)
+	// disk
+	if config.enableDiskCacheForLocalFS &&
+		config.DiskCapacity != nil &&
+		*config.DiskCapacity > DisableCacheCapacity &&
+		config.DiskPath != nil {
+		var err error
+		l.diskCache, err = NewDiskCache(
+			ctx,
+			*config.DiskPath,
+			fscache.ConstCapacity(int64(*config.DiskCapacity)),
+			l.perfCounterSets,
+			true,
+			l,
+			l.name,
+		)
+		if err != nil {
+			return err
 		}
+		logutil.Info("fileservice: disk cache initialized",
+			zap.Any("fs-name", l.name),
+			zap.Any("config", config),
+		)
 	}
 
 	return nil
@@ -1032,7 +1039,12 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 var _ CachingFileService = new(LocalFS)
 
 func (l *LocalFS) Close() {
-	l.FlushCache()
+	if l.memCache != nil {
+		l.memCache.Close()
+	}
+	if l.diskCache != nil {
+		l.diskCache.Close()
+	}
 }
 
 func (l *LocalFS) FlushCache() {

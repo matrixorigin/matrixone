@@ -157,14 +157,9 @@ func FilterObjects(
 					continue
 				}
 			}
-			loc := objStats.BlockLocation(uint16(pos), objectio.BlockMaxRows)
-			blk := objectio.BlockInfo{
-				BlockID: *objectio.BuildObjectBlockid(objStats.ObjectName(), uint16(pos)),
-				MetaLoc: objectio.ObjectLocation(loc),
-			}
-
-			blk.SetFlagByObjStats(objStats)
-			outBlocks.AppendBlockInfo(blk)
+			var blk objectio.BlockInfo
+			objStats.ConstructBlockInfoTo(uint16(pos), &blk)
+			outBlocks.AppendBlockInfo(&blk)
 		}
 
 		return
