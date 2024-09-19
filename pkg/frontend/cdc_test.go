@@ -2840,3 +2840,40 @@ func Test_execFrontend(t *testing.T) {
 	}
 
 }
+
+func Test_getSqlForGetTask(t *testing.T) {
+	type args struct {
+		accountId uint64
+		all       bool
+		taskName  string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "t1",
+			args: args{
+				accountId: 0,
+				all:       true,
+				taskName:  "",
+			},
+			want: "select task_id, task_name, source_uri, sink_uri, state from mo_catalog.mo_cdc_task where account_id = 0",
+		},
+		{
+			name: "t2",
+			args: args{
+				accountId: 0,
+				all:       false,
+				taskName:  "task1",
+			},
+			want: "select task_id, task_name, source_uri, sink_uri, state from mo_catalog.mo_cdc_task where account_id = 0 and task_name = 'task1'",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, getSqlForGetTask(tt.args.accountId, tt.args.all, tt.args.taskName), "getSqlForGetTask(%v, %v, %v)", tt.args.accountId, tt.args.all, tt.args.taskName)
+		})
+	}
+}
