@@ -121,7 +121,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 // applyOpStatsToNode Recursive traversal of PhyOperator tree,
 // and add OpStats statistics to the corresponding NodeAnalyze Info
-func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
+func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalleInfo *ParallelScopeInfo) {
 	if op == nil {
 		return
 	}
@@ -139,17 +139,30 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TotalTimeConsumed
 		node.AnalyzeInfo.MemorySize += op.OpStats.TotalMemorySize
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
-		node.AnalyzeInfo.S3IOByte += op.OpStats.TotalS3IOByte
+		node.AnalyzeInfo.ScanBytes += op.OpStats.TotalScanBytes
 		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
 		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
-
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
+
+		if _, isMinorOp := vm.MinorOpMap[op.OpName]; isMinorOp {
+			isMinor := true
+			if op.OpName == vm.OperatorToStrMap[vm.Filter] {
+				if op.OpName != vm.OperatorToStrMap[vm.TableScan] && op.OpName != vm.OperatorToStrMap[vm.External] {
+					isMinor = false // restrict operator is minor only for scan
+				}
+			}
+			if isMinor {
+				scopeParalleInfo.NodeIdxTimeConsumeMinor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+			}
+		} else if _, isMajorOp := vm.MajorOpMap[op.OpName]; isMajorOp {
+			scopeParalleInfo.NodeIdxTimeConsumeMajor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+		}
 	}
 
 	// Recursive processing of sub operators
 	for _, childOp := range op.Children {
-		applyOpStatsToNode(childOp, nodes)
+		applyOpStatsToNode(childOp, nodes, scopeParalleInfo)
 	}
 }
 
@@ -161,7 +174,16 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
-		applyOpStatsToNode(scope.RootOperator, nodes)
+		scopeParallInfo := NewParallelScopeInfo()
+		applyOpStatsToNode(scope.RootOperator, nodes, scopeParallInfo)
+
+		for nodeIdx, timeConsumeMajor := range scopeParallInfo.NodeIdxTimeConsumeMajor {
+			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor, timeConsumeMajor)
+		}
+
+		for nodeIdx, timeConsumeMinor := range scopeParallInfo.NodeIdxTimeConsumeMinor {
+			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor, timeConsumeMinor)
+		}
 	}
 
 	// handle preScopes recursively
@@ -374,7 +396,6 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 		}
 	}
 
-	//-------------------------------------------------------------------------------------------
 	// record the number of s3 requests
 	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.Put.Load()
 	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.List.Load()
@@ -389,6 +410,19 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
 		c.anal.phyPlan.S3IOInputCount += remotePhy.S3IOInputCount
 		c.anal.phyPlan.S3IOOutputCount += remotePhy.S3IOOutputCount
+	}
+}
+
+type ParallelScopeInfo struct {
+	NodeIdxTimeConsumeMajor map[int]int64
+	NodeIdxTimeConsumeMinor map[int]int64
+	//scopeId                 int32
+}
+
+func NewParallelScopeInfo() *ParallelScopeInfo {
+	return &ParallelScopeInfo{
+		NodeIdxTimeConsumeMajor: make(map[int]int64),
+		NodeIdxTimeConsumeMinor: make(map[int]int64),
 	}
 }
 
