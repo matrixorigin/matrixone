@@ -334,12 +334,9 @@ const (
 
 	/************ 3. FULLTEXT Index **************/
 
-	FullTextIndex_TabCol_Word       = "word"
-	FullTextIndex_TabCol_Id         = "doc_id"
-	FullTextIndex_TabCol_Position   = "pos"
-	FullTextIndex_TabCol_DocCount   = "doc_count"
-	FullTextIndex_TabCol_Firstrowid = "first_doc_id"
-	FullTextIndex_TabCol_Lastrowid  = "last_doc_id"
+	FullTextIndex_TabCol_Word     = "word"
+	FullTextIndex_TabCol_Id       = "doc_id"
+	FullTextIndex_TabCol_Position = "pos"
 )
 
 const (
