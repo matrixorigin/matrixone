@@ -16,8 +16,6 @@ package rpc
 
 import (
 	"context"
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -103,12 +101,6 @@ func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) error {
 		zap.String("table-name", req.TableName),
 		zap.Int("obj-cnt", len(req.DataObjectStats)),
 	)
-
-	rows := 0
-	for i := 0; i < len(req.DataObjectStats); i++ {
-		rows += int(req.DataObjectStats[i].Rows())
-	}
-	fmt.Println("cn commit s3: ", len(req.DataObjectStats), rows)
 
 	return nil
 }
