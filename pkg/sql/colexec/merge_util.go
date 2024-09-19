@@ -26,7 +26,7 @@ import (
 )
 
 type MergeInterface interface {
-	GetNextPos() (int, int, int)
+	getNextPos() (int, int, int)
 }
 
 type heapElem[T any] struct {
@@ -93,7 +93,7 @@ func (m *Merge[T]) initHeap() {
 	}
 }
 
-func (m *Merge[T]) GetNextPos() (batchIndex, rowIndex, size int) {
+func (m *Merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
 	data := m.pushNext()
 	if data == nil {
 		// now, m.size is 0

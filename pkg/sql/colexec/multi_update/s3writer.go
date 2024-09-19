@@ -259,7 +259,6 @@ func (writer *s3Writer) sortAndSyncOneTable(
 		nulls[i] = bats[i].Vecs[sortIndx].GetNulls()
 	}
 
-	merge := colexec.GetNewMergeFromBatchs(bats, sortIndx, nulls)
 	blockWriter, err = generateBlockWriter(writer, proc, idx, isDelete)
 	if err != nil {
 		return
@@ -283,42 +282,15 @@ func (writer *s3Writer) sortAndSyncOneTable(
 		}
 		buf = writer.insertBuf[idx]
 	}
-	lens := 0
-	size := len(bats)
-	buf.CleanOnlyData()
-	var batchIndex int
-	var rowIndex int
-	for size > 0 {
-		batchIndex, rowIndex, size = merge.GetNextPos()
-		for i := range buf.Vecs {
-			err = buf.Vecs[i].UnionOne(bats[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
-			if err != nil {
-				return
-			}
-		}
-		// all data in bats[batchIndex] are used. Clean it.
-		if rowIndex+1 == bats[batchIndex].RowCount() {
-			bats[batchIndex].Clean(proc.GetMPool())
-		}
-		lens++
-		if lens == colexec.DefaultBatchSize {
-			lens = 0
-			buf.SetRowCount(colexec.DefaultBatchSize)
-			if _, err = blockWriter.WriteBatch(buf); err != nil {
-				return
-			}
-			// force clean
-			buf.CleanOnlyData()
-		}
-	}
-	if lens > 0 {
-		buf.SetRowCount(lens)
-		if _, err = blockWriter.WriteBatch(buf); err != nil {
-			return
-		}
-		buf.CleanOnlyData()
+	sinker := func(bat *batch.Batch) error {
+		_, err := blockWriter.WriteBatch(bat)
+		return err
 	}
 
+	err = colexec.MergeSortBatches(bats, sortIndx, buf, sinker, proc.GetMPool())
+	if err != nil {
+		return
+	}
 	blockInfos, objStats, err = syncThenGetBlockInfoAndStats(proc, blockWriter, sortIndx)
 	if err != nil {
 		return
@@ -372,7 +344,7 @@ func (writer *s3Writer) fillBlockInfoBat(
 
 		if err = vector.AppendBytes(
 			targetBat.Vecs[1],
-			objectio.EncodeBlockInfo(blkInfo),
+			objectio.EncodeBlockInfo(&blkInfo),
 			false,
 			proc.GetMPool()); err != nil {
 			return

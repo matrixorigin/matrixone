@@ -250,7 +250,7 @@ func fetchMainTableBatchs(
 			newBat = batch.NewWithSize(len(cols))
 			for j, idx := range cols {
 				oldVec := oldBat.Vecs[idx]
-				srcBats[i].ReplaceVector(oldVec, nil)
+				srcBats[i].ReplaceVector(oldVec, nil, 0)
 				newBat.Vecs[j] = oldVec
 			}
 			newBat.SetRowCount(newBat.Vecs[0].Length())
