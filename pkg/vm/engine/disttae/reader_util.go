@@ -87,7 +87,7 @@ func SimpleObjectReader(
 ) engine.Reader {
 	relData := NewBlockListRelationDataOfObject(obj, false)
 	ds := NewRemoteDataSource(
-		ctx, fs, ts, relData,
+		ctx, nil, fs, ts, relData,
 	)
 	return NewSimpleReader(
 		ctx, ds, fs, ts, opts...,
@@ -119,7 +119,7 @@ func SimpleMultiObjectsReader(
 	relData := NewBlockListRelationData(0)
 	relData.SetBlockList(slice)
 	ds := NewRemoteDataSource(
-		ctx, fs, ts, relData,
+		ctx, nil, fs, ts, relData,
 	)
 	return NewSimpleReader(
 		ctx, ds, fs, ts, opts...,
