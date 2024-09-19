@@ -759,6 +759,11 @@ message Node {
 		LINEAR = 5;
 	}
 
+	enum ApplyType {
+		CROSSAPPLY = 0;
+		OUTERAPPLY = 1;
+	}
+
 	NodeType node_type = 1;
 	int32 node_id = 2;
 	Stats stats = 3;
@@ -851,6 +856,8 @@ message Node {
 	repeated msgHeader recv_msg_list = 57;
 
 	Snapshot scan_snapshot = 58;
+
+	ApplyType apply_type = 59;
 
 }
 

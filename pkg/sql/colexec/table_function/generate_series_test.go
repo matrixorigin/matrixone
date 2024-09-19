@@ -132,7 +132,7 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 
 	proc := testutil.NewProc()
 	for _, kase := range kases {
-		var gs genNumState[T]
+		var gs genNumState[int64]
 		startVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.start, 1, proc.Mp())
 		endVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.end, 1, proc.Mp())
 		stepVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.step, 1, proc.Mp())

@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -42,14 +43,20 @@ type container struct {
 
 	batchRowCount int64
 	rbat          *batch.Batch
+	inbat         *batch.Batch
+
+	batIdx   int
+	tfFinish bool
+	sels     []int32
 }
 
 type Apply struct {
 	ctr       container
 	ApplyType int
 	Result    []colexec.ResultPos
+	Typs      []types.Type
 
-	table_function.TableFunction
+	TableFunction table_function.TableFunction
 	vm.OperatorBase
 	colexec.Projection
 }
@@ -90,12 +97,13 @@ func (apply *Apply) Reset(proc *process.Process, pipelineFailed bool, err error)
 
 	ctr.state = Build
 
-	/*
-		if apply.ProjectList != nil {
-			apply.OpAnalyzer.Alloc(apply.ProjectAllocSize)
-			apply.ResetProjection(proc)
-		}
-	*/
+	apply.TableFunction.Reset(proc, pipelineFailed, err)
+
+	if apply.ProjectList != nil {
+		apply.OpAnalyzer.Alloc(apply.ProjectAllocSize)
+		apply.ResetProjection(proc)
+	}
+
 }
 
 func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -103,11 +111,12 @@ func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) 
 
 	ctr.cleanBatch(proc.Mp())
 
-	/*
-		if apply.ProjectList != nil {
-				apply.FreeProjection(proc)
-			}
-	*/
+	apply.TableFunction.Free(proc, pipelineFailed, err)
+
+	if apply.ProjectList != nil {
+		apply.FreeProjection(proc)
+	}
+
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

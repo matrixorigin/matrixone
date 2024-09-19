@@ -523,7 +523,11 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Apply:
 		t := sourceOp.(*apply.Apply)
 		op := apply.NewArgument()
+		op.ApplyType = t.ApplyType
+		op.Result = t.Result
+		op.Typs = t.Typs
 		op.ProjectList = t.ProjectList
+		op.TableFunction = t.TableFunction
 		op.SetInfo(&info)
 		return op
 	}
@@ -1834,20 +1838,23 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
-/*
-	func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
-		result := make([]colexec.ResultPos, len(n.ProjectList))
-		for i, expr := range n.ProjectList {
-			result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
-		}
-		arg := apply.NewArgument()
-		arg.ApplyType = applyType
-		arg.Result = result
-		arg.Args = plan2.DeepCopyExprList(right.TblFuncExprList)
-		arg.FuncName = right.TableDef.TblFunc.Name
-		return arg
+func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-*/
+	rightTyps := make([]types.Type, len(right.TableDef.Cols))
+	for i, expr := range right.TableDef.Cols {
+		rightTyps[i] = dupType(&expr.Typ)
+	}
+	arg := apply.NewArgument()
+	arg.ApplyType = applyType
+	arg.Result = result
+	arg.Typs = rightTyps
+	arg.TableFunction = *constructTableFunction(right)
+	return arg
+}
+
 func constructTableScan(n *plan.Node) *table_scan.TableScan {
 	types := make([]plan.Type, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
