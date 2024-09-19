@@ -86,6 +86,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 
 		for i, id := range proj_node_ids {
 			if _, ok := eqmap[int32(i)]; ok {
+				// duplicate fulltext_match() found and skip it
 				continue
 			}
 
@@ -151,7 +152,6 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	projids := make([]int32, 0)
 	projIndexDefs := make([]*plan.IndexDef, 0)
 
-	//ctx := builder.ctxByNode[nodeID]
 	eqmap := make(map[int32]int32)
 
 	idxID, _, _ := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
@@ -171,8 +171,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	var pkType = scanNode.TableDef.Cols[pkPos].Typ
-	//var colDefs = scanNode.TableDef.Cols
-	//pkJson := fmt.Sprintf("{\"type\":%d}", pkType.Id)
 
 	var ret_filter_node_ids = make([]int32, len(filterids))
 	var ret_proj_node_ids = make([]int32, len(projids))
