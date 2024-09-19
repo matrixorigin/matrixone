@@ -82,6 +82,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				//jm.SetIgnoreRows(ctr.hashmapBuilder.IgnoreRows)
 				if ap.NeedBatches {
 					jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				}

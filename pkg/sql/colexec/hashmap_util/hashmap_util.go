@@ -44,7 +44,7 @@ type HashmapBuilder struct {
 	IsDedup      bool
 	OnDupAction  pbplan.Node_OnDuplicateAction
 	DedupColName string
-	IgnoreRow    *bitmap.Bitmap
+	IgnoreRows   *bitmap.Bitmap
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -242,8 +242,8 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 	}
 
 	if hb.IsDedup && hb.InputBatchRowCount > 0 {
-		hb.IgnoreRow = &bitmap.Bitmap{}
-		hb.IgnoreRow.InitWithSize(int64(hb.InputBatchRowCount))
+		hb.IgnoreRows = &bitmap.Bitmap{}
+		hb.IgnoreRows.InitWithSize(int64(hb.InputBatchRowCount))
 	}
 
 	var (
@@ -305,7 +305,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 					case pbplan.Node_ERROR:
 						return moerr.NewDuplicateEntry(proc.Ctx, hb.vecs[vecIdx1][0].RowToString(vecIdx2+k), hb.DedupColName)
 					case pbplan.Node_IGNORE:
-						hb.IgnoreRow.Add(uint64(i + k))
+						hb.IgnoreRows.Add(uint64(i + k))
 					case pbplan.Node_UPDATE:
 					}
 				} else {
@@ -361,7 +361,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 	}
 
 	if hb.IsDedup {
-		err := hb.Batches.Shrink(hb.IgnoreRow, proc)
+		err := hb.Batches.Shrink(hb.IgnoreRows, proc)
 		if err != nil {
 			return err
 		}
