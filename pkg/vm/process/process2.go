@@ -17,7 +17,6 @@ package process
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -289,30 +288,4 @@ func (qbCtx *QueryBaseContext) SaveToQueryContext(key, value any) context.Contex
 func (qbCtx *QueryBaseContext) WithCounterSetToQueryContext(sets ...*perfcounter.CounterSet) context.Context {
 	qbCtx.queryContext = perfcounter.WithCounterSet(qbCtx.queryContext, sets...)
 	return qbCtx.queryContext
-}
-
-// PutBatch updates the reference count of the batch.
-// when this batch is no longer in use, places all vectors into the pool.
-func (proc *Process) PutBatch(bat *batch.Batch) {
-	// situations that batch was still in use.
-	// we use `!= 0` but not `>0` to avoid the situation that the batch was cleaned more than required.
-	if bat == batch.EmptyBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
-		return
-	}
-
-	for i, vec := range bat.Vecs {
-		if vec != nil {
-			bat.ReplaceVector(vec, nil, i)
-			vec.Free(proc.GetMPool())
-		}
-	}
-	for _, agg := range bat.Aggs {
-		if agg != nil {
-			agg.Free()
-		}
-	}
-	bat.Aggs = nil
-	bat.Vecs = nil
-	bat.Attrs = nil
-	bat.SetRowCount(0)
 }
