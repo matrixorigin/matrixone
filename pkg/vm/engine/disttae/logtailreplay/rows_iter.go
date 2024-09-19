@@ -525,7 +525,7 @@ func (p *PartitionState) NewPrimaryKeyIter(
 	ts types.TS,
 	spec PrimaryKeyMatchSpec,
 ) *primaryKeyIter {
-	index := p.primaryIndex.Copy()
+	index := p.rowPrimaryKeyIndex.Copy()
 	return &primaryKeyIter{
 		ts:           ts,
 		spec:         spec,
@@ -545,7 +545,7 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 	spec PrimaryKeyMatchSpec,
 	bid types.Blockid,
 ) *primaryKeyDelIter {
-	index := p.primaryIndex.Copy()
+	index := p.rowPrimaryKeyIndex.Copy()
 	return &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
 			ts:           ts,

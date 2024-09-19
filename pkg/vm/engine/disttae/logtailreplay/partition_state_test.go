@@ -62,16 +62,16 @@ func TestTruncate(t *testing.T) {
 	addObject(partition, types.BuildTS(1, 0), types.TS{})
 
 	partition.truncate([2]uint64{0, 0}, types.BuildTS(1, 0))
-	assert.Equal(t, 5, partition.objectIndexByTS.Len())
+	assert.Equal(t, 5, partition.dataObjectTSIndex.Len())
 
 	partition.truncate([2]uint64{0, 0}, types.BuildTS(2, 0))
-	assert.Equal(t, 3, partition.objectIndexByTS.Len())
+	assert.Equal(t, 3, partition.dataObjectTSIndex.Len())
 
 	partition.truncate([2]uint64{0, 0}, types.BuildTS(3, 0))
-	assert.Equal(t, 1, partition.objectIndexByTS.Len())
+	assert.Equal(t, 1, partition.dataObjectTSIndex.Len())
 
 	partition.truncate([2]uint64{0, 0}, types.BuildTS(4, 0))
-	assert.Equal(t, 1, partition.objectIndexByTS.Len())
+	assert.Equal(t, 1, partition.dataObjectTSIndex.Len())
 }
 
 func addObject(p *PartitionState, create, delete types.TS) {
@@ -82,14 +82,14 @@ func addObject(p *PartitionState, create, delete types.TS) {
 		ShortObjName: *objShortName,
 		IsDelete:     false,
 	}
-	p.objectIndexByTS.Set(objIndex1)
+	p.dataObjectTSIndex.Set(objIndex1)
 	if !delete.IsEmpty() {
 		objIndex2 := ObjectIndexByTSEntry{
 			Time:         delete,
 			ShortObjName: *objShortName,
 			IsDelete:     true,
 		}
-		p.objectIndexByTS.Set(objIndex2)
+		p.dataObjectTSIndex.Set(objIndex2)
 	}
 
 }
