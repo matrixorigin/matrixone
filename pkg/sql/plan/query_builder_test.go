@@ -88,6 +88,6 @@ func TestBuildTable_AlterView(t *testing.T) {
 	tb.SchemaName = "db"
 	tb.ObjectName = "v"
 	bc := NewBindContext(qb, nil)
-	_, err = qb.buildTable(tb, bc, -1, nil, true)
+	_, err = qb.buildTable(tb, bc, -1, nil)
 	assert.Error(t, err)
 }

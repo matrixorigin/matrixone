@@ -3329,7 +3329,7 @@ func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
 
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext, isRoot bool) (int32, error) {
 	if len(stmt) == 1 {
-		return builder.buildTable(stmt[0], ctx, -1, nil, isRoot)
+		return builder.buildTable(stmt[0], ctx, -1, nil)
 	}
 	return 0, moerr.NewInternalError(ctx.binder.GetContext(), "stmt's length should be zero")
 	// for now, stmt'length always be zero. if someday that change in parser, you should uncomment these codes
@@ -3459,7 +3459,7 @@ func getSelectTree(s *tree.Select) *tree.Select {
 	}
 }
 
-func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext, isRoot bool) (nodeID int32, err error) {
+func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
 		if builder.isForUpdate {
@@ -3850,7 +3850,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					ExplicitCatalog: false,
 					ExplicitSchema:  false,
 				}, nil)
-				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx, false)
+				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx)
 			}
 		}
 
@@ -3865,11 +3865,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
-			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx, isRoot)
+			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
 		} else if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from join table for update")
 		}
-		return builder.buildJoinTable(tbl, ctx, isRoot)
+		return builder.buildJoinTable(tbl, ctx)
 
 	case *tree.ApplyTableExpr:
 		_, ok := tbl.Right.(*tree.TableFunction)
@@ -3879,7 +3879,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			}
 		}
 		if ok {
-			return builder.buildApplyTable(tbl, ctx, isRoot)
+			return builder.buildApplyTable(tbl, ctx)
 		} else {
 			return 0, moerr.NewInternalError(builder.GetContext(), "must apply a table function")
 		}
@@ -3891,7 +3891,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		return builder.buildTableFunction(tbl, ctx, preNodeId, leftCtx)
 
 	case *tree.ParenTableExpr:
-		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx, isRoot)
+		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		if _, ok := tbl.Expr.(*tree.Select); ok {
@@ -3900,7 +3900,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			}
 		}
 
-		nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx, isRoot)
+		nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 		if err != nil {
 			return
 		}
@@ -4148,7 +4148,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	return nil
 }
 
-func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext, isRoot bool) (int32, error) {
+func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (int32, error) {
 	joinType := plan.Node_INNER
 
 	switch tbl.JoinType {
@@ -4169,7 +4169,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
 
-	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx, isRoot)
+	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
 	if err != nil {
 		return 0, err
 	}
@@ -4178,7 +4178,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
-	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx, isRoot)
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx)
 	if err != nil {
 		return 0, err
 	}
@@ -4265,7 +4265,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	return nodeID, nil
 }
 
-func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *BindContext, isRoot bool) (int32, error) {
+func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *BindContext) (int32, error) {
 	var applyType plan.Node_JoinType
 
 	switch tbl.ApplyType {
@@ -4278,13 +4278,13 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
 
-	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx, isRoot)
+	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
 	if err != nil {
 		return 0, err
 	}
 	ctx.views = append(ctx.views, leftCtx.views...)
 
-	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, -2, leftCtx, isRoot)
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, -2, leftCtx)
 	if err != nil {
 		return 0, err
 	}
