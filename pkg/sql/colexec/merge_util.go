@@ -15,7 +15,13 @@
 package colexec
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 )
 
@@ -187,3 +193,105 @@ func (x *heapSlice[T]) Less(i, j int) bool {
 }
 func (x *heapSlice[T]) Swap(i, j int) { x.s[i], x.s[j] = x.s[j], x.s[i] }
 func (x *heapSlice[T]) Len() int      { return len(x.s) }
+
+type SinkerT func(*batch.Batch) error
+
+func MergeSortBatches(
+	batches []*batch.Batch,
+	sortKeyIdx int,
+	buffer *batch.Batch,
+	sinker SinkerT,
+	mp *mpool.MPool,
+) error {
+	var merge MergeInterface
+	nulls := make([]*nulls.Nulls, len(batches))
+	for i, b := range batches {
+		nulls[i] = b.Vecs[sortKeyIdx].GetNulls()
+	}
+	switch batches[0].Vecs[sortKeyIdx].GetType().Oid {
+	case types.T_bool:
+		merge = newMerge(sort.BoolLess, getFixedCols[bool](batches, sortKeyIdx), nulls)
+	case types.T_bit:
+		merge = newMerge(sort.GenericLess[uint64], getFixedCols[uint64](batches, sortKeyIdx), nulls)
+	case types.T_int8:
+		merge = newMerge(sort.GenericLess[int8], getFixedCols[int8](batches, sortKeyIdx), nulls)
+	case types.T_int16:
+		merge = newMerge(sort.GenericLess[int16], getFixedCols[int16](batches, sortKeyIdx), nulls)
+	case types.T_int32:
+		merge = newMerge(sort.GenericLess[int32], getFixedCols[int32](batches, sortKeyIdx), nulls)
+	case types.T_int64:
+		merge = newMerge(sort.GenericLess[int64], getFixedCols[int64](batches, sortKeyIdx), nulls)
+	case types.T_uint8:
+		merge = newMerge(sort.GenericLess[uint8], getFixedCols[uint8](batches, sortKeyIdx), nulls)
+	case types.T_uint16:
+		merge = newMerge(sort.GenericLess[uint16], getFixedCols[uint16](batches, sortKeyIdx), nulls)
+	case types.T_uint32:
+		merge = newMerge(sort.GenericLess[uint32], getFixedCols[uint32](batches, sortKeyIdx), nulls)
+	case types.T_uint64:
+		merge = newMerge(sort.GenericLess[uint64], getFixedCols[uint64](batches, sortKeyIdx), nulls)
+	case types.T_float32:
+		merge = newMerge(sort.GenericLess[float32], getFixedCols[float32](batches, sortKeyIdx), nulls)
+	case types.T_float64:
+		merge = newMerge(sort.GenericLess[float64], getFixedCols[float64](batches, sortKeyIdx), nulls)
+	case types.T_date:
+		merge = newMerge(sort.GenericLess[types.Date], getFixedCols[types.Date](batches, sortKeyIdx), nulls)
+	case types.T_datetime:
+		merge = newMerge(sort.GenericLess[types.Datetime], getFixedCols[types.Datetime](batches, sortKeyIdx), nulls)
+	case types.T_time:
+		merge = newMerge(sort.GenericLess[types.Time], getFixedCols[types.Time](batches, sortKeyIdx), nulls)
+	case types.T_timestamp:
+		merge = newMerge(sort.GenericLess[types.Timestamp], getFixedCols[types.Timestamp](batches, sortKeyIdx), nulls)
+	case types.T_enum:
+		merge = newMerge(sort.GenericLess[types.Enum], getFixedCols[types.Enum](batches, sortKeyIdx), nulls)
+	case types.T_decimal64:
+		merge = newMerge(sort.Decimal64Less, getFixedCols[types.Decimal64](batches, sortKeyIdx), nulls)
+	case types.T_decimal128:
+		merge = newMerge(sort.Decimal128Less, getFixedCols[types.Decimal128](batches, sortKeyIdx), nulls)
+	case types.T_uuid:
+		merge = newMerge(sort.UuidLess, getFixedCols[types.Uuid](batches, sortKeyIdx), nulls)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
+		merge = newMerge(sort.GenericLess[string], getStrCols(batches, sortKeyIdx), nulls)
+	case types.T_Rowid:
+		merge = newMerge(sort.RowidLess, getFixedCols[types.Rowid](batches, sortKeyIdx), nulls)
+	default:
+		panic(fmt.Sprintf("invalid type: %s", batches[0].Vecs[sortKeyIdx].GetType()))
+	}
+	var (
+		batchIndex int
+		rowIndex   int
+		lens       int
+	)
+	size := len(batches)
+	buffer.CleanOnlyData()
+	for size > 0 {
+		batchIndex, rowIndex, size = merge.getNextPos()
+		for i := range buffer.Vecs {
+			err := buffer.Vecs[i].UnionOne(batches[batchIndex].Vecs[i], int64(rowIndex), mp)
+			if err != nil {
+				return err
+			}
+		}
+		// all data in batches[batchIndex] are used. Clean it.
+		if rowIndex+1 == batches[batchIndex].RowCount() {
+			batches[batchIndex].Clean(mp)
+		}
+		lens++
+		if lens == objectio.BlockMaxRows {
+			lens = 0
+			buffer.SetRowCount(objectio.BlockMaxRows)
+			if err := sinker(buffer); err != nil {
+				return err
+			}
+			// force clean
+			buffer.CleanOnlyData()
+		}
+	}
+	if lens > 0 {
+		buffer.SetRowCount(lens)
+		if err := sinker(buffer); err != nil {
+			return err
+		}
+		buffer.CleanOnlyData()
+	}
+	return nil
+}
