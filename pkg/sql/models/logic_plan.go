@@ -34,7 +34,7 @@ const InputSize = "Input Size"
 const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
-const S3IOByte = "S3 IO Byte"
+const ScanBytes = "Scan Bytes"
 const S3IOInputCount = "S3 IO Input Count"
 const S3IOOutputCount = "S3 IO Output Count"
 const Network = "Network"
@@ -238,7 +238,7 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 
 		//io
 		gDiskIO := NewStatisticValue(DiskIO, "byte")
-		gS3IOByte := NewStatisticValue(S3IOByte, "byte")
+		gS3IOByte := NewStatisticValue(ScanBytes, "byte")
 		gS3IOInputCount := NewStatisticValue(S3IOInputCount, "count")
 		gS3IOOutputCount := NewStatisticValue(S3IOOutputCount, "count")
 
@@ -286,7 +286,7 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 				if ioValue.Name == DiskIO {
 					gDiskIO.Value += ioValue.Value
 				}
-				if ioValue.Name == S3IOByte {
+				if ioValue.Name == ScanBytes {
 					gS3IOByte.Value += ioValue.Value
 				}
 				if ioValue.Name == S3IOInputCount {

@@ -41,7 +41,7 @@ func TestPhyPlanJSON(t *testing.T) {
 		TotalInputSize:        2048,
 		TotalInputBlocks:      0,
 		TotalOutputSize:       1900,
-		TotalS3IOByte:         0,
+		TotalScanBytes:        0,
 		TotalNetworkIO:        600,
 		//TotalScanTime:         1500,
 		//TotalInsertTime:       2500,
