@@ -50,6 +50,7 @@ const PARAMKEY_PROVIDER = "provider"
 
 const S3_PROVIDER_AMAZON = "amazon"
 const S3_PROVIDER_MINIO = "minio"
+const S3_PROVIDER_COS = "cos"
 
 const S3_SERVICE = "s3"
 const MINIO_SERVICE = "minio"
@@ -154,6 +155,8 @@ func (s *StageDef) ToPath() (mopath string, query string, err error) {
 func getS3ServiceFromProvider(provider string) (string, error) {
 	provider = strings.ToLower(provider)
 	switch provider {
+	case S3_PROVIDER_COS:
+		return S3_SERVICE, nil
 	case S3_PROVIDER_AMAZON:
 		return S3_SERVICE, nil
 	case S3_PROVIDER_MINIO:
