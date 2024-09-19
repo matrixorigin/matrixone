@@ -123,6 +123,8 @@ type SnapshotMeta struct {
 	objects    map[uint64]map[objectio.Segmentid]*objectInfo
 	tombstones map[uint64]map[objectio.Segmentid]*objectInfo
 
+	aobjDelTsMap map[types.TS]struct{} // used for filering out transferred tombstones
+
 	// tables records all the table information of mo, the key is account id,
 	// and the map is the mapping of table id and table information.
 	//
@@ -144,12 +146,13 @@ type SnapshotMeta struct {
 
 func NewSnapshotMeta() *SnapshotMeta {
 	return &SnapshotMeta{
-		objects:     make(map[uint64]map[objectio.Segmentid]*objectInfo),
-		tombstones:  make(map[uint64]map[objectio.Segmentid]*objectInfo),
-		tables:      make(map[uint32]map[uint64]*tableInfo),
-		acctIndexes: make(map[uint64]*tableInfo),
-		tides:       make(map[uint64]struct{}),
-		pkIndexes:   make(map[string][]*tableInfo),
+		objects:      make(map[uint64]map[objectio.Segmentid]*objectInfo),
+		tombstones:   make(map[uint64]map[objectio.Segmentid]*objectInfo),
+		aobjDelTsMap: make(map[types.TS]struct{}),
+		tables:       make(map[uint32]map[uint64]*tableInfo),
+		acctIndexes:  make(map[uint64]*tableInfo),
+		tides:        make(map[uint64]struct{}),
+		pkIndexes:    make(map[string][]*tableInfo),
 	}
 }
 
@@ -197,8 +200,9 @@ type tombstone struct {
 func (sm *SnapshotMeta) updateTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CheckpointData,
+	data *CheckpointData, startts, endts types.TS,
 ) error {
+	logutil.Info("[UpdateTableInfo] start", zap.String("startts", startts.ToString()), zap.String("endts", endts.ToString()))
 	var objects map[uint64]map[objectio.Segmentid]*objectInfo
 	var tombstones map[uint64]map[objectio.Segmentid]*objectInfo
 	objects = make(map[uint64]map[objectio.Segmentid]*objectInfo, 1)
@@ -219,15 +223,9 @@ func (sm *SnapshotMeta) updateTableInfo(
 			return
 		}
 		id := stats.ObjectName().SegmentId()
-		if deleteTS.IsEmpty() {
-			return
-		}
 		moTable := (*objects)[tid]
-		if moTable[id] != nil {
-			// mo_table only consumes  appendable object that is
-			// soft deleted once, otherwise panic
-			panic(fmt.Sprintf("duplicate object %v", id.String()))
-		}
+
+		// dropped object will overwrite the created object, updating the deleteAt
 		moTable[id] = &objectInfo{
 			stats:    stats,
 			createAt: createTS,
@@ -238,11 +236,23 @@ func (sm *SnapshotMeta) updateTableInfo(
 	collectObjects(&tombstones, data.GetTombstoneObjectBatchs(), collector)
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
+	orderedInfos := make([]*objectInfo, 0, len(tObjects))
 	for _, info := range tObjects {
+		orderedInfos = append(orderedInfos, info)
+	}
+	sort.Slice(orderedInfos, func(i, j int) bool {
+		return orderedInfos[i].createAt.Less(&orderedInfos[j].createAt)
+	})
+
+	for _, info := range orderedInfos {
 		if info.stats.BlkCnt() != 1 {
 			panic(fmt.Sprintf("mo_table object %v blk cnt %v",
 				info.stats.ObjectName(), info.stats.BlkCnt()))
 		}
+		if !info.deleteAt.IsEmpty() {
+			sm.aobjDelTsMap[info.deleteAt] = struct{}{}
+		}
+		logutil.Infof("yyyy object file %v, %v, %v", info.stats.ObjectLocation().String(), info.createAt.ToString(), info.deleteAt.ToString())
 		objectBat, _, err := blockio.LoadOneBlock(
 			ctx, fs, info.stats.ObjectLocation(), objectio.SchemaData)
 		if err != nil {
@@ -259,11 +269,14 @@ func (sm *SnapshotMeta) updateTableInfo(
 		accounts := vector.MustFixedColWithTypeCheck[uint32](objectBat.Vecs[11])
 		creates := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
 		for i := 0; i < len(ids); i++ {
+			createAt := creates[i]
+			if createAt.Less(&startts) || createAt.Greater(&endts) {
+				continue
+			}
 			name := string(nameVarlena[i].GetByteSlice(nameArea))
 			tid := ids[i]
 			account := accounts[i]
 			db := dbs[i]
-			createAt := creates[i]
 			tuple, _, _, err := types.DecodeTuple(
 				objectBat.Vecs[len(objectBat.Vecs)-3].GetRawBytesAt(i))
 			if err != nil {
@@ -282,9 +295,10 @@ func (sm *SnapshotMeta) updateTableInfo(
 			}
 			table := sm.tables[account][tid]
 			if table != nil {
+				// logutil.Infof("yyyyyy add table again %v, %v @ %v", tid, tuple.ErrString(nil), createAt.ToString())
 				if table.createAt.Greater(&createAt) {
-					panic(fmt.Sprintf("table %v create at %v is greater than %v",
-						tid, table.createAt.ToString(), createAt.ToString()))
+					panic(fmt.Sprintf("table %v %v create at %v is greater than %v",
+						tid, tuple.ErrString(nil), table.createAt.ToString(), createAt.ToString()))
 				}
 				sm.pkIndexes[pk] = append(sm.pkIndexes[pk], table)
 				continue
@@ -310,6 +324,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			panic(fmt.Sprintf("mo_table tombstone %v blk cnt %v",
 				info.stats.ObjectName(), info.stats.BlkCnt()))
 		}
+		// logutil.Infof("yyyy tb file %v", info.stats.ObjectLocation().String())
 		objectBat, _, err := blockio.LoadOneBlock(
 			ctx, fs, info.stats.ObjectLocation(), objectio.SchemaData)
 		if err != nil {
@@ -320,6 +335,13 @@ func (sm *SnapshotMeta) updateTableInfo(
 		for i := 0; i < len(commitTsVec); i++ {
 			pk, _, _, _ := types.DecodeTuple(objectBat.Vecs[1].GetRawBytesAt(i))
 			commitTs := commitTsVec[i]
+			if commitTs.Less(&startts) || commitTs.Greater(&endts) {
+				continue
+			}
+			if _, ok := sm.aobjDelTsMap[commitTs]; ok {
+				logutil.Infof("yyyy skip table %v @ %v", pk.ErrString(nil), commitTs.ToString())
+				continue
+			}
 			deletes = append(deletes, tombstone{
 				pk: pk,
 				ts: commitTs,
@@ -337,7 +359,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			continue
 		}
 		if len(sm.pkIndexes[pk]) == 0 {
-			panic(fmt.Sprintf("delete table %v not found", del.pk.SQLStrings(nil)))
+			panic(fmt.Sprintf("delete table %v not found @ %v", del.pk.ErrString(nil), del.ts.ToString()))
 		}
 		table := sm.pkIndexes[pk][0]
 		if !table.deleteAt.IsEmpty() && table.deleteAt.Greater(&del.ts) {
@@ -345,6 +367,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 		}
 		table.deleteAt = del.ts
 		sm.pkIndexes[pk] = sm.pkIndexes[pk][1:]
+
+		// logutil.Infof("yyyyyy delete table %v @ %v", del.pk.ErrString(nil), del.ts.ToString())
 		if sm.acctIndexes[table.tid] == nil {
 			//In the upgraded cluster, because the inc checkpoint is consumed halfway,
 			// there may be no record of the create table entry, only the delete entry
@@ -386,7 +410,7 @@ func collectObjects(
 func (sm *SnapshotMeta) Update(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CheckpointData,
+	data *CheckpointData, startts, endts types.TS,
 ) (*SnapshotMeta, error) {
 	sm.Lock()
 	defer sm.Unlock()
@@ -394,7 +418,7 @@ func (sm *SnapshotMeta) Update(
 	defer func() {
 		logutil.Infof("[UpdateSnapshot] cost %v", time.Since(now))
 	}()
-	err := sm.updateTableInfo(ctx, fs, data)
+	err := sm.updateTableInfo(ctx, fs, data, startts, endts)
 	if err != nil {
 		logutil.Errorf("[UpdateSnapshot] updateTableInfo failed %v", err)
 		return sm, err
@@ -877,10 +901,15 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 	return nil
 }
 
-func (sm *SnapshotMeta) InitTableInfo(ctx context.Context, fs fileservice.FileService, data *CheckpointData) {
+func (sm *SnapshotMeta) InitTableInfo(
+	ctx context.Context,
+	fs fileservice.FileService,
+	data *CheckpointData,
+	startts, endts types.TS,
+) {
 	sm.Lock()
 	defer sm.Unlock()
-	sm.updateTableInfo(ctx, fs, data)
+	sm.updateTableInfo(ctx, fs, data, startts, endts)
 }
 
 func (sm *SnapshotMeta) TableInfoString() string {
@@ -961,6 +990,12 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 					delete(sm.objects, table.tid)
 				}
 			}
+		}
+	}
+	hoursAgo := types.BuildTS(time.Now().UnixNano()-int64(3*time.Hour), 0)
+	for key := range sm.aobjDelTsMap {
+		if key.Less(&hoursAgo) {
+			delete(sm.aobjDelTsMap, key)
 		}
 	}
 	return nil
