@@ -45,25 +45,25 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	v := tf.ctr.argVecs[0]
 	if v.GetType().Oid != types.T_varchar {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("First argument (source table name) must be string, but got %s", v.GetType().String()))
 	}
 	source_table := v.UnsafeGetStringAt(0)
 
 	v = tf.ctr.argVecs[1]
 	if v.GetType().Oid != types.T_varchar {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Second argument (index table name) must be string, but got %s", v.GetType().String()))
 	}
 	index_table := v.UnsafeGetStringAt(0)
 
 	v = tf.ctr.argVecs[2]
 	if v.GetType().Oid != types.T_varchar {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: second argument (pattern) must be string, but got %s", v.GetType().String()))
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Third argument (pattern) must be string, but got %s", v.GetType().String()))
 	}
 	pattern := v.UnsafeGetStringAt(0)
 
 	v = tf.ctr.argVecs[3]
 	if v.GetType().Oid != types.T_int64 {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: third argument (mode) must be int64, but got %s", v.GetType().String()))
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Fourth argument (mode) must be int64, but got %s", v.GetType().String()))
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
