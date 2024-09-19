@@ -20,7 +20,7 @@ alter table src add fulltext index ftidx2 (body);
 -- match in WHERE clause
 select * from src where match(body, title) against('red');
 
-select *, match(body, title) against('is red' in natural language mode) from src;
+select *, match(body, title) against('is red' in natural language mode) as score from src;
 
 select * from src where match(body, title) against('教學指引');
 
@@ -30,9 +30,9 @@ select * from src where match(body, title) against('遠東' in natural language 
 
 select * from src where match(body, title) against('版一、二冊' in natural language mode);
 
-select *, match(body, title) against('遠東兒童中文' in natural language mode) from src;
+select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 
-select *, match(body) against('遠東兒童中文' in natural language mode) from src;
+select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 
 -- boolean mode
 select * from src where match(body, title) against('+red blue' in boolean mode);

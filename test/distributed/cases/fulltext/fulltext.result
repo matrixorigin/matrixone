@@ -13,7 +13,7 @@ select * from src where match(body, title) against('red');
 id    body    title
 0    color is red    t1
 3    blue is not red    colorful
-select *, match(body, title) against('is red' in natural language mode) from src;
+select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
 0    color is red    t1    0.4530953
 3    blue is not red    colorful    0.4530953
@@ -32,11 +32,11 @@ id    body    title
 select * from src where match(body, title) against('版一、二冊' in natural language mode);
 id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
-select *, match(body, title) against('遠東兒童中文' in natural language mode) from src;
+select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    3.6247625
 5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    2.1748574
-select *, match(body) against('遠東兒童中文' in natural language mode) from src;
+select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    3.2622862
 select * from src where match(body, title) against('+red blue' in boolean mode);
@@ -67,7 +67,7 @@ select * from src where match(body, title) against('"is not red"' in boolean mod
 id    body    title
 3    blue is not red    colorful
 select src.*, match(body, title) against('blue') from src;
-id    body    title    score
+id    body    title    MATCH (body, title) AGAINST (blue)
 2    sky is blue    no limit    0.36247623
 3    blue is not red    colorful    0.36247623
 select count(*) from src where match(title, body) against('red');
@@ -93,7 +93,7 @@ id1    id2    body    title
 id0    0    red    t1
 id3    3    blue red    t4
 select src2.*, match(body, title) against('blue') from src2;
-id1    id2    body    title    score
+id1    id2    body    title    MATCH (body, title) AGAINST (blue)
 id2    2    blue    t3    0.09061906
 id3    3    blue red    t4    0.09061906
 drop table src2;
