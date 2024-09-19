@@ -889,6 +889,7 @@ type withFilterMixin struct {
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
+	name     string
 
 	// columns used for reading
 	columns struct {
@@ -918,7 +919,6 @@ type reader struct {
 	withFilterMixin
 
 	source engine.DataSource
-	ts     timestamp.Timestamp
 
 	memFilter MemPKFilter
 
