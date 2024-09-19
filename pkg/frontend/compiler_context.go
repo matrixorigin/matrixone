@@ -1020,6 +1020,10 @@ func (tcc *TxnCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return isDbPublishing(tcc.GetContext(), dbName, tcc.GetSession())
 }
 
+func (tcc *TxnCompilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
+	return buildTableDefFromMoColumns(tcc.GetContext(), uint64(tcc.GetSession().GetAccountId()), dbName, table, tcc.GetSession())
+}
+
 // makeResultMetaPath gets query result meta path
 func makeResultMetaPath(accountName string, statementId string) string {
 	return fmt.Sprintf("query_result_meta/%s_%s.blk", accountName, statementId)
