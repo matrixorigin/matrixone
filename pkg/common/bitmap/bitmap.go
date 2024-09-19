@@ -200,16 +200,6 @@ func (n *Bitmap) Add(row uint64) {
 	n.data[row>>6] |= 1 << (row & 0x3F)
 }
 
-func (n *Bitmap) Add2(row uint64) {
-	if n.count == -1 {
-		return
-	}
-	if n.data[row>>6]&(1<<(row&0x3F)) == 0 {
-		n.count++
-	}
-	n.data[row>>6] |= 1 << (row & 0x3F)
-}
-
 func (n *Bitmap) AddMany(rows []uint64) {
 	for _, row := range rows {
 		if n.data[row>>6]&(1<<(row&0x3F)) == 0 {
@@ -420,6 +410,19 @@ func (n *Bitmap) Marshal() []byte {
 	return buf.Bytes()
 }
 
+// MarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.count replace it
+func (n *Bitmap) MarshalV1() []byte {
+	var buf bytes.Buffer
+	empty := int32(0)
+	u1 := uint64(n.len)
+	u2 := uint64(len(n.data) * 8)
+	buf.Write(types.EncodeInt32(&empty))
+	buf.Write(types.EncodeUint64(&u1))
+	buf.Write(types.EncodeUint64(&u2))
+	buf.Write(types.EncodeSlice(n.data))
+	return buf.Bytes()
+}
+
 func (n *Bitmap) Unmarshal(data []byte) {
 	n.count = types.DecodeInt64(data[:8])
 	data = data[8:]
@@ -448,6 +451,7 @@ func (n *Bitmap) UnmarshalNoCopy(data []byte) {
 	}
 }
 
+// UnmarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.count replace it
 func (n *Bitmap) UnmarshalV1(data []byte) {
 	data = data[4:]
 	n.len = int64(types.DecodeUint64(data[:8]))

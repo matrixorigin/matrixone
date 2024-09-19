@@ -239,6 +239,30 @@ func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
+// WriteToV1 in version 1, vector.nulls.bitmap is v1
+func (vec *vectorWrapper) WriteToV1(w io.Writer) (n int64, err error) {
+	var bs bytes.Buffer
+
+	var size int64
+	_, _ = bs.Write(types.EncodeInt64(&size))
+
+	if err = vec.wrapped.MarshalBinaryWithBufferV1(&bs); err != nil {
+		return
+	}
+
+	size = int64(bs.Len() - 8)
+
+	buf := bs.Bytes()
+	copy(buf[:8], types.EncodeInt64(&size))
+
+	if _, err = w.Write(buf); err != nil {
+		return
+	}
+
+	n = int64(len(buf))
+	return
+}
+
 func (vec *vectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 	buf := make([]byte, 8)
 	if _, err = r.Read(buf); err != nil {

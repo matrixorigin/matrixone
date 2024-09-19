@@ -344,6 +344,68 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
+// WriteToV2 in version 2, vector.Nulls.Bitmap is v1
+func (bat *Batch) WriteToV2(w io.Writer) (n int64, err error) {
+	var nr int
+	var tmpn int64
+	var buffer Vector
+	if bat.Pool != nil {
+		t := types.T_varchar.ToType()
+		buffer = bat.Pool.GetVector(&t)
+	} else {
+		buffer = MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	}
+	defer buffer.Close()
+	mp := buffer.GetAllocator()
+	bufVec := buffer.GetDownstreamVector()
+	if err = vector.AppendBytes(bufVec, types.EncodeFixed(uint16(len(bat.Vecs))), false, mp); err != nil {
+		return
+	}
+
+	// 2. Types and Names
+	for i, vec := range bat.Vecs {
+		if err = vector.AppendBytes(bufVec, []byte(bat.Attrs[i]), false, mp); err != nil {
+			return
+		}
+		vt := vec.GetType()
+		if err = vector.AppendBytes(bufVec, types.EncodeType(vt), false, mp); err != nil {
+			return
+		}
+	}
+	if tmpn, err = buffer.WriteTo(w); err != nil {
+		return
+	}
+	n += tmpn
+
+	// 3. Vectors
+	for _, vec := range bat.Vecs {
+		if tmpn, err = vec.WriteTo(w); err != nil {
+			return
+		}
+		n += tmpn
+	}
+	// 4. Deletes
+	var buf []byte
+	if bat.Deletes != nil {
+		if buf, err = bat.Deletes.Show(); err != nil {
+			return
+		}
+	}
+	if nr, err = w.Write(types.EncodeFixed(uint32(len(buf)))); err != nil {
+		return
+	}
+	n += int64(nr)
+	if len(buf) == 0 {
+		return
+	}
+	if nr, err = w.Write(buf); err != nil {
+		return
+	}
+	n += int64(nr)
+
+	return
+}
+
 func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	var tmpn int64
 	buffer := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)

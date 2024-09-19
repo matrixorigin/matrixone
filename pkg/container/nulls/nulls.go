@@ -363,6 +363,14 @@ func (nsp *Nulls) Show() ([]byte, error) {
 	return nsp.np.Marshal(), nil
 }
 
+// ShowV1 in version 1, bitmap is v1
+func (nsp *Nulls) ShowV1() ([]byte, error) {
+	if nsp.np.EmptyByFlag() {
+		return nil, nil
+	}
+	return nsp.np.MarshalV1(), nil
+}
+
 func (nsp *Nulls) Read(data []byte) error {
 	if len(data) == 0 {
 		// don't we need to reset?   Or we always, Read into a blank Nulls?

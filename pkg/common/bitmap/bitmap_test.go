@@ -15,11 +15,9 @@
 package bitmap
 
 import (
-	"bytes"
 	"fmt"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -152,23 +150,6 @@ func TestBitmapIterator_Next(t *testing.T) {
 	}
 }
 
-type BitmapV1 struct {
-	emptyflag int32
-	len       int64
-	data      []uint64
-}
-
-func (n *BitmapV1) Marshal() []byte {
-	var buf bytes.Buffer
-	u1 := uint64(n.len)
-	u2 := uint64(len(n.data) * 8)
-	buf.Write(types.EncodeInt32(&n.emptyflag))
-	buf.Write(types.EncodeUint64(&u1))
-	buf.Write(types.EncodeUint64(&u2))
-	buf.Write(types.EncodeSlice(n.data))
-	return buf.Bytes()
-}
-
 func TestBitmap_Compatibility(t *testing.T) {
 	np := newBm(BenchmarkRows)
 	np.AddRange(0, 64)
@@ -176,11 +157,11 @@ func TestBitmap_Compatibility(t *testing.T) {
 	rows := []uint64{127, 192, 320}
 	np.AddMany(rows)
 
-	npV1 := &BitmapV1{
+	npV1 := &Bitmap{
 		len:  np.len,
 		data: np.data,
 	}
-	data := npV1.Marshal()
+	data := npV1.MarshalV1()
 
 	np2 := newBm(BenchmarkRows)
 	np2.UnmarshalV1(data)
