@@ -151,7 +151,6 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
-	offset = 0
 	for i, obj := range objNames {
 		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 		metaLocBat.Vecs[0].Append([]byte(stats[i][:]), false)
