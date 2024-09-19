@@ -398,16 +398,22 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 
 // a GROUP BY clause.
 type GroupByClause struct {
-	GroupByExprs []Expr
-	RollUp       bool
+	GroupByExprsList []Exprs
+	Cube             bool
+	RollUp           bool
 }
 
 func (node *GroupByClause) Format(ctx *FmtCtx) {
 	prefix := "group by "
-	for _, n := range node.GroupByExprs {
-		ctx.WriteString(prefix)
-		n.Format(ctx)
-		prefix = ", "
+	for _, list := range node.GroupByExprsList {
+		for _, n := range list {
+			ctx.WriteString(prefix)
+			n.Format(ctx)
+			prefix = ", "
+		}
+	}
+	if node.Cube {
+		ctx.WriteString("with cube")
 	}
 	if node.RollUp {
 		ctx.WriteString(" with rollup")

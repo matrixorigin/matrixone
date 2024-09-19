@@ -2467,15 +2467,17 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, moerr.NewParseErrorf(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(clause.GroupBy, dialect.MYSQL))
 			}
 			groupBinder := NewGroupBinder(builder, ctx, selectList)
-			for _, group := range clause.GroupBy.GroupByExprs {
-				group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
-				if err != nil {
-					return 0, err
-				}
+			for _, list := range clause.GroupBy.GroupByExprsList {
+				for _, group := range list {
+					group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
+					if err != nil {
+						return 0, err
+					}
 
-				_, err = groupBinder.BindExpr(group, 0, true)
-				if err != nil {
-					return 0, err
+					_, err = groupBinder.BindExpr(group, 0, true)
+					if err != nil {
+						return 0, err
+					}
 				}
 			}
 		}
