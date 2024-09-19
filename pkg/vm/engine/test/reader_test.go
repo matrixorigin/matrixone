@@ -35,7 +35,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -1266,4 +1268,61 @@ func Test_ShardingLocalReader(t *testing.T) {
 	assert.Panics(t, func() {
 		shardingLRD.SetFilterZM(nil)
 	})
+}
+
+func Test_SimpleReader(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	proc := testutil3.NewProcessWithMPool("", mp)
+	pkType := types.T_int32.ToType()
+	bat1 := engine_util.NewCNTombstoneBatch(
+		"pk",
+		&pkType,
+	)
+	defer bat1.Clean(mp)
+	obj := types.NewObjectid()
+	blk0 := types.NewBlockidWithObjectID(obj, 0)
+	blk1 := types.NewBlockidWithObjectID(obj, 1)
+	idx := int32(0)
+	for i := 0; i < 10; i++ {
+		vector.AppendFixed[int32](
+			bat1.Vecs[1],
+			idx,
+			false,
+			mp,
+		)
+		idx++
+		rowid := types.NewRowid(blk0, uint32(i))
+		vector.AppendFixed[types.Rowid](
+			bat1.Vecs[0],
+			*rowid,
+			false,
+			mp,
+		)
+	}
+	for i := 0; i < 10; i++ {
+		vector.AppendFixed[int32](
+			bat1.Vecs[1],
+			idx,
+			false,
+			mp,
+		)
+		idx++
+		rowid := types.NewRowid(blk1, uint32(i))
+		vector.AppendFixed[types.Rowid](
+			bat1.Vecs[0],
+			*rowid,
+			false,
+			mp,
+		)
+	}
+	bat1.SetRowCount(bat1.Vecs[0].Length())
+
+	w, err := colexec.NewS3TombstoneWriter()
+	require.NoError(t, err)
+	defer w.Free(mp)
+	w.StashBatch(proc, bat1)
+	_, stats, err := w.SortAndSync(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint32(20), stats.Rows())
+	t.Logf("stats: %s", stats.String())
 }

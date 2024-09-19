@@ -80,17 +80,17 @@ const (
 	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
 )
 
-func (w *S3Writer) Free(proc *process.Process) {
+func (w *S3Writer) Free(mp *mpool.MPool) {
 	if w.blockInfoBat != nil {
-		w.blockInfoBat.Clean(proc.Mp())
+		w.blockInfoBat.Clean(mp)
 		w.blockInfoBat = nil
 	}
 	if w.buffer != nil {
-		w.buffer.Clean(proc.Mp())
+		w.buffer.Clean(mp)
 		w.buffer = nil
 	}
 	for _, bat := range w.batches {
-		bat.Clean(proc.Mp())
+		bat.Clean(mp)
 	}
 	w.batches = nil
 }
