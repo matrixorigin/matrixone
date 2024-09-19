@@ -279,8 +279,8 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	if len(w.checkpointed) == 0 {
 		return
 	}
-	lsn := groups[entry.GTCustomized]
-	maxLsn := w.checkpointed[entry.GTCustomized]
+	maxLsn := groups[entry.GTCustomized]
+	lsn := w.checkpointed[entry.GTCustomized]
 	if lsn < maxLsn {
 		drLsn, err := w.retryGetDriverLsn(entry.GTCustomized, lsn+1)
 		if err != nil {
