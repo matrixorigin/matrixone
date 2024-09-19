@@ -15,12 +15,16 @@
 package colexec
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 )
 
 type MergeInterface interface {
-	getNextPos() (int, int, int)
+	GetNextPos() (int, int, int)
 }
 
 type heapElem[T any] struct {
@@ -49,6 +53,10 @@ type Merge[T any] struct {
 	nulls []*nulls.Nulls
 
 	heap *heapSlice[T]
+}
+
+func NewMerge[T any](compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) *Merge[T] {
+	return newMerge(compLess, cols, nulls)
 }
 
 func newMerge[T any](compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) *Merge[T] {
@@ -83,7 +91,7 @@ func (m *Merge[T]) initHeap() {
 	}
 }
 
-func (m *Merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
+func (m *Merge[T]) GetNextPos() (batchIndex, rowIndex, size int) {
 	data := m.pushNext()
 	if data == nil {
 		// now, m.size is 0
@@ -187,3 +195,59 @@ func (x *heapSlice[T]) Less(i, j int) bool {
 }
 func (x *heapSlice[T]) Swap(i, j int) { x.s[i], x.s[j] = x.s[j], x.s[i] }
 func (x *heapSlice[T]) Len() int      { return len(x.s) }
+
+func GetNewMergeFromBatchs(bats []*batch.Batch, sortIndex int, nulls []*nulls.Nulls) MergeInterface {
+	var merge MergeInterface
+	switch bats[0].Vecs[sortIndex].GetType().Oid {
+	case types.T_bool:
+		merge = newMerge(sort.BoolLess, getFixedCols[bool](bats, sortIndex), nulls)
+	case types.T_bit:
+		merge = newMerge(sort.GenericLess[uint64], getFixedCols[uint64](bats, sortIndex), nulls)
+	case types.T_int8:
+		merge = newMerge(sort.GenericLess[int8], getFixedCols[int8](bats, sortIndex), nulls)
+	case types.T_int16:
+		merge = newMerge(sort.GenericLess[int16], getFixedCols[int16](bats, sortIndex), nulls)
+	case types.T_int32:
+		merge = newMerge(sort.GenericLess[int32], getFixedCols[int32](bats, sortIndex), nulls)
+	case types.T_int64:
+		merge = newMerge(sort.GenericLess[int64], getFixedCols[int64](bats, sortIndex), nulls)
+	case types.T_uint8:
+		merge = newMerge(sort.GenericLess[uint8], getFixedCols[uint8](bats, sortIndex), nulls)
+	case types.T_uint16:
+		merge = newMerge(sort.GenericLess[uint16], getFixedCols[uint16](bats, sortIndex), nulls)
+	case types.T_uint32:
+		merge = newMerge(sort.GenericLess[uint32], getFixedCols[uint32](bats, sortIndex), nulls)
+	case types.T_uint64:
+		merge = newMerge(sort.GenericLess[uint64], getFixedCols[uint64](bats, sortIndex), nulls)
+	case types.T_float32:
+		merge = newMerge(sort.GenericLess[float32], getFixedCols[float32](bats, sortIndex), nulls)
+	case types.T_float64:
+		merge = newMerge(sort.GenericLess[float64], getFixedCols[float64](bats, sortIndex), nulls)
+	case types.T_date:
+		merge = newMerge(sort.GenericLess[types.Date], getFixedCols[types.Date](bats, sortIndex), nulls)
+	case types.T_datetime:
+		merge = newMerge(sort.GenericLess[types.Datetime], getFixedCols[types.Datetime](bats, sortIndex), nulls)
+	case types.T_time:
+		merge = newMerge(sort.GenericLess[types.Time], getFixedCols[types.Time](bats, sortIndex), nulls)
+	case types.T_timestamp:
+		merge = newMerge(sort.GenericLess[types.Timestamp], getFixedCols[types.Timestamp](bats, sortIndex), nulls)
+	case types.T_enum:
+		merge = newMerge(sort.GenericLess[types.Enum], getFixedCols[types.Enum](bats, sortIndex), nulls)
+	case types.T_decimal64:
+		merge = newMerge(sort.Decimal64Less, getFixedCols[types.Decimal64](bats, sortIndex), nulls)
+	case types.T_decimal128:
+		merge = newMerge(sort.Decimal128Less, getFixedCols[types.Decimal128](bats, sortIndex), nulls)
+	case types.T_uuid:
+		merge = newMerge(sort.UuidLess, getFixedCols[types.Uuid](bats, sortIndex), nulls)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
+		merge = newMerge(sort.GenericLess[string], getStrCols(bats, sortIndex), nulls)
+	case types.T_Rowid:
+		merge = newMerge(sort.RowidLess, getFixedCols[types.Rowid](bats, sortIndex), nulls)
+	//TODO: check if we need T_array here? T_json is missing here.
+	// Update Oct 20 2023: I don't think it is necessary to add T_array here. Keeping this comment,
+	// in case anything fails in vector S3 flush in future.
+	default:
+		panic(fmt.Sprintf("invalid type: %s", bats[0].Vecs[sortIndex].GetType().Oid))
+	}
+	return merge
+}

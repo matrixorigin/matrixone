@@ -51,15 +51,38 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	}
 
 	eng := update.Engine
-	for _, updateCtx := range update.MultiUpdateCtx {
-		ref := updateCtx.ref
-		partitionNames := updateCtx.partitionTableNames
-		rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
-		if err != nil {
-			return err
+
+	if update.ToWriteS3 {
+		if update.ctr.s3Writer == nil {
+			writer, err := newS3Writer(update)
+			if err != nil {
+				return err
+			}
+			update.ctr.s3Writer = writer
 		}
-		updateCtx.source = rel
-		updateCtx.partitionSources = partitionRels
+
+		writer := update.ctr.s3Writer
+		for _, updateCtx := range writer.updateCtxs {
+			ref := updateCtx.ref
+			partitionNames := updateCtx.partitionTableNames
+			rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
+			if err != nil {
+				return err
+			}
+			updateCtx.source = rel
+			updateCtx.partitionSources = partitionRels
+		}
+	} else {
+		for _, updateCtx := range update.MultiUpdateCtx {
+			ref := updateCtx.ref
+			partitionNames := updateCtx.partitionTableNames
+			rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
+			if err != nil {
+				return err
+			}
+			updateCtx.source = rel
+			updateCtx.partitionSources = partitionRels
+		}
 	}
 
 	return nil
@@ -107,10 +130,21 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 			if input.Batch.IsEmpty() {
 				continue
 			}
+
+			ctr.affectedRows += uint64(input.Batch.RowCount())
+			err = ctr.s3Writer.append(proc, input.Batch)
+			if err != nil {
+				return vm.CancelResult, err
+			}
 		}
 	}
 
 	if ctr.state == vm.Eval {
+		err := ctr.s3Writer.flushTailAndWriteToWorkspace(proc, update)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		return vm.NewCallResult(), nil
 	}
 
 	return vm.CancelResult, nil
@@ -126,40 +160,51 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 		return input, nil
 	}
 
+	err = update.updateOneBatch(proc, input.Batch)
+	if err != nil {
+		return vm.CancelResult, err
+	}
+
+	update.ctr.affectedRows += uint64(input.Batch.RowCount())
+	analyzer.Output(input.Batch)
+
+	return input, nil
+}
+
+func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batch) (err error) {
 	ctr := &update.ctr
-
 	for i, updateCtx := range update.MultiUpdateCtx {
-		// insert rows
-		if len(updateCtx.insertCols) > 0 {
-			switch updateCtx.tableType {
-			case MainTable:
-				err = update.insert_main_table(proc, i, input.Batch)
-			case UniqueIndexTable:
-				err = update.insert_uniuqe_index_table(proc, i, input.Batch)
-			case SecondaryIndexTable:
-				err = update.insert_secondary_index_table(proc, i, input.Batch)
-			}
-		}
-		if err != nil {
-			return vm.CancelResult, err
-		}
-
 		// delete rows
 		if len(updateCtx.deleteCols) > 0 {
 			// init buf
 			if ctr.deleteBuf[i] == nil {
 				mainPkIdx := updateCtx.deleteCols[1]
-				bat := batch.New(false, []string{catalog.Row_ID, "pk"})
-				bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-				bat.SetVector(1, vector.NewVec(*input.Batch.Vecs[mainPkIdx].GetType()))
-				ctr.deleteBuf[i] = bat
+				buf := batch.New(false, []string{catalog.Row_ID, "pk"})
+				buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+				buf.SetVector(1, vector.NewVec(*bat.Vecs[mainPkIdx].GetType()))
+				ctr.deleteBuf[i] = buf
 			}
-			err = update.delete_table(proc, updateCtx, input.Batch, ctr.deleteBuf[i])
+			err = update.delete_table(proc, updateCtx, bat, ctr.deleteBuf[i])
+			if err != nil {
+				return
+			}
+		}
+
+		// insert rows
+		if len(updateCtx.insertCols) > 0 {
+			switch updateCtx.tableType {
+			case updateMainTable:
+				err = update.insert_main_table(proc, i, bat)
+			case updateUniqueIndexTable:
+				err = update.insert_uniuqe_index_table(proc, i, bat)
+			case updateSecondaryIndexTable:
+				err = update.insert_secondary_index_table(proc, i, bat)
+			}
+			if err != nil {
+				return
+			}
 		}
 	}
 
-	ctr.affectedRows += uint64(input.Batch.RowCount())
-	analyzer.Output(input.Batch)
-
-	return input, nil
+	return nil
 }

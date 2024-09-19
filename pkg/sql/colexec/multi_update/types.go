@@ -30,9 +30,17 @@ const opName = "MultiUpdate"
 type updateTableType int
 
 const (
-	MainTable           updateTableType = iota
-	UniqueIndexTable    updateTableType = iota
-	SecondaryIndexTable updateTableType = iota
+	updateMainTable updateTableType = iota
+	updateUniqueIndexTable
+	updateSecondaryIndexTable
+)
+
+type actionType int
+
+const (
+	actionInsert actionType = iota
+	actionDelete
+	actionUpdate
 )
 
 func init() {
@@ -63,6 +71,8 @@ type MultiUpdate struct {
 type container struct {
 	state        vm.CtrState
 	affectedRows uint64
+
+	s3Writer *s3Writer
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
@@ -115,6 +125,9 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 			buf.CleanOnlyData()
 		}
 	}
+	if update.ctr.s3Writer != nil {
+		update.ctr.s3Writer.reset(proc)
+	}
 	update.ctr.state = vm.Build
 	update.ctr.affectedRows = 0
 }
@@ -134,6 +147,11 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 		}
 	}
 	update.ctr.deleteBuf = nil
+
+	if update.ctr.s3Writer != nil {
+		update.ctr.s3Writer.free(proc)
+		update.ctr.s3Writer = nil
+	}
 }
 
 func (update *MultiUpdate) GetAffectedRows() uint64 {

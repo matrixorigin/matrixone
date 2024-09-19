@@ -15,8 +15,6 @@
 package colexec
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -335,7 +333,7 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 	}
 
 	for i := range w.batches {
-		err := sortByKey(proc, w.batches[i], w.sortIndex, w.isClusterBy, proc.GetMPool())
+		err := SortByKey(proc, w.batches[i], w.sortIndex, w.isClusterBy, proc.GetMPool())
 		if err != nil {
 			return nil, objectio.ObjectStats{}, err
 		}
@@ -343,63 +341,11 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 
 	w.initBuffers(proc, w.batches[0])
 
-	var merge MergeInterface
 	nulls := make([]*nulls.Nulls, 0, len(w.batches))
 	for i := 0; i < len(w.batches); i++ {
 		nulls = append(nulls, w.batches[i].Vecs[w.sortIndex].GetNulls())
 	}
-	pos := w.sortIndex
-	switch w.batches[0].Vecs[w.sortIndex].GetType().Oid {
-	case types.T_bool:
-		merge = newMerge(sort.BoolLess, getFixedCols[bool](w.batches, pos), nulls)
-	case types.T_bit:
-		merge = newMerge(sort.GenericLess[uint64], getFixedCols[uint64](w.batches, pos), nulls)
-	case types.T_int8:
-		merge = newMerge(sort.GenericLess[int8], getFixedCols[int8](w.batches, pos), nulls)
-	case types.T_int16:
-		merge = newMerge(sort.GenericLess[int16], getFixedCols[int16](w.batches, pos), nulls)
-	case types.T_int32:
-		merge = newMerge(sort.GenericLess[int32], getFixedCols[int32](w.batches, pos), nulls)
-	case types.T_int64:
-		merge = newMerge(sort.GenericLess[int64], getFixedCols[int64](w.batches, pos), nulls)
-	case types.T_uint8:
-		merge = newMerge(sort.GenericLess[uint8], getFixedCols[uint8](w.batches, pos), nulls)
-	case types.T_uint16:
-		merge = newMerge(sort.GenericLess[uint16], getFixedCols[uint16](w.batches, pos), nulls)
-	case types.T_uint32:
-		merge = newMerge(sort.GenericLess[uint32], getFixedCols[uint32](w.batches, pos), nulls)
-	case types.T_uint64:
-		merge = newMerge(sort.GenericLess[uint64], getFixedCols[uint64](w.batches, pos), nulls)
-	case types.T_float32:
-		merge = newMerge(sort.GenericLess[float32], getFixedCols[float32](w.batches, pos), nulls)
-	case types.T_float64:
-		merge = newMerge(sort.GenericLess[float64], getFixedCols[float64](w.batches, pos), nulls)
-	case types.T_date:
-		merge = newMerge(sort.GenericLess[types.Date], getFixedCols[types.Date](w.batches, pos), nulls)
-	case types.T_datetime:
-		merge = newMerge(sort.GenericLess[types.Datetime], getFixedCols[types.Datetime](w.batches, pos), nulls)
-	case types.T_time:
-		merge = newMerge(sort.GenericLess[types.Time], getFixedCols[types.Time](w.batches, pos), nulls)
-	case types.T_timestamp:
-		merge = newMerge(sort.GenericLess[types.Timestamp], getFixedCols[types.Timestamp](w.batches, pos), nulls)
-	case types.T_enum:
-		merge = newMerge(sort.GenericLess[types.Enum], getFixedCols[types.Enum](w.batches, pos), nulls)
-	case types.T_decimal64:
-		merge = newMerge(sort.Decimal64Less, getFixedCols[types.Decimal64](w.batches, pos), nulls)
-	case types.T_decimal128:
-		merge = newMerge(sort.Decimal128Less, getFixedCols[types.Decimal128](w.batches, pos), nulls)
-	case types.T_uuid:
-		merge = newMerge(sort.UuidLess, getFixedCols[types.Uuid](w.batches, pos), nulls)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
-		merge = newMerge(sort.GenericLess[string], getStrCols(w.batches, pos), nulls)
-	case types.T_Rowid:
-		merge = newMerge(sort.RowidLess, getFixedCols[types.Rowid](w.batches, pos), nulls)
-	//TODO: check if we need T_array here? T_json is missing here.
-	// Update Oct 20 2023: I don't think it is necessary to add T_array here. Keeping this comment,
-	// in case anything fails in vector S3 flush in future.
-	default:
-		panic(fmt.Sprintf("invalid type: %s", w.batches[0].Vecs[w.sortIndex].GetType().Oid))
-	}
+	merge := GetNewMergeFromBatchs(w.batches, w.sortIndex, nulls)
 	if _, err := w.generateWriter(proc); err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}
@@ -409,7 +355,7 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 	var batchIndex int
 	var rowIndex int
 	for size > 0 {
-		batchIndex, rowIndex, size = merge.getNextPos()
+		batchIndex, rowIndex, size = merge.GetNextPos()
 		for i := range w.buffer.Vecs {
 			err := w.buffer.Vecs[i].UnionOne(w.batches[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
 			if err != nil {
@@ -479,7 +425,7 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
-func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_null bool, m *mpool.MPool) error {
+func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_null bool, m *mpool.MPool) error {
 	hasNull := false
 	// Not-Null Check, notice that cluster by support null value
 	if nulls.Any(bat.Vecs[sortIndex].GetNulls()) {
