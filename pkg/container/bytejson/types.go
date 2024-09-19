@@ -94,6 +94,11 @@ const (
 	LiteralFalse
 )
 
+// search josn
+const (
+	bsearchCutoff = 20
+)
+
 var (
 	endian = binary.LittleEndian
 )
