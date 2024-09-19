@@ -195,6 +195,7 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 	dispatch.ctr.isRemote = true
 	dispatch.ctr.remoteReceivers = make([]*process.WrapCs, 0, dispatch.ctr.remoteRegsCnt)
 	dispatch.ctr.remoteToIdx = make(map[uuid.UUID]int)
+	proc.DispatchNotifyCh = make(chan *process.WrapCs)
 	for i, rr := range dispatch.RemoteRegs {
 		if dispatch.FuncId == ShuffleToAllFunc {
 			dispatch.ctr.remoteToIdx[rr.Uuid] = dispatch.ShuffleRegIdxRemote[i]

@@ -374,7 +374,6 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.SetPrepareParams(pHelper.prepareParams)
-	proc.DispatchNotifyCh = make(chan *process.WrapCs)
 	{
 		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()

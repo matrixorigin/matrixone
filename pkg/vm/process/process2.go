@@ -108,14 +108,11 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 			}
 		}
 	}
-
-	// todo: if there is no dispatch operation, we don't need to create the following channel. but OK for now.
-	child.DispatchNotifyCh = make(chan *WrapCs)
 	return child
 }
 
-// NewNoContextChildProc make a new child process without a context field.
-// This is used for the compile-process, which doesn't need to pass the context.
+// NewNoContextChildProcWithChannel make a new child process without a context field.
+// channelBufferSize and nilbatchCnt is the extra information for Reg.
 func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channelBufferSize []int32, nilbatchCnt []int32) *Process {
 	child := &Process{
 		Base: proc.Base,
@@ -130,9 +127,6 @@ func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channe
 			}
 		}
 	}
-
-	// todo: if there is no dispatch operation, we don't need to create the following channel. but OK for now.
-	child.DispatchNotifyCh = make(chan *WrapCs)
 	return child
 }
 
