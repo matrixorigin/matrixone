@@ -118,12 +118,6 @@ func noteSplitAlter(note string) (bool, int, uint64, string) {
 }
 
 const (
-	SMALL = iota
-	NORMAL
-	LARGE
-)
-
-const (
 	MO_DATABASE_ID_NAME_IDX       = 1
 	MO_DATABASE_ID_ACCOUNT_IDX    = 2
 	MO_DATABASE_LIST_ACCOUNT_IDX  = 1
@@ -921,9 +915,8 @@ type reader struct {
 	source engine.DataSource
 	ts     timestamp.Timestamp
 
-	memFilter MemPKFilter
-
-	scanType int
+	memFilter    MemPKFilter
+	readBlockCnt uint64
 }
 
 type mergeReader struct {
