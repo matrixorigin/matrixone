@@ -276,7 +276,6 @@ func NewReader(
 			ctx:      ctx,
 			fs:       e.fs,
 			ts:       ts,
-			proc:     proc,
 			tableDef: tableDef,
 		},
 		memFilter: memFilter,

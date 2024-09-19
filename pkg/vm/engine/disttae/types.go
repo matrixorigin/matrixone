@@ -888,7 +888,6 @@ type withFilterMixin struct {
 	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
-	proc     *process.Process
 	tableDef *plan.TableDef
 
 	// columns used for reading
