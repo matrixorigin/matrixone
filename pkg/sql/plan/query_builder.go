@@ -1730,7 +1730,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID := builder.qry.Steps[i]
 		rootNode := builder.qry.Nodes[rootID]
 		colRefCnt := make(map[[2]int32]int)
-		if rootNode.NodeType == plan.Node_PROJECT {
+		if len(rootNode.BindingTags) > 0 {
 			resultTag := rootNode.BindingTags[0]
 			for j := range rootNode.ProjectList {
 				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
