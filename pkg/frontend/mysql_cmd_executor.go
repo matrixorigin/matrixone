@@ -3327,7 +3327,7 @@ type jsonPlanHandler struct {
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
 	h := NewMarshalPlanHandler(ctx, stmt, plan, phyPlan, opts...)
 	jsonBytes := h.Marshal(ctx)
-	statsBytes, stats := h.Stats(ctx, ses, stmt)
+	statsBytes, stats := h.Stats(ctx, ses)
 	return &jsonPlanHandler{
 		jsonBytes:  jsonBytes,
 		statsBytes: statsBytes,
@@ -3491,7 +3491,7 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 var sqlQueryIgnoreExecPlan = []byte(`{}`)
 var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan"}`)
 
-func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession, stmt *motrace.StatementInfo) (statsByte statistic.StatsArray, stats motrace.Statistic) {
+func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
 		statsByte.Reset()
@@ -3518,7 +3518,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession, stmt *mot
 		if val < 0 {
 			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo(%d + %d + %d + %d + %d - %d - %d) = %d",
 				uuid.UUID(h.stmt.StatementID).String(),
-				stmt.StatementType,
+				h.stmt.StatementType,
 				int64(statsByte.GetTimeConsumed()),
 				statsInfo.BuildReaderDuration,
 				statsInfo.ParseDuration,
