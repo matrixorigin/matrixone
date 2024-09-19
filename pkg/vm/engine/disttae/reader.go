@@ -231,61 +231,6 @@ func (r *mergeReader) Read(
 }
 
 // -----------------------------------------------------------------
-
-type ReaderOption func(*reader)
-
-func WithColumns(
-	seqnums []uint16, colTypes []types.Type,
-) ReaderOption {
-	return func(r *reader) {
-		r.columns.seqnums = seqnums
-		r.columns.colTypes = colTypes
-	}
-}
-
-func WithBlockFilter(
-	filter objectio.BlockReadFilter, seqnum uint16, typ types.Type,
-) ReaderOption {
-	return func(r *reader) {
-		r.filterState.filter = filter
-		r.filterState.seqnums = []uint16{seqnum}
-		r.filterState.colTypes = []types.Type{typ}
-	}
-}
-
-func WithMemFilter(filter MemPKFilter) ReaderOption {
-	return func(r *reader) {
-		r.memFilter = filter
-	}
-}
-
-func WithTombstone() ReaderOption {
-	return func(r *reader) {
-		r.isTombstone = true
-	}
-}
-
-func NewSimpleReader(
-	ctx context.Context,
-	ds engine.DataSource,
-	fs fileservice.FileService,
-	ts timestamp.Timestamp,
-	opts ...ReaderOption,
-) *reader {
-	r := &reader{
-		withFilterMixin: withFilterMixin{
-			ctx: ctx,
-			fs:  fs,
-			ts:  ts,
-		},
-		source: ds,
-	}
-	for _, opt := range opts {
-		opt(r)
-	}
-	return r
-}
-
 func NewReader(
 	ctx context.Context,
 	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.

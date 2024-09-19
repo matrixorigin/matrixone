@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -45,7 +44,6 @@ const (
 
 func NewRemoteDataSource(
 	ctx context.Context,
-	proc *process.Process,
 	fs fileservice.FileService,
 	snapshotTS timestamp.Timestamp,
 	relData engine.RelData,
@@ -53,7 +51,6 @@ func NewRemoteDataSource(
 	return &RemoteDataSource{
 		data: relData,
 		ctx:  ctx,
-		proc: proc,
 		fs:   fs,
 		ts:   types.TimestampToTS(snapshotTS),
 	}
@@ -113,8 +110,7 @@ func NewLocalDataSource(
 // --------------------------------------------------------------------------------
 
 type RemoteDataSource struct {
-	ctx  context.Context
-	proc *process.Process
+	ctx context.Context
 
 	fs fileservice.FileService
 	ts types.TS
@@ -164,14 +160,14 @@ func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
 	}
 
 	err := blockio.Prefetch(
-		rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
+		"", rs.fs, blks[0].MetaLocation())
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
 
 	tombstoner := rs.data.GetTombstones()
 	if tombstoner != nil {
-		rs.data.GetTombstones().PrefetchTombstones(rs.proc.GetService(), rs.fs, bids)
+		rs.data.GetTombstones().PrefetchTombstones("", rs.fs, bids)
 	}
 
 	rs.batchPrefetchCursor = end

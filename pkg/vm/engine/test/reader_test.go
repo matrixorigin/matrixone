@@ -1330,24 +1330,13 @@ func Test_SimpleReader(t *testing.T) {
 
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
-	relData := disttae.NewBlockListRelationDataOfObject(&stats, false)
-	ds := disttae.NewRemoteDataSource(
-		context.Background(),
-		proc,
-		fs,
-		timestamp.Timestamp{},
-		relData,
-	)
-	r := disttae.NewSimpleReader(
-		context.Background(),
-		ds,
-		fs,
-		timestamp.Timestamp{},
+
+	r := disttae.SimpleTombstoneObjectReader(
+		context.Background(), fs, &stats, timestamp.Timestamp{},
 		disttae.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
 		),
-		disttae.WithTombstone(),
 	)
 	blockio.Start("")
 	defer blockio.Stop("")
@@ -1371,5 +1360,4 @@ func Test_SimpleReader(t *testing.T) {
 	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
 	require.NoError(t, err)
 	require.True(t, done)
-
 }
