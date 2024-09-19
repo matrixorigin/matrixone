@@ -378,7 +378,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	// XXX Fix the following read, it is a very twisted way of reading uint32.
 	// Read Deletes
 	buf = make([]byte, int(unsafe.Sizeof(uint32(0))))
-	if _, err = r.Read(buf); err != nil {
+	if _, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 	n += int64(len(buf))
@@ -388,7 +388,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	bat.Deletes = &nulls.Bitmap{}
 	buf = make([]byte, size)
-	if _, err = r.Read(buf); err != nil {
+	if _, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 	if err = bat.Deletes.ReadNoCopy(buf); err != nil {
@@ -434,7 +434,7 @@ func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 	// XXX Fix the following read, it is a very twisted way of reading uint32.
 	// Read Deletes
 	buf = make([]byte, int(unsafe.Sizeof(uint32(0))))
-	if _, err = r.Read(buf); err != nil {
+	if _, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 	n += int64(len(buf))
