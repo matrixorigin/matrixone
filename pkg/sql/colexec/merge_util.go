@@ -57,10 +57,6 @@ type Merge[T any] struct {
 	heap *heapSlice[T]
 }
 
-func NewMerge[T any](compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) *Merge[T] {
-	return newMerge(compLess, cols, nulls)
-}
-
 func newMerge[T any](compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) *Merge[T] {
 	m := &Merge[T]{
 		size:   len(cols),

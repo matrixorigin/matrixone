@@ -79,7 +79,7 @@ func (update *MultiUpdate) insert_uniuqe_index_table(
 	}
 
 	idxPkPos := updateCtx.insertCols[0]
-	if !inputBatch.Vecs[idxPkPos].HasNull() {
+	if inputBatch.Vecs[idxPkPos].HasNull() {
 		err = update.check_null_and_insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 	} else {
 		err = update.insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
@@ -104,7 +104,7 @@ func (update *MultiUpdate) insert_secondary_index_table(
 	}
 
 	idxPkPos := updateCtx.insertCols[0]
-	if !inputBatch.Vecs[idxPkPos].HasNull() {
+	if inputBatch.Vecs[idxPkPos].HasNull() {
 		err = update.check_null_and_insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 	} else {
 		err = update.insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])

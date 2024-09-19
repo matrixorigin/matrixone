@@ -38,6 +38,37 @@ func TestInsertSimpleTable(t *testing.T) {
 	runTestCases(t, proc, []*testCase{case1})
 }
 
+func TestInsertSpecialTable(t *testing.T) {
+	//case 1: pk has null, throw err
+	hasUniqueKey := false
+	hasSecondaryKey := false
+	isPartition := false
+	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+
+	oldBat := case1.inputBatchs[0]
+	bat1RowCount := oldBat.RowCount()
+	rows := makeTestPkArray(0, bat1RowCount)
+	// pk have null
+	columnA := testutil.MakeInt64Vector(rows, []uint64{0, 1, 2})
+	oldBat.Vecs[0].Free(proc.GetMPool())
+	oldBat.ReplaceVector(oldBat.Vecs[0], columnA, 0)
+	case1.expectErr = true
+	runTestCases(t, proc, []*testCase{case1})
+
+	//case 2: unique key has null, that will be ok
+	hasUniqueKey = true
+	hasSecondaryKey = false
+	isPartition = false
+	proc, case1 = buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+	oldBat = case1.inputBatchs[0]
+	bat1RowCount = oldBat.RowCount()
+	pkArr := makeTestVarcharArray(bat1RowCount)
+	uniquePk := testutil.MakeVarcharVector(pkArr, []uint64{0, 1, 2})
+	oldBat.Vecs[4].Free(proc.GetMPool())
+	oldBat.ReplaceVector(oldBat.Vecs[4], uniquePk, 0)
+	runTestCases(t, proc, []*testCase{case1})
+}
+
 func TestInsertTableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 	hasUniqueKey := true
 	hasSecondaryKey := true

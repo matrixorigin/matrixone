@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -83,6 +84,10 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 
 		// if expect error.  only run one time
 		if tc.expectErr {
+			for _, bat := range tc.inputBatchs {
+				bat.Clean(proc.GetMPool())
+			}
+			tc.op.Children[0].Free(proc, false, nil)
 			tc.op.Free(proc, true, err)
 			continue
 		}
@@ -192,7 +197,9 @@ func getTestMainTable(isPartition bool) (*plan.ObjectRef, *plan.TableDef) {
 		Name:   "t1",
 		Hidden: false,
 		Cols: []*plan.ColDef{
-			{ColId: 0, Name: "a", Typ: i64typ, NotNull: true, Primary: true},
+			{ColId: 0, Name: "a", Typ: i64typ, NotNull: true, Primary: true, Default: &pbPlan.Default{
+				NullAbility: false,
+			}},
 			{ColId: 1, Name: "b", Typ: varcharTyp, NotNull: true},
 			{ColId: 2, Name: "c", Typ: i32typ},
 			{ColId: 3, Name: "d", Typ: i32typ},
@@ -231,8 +238,12 @@ func getTestUniqueIndexTable(uniqueTblName string, isPartition bool) (*plan.Obje
 		Name:   uniqueTblName,
 		Hidden: true,
 		Cols: []*plan.ColDef{
-			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true},
-			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: varcharTyp, NotNull: true},
+			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true, Default: &pbPlan.Default{
+				NullAbility: false,
+			}},
+			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: varcharTyp, NotNull: true, Default: &pbPlan.Default{
+				NullAbility: false,
+			}},
 			{ColId: 2, Name: catalog.Row_ID, Typ: rowIdTyp},
 		},
 		TableType: catalog.SystemOrdinaryRel,
@@ -266,7 +277,9 @@ func getTestSecondaryIndexTable(secondaryIdxTblName string, isPartition bool) (*
 		Name:   secondaryIdxTblName,
 		Hidden: true,
 		Cols: []*plan.ColDef{
-			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true},
+			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true, Default: &pbPlan.Default{
+				NullAbility: false,
+			}},
 			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: varcharTyp, NotNull: true},
 			{ColId: 2, Name: catalog.Row_ID, Typ: rowIdTyp},
 		},
@@ -336,6 +349,14 @@ func makeTestPartitionArray(rowCount int, partitionCount int) []int32 {
 	val := make([]int32, rowCount)
 	for i := 0; i < rowCount; i++ {
 		val[i] = int32(i / partitionCount)
+	}
+	return val
+}
+
+func makeTestVarcharArray(rowCount int) []string {
+	val := make([]string, rowCount)
+	for i := 0; i < rowCount; i++ {
+		val[i] = strconv.Itoa(i)
 	}
 	return val
 }
