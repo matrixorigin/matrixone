@@ -104,7 +104,6 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 	idxScanNodes := make([][]*plan.Node, len(tblInfo.tableDefs))
 
 	for i, tableDef := range tblInfo.tableDefs {
-		scanNode := builder.qry.Nodes[builder.name2ScanNode[tableDef.Name]]
 		idxDefs := tableDef.Indexes
 		idxScanNodes[i] = make([]*plan.Node, len(idxDefs))
 
@@ -126,7 +125,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				TableDef:     idxTableDef,
 				ObjRef:       idxObjRef,
 				BindingTags:  []int32{idxTag},
-				ScanSnapshot: scanNode.ScanSnapshot,
+				ScanSnapshot: builder.compCtx.GetSnapshot(),
 			}
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], ctx)
 

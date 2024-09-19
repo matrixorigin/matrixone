@@ -65,7 +65,6 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		isPrepareStatement: isPrepareStatement,
 		deleteNode:         make(map[uint64]int32),
 		skipStats:          skipStats,
-		name2ScanNode:      make(map[string]int32),
 	}
 }
 
@@ -3916,7 +3915,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		if midNode.NodeType == plan.Node_TABLE_SCAN {
 			dbName := midNode.ObjRef.SchemaName
 			tableName := midNode.TableDef.Name
-			builder.name2ScanNode[tableName] = nodeID
 			currentAccountID, err := builder.compCtx.GetAccountId()
 			if err != nil {
 				return 0, err
