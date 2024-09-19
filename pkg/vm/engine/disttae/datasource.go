@@ -169,7 +169,10 @@ func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
 
-	rs.data.GetTombstones().PrefetchTombstones(rs.proc.GetService(), rs.fs, bids)
+	tombstoner := rs.data.GetTombstones()
+	if tombstoner != nil {
+		rs.data.GetTombstones().PrefetchTombstones(rs.proc.GetService(), rs.fs, bids)
+	}
 
 	rs.batchPrefetchCursor = end
 }

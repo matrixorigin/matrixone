@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -1325,4 +1327,49 @@ func Test_SimpleReader(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(20), stats.Rows())
 	t.Logf("stats: %s", stats.String())
+
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+	relData := disttae.NewBlockListRelationDataOfObject(&stats, false)
+	ds := disttae.NewRemoteDataSource(
+		context.Background(),
+		proc,
+		fs,
+		timestamp.Timestamp{},
+		relData,
+	)
+	r := disttae.NewSimpleReader(
+		context.Background(),
+		ds,
+		fs,
+		timestamp.Timestamp{},
+		disttae.WithColumns(
+			[]uint16{0, 1},
+			[]types.Type{objectio.RowidType, pkType},
+		),
+	)
+	blockio.Start("")
+	defer blockio.Stop("")
+	bat2 := engine_util.NewCNTombstoneBatch(
+		"pk",
+		&pkType,
+	)
+	done, err := r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, 20, bat2.RowCount())
+	t.Log(common.MoVectorToString(bat1.Vecs[0], 100))
+	t.Log(common.MoVectorToString(bat2.Vecs[0], 100))
+	pks := vector.MustFixedColWithTypeCheck[int32](bat2.Vecs[1])
+	require.Equal(t, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}, pks)
+	rowids1 := vector.MustFixedColWithTypeCheck[types.Rowid](bat1.Vecs[0])
+	rowids2 := vector.MustFixedColWithTypeCheck[types.Rowid](bat2.Vecs[0])
+	for i := 0; i < bat1.RowCount(); i++ {
+		require.Equal(t, rowids1[i], rowids2[i])
+	}
+
+	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	require.NoError(t, err)
+	require.True(t, done)
+
 }

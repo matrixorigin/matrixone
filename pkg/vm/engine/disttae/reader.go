@@ -261,6 +261,7 @@ func WithMemFilter(filter MemPKFilter) ReaderOption {
 
 func NewSimpleReader(
 	ctx context.Context,
+	ds engine.DataSource,
 	fs fileservice.FileService,
 	ts timestamp.Timestamp,
 	opts ...ReaderOption,
@@ -271,6 +272,7 @@ func NewSimpleReader(
 			fs:  fs,
 			ts:  ts,
 		},
+		source: ds,
 	}
 	for _, opt := range opts {
 		opt(r)
