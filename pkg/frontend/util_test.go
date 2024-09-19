@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
 	cvey "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +40,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1428,4 +1432,202 @@ func Test_uriHasPrefix(t *testing.T) {
 func Test_extractUriInfo(t *testing.T) {
 	_, _, err := extractUriInfo(context.Background(), "abc", "t")
 	assert.Error(t, err)
+}
+
+func Test_BuildTableDefFromMoColumns(t *testing.T) {
+	convey.Convey("BuildTableDefFromMoColumns fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+		rm, err := NewRoutineManager(ctx)
+		assert.Nil(t, err)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
+		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
+
+		// process.
+		ses.proc = testutil.NewProc()
+		ses.proc.Base.TxnOperator = txnOperator
+
+		sql, err := getTableColumnDefSql(uint64(tenant.TenantID), "db1", "t1")
+		assert.Nil(t, err)
+
+		mrs := newMrsForPasswordOfUser([][]interface{}{{}})
+		bh.sql2result[sql] = mrs
+
+		_, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func Test_getTableColumnDefSql(t *testing.T) {
+	tests := []struct {
+		name      string
+		accountId uint64
+		dbName    string
+		tableName string
+		want      string
+		wantErr   bool
+	}{
+		{
+			name:      "1",
+			accountId: 1,
+			dbName:    "db1",
+			tableName: "tbl1",
+			want:      fmt.Sprintf(getTableColumnDefFormat, 1, "db1", "tbl1"),
+			wantErr:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getTableColumnDefSql(tt.accountId, tt.dbName, tt.tableName)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getTableColumnDefSql() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("getTableColumnDefSql() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_extractTableDefColumns(t *testing.T) {
+
+	// name type error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+			typ := new(types.Type)
+			typByte, _ := typ.Marshal()
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				def,
+				typByte,
+				uint64(1),
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
+
+	// typ error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				"id",
+				def,
+				uint64(1),
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
+
+	// colId error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+			typ := new(types.Type)
+			typByte, _ := typ.Marshal()
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				"id",
+				typByte,
+				def,
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
+
+	// default error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+			typ := new(types.Type)
+			typByte, _ := typ.Marshal()
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				"id",
+				typByte,
+				uint64(1),
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
 }
