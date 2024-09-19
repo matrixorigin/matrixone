@@ -56,13 +56,6 @@ import (
 )
 
 const (
-	PREFETCH_THRESHOLD  = 256
-	PREFETCH_ROUNDS     = 24
-	SMALLSCAN_THRESHOLD = 100
-	LARGESCAN_THRESHOLD = 1500
-)
-
-const (
 	INSERT = iota
 	DELETE
 	ALTER // alter command for TN. Update batches for mo_tables and mo_columns will fall into the category of INSERT and DELETE.
