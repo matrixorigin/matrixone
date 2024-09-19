@@ -48,8 +48,7 @@ Find rows that contain the exact phrase “some words” (for example, rows that
 */
 
 type FullTextParserParam struct {
-	Parser         string `json:"parser"`
-	NgramTokenSize string `json:"ngram_token_size"`
+	Parser string `json:"parser"`
 }
 
 type Word struct {

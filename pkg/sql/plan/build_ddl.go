@@ -1596,26 +1596,13 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
 	}
 
-	//get variable ngram_token_size. Default is 3.
-	val, err := ctx.GetProcess().GetResolveVariableFunc()("ngram_token_size", true, true)
-	if err != nil {
-		return err
-	}
-
-	ngram_token_size, ok := val.(int64)
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("ngram_token_size is not an int64")
-	}
-
-	logutil.Infof("FT: primary key name  %s, ngram =%d", pkeyName, ngram_token_size)
-
 	for _, indexInfo := range indexInfos {
 		// fulltext only support char, varchar and text
 		for _, keyPart := range indexInfo.KeyParts {
 			nameOrigin := keyPart.ColName.ColNameOrigin()
 			name := keyPart.ColName.ColName()
 			if _, ok := colMap[name]; !ok {
-				return moerr.NewInvalidInput(ctx.GetContext(), fmt.Sprintf("column '%s' is not exist", nameOrigin))
+				return moerr.NewInvalidInput(ctx.GetContext(), fmt.Sprintf("column '%s' does not exist", nameOrigin))
 			}
 			typid := colMap[name].Typ.Id
 			if !(typid == int32(types.T_text) || typid == int32(types.T_char) || typid == int32(types.T_varchar)) {
@@ -1647,13 +1634,11 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 
 		indexParts := make([]string, 0)
 		for _, keyPart := range indexInfo.KeyParts {
-			//nameOrigin := keyPart.ColName.ColNameOrigin()
 			name := keyPart.ColName.ColName()
 			indexParts = append(indexParts, name)
 		}
 
 		indexDef.Unique = false
-		//indexDef.Fulltext = true
 		indexDef.IndexName = indexInfo.Name
 		indexDef.IndexTableName = indexTableName
 		indexDef.IndexAlgo = tree.INDEX_TYPE_FULLTEXT.ToString()
@@ -1662,7 +1647,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		indexDef.TableExist = true
 		if indexInfo.IndexOption != nil {
 			if indexInfo.IndexOption.ParserName != "" {
-				indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(ngram_token_size)}
+				indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(3)}
 				indexDef.IndexAlgoParams, err = catalog.IndexParamsToJsonString(indexInfo)
 				if err != nil {
 					return err
