@@ -265,6 +265,33 @@ func (vec *vectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
+// ReadFromV1 in version 1, vector.nulls.bitmap is v1
+func (vec *vectorWrapper) ReadFromV1(r io.Reader) (n int64, err error) {
+	buf := make([]byte, 8)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+
+	n += 8
+
+	// 1. Whole TN Vector
+	buf = make([]byte, types.DecodeInt64(buf[:]))
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+
+	n += int64(len(buf))
+
+	t := vec.wrapped.GetType()
+	vec.releaseWrapped()
+	vec.wrapped = vector.NewVec(*t)
+	if err = vec.wrapped.UnmarshalBinaryV1(buf); err != nil {
+		return
+	}
+
+	return
+}
+
 func (vec *vectorWrapper) HasNull() bool {
 	if vec.wrapped.IsConstNull() {
 		return true

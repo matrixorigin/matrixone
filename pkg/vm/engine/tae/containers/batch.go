@@ -452,6 +452,62 @@ func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 	return
 }
 
+// ReadFromV2 in version2, vector.nulls.bitmap is v1
+func (bat *Batch) ReadFromV2(r io.Reader) (n int64, err error) {
+	var tmpn int64
+	buffer := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	defer buffer.Close()
+	if tmpn, err = buffer.ReadFrom(r); err != nil {
+		return
+	}
+	n += tmpn
+	pos := 0
+	buf := buffer.Get(pos).([]byte)
+	pos++
+	cnt := types.DecodeFixed[uint16](buf)
+	vecTypes := make([]types.Type, cnt)
+	bat.Attrs = make([]string, cnt)
+	for i := 0; i < int(cnt); i++ {
+		buf = buffer.Get(pos).([]byte)
+		pos++
+		bat.Attrs[i] = string(buf)
+		bat.Nameidx[bat.Attrs[i]] = i
+		buf = buffer.Get(pos).([]byte)
+		vecTypes[i] = types.DecodeType(buf)
+		pos++
+	}
+	for _, vecType := range vecTypes {
+		vec := MakeVector(vecType, common.DefaultAllocator)
+		if tmpn, err = vec.ReadFromV1(r); err != nil {
+			return
+		}
+		bat.Vecs = append(bat.Vecs, vec)
+		n += tmpn
+	}
+	// XXX Fix the following read, it is a very twisted way of reading uint32.
+	// Read Deletes
+	buf = make([]byte, int(unsafe.Sizeof(uint32(0))))
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	n += int64(len(buf))
+	size := types.DecodeFixed[uint32](buf)
+	if size == 0 {
+		return
+	}
+	bat.Deletes = &nulls.Bitmap{}
+	buf = make([]byte, size)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	if err = bat.Deletes.ReadNoCopy(buf); err != nil {
+		return
+	}
+	n += int64(size)
+
+	return
+}
+
 func (bat *Batch) Split(cnt int) []*Batch {
 	if cnt == 1 {
 		return []*Batch{bat}
