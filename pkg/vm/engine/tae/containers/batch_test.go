@@ -222,9 +222,9 @@ func TestCompatibilityV2(t *testing.T) {
 	bat := BuildBatch(attrs, vecTypes, opts)
 	bat.Vecs[0].Append(int32(1), false)
 	bat.Vecs[0].Append(int32(2), false)
-	bat.Vecs[0].Append(int32(3), false)
+	bat.Vecs[0].Append(int32(3), true)
 	bat.Vecs[1].Append(int64(11), false)
-	bat.Vecs[1].Append(int64(12), false)
+	bat.Vecs[1].Append(int64(12), true)
 	bat.Vecs[1].Append(int64(13), false)
 
 	assert.Equal(t, 3, bat.Length())

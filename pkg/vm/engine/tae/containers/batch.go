@@ -379,7 +379,7 @@ func (bat *Batch) WriteToV2(w io.Writer) (n int64, err error) {
 
 	// 3. Vectors
 	for _, vec := range bat.Vecs {
-		if tmpn, err = vec.WriteTo(w); err != nil {
+		if tmpn, err = vec.WriteToV1(w); err != nil {
 			return
 		}
 		n += tmpn

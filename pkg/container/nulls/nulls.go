@@ -389,16 +389,6 @@ func (nsp *Nulls) ReadNoCopy(data []byte) error {
 	return nil
 }
 
-func (nsp *Nulls) ReadV1(data []byte) error {
-	if len(data) == 0 {
-		// don't we need to reset?   Or we always, Read into a blank Nulls?
-		// nsp.np.Reset()
-		return nil
-	}
-	nsp.np.UnmarshalV1(data)
-	return nil
-}
-
 func (nsp *Nulls) ReadNoCopyV1(data []byte) error {
 	if len(data) == 0 {
 		return nil
