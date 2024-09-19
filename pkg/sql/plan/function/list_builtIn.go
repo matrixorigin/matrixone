@@ -5827,6 +5827,28 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_show_col_qunique`
+	{
+		functionId: MO_SHOW_COL_QUNIQUE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInMoShowColUnique
+				},
+			},
+		},
+	},
+
 	// function `cast_index_to_value`
 	{
 		functionId: CAST_INDEX_TO_VALUE,
