@@ -1486,6 +1486,8 @@ const (
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
 
 	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
+
+	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
 )
 
 var (
@@ -1831,6 +1833,10 @@ func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(getDbPubCountFormat, dbName), nil
+}
+
+func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
+	return fmt.Sprintf(getTableColumnDefFormat, accountId, dbName, tableName), nil
 }
 
 func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {

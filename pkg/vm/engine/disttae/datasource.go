@@ -1212,7 +1212,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		return false
 	}
 
-	for iter.Next() && len(rowIds) > len(deleted) {
+	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
 
 		if !obj.GetAppendable() {
@@ -1246,10 +1246,13 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				commit = vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[1])
 			}
 
-			for i := range rowIds {
-				s, e := blockio.FindStartEndOfBlockFromSortedRowids(deletedRowIds, rowIds[i].BorrowBlockID())
+			for i := 0; i < len(rowIds); i++ {
+				s, e := blockio.FindStartEndOfBlockFromSortedRowids(
+					deletedRowIds, rowIds[i].BorrowBlockID())
+
 				for j := s; j < e; j++ {
-					if rowIds[i].EQ(&deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
+					if rowIds[i].EQ(&deletedRowIds[j]) &&
+						(commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
 						deleted = append(deleted, int64(i))
 						break
 					}
