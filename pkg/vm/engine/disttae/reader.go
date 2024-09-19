@@ -358,7 +358,7 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.readBlockCnt > 128 {
+	if r.readBlockCnt > SMALLSCAN_THRESHOLD {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 

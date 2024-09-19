@@ -56,6 +56,10 @@ import (
 )
 
 const (
+	SMALLSCAN_THRESHOLD = 100
+)
+
+const (
 	INSERT = iota
 	DELETE
 	ALTER // alter command for TN. Update batches for mo_tables and mo_columns will fall into the category of INSERT and DELETE.
