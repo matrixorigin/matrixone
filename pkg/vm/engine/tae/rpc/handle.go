@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -197,11 +198,45 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
+func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (releaseF []func()) {
+	delM := make(map[uint64]uint64)
+	for _, e := range reqs {
+		if req, ok := e.(*db.WriteReq); ok && req.Type == db.EntryDelete {
+			if req.FileName != "" {
+				for _, stats := range req.TombstoneStats {
+					delM[req.TableID] += uint64(stats.Rows())
+				}
+			}
+			if req.Batch != nil {
+				delM[req.TableID] += uint64(req.Batch.RowCount())
+			}
+		}
+	}
+
+	for id, rows := range delM {
+		if rows <= h.db.Opts.BulkTomestoneTxnThreshold {
+			continue
+		}
+		h.db.Runtime.LockMergeService.LockFromUser(id)
+		logutil.Info("LockMerge Bulk Delete",
+			zap.Uint64("tid", id), zap.Uint64("rows", rows), zap.String("txn", txn.String()))
+		release := func() {
+			h.db.Runtime.LockMergeService.UnlockFromUser(id)
+			logutil.Info("LockMerge Bulk Delete Committed",
+				zap.Uint64("tid", id), zap.Uint64("rows", rows), zap.String("txn", txn.String()))
+		}
+		releaseF = append(releaseF, release)
+	}
+
+	return
+}
+
 func (h *Handle) handleRequests(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	txnCtx *txnContext,
-) (err error) {
+) (releaseF []func(), err error) {
+	releaseF = h.tryLockMergeForBulkDelete(txnCtx.reqs, txn)
 	for _, e := range txnCtx.reqs {
 		switch req := e.(type) {
 		case *pkgcatalog.CreateDatabaseReq:
@@ -303,7 +338,11 @@ func (h *Handle) HandleCommit(
 		logutil.Debugf("HandleCommit start : %X",
 			string(meta.GetID()))
 	})
+	var releaseF []func()
 	defer func() {
+		for _, f := range releaseF {
+			f()
+		}
 		if ok {
 			//delete the txn's context.
 			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
@@ -326,7 +365,7 @@ func (h *Handle) HandleCommit(
 		if err != nil {
 			return
 		}
-		err = h.handleRequests(ctx, txn, txnCtx)
+		releaseF, err = h.handleRequests(ctx, txn, txnCtx)
 		if err != nil {
 			return
 		}
@@ -350,6 +389,9 @@ func (h *Handle) HandleCommit(
 
 	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 		for {
+			for _, f := range releaseF {
+				f()
+			}
 			txn, err = h.db.StartTxnWithStartTSAndSnapshotTS(nil,
 				types.TimestampToTS(meta.GetSnapshotTS()))
 			if err != nil {
@@ -361,7 +403,7 @@ func (h *Handle) HandleCommit(
 				zap.String("new-txn", txn.GetID()),
 			)
 			//Handle precommit-write command for 1PC
-			err = h.handleRequests(ctx, txn, txnCtx)
+			releaseF, err = h.handleRequests(ctx, txn, txnCtx)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
 			}
@@ -505,7 +547,7 @@ func (h *Handle) HandleDropDatabase(
 	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.Bat.GetVector(1), common.WorkspaceAllocator)
 	defer pkVec.Close()
-	err = databaseTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec)
+	err = databaseTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
 
 	return
 }
@@ -604,7 +646,7 @@ func (h *Handle) HandleDropRelation(
 	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.TableBat.GetVector(1), common.WorkspaceAllocator)
 	defer pkVec.Close()
-	if err := tablesTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
+	if err := tablesTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal); err != nil {
 		return err
 	}
 	// if len(req.Cmds) > 0 {
@@ -618,7 +660,7 @@ func (h *Handle) HandleDropRelation(
 		defer rowIDVec.Close()
 		pkVec := containers.ToTNVector(bat.GetVector(1), common.WorkspaceAllocator)
 		defer pkVec.Close()
-		if err := columnsTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
+		if err := columnsTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal); err != nil {
 			return err
 		}
 	}
@@ -684,10 +726,9 @@ func (h *Handle) HandleWrite(
 				}
 				metalocations[location.Name().String()] = struct{}{}
 			}
-			statsCNVec := req.Batch.Vecs[1]
-			statsVec := containers.ToTNVector(statsCNVec, common.WorkspaceAllocator)
+			statsVec := req.Batch.Vecs[1]
 			for i := 0; i < statsVec.Length(); i++ {
-				s := objectio.ObjectStats(statsVec.Get(i).([]byte))
+				s := objectio.ObjectStats(statsVec.GetBytesAt(i))
 				if !s.GetCNCreated() {
 					logutil.Fatal("the `CNCreated` mask not set")
 				}
@@ -702,7 +743,10 @@ func (h *Handle) HandleWrite(
 				err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
 				return
 			}
-			err = tb.AddObjsWithMetaLoc(ctx, statsVec)
+			err = tb.AddObjsWithMetaLoc(
+				ctx,
+				containers.ToTNVector(statsVec, common.WorkspaceAllocator),
+			)
 			return
 		}
 		//check the input batch passed by cn is valid.
@@ -796,7 +840,7 @@ func (h *Handle) HandleWrite(
 					nil,
 				)
 
-				if err = tb.DeleteByPhyAddrKeys(vectors[0], vectors[1]); err != nil {
+				if err = tb.DeleteByPhyAddrKeys(vectors[0], vectors[1], handle.DT_Normal); err != nil {
 					logutil.Errorf("delete by phyaddr keys faild: %s, %s, [idx]%d, %v",
 						stats.String(), loc.String(), i, err)
 
@@ -814,7 +858,6 @@ func (h *Handle) HandleWrite(
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
 	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0), common.WorkspaceAllocator)
-	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
@@ -845,7 +888,7 @@ func (h *Handle) HandleWrite(
 			}
 		}
 	}
-	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
+	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
 	return
 }
 

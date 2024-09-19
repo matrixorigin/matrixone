@@ -17,10 +17,11 @@ package logtailreplay
 import (
 	"bytes"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/tidwall/btree"
 )
 
 type RowsIter interface {
@@ -524,7 +525,7 @@ func (p *PartitionState) NewPrimaryKeyIter(
 	ts types.TS,
 	spec PrimaryKeyMatchSpec,
 ) *primaryKeyIter {
-	index := p.primaryIndex.Copy()
+	index := p.rowPrimaryKeyIndex.Copy()
 	return &primaryKeyIter{
 		ts:           ts,
 		spec:         spec,
@@ -544,7 +545,7 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 	spec PrimaryKeyMatchSpec,
 	bid types.Blockid,
 ) *primaryKeyDelIter {
-	index := p.primaryIndex.Copy()
+	index := p.rowPrimaryKeyIndex.Copy()
 	return &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
 			ts:           ts,

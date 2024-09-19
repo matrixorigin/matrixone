@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -177,6 +178,13 @@ const (
 	FPInternalExecutorExec
 	FPInternalExecutorQuery
 	FPHandleAnalyzeStmt
+	FPShowPublications
+	FPCreateCDC
+	FPPauseCDC
+	FPDropCDC
+	FPRestartCDC
+	FPResumeCDC
+	FPShowCDC
 )
 
 type (
@@ -207,6 +215,8 @@ type ComputationWrapper interface {
 	GetUUID() []byte
 
 	RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error
+
+	SetExplainBuffer(buf *bytes.Buffer)
 
 	GetLoadTag() bool
 
@@ -391,7 +401,7 @@ func (prepareStmt *PrepareStmt) Close() {
 var _ buf.Allocator = &SessionAllocator{}
 
 type SessionAllocator struct {
-	allocator *malloc.ManagedAllocator
+	allocator *malloc.ManagedAllocator[malloc.Allocator]
 }
 
 func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
@@ -686,9 +696,7 @@ func (ses *feSessionImpl) Close() {
 		ses.txnHandler = nil
 	}
 	if ses.txnCompileCtx != nil {
-		ses.txnCompileCtx.execCtx = nil
-		ses.txnCompileCtx.snapshot = nil
-		ses.txnCompileCtx.views = nil
+		ses.txnCompileCtx.Close()
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""

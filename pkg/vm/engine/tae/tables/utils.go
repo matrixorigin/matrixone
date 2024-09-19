@@ -124,12 +124,8 @@ func MakeImmuIndex(
 	bf objectio.BloomFilter,
 	rt *dbutils.Runtime,
 ) (idx indexwrapper.ImmutIndex, err error) {
-	stats, err := meta.MustGetObjectStats()
-	if err != nil {
-		return
-	}
 	idx = indexwrapper.NewImmutIndex(
-		stats.SortKeyZoneMap(), bf, stats.ObjectLocation(),
+		meta.SortKeyZoneMap(), bf, meta.ObjectLocation(),
 	)
 	return
 }

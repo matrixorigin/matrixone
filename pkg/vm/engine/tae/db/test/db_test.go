@@ -21,18 +21,12 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/require"
-
-	"sort"
-
-	"github.com/panjf2000/ants/v2"
-	"github.com/stretchr/testify/assert"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -68,6 +63,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -560,13 +558,13 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		err = task1.WaitDone(context.Background())
 		assert.NoError(t, err)
 		newBlockFp1 = task1.GetCreatedObjects().Fingerprint()
-		stats1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
+		stats1 = *task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
 		metaLoc1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLocation()
 		metaLoc1.SetID(0)
 		metaLoc1.SetRows(schema.BlockMaxRows)
 		newBlockFp2 = task1.GetCreatedObjects().Fingerprint()
 		newBlockFp2.SetBlockOffset(1)
-		stats2 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
+		stats2 = *task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	//read new non-appendable block data and check
@@ -4794,7 +4792,7 @@ func TestMergeBlocks3(t *testing.T) {
 		var pkView *containers.Batch
 		err = objHandle.Scan(ctx, &pkView, 0, []int{pkDef.Idx}, common.DefaultAllocator)
 		assert.NoError(t, err)
-		err = rel.DeleteByPhyAddrKeys(view.Vecs[0], pkView.Vecs[0])
+		err = rel.DeleteByPhyAddrKeys(view.Vecs[0], pkView.Vecs[0], handle.DT_Normal)
 		assert.NoError(t, err)
 
 		assert.NoError(t, rel.DeleteByFilter(context.Background(), filter15))
@@ -5020,8 +5018,7 @@ func TestMergeMemsize(t *testing.T) {
 			obj := it.GetObject()
 			defer obj.Close()
 			meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-			stat := meta.GetObjectStats()
-			blkcnt += int(stat.BlkCnt())
+			blkcnt += int(meta.BlkCnt())
 			metas = append(metas, meta)
 
 		}
@@ -5121,7 +5118,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneTombstoneMeta(rel)
-		assert.Equal(t, 10, meta.GetRows())
+		assert.Equal(t, 10, int(meta.Rows()))
 		assert.NoError(t, txn.Commit(ctx))
 	}
 	logutil.Info(tae.Catalog.SimplePPString(3))
@@ -5130,7 +5127,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneTombstoneMeta(rel)
-		assert.Equal(t, 10, meta.GetRows())
+		assert.Equal(t, 10, int(meta.Rows()))
 		assert.NoError(t, txn.Commit(ctx))
 	}
 }
@@ -9415,4 +9412,145 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 	assert.NoError(t, txn.Commit(ctx))
 	assert.Equal(t, 1, deletes.Count())
 	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
+}
+
+func TestTransferS3Deletes(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	rows := 10
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	// apply deleteloc fails on ablk
+	txn, _ := tae.StartTxn(nil)
+	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, txn)
+	{
+		tae.CompactBlocks(true)
+	}
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	assert.NoError(t, txn.Commit(ctx))
+	tae.CheckRowsByScan(9, true)
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+func TestStartStopTableMerge(t *testing.T) {
+	db := testutil.InitTestDB(context.Background(), "MergeTest", t, nil)
+	defer db.Close()
+
+	scheduler := merge.NewScheduler(db.Runtime, db.CNMergeSched)
+
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 1000
+	schema.ObjectMaxBlocks = 2
+
+	txn, _ := db.StartTxn(nil)
+	database, _ := txn.CreateDatabase("db", "", "")
+	rel, _ := database.CreateRelation(schema)
+	require.NoError(t, txn.Commit(context.Background()))
+
+	tbl := rel.GetMeta().(*catalog.TableEntry)
+	scheduler.StopMerge(tbl)
+
+	require.Equal(t, moerr.GetOkStopCurrRecur(), scheduler.LoopProcessor.OnTable(tbl))
+
+	scheduler.StartMerge(tbl)
+
+	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
+}
+func TestDeleteByPhyAddrKeys(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 1
+	schema.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, db := tae.GetDB("db")
+	rel, _ := db.GetRelationByName(schema.Name)
+	db.DropRelationByName(schema.Name)
+	obj := testutil.GetOneBlockMeta(rel)
+	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*obj.ID(), 0, 0)
+	rowidVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	rowidVec.Append(rowID, false)
+	defer rowidVec.Close()
+	err := rel.DeleteByPhyAddrKeys(rowidVec, bat.Vecs[0].CloneWindow(0, 1), handle.DT_Normal)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+}
+
+func TestRollbackMergeInQueue(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 20
+	schema.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+
+	err = task.OnExec(context.Background())
+	require.NoError(t, err)
+	tae.Runtime.LockMergeService.LockFromUser(rel.ID())
+	require.Error(t, txn.Commit(ctx)) // rollback
+
+	_, rel = tae.GetRelation()
+	objH, err := rel.GetObject(obj.ID(), false)
+	require.NoError(t, err)
+
+	meta := objH.GetMeta().(*catalog.ObjectEntry)
+	require.Equal(t, catalog.ObjectState_Create_ApplyCommit, meta.ObjectState)
+	require.True(t, meta.DeletedAt.IsEmpty())
+	require.Equal(t, 2, rel.GetMeta().(*catalog.TableEntry).ObjectCnt(false) /*Aobj(deleted), Nobj(rollbacked)*/)
+}
+
+func TestTransferInMerge(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.BlockMaxRows = 8192
+	schema.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 400000)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	{
+		tae.DeleteAll(true)
+	}
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
 }

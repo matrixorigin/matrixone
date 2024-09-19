@@ -25,6 +25,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -66,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func NewService(
@@ -764,10 +765,13 @@ func (s *service) initShardService() {
 			shardservice.ReadApproxObjectsNum:         disttae.HandleShardingReadApproxObjectsNum,
 			shardservice.ReadRanges:                   disttae.HandleShardingReadRanges,
 			shardservice.ReadGetColumMetadataScanInfo: disttae.HandleShardingReadGetColumMetadataScanInfo,
-			shardservice.ReadReader:                   disttae.HandleShardingReadReader,
+			shardservice.ReadBuildReader:              disttae.HandleShardingReadBuildReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
 			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
+			shardservice.ReadClose:                    disttae.HandleShardingReadClose,
+			shardservice.ReadNext:                     disttae.HandleShardingReadNext,
+			shardservice.ReadCollectTombstones:        disttae.HandleShardingReadCollectTombstones,
 		},
 		s.storeEngine,
 	)

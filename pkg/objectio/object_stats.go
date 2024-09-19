@@ -146,6 +146,38 @@ func (des *ObjectStats) ObjectLocation() Location {
 	return BuildLocation(des.ObjectName(), des.Extent(), 0, 0)
 }
 
+func (des *ObjectStats) ConstructBlockId(id uint16) Blockid {
+	var blockId Blockid
+	BuildObjectBlockidTo(des.ObjectName(), id, blockId[:])
+	return blockId
+}
+
+func (des *ObjectStats) ConstructBlockInfoTo(id uint16, blk *BlockInfo) {
+	des.BlockLocationTo(id, BlockMaxRows, blk.MetaLoc[:])
+	blk.ConstructBlockID(des.ObjectName(), id)
+	blk.SetFlagByObjStats(des)
+}
+
+func (des *ObjectStats) ConstructBlockInfo(id uint16) BlockInfo {
+	var blk BlockInfo
+	des.BlockLocationTo(id, BlockMaxRows, blk.MetaLoc[:])
+	blk.ConstructBlockID(des.ObjectName(), id)
+	blk.SetFlagByObjStats(des)
+	return blk
+}
+
+func (des *ObjectStats) BlockLocationTo(
+	blk uint16,
+	maxRows uint32,
+	toLoc []byte,
+) {
+	row := maxRows
+	if blk == uint16(des.BlkCnt())-1 {
+		row = des.Rows() - uint32(blk)*maxRows
+	}
+	BuildLocationTo(des.ObjectName(), des.Extent(), row, blk, toLoc)
+}
+
 func (des *ObjectStats) BlockLocation(blk uint16, maxRows uint32) Location {
 	row := maxRows
 	if blk == uint16(des.BlkCnt())-1 {
@@ -182,22 +214,36 @@ func (des *ObjectStats) Rows() uint32 {
 	return types.DecodeUint32(des[rowCntOffset : rowCntOffset+rowCntLen])
 }
 
-func (des *ObjectStats) String() string {
-	reserved := ""
+func (des *ObjectStats) FlagString() string {
+	flags := ""
 	if des.GetAppendable() {
-		reserved = reserved + "A"
+		flags += "1"
+	} else {
+		flags += "0"
 	}
 	if des.GetSorted() {
-		reserved = reserved + "S"
+		flags += "1"
+	} else {
+		flags += "0"
 	}
 	if des.GetCNCreated() {
-		reserved = reserved + "C"
+		flags += "1"
+	} else {
+		flags += "0"
 	}
-	return fmt.Sprintf("[object stats]: %v; objName: %s; extent: %v; "+
-		"rowCnt: %d; blkCnt: %d; sortKey zoneMap: %v; size: %d; originSize: %d",
-		reserved, des.ObjectName().String(), des.Extent().String(),
-		des.Rows(), des.BlkCnt(), des.SortKeyZoneMap(),
-		des.Size(), des.OriginSize())
+	return flags
+}
+
+func (des *ObjectStats) String() string {
+	flags := des.FlagString()
+	if des.Extent().Length() == 0 {
+		return fmt.Sprintf("[OBJ(%s)-(%s)|NoExt]", flags, des.ObjectName().String())
+	}
+	return fmt.Sprintf(
+		"[OBJ(%s)-(%s)|Ext(%s)|Rows(%d)|Blks(%d)|Size(%d)|OSize(%d)]",
+		flags, des.ObjectName().String(), des.Extent().String(),
+		des.Rows(), des.BlkCnt(), des.Size(), des.OriginSize(),
+	)
 }
 
 func setHelper(stats *ObjectStats, offset int, data []byte) error {

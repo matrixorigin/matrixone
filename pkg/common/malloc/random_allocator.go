@@ -15,27 +15,27 @@
 package malloc
 
 // RandomAllocator calls upstream1 or upstream2 in certain probability
-type RandomAllocator struct {
-	upstream1         Allocator
-	upstream2         Allocator
+type RandomAllocator[A, B Allocator] struct {
+	upstream1         A
+	upstream2         B
 	upstream2Fraction uint32
 }
 
-func NewRandomAllocator(
-	upstream1 Allocator,
-	upstream2 Allocator,
+func NewRandomAllocator[A, B Allocator](
+	upstream1 A,
+	upstream2 B,
 	upstream2Fraction uint32,
-) *RandomAllocator {
-	return &RandomAllocator{
+) *RandomAllocator[A, B] {
+	return &RandomAllocator[A, B]{
 		upstream1:         upstream1,
 		upstream2:         upstream2,
 		upstream2Fraction: upstream2Fraction,
 	}
 }
 
-var _ Allocator = new(RandomAllocator)
+var _ Allocator = new(RandomAllocator[Allocator, Allocator])
 
-func (r *RandomAllocator) Allocate(size uint64, hint Hints) ([]byte, Deallocator, error) {
+func (r *RandomAllocator[A, B]) Allocate(size uint64, hint Hints) ([]byte, Deallocator, error) {
 	if fastrand()%r.upstream2Fraction > 0 {
 		return r.upstream1.Allocate(size, hint)
 	}

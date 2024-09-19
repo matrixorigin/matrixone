@@ -1598,9 +1598,6 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 		w := csv.NewWriter(buf)
 		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
 			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
-		if strings.ToLower(param.S3Param.Provider) != "" && strings.ToLower(param.S3Param.Provider) != "minio" {
-			return nil, "", moerr.NewBadConfig(param.Ctx, "the provider only support 'minio' now")
-		}
 		if strings.ToLower(param.S3Param.Provider) == "minio" {
 			opts = append(opts, "is-minio=true")
 		}
@@ -1897,6 +1894,10 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // 	}
 // 	return expr
 // }
+
+func ExprType2Type(typ *plan.Type) types.Type {
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+}
 
 func FormatExprs(exprs []*plan.Expr) string {
 	var w bytes.Buffer

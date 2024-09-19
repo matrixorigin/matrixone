@@ -644,7 +644,7 @@ message AnalyzeInfo {
 	int64 memory_size = 6;
 	int64 wait_time_consumed = 7;
 	int64 diskIO = 8;
-	int64 s3IO_byte = 9;
+	int64 scan_bytes = 9;
 	int64 s3IO_input_count = 10;
 	int64 s3IO_output_count = 11;
 	int64 networkIO = 12;
@@ -735,6 +735,7 @@ message Node {
 		FILL = 65;
 		PARTITION = 66;
 		FUZZY_FILTER = 67;
+		APPLY = 68;
 	}
 
 	enum JoinType {
@@ -746,9 +747,8 @@ message Node {
 		ANTI	= 5;
 		SINGLE	= 6;
 		MARK	= 7;
-		APPLY	= 8;
-		INDEX = 9;
-		L2 = 10;
+		INDEX = 8;
+		L2 = 9;
 	}
 
 	enum AggMode {
@@ -859,6 +859,7 @@ message Node {
 
 	Snapshot scan_snapshot = 58;
 
+	bool recursive_cte = 59;
 }
 
 // Snapshot Represents a snapshot of the database
