@@ -76,7 +76,7 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 
 		o.validTombstones[tombstone] = struct{}{}
 
-		if entryOutdated(tombstone, config.TombstoneLifetime) ||
+		if (entryOutdated(tombstone, config.TombstoneLifetime) && tombstone.OriginSize() > 10*common.Const1MBytes) ||
 			tombstone.OriginSize() > common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
 			logutil.Info("[MERGE-POLICY]",
 				zap.String("policy", "compact"),
