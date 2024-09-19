@@ -208,6 +208,9 @@ func TestTruncate1(t *testing.T) {
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
+	testutils.WaitExpect(20000, func() bool {
+		return db.Wal.GetTruncated() >= 4
+	})
 	assert.GreaterOrEqual(t, db.Wal.GetTruncated(), uint64(4))
 }
 func TestAppend3(t *testing.T) {
