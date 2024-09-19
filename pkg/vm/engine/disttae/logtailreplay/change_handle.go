@@ -250,9 +250,9 @@ type baseHandle struct {
 func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, tombstone bool, fs fileservice.FileService, ctx context.Context) *baseHandle {
 	var iter btree.IterG[ObjectEntry]
 	if tombstone {
-		iter = state.tombstoneObjects.Copy().Iter()
+		iter = state.tombstoneObjectsNameIndex.Copy().Iter()
 	} else {
-		iter = state.dataObjects.Copy().Iter()
+		iter = state.dataObjectsNameIndex.Copy().Iter()
 	}
 	return &baseHandle{
 		objectIter:  iter,
