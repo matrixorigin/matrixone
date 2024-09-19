@@ -491,7 +491,6 @@ func readBlockData(
 	m *mpool.MPool,
 	fs fileservice.FileService,
 ) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, release func(), err error) {
-	// (int, []uint16, []types.Type) {
 	var (
 		idxes []uint16
 		typs  []types.Type
