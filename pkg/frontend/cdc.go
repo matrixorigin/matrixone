@@ -89,7 +89,7 @@ const (
 		`account_id = %d and ` +
 		`task_id = "%s"`
 
-	getShowCdcTaskFormat = "SELECT task_id, task_name, source_uri, sink_uri, state FROM mo_catalog.mo_cdc_task where account_id = %d"
+	getShowCdcTaskFormat = "select task_id, task_name, source_uri, sink_uri, state from mo_catalog.mo_cdc_task where account_id = %d"
 
 	getDbIdAndTableIdFormat = "select reldatabase_id,rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s' and relname = '%s'"
 
@@ -252,7 +252,7 @@ func getSqlForGetWatermark(accountId uint64, taskId string) string {
 func getSqlForGetTask(accountId uint64, all bool, taskName string) string {
 	s := fmt.Sprintf(getShowCdcTaskFormat, accountId)
 	if !all {
-		s += fmt.Sprintf(" where task_name = '%s'", taskName)
+		s += fmt.Sprintf(" and task_name = '%s'", taskName)
 	}
 	return s
 }
