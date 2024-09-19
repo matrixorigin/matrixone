@@ -140,7 +140,8 @@
 # pkg/sql
 /pkg/sql @aunjgr
 /pkg/sql/colexec @m-schen
-/pkg/sql/compile @m-schen @ouyuanning @aunjgr @badboynt1
+/pkg/sql/compile @m-schen @ouyuanning @aunjgr @badboynt1 @qingxinhome
+/pkg/sql/models @qingxinhome
 /pkg/sql/parsers @iamlinjunhong
 /pkg/sql/plan @ouyuanning @aunjgr @badboynt1
 /pkg/sql/plan/function @m-schen
