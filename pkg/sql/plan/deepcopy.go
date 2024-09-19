@@ -17,9 +17,8 @@ package plan
 import (
 	"bytes"
 
-	"golang.org/x/exp/constraints"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"golang.org/x/exp/constraints"
 )
 
 func DeepCopyExprList(list []*Expr) []*Expr {
@@ -178,41 +177,42 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
-		NodeType:        node.NodeType,
-		NodeId:          node.NodeId,
-		ExtraOptions:    node.ExtraOptions,
-		Children:        make([]int32, len(node.Children)),
-		JoinType:        node.JoinType,
-		BuildOnLeft:     node.BuildOnLeft,
-		BindingTags:     make([]int32, len(node.BindingTags)),
-		Limit:           DeepCopyExpr(node.Limit),
-		Offset:          DeepCopyExpr(node.Offset),
-		ProjectList:     make([]*plan.Expr, len(node.ProjectList)),
-		OnList:          make([]*plan.Expr, len(node.OnList)),
-		FilterList:      make([]*plan.Expr, len(node.FilterList)),
-		BlockFilterList: make([]*plan.Expr, len(node.BlockFilterList)),
-		GroupBy:         make([]*plan.Expr, len(node.GroupBy)),
-		GroupingSet:     make([]*plan.Expr, len(node.GroupingSet)),
-		AggList:         make([]*plan.Expr, len(node.AggList)),
-		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
-		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
-		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
-		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
-		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
-		ReplaceCtx:      DeepCopyReplaceCtx(node.ReplaceCtx),
-		NotCacheable:    node.NotCacheable,
-		SourceStep:      node.SourceStep,
-		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
-		PreInsertUkCtx:  DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		PreDeleteCtx:    DeepCopyPreDeleteCtx(node.PreDeleteCtx),
-		OnDuplicateKey:  DeepCopyOnDupliateKeyCtx(node.OnDuplicateKey),
-		LockTargets:     make([]*plan.LockTarget, len(node.LockTargets)),
-		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
-		IsEnd:           node.IsEnd,
-		ExternScan:      node.ExternScan,
-		PartitionPrune:  DeepCopyPartitionPrune(node.PartitionPrune),
-		SampleFunc:      DeepCopySampleFuncSpec(node.SampleFunc),
-		OnUpdateExprs:   make([]*plan.Expr, len(node.OnUpdateExprs)),
+		NodeType:         node.NodeType,
+		NodeId:           node.NodeId,
+		ExtraOptions:     node.ExtraOptions,
+		Children:         make([]int32, len(node.Children)),
+		JoinType:         node.JoinType,
+		BuildOnLeft:      node.BuildOnLeft,
+		BindingTags:      make([]int32, len(node.BindingTags)),
+		Limit:            DeepCopyExpr(node.Limit),
+		Offset:           DeepCopyExpr(node.Offset),
+		ProjectList:      DeepCopyExprList(node.ProjectList),
+		OnList:           DeepCopyExprList(node.OnList),
+		FilterList:       DeepCopyExprList(node.FilterList),
+		BlockFilterList:  DeepCopyExprList(node.BlockFilterList),
+		GroupBy:          DeepCopyExprList(node.GroupBy),
+		GroupingSet:      DeepCopyExprList(node.GroupingSet),
+		AggList:          DeepCopyExprList(node.AggList),
+		OrderBy:          make([]*plan.OrderBySpec, len(node.OrderBy)),
+		DeleteCtx:        DeepCopyDeleteCtx(node.DeleteCtx),
+		TblFuncExprList:  DeepCopyExprList(node.TblFuncExprList),
+		ClusterTable:     DeepCopyClusterTable(node.GetClusterTable()),
+		InsertCtx:        DeepCopyInsertCtx(node.InsertCtx),
+		ReplaceCtx:       DeepCopyReplaceCtx(node.ReplaceCtx),
+		NotCacheable:     node.NotCacheable,
+		SourceStep:       node.SourceStep,
+		PreInsertCtx:     DeepCopyPreInsertCtx(node.PreInsertCtx),
+		PreInsertUkCtx:   DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
+		PreDeleteCtx:     DeepCopyPreDeleteCtx(node.PreDeleteCtx),
+		OnDuplicateKey:   DeepCopyOnDupliateKeyCtx(node.OnDuplicateKey),
+		LockTargets:      make([]*plan.LockTarget, len(node.LockTargets)),
+		AnalyzeInfo:      DeepCopyAnalyzeInfo(node.AnalyzeInfo),
+		IsEnd:            node.IsEnd,
+		ExternScan:       node.ExternScan,
+		PartitionPrune:   DeepCopyPartitionPrune(node.PartitionPrune),
+		SampleFunc:       DeepCopySampleFuncSpec(node.SampleFunc),
+		OnUpdateExprs:    DeepCopyExprList(node.OnUpdateExprs),
+		InsertDeleteCols: DeepCopyExprList(node.InsertDeleteCols),
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
@@ -223,40 +223,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.LockTargets[idx] = DeepCopyLockTarget(target)
 	}
 
-	for idx, expr := range node.ProjectList {
-		newNode.ProjectList[idx] = DeepCopyExpr(expr)
-	}
-
-	for idx, expr := range node.OnList {
-		newNode.OnList[idx] = DeepCopyExpr(expr)
-	}
-
-	for idx, expr := range node.FilterList {
-		newNode.FilterList[idx] = DeepCopyExpr(expr)
-	}
-
-	for idx, expr := range node.BlockFilterList {
-		newNode.BlockFilterList[idx] = DeepCopyExpr(expr)
-	}
-
-	for idx, expr := range node.GroupBy {
-		newNode.GroupBy[idx] = DeepCopyExpr(expr)
-	}
-
-	for idx, expr := range node.GroupingSet {
-		newNode.GroupingSet[idx] = DeepCopyExpr(expr)
-	}
-
-	for idx, expr := range node.AggList {
-		newNode.AggList[idx] = DeepCopyExpr(expr)
-	}
-
 	for idx, orderBy := range node.OrderBy {
 		newNode.OrderBy[idx] = DeepCopyOrderBy(orderBy)
-	}
-
-	for idx, expr := range node.OnUpdateExprs {
-		newNode.OnUpdateExprs[idx] = DeepCopyExpr(expr)
 	}
 
 	newNode.Stats = DeepCopyStats(node.Stats)
@@ -284,9 +252,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		for idx, col := range node.RowsetData.Cols {
 			newNode.RowsetData.Cols[idx] = DeepCopyColData(col)
 		}
-	}
-	for idx, expr := range node.TblFuncExprList {
-		newNode.TblFuncExprList[idx] = DeepCopyExpr(expr)
 	}
 
 	return newNode
@@ -595,11 +560,8 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		StmtType: qry.StmtType,
 		Steps:    qry.Steps,
 		Nodes:    make([]*plan.Node, len(qry.Nodes)),
-		Params:   make([]*plan.Expr, len(qry.Params)),
+		Params:   DeepCopyExprList(qry.Params),
 		Headings: qry.Headings,
-	}
-	for idx, param := range qry.Params {
-		newQry.Params[idx] = DeepCopyExpr(param)
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)
@@ -796,10 +758,7 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_ShowVariables:
 		showVariables := &plan.ShowVariables{
 			Global: df.ShowVariables.Global,
-			Where:  make([]*plan.Expr, len(df.ShowVariables.Where)),
-		}
-		for i, e := range df.ShowVariables.Where {
-			showVariables.Where[i] = DeepCopyExpr(e)
+			Where:  DeepCopyExprList(df.ShowVariables.Where),
 		}
 
 		newDf.Definition = &plan.DataDefinition_ShowVariables{
@@ -964,10 +923,6 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 
 	case *plan.Expr_W:
-		ps := make([]*Expr, len(item.W.PartitionBy))
-		for i, p := range item.W.PartitionBy {
-			ps[i] = DeepCopyExpr(p)
-		}
 		os := make([]*OrderBySpec, len(item.W.OrderBy))
 		for i, o := range item.W.OrderBy {
 			os[i] = DeepCopyOrderBy(o)
@@ -976,7 +931,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		newExpr.Expr = &plan.Expr_W{
 			W: &plan.WindowSpec{
 				WindowFunc:  DeepCopyExpr(item.W.WindowFunc),
-				PartitionBy: ps,
+				PartitionBy: DeepCopyExprList(item.W.PartitionBy),
 				OrderBy:     os,
 				Name:        item.W.Name,
 				Frame: &plan.FrameClause{
@@ -1028,14 +983,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 
 	case *plan.Expr_List:
-		e := &plan.ExprList{
-			List: make([]*plan.Expr, len(item.List.List)),
-		}
-		for i, ie := range item.List.List {
-			e.List[i] = DeepCopyExpr(ie)
-		}
 		newExpr.Expr = &plan.Expr_List{
-			List: e,
+			List: &plan.ExprList{
+				List: DeepCopyExprList(item.List.List),
+			},
 		}
 
 	case *plan.Expr_Vec:
