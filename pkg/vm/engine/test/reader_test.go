@@ -1360,4 +1360,42 @@ func Test_SimpleReader(t *testing.T) {
 	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
 	require.NoError(t, err)
 	require.True(t, done)
+
+	r = disttae.SimpleMultiObjectsReader(
+		context.Background(), fs,
+		[]objectio.ObjectStats{stats, stats}, timestamp.Timestamp{},
+		disttae.WithColumns(
+			[]uint16{0, 1},
+			[]types.Type{objectio.RowidType, pkType},
+		),
+		disttae.WithTombstone(),
+	)
+
+	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, 20, bat2.RowCount())
+
+	pks = vector.MustFixedColWithTypeCheck[int32](bat2.Vecs[1])
+	require.Equal(t, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}, pks)
+	rowids2 = vector.MustFixedColWithTypeCheck[types.Rowid](bat2.Vecs[0])
+	for i := 0; i < bat1.RowCount(); i++ {
+		require.Equal(t, rowids1[i], rowids2[i])
+	}
+
+	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, 20, bat2.RowCount())
+
+	pks = vector.MustFixedColWithTypeCheck[int32](bat2.Vecs[1])
+	require.Equal(t, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}, pks)
+	rowids2 = vector.MustFixedColWithTypeCheck[types.Rowid](bat2.Vecs[0])
+	for i := 0; i < bat1.RowCount(); i++ {
+		require.Equal(t, rowids1[i], rowids2[i])
+	}
+
+	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	require.NoError(t, err)
+	require.True(t, done)
 }

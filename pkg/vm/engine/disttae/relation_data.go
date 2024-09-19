@@ -107,6 +107,10 @@ func (relData *blockListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 	relData.blklist.Set(i, blk)
 }
 
+func (relData *blockListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
+	relData.blklist = slice
+}
+
 func (relData *blockListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
 	relData.blklist.AppendBlockInfo(blk)
 }

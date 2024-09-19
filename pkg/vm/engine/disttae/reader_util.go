@@ -106,3 +106,22 @@ func SimpleTombstoneObjectReader(
 		ctx, fs, obj, ts, opts...,
 	)
 }
+
+// TODO: optimize me to add object list relation data
+func SimpleMultiObjectsReader(
+	ctx context.Context,
+	fs fileservice.FileService,
+	objs []objectio.ObjectStats,
+	ts timestamp.Timestamp, // only used for appendable object
+	opts ...ReaderOption,
+) engine.Reader {
+	slice := objectio.MultiObjectStatsToBlockInfoSlice(objs, false)
+	relData := NewBlockListRelationData(0)
+	relData.SetBlockList(slice)
+	ds := NewRemoteDataSource(
+		ctx, fs, ts, relData,
+	)
+	return NewSimpleReader(
+		ctx, ds, fs, ts, opts...,
+	)
+}
