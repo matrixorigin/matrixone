@@ -52,9 +52,7 @@ type container struct {
 
 	tsExe colexec.ExpressionExecutor
 	tsVec []*vector.Vector
-
 	tsOid types.T
-	tsTyp *types.Type
 
 	startExe colexec.ExpressionExecutor
 	endExe   colexec.ExpressionExecutor

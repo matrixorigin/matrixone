@@ -2529,7 +2529,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				if err != nil {
 					return 0, err
 				}
-				colPos, _ := groupBinder.ctx.groupByAst[tree.String(helpFunc.truncate, dialect.MYSQL)]
+				colPos := groupBinder.ctx.groupByAst[tree.String(helpFunc.truncate, dialect.MYSQL)]
 				timeWindowGroup = &plan.Expr{
 					Typ: groupBinder.ctx.groups[colPos].Typ,
 					Expr: &plan.Expr_Col{
