@@ -138,7 +138,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			tableScan.ctr.buf)
 
 		analyzer.InputBlock()
-		analyzer.S3IOByte(tableScan.ctr.buf)
+		analyzer.ScanBytes(tableScan.ctr.buf)
 		batSize := tableScan.ctr.buf.Size()
 		tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
 		break

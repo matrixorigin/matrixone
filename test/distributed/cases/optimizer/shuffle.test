@@ -16,6 +16,9 @@ select Sleep(1);
 explain select count(*) from t1,t2 where t1.c1=t2.c1;
 select count(*) from t1,t2 where t1.c1=t2.c1;
 -- @separator:table
+explain select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
+select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
+-- @separator:table
 explain select count(*) from t1,t2 where t1.c1=t2.c2;
 select count(*) from t1,t2 where t1.c1=t2.c2;
 -- @separator:table

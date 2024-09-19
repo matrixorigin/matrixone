@@ -28,10 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/tidwall/btree"
 )
 
 const (
@@ -135,18 +136,20 @@ func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.File
 	return
 }
 
-func updateTombstoneBatch(bat *batch.Batch, mp *mpool.MPool) {
+func updateTombstoneBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 	bat.Vecs[0].Free(mp) // rowid
 	//bat.Vecs[2].Free(mp) // phyaddr
 	bat.Vecs = []*vector.Vector{bat.Vecs[1], bat.Vecs[2]}
 	bat.Attrs = []string{
 		catalog.AttrPKVal,
 		catalog.AttrCommitTs}
+	applyTSFilterForBatch(bat, 1, start, end, mp)
 	sortBatch(bat, 1, mp)
 }
-func updateDataBatch(bat *batch.Batch, mp *mpool.MPool) {
+func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 	bat.Vecs[len(bat.Vecs)-2].Free(mp) // rowid
 	bat.Vecs = append(bat.Vecs[:len(bat.Vecs)-2], bat.Vecs[len(bat.Vecs)-1])
+	applyTSFilterForBatch(bat, len(bat.Vecs)-1, start, end, mp)
 }
 func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool) {
 	var pk *vector.Vector
@@ -173,6 +176,7 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 }
 
 type ObjectHandle struct {
+	start, end  types.TS
 	entry       *ObjectEntry
 	blockOffset uint32
 	fs          fileservice.FileService
@@ -181,13 +185,15 @@ type ObjectHandle struct {
 	ctx         context.Context
 }
 
-func newObjectHandle(entry *ObjectEntry, fs fileservice.FileService, tombstone bool, mp *mpool.MPool, ctx context.Context) (h *ObjectHandle) {
+func newObjectHandle(ctx context.Context, entry *ObjectEntry, fs fileservice.FileService, tombstone bool, mp *mpool.MPool, start, end types.TS) (h *ObjectHandle) {
 	return &ObjectHandle{
 		entry:       entry,
 		fs:          fs,
 		isTombstone: tombstone,
 		mp:          mp,
 		ctx:         ctx,
+		start:       start,
+		end:         end,
 	}
 }
 
@@ -217,9 +223,9 @@ func (r *ObjectHandle) Next() (bat *batch.Batch, err error) {
 		}
 	} else {
 		if r.isTombstone {
-			updateTombstoneBatch(bat, r.mp)
+			updateTombstoneBatch(bat, r.start, r.end, r.mp)
 		} else {
-			updateDataBatch(bat, r.mp)
+			updateDataBatch(bat, r.start, r.end, r.mp)
 		}
 	}
 	r.blockOffset++
@@ -340,7 +346,7 @@ func (p *baseHandle) newObjectHandle(mp *mpool.MPool, ctx context.Context) (h *O
 	for p.objectIter.Next() {
 		entry := p.objectIter.Item()
 		if checkObjectEntry(&entry, p.start, p.end) {
-			return newObjectHandle(&entry, p.fs, p.isTombstone, mp, ctx), nil
+			return newObjectHandle(ctx, &entry, p.fs, p.isTombstone, mp, p.start, p.end), nil
 		}
 	}
 	return nil, moerr.GetOkExpectedEOF()
@@ -351,11 +357,14 @@ type ChangeHandler struct {
 	dataHandle      *baseHandle
 }
 
-func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) *ChangeHandler {
+func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (*ChangeHandler, error) {
+	if state.minTS.Greater(&start) {
+		return nil, moerr.NewErrStaleReadNoCtx(state.minTS.ToString(), start.ToString())
+	}
 	return &ChangeHandler{
 		tombstoneHandle: NewBaseHandler(state, start, end, mp, maxRow, true, fs, ctx),
 		dataHandle:      NewBaseHandler(state, start, end, mp, maxRow, false, fs, ctx),
-	}
+	}, nil
 }
 
 func (p *ChangeHandler) Close() error {
@@ -372,13 +381,28 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 		return
 	}
-	if tombstone == nil && data == nil {
-		err = moerr.GetOkExpectedEOF()
-	} else {
-		err = nil
-	}
+	err = nil
 	hint = engine.ChangesHandle_Tail_wip
 	return
+}
+func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, start, end types.TS, mp *mpool.MPool) error {
+	if bat == nil {
+		return nil
+	}
+	if bat.Vecs[sortIdx].GetType().Oid != types.T_TS {
+		panic(fmt.Sprintf("logic error, batch attrs %v, sort idx %d", bat.Attrs, sortIdx))
+	}
+	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[sortIdx])
+	deletes := make([]int64, 0)
+	for i, ts := range commitTSs {
+		if ts.Less(&start) || ts.Greater(&end) {
+			deletes = append(deletes, int64(i))
+		}
+	}
+	for _, vec := range bat.Vecs {
+		vec.Shrink(deletes, true)
+	}
+	return nil
 }
 func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 	if bat == nil {

@@ -99,9 +99,9 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 	case types.T_enum:
 		return CompareOrdered(types.DecodeEnum(a), types.DecodeEnum(b))
 	case types.T_TS:
-		// PXU FIXME Done
-		aa, bb := types.TS(a), types.TS(b)
-		return aa.Compare(&bb)
+		aa := (*types.TS)(unsafe.Pointer(&a[0]))
+		bb := (*types.TS)(unsafe.Pointer(&b[0]))
+		return aa.Compare(bb)
 
 	case types.T_Rowid:
 		// Row id is very special. it is not valena type but always be

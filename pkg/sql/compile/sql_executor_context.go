@@ -86,6 +86,10 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("not supported in internal sql executor")
 }
 
+func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
+	panic("not supported in internal sql executor")
+}
+
 func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
 	panic("not supported in internal sql executor")
 }
