@@ -268,8 +268,8 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 		return err
 	}
 
-	if !op.simple {
-		return moerr.NewInvalidInput(proc.Ctx, "json_extract_value should use a path that retrives a single value")
+	if !op.simple || (op.simple && len(op.paths) > 1) {
+		return moerr.NewInvalidInput(proc.Ctx, "json_extract_string should use a path that retrives a single value")
 	}
 	if jsonVec.GetType().Oid == types.T_json {
 		fn = computeJsonSimple
@@ -332,8 +332,8 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 	if err = op.buildPath(parameters, length); err != nil {
 		return err
 	}
-	if !op.simple {
-		return moerr.NewInvalidInput(proc.Ctx, "json_extract_value should use a path that retrives a single value")
+	if !op.simple || (op.simple && len(op.paths) > 1) {
+		return moerr.NewInvalidInput(proc.Ctx, "json_extract_float64 should use a path that retrives a single value")
 	}
 
 	if jsonVec.GetType().Oid == types.T_json {

@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strings"
 	"sync/atomic"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -347,12 +346,26 @@ type TableStat struct {
 	Csize     int
 }
 
-func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat TableStat, w bytes.Buffer) {
+func (entry *TableEntry) ObjectCnt(isTombstone bool) int {
+	if isTombstone {
+		return entry.tombstoneObjects.tree.Load().Len()
+	}
+	return entry.dataObjects.tree.Load().Len()
+}
 
-	it := entry.MakeDataObjectIt()
+func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTombstone bool) (stat TableStat, w bytes.Buffer) {
+	var it btree.IterG[*ObjectEntry]
+	if isTombstone {
+		w.WriteString("TOMBSTONES\n")
+		it = entry.MakeTombstoneObjectIt()
+	} else {
+		w.WriteString("DATA\n")
+		it = entry.MakeDataObjectIt()
+	}
+
 	defer it.Release()
 	zonemapKind := common.ZonemapPrintKindNormal
-	if schema := entry.GetLastestSchemaLocked(false); schema.HasSortKey() && strings.HasPrefix(schema.GetSingleSortKey().Name, "__") {
+	if schema := entry.GetLastestSchemaLocked(isTombstone); schema.HasSortKey() && schema.GetSingleSortKey().Name == "__mo_cpkey_col" {
 		zonemapKind = common.ZonemapPrintKindCompose
 	}
 
@@ -382,9 +395,9 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 		stat.ObjectCnt += 1
 		if objectEntry.GetLoaded() {
 			stat.Loaded += 1
-			stat.Rows += int(objectEntry.GetRows())
-			stat.OSize += int(objectEntry.GetOriginSize())
-			stat.Csize += int(objectEntry.GetCompSize())
+			stat.Rows += int(objectEntry.Rows())
+			stat.OSize += int(objectEntry.OriginSize())
+			stat.Csize += int(objectEntry.Size())
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')
@@ -404,8 +417,8 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 	return
 }
 
-func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int) string {
-	stat, detail := entry.ObjectStats(level, start, end)
+func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int, isTombstone bool) string {
+	stat, detail := entry.ObjectStats(level, start, end, isTombstone)
 
 	var avgCsize, avgRow, avgOsize int
 	if stat.Loaded > 0 {
@@ -483,26 +496,28 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	defer objIt.Release()
 	for objIt.Next() {
 		objectEntry := objIt.Item()
-		if err := processor.OnObject(objectEntry); err != nil {
+		if err = processor.OnObject(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				continue
 			}
 			return err
 		}
-		if err := processor.OnPostObject(objectEntry); err != nil {
+		if err = processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
 	}
-	objIt = entry.MakeTombstoneObjectIt()
-	for objIt.Next() {
-		objectEntry := objIt.Item()
-		if err := processor.OnTombstone(objectEntry); err != nil {
+
+	tombstoneIt := entry.MakeTombstoneObjectIt()
+	defer tombstoneIt.Release()
+	for tombstoneIt.Next() {
+		objectEntry := tombstoneIt.Item()
+		if err = processor.OnTombstone(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				continue
 			}
 			return err
 		}
-		if err := processor.OnPostObject(objectEntry); err != nil {
+		if err = processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
 	}
@@ -703,6 +718,7 @@ func MockTableEntryWithDB(dbEntry *DBEntry, tblId uint64) *TableEntry {
 	entry := NewReplayTableEntry()
 	entry.TableNode = &TableNode{}
 	entry.TableNode.schema.Store(NewEmptySchema("test"))
+	entry.TableNode.tombstoneSchema.Store(NewEmptySchema("tombstone"))
 	entry.ID = tblId
 	entry.db = dbEntry
 	return entry

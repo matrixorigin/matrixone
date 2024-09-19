@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -255,10 +256,10 @@ func (obj *aobject) GetMaxRowByTS(ts types.TS) (uint32, error) {
 			return 0, err
 		}
 		defer vec.Close()
-		for i := uint32(0); i < uint32(vec.Length()); i++ {
-			commitTS := vec.Get(int(i)).(types.TS)
-			if commitTS.Greater(&ts) {
-				return i, nil
+		tsVec := vector.MustFixedColNoTypeCheck[types.TS](vec.GetDownstreamVector())
+		for i := range tsVec {
+			if tsVec[i].Greater(&ts) {
+				return uint32(i), nil
 			}
 		}
 		return uint32(vec.Length()), nil

@@ -423,8 +423,10 @@ func (rm *RoutineManager) KillRoutineConnections() {
 			for rt, version := range rtMap {
 				if rt != nil && ((version+1)%math.MaxUint64)-1 <= killRecord.version {
 					//kill connect of this routine
-					logutil.Infof("[kill connection] do kill connection account id %d, version %d, connection id %d, ", account, killRecord.version, rt.getConnectionID())
-					rt.killConnection(false)
+					if rt.getProtocol() != nil {
+						logutil.Infof("[kill connection] do kill connection account id %d, version %d, connection id %d, ", account, killRecord.version, rt.getConnectionID())
+						rt.killConnection(false)
+					}
 					ar.deleteRoutine(account, rt)
 				}
 			}

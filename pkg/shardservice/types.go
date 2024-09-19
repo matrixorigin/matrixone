@@ -65,7 +65,7 @@ type ShardServer interface {
 // ShardService is sharding service. Each CN node holds an instance of the
 // ShardService.
 type ShardService interface {
-	// GetConfig returns the configuration of the shard service.
+	// Config returns the configuration of the shard service.
 	Config() Config
 	// GetStorage returns the storage of the shard service.
 	GetStorage() ShardStorage
@@ -166,9 +166,12 @@ const (
 	ReadApproxObjectsNum         = 5
 	ReadPrimaryKeysMayBeModified = 6
 	ReadGetColumMetadataScanInfo = 7
-	ReadReader                   = 8
+	ReadBuildReader              = 8
 	ReadMergeObjects             = 9
 	ReadVisibleObjectStats       = 10
+	ReadNext                     = 11
+	ReadClose                    = 12
+	ReadCollectTombstones        = 13
 )
 
 type ReadRequest struct {

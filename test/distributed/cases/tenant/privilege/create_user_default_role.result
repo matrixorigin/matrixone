@@ -23,6 +23,8 @@ show tables;
 Tables_in_mo_catalog
 mo_account
 mo_cache
+mo_cdc_task
+mo_cdc_watermark
 mo_columns
 mo_configurations
 mo_database

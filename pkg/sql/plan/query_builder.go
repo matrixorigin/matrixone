@@ -1599,11 +1599,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
-
 		builder.partitionPrune(rootID)
-
-		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
-		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
@@ -1613,6 +1609,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
+		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
@@ -2318,6 +2316,28 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if ctx.recSelect && clause.Distinct {
 			return 0, moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		}
+
+		if len(clause.Exprs) == 1 {
+			switch clause.Exprs[0].Expr.(type) {
+			case tree.UnqualifiedStar:
+				if astLimit != nil && astLimit.Count != nil {
+					limitBinder := NewLimitBinder(builder, ctx)
+					limitExpr, err := limitBinder.BindExpr(astLimit.Count, 0, true)
+					if err != nil {
+						return 0, err
+					}
+
+					if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
+						if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+							if c.U64Val == 0 {
+								builder.isSkipResolveTableDef = true
+							}
+						}
+					}
+				}
+			}
+		}
+
 		// build FROM clause
 		nodeID, err = builder.buildFrom(clause.From.Tables, ctx)
 		if err != nil {
@@ -2978,6 +2998,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	if (ctx.initSelect || ctx.recSelect) && !ctx.unionSelect {
 		nodeID = appendSinkNodeWithTag(builder, ctx, nodeID, ctx.sinkTag)
+		builder.qry.Nodes[nodeID].RecursiveCte = ctx.recSelect
 	}
 
 	if isRoot {
@@ -3613,6 +3634,27 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		schema, err = databaseIsValid(schema, builder.compCtx, snapshot)
 		if err != nil {
 			return 0, err
+		}
+
+		var subMeta *SubscriptionMeta
+		subMeta, err = builder.compCtx.GetSubscriptionMeta(schema, snapshot)
+		if err == nil && builder.isSkipResolveTableDef && snapshot == nil && subMeta == nil {
+			var tableDef *TableDef
+			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(schema, table)
+			if err != nil {
+				return 0, err
+			}
+
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:     plan.Node_TABLE_SCAN,
+				Stats:        nil,
+				ObjRef:       &plan.ObjectRef{DbName: schema, SchemaName: table},
+				TableDef:     tableDef,
+				BindingTags:  []int32{builder.genNewTag()},
+				ScanSnapshot: snapshot,
+			}, ctx)
+
+			return
 		}
 
 		// TODO
