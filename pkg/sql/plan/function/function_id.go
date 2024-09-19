@@ -251,6 +251,7 @@ const (
 	APPROX_COUNT_DISTINCT
 
 	LOAD_FILE
+	SAVE_FILE
 
 	//information functions
 	//Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
@@ -327,6 +328,7 @@ const (
 	MO_ADMIN_NAME // get mo admin name of account
 	MO_CU
 	MO_CU_V1
+	MO_EXPLAIN_PHY
 
 	GIT_VERSION
 	BUILD_VERSION
@@ -598,6 +600,7 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
+	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
 	"md5":                            MD5,
@@ -649,6 +652,7 @@ var functionIdRegister = map[string]int32{
 	"mo_admin_name":                  MO_ADMIN_NAME,
 	"mo_cu":                          MO_CU,
 	"mo_cu_v1":                       MO_CU_V1,
+	"mo_explain_phy":                 MO_EXPLAIN_PHY,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,

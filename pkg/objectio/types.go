@@ -49,6 +49,18 @@ type BlockReadFilter struct {
 	UnSortedSearchFunc ReadFilterSearchFuncType
 }
 
+func (f BlockReadFilter) DecideSearchFunc(isSortedBlk bool) ReadFilterSearchFuncType {
+	if (f.HasFakePK || !isSortedBlk) && f.UnSortedSearchFunc != nil {
+		return f.UnSortedSearchFunc
+	}
+
+	if isSortedBlk && f.SortedSearchFunc != nil {
+		return f.SortedSearchFunc
+	}
+
+	return nil
+}
+
 type WriteOptions struct {
 	Type WriteType
 	Val  any
@@ -109,37 +121,4 @@ type Reader interface {
 	ReadAllMeta(ctx context.Context, m *mpool.MPool) (ObjectDataMeta, error)
 
 	GetObject() *Object
-}
-
-type ObjectMeta interface {
-	MustGetMeta(metaType DataMetaType) ObjectDataMeta
-
-	HeaderLength() uint32
-
-	DataMetaCount() uint16
-	TombstoneMetaCount() uint16
-
-	DataMeta() (ObjectDataMeta, bool)
-
-	MustDataMeta() ObjectDataMeta
-
-	TombstoneMeta() (ObjectDataMeta, bool)
-
-	MustTombstoneMeta() ObjectDataMeta
-
-	SetDataMetaCount(count uint16)
-
-	SetDataMetaOffset(offset uint32)
-
-	SetTombstoneMetaCount(count uint16)
-
-	SetTombstoneMetaOffset(offset uint32)
-
-	SubMeta(pos uint16) (ObjectDataMeta, bool)
-
-	SubMetaCount() uint16
-
-	SubMetaIndex() SubMetaIndex
-
-	SubMetaTypes() []uint16
 }

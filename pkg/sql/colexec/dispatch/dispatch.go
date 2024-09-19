@@ -17,14 +17,13 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -37,16 +36,19 @@ func (dispatch *Dispatch) String(buf *bytes.Buffer) {
 	buf.WriteString(": dispatch")
 }
 
-func (dispatch *Dispatch) OpType() vm.OpType {
-	return vm.Dispatch
-}
-
 func (dispatch *Dispatch) Prepare(proc *process.Process) error {
+	if dispatch.OpAnalyzer == nil {
+		dispatch.OpAnalyzer = process.NewAnalyzer(dispatch.GetIdx(), dispatch.IsFirst, dispatch.IsLast, "dispatch")
+	} else {
+		dispatch.OpAnalyzer.Reset()
+	}
+
 	ctr := new(container)
 	dispatch.ctr = ctr
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
+	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), ctr.localRegsCnt)
 
 	switch dispatch.FuncId {
 	case SendToAllFunc:
@@ -127,75 +129,41 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ap := dispatch
+	analyzer := dispatch.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := dispatch.Children[0].Call(proc)
+	result, err := vm.ChildrenCall(dispatch.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
 
-	bat := result.Batch
-
+	whichToSend := result.Batch
 	if result.Batch == nil {
-		if ap.RecSink {
-			bat, err = makeEndBatch(proc)
-			if err != nil {
-				return result, err
-			}
-			defer func() {
-				if bat != nil {
-					proc.PutBatch(bat)
-				}
-			}()
-		} else {
-			printShuffleResult(ap)
-			result.Status = vm.ExecStop
-			return result, nil
-		}
+		result.Status = vm.ExecStop
+		printShuffleResult(dispatch)
+		return result, nil
 	}
 
-	if bat.Last() {
-		if !ap.ctr.hasData {
-			bat.SetEnd()
+	if whichToSend.Recursive == 1 {
+		if !dispatch.ctr.hasData {
+			result.Status = vm.ExecStop
+			whichToSend.SetEnd()
 		} else {
-			ap.ctr.hasData = false
+			dispatch.ctr.hasData = false
 		}
-	} else if bat.IsEmpty() {
-		result.Batch = batch.EmptyBatch
+	} else if whichToSend.IsEmpty() {
 		return result, nil
 	} else {
-		ap.ctr.hasData = true
+		dispatch.ctr.hasData = true
 	}
 
-	if bat == result.Batch {
-		bat, err = bat.Dup(proc.GetMPool())
-		if err != nil {
-			return vm.CancelResult, nil
-		}
-	}
-
-	ok, err := ap.ctr.sendFunc(bat, ap, proc)
+	// sending.
+	ok, err := dispatch.ctr.sendFunc(whichToSend, dispatch, proc)
 	if ok {
 		result.Status = vm.ExecStop
-		return result, err
-	} else {
-		// result.Batch = nil
-		return result, err
 	}
-}
-
-func makeEndBatch(proc *process.Process) (*batch.Batch, error) {
-	b := batch.NewWithSize(1)
-	b.Attrs = []string{
-		"recursive_col",
-	}
-	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-	err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
-	if err == nil {
-		batch.SetLength(b, 1)
-		b.SetEnd()
-	}
-	return b, err
+	return result, err
 }
 
 func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {

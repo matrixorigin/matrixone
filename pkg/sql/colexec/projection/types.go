@@ -75,8 +75,10 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 			projection.ctr.projExecutors[i].ResetForNextQuery()
 		}
 	}
-	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-	anal.Alloc(int64(projection.maxAllocSize))
+
+	if projection.OpAnalyzer != nil {
+		projection.OpAnalyzer.Alloc(int64(projection.maxAllocSize))
+	}
 	projection.maxAllocSize = 0
 }
 

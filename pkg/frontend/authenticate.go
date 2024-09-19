@@ -30,6 +30,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tidwall/btree"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -50,13 +54,12 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/tidwall/btree"
-	"golang.org/x/sync/errgroup"
 )
 
 type TenantInfo struct {
@@ -919,6 +922,8 @@ var (
 		"mo_transactions":             0,
 		"mo_cache":                    0,
 		"mo_snapshots":                0,
+		"mo_cdc_task":                 0,
+		"mo_cdc_watermark":            0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -957,6 +962,8 @@ var (
 		"mo_shards":                   0,
 		"mo_shards_metadata":          0,
 		catalog.MO_RETENTION:          0,
+		"mo_cdc_task":                 0,
+		"mo_cdc_watermark":            0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -991,6 +998,8 @@ var (
 		MoCatalogMoVariablesDDL,
 		MoCatalogMoTransactionsDDL,
 		MoCatalogMoCacheDDL,
+		MoCatalogMoCdcTaskDDL,
+		MoCatalogMoCdcWatermarkDDL,
 	}
 
 	//drop tables for the tenant
@@ -1160,7 +1169,7 @@ var (
 
 const (
 	//privilege verification
-	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s" order by account_id;`
+	checkTenantFormat = `select account_id,account_name,status,version,suspended_time,create_version from mo_catalog.mo_account where account_name = "%s" order by account_id;`
 
 	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s" order by account_id;`
 
@@ -1497,6 +1506,7 @@ var (
 		"system_metrics":     0,
 		"mysql":              0,
 		"mo_task":            0,
+		"mo_debug":           0,
 	}
 
 	// the privileges that can not be granted or revoked
@@ -2993,6 +3003,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
 				ses.Errorf(ctx, "post alter account suspend error: %s", err.Error())
 			}
+
+			if err = postProcessCdc(ctx, ses, aa.Name, targetAccountId, tree.AccountStatusSuspend.String()); err != nil {
+				ses.Errorf(ctx, "post pause cdc of alter accound suspend error: %s", err.Error())
+			}
 		}
 
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusRestricted {
@@ -3007,6 +3021,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			if err != nil {
 				ses.Errorf(ctx, "post alter account restricted error: %s", err.Error())
 			}
+
+			if err = postProcessCdc(ctx, ses, aa.Name, targetAccountId, tree.AccountStatusRestricted.String()); err != nil {
+				ses.Errorf(ctx, "post pause cdc of alter accound restricted error: %s", err.Error())
+			}
 		}
 
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusOpen && accountStatus == tree.AccountStatusRestricted.String() {
@@ -3019,6 +3037,16 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusOpen.String())
 			if err != nil {
 				ses.Errorf(ctx, "post alter account not restricted error: %s", err.Error())
+			}
+
+		}
+
+		if aa.StatusOption.Exist &&
+			aa.StatusOption.Option == tree.AccountStatusOpen &&
+			(accountStatus == tree.AccountStatusRestricted.String() ||
+				accountStatus == tree.AccountStatusSuspend.String()) {
+			if err = postProcessCdc(ctx, ses, aa.Name, targetAccountId, tree.AccountStatusOpen.String()); err != nil {
+				ses.Errorf(ctx, "post resume cdc of alter accound not restricted or not suspend error: %s", err.Error())
 			}
 		}
 	}
@@ -3726,6 +3754,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Errorf(ctx, "post drop account error: %s", err.Error())
 	}
 
+	if err = postProcessCdc(ctx, ses, da.Name, uint64(accountId), "drop"); err != nil {
+		ses.Errorf(ctx, "post drop cdc of the accound error: %s", err.Error())
+	}
+
 	return err
 }
 
@@ -3770,6 +3802,47 @@ func postDropSuspendAccount(
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
+}
+
+func postProcessCdc(
+	ctx context.Context,
+	ses *Session,
+	targetAccountName string,
+	targetAccountID uint64,
+	targetAccountStatus string,
+) (err error) {
+	//drop or pause cdc
+	switch targetAccountStatus {
+	case "drop":
+		return runUpdateCdcTask(
+			ctx,
+			task.TaskStatus_CancelRequested,
+			targetAccountID,
+			"",
+			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+	case tree.AccountStatusSuspend.String(), tree.AccountStatusRestricted.String():
+		return runUpdateCdcTask(
+			ctx,
+			task.TaskStatus_PauseRequested,
+			targetAccountID,
+			"",
+			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+	case tree.AccountStatusOpen.String():
+		return runUpdateCdcTask(
+			ctx,
+			task.TaskStatus_ResumeRequested,
+			targetAccountID,
+			"",
+			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+	}
+
+	return
 }
 
 // doDropUser accomplishes the DropUser statement
@@ -5298,7 +5371,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
 		canExecInRestricted = true
-	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
+	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt, *tree.ExplainPhyPlan:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
@@ -6937,6 +7010,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsSysTenant(), nil
 		}
 
+		checkCdcTaskPrivilege := func() (bool, error) {
+			//only the moAdmin or accountAdmin can execute the Cdc statement
+			return tenant.IsAdminRole(), nil
+		}
+
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
@@ -6971,7 +7049,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		case *tree.BackupStart:
 			return checkBackUpStartPrivilege()
 		case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
-			return checkBackUpStartPrivilege()
+			return checkCdcTaskPrivilege()
 		}
 	}
 
@@ -7292,19 +7370,31 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
 	defer span.End()
 
+	isSysOnlyDb := func(sql string) bool {
+		// only the SYS tenant has the table mo_account/mo_subs
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
+			return true
+		}
+		return false
+	}
+
 	start1 := time.Now()
 
 	//create tables for the tenant
 	for _, sql := range createSqls {
-		// only the SYS tenant has the table mo_account/mo_subs
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
+		if isSysOnlyDb(sql) {
 			continue
 		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
-			continue
-		}
-		err = bh.Exec(newTenantCtx, sql)
-		if err != nil {
+		if err = bh.Exec(newTenantCtx, sql); err != nil {
 			return err
 		}
 	}
@@ -8220,17 +8310,6 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		return err
 	}
 
-	// step3: update the session verison and session config
-	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == dbName {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
-		if err != nil {
-			return err
-		}
-
-		// TODO : Need to check the isolation level of this variable configuration
-		ses.SetConfig(dbName, configVar[configTyp], updateConfig)
-	}
-
 	return err
 }
 
@@ -8286,14 +8365,6 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	err = updateConfigForAccount()
 	if err != nil {
 		return err
-	}
-
-	// step3: update the session verison
-	if len(ses.GetDatabaseName()) != 0 {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
-		if err != nil {
-			return err
-		}
 	}
 
 	return err

@@ -42,8 +42,6 @@ type evalVector struct {
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state   int
 	lastpos int
 
@@ -129,8 +127,10 @@ func (rightAnti *RightAnti) Reset(proc *process.Process, pipelineFailed bool, er
 	if !ctr.handledLast && rightAnti.NumCPU > 1 && !rightAnti.IsMerger {
 		rightAnti.Channel <- nil
 	}
-	anal := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
-	anal.Alloc(ctr.maxAllocSize)
+	if rightAnti.OpAnalyzer != nil {
+		rightAnti.OpAnalyzer.Alloc(ctr.maxAllocSize)
+	}
+
 	ctr.maxAllocSize = 0
 
 	ctr.cleanBuf(proc)

@@ -133,7 +133,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw.EXPECT().GetColumns(gomock.Any()).Return(columns, nil).AnyTimes()
 	mcw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
-	mcw.EXPECT().RecordExecPlan(gomock.Any()).Return(nil).AnyTimes()
+	mcw.EXPECT().RecordExecPlan(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().GetLoadTag().Return(false).AnyTimes()
 	mcw.EXPECT().Clear().AnyTimes()
 	mcw.EXPECT().Free().AnyTimes()
