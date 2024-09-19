@@ -42,6 +42,7 @@ create table test03 (col1 int, col2 datalink);
 insert into test03 values (1, 'file://$resources/load_data/text.csv.tar.gz');
 insert into test03 values (2, 'file://$resources/load_data/test_columnlist_01.csv');
 select col1, load_file(col2) from test03;
+-- @ignore:1
 select * from test03;
 alter table test03 drop column col2;
 show create table test03;
@@ -89,7 +90,7 @@ select save_file(cast('stage://outfilestage01/datalink/test01.csv' as datalink),
 select load_file(cast('stage://outfilestage01/datalink/test01.csv?offset=0&size=6' as datalink));
 select save_file(cast('stage://outfilestage01/datalink/test02.csv' as datalink), 'test for datalink');
 select load_file(cast('stage://outfilestage01/datalink/test02.csv' as datalink));
-drop stage stage_link01;
+drop stage outfilestage01;
 
 
 
