@@ -70,16 +70,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		}
 	}
 
-	tblInfo, err := getDmlTableInfo(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
-	if err != nil {
-		return 0, err
-	}
-	rewriteInfo := &dmlSelectInfo{
-		typ:     "insert",
-		rootId:  -1,
-		tblInfo: tblInfo,
-	}
-	modTableDef := tblInfo.tableDefs[0]
 	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
 	// if err != nil {
 	// 	return 0, err
@@ -102,17 +92,10 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		}()
 	}
 
-	colName2Idx, err := builder.initInsertStmt(ctx, stmt, rewriteInfo, tableDefs[0])
+	lastNodeID, colName2Idx, err := builder.initInsertStmt(ctx, stmt, tableDefs[0])
 	if err != nil {
 		return 0, err
 	}
-	replaceStmt := getRewriteToReplaceStmt(modTableDef, stmt, rewriteInfo, builder.isPrepareStatement)
-	if replaceStmt != nil {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "rewrite to replace")
-	}
-	lastNodeID := rewriteInfo.rootId
-
-	//colName2Idx := make(map[string]int)
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	idxObjRefs := make([][]*plan.ObjectRef, len(tableDefs))
@@ -428,8 +411,12 @@ func (builder *QueryBuilder) getInsertColsFromStmt(stmt *tree.Insert, tableDef *
 	return insertColNames, nil
 }
 
-func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo, tableDef *plan.TableDef) (map[string]int32, error) {
-	var err error
+func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Insert, tableDef *plan.TableDef) (int32, map[string]int32, error) {
+	var (
+		lastNodeID int32
+		err        error
+	)
+
 	colName2Idx := make(map[string]int32)
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
@@ -440,7 +427,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 
 	//var ifInsertFromUniqueColMap map[string]bool
 	if insertColumns, err = builder.getInsertColsFromStmt(stmt, tableDef); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
 	var astSelect *tree.Select
@@ -454,14 +441,14 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		if isAllDefault {
 			for j, row := range selectImpl.Rows {
 				if row != nil {
-					return nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
+					return 0, nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		} else {
 			colCount := len(insertColumns)
 			for j, row := range selectImpl.Rows {
 				if len(row) != colCount {
-					return nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
+					return 0, nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		}
@@ -470,20 +457,20 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		// but it does not work at the case:
 		// insert into a(a) values (); insert into a values (0),();
 		if isAllDefault && stmt.Columns != nil {
-			return nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+			return 0, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		info.rootId, err = builder.buildValueScan(isAllDefault, bindCtx, tableDef, selectImpl, insertColumns)
+		lastNodeID, err = builder.buildValueScan(isAllDefault, bindCtx, tableDef, selectImpl, insertColumns)
 		if err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 
 	case *tree.SelectClause:
 		astSelect = stmt.Rows
 
 		subCtx := NewBindContext(builder, bindCtx)
-		info.rootId, err = builder.bindSelect(astSelect, subCtx, false)
+		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 		//ifInsertFromUniqueColMap = make(map[string]bool)
 
@@ -491,23 +478,23 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		astSelect = selectImpl.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
-		info.rootId, err = builder.bindSelect(astSelect, subCtx, false)
+		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 		// ifInsertFromUniqueColMap = make(map[string]bool)
 
 	default:
-		return nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
+		return 0, nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
-		return nil, err
+	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
+		return 0, nil, err
 	}
 
-	lastNode := builder.qry.Nodes[info.rootId]
+	lastNode := builder.qry.Nodes[lastNodeID]
 	if len(insertColumns) != len(lastNode.ProjectList) {
-		return nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+		return 0, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 	}
 
 	var findTableDefFromSource func(node *plan.Node) *plan.TableDef
@@ -551,8 +538,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 	//	fromUniqueCols = getUniqueColMap(tableDef)
 	//}
 
-	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
-	info.derivedTableId = info.rootId
+	tag := lastNode.BindingTags[0]
 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
 	insertColToExpr := make(map[string]*Expr)
@@ -570,12 +556,12 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		if tableDef.Cols[colIdx].Typ.Id == int32(types.T_enum) {
 			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
-				return nil, err
+				return 0, nil, err
 			}
 		} else {
 			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
-				return nil, err
+				return 0, nil, err
 			}
 		}
 		insertColToExpr[column] = projExpr
@@ -637,7 +623,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
-				return nil, err
+				return 0, nil, err
 			}
 
 			projectList = append(projectList, defExpr)
@@ -649,29 +635,14 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 	// append ProjectNode
 	projectCtx := NewBindContext(builder, bindCtx)
 	lastTag := builder.genNewTag()
-	info.rootId = builder.appendNode(&plan.Node{
+	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: projectList,
-		Children:    []int32{info.rootId},
+		Children:    []int32{lastNodeID},
 		BindingTags: []int32{lastTag},
 	}, projectCtx)
 
-	info.projectList = make([]*Expr, 0, len(projectList))
-	info.derivedTableId = info.rootId
-	for i, e := range projectList {
-		info.projectList = append(info.projectList, &plan.Expr{
-			Typ: e.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: lastTag,
-					ColPos: int32(i),
-				},
-			},
-		})
-	}
-	info.idx = int32(len(info.projectList))
-
-	return colName2Idx, nil
+	return lastNodeID, colName2Idx, nil
 }
 
 func (builder *QueryBuilder) buildValueScan(
