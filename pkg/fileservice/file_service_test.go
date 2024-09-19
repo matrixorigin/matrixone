@@ -51,6 +51,7 @@ func testFileService(
 	t.Run("basic", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
+		defer fs.Close()
 
 		assert.True(t, strings.Contains(fs.Name(), fsName))
 
@@ -182,6 +183,7 @@ func testFileService(
 	t.Run("WriterForRead", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+		defer fs.Close()
 
 		err := fs.Write(ctx, IOVector{
 			FilePath: "foo",
@@ -231,8 +233,10 @@ func testFileService(
 	})
 
 	t.Run("ReadCloserForRead", func(t *testing.T) {
-		fs := newFS(fsName)
 		ctx := context.Background()
+		fs := newFS(fsName)
+		defer fs.Close()
+
 		err := fs.Write(ctx, IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -310,6 +314,7 @@ func testFileService(
 	t.Run("random", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+		defer fs.Close()
 
 		for i := 0; i < 8; i++ {
 			filePath := fmt.Sprintf("%d", mrand.Int63())
@@ -439,6 +444,7 @@ func testFileService(
 	t.Run("tree", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+		defer fs.Close()
 
 		for _, dir := range []string{
 			"",
@@ -561,6 +567,7 @@ func testFileService(
 	t.Run("errors", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+		defer fs.Close()
 
 		err := fs.Read(ctx, &IOVector{
 			FilePath: "foo",
@@ -664,6 +671,7 @@ func testFileService(
 
 	t.Run("cache data", func(t *testing.T) {
 		fs := newFS(fsName)
+		defer fs.Close()
 		ctx := context.Background()
 		var counterSet perfcounter.CounterSet
 		ctx = perfcounter.WithCounterSet(ctx, &counterSet)
@@ -737,11 +745,11 @@ func testFileService(
 			assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
 		}
 		vec.Release()
-		fs.Close()
 	})
 
 	t.Run("ignore", func(t *testing.T) {
 		fs := newFS(fsName)
+		defer fs.Close()
 		ctx := context.Background()
 
 		data := []byte("foo")
@@ -780,6 +788,7 @@ func testFileService(
 	t.Run("named path", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
+		defer fs.Close()
 
 		// write
 		err := fs.Write(ctx, IOVector{
@@ -849,6 +858,8 @@ func testFileService(
 	t.Run("issue6110", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
+		defer fs.Close()
+
 		err := fs.Write(ctx, IOVector{
 			FilePath: "path/to/file/foo",
 			Entries: []IOEntry{
@@ -870,6 +881,7 @@ func testFileService(
 	t.Run("streaming write", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
+		defer fs.Close()
 
 		reader, writer := io.Pipe()
 		n := 65536
@@ -980,6 +992,7 @@ func testFileService(
 
 	t.Run("context cancel", func(t *testing.T) {
 		fs := newFS(fsName)
+		defer fs.Close()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 

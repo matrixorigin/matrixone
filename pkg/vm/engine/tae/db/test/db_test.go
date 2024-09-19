@@ -28,6 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -111,7 +113,7 @@ func TestAppend2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
+	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
@@ -126,7 +128,7 @@ func TestAppend2(t *testing.T) {
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 10
-	testutil.CreateRelation(t, db, "db", schema, true)
+	testutil.CreateRelation(t, db.DB, "db", schema, true)
 
 	totalRows := uint64(schema.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
@@ -140,13 +142,13 @@ func TestAppend2(t *testing.T) {
 	start := time.Now()
 	for _, data := range bats {
 		wg.Add(1)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db, &wg))
+		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
 		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 	{
-		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
+		txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 		testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -162,10 +164,55 @@ func TestAppend2(t *testing.T) {
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	wg.Add(1)
-	testutil.AppendFailClosure(t, bats[0], schema.Name, db, &wg)()
+	testutil.AppendFailClosure(t, bats[0], schema.Name, db.DB, &wg)()
 	wg.Wait()
 }
 
+func TestTruncate1(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer db.Close()
+
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 10
+	db.BindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+
+	db.CreateRelAndAppend(bat, true)
+
+	now := time.Now()
+	testutils.WaitExpect(20000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	t.Logf("Checkpointed: %d", db.Runtime.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+	db.DoAppend(bat)
+
+	now = time.Now()
+	testutils.WaitExpect(20000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	t.Logf("Checkpointed: %d", db.Runtime.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+
+	testutils.WaitExpect(20000, func() bool {
+		return db.Wal.GetTruncated() >= 4
+	})
+	assert.GreaterOrEqual(t, db.Wal.GetTruncated(), uint64(4))
+}
 func TestAppend3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -6407,6 +6454,92 @@ func TestAppendAndGC(t *testing.T) {
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 
+}
+
+func TestAppendAndGC2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := new(options.Options)
+	opts = config.WithQuickScanAndCKPOpts(opts)
+	opts.CheckpointCfg.MinCount = 3
+	opts.CheckpointCfg.GlobalMinCount = 5
+	options.WithDisableGCCheckpoint()(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	db := tae.DB
+	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
+
+	schema1 := catalog.MockSchemaAll(13, 2)
+	schema1.BlockMaxRows = 10
+	schema1.ObjectMaxBlocks = 2
+
+	schema2 := catalog.MockSchemaAll(13, 2)
+	schema2.BlockMaxRows = 10
+	schema2.ObjectMaxBlocks = 2
+	{
+		txn, _ := db.StartTxn(nil)
+		database, err := txn.CreateDatabase("db", "", "")
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema1)
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema2)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*10-1))
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
+
+	pool, err := ants.NewPool(20)
+	assert.Nil(t, err)
+	defer pool.Release()
+	var wg sync.WaitGroup
+
+	for _, data := range bats {
+		wg.Add(2)
+		err = pool.Submit(testutil.AppendClosure(t, data, schema1.Name, db, &wg))
+		assert.Nil(t, err)
+		err = pool.Submit(testutil.AppendClosure(t, data, schema2.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+	testutils.WaitExpect(5000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	metaFile := db.BGCheckpointRunner.GetCheckpointMetaFiles()
+	tae.Restart(ctx)
+	db = tae.DB
+	files := make(map[string]struct{}, 0)
+	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
+		if group != store.GroupFiles {
+			return
+		}
+		vec := vector.NewVec(types.Type{})
+		if err = vec.UnmarshalBinary(payload); err != nil {
+			return
+		}
+		for i := 0; i < vec.Length(); i++ {
+			file := vec.GetStringAt(i)
+			if strings.Contains(file, checkpoint.PrefixMetadata) {
+				fileInfo := strings.Split(file, checkpoint.CheckpointDir+"/")
+				name := fileInfo[1]
+				files[name] = struct{}{}
+				continue
+			}
+			files[file] = struct{}{}
+		}
+	}
+	db.Wal.Replay(loadFiles)
+	assert.NotEqual(t, 0, len(files))
+	for file := range metaFile {
+		if _, ok := files[file]; !ok {
+			panic(fmt.Sprintf("file %s not in meta files", file))
+		}
+		logutil.Infof("file %s in meta files", file)
+	}
 }
 
 func TestSnapshotGC(t *testing.T) {
