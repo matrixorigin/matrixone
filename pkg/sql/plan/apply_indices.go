@@ -220,10 +220,13 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// get the list of filter that is fulltext_match func
 			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
 
+			// check equal fulltext_match func and only compute once for equal function()
+			eqmap := builder.findEqualFullTextMatchFunc(projNode, scanNode, projids, filterids)
+
 			// apply fulltext indices when fulltext_match exists
 			if len(filterids) > 0 || len(projids) > 0 {
 				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode,
-					filterids, filter_ftidxs, projids, proj_ftidxs, colRefCnt, idxColMap)
+					filterids, filter_ftidxs, projids, proj_ftidxs, eqmap, colRefCnt, idxColMap)
 			}
 		}
 	}

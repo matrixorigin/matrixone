@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -54,13 +55,13 @@ import (
 // |                           ->  Values Scan "*VALUES*"                                     |
 // +------------------------------------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
-	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
+	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef, eqmap map[int32]int32,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	ctx := builder.ctxByNode[nodeID]
 
 	idxID, filter_node_ids, proj_node_ids := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		filterids, filterIndexDefs, projids, projIndexDef, colRefCnt, idxColMap)
+		filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
 
 	if sortNode != nil {
 		sortNode.Children[0] = idxID
@@ -85,7 +86,11 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			})
 		}
 
-		for _, id := range proj_node_ids {
+		for i, id := range proj_node_ids {
+			if _, ok := eqmap[int32(i)]; ok {
+				continue
+			}
+
 			ftnode := builder.qry.Nodes[id]
 			orderByScore = append(orderByScore, &OrderBySpec{
 				Expr: &Expr{
@@ -149,9 +154,10 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	projIndexDefs := make([]*plan.IndexDef, 0)
 
 	//ctx := builder.ctxByNode[nodeID]
+	eqmap := make(map[int32]int32)
 
 	idxID, _, _ := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		filterids, filterIndexDefs, projids, projIndexDefs, colRefCnt, idxColMap)
+		filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
 
 	aggNode.Children[0] = idxID
 
@@ -160,7 +166,7 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
-	projids []int32, proj_indexDefs []*plan.IndexDef,
+	projids []int32, proj_indexDefs []*plan.IndexDef, eqmap map[int32]int32,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32) {
 
 	ctx := builder.ctxByNode[nodeID]
@@ -170,14 +176,14 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	//var colDefs = scanNode.TableDef.Cols
 	//pkJson := fmt.Sprintf("{\"type\":%d}", pkType.Id)
 
-	var ret_filter_node_ids = make([]int32, 0)
-	var ret_proj_node_ids = make([]int32, 0)
+	var ret_filter_node_ids = make([]int32, len(filterids))
+	var ret_proj_node_ids = make([]int32, len(projids))
 
 	indexDefs := make([]*plan.IndexDef, 0)
 	// copy filters and then delete the fulltext_match from scanNode.FilterList
-	ft_filters := make([]*plan.Expr, len(filterids)+len(projids))
-	for i, id := range filterids {
-		ft_filters[i] = scanNode.FilterList[id]
+	ft_filters := make([]*plan.Expr, 0)
+	for _, id := range filterids {
+		ft_filters = append(ft_filters, scanNode.FilterList[id])
 	}
 
 	// remove the fulltext_match filter from TABLE_SCAN
@@ -188,11 +194,25 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	indexDefs = append(indexDefs, filter_indexDefs...)
 
+	// Check Equal fulltext_match function
+	ret_proj_node_ids_map := make(map[int32]int32)
+
 	proj_offset := len(filterids)
 	for i, id := range projids {
-		ft_filters[proj_offset+i] = projNode.ProjectList[id]
+
+		eqfid, ok := eqmap[int32(i)]
+		if ok {
+			// equivalent filter found
+			ret_proj_node_ids_map[eqfid] = int32(i)
+		} else {
+			// proj filter not match with filter list so add to ft_filters
+			// and append the corresponding ret_proj_node_ids position
+			ftlen := len(ft_filters)
+			ret_proj_node_ids_map[int32(ftlen)] = int32(i)
+			ft_filters = append(ft_filters, projNode.ProjectList[id])
+			indexDefs = append(indexDefs, proj_indexDefs[i])
+		}
 	}
-	indexDefs = append(indexDefs, proj_indexDefs...)
 
 	// buildFullTextIndexScan
 	var last_node_id int32
@@ -239,10 +259,23 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 
 		// save the created fulltext node to either filter or projection
+		// check equal fulltext_match() and return node id to correct project position
 		if i < proj_offset {
-			ret_filter_node_ids = append(ret_filter_node_ids, curr_ftnode_id)
+			v, ok := ret_proj_node_ids_map[int32(i)]
+			if ok {
+				// equal fulltext_match() in proj and filter
+				ret_proj_node_ids[v] = curr_ftnode_id
+			}
+			ret_filter_node_ids[i] = curr_ftnode_id
 		} else {
-			ret_proj_node_ids = append(ret_proj_node_ids, curr_ftnode_id)
+			v, ok := ret_proj_node_ids_map[int32(i)]
+			if ok {
+				// remaining fulltext_match() should have its position from reverse_eqmap too
+				ret_proj_node_ids[v] = curr_ftnode_id
+
+			} else {
+				panic(moerr.NewInternalError(builder.GetContext(), "Invalid ret_proj_node_ids_map"))
+			}
 		}
 
 		curr_ftnode := builder.qry.Nodes[curr_ftnode_id]
@@ -322,6 +355,58 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	scanNode.Offset = nil
 
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids
+}
+
+func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
+
+	nargs1 := len(fn1.Args)
+	nargs2 := len(fn2.Args)
+
+	if nargs1 != nargs2 {
+		return false
+	}
+
+	// check search pattern and mode
+	var pattern1, pattern2 string
+	var mode1, mode2 int64
+
+	pattern1 = fn1.Args[0].GetLit().GetSval()
+	mode1 = fn1.Args[1].GetLit().GetI64Val()
+
+	pattern2 = fn2.Args[0].GetLit().GetSval()
+	mode2 = fn2.Args[1].GetLit().GetI64Val()
+
+	if pattern1 != pattern2 || mode1 != mode2 {
+		return false
+	}
+
+	// check index parts
+	for i := 2; i < nargs1; i++ {
+		if !strings.EqualFold(fn1.Args[i].GetCol().GetName(), fn2.Args[i].GetCol().GetName()) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// return map[projid]fiter_id -- position of the projids and filterids but NOT position of ProjectList and FilterList
+func (builder *QueryBuilder) findEqualFullTextMatchFunc(projNode *plan.Node, scanNode *plan.Node, projids, filterids []int32) map[int32]int32 {
+
+	eqmap := make(map[int32]int32)
+
+	for i, projid := range projids {
+		prexpr := projNode.ProjectList[projid]
+		for j, fid := range filterids {
+			fexpr := scanNode.FilterList[fid]
+			eq := builder.equalsFullTextMatchFunc(prexpr.GetF(), fexpr.GetF())
+			if eq {
+				eqmap[int32(i)] = int32(j)
+			}
+		}
+	}
+
+	return eqmap
 }
 
 func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode *plan.Node) *plan.IndexDef {

@@ -57,6 +57,10 @@ select src.*, match(body, title) against('blue') from src;
 -- match with Aggregate
 select count(*) from src where match(title, body) against('red');
 
+-- duplicate fulltext_match and compute once
+-- @separator:table
+explain select match(body, title) against('red') from src where match(body, title) against('red');
+
 drop table src;
 
 -- composite primary key

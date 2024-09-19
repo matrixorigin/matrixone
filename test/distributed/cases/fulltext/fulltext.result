@@ -73,6 +73,17 @@ id    body    title    score
 select count(*) from src where match(title, body) against('red');
 count(*)
 2
+explain select match(body, title) against('red') from src where match(body, title) against('red');
+TP QURERY PLAN
+Project
+  ->  Sort
+        Sort Key: mo_fulltext_alias_0.score DESC
+        ->  Join
+              Join Type: INNER
+              Join Cond: (src.id = mo_fulltext_alias_0.doc_id)
+              ->  Table Scan on fulltext.src
+              ->  Table Function on fulltext_index_scan
+                    ->  Values Scan "*VALUES*" 
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
