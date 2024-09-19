@@ -259,6 +259,12 @@ func WithMemFilter(filter MemPKFilter) ReaderOption {
 	}
 }
 
+func WithTombstone() ReaderOption {
+	return func(r *reader) {
+		r.isTombstone = true
+	}
+}
+
 func NewSimpleReader(
 	ctx context.Context,
 	ds engine.DataSource,
@@ -411,6 +417,7 @@ func (r *reader) Read(
 
 	err = blockio.BlockDataRead(
 		statsCtx,
+		r.isTombstone,
 		blkInfo,
 		r.source,
 		r.columns.seqnums,

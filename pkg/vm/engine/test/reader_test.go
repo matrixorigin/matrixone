@@ -1347,6 +1347,7 @@ func Test_SimpleReader(t *testing.T) {
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
 		),
+		disttae.WithTombstone(),
 	)
 	blockio.Start("")
 	defer blockio.Stop("")

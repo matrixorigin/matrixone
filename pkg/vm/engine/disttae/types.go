@@ -918,7 +918,8 @@ type blockSortHelper struct {
 type reader struct {
 	withFilterMixin
 
-	source engine.DataSource
+	isTombstone bool
+	source      engine.DataSource
 
 	memFilter MemPKFilter
 
