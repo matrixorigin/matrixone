@@ -15,8 +15,9 @@ package colexec
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -86,6 +87,313 @@ func TestSetStatsCNCreated(t *testing.T) {
 	require.Equal(t, uint32(bat.VectorCount()), stats.BlkCnt())
 	require.Equal(t, uint32(bat.Vecs[0].Length()), stats.Rows())
 
+}
+
+func TestMergeSortBatches(t *testing.T) {
+	pool, err := mpool.NewMPool("", mpool.GB, 0)
+	require.NoError(t, err)
+	var restult *batch.Batch
+	sinker := func(bat *batch.Batch) error {
+		var err2 error
+		if restult != nil {
+			restult.Clean(pool)
+		}
+		restult, err2 = bat.Dup(pool)
+		if err2 != nil {
+			return err2
+		}
+		return nil
+	}
+	// Test bool
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_bool.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], true, false, pool)
+		vector.AppendFixed(bat2.Vecs[1], false, false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{1, 2}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []bool{false, true}, vector.MustFixedColWithTypeCheck[bool](restult.Vecs[1]))
+	}
+	// Test int8
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_int8.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], int8(1), false, pool)
+		vector.AppendFixed(bat2.Vecs[1], int8(2), false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{2, 1}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []int8{1, 2}, vector.MustFixedColWithTypeCheck[int8](restult.Vecs[1]))
+	}
+	// Test int16
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_int16.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], int16(1), false, pool)
+		vector.AppendFixed(bat2.Vecs[1], int16(2), false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{2, 1}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []int16{1, 2}, vector.MustFixedColWithTypeCheck[int16](restult.Vecs[1]))
+	}
+	// Test uint8
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_uint8.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], uint8(1), false, pool)
+		vector.AppendFixed(bat2.Vecs[1], uint8(2), false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{2, 1}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []uint8{1, 2}, vector.MustFixedColWithTypeCheck[uint8](restult.Vecs[1]))
+	}
+	// Test uint16
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_uint16.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], uint16(1), false, pool)
+		vector.AppendFixed(bat2.Vecs[1], uint16(2), false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{2, 1}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []uint16{1, 2}, vector.MustFixedColWithTypeCheck[uint16](restult.Vecs[1]))
+	}
+	// Test uint32
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_uint32.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], uint32(1), false, pool)
+		vector.AppendFixed(bat2.Vecs[1], uint32(2), false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{2, 1}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []uint32{1, 2}, vector.MustFixedColWithTypeCheck[uint32](restult.Vecs[1]))
+	}
+	// Test bit
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_bit.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], uint64(1), false, pool)
+		vector.AppendFixed(bat2.Vecs[1], uint64(2), false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{2, 1}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []uint64{1, 2}, vector.MustFixedColWithTypeCheck[uint64](restult.Vecs[1]))
+	}
+	// Test float32
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_float32.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], float32(1), false, pool)
+		vector.AppendFixed(bat2.Vecs[1], float32(2), false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{2, 1}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []float32{1, 2}, vector.MustFixedColWithTypeCheck[float32](restult.Vecs[1]))
+	}
+	// Test float64
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_float64.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], float64(1), false, pool)
+		vector.AppendFixed(bat2.Vecs[1], float64(2), false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{2, 1}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []float64{1, 2}, vector.MustFixedColWithTypeCheck[float64](restult.Vecs[1]))
+	}
+	// Test date
+	{
+		bat1 := batch.NewWithSize(2)
+		defer bat1.Clean(pool)
+		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewVec(types.T_date.ToType()))
+		bat2, err := bat1.Dup(pool)
+		require.NoError(t, err)
+		buffer, err := bat1.Dup(pool)
+		defer buffer.Clean(pool)
+		require.NoError(t, err)
+		vector.AppendFixed(bat1.Vecs[1], types.Date(1), false, pool)
+		vector.AppendFixed(bat2.Vecs[1], types.Date(2), false, pool)
+		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
+		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
+
+		err = MergeSortBatches(
+			[]*batch.Batch{bat1, bat2},
+			1,
+			buffer,
+			sinker,
+			pool,
+		)
+		require.NoError(t, err)
+		require.Equal(t, restult.Vecs[0].Length(), 2)
+		require.Equal(t, restult.Vecs[1].Length(), 2)
+		require.Equal(t, []int32{2, 1}, vector.MustFixedColWithTypeCheck[int32](restult.Vecs[0]))
+		require.Equal(t, []types.Date{1, 2}, vector.MustFixedColWithTypeCheck[types.Date](restult.Vecs[1]))
+	}
 }
 
 func TestS3Writer_SortAndSync(t *testing.T) {
