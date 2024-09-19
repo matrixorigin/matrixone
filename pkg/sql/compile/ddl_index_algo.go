@@ -92,7 +92,6 @@ func (s *Scope) handleMasterIndexTable(c *Compile, indexDef *plan.IndexDef, qryD
 	return nil
 }
 
-// ERIC
 func (s *Scope) handleFullTextIndexTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 	if ok, err := s.isExperimentalEnabled(c, fulltextIndexFlag); err != nil {

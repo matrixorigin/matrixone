@@ -243,7 +243,6 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		err = moerr.NewInvalidInput(b.GetContext(), "SELECT clause contains unqualified star")
 
 	case *tree.FullTextMatchExpr:
-		// ERIC
 		expr, err = b.bindFullTextMatchExpr(exprImpl, depth, isRoot)
 	default:
 		err = moerr.NewNYIf(b.GetContext(), "expr '%+v'", exprImpl)
@@ -964,7 +963,6 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 }
 
-// ERIC
 func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
 
 	args := make([]*Expr, 2+len(astExpr.KeyParts))

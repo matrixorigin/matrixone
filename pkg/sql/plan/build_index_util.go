@@ -105,6 +105,26 @@ func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
 	}
 }
 
+// setEmptyFullTextIndexName Set name for index constraint with an empty name
+func setEmptyFullTextIndexName(namesMap map[string]bool, indexConstr *tree.FullTextIndex) {
+	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
+		colName := indexConstr.KeyParts[0].ColName.ColName()
+		constrName := colName
+		i := 2
+		if strings.EqualFold(constrName, "PRIMARY") {
+			constrName = fmt.Sprintf("%s_%d", constrName, 2)
+			i = 3
+		}
+		for namesMap[constrName] {
+			//  loop forever until we find constrName that haven't been used.
+			constrName = fmt.Sprintf("%s_%d", colName, i)
+			i++
+		}
+		indexConstr.Name = constrName
+		namesMap[constrName] = true
+	}
+}
+
 // TODO
 // Currently, using expression as index keyparts are not supported in matrixone
 func checkIndexKeypartSupportability(context context.Context, keyParts []*tree.KeyPart) error {

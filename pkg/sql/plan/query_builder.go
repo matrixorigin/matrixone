@@ -1660,7 +1660,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	return builder.qry, nil
 }
 
-// ERIC learn to generate select table_function
 func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, ctx *BindContext, isRoot bool) (int32, error) {
 	var selectStmts []tree.Statement
 	var unionTypes []plan.Node_NodeType
@@ -3030,7 +3029,6 @@ func DeepProcessExprForGroupConcat(expr *Expr, ctx *BindContext) *Expr {
 
 }
 
-// ERIC handle FullTExtMatchExpr here
 func appendSelectList(
 	builder *QueryBuilder,
 	ctx *BindContext,
@@ -4027,7 +4025,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	return nil
 }
 
-// ERIC JOIN INNER TABLE FUNCTION
 func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (int32, error) {
 	var joinType plan.Node_JoinType
 

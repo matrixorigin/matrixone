@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -271,7 +270,6 @@ func getAddColPos(cols []*plan.ColDef, def *plan.ColDef, colName string, pos int
 	return nil, 0, moerr.NewInvalidInputNoCtxf("column '%s' doesn't exist in table", colName)
 }
 
-// ERIC Alter Table
 func (s *Scope) AlterTableInplace(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
@@ -442,7 +440,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 
-		// ERIC ALTER ADD INDEX
 		case *plan.AlterTable_Action_AddIndex:
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 
@@ -511,7 +508,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					return err
 				}
 			}
-		// ERIC Alter Index
 		case *plan.AlterTable_Action_AlterIndex:
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterIndex
@@ -536,7 +532,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					break
 				}
 			}
-		// ERIC ALTER REINDEX SKIP FOR NOW
 		case *plan.AlterTable_Action_AlterReindex:
 			// NOTE: We hold lock (with retry) during alter reindex, as "alter table" takes an exclusive lock
 			//in the beginning for pessimistic mode. We need to see how to reduce the critical section.
@@ -545,7 +540,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			constraintName := tableAlterIndex.IndexName
 			multiTableIndexes := make(map[string]*MultiTableIndex)
 
-			// ERIC Alter Reindex table
 			for i, indexDef := range tableDef.Indexes {
 				if indexDef.IndexName == constraintName {
 					alterIndex = indexDef
@@ -599,7 +593,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 			}
 
-			// ERIC SKIP FOR NOW
 			// update the hidden tables
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo {
@@ -796,7 +789,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	return nil
 }
 
-// ERIC Create Table
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
@@ -1158,7 +1150,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	// ERIC CREATE TABLE --- index
 	// build index table
 	for _, def := range qry.IndexTables {
 		planCols = def.GetCols()
@@ -1485,11 +1476,9 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		})
 }
 
-// ERIC CREATE INDEX
 func (s *Scope) CreateIndex(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateIndex()
 
-	logutil.Infof("ERIC Compile.CreateIndex %s: ", qry.String())
 	{
 		// lockMoTable will lock Table  mo_catalog.mo_tables
 		// for the row with db_name=dbName & table_name = tblName。

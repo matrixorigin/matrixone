@@ -116,7 +116,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 		for _, expr := range node.FilterList {
 			fn := expr.GetF()
 			if fn == nil {
-				goto END0 // TODO: ERIC bug here
+				goto END0
 			}
 
 			switch fn.Func.ObjName {
@@ -140,7 +140,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				goto END0
 			}
 		}
-		// ERIC BUG?  e.g. a,b columns are in master index but the filter is a='str1' and b='str2' and c < 3. isAllFilterColumnsIncluded = false
 		for _, indexDef := range masterIndexes {
 			isAllFilterColumnsIncluded := true
 			for _, expr := range node.FilterList {

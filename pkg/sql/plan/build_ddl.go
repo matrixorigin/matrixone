@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1051,7 +1050,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	colMap := make(map[string]*ColDef)
 	defaultMap := make(map[string]string)
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
-	// ERIC
 	fullTextIndexInfos := make([]*tree.FullTextIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
@@ -1221,9 +1219,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.ColName()
 				indexs = append(indexs, name)
 			}
-			// ERIC
 		case *tree.FullTextIndex:
-			logutil.Infof("CREATE TABLE FULLTEXT Index")
 			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 			if err != nil {
 				return err
@@ -1590,7 +1586,6 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 	}
 }
 
-// ERIC
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
@@ -1615,7 +1610,6 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if indexInfo.IndexOption != nil && indexInfo.IndexOption.ParserName != "" {
 			// set parser ngram
 			parsername = strings.ToLower(indexInfo.IndexOption.ParserName)
-			logutil.Infof("Parser %s", indexInfo.IndexOption.ParserName)
 			if parsername != "ngram" && parsername != "default" && parsername != "json" {
 				return moerr.NewInternalErrorNoCtx(fmt.Sprintf("Fulltext parser %s not supported", parsername))
 			}
@@ -1742,15 +1736,11 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			PkeyColName: pkeyName,
 		}
 
-		logutil.Infof("indexDef %s", indexDef.String())
-		logutil.Infof("index columns = %v", indexParts)
-
 		// append to createTable.IndexTables and createTable.TableDef
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 
 	}
-	logutil.Infof("buildFullTextIndexTable.....")
 	return nil
 }
 
@@ -2859,11 +2849,6 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			KeyType:     stmt.IndexOption.IType,
 		}
 	case tree.INDEX_CATEGORY_FULLTEXT:
-		// TODO: ERIC
-		logutil.Infof("FULLTEXT INDEX: Name : %s", indexName)
-		for _, kp := range stmt.KeyParts {
-			logutil.Infof("FULLTEXT INDEX: Name : %s, keyParts: %s", indexName, kp.ColName.ColNameOrigin())
-		}
 		ftIdx = &tree.FullTextIndex{
 			Name:        indexName,
 			KeyParts:    stmt.KeyParts,
@@ -3331,7 +3316,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						},
 					},
 				}
-				// ERIC
 			case *tree.FullTextIndex:
 				err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 				if err != nil {
@@ -3350,12 +3334,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if err != nil {
 					return nil, err
 				}
-				/* TODO: ERIC -- must have index name?
-				   if len(indexName) == 0 {
-				           // set empty constraint names(index and unique index)
-				           setEmptyUniqueIndexName(constrNames, def)
-				   }
-				*/
+
+				if len(indexName) == 0 {
+					// set empty constraint names(index and unique index)
+					setEmptyFullTextIndexName(constrNames, def)
+				}
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
