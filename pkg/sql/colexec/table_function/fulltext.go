@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -165,7 +164,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 	}
 
 	sql := strings.Join(union, " UNION ")
-	logutil.Infof("SQL is %s", sql)
+	//logutil.Infof("SQL is %s", sql)
 
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
@@ -222,7 +221,6 @@ func (s *SearchAccum) runCountStar(proc *process.Process) (int64, error) {
 	var nrow int64
 	nrow = 0
 	sql := fmt.Sprintf(countstar_sql, s.SrcTblName)
-	logutil.Infof("COUNT STAR: %s", sql)
 
 	res, err := ft_runSql(proc, sql)
 	if err != nil {

@@ -15,6 +15,12 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 
 create fulltext index ftidx on src (body, title);
 
+-- check fulltext_match with index error
+select * from src where match(body) against('red');
+
+select match(body) against('red') from src;
+
+-- add index for body column
 alter table src add fulltext index ftidx2 (body);
 
 -- match in WHERE clause

@@ -8,6 +8,10 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (6, '各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。', '中文短篇小說'),
 (7, '59個簡單的英文和中文短篇小說', '適合初學者');
 create fulltext index ftidx on src (body, title);
+select * from src where match(body) against('red');
+not supported: fulltext_match() not implemented yet.  Please create FULLTEXT INDEX.
+select match(body) against('red') from src;
+not supported: fulltext_match_score() not implemented yet. Please create FULLTEXT INDEX.
 alter table src add fulltext index ftidx2 (body);
 select * from src where match(body, title) against('red');
 id    body    title
