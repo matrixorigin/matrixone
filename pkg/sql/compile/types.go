@@ -68,7 +68,8 @@ const (
 
 // Source contains information of a relation which will be used in execution.
 type Source struct {
-	isConst bool
+	isConst  bool
+	hasLimit bool
 
 	PushdownId             uint64
 	PushdownAddr           string
