@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -78,6 +79,9 @@ func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error 
 			return err
 		}
 	}
+
+	logCNCommittedObjects(true, req.TableID, req.TableName, req.TombstoneStats)
+
 	return nil
 }
 
@@ -95,14 +99,49 @@ func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) error {
 		}
 	}
 
-	logutil.Info(
-		"CN-COMMIT-S3",
-		zap.Int("table-id", int(req.TableID)),
-		zap.String("table-name", req.TableName),
-		zap.Int("obj-cnt", len(req.DataObjectStats)),
-	)
+	logCNCommittedObjects(false, req.TableID, req.TableName, req.DataObjectStats)
 
 	return nil
+}
+
+func logCNCommittedObjects(
+	isTombstone bool,
+	tableId uint64,
+	tableName string,
+	statsList []objectio.ObjectStats) {
+
+	totalBlkCnt := 0
+	totalRowCnt := 0
+	totalOSize := float64(0)
+	totalCSize := float64(0)
+	var objNames = make([]string, 0, len(statsList))
+	for _, stats := range statsList {
+		totalBlkCnt += int(stats.BlkCnt())
+		totalRowCnt += int(stats.Rows())
+		totalCSize += float64(stats.Size())
+		totalOSize += float64(stats.OriginSize())
+		objNames = append(objNames, stats.ObjectName().ObjectId().ShortStringEx())
+	}
+
+	totalCSize /= 1024.0 * 1024.0
+	totalOSize /= 1024.0 * 1024.0
+
+	hint := "CN-COMMIT-S3-Data-Object"
+	if isTombstone {
+		hint = "CN-COMMIT-S3-Tombstone-Object"
+	}
+
+	logutil.Info(
+		hint,
+		zap.Int("table-id", int(tableId)),
+		zap.String("table-name", tableName),
+		zap.Int("obj-cnt", len(statsList)),
+		zap.String("obj-osize", fmt.Sprintf("%.6fmb", totalOSize)),
+		zap.String("obj-csize", fmt.Sprintf("%.6fmb", totalCSize)),
+		zap.Int("blk-cnt", totalBlkCnt),
+		zap.Int("row-cnt", totalRowCnt),
+		zap.Strings("names", objNames),
+	)
 }
 
 // TryPrefetchTxn only prefetch data written by CN, do not change the state machine of TxnEngine.
