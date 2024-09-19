@@ -48,7 +48,30 @@ type ObjectEntry struct {
 	ObjectInfo
 }
 
-func (o ObjectEntry) Less(than ObjectEntry) bool {
+func (o ObjectEntry) ObjectNameIndexLess(than ObjectEntry) bool {
+	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
+}
+
+// ObjectDTSIndexLess has the order:
+// 1. if the delete time is empty, let it be the max ts
+// 2. ascending object with delete ts.
+// 3. ascending object with name when same dts.
+//
+// sort by DELETE time and name
+func (o ObjectEntry) ObjectDTSIndexLess(than ObjectEntry) bool {
+	// (c, d), (c, d), (c, d), (c, inf), (c, inf) ...
+	x, y := o.DeleteTime, than.DeleteTime
+	if x.IsEmpty() {
+		x = types.MaxTs()
+	}
+	if y.IsEmpty() {
+		y = types.MaxTs()
+	}
+
+	if !x.Equal(&y) {
+		return x.Less(&y)
+	}
+
 	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
 }
 
@@ -56,7 +79,7 @@ func (o ObjectEntry) IsEmpty() bool {
 	return o.Size() == 0
 }
 
-func (o *ObjectEntry) Visible(ts types.TS) bool {
+func (o ObjectEntry) Visible(ts types.TS) bool {
 	return o.CreateTime.LessEq(&ts) &&
 		(o.DeleteTime.IsEmpty() || ts.Less(&o.DeleteTime))
 }
@@ -158,13 +181,6 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 	if cmp > 0 {
 		return false
 	}
-
-	//if b.IsDelete && !than.IsDelete {
-	//	return true
-	//}
-	//if !b.IsDelete && than.IsDelete {
-	//	return false
-	//}
 
 	return false
 }
