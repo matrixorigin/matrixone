@@ -546,7 +546,13 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Result = t.Result
 		op.Typs = t.Typs
 		op.ProjectList = t.ProjectList
-		op.TableFunction = t.TableFunction
+		op.TableFunction = table_function.NewArgument()
+		op.TableFunction.FuncName = t.TableFunction.FuncName
+		op.TableFunction.Args = t.TableFunction.Args
+		op.TableFunction.Rets = t.TableFunction.Rets
+		op.TableFunction.Attrs = t.TableFunction.Attrs
+		op.TableFunction.Params = t.TableFunction.Params
+		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
 	}
@@ -1871,7 +1877,7 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	arg.TableFunction = *constructTableFunction(right)
+	arg.TableFunction = constructTableFunction(right)
 	return arg
 }
 

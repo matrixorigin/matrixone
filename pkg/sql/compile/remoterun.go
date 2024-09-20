@@ -1285,6 +1285,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.ProjectList = opr.ProjectList
+		arg.TableFunction = table_function.NewArgument()
 		arg.TableFunction.Attrs = opr.TableFunction.Attrs
 		arg.TableFunction.Rets = opr.TableFunction.Rets
 		arg.TableFunction.Args = opr.TableFunction.Args

@@ -55,7 +55,7 @@ type Apply struct {
 	Result    []colexec.ResultPos
 	Typs      []types.Type
 
-	TableFunction table_function.TableFunction
+	TableFunction *table_function.TableFunction
 	vm.OperatorBase
 	colexec.Projection
 }
