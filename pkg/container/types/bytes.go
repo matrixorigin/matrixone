@@ -64,7 +64,7 @@ func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 }
 
 // do not use this function, will be deleted in the future
-// use BuildVarlenaFromValena or BuildVarlenaFromByteSlice instead
+// use BuildVarlenaFromVarlena or BuildVarlenaFromByteSlice instead
 func BuildVarlena(bs []byte, area []byte, m *mpool.MPool) (Varlena, []byte, error) {
 	var err error
 	var v Varlena
