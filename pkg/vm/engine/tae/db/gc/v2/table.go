@@ -167,13 +167,24 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, name string) bool {
 	if len(snapVec) == 0 {
 		return false
 	}
+	if obj.dropTS.IsEmpty() {
+		logutil.Debug("[soft GC]Snapshot Refers",
+			zap.String("name", name),
+			zap.String("snapTS", snapVec[0].ToString()),
+			zap.String("createTS", obj.createTS.ToString()),
+			zap.String("dropTS", obj.dropTS.ToString()))
+		return true
+	}
 	left, right := 0, len(snapVec)-1
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		if snapTS.GreaterEq(&obj.createTS) && (obj.dropTS.IsEmpty() || snapTS.Less(&obj.dropTS)) {
-			logutil.Debug("[soft GC]Snapshot Refers", zap.String("name", name), zap.String("snapTS", snapTS.ToString()),
-				zap.String("createTS", obj.createTS.ToString()), zap.String("dropTS", obj.dropTS.ToString()))
+		if snapTS.GreaterEq(&obj.createTS) && snapTS.Less(&obj.dropTS) {
+			logutil.Debug("[soft GC]Snapshot Refers",
+				zap.String("name", name),
+				zap.String("snapTS", snapTS.ToString()),
+				zap.String("createTS", obj.createTS.ToString()),
+				zap.String("dropTS", obj.dropTS.ToString()))
 			return true
 		} else if snapTS.Less(&obj.createTS) {
 			left = mid + 1
@@ -430,7 +441,8 @@ func (t *GCTable) compareObjects(objects, compareObjects map[string]*ObjectEntry
 	for name, entry := range compareObjects {
 		object := objects[name]
 		if object == nil {
-			logutil.Infof("object %s is nil, create %v, drop %v", name, entry.createTS.ToString(), entry.dropTS.ToString())
+			logutil.Infof("object %s is nil, create %v, drop %v",
+				name, entry.createTS.ToString(), entry.dropTS.ToString())
 			return false
 		}
 		if !entry.commitTS.Equal(&object.commitTS) {
