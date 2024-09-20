@@ -63,8 +63,8 @@ func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
 	return op
 }
 
-func (s *Scheduler) ConfigPolicy(tbl *catalog.TableEntry, txn txnif.AsyncTxn, c *BasicPolicyConfig) {
-	s.policies.setConfig(tbl, txn, c)
+func (s *Scheduler) ConfigPolicy(tbl *catalog.TableEntry, txn txnif.AsyncTxn, c *BasicPolicyConfig) error {
+	return s.policies.setConfig(tbl, txn, c)
 }
 
 func (s *Scheduler) GetPolicy(tbl *catalog.TableEntry) *BasicPolicyConfig {
