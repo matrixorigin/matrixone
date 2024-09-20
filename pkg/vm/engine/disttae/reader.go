@@ -231,7 +231,6 @@ func (r *mergeReader) Read(
 }
 
 // -----------------------------------------------------------------
-
 func NewReader(
 	ctx context.Context,
 	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
@@ -276,12 +275,11 @@ func NewReader(
 			ctx:      ctx,
 			fs:       e.fs,
 			ts:       ts,
-			proc:     proc,
 			tableDef: tableDef,
+			name:     tableDef.Name,
 		},
 		memFilter: memFilter,
 		source:    source,
-		ts:        ts,
 	}
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
@@ -314,6 +312,7 @@ func (r *reader) Read(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
+	outBatch.CleanOnlyData()
 
 	var dataState engine.DataState
 
@@ -358,12 +357,16 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.scanType == LARGE || r.scanType == NORMAL {
+	if r.readBlockCnt == 0 {
+		r.smallScanThreshHold = GetSmallScanThreshHold()
+	}
+	if r.readBlockCnt > r.smallScanThreshHold {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 
 	err = blockio.BlockDataRead(
 		statsCtx,
+		r.isTombstone,
 		blkInfo,
 		r.source,
 		r.columns.seqnums,
@@ -373,7 +376,7 @@ func (r *reader) Read(
 		r.filterState.colTypes,
 		filter,
 		policy,
-		r.tableDef.Name,
+		r.name,
 		outBatch,
 		mp,
 		r.fs,
@@ -381,6 +384,7 @@ func (r *reader) Read(
 	if err != nil {
 		return false, err
 	}
+	r.readBlockCnt++
 
 	if filter.Valid {
 		// we collect mem cache hit related statistics info for blk read here

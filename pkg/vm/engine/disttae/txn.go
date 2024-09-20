@@ -534,7 +534,7 @@ func (txn *Transaction) dumpInsertBatchLocked(offset int, size *uint64, pkCount 
 		if err != nil {
 			return err
 		}
-		defer s3Writer.Free(txn.proc)
+		defer s3Writer.Free(txn.proc.GetMPool())
 		for i := 0; i < len(mp[tbKey]); i++ {
 			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
@@ -644,7 +644,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
-		defer s3Writer.Free(txn.proc)
+		defer s3Writer.Free(txn.proc.GetMPool())
 		for i := 0; i < len(mp[tbKey]); i++ {
 			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
