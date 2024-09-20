@@ -71,7 +71,7 @@ INSERT INTO split_part_01 VALUES(9, '442+562++++——----吃饭了',',',NULL);
 INSERT INTO split_part_01 VALUES(1, 'ewjj32..3,l43/.43', 0);
 Column count doesn't match value count at row 1
 INSERT INTO split_part_01 VALUES(11, 'vhjdwewj3902i302o302($#$%^&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw54545484154444489897897o8u8&92)(','few',4);
-internal error: Can't cast 'vhjdwewj3902i302o302($#$%^&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw545454841544444898978...' to VARCHAR type. Src length 111 is larger than Dest length 100
+internal error: Can't cast 'vhjdwewj3902i302o302($#$%^&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw545454841544444898978...' from VARCHAR type to VARCHAR type. Src length 111 is larger than Dest length 100
 INSERT INTO split_part_01 VALUES(12, '', 'vjdkelwvrew', 32769);
 Data truncation: data out of range: data type int16, value '32769'
 SELECT split_part(s1,NULL,count1) FROM split_part_01;
@@ -135,7 +135,7 @@ SELECT split_part(s1,' ',1) FROM split_part_01 WHERE id = 6;
 split_part(s1,  , 1)
 efwu3nkjr3w3;;
 SELECT split_part(s1,'*.',ABS(-2)) FROM split_part_01 WHERE id = 4;
-split_part(s1, *., abs(-2))
+split_part(s1, *., ABS(-2))
 jjkmm&
 SELECT * FROM split_part_01 WHERE split_part(s1, '.', 1 + 6) = 'com.cn';
 id    s1    delim    count1
@@ -181,7 +181,7 @@ true
 SELECT * FROM split_part_01 WHERE find_in_set(split_part(s1,delim,count1),NULL) = NULL;
 id    s1    delim    count1
 SELECT CONCAT_WS(split_part(s1,delim,count1),'hehaha32789','ABCNSLK') FROM split_part_01 WHERE id = 2;
-concat_ws(split_part(s1, delim, count1), hehaha32789, ABCNSLK)
+CONCAT_WS(split_part(s1, delim, count1), hehaha32789, ABCNSLK)
 null
 SELECT empty(split_part(s1,delim,count1)) FROM split_part_01;
 empty(split_part(s1, delim, count1))
@@ -206,7 +206,7 @@ null
 null
 null
 SELECT REVERSE(split_part(s1,delim,3)) FROM split_part_01;
-reverse(split_part(s1, delim, 3))
+REVERSE(split_part(s1, delim, 3))
 nc
 null
 ,39012348,哈
@@ -220,7 +220,7 @@ SELECT * FROM split_part_01 WHERE s1 = (SELECT s1 FROM split_part_01 WHERE split
 id    s1    delim    count1
 5      78829,.327hjfew.;,32oi  cekw    ,    22
 SELECT(SELECT s1 FROM split_part_01 WHERE split_part(RTRIM(s1),'<>',1) = '83092i3f2o.dkwec');
-(select s1 from split_part_01 where split_part(rtrim(s1), <>, 1) = 83092i3f2o.dkwec)
+(select s1 from split_part_01 where split_part(RTRIM(s1), <>, 1) = 83092i3f2o.dkwec)
 83092i3f2o.dkwec<>dhwkjv<>789392-3<>
 SELECT id ,s1, delim FROM split_part_01 WHERE s1 = (SELECT s1 FROM split_part_01 WHERE split_part(LTRIM(s1),'*.',1) = '123abc&');
 id    s1    delim
@@ -282,7 +282,7 @@ SELECT * FROM split_part_02 WHERE LENGTH(split_part(s1,delim,2)) = 14;
 id    s1    delim    count1    count2
 2    dvuewinviecfjds439432094ie3jiHHDIUWH*&*(UIJCSijfje3iu2j9032^&(*&()(*)I)A&^%^*&    j    3    123
 SELECT split_part(LTRIM(s1),delim,6) FROM split_part_02 WHERE id = 5;
-split_part(ltrim(s1), delim, 6)
+split_part(LTRIM(s1), delim, 6)
 +=--=
 SELECT * FROM split_part_02 WHERE split_part(LTRIM(s1),delim,6) = '+=--=';
 id    s1    delim    count1    count2
@@ -314,10 +314,10 @@ null
 null
 0
 SELECT CONCAT_WS(split_part(s1,delim,count1),'hehaha32789','ABCNSLK') FROM split_part_02 WHERE id = 2;
-concat_ws(split_part(s1, delim, count1), hehaha32789, ABCNSLK)
+CONCAT_WS(split_part(s1, delim, count1), hehaha32789, ABCNSLK)
 hehaha32789iHHDIUWH*&*(UIJCSiABCNSLK
 SELECT REVERSE(split_part(s1,delim,3)) FROM split_part_02;
-reverse(split_part(s1, delim, 3))
+REVERSE(split_part(s1, delim, 3))
 null
 iSCJIU(*&*HWUIDHHi
 null

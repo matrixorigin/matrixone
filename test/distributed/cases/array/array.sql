@@ -218,6 +218,7 @@ select 2.0 * cast("[1,2,3]" as vecf32(3));
 select 2.0 / cast("[1,2,3]" as vecf32(3));
 select cast("[1,2,3]" as vecf32(3)) / 0 ;
 select 5 + (-1*cast("[1,2,3]" as vecf32(3)));
+select cast("[1, 2, 3]" as vecf32(2));
 
 -- Distinct SQL
 create table t11(a vecf32(2));

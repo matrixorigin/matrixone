@@ -619,6 +619,10 @@ func (t T) ToType() Type {
 	case T_array_float32, T_array_float64:
 		typ.Size = VarlenaSize
 		typ.Width = MaxArrayDimension
+		// when typ.Scale = -1, in strToArray don't check  vector dimension
+		// for sql like SELECT SUBVECTOR("[1,2,3]", 2); in the function, arg "[1, 2, 3]" width is set default 65535
+		// so skip check
+		typ.Scale = -1
 	case T_binary:
 		typ.Size = VarlenaSize
 		typ.Width = MaxBinaryLen

@@ -29,13 +29,14 @@ var _ vm.Operator = new(ValueScan)
 type container struct {
 	idx int
 }
+
 type ValueScan struct {
-	ctr        container
-	Batchs     []*batch.Batch
-	RowsetData *plan.RowsetData
-	ColCount   int
-	Uuid       []byte
-	NodeType   plan2.Node_NodeType
+	ctr          container
+	Batchs       []*batch.Batch
+	ColCount     int
+	NodeType     plan2.Node_NodeType
+	ExprExecList [][]colexec.ExpressionExecutor
+	RowsetData   *plan.RowsetData
 
 	vm.OperatorBase
 	colexec.Projection
@@ -75,7 +76,14 @@ func (valueScan *ValueScan) Release() {
 func (valueScan *ValueScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	valueScan.ctr.idx = 0
 	if valueScan.Batchs != nil {
-		valueScan.cleanBatchs(proc)
+		valueScan.resetBatchs()
+	}
+
+	for i := 0; i < valueScan.ColCount; i++ {
+		exprExecs := valueScan.ExprExecList[i]
+		for _, expr := range exprExecs {
+			expr.ResetForNextQuery()
+		}
 	}
 	valueScan.ResetProjection(proc)
 }
@@ -84,6 +92,16 @@ func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err
 	valueScan.FreeProjection(proc)
 	if valueScan.Batchs != nil {
 		valueScan.cleanBatchs(proc)
+	}
+
+	for i := range valueScan.ExprExecList {
+		exprExecs := valueScan.ExprExecList[i]
+		for i, expr := range exprExecs {
+			if expr != nil {
+				expr.Free()
+				exprExecs[i] = nil
+			}
+		}
 	}
 }
 
@@ -94,4 +112,14 @@ func (valueScan *ValueScan) cleanBatchs(proc *process.Process) {
 		}
 	}
 	valueScan.Batchs = nil
+}
+
+func (valueScan *ValueScan) resetBatchs() {
+	for _, bat := range valueScan.Batchs {
+		if bat != nil {
+			for _, vec := range bat.Vecs {
+				vec.CleanOnlyData()
+			}
+		}
+	}
 }

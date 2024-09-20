@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -1772,6 +1773,24 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	}, nil
 }
 
+func IsInt(typeId int32) bool {
+	switch typeId {
+	case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64):
+		return true
+	default:
+		return false
+	}
+}
+
+func IsUint(typeId int32) bool {
+	switch typeId {
+	case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64):
+		return true
+	default:
+		return false
+	}
+}
+
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	// over_int64_err := moerr.NewInternalError(b.GetContext(), "", "Constants over int64 will support in future version.")
 	// rewrite the hexnum process logic
@@ -1881,13 +1900,25 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		if !typ.IsEmpty() && (typ.Id == int32(types.T_decimal64) || typ.Id == int32(types.T_decimal128)) {
 			return returnDecimalExpr(originString)
 		}
+		floatValue, ok := astExpr.Float64()
+		if IsUint(typ.Id) {
+			val := uint64(floatValue)
+			return makePlan2Uint64ConstExprWithType(val), nil
+		} else if IsInt(typ.Id) {
+			val := int64(floatValue)
+			return makePlan2Int64ConstExprWithType(val), nil
+		}
+		if typ.Id == int32(types.T_bit) {
+			val := math.Round(floatValue)
+			return makePlan2Float64ConstExprWithType(val), nil
+		}
 		if !strings.Contains(originString, "e") {
 			expr, err := returnDecimalExpr(originString)
 			if err == nil {
 				return expr, nil
 			}
 		}
-		floatValue, ok := astExpr.Float64()
+
 		if !ok {
 			return returnDecimalExpr(originString)
 		}

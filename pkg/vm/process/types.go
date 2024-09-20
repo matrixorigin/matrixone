@@ -267,12 +267,9 @@ type BaseProcess struct {
 
 	StmtProfile *StmtProfile
 	// Id, query id.
-	Id              string
-	Lim             Limitation
-	mp              *mpool.MPool
-	prepareBatch    *batch.Batch
-	prepareExprList any
-	valueScanBatch  map[[16]byte]*batch.Batch
+	Id  string
+	Lim Limitation
+	mp  *mpool.MPool
 	// unix timestamp
 	UnixTime            int64
 	TxnClient           client.TxnClient
@@ -361,32 +358,6 @@ func (proc *Process) SetMPool(mp *mpool.MPool) {
 
 func (proc *Process) SetFileService(fs fileservice.FileService) {
 	proc.Base.FileService = fs
-}
-
-func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
-	proc.Base.valueScanBatch[key] = batch
-}
-
-func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
-	bat, ok := proc.Base.valueScanBatch[key]
-	if ok {
-		bat.SetCnt(1000) // make sure this batch wouldn't be cleaned
-		return bat
-		// delete(proc.valueScanBatch, key)
-	}
-	return bat
-}
-
-func (proc *Process) CleanValueScanBatchs() {
-	mp := proc.Mp()
-	for k, bat := range proc.Base.valueScanBatch {
-		if bat != nil {
-			bat.SetCnt(1)
-			bat.Clean(mp)
-		}
-		// todo: why not remake the map after all clean ?
-		delete(proc.Base.valueScanBatch, k)
-	}
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {

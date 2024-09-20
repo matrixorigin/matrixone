@@ -172,9 +172,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if txnOperator != nil {
 			txnOperator.ExitRunSql()
 		}
-		c.proc.CleanValueScanBatchs()
-		c.proc.SetPrepareBatch(nil)
-		c.proc.SetPrepareExprList(nil)
 	}()
 
 	// update the top context with some trace information and values.

@@ -1876,8 +1876,21 @@ func constructTableScan(n *plan.Node) *table_scan.TableScan {
 	return table_scan.NewArgument().WithTypes(types)
 }
 
-func constructValueScan() *value_scan.ValueScan {
-	return value_scan.NewArgument()
+func constructValueScan(n *plan.Node) (*value_scan.ValueScan, error) {
+	op := value_scan.NewArgument()
+	if n == nil {
+		return op, nil
+	}
+	op.NodeType = n.NodeType
+	if n.RowsetData == nil {
+		return op, nil
+	}
+	op.RowsetData = n.RowsetData
+	op.ColCount = len(n.TableDef.Cols)
+	op.Batchs = make([]*batch.Batch, 2)
+	op.Batchs[0] = batch.NewWithSize(len(n.RowsetData.Cols))
+	op.Batchs[0].SetRowCount(len(n.RowsetData.Cols[0].Data))
+	return op, nil
 }
 
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {

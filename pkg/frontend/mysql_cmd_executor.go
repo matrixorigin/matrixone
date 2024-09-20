@@ -1113,7 +1113,6 @@ func createPrepareStmt(
 		PrepareStmt:         saveStmt,
 		getFromSendLongData: make(map[int]struct{}),
 	}
-	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 
 	dcPrepare, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
@@ -2759,7 +2758,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc := ses.proc
 	proc.ReplaceTopCtx(execCtx.reqCtx)
 
-	proc.CopyValueScanBatch(ses.proc)
 	proc.Base.Id = ses.getNextProcessId()
 	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows

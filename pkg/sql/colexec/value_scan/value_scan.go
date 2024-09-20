@@ -16,16 +16,13 @@ package value_scan
 
 import (
 	"bytes"
-	"fmt"
 
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,90 +38,76 @@ func (valueScan *ValueScan) OpType() vm.OpType {
 	return vm.ValueScan
 }
 
-func evalRowsetData(proc *process.Process,
-	exprs []*plan2.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor,
+func evalRowsetData(proc *process.Process, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor,
 ) error {
 	var bats []*batch.Batch
 
 	vec.ResetArea()
 	bats = []*batch.Batch{batch.EmptyForConstFoldBatch}
-	if len(exprExecs) > 0 {
-		for i, expr := range exprExecs {
-			val, err := expr.Eval(proc, bats, nil)
-			if err != nil {
-				return err
-			}
-			if err := vec.Copy(val, int64(exprs[i].RowPos), 0, proc.Mp()); err != nil {
-				return err
-			}
+	for i, expr := range exprExecs {
+		if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
+			return err
 		}
-	} else {
-		for _, expr := range exprs {
-			if expr.Pos >= 0 {
-				continue
-			}
-			val, err := colexec.EvalExpressionOnce(proc, expr.Expr, bats)
-			if err != nil {
-				return err
-			}
-			if err := vec.Copy(val, int64(expr.RowPos), 0, proc.Mp()); err != nil {
-				val.Free(proc.Mp())
-				return err
-			}
-			val.Free(proc.Mp())
+		val, err := expr.Eval(proc, bats, nil)
+		if err != nil {
+			return err
+		}
+		if err := vec.Copy(val, int64(i), 0, proc.Mp()); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (bat *batch.Batch, err error) {
+func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error) {
 	var exprList []colexec.ExpressionExecutor
 
 	if valueScan.RowsetData == nil { // select 1,2
-		bat = batch.NewWithSize(1)
+		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
 		bat.SetRowCount(1)
-		return bat, nil
+		valueScan.Batchs = append(valueScan.Batchs, bat)
+		valueScan.Batchs = append(valueScan.Batchs, nil)
+		return nil
 	}
+
+	if valueScan.ExprExecList == nil {
+		if err := valueScan.InitExprExecList(proc); err != nil {
+			return err
+		}
+	}
+
 	// select * from (values row(1,1), row(2,2), row(3,3)) a;
-	var nodeId uuid.UUID
-	copy(nodeId[:], valueScan.Uuid)
-	bat = proc.GetPrepareBatch()
-	if bat == nil {
-		bat = proc.GetValueScanBatch(nodeId)
-		if bat == nil {
-			return nil, moerr.NewInfo(proc.Ctx, fmt.Sprintf("makeValueScanBatch failed, node id: %s", nodeId.String()))
+	bat := valueScan.Batchs[0]
+
+	for i := 0; i < valueScan.ColCount; i++ {
+		exprList = valueScan.ExprExecList[i]
+		vec := bat.Vecs[i]
+		if err := evalRowsetData(proc, vec, exprList); err != nil {
+			return err
 		}
 	}
 
-	colsData := valueScan.RowsetData.Cols
-	params := proc.GetPrepareParams()
-	if len(colsData) > 0 {
-		exprs := proc.GetPrepareExprList()
-		for i := 0; i < valueScan.ColCount; i++ {
-			if exprs != nil {
-				exprList = exprs.([][]colexec.ExpressionExecutor)[i]
+	return nil
+}
+
+func (valueScan *ValueScan) InitExprExecList(proc *process.Process) error {
+	exprExecList := make([][]colexec.ExpressionExecutor, len(valueScan.RowsetData.Cols))
+	for i, col := range valueScan.RowsetData.Cols {
+		vec := vector.NewVec(plan.MakeTypeByPlan2Expr(col.Data[0].Expr))
+		valueScan.Batchs[0].Vecs[i] = vec
+		exprExecList[i] = make([]colexec.ExpressionExecutor, 0, len(col.Data))
+		for _, data := range col.Data {
+			exprExecutor, err := colexec.NewExpressionExecutor(proc, data.Expr)
+			if err != nil {
+				return err
 			}
-			if params != nil {
-				vs := vector.MustFixedColWithTypeCheck[types.Varlena](params)
-				for _, row := range colsData[i].Data {
-					if row.Pos >= 0 {
-						isNull := params.GetNulls().Contains(uint64(row.Pos - 1))
-						str := vs[row.Pos-1].UnsafeGetString(params.GetArea())
-						if err := util.SetBytesToAnyVector(proc.Ctx, str, int(row.RowPos), isNull, bat.Vecs[i],
-							proc); err != nil {
-							return nil, err
-						}
-					}
-				}
-			}
-			if err := evalRowsetData(proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
-				return nil, err
-			}
+			exprExecList[i] = append(exprExecList[i], exprExecutor)
 		}
 	}
 
-	return bat, nil
+	valueScan.ExprExecList = exprExecList
+	return nil
 }
 
 func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
@@ -138,15 +121,10 @@ func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	if valueScan.NodeType == plan2.Node_VALUE_SCAN && valueScan.Batchs == nil {
-		bat, err := valueScan.makeValueScanBatch(proc)
+	if valueScan.NodeType == plan2.Node_VALUE_SCAN {
+		err := valueScan.makeValueScanBatch(proc)
 		if err != nil {
 			return err
-		}
-		valueScan.Batchs = make([]*batch.Batch, 2)
-		valueScan.Batchs[0] = bat
-		if bat != nil {
-			valueScan.Batchs[1] = nil
 		}
 	}
 
@@ -166,10 +144,6 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if valueScan.ctr.idx < len(valueScan.Batchs) {
 		result.Batch = valueScan.Batchs[valueScan.ctr.idx]
-		if valueScan.ctr.idx > 0 {
-			valueScan.Batchs[valueScan.ctr.idx-1].Clean(proc.GetMPool())
-			valueScan.Batchs[valueScan.ctr.idx-1] = nil
-		}
 		valueScan.ctr.idx += 1
 	}
 	var err error

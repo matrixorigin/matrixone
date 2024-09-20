@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -951,16 +950,8 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	} else {
 		stmt.Close()
 	}
-	if prepareStmt != nil && prepareStmt.PreparePlan != nil {
-		isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
-			prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
-		if isInsertValues {
-			prepareStmt.proc = ses.proc
-			prepareStmt.exprList = exprList
-		}
-	}
-	ses.prepareStmts[name] = prepareStmt
 
+	ses.prepareStmts[name] = prepareStmt
 	return nil
 }
 
@@ -1586,33 +1577,6 @@ func (ses *Session) reset(prev *Session) error {
 	// close the previous session.
 	prev.ReserveConnAndClose()
 	return nil
-}
-
-func checkPlanIsInsertValues(proc *process.Process,
-	p *plan.Plan) (bool, [][]colexec.ExpressionExecutor) {
-	qry := p.GetQuery()
-	if qry != nil {
-		for _, node := range qry.Nodes {
-			if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
-				exprList := make([][]colexec.ExpressionExecutor, len(node.RowsetData.Cols))
-				for i, col := range node.RowsetData.Cols {
-					exprList[i] = make([]colexec.ExpressionExecutor, 0, len(col.Data))
-					for _, data := range col.Data {
-						if data.Pos >= 0 {
-							continue
-						}
-						expr, err := colexec.NewExpressionExecutor(proc, data.Expr)
-						if err != nil {
-							return false, nil
-						}
-						exprList[i] = append(exprList[i], expr)
-					}
-				}
-				return true, exprList
-			}
-		}
-	}
-	return false, nil
 }
 
 func commitAfterMigrate(ses *Session, err error) error {

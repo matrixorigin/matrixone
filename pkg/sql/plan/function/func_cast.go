@@ -1690,7 +1690,7 @@ func strTypeToOthers(proc *process.Process,
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToStr(ctx, source, rs, length, toType)
+		return strToStr(proc, ctx, source, rs, length, toType)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -4299,6 +4299,7 @@ func strToTimestamp(
 }
 
 func strToStr(
+	proc *process.Process,
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
@@ -4315,6 +4316,17 @@ func strToStr(
 			}
 		}
 		return nil
+	}
+
+	if toType.Oid.IsDatalink() {
+		for i = 0; i < l; i++ {
+			v, _ := from.GetStrValue(i)
+			_, _, err := ParseDatalink(string(v), proc)
+			if err != nil {
+				return err
+			}
+		}
+
 	}
 	if totype.Oid != types.T_text && destLen != 0 {
 		for i = 0; i < l; i++ {
@@ -4403,11 +4415,20 @@ func strToArray[T types.RealNumbers](
 				return err
 			}
 		} else {
-
-			b, err := types.StringToArrayToBytes[T](convertByteSliceToString(v))
+			// Convert "[1,2,3]" --> []float32{1.0, 2.0, 3.0}
+			a, err := types.StringToArray[T](convertByteSliceToString(v))
 			if err != nil {
 				return err
 			}
+
+			if to.GetType().Scale != -1 {
+				if int32(len(a)) != to.GetType().Width {
+					return moerr.NewArrayDefMismatchNoCtx(int(to.GetType().Width), len(a))
+				}
+			}
+
+			// Convert []float32{1.0, 2.0, 3.0} --> []byte{11, 33, 45, 56,.....}
+			b := types.ArrayToBytes[T](a)
 			if err = to.AppendBytes(b, false); err != nil {
 				return err
 			}

@@ -165,11 +165,11 @@ drop table pri07;
 drop table if exists pri08;
 create table pri08 (col1 binary, col2 int unsigned);
 insert into pri08 values ('ewfijew', 372984324);
+internal error: Can't cast 'ewfijew' from VARCHAR type to BINARY type. Src length 7 is larger than Dest length 1
 insert into pri08 values ('ew8u3ejkfcwev', 2147483647);
+internal error: Can't cast 'ew8u3ejkfcwev' from VARCHAR type to BINARY type. Src length 13 is larger than Dest length 1
 select * from pri08;
 col1    col2
-ewfijew    372984324
-ew8u3ejkfcwev    2147483647
 alter table pri08 add constraint primary key (col1);
 show create table pri08;
 Table    Create Table

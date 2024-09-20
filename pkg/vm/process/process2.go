@@ -79,8 +79,7 @@ func NewTopProcess(
 		UdfService:  udfService,
 
 		// 2. fields from make.
-		LastInsertID:   new(uint64),
-		valueScanBatch: make(map[[16]byte]*batch.Batch),
+		LastInsertID: new(uint64),
 
 		// 3. other fields.
 		logger:   util.GetLogger(sid),
@@ -222,11 +221,11 @@ func (proc *Process) ResetQueryContext() {
 }
 
 // Free do memory clean for the process.
+// todo, delete this function
 func (proc *Process) Free() {
 	if proc == nil {
 		return
 	}
-	proc.CleanValueScanBatchs()
 }
 
 type QueryBaseContext struct {

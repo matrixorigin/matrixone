@@ -220,9 +220,9 @@ create table locate01(col1 char(5), col2 varchar(20));
 insert into locate01 values ('da','database数据库DB数据库管理系统');
 insert into locate01 values (null,null);
 insert into locate01 values ('ABCDF','GHIJKLMNabcdfeowejfwve');
-internal error: Can't cast 'GHIJKLMNabcdfeowejfwve' to VARCHAR type. Src length 22 is larger than Dest length 20
+internal error: Can't cast 'GHIJKLMNabcdfeowejfwve' from VARCHAR type to VARCHAR type. Src length 22 is larger than Dest length 20
 insert into locate01 values ('圣诞节快乐','圣诞节快乐Merry Charismas!');
-internal error: Can't cast '圣诞节快乐Merry Charismas!' to VARCHAR type. Src length 31 is larger than Dest length 20
+internal error: Can't cast '圣诞节快乐Merry Charismas!' from VARCHAR type to VARCHAR type. Src length 31 is larger than Dest length 20
 insert into locate01 values ('@#$', '^&**(&^$@@#$');
 select * from locate01;
 col1    col2
