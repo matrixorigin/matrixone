@@ -239,7 +239,7 @@ type Sinker struct {
 	}
 	result struct {
 		persisted []objectio.ObjectStats
-		tail      *batch.Batch
+		tail      []*batch.Batch
 	}
 	buffers *containers.OneSchemaBatchBuffer
 	mp      *mpool.MPool
@@ -267,8 +267,18 @@ func (sinker *Sinker) putbackBuffer(bat *batch.Batch) {
 	sinker.buffers.Putback(bat, sinker.mp)
 }
 
-// stageData take the ownership of the bat
-func (sinker *Sinker) stageData(
+func (sinker *Sinker) popStaged() *batch.Batch {
+	if len(sinker.staged.inMemory) == 0 {
+		return nil
+	}
+	ret := sinker.staged.inMemory[len(sinker.staged.inMemory)-1]
+	sinker.staged.inMemory = sinker.staged.inMemory[:len(sinker.staged.inMemory)-1]
+	sinker.staged.inMemorySize -= ret.Size()
+	return ret
+}
+
+// pushStaged take the ownership of the bat
+func (sinker *Sinker) pushStaged(
 	ctx context.Context, bat *batch.Batch,
 ) error {
 	sinker.staged.inMemory = append(sinker.staged.inMemory, bat)
@@ -277,6 +287,11 @@ func (sinker *Sinker) stageData(
 		return sinker.trySpill(ctx)
 	}
 	return nil
+}
+
+func (sinker *Sinker) clearInMemoryStaged() {
+	sinker.staged.inMemory = sinker.staged.inMemory[:0]
+	sinker.staged.inMemorySize = 0
 }
 
 func (sinker *Sinker) cleanupInMemoryStaged() {
@@ -288,7 +303,28 @@ func (sinker *Sinker) cleanupInMemoryStaged() {
 	sinker.staged.inMemorySize = 0
 }
 
+func (sinker *Sinker) trySortInMemoryStaged(ctx context.Context) error {
+	if sinker.schema.sortKeyIdx == -1 {
+		return nil
+	}
+	for _, bat := range sinker.staged.inMemory {
+		if err := mergesort.SortColumnsByIndex(
+			bat.Vecs,
+			sinker.schema.sortKeyIdx,
+			sinker.mp,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (sinker *Sinker) trySpill(ctx context.Context) error {
+	// sort all in memory data
+	if err := sinker.trySortInMemoryStaged(ctx); err != nil {
+		return err
+	}
+
 	defer sinker.cleanupInMemoryStaged()
 	var sorted []*batch.Batch
 	innersinker := func(data *batch.Batch) error {
@@ -369,24 +405,43 @@ func (sinker *Sinker) getStageFileSinker() FileSinker {
 func (sinker *Sinker) Write(
 	ctx context.Context,
 	data *batch.Batch,
-) error {
-	buffer := sinker.fetchBuffer()
-	_, err := buffer.AppendWithCopy(ctx, sinker.mp, data)
-	if err != nil {
-		sinker.putbackBuffer(buffer)
-		return err
+) (err error) {
+	var curr *batch.Batch
+	defer func() {
+		if err != nil && curr != nil {
+			sinker.putbackBuffer(curr)
+		}
+	}()
+	offset := 0
+	left := data.RowCount()
+	for left > 0 {
+		curr = sinker.popStaged()
+		if curr == nil {
+			curr = sinker.fetchBuffer()
+		}
+		toAdd := objectio.BlockMaxRows
+		if data.RowCount() < toAdd {
+			toAdd = data.RowCount()
+		}
+		left -= toAdd
+		if err = curr.Union(data, offset, toAdd, sinker.mp); err != nil {
+			return
+		}
+		if curr.RowCount() == objectio.BlockMaxRows {
+
+			if err = sinker.pushStaged(ctx, curr); err != nil {
+				return
+			}
+			curr = sinker.fetchBuffer()
+		}
+		offset += toAdd
 	}
-	if sinker.schema.sortKeyIdx != -1 {
-		if err := mergesort.SortColumnsByIndex(
-			buffer.Vecs,
-			sinker.schema.sortKeyIdx,
-			sinker.mp,
-		); err != nil {
-			sinker.putbackBuffer(buffer)
-			return err
+	if curr != nil && curr.RowCount() > 0 {
+		if err = sinker.pushStaged(ctx, curr); err != nil {
+			return
 		}
 	}
-	return sinker.stageData(ctx, buffer)
+	return
 }
 
 func (sinker *Sinker) Sync(ctx context.Context) error {
@@ -399,24 +454,19 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 			return err
 		}
 	} else {
-		if len(sinker.staged.inMemory) == 1 {
-			sinker.result.tail = sinker.staged.inMemory[0]
-		} else {
-			tail := sinker.fetchBuffer()
-			for _, bat := range sinker.staged.inMemory {
-				if _, err := tail.AppendWithCopy(ctx, sinker.mp, bat); err != nil {
-					sinker.putbackBuffer(tail)
-					return err
-				}
-			}
-			sinker.result.tail = tail
-			for i, bat := range sinker.staged.inMemory {
-				sinker.putbackBuffer(bat)
-				sinker.staged.inMemory[i] = nil
+		if err := sinker.trySortInMemoryStaged(ctx); err != nil {
+			return err
+		}
+		if sinker.config.dedupAll {
+			if err := containers.DedupSortedBatches(
+				sinker.schema.sortKeyIdx,
+				sinker.staged.inMemory,
+			); err != nil {
+				return err
 			}
 		}
-		sinker.staged.inMemory = nil
-		sinker.staged.inMemorySize = 0
+		sinker.result.tail = sinker.staged.inMemory
+		sinker.clearInMemoryStaged()
 	}
 	// if there is only one file, it is sorted an deduped
 	if len(sinker.staged.persisted) == 1 {
@@ -443,10 +493,13 @@ func (sinker *Sinker) Close() error {
 		sinker.buffers.Close(sinker.mp)
 		sinker.buffers = nil
 	}
-	if sinker.result.tail != nil {
-		sinker.result.tail.Clean(sinker.mp)
-		sinker.result.tail = nil
+	for i := range sinker.result.tail {
+		if sinker.result.tail[i] != nil {
+			sinker.result.tail[i].Clean(sinker.mp)
+			sinker.result.tail[i] = nil
+		}
 	}
+	sinker.result.tail = nil
 	sinker.staged.persisted = nil
 	if sinker.fSinker.executor != nil {
 		sinker.fSinker.executor.Close()
