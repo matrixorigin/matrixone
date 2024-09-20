@@ -3087,7 +3087,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow, ctx context.Conte
 			Exprs: tree.Exprs{astTimeWindow.Sliding.Val, arg2},
 		}
 
-		name = tree.NewUnresolvedColName("divisor")
+		name = tree.NewUnresolvedColName("mo_win_divisor")
 		div := &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{h.interval, h.sliding},
@@ -3101,7 +3101,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow, ctx context.Conte
 		}
 	}
 
-	name = tree.NewUnresolvedColName("truncate")
+	name = tree.NewUnresolvedColName("mo_win_truncate")
 	h.truncate = &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(name),
 		Exprs: tree.Exprs{astTimeWindow.Interval.Col, expr},

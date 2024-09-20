@@ -1335,7 +1335,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err != nil {
 			return nil, err
 		}
-	case "truncate":
+	case "mo_win_truncate":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
@@ -1349,7 +1349,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err != nil {
 			return nil, err
 		}
-	case "divisor":
+	case "mo_win_divisor":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "divisor function need two args", len(args))
 		}

@@ -4969,9 +4969,9 @@ var supportedControlBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `truncate`
+	// function `MO_WIN_TRUNCATE`
 	{
-		functionId: TRUNCATE,
+		functionId: MO_WIN_TRUNCATE,
 		class:      plan.Function_INTERNAL,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -4992,9 +4992,9 @@ var supportedControlBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `divisor`
+	// function `MO_WIN_DIVISOR`
 	{
-		functionId: DIVISOR,
+		functionId: MO_WIN_DIVISOR,
 		class:      plan.Function_INTERNAL,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,

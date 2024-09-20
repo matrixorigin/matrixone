@@ -25,10 +25,7 @@ import (
 )
 
 const (
-	SecsPerMinute = 60
-	MinutePerHour = 60
-	MinutePerDay  = 24 * MinutePerHour
-	HourPerMinute
+	SecsPerMinute       = 60
 	SecsPerHour         = 60 * SecsPerMinute
 	SecsPerDay          = 24 * SecsPerHour
 	SecsPerWeek         = 7 * SecsPerDay

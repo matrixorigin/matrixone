@@ -913,7 +913,7 @@ func Truncate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetValue(i)
 		if null {
-			return moerr.NewNotSupported(proc.Ctx, "now args of TRUNCATE can not be NULL")
+			return moerr.NewNotSupported(proc.Ctx, "now args of MO_WIN_TRUNCATE can not be NULL")
 		}
 		if err = rs.Append(v-v%t, false); err != nil {
 			return err
