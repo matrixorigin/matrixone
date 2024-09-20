@@ -1047,6 +1047,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// all below fields' key is lower case
 	var primaryKeys []string
 	var indexs []string
+	var fulltext_indexs []string
 	colMap := make(map[string]*ColDef)
 	defaultMap := make(map[string]string)
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
@@ -1228,7 +1229,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			fullTextIndexInfos = append(fullTextIndexInfos, def)
 			for _, key := range def.KeyParts {
 				name := key.ColName.ColName()
-				indexs = append(indexs, name)
+				fulltext_indexs = append(fulltext_indexs, name)
 			}
 		case *tree.ForeignKey:
 			if createTable.Temporary {
@@ -1484,6 +1485,25 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	// check index invalid on the type
 	for _, str := range indexs {
+		if _, ok := colMap[str]; !ok {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", str)
+		}
+		if colMap[str].Typ.Id == int32(types.T_blob) {
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
+		}
+		if colMap[str].Typ.Id == int32(types.T_text) {
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
+		}
+		if colMap[str].Typ.Id == int32(types.T_datalink) {
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", str))
+		}
+		if colMap[str].Typ.Id == int32(types.T_json) {
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
+		}
+	}
+
+	// check fulltext index invalid on the typ
+	for _, str := range fulltext_indexs {
 		if _, ok := colMap[str]; !ok {
 			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", str)
 		}
