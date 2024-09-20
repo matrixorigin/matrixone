@@ -54,7 +54,7 @@ type container struct {
 	colIdx    int
 	idx       int
 	buf       *batch.Batch
-
+	// test
 	// linear
 	nullIdx int
 	nullRow int
