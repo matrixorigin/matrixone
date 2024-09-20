@@ -536,10 +536,10 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 			return nil, nil, nil
 
 		default:
-			dispatchProc, ok := colexec.Get().GetProcByUuid(uid, true)
+			dispatchProc, notifyChannel, ok := colexec.Get().GetProcByUuid(uid, true)
 			if ok {
 				tcancel()
-				return dispatchProc, dispatchProc.DispatchNotifyCh, nil
+				return dispatchProc, notifyChannel, nil
 			}
 
 			// it's very bad to call the runtime.Gosched() here.

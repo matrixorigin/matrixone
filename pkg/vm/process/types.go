@@ -308,9 +308,6 @@ type Process struct {
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
 	Ctx    context.Context
 	Cancel context.CancelFunc
-
-	// TODO: move to dispatch operator.
-	DispatchNotifyCh chan *WrapCs
 }
 
 type sqlHelper interface {

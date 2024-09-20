@@ -180,7 +180,7 @@ func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, erro
 			dispatch.ctr.prepared = true
 			return true, nil
 
-		case csinfo := <-proc.DispatchNotifyCh:
+		case csinfo := <-dispatch.ctr.remoteInfo:
 			timeoutCancel()
 			dispatch.ctr.remoteReceivers = append(dispatch.ctr.remoteReceivers, csinfo)
 			cnt--
@@ -195,12 +195,12 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 	dispatch.ctr.isRemote = true
 	dispatch.ctr.remoteReceivers = make([]*process.WrapCs, 0, dispatch.ctr.remoteRegsCnt)
 	dispatch.ctr.remoteToIdx = make(map[uuid.UUID]int)
-	proc.DispatchNotifyCh = make(chan *process.WrapCs)
+	dispatch.ctr.remoteInfo = make(chan *process.WrapCs)
 	for i, rr := range dispatch.RemoteRegs {
 		if dispatch.FuncId == ShuffleToAllFunc {
 			dispatch.ctr.remoteToIdx[rr.Uuid] = dispatch.ShuffleRegIdxRemote[i]
 		}
-		if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc); err != nil {
+		if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
 			return err
 		}
 	}
