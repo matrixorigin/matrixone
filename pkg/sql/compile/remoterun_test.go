@@ -236,7 +236,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&shufflebuild.ShuffleBuild{},
 		&indexbuild.IndexBuild{},
 		&source.Source{},
-		&apply.Apply{},
+		&apply.Apply{TableFunction: &table_function.TableFunction{}},
 	}
 	ctx := &scopeContext{
 		id:       1,
