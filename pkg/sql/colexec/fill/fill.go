@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -47,22 +46,6 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &fill.ctr
-
-	f := true
-	for i := len(fill.AggIds) - 1; i >= 0; i-- {
-		if fill.AggIds[i] == function.MAX ||
-			fill.AggIds[i] == function.MIN ||
-			fill.AggIds[i] == function.SUM ||
-			fill.AggIds[i] == function.AVG ||
-			fill.AggIds[i] == function.AVG_TW_RESULT {
-			ctr.colIdx = i
-			f = false
-			break
-		}
-	}
-	if f {
-		fill.FillType = plan.Node_NONE
-	}
 
 	switch fill.FillType {
 	case plan.Node_VALUE:
