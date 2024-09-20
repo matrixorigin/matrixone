@@ -292,10 +292,20 @@ func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T)
 	return
 }
 
-func getStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
-	cols = make([][]string, 0, len(bats))
+func getVarlenaCols(bats []*batch.Batch, idx int) (cols []struct {
+	data []types.Varlena
+	area []byte
+}) {
+	cols = make([]struct {
+		data []types.Varlena
+		area []byte
+	}, 0, len(bats))
 	for i := range bats {
-		cols = append(cols, vector.InefficientMustStrCol(bats[i].Vecs[idx]))
+		data, area := vector.MustVarlenaRawData(bats[i].Vecs[idx])
+		cols = append(cols, struct {
+			data []types.Varlena
+			area []byte
+		}{data, area})
 	}
 	return
 }
