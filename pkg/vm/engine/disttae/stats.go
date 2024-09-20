@@ -770,7 +770,7 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
 				if info.ColumnNDVs[idx] > 500 {
 					if plan2.GetSortOrder(tableDef, int32(idx)) == -1 { //non sorted column, need to adjust ndv down
-						info.ColumnNDVs[idx] /= math.Pow(info.ColumnNDVs[idx], 0.15)
+						info.ColumnNDVs[idx] /= math.Pow(info.ColumnNDVs[idx], 0.25)
 					} else { //sorted column, need to adjust ndv up
 						info.ColumnNDVs[idx] *= math.Pow(info.ColumnNDVs[idx], 0.2)
 						if info.ColumnSize[idx] > 0 {
