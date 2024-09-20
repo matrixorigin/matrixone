@@ -379,6 +379,16 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	return rbat, nil
 }
 
+func (bat *Batch) Union(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
+	for i, vec := range bat.Vecs {
+		if err := vec.UnionBatch(bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
+			return err
+		}
+	}
+	bat.rowCount += cnt
+	return nil
+}
+
 func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
 	for i, vec := range bat.Vecs {
 		if err := vec.UnionOne(bat2.Vecs[i], pos, m); err != nil {
