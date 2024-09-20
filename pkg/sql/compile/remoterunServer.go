@@ -124,7 +124,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
-		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid)
+		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid, HandleNotifyTimeout)
 		if err != nil || dispatchProc == nil {
 			return err
 		}
@@ -520,8 +520,8 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	return result, nil
 }
 
-func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	tout, tcancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
+func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID, timeout time.Duration) (*process.Process, process.RemotePipelineInformationChannel, error) {
+	tout, tcancel := context.WithTimeout(context.Background(), timeout)
 
 	for {
 		select {
