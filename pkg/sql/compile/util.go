@@ -653,12 +653,7 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 		parts = append(parts, src_alias+"."+p)
 	}
 
-	var concat string
-	if len(parts) > 1 {
-		concat = "CONCAT(" + strings.Join(parts, ", '\n', ") + ")"
-	} else {
-		concat = parts[0]
-	}
+	concat := strings.Join(parts, ",")
 
 	sql := fmt.Sprintf(insertIntoFullTextIndexTableFormat,
 		qryDatabase, tblname,

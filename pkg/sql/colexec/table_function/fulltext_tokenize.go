@@ -103,21 +103,34 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	u.batch.CleanOnlyData()
 
 	// tokenize
-	idVec := tf.ctr.argVecs[0]
-	contentVec := tf.ctr.argVecs[1]
+	vlen := len(tf.ctr.argVecs)
 
-	if contentVec.IsNull(uint64(nthRow)) {
+	idVec := tf.ctr.argVecs[0]
+	id := vector.GetAny(idVec, nthRow)
+
+	isnull := false
+	for i := 1; i < vlen; i++ {
+		isnull = (isnull || tf.ctr.argVecs[i].IsNull(uint64(nthRow)))
+	}
+
+	if isnull {
 		u.batch.SetRowCount(0)
 		return nil
 	}
-
-	id := vector.GetAny(idVec, nthRow)
-	c := contentVec.GetStringAt(nthRow)
 
 	var doc Document
 
 	switch u.param.Parser {
 	case "", "ngram", "default":
+
+		var c string
+		for i := 1; i < vlen; i++ {
+			if i > 1 {
+				c += "\n"
+			}
+			c += tf.ctr.argVecs[i].GetStringAt(nthRow)
+		}
+
 		tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))
 		for t := range tok.Tokenize() {
 
@@ -127,15 +140,19 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
 		}
 	case "json":
-		var bj bytejson.ByteJson
-		if err := json.Unmarshal([]byte(c), &bj); err != nil {
-			return err
-		}
+		for i := 1; i < vlen; i++ {
+			c := tf.ctr.argVecs[i].GetStringAt(nthRow)
 
-		for t := range bj.TokenizeValue(false) {
-			slen := t.TokenBytes[0]
-			word := string(t.TokenBytes[1 : slen+1])
-			doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.TokenPos})
+			var bj bytejson.ByteJson
+			if err := json.Unmarshal([]byte(c), &bj); err != nil {
+				return err
+			}
+
+			for t := range bj.TokenizeValue(false) {
+				slen := t.TokenBytes[0]
+				word := string(t.TokenBytes[1 : slen+1])
+				doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.TokenPos})
+			}
 		}
 	default:
 		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser")

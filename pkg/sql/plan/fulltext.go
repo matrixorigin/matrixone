@@ -104,8 +104,8 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 // arg list [params, doc_id, content]
 func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 
-	if len(exprs) != 3 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
+	if len(exprs) < 3 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
 	}
 
 	colDefs := _getColDefs(tokenizeColDefs)
