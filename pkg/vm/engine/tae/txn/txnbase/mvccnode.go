@@ -400,7 +400,7 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%s,%s][%v]",
+	return fmt.Sprintf("[%s,%s][Committed(%v)]",
 		un.Start.ToString(),
 		un.End.ToString(), un.Txn == nil)
 }

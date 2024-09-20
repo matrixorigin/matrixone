@@ -15,6 +15,9 @@
 package compile
 
 import (
+	"bytes"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -22,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -35,8 +39,9 @@ type AnalyzeModule struct {
 	phyPlan        *models.PhyPlan
 	remotePhyPlans []models.PhyPlan
 	// Added read-write lock
-	mu         sync.RWMutex
-	retryTimes int
+	mu               sync.RWMutex
+	retryTimes       int
+	explainPhyBuffer *bytes.Buffer
 }
 
 func (anal *AnalyzeModule) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
@@ -47,6 +52,10 @@ func (anal *AnalyzeModule) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
 
 func (anal *AnalyzeModule) GetPhyPlan() *models.PhyPlan {
 	return anal.phyPlan
+}
+
+func (anal *AnalyzeModule) GetExplainPhyBuffer() *bytes.Buffer {
+	return anal.explainPhyBuffer
 }
 
 func (anal *AnalyzeModule) TypeName() string {
@@ -112,7 +121,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 // applyOpStatsToNode Recursive traversal of PhyOperator tree,
 // and add OpStats statistics to the corresponding NodeAnalyze Info
-func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
+func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalleInfo *ParallelScopeInfo) {
 	if op == nil {
 		return
 	}
@@ -130,17 +139,30 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TotalTimeConsumed
 		node.AnalyzeInfo.MemorySize += op.OpStats.TotalMemorySize
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
-		node.AnalyzeInfo.S3IOByte += op.OpStats.TotalS3IOByte
+		node.AnalyzeInfo.ScanBytes += op.OpStats.TotalScanBytes
 		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
 		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
-
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
+
+		if _, isMinorOp := vm.MinorOpMap[op.OpName]; isMinorOp {
+			isMinor := true
+			if op.OpName == vm.OperatorToStrMap[vm.Filter] {
+				if op.OpName != vm.OperatorToStrMap[vm.TableScan] && op.OpName != vm.OperatorToStrMap[vm.External] {
+					isMinor = false // restrict operator is minor only for scan
+				}
+			}
+			if isMinor {
+				scopeParalleInfo.NodeIdxTimeConsumeMinor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+			}
+		} else if _, isMajorOp := vm.MajorOpMap[op.OpName]; isMajorOp {
+			scopeParalleInfo.NodeIdxTimeConsumeMajor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+		}
 	}
 
 	// Recursive processing of sub operators
 	for _, childOp := range op.Children {
-		applyOpStatsToNode(childOp, nodes)
+		applyOpStatsToNode(childOp, nodes, scopeParalleInfo)
 	}
 }
 
@@ -152,7 +174,16 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
-		applyOpStatsToNode(scope.RootOperator, nodes)
+		scopeParallInfo := NewParallelScopeInfo()
+		applyOpStatsToNode(scope.RootOperator, nodes, scopeParallInfo)
+
+		for nodeIdx, timeConsumeMajor := range scopeParallInfo.NodeIdxTimeConsumeMajor {
+			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor, timeConsumeMajor)
+		}
+
+		for nodeIdx, timeConsumeMinor := range scopeParallInfo.NodeIdxTimeConsumeMinor {
+			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor, timeConsumeMinor)
+		}
 	}
 
 	// handle preScopes recursively
@@ -365,7 +396,6 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 		}
 	}
 
-	//-------------------------------------------------------------------------------------------
 	// record the number of s3 requests
 	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.Put.Load()
 	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.List.Load()
@@ -380,5 +410,163 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
 		c.anal.phyPlan.S3IOInputCount += remotePhy.S3IOInputCount
 		c.anal.phyPlan.S3IOOutputCount += remotePhy.S3IOOutputCount
+	}
+}
+
+type ParallelScopeInfo struct {
+	NodeIdxTimeConsumeMajor map[int]int64
+	NodeIdxTimeConsumeMinor map[int]int64
+	//scopeId                 int32
+}
+
+func NewParallelScopeInfo() *ParallelScopeInfo {
+	return &ParallelScopeInfo{
+		NodeIdxTimeConsumeMajor: make(map[int]int64),
+		NodeIdxTimeConsumeMinor: make(map[int]int64),
+	}
+}
+
+//---------------------------------------------------------------------------------------------------
+
+type ExplainOption struct {
+	Verbose bool
+	Analyze bool
+}
+
+func getExplainOption(options []tree.OptionElem) *ExplainOption {
+	es := new(ExplainOption)
+
+	if options == nil {
+		return es
+	}
+
+	for _, v := range options {
+		switch {
+		case strings.EqualFold(v.Name, "VERBOSE"):
+			es.Verbose = strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL"
+		case strings.EqualFold(v.Name, "ANALYZE"):
+			es.Analyze = strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL"
+		}
+	}
+
+	return es
+}
+
+func makeExplainPhyPlanBuffer(ss []*Scope, option *ExplainOption) *bytes.Buffer {
+	receiverMap := make(map[*process.WaitRegister]int)
+	for i := range ss {
+		genReceiverMap(ss[i], receiverMap)
+	}
+
+	return explainScopes(ss, 0, receiverMap, option)
+}
+
+func explainScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption) *bytes.Buffer {
+	buffer := bytes.NewBuffer(make([]byte, 0, 300))
+	for i := range scopes {
+		explainSingleScope(scopes[i], i, gap, rmp, option, buffer)
+	}
+	return buffer
+}
+
+// showSingleScope generates and outputs a string representation of a single Scope.
+// It includes header information of Scope, data source information, and pipeline tree information.
+// In addition, it recursively displays information from any PreScopes.
+func explainSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption, buffer *bytes.Buffer) {
+	gapNextLine(gap, buffer)
+
+	// Scope Header
+	receiverStr := "nil"
+	if scope.Proc != nil {
+		receiverStr = getReceiverStr(scope, scope.Proc.Reg.MergeReceivers, rmp)
+	}
+
+	if option.Verbose || option.Analyze {
+		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr))
+	} else {
+		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Mcpu, receiverStr))
+	}
+
+	// Scope DataSource
+	if scope.DataSource != nil {
+		gapNextLine(gap, buffer)
+		buffer.WriteString(fmt.Sprintf("  DataSource: %s", showDataSource(scope.DataSource)))
+	}
+
+	if scope.RootOp != nil {
+		gapNextLine(gap, buffer)
+		prefixStr := addGap(gap) + "         "
+		explainPipeline(scope.RootOp, prefixStr, true, true, rmp, option, buffer)
+	}
+
+	if len(scope.PreScopes) > 0 {
+		gapNextLine(gap, buffer)
+		buffer.WriteString("  PreScopes: {")
+		for i := range scope.PreScopes {
+			explainSingleScope(scope.PreScopes[i], i, gap+4, rmp, option, buffer)
+		}
+		gapNextLine(gap, buffer)
+		buffer.WriteString("  }")
+	}
+}
+
+func explainPipeline(node vm.Operator, prefix string, isRoot bool, isTail bool, mp map[*process.WaitRegister]int, option *ExplainOption, buffer *bytes.Buffer) {
+	if node == nil {
+		return
+	}
+
+	id := node.OpType()
+	name, ok := debugInstructionNames[id]
+	if !ok {
+		name = "unknown"
+	}
+
+	analyzeStr := ""
+	if option.Verbose {
+		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v)",
+			node.GetOperatorBase().Idx,
+			node.GetOperatorBase().IsFirst,
+			node.GetOperatorBase().IsLast)
+	}
+	if option.Analyze {
+		if node.GetOperatorBase().OpAnalyzer != nil && node.GetOperatorBase().OpAnalyzer.GetOpStats() != nil {
+			analyzeStr += node.GetOperatorBase().OpAnalyzer.GetOpStats().String()
+		}
+	}
+
+	// Write to the current node
+	if isRoot {
+		headPrefix := "  Pipeline: └── "
+		buffer.WriteString(fmt.Sprintf("%s%s%s", headPrefix, name, analyzeStr))
+		hanldeTailNodeReceiver(node, mp, buffer)
+		buffer.WriteString("\n")
+		// Ensure that child nodes are properly indented
+		prefix += "   "
+	} else {
+		if isTail {
+			buffer.WriteString(fmt.Sprintf("%s└── %s%s", prefix, name, analyzeStr))
+			hanldeTailNodeReceiver(node, mp, buffer)
+			buffer.WriteString("\n")
+		} else {
+			buffer.WriteString(fmt.Sprintf("%s├── %s%s\n", prefix, name, analyzeStr))
+		}
+	}
+
+	// Calculate new prefix
+	newPrefix := prefix
+	if isTail {
+		newPrefix += "    "
+	} else {
+		newPrefix += "│   "
+	}
+
+	// Write to child node
+	for i := 0; i < len(node.GetOperatorBase().Children); i++ {
+		isLast := i == len(node.GetOperatorBase().Children)-1
+		explainPipeline(node.GetOperatorBase().GetChildren(i), newPrefix, false, isLast, mp, option, buffer)
+	}
+
+	if isRoot {
+		trimLastNewline(buffer)
 	}
 }

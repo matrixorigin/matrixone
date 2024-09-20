@@ -277,7 +277,10 @@ func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
 		p := c.ctx.db.MergeScheduler.GetPolicy(c.tbl)
-		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end))
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end, false))
+		b.WriteByte('\n')
+		b.WriteByte('\n')
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end, true))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
 		c.ctx.resp.Payload = b.Bytes()
@@ -429,9 +432,8 @@ func (c *objectPruneArg) Run() error {
 		stale++
 		selected++
 		selectedObjs = append(selectedObjs, obj)
-		stat := obj.GetObjectStats()
-		rw := int(stat.Rows())
-		sz := int(stat.OriginSize())
+		rw := int(obj.Rows())
+		sz := int(obj.OriginSize())
 		if minR == 0 || rw < minR {
 			minR = rw
 		}
@@ -730,11 +732,9 @@ func (c *infoArg) Run() error {
 
 		schema := c.obj.GetSchema()
 		if schema.HasSortKey() {
-			zm, err := c.obj.GetPKZoneMap(context.Background())
+			zm := c.obj.SortKeyZoneMap()
 			var zmstr string
-			if err != nil {
-				zmstr = err.Error()
-			} else if c.verbose <= common.PPL1 {
+			if c.verbose <= common.PPL1 {
 				zmstr = zm.String()
 			} else if c.verbose == common.PPL2 {
 				zmstr = zm.StringForCompose()
@@ -1039,7 +1039,7 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 	}
 	o.tbl++
 
-	stat, _ := table.ObjectStats(common.PPL0, 0, -1)
+	stat, _ := table.ObjectStats(common.PPL0, 0, -1, false)
 	heap.Push(&o.candidates, mItem{objcnt: stat.ObjectCnt, did: table.GetDB().ID, tid: table.ID})
 	if o.candidates.Len() > o.topk {
 		heap.Pop(&o.candidates)

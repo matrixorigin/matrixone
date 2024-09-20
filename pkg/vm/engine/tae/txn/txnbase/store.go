@@ -127,6 +127,12 @@ func (store *NoopTxnStore) RangeDelete(
 ) (err error) {
 	return
 }
+func (store *NoopTxnStore) DeleteByPhyAddrKeys(
+	id *common.ID,
+	rowIDVec, pkVec containers.Vector, dt handle.DeleteType,
+) (err error) {
+	return
+}
 
 func (store *NoopTxnStore) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	return

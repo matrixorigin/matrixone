@@ -15,7 +15,6 @@
 package sort
 
 import (
-	"bytes"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -65,8 +64,10 @@ func UuidLess(a, b types.Uuid) bool {
 }
 
 // it seems that go has no const generic type, handle these types respectively
-// PXU FIXME
-func TsLess(a, b types.TS) bool           { return bytes.Compare(a[:], b[:]) < 0 }
+// PXU FIXME Done
+func TsLess(a, b types.TS) bool {
+	return a.Compare(&b) < 0
+}
 func RowidLess(a, b types.Rowid) bool     { return a.LT(&b) }
 func BlockidLess(a, b types.Blockid) bool { return a.LT(&b) }
 

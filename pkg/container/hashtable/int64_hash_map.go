@@ -89,7 +89,7 @@ func (ht *Int64HashMap) Init(allocator malloc.Allocator) (err error) {
 	ht.rawDataDeallocators = make([]malloc.Deallocator, 1)
 	ht.cells = make([][]Int64HashMapCell, 1)
 
-	if err := ht.allocate(0, uint64(ht.blockCellCnt*strCellSize)); err != nil {
+	if err = ht.allocate(0, uint64(ht.blockCellCnt*intCellSize)); err != nil {
 		return err
 	}
 
@@ -191,9 +191,9 @@ func (ht *Int64HashMap) findEmptyCell(hash uint64) *Int64HashMapCell {
 	return nil
 }
 
-func (ht *Int64HashMap) ResizeOnDemand(n int) error {
+func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
 
-	targetCnt := ht.elemCnt + uint64(n)
+	targetCnt := ht.elemCnt + uint64(cnt)
 	if targetCnt <= uint64(len(ht.rawData))*ht.blockMaxElemCnt {
 		return nil
 	}
@@ -205,11 +205,11 @@ func (ht *Int64HashMap) ResizeOnDemand(n int) error {
 		newMaxElemCnt = maxElemCnt(newCellCnt, intCellSize)
 	}
 
-	newAlloc := int(newCellCnt * intCellSize)
+	newAllocSize := int(newCellCnt * intCellSize)
 	if ht.blockCellCnt == maxIntCellCntPerBlock {
 		// double the blocks
 		oldBlockNum := len(ht.rawData)
-		newBlockNum := newAlloc / maxBlockSize
+		newBlockNum := newAllocSize / maxBlockSize
 
 		ht.rawData = append(ht.rawData, make([][]byte, newBlockNum-oldBlockNum)...)
 		ht.rawDataDeallocators = append(ht.rawDataDeallocators, make([]malloc.Deallocator, newBlockNum-oldBlockNum)...)
@@ -218,7 +218,7 @@ func (ht *Int64HashMap) ResizeOnDemand(n int) error {
 		ht.cellCntMask = ht.cellCnt - 1
 
 		for i := oldBlockNum; i < newBlockNum; i++ {
-			if err := ht.allocate(i, uint64(ht.blockCellCnt*strCellSize)); err != nil {
+			if err := ht.allocate(i, uint64(ht.blockCellCnt*intCellSize)); err != nil {
 				return err
 			}
 		}
@@ -261,11 +261,11 @@ func (ht *Int64HashMap) ResizeOnDemand(n int) error {
 		ht.cellCnt = newCellCnt
 		ht.cellCntMask = newCellCnt - 1
 
-		if newAlloc <= maxBlockSize {
+		if newAllocSize <= maxBlockSize {
 			ht.blockCellCnt = newCellCnt
 			ht.blockMaxElemCnt = newMaxElemCnt
 
-			if err := ht.allocate(0, uint64(newAlloc)); err != nil {
+			if err := ht.allocate(0, uint64(newAllocSize)); err != nil {
 				return err
 			}
 
@@ -273,7 +273,7 @@ func (ht *Int64HashMap) ResizeOnDemand(n int) error {
 			ht.blockCellCnt = maxIntCellCntPerBlock
 			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt, intCellSize)
 
-			newBlockNum := newAlloc / maxBlockSize
+			newBlockNum := newAllocSize / maxBlockSize
 			ht.rawData = make([][]byte, newBlockNum)
 			ht.rawDataDeallocators = make([]malloc.Deallocator, newBlockNum)
 			ht.cells = make([][]Int64HashMapCell, newBlockNum)
@@ -281,7 +281,7 @@ func (ht *Int64HashMap) ResizeOnDemand(n int) error {
 			ht.cellCntMask = ht.cellCnt - 1
 
 			for i := 0; i < newBlockNum; i++ {
-				if err := ht.allocate(i, uint64(ht.blockCellCnt*strCellSize)); err != nil {
+				if err := ht.allocate(i, uint64(ht.blockCellCnt*intCellSize)); err != nil {
 					return err
 				}
 			}

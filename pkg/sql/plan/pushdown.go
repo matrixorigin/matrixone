@@ -466,6 +466,18 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		childId := node.Children[0]
 		childId, _ = builder.pushdownFilters(childId, downFilters, separateNonEquiConds)
 		node.Children[0] = childId
+	case plan.Node_APPLY:
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], filters, separateNonEquiConds)
+
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+
+		node.Children[0] = childID
 	default:
 		if len(node.Children) > 0 {
 			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], filters, separateNonEquiConds)
@@ -553,6 +565,24 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
+
+			// if there is a limit, outcnt is limit number
+			if child.Limit != nil {
+				if cExpr, ok := child.Limit.Expr.(*plan.Expr_Lit); ok {
+					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+						child.Stats.Outcnt = float64(c.U64Val)
+						if child.Stats.Selectivity < 0.5 {
+							newblockNum := int32(c.U64Val / 2)
+							if newblockNum < child.Stats.BlockNum {
+								child.Stats.BlockNum = newblockNum
+							}
+						} else {
+							child.Stats.BlockNum = 1
+						}
+						child.Stats.Cost = float64(child.Stats.BlockNum * DefaultBlockMaxRows)
+					}
+				}
+			}
 		}
 	}
 }

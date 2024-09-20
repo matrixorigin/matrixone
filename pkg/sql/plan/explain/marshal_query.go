@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -235,6 +236,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "window", nil
 	case plan.Node_MATERIAL:
 		return "mterial", nil
+	case plan.Node_APPLY:
+		return "apply", nil
 	default:
 		return "", moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -634,6 +637,11 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Meterial,
 			Value: []string{},
 		})
+	case plan.Node_APPLY:
+		labels = append(labels, models.Label{
+			Name:  Label_Apply,
+			Value: []string{},
+		})
 	default:
 		return nil, moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -693,7 +701,7 @@ const InputSize = "Input Size"
 const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
-const S3IOByte = "S3 IO Byte"
+const ScanBytes = "Scan Bytes"
 const S3IOInputCount = "S3 IO Input Count"
 const S3IOOutputCount = "S3 IO Output Count"
 const Network = "Network"
@@ -783,8 +791,8 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  Statistic_Unit_byte, //"byte",
 			},
 			{
-				Name:  S3IOByte,
-				Value: analyzeInfo.S3IOByte,
+				Name:  ScanBytes,
+				Value: analyzeInfo.ScanBytes,
 				Unit:  Statistic_Unit_byte, //"byte",
 			},
 			{

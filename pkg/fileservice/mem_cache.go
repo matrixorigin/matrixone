@@ -32,6 +32,7 @@ func NewMemCache(
 	capacity fscache.CapacityFunc,
 	callbacks *CacheCallbacks,
 	counterSets []*perfcounter.CounterSet,
+	name string,
 ) *MemCache {
 
 	postSetFn := func(key fscache.CacheKey, value fscache.Data) {
@@ -64,7 +65,15 @@ func NewMemCache(
 		}
 	}
 
-	dataCache := fifocache.NewDataCache(capacity, postSetFn, postGetFn, postEvictFn)
+	capacityFunc := func() int64 {
+		// read from global hint
+		if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
+			return n
+		}
+		// fallback
+		return capacity()
+	}
+	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
 
 	return &MemCache{
 		cache:       dataCache,
@@ -174,4 +183,9 @@ func (m *MemCache) DeletePaths(
 
 func (m *MemCache) Evict(done chan int64) {
 	m.cache.Evict(done)
+}
+
+func (m *MemCache) Close() {
+	m.Flush()
+	allMemoryCaches.Delete(m)
 }

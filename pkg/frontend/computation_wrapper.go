@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -56,6 +57,8 @@ type TxnComputationWrapper struct {
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
+
+	explainBuffer *bytes.Buffer
 }
 
 func InitTxnComputationWrapper(
@@ -283,6 +286,10 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *
 	return nil
 }
 
+func (cwft *TxnComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
+	cwft.explainBuffer = buf
+}
+
 func (cwft *TxnComputationWrapper) GetUUID() []byte {
 	return cwft.uuid[:]
 }
@@ -338,6 +345,11 @@ func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputa
 	if prepareStmt.InsertBat != nil {
 		prepareStmt.InsertBat.SetCnt(1000) // we will make sure :  when retry in lock error, we will not clean up this batch
 		cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
+		for i := 0; i < len(prepareStmt.exprList); i++ {
+			for j := range prepareStmt.exprList[i] {
+				prepareStmt.exprList[i][j].ResetForNextQuery()
+			}
+		}
 		cwft.proc.SetPrepareExprList(prepareStmt.exprList)
 	}
 	numParams := len(preparePlan.ParamTypes)
@@ -439,6 +451,11 @@ func createCompile(
 	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(bat *batch.Batch) error { return nil }
 	}
+
+	if _, ok := stmt.(*tree.ExplainPhyPlan); ok {
+		fill = func(bat *batch.Batch) error { return nil }
+	}
+
 	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
 	if err != nil {
 		return

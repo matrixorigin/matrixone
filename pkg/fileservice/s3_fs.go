@@ -157,11 +157,13 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	}
 
 	// memory cache
-	if *config.MemoryCapacity > DisableCacheCapacity {
+	if config.MemoryCapacity != nil &&
+		*config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
 			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
 			&config.CacheCallbacks,
 			s.perfCounterSets,
+			s.name,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", s.name),
@@ -170,7 +172,9 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	}
 
 	// disk cache
-	if *config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
+	if config.DiskCapacity != nil &&
+		*config.DiskCapacity > DisableCacheCapacity &&
+		config.DiskPath != nil {
 		var err error
 		s.diskCache, err = NewDiskCache(
 			ctx,
@@ -179,6 +183,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			s.perfCounterSets,
 			true,
 			s,
+			s.name,
 		)
 		if err != nil {
 			return err
@@ -905,7 +910,12 @@ func (*S3FS) ETLCompatible() {}
 var _ CachingFileService = new(S3FS)
 
 func (s *S3FS) Close() {
-	s.FlushCache()
+	if s.memCache != nil {
+		s.memCache.Close()
+	}
+	if s.diskCache != nil {
+		s.diskCache.Close()
+	}
 }
 
 func (s *S3FS) FlushCache() {

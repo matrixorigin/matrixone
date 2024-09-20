@@ -46,7 +46,7 @@ type Scheduler struct {
 func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
 	op := &Scheduler{
 		LoopProcessor: new(catalog.LoopProcessor),
-		policies:      newPolicyGroup(newBasicPolicy(), newTombstonePolicy()),
+		policies:      newPolicyGroup(newBasicPolicy(), newObjCompactPolicy(rt.Fs.Service), newObjOverlapPolicy(), newTombstonePolicy()),
 		executor:      newMergeExecutor(rt, sched),
 		stoppedTables: struct {
 			sync.RWMutex
@@ -118,6 +118,12 @@ func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
+
+	if s.executor.rt.LockMergeService.IsLockedByUser(tableEntry.ID) {
+		logutil.Infof("LockMerge skip table scan due to user lock %d", tableEntry.ID)
+		return moerr.GetOkStopCurrRecur()
+	}
+
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -153,7 +159,7 @@ func (s *Scheduler) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 
 	results := s.policies.revise(s.executor.CPUPercent(), int64(s.executor.memAvailBytes()))
 	for _, r := range results {
-		if len(r.objs) > 1 {
+		if len(r.objs) > 0 {
 			s.executor.executeFor(tableEntry, r.objs, r.kind)
 		}
 	}
@@ -161,10 +167,6 @@ func (s *Scheduler) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 }
 
 func (s *Scheduler) onObject(objectEntry *catalog.ObjectEntry) (err error) {
-	if !objectEntry.IsActive() {
-		return moerr.GetOkStopCurrRecur()
-	}
-
 	if !objectValid(objectEntry) {
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -192,11 +194,16 @@ func (s *Scheduler) StartMerge(tbl *catalog.TableEntry) {
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
-	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry) {
+	if objectEntry.IsAppendable() {
 		return false
 	}
-
-	if objectEntry.IsAppendable() {
+	if !objectEntry.IsActive() {
+		return false
+	}
+	if !objectEntry.IsCommitted() {
+		return false
+	}
+	if objectEntry.IsCreatingOrAborted() {
 		return false
 	}
 	return true
