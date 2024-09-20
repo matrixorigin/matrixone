@@ -536,7 +536,7 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 			return nil, nil, nil
 
 		default:
-			dispatchProc, notifyChannel, ok := colexec.Get().GetProcByUuid(uid, true)
+			dispatchProc, notifyChannel, ok := colexec.Get().GetProcByUuid(uid, false)
 			if ok {
 				tcancel()
 				return dispatchProc, notifyChannel, nil
