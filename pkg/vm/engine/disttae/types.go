@@ -55,12 +55,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	PREFETCH_THRESHOLD  = 256
-	PREFETCH_ROUNDS     = 24
-	SMALLSCAN_THRESHOLD = 100
-	LARGESCAN_THRESHOLD = 1500
-)
+func GetSmallScanThreshHold() uint64 {
+	if ncpu > 32 {
+		return 100
+	}
+	if ncpu > 16 {
+		return 200
+	}
+	return 400
+}
 
 const (
 	INSERT = iota
@@ -116,12 +119,6 @@ func noteSplitAlter(note string) (bool, int, uint64, string) {
 	}
 	panic("bad format of alter note")
 }
-
-const (
-	SMALL = iota
-	NORMAL
-	LARGE
-)
 
 const (
 	MO_DATABASE_ID_NAME_IDX       = 1
@@ -921,9 +918,9 @@ type reader struct {
 	isTombstone bool
 	source      engine.DataSource
 
-	memFilter MemPKFilter
-
-	scanType int
+	memFilter           MemPKFilter
+	readBlockCnt        uint64
+	smallScanThreshHold uint64
 }
 
 type mergeReader struct {
