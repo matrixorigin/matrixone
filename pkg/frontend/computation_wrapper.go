@@ -345,6 +345,11 @@ func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputa
 	if prepareStmt.InsertBat != nil {
 		prepareStmt.InsertBat.SetCnt(1000) // we will make sure :  when retry in lock error, we will not clean up this batch
 		cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
+		for i := 0; i < len(prepareStmt.exprList); i++ {
+			for j := range prepareStmt.exprList[i] {
+				prepareStmt.exprList[i][j].ResetForNextQuery()
+			}
+		}
 		cwft.proc.SetPrepareExprList(prepareStmt.exprList)
 	}
 	numParams := len(preparePlan.ParamTypes)
