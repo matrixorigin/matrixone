@@ -109,11 +109,11 @@ func (node *persistedNode) Scan(
 		*bat = containers.NewBatch()
 		for i, idx := range colIdxes {
 			var attr string
-			if idx == catalog.COLIDX_COMMITS {
+			if idx == objectio.SEQNUM_COMMITTS {
 				attr = catalog.AttrCommitTs
 				if vecs[i].GetType().Oid != types.T_TS {
 					vecs[i].Close()
-					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&catalog.CommitTSType)
+					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
 					createTS := node.object.meta.Load().GetCreatedAt()
 					vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, vecs[0].Length(), mp)
 				}
@@ -125,11 +125,11 @@ func (node *persistedNode) Scan(
 	} else {
 		for i, idx := range colIdxes {
 			var attr string
-			if idx == catalog.COLIDX_COMMITS {
+			if idx == objectio.SEQNUM_COMMITTS {
 				attr = catalog.AttrCommitTs
 				if vecs[i].GetType().Oid != types.T_TS {
 					vecs[i].Close()
-					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&catalog.CommitTSType)
+					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
 					createTS := node.object.meta.Load().GetCreatedAt()
 					vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, vecs[0].Length(), mp)
 				}
@@ -154,7 +154,7 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		panic("not support")
 	}
 	colIdxes := catalog.TombstoneBatchIdxes
-	colIdxes = append(colIdxes, catalog.COLIDX_COMMITS)
+	colIdxes = append(colIdxes, objectio.SEQNUM_COMMITTS)
 	readSchema := node.object.meta.Load().GetTable().GetLastestSchema(true)
 	var startTS types.TS
 	if !node.object.meta.Load().IsAppendable() {

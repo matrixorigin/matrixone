@@ -72,9 +72,9 @@ func LoadPersistedColumnDatas(
 	vectors := make([]containers.Vector, len(colIdxs))
 	phyAddIdx := -1
 	for i, colIdx := range colIdxs {
-		if colIdx == catalog.COLIDX_COMMITS {
+		if colIdx == objectio.SEQNUM_COMMITTS {
 			cols = append(cols, objectio.SEQNUM_COMMITTS)
-			typs = append(typs, catalog.CommitTSType)
+			typs = append(typs, objectio.TSType)
 			continue
 		}
 		def := schema.ColDefs[colIdx]

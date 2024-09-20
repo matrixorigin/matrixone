@@ -42,14 +42,6 @@ func i82bool(v int8) bool {
 	return v == 1
 }
 
-const (
-	COLIDX_COMMITS = objectio.SEQNUM_COMMITTS
-)
-
-var (
-	CommitTSType = types.T_TS.ToType()
-)
-
 type ColDef struct {
 	// letter case: origin
 	Name          string
@@ -892,7 +884,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	// check duplicate column names
 	names := make(map[string]bool)
 	for idx, def := range s.ColDefs {
-		if idx == COLIDX_COMMITS {
+		if idx == objectio.SEQNUM_COMMITTS {
 			panic(fmt.Sprintf("bad column idx %d, table %v", idx, s.Name))
 		}
 		// Check column sequence idx validility
