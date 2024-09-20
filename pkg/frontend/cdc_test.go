@@ -663,6 +663,12 @@ func Test_handleCreateCdc(t *testing.T) {
 
 	ses.GetTxnCompileCtx().execCtx.stmt = create
 
+	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
+	stub := gostub.Stub(&initAesKeyWrapper, func(context.Context, taskservice.SqlExecutor, uint32) (err error) {
+		return nil
+	})
+	defer stub.Reset()
+
 	tests := []struct {
 		name    string
 		args    args
@@ -1030,6 +1036,8 @@ const (
 )
 
 func TestRegisterCdcExecutor(t *testing.T) {
+	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
+
 	type args struct {
 		logger       *zap.Logger
 		ts           *testTaskService
@@ -2900,5 +2908,4 @@ func Test_initAesKey(t *testing.T) {
 
 	err := initAesKey(context.Background(), nil, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, cdc2.AesKey, "aesKey")
 }

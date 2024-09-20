@@ -398,7 +398,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 				return
 			}
 
-			if err = initAesKey(ctx, tx, creatorAccInfo.GetTenantID()); err != nil {
+			if err = initAesKeyWrapper(ctx, tx, creatorAccInfo.GetTenantID()); err != nil {
 				return
 			}
 
@@ -1751,6 +1751,7 @@ var (
 	queryTableWrapper  = queryTable
 	decrypt            = cdc2.AesCFBDecodeWithKey
 	getGlobalPuWrapper = getGlobalPu
+	initAesKeyWrapper  = initAesKey
 )
 
 func initAesKey(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32) (err error) {
