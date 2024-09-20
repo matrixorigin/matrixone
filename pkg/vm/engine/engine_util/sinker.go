@@ -91,13 +91,14 @@ type FSinkerImpl struct {
 
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
-		s.writer = mergesort.GetNewWriter(
-			s.fs,
+		s.writer = blockio.ConstructWriter(
 			s.schemaVersion,
 			s.seqnums,
 			s.sortKeyPos,
 			s.isPrimaryKey,
-			s.isTombstone)
+			s.isTombstone,
+			s.fs,
+		)
 	}
 
 	_, err := s.writer.WriteBatch(b)

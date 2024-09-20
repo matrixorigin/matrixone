@@ -321,7 +321,14 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 		sortkeyPos = schema.GetSingleSortKeyIdx()
 	}
 
-	return mergesort.GetNewWriter(task.rt.Fs.Service, schema.Version, seqnums, sortkeyPos, sortkeyIsPK, task.isTombstone)
+	return blockio.ConstructWriter(
+		schema.Version,
+		seqnums,
+		sortkeyPos,
+		sortkeyIsPK,
+		task.isTombstone,
+		task.rt.Fs.Service,
+	)
 }
 
 func (task *mergeObjectsTask) DoTransfer() bool {
