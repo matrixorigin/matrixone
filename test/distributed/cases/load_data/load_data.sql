@@ -472,6 +472,10 @@ delete from load_data_t9;
 load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true' strict 'true';
 select count(*) from load_data_t9;
 delete from load_data_t9;
+
+load data infile {'filepath'='$resources/load_data/test_parallel_gz.csv.gz'} into table load_data_t9 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
+select count(*) from load_data_t9;
+
 drop table load_data_t9;
 
 

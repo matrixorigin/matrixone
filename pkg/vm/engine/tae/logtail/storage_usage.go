@@ -1039,41 +1039,6 @@ func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 	return log
 }
 
-// TODO(GHS) remove later when these special tables have their own objects
-func applyChangesForSpecial(collector *BaseCollector, memo *TNUsageMemo) {
-	if collector.data == nil {
-		return
-	}
-
-	moDatabaseBat := collector.data.bats[DBInsertIDX]
-	moTablesBat := collector.data.bats[TBLInsertIDX]
-	moColumnsBat := collector.data.bats[TBLColInsertIDX]
-
-	memo.applySegInserts([]UsageData{{
-		AccId:   uint64(pkgcatalog.System_Account),
-		DbId:    pkgcatalog.MO_CATALOG_ID,
-		TblId:   pkgcatalog.MO_DATABASE_ID,
-		Size:    uint64(moDatabaseBat.ApproxSize()),
-		special: yeah,
-	}}, collector.data, collector.Allocator())
-
-	memo.applySegInserts([]UsageData{{
-		AccId:   uint64(pkgcatalog.System_Account),
-		DbId:    pkgcatalog.MO_CATALOG_ID,
-		TblId:   pkgcatalog.MO_TABLES_ID,
-		Size:    uint64(moTablesBat.ApproxSize()),
-		special: yeah,
-	}}, collector.data, collector.Allocator())
-
-	memo.applySegInserts([]UsageData{{
-		AccId:   uint64(pkgcatalog.System_Account),
-		DbId:    pkgcatalog.MO_CATALOG_ID,
-		TblId:   pkgcatalog.MO_COLUMNS_ID,
-		Size:    uint64(moColumnsBat.ApproxSize()),
-		special: yeah,
-	}}, collector.data, collector.Allocator())
-}
-
 func doSummary(ckp string, fields ...zap.Field) {
 	defer func() {
 		summaryLog[0] = summaryLog[0][:0]
@@ -1150,8 +1115,6 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 	}()
 
 	log1 := applyChanges(collector.BaseCollector, collector.UsageMemo)
-	//log2 := applyTransfer(collector.BaseCollector, collector.UsageMemo)
-	applyChangesForSpecial(collector.BaseCollector, collector.UsageMemo)
 
 	memoryUsed = collector.UsageMemo.MemoryUsed()
 	doSummary("I",
