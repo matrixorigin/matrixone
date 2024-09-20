@@ -840,7 +840,7 @@ func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
 	for i := 0; i < ins.Length(); i++ {
 		commitTs := commitTsVec[i]
 		if _, ok := sm.aobjDelTsMap[commitTs]; ok {
-			panic(fmt.Sprintf("commitTs %d already exists", commitTs.ToString()))
+			panic(fmt.Sprintf("commitTs %v already exists", commitTs.ToString()))
 		}
 		sm.aobjDelTsMap[commitTs] = struct{}{}
 	}
@@ -981,7 +981,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 			pkgVec := mobat.Vecs[i]
 			var vec containers.Vector
 			if pkgVec.Length() == 0 {
-				vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator)
+				vec = containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator)
 			} else {
 				vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
 			}
