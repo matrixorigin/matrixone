@@ -111,8 +111,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		return nil
 	}
 
-	var id any
-	id = vector.GetAny(idVec, nthRow)
+	id := vector.GetAny(idVec, nthRow)
 	c := contentVec.GetStringAt(nthRow)
 
 	var doc Document

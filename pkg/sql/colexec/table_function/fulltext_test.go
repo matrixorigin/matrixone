@@ -29,7 +29,7 @@ type TestCase struct {
 }
 
 func PatternListToString(ps []*Pattern) string {
-	var ss []string
+	ss := make([]string, 0, len(ps))
 	for _, p := range ps {
 		ss = append(ss, p.String())
 	}

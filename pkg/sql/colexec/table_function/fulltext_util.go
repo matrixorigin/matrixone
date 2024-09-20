@@ -240,7 +240,7 @@ func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map
 		return nil, nil
 	}
 
-	var keys []any
+	keys := make([]any, 0, len(result))
 	for key := range result {
 		keys = append(keys, key)
 	}
@@ -263,7 +263,7 @@ func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[a
 		return nil, nil
 	}
 
-	var keys []any
+	keys := make([]any, 0, len(result))
 	for key := range result {
 		keys = append(keys, key)
 	}
@@ -541,7 +541,6 @@ func CreatePattern(pattern string) (*Pattern, error) {
 	var operator int
 	var word string
 	if op == '(' && lastop == ')' {
-		operator = GROUP
 		word = strings.TrimSpace(string(runeSlice[1 : strlen-1]))
 
 		p, err := ParsePatternInBooleanMode(word)
@@ -552,13 +551,11 @@ func CreatePattern(pattern string) (*Pattern, error) {
 
 	}
 
-	word = string(runeSlice[1:])
 	operator = GetOp(op)
 	if operator == TEXT {
 		if lastop == '*' {
 			operator = STAR
 		}
-		word = string(runeSlice)
 		return &Pattern{Text: pattern, Operator: operator}, nil
 	}
 
@@ -624,7 +621,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 			continue
 		}
 
-		if isspace == false {
+		if !isspace {
 			if r == ' ' {
 				// something here
 				isspace = true
@@ -689,7 +686,7 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 		return []*Pattern{{Text: pattern + "*", Operator: STAR}}, nil
 	}
 
-	var list []*Pattern
+	var list []*Pattern = make([]*Pattern, 0, 64)
 	tok, _ := tokenizer.NewSimpleTokenizer([]byte(pattern))
 	for t := range tok.Tokenize() {
 
