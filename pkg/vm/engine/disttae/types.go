@@ -55,9 +55,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	SMALLSCAN_THRESHOLD = 100
-)
+func GetSmallScanThreshHold() uint64 {
+	if ncpu > 32 {
+		return 100
+	}
+	if ncpu > 16 {
+		return 200
+	}
+	return 400
+}
 
 const (
 	INSERT = iota
@@ -912,8 +918,9 @@ type reader struct {
 	source engine.DataSource
 	ts     timestamp.Timestamp
 
-	memFilter    MemPKFilter
-	readBlockCnt uint64
+	memFilter           MemPKFilter
+	readBlockCnt        uint64
+	smallScanThreshHold uint64
 }
 
 type mergeReader struct {

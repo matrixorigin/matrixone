@@ -358,7 +358,10 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.readBlockCnt > SMALLSCAN_THRESHOLD {
+	if r.readBlockCnt == 0 {
+		r.smallScanThreshHold = GetSmallScanThreshHold()
+	}
+	if r.readBlockCnt > r.smallScanThreshHold {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 
