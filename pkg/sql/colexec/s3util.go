@@ -343,7 +343,7 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 	}
 
 	for i := range w.batches {
-		err := sortByKey(proc, w.batches[i], w.sortIndex, w.isClusterBy, proc.GetMPool())
+		err := SortByKey(proc, w.batches[i], w.sortIndex, w.isClusterBy, proc.GetMPool())
 		if err != nil {
 			return nil, objectio.ObjectStats{}, err
 		}
@@ -409,7 +409,7 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
-func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_null bool, m *mpool.MPool) error {
+func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_null bool, m *mpool.MPool) error {
 	hasNull := false
 	// Not-Null Check, notice that cluster by support null value
 	if nulls.Any(bat.Vecs[sortIndex].GetNulls()) {
