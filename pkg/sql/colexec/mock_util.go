@@ -44,6 +44,12 @@ func NewMockOperator() *MockOperator {
 	return &MockOperator{}
 }
 
+func (op *MockOperator) ResetBatchs(proc *process.Process, batchs []*batch.Batch) *MockOperator {
+	op.Free(proc, false, nil)
+	op.WithBatchs(batchs)
+	return op
+}
+
 func (op *MockOperator) WithBatchs(batchs []*batch.Batch) *MockOperator {
 	op.batchs = append(op.batchs, batchs...)
 	return op
