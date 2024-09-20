@@ -94,7 +94,7 @@ const (
 	LiteralFalse
 )
 
-// search josn
+// search josn element cut off point.
 const (
 	bsearchCutoff = 20
 )
