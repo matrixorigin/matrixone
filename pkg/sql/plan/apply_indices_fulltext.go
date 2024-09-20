@@ -522,49 +522,6 @@ func (builder *QueryBuilder) getFullTextMatchScoreExpr(expr *plan.Expr) *plan.Ex
 	return newExpr
 }
 
-func (builder *QueryBuilder) resolveFullTextMatchFromScanNode(node *plan.Node) *plan.Node {
-
-	if node.NodeType == plan.Node_TABLE_SCAN && len(node.TableDef.Indexes) > 0 {
-
-		for _, f := range node.FilterList {
-			fn := f.GetF()
-			if fn == nil {
-				continue
-			}
-
-			if fn.Func.ObjName == "fulltext_match" {
-				return node
-			}
-		}
-	}
-
-	for _, nodeId := range node.Children {
-		node = builder.resolveFullTextMatchFromScanNode(builder.qry.Nodes[nodeId])
-		if node != nil {
-			return node
-		}
-	}
-
-	return nil
-}
-
-func (builder *QueryBuilder) resolveFullTextIndexScanNode(node *plan.Node) *plan.Node {
-
-	if node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef.TableType == "func_table" &&
-		node.TableDef.TblFunc.Name == fulltext_index_scan_func_name {
-		return node
-	}
-
-	for _, nodeId := range node.Children {
-		node = builder.resolveFullTextIndexScanNode(builder.qry.Nodes[nodeId])
-		if node != nil {
-			return node
-		}
-	}
-
-	return nil
-}
-
 func (builder *QueryBuilder) resolveAggNode(node *plan.Node, depth int32) *plan.Node {
 	if depth == 0 {
 		if node.NodeType == plan.Node_AGG {
