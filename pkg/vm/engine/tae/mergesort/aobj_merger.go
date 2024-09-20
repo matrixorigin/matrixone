@@ -30,10 +30,10 @@ type AObjMerger interface {
 	Merge(context.Context) ([]*batch.Batch, func(), []int, error)
 }
 
-type aObjMerger[T any] struct {
+type aObjMerger[T comparable] struct {
 	heap *heapSlice[T]
 
-	cols  [][]T
+	df    dataFetcher[T]
 	nulls []*nulls.Nulls
 
 	bats      []*containers.Batch
@@ -53,56 +53,155 @@ func MergeAObj(
 	toLayout []uint32) ([]*batch.Batch, func(), []int, error) {
 	var merger AObjMerger
 	typ := batches[0].Vecs[sortKeyPos].GetType()
+	size := len(batches)
 	if typ.IsVarlen() {
-		merger = newAObjMerger(vpool, batches, sort.GenericLess[string], sortKeyPos, vector.InefficientMustStrCol, toLayout)
+		df := &varlenaDataFetcher{
+			cols: make([]struct {
+				data []types.Varlena
+				area []byte
+			}, size),
+		}
+		merger = newAObjMerger(vpool, batches, sort.GenericLess[string], sortKeyPos, df, toLayout)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:
-			merger = newAObjMerger(vpool, batches, sort.BoolLess, sortKeyPos, vector.MustFixedColNoTypeCheck[bool], toLayout)
+			df := &fixedDataFetcher[bool]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[bool],
+				cols:        make([][]bool, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.BoolLess, sortKeyPos, df, toLayout)
 		case types.T_bit:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedColNoTypeCheck[uint64], toLayout)
+			df := &fixedDataFetcher[uint64]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[uint64],
+				cols:        make([][]uint64, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, df, toLayout)
 		case types.T_int8:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int8], sortKeyPos, vector.MustFixedColNoTypeCheck[int8], toLayout)
+			df := &fixedDataFetcher[int8]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[int8],
+				cols:        make([][]int8, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int8], sortKeyPos, df, toLayout)
 		case types.T_int16:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int16], sortKeyPos, vector.MustFixedColNoTypeCheck[int16], toLayout)
+			df := &fixedDataFetcher[int16]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[int16],
+				cols:        make([][]int16, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int16], sortKeyPos, df, toLayout)
 		case types.T_int32:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int32], sortKeyPos, vector.MustFixedColNoTypeCheck[int32], toLayout)
+			df := &fixedDataFetcher[int32]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[int32],
+				cols:        make([][]int32, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int32], sortKeyPos, df, toLayout)
 		case types.T_int64:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int64], sortKeyPos, vector.MustFixedColNoTypeCheck[int64], toLayout)
+			df := &fixedDataFetcher[int64]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[int64],
+				cols:        make([][]int64, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int64], sortKeyPos, df, toLayout)
 		case types.T_float32:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[float32], sortKeyPos, vector.MustFixedColNoTypeCheck[float32], toLayout)
+			df := &fixedDataFetcher[float32]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[float32],
+				cols:        make([][]float32, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[float32], sortKeyPos, df, toLayout)
 		case types.T_float64:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[float64], sortKeyPos, vector.MustFixedColNoTypeCheck[float64], toLayout)
+			df := &fixedDataFetcher[float64]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[float64],
+				cols:        make([][]float64, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[float64], sortKeyPos, df, toLayout)
 		case types.T_uint8:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint8], sortKeyPos, vector.MustFixedColNoTypeCheck[uint8], toLayout)
+			df := &fixedDataFetcher[uint8]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[uint8],
+				cols:        make([][]uint8, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint8], sortKeyPos, df, toLayout)
 		case types.T_uint16:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint16], sortKeyPos, vector.MustFixedColNoTypeCheck[uint16], toLayout)
+			df := &fixedDataFetcher[uint16]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[uint16],
+				cols:        make([][]uint16, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint16], sortKeyPos, df, toLayout)
 		case types.T_uint32:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint32], sortKeyPos, vector.MustFixedColNoTypeCheck[uint32], toLayout)
+			df := &fixedDataFetcher[uint32]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[uint32],
+				cols:        make([][]uint32, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint32], sortKeyPos, df, toLayout)
 		case types.T_uint64:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedColNoTypeCheck[uint64], toLayout)
+			df := &fixedDataFetcher[uint64]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[uint64],
+				cols:        make([][]uint64, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, df, toLayout)
 		case types.T_date:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Date], sortKeyPos, vector.MustFixedColNoTypeCheck[types.Date], toLayout)
+			df := &fixedDataFetcher[types.Date]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Date],
+				cols:        make([][]types.Date, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Date], sortKeyPos, df, toLayout)
 		case types.T_timestamp:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Timestamp], sortKeyPos, vector.MustFixedColNoTypeCheck[types.Timestamp], toLayout)
+			df := &fixedDataFetcher[types.Timestamp]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Timestamp],
+				cols:        make([][]types.Timestamp, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Timestamp], sortKeyPos, df, toLayout)
 		case types.T_datetime:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Datetime], sortKeyPos, vector.MustFixedColNoTypeCheck[types.Datetime], toLayout)
+			df := &fixedDataFetcher[types.Datetime]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Datetime],
+				cols:        make([][]types.Datetime, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Datetime], sortKeyPos, df, toLayout)
 		case types.T_time:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Time], sortKeyPos, vector.MustFixedColNoTypeCheck[types.Time], toLayout)
+			df := &fixedDataFetcher[types.Time]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Time],
+				cols:        make([][]types.Time, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Time], sortKeyPos, df, toLayout)
 		case types.T_enum:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Enum], sortKeyPos, vector.MustFixedColNoTypeCheck[types.Enum], toLayout)
+			df := &fixedDataFetcher[types.Enum]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Enum],
+				cols:        make([][]types.Enum, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Enum], sortKeyPos, df, toLayout)
 		case types.T_decimal64:
-			merger = newAObjMerger(vpool, batches, sort.Decimal64Less, sortKeyPos, vector.MustFixedColNoTypeCheck[types.Decimal64], toLayout)
+			df := &fixedDataFetcher[types.Decimal64]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Decimal64],
+				cols:        make([][]types.Decimal64, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.Decimal64Less, sortKeyPos, df, toLayout)
 		case types.T_decimal128:
-			merger = newAObjMerger(vpool, batches, sort.Decimal128Less, sortKeyPos, vector.MustFixedColNoTypeCheck[types.Decimal128], toLayout)
+			df := &fixedDataFetcher[types.Decimal128]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Decimal128],
+				cols:        make([][]types.Decimal128, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.Decimal128Less, sortKeyPos, df, toLayout)
 		case types.T_uuid:
-			merger = newAObjMerger(vpool, batches, sort.UuidLess, sortKeyPos, vector.MustFixedColNoTypeCheck[types.Uuid], toLayout)
+			df := &fixedDataFetcher[types.Uuid]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Uuid],
+				cols:        make([][]types.Uuid, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.UuidLess, sortKeyPos, df, toLayout)
 		case types.T_TS:
-			merger = newAObjMerger(vpool, batches, sort.TsLess, sortKeyPos, vector.MustFixedColNoTypeCheck[types.TS], toLayout)
+			df := &fixedDataFetcher[types.TS]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.TS],
+				cols:        make([][]types.TS, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.TsLess, sortKeyPos, df, toLayout)
 		case types.T_Rowid:
-			merger = newAObjMerger(vpool, batches, sort.RowidLess, sortKeyPos, vector.MustFixedColNoTypeCheck[types.Rowid], toLayout)
+			df := &fixedDataFetcher[types.Rowid]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Rowid],
+				cols:        make([][]types.Rowid, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.RowidLess, sortKeyPos, df, toLayout)
 		case types.T_Blockid:
-			merger = newAObjMerger(vpool, batches, sort.BlockidLess, sortKeyPos, vector.MustFixedColNoTypeCheck[types.Blockid], toLayout)
+			df := &fixedDataFetcher[types.Blockid]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Blockid],
+				cols:        make([][]types.Blockid, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.BlockidLess, sortKeyPos, df, toLayout)
 		default:
 			return nil, nil, nil, moerr.NewErrUnsupportedDataType(ctx, typ)
 		}
@@ -110,18 +209,18 @@ func MergeAObj(
 	return merger.Merge(ctx)
 }
 
-func newAObjMerger[T any](
+func newAObjMerger[T comparable](
 	vpool DisposableVecPool,
 	batches []*containers.Batch,
 	lessFunc sort.LessFunc[T],
 	sortKeyPos int,
-	mustColFunc func(*vector.Vector) []T,
+	df dataFetcher[T],
 	toLayout []uint32) AObjMerger {
 	size := len(batches)
 	m := &aObjMerger[T]{
 		vpool:     vpool,
 		heap:      newHeapSlice[T](size, lessFunc),
-		cols:      make([][]T, size),
+		df:        df,
 		nulls:     make([]*nulls.Nulls, size),
 		rowIdx:    make([]int64, size),
 		accRowCnt: make([]int64, size),
@@ -132,11 +231,11 @@ func newAObjMerger[T any](
 	totalRowCnt := 0
 	for i, blk := range batches {
 		sortKeyCol := blk.Vecs[sortKeyPos].GetDownstreamVector()
-		m.cols[i] = mustColFunc(sortKeyCol)
+		m.df.mustToCol(sortKeyCol, uint32(i))
 		m.nulls[i] = sortKeyCol.GetNulls()
 		m.rowIdx[i] = 0
 		m.accRowCnt[i] = int64(totalRowCnt)
-		totalRowCnt += len(m.cols[i])
+		totalRowCnt += m.df.length(uint32(i))
 	}
 	m.mapping = make([]int, totalRowCnt)
 	for i := range m.mapping {
@@ -149,7 +248,7 @@ func newAObjMerger[T any](
 func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []int, error) {
 	for i := 0; i < len(am.bats); i++ {
 		heapPush(am.heap, heapElem[T]{
-			data:   am.cols[i][0],
+			data:   am.df.at(uint32(i), 0),
 			isNull: am.nulls[i].Contains(0),
 			src:    uint32(i),
 		})
@@ -211,12 +310,12 @@ func (am *aObjMerger[T]) nextPos() uint32 {
 
 func (am *aObjMerger[T]) pushNewElem(blkIdx uint32) bool {
 	am.rowIdx[blkIdx]++
-	if am.rowIdx[blkIdx] >= int64(len(am.cols[blkIdx])) {
+	if am.rowIdx[blkIdx] >= int64(am.df.length(blkIdx)) {
 		return false
 	}
 	nextRow := am.rowIdx[blkIdx]
 	heapPush(am.heap, heapElem[T]{
-		data:   am.cols[blkIdx][nextRow],
+		data:   am.df.at(blkIdx, uint32(nextRow)),
 		isNull: am.nulls[blkIdx].Contains(uint64(nextRow)),
 		src:    blkIdx,
 	})
