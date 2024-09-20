@@ -181,6 +181,16 @@ func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F)
 	}
 
 	if exprImpl, ok = valExpr.Expr.(*plan.Expr_Vec); !ok {
+		if fExpr, ok := valExpr.Expr.(*plan.Expr_Fold); ok {
+			if len(fExpr.Fold.Data) == 0 {
+				return nil, nil, false
+			}
+			if fExpr.Fold.IsConst {
+				return nil, nil, false
+			}
+			return colExpr, fExpr.Fold.Data, ok
+		}
+
 		logutil.Warnf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
 		return nil, nil, false
 		// foldedExprs, err := plan2.ConstandFoldList([]*plan.Expr{valExpr}, proc, true)
