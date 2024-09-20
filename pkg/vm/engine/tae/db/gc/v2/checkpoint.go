@@ -237,6 +237,12 @@ func (c *checkpointCleaner) Replay() error {
 		}
 		c.updateInputs(table)
 	}
+	if acctFile != "" {
+		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
+		if err != nil {
+			return err
+		}
+	}
 	if snapFile != "" {
 		err = c.snapshotMeta.ReadMeta(c.ctx, GCMetaDir+snapFile, c.fs.Service)
 		if err != nil {
@@ -251,12 +257,7 @@ func (c *checkpointCleaner) Replay() error {
 		ckp = checkpoint.NewCheckpointEntry(c.sid, minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
 		c.updateMinMerged(ckp)
 	}()
-	if acctFile != "" {
-		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
-		if err != nil {
-			return err
-		}
-	} else {
+	if acctFile == "" {
 		//No account table information, it may be a new cluster or an upgraded cluster,
 		//and the table information needs to be initialized from the checkpoint
 		maxConsumed := c.maxConsumed.Load()
