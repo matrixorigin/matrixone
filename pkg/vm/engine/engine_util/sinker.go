@@ -75,9 +75,9 @@ type FileSinker interface {
 	Close() error
 }
 
-var _ FileSinker = new(SinkerImpl)
+var _ FileSinker = new(FSinkerImpl)
 
-type SinkerImpl struct {
+type FSinkerImpl struct {
 	writer *blockio.BlockWriter
 	mp     *mpool.MPool
 	fs     fileservice.FileService
@@ -89,7 +89,7 @@ type SinkerImpl struct {
 	schemaVersion uint32
 }
 
-func (s *SinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
+func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
 		s.writer = mergesort.GetNewWriter(
 			s.fs,
@@ -104,7 +104,7 @@ func (s *SinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	return err
 }
 
-func (s *SinkerImpl) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
+func (s *FSinkerImpl) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
 	if _, _, err := s.writer.Sync(ctx); err != nil {
 		return nil, err
 	}
@@ -122,28 +122,51 @@ func (s *SinkerImpl) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
 	return &ss, nil
 }
 
-func (s *SinkerImpl) Reset() {
+func (s *FSinkerImpl) Reset() {
 	if s.writer != nil {
 		// s.writer.Reset
 		s.writer = nil
 	}
 }
 
-func (s *SinkerImpl) Close() error {
+func (s *FSinkerImpl) Close() error {
 	// s.writer.Reset
 	s.writer = nil
 	return nil
 }
 
-func NewSinkerImpl(
-	fs fileservice.FileService,
-	mp *mpool.MPool,
+type FileSinkerFactory func(*mpool.MPool, fileservice.FileService) FileSinker
+
+func NewFSinkerImplFactory(
 	seqnums []uint16,
 	sortKeyPos int,
 	isPrimaryKey bool,
 	isTombstone bool,
-	schemaVersion uint32) *SinkerImpl {
-	return &SinkerImpl{
+	schemaVersion uint32,
+) FileSinkerFactory {
+	return func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
+		return NewFSinkerImpl(
+			seqnums,
+			sortKeyPos,
+			isPrimaryKey,
+			isTombstone,
+			schemaVersion,
+			mp,
+			fs,
+		)
+	}
+}
+
+func NewFSinkerImpl(
+	seqnums []uint16,
+	sortKeyPos int,
+	isPrimaryKey bool,
+	isTombstone bool,
+	schemaVersion uint32,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) *FSinkerImpl {
+	return &FSinkerImpl{
 		fs:            fs,
 		mp:            mp,
 		seqnums:       seqnums,
@@ -158,31 +181,26 @@ func NewSinker(
 	sortKeyIdx int,
 	attrs []string,
 	attrTypes []types.Type,
-	seqnums []uint16,
-	isPrimaryKey bool,
-	isTombstone bool,
-	schemaVersion uint32,
+	factory FileSinkerFactory,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	opts ...SinkerOption,
 ) *Sinker {
 	sinker := &Sinker{
 		schema: struct {
-			attrs         []string
-			attrTypes     []types.Type
-			seqnums       []uint16
-			sortKeyIdx    int
-			schemaVersion uint32
-			isPrimaryKey  bool
-			isTombstone   bool
+			attrs      []string
+			attrTypes  []types.Type
+			sortKeyIdx int
 		}{
-			attrs:         attrs,
-			attrTypes:     attrTypes,
-			seqnums:       seqnums,
-			sortKeyIdx:    sortKeyIdx,
-			schemaVersion: schemaVersion,
-			isPrimaryKey:  isPrimaryKey,
-			isTombstone:   isTombstone,
+			attrs:      attrs,
+			attrTypes:  attrTypes,
+			sortKeyIdx: sortKeyIdx,
+		},
+		fSinker: struct {
+			executor FileSinker
+			factory  FileSinkerFactory
+		}{
+			factory: factory,
 		},
 
 		mp: mp,
@@ -199,13 +217,9 @@ func NewSinker(
 
 type Sinker struct {
 	schema struct {
-		attrs         []string
-		attrTypes     []types.Type
-		seqnums       []uint16
-		sortKeyIdx    int
-		schemaVersion uint32
-		isPrimaryKey  bool
-		isTombstone   bool
+		attrs      []string
+		attrTypes  []types.Type
+		sortKeyIdx int
 	}
 	config struct {
 		allMergeSorted bool
@@ -213,12 +227,15 @@ type Sinker struct {
 		bufferSizeCap  int
 		tailSizeCap    int
 	}
+	fSinker struct {
+		executor FileSinker
+		factory  FileSinkerFactory
+	}
 	staged struct {
 		inMemory            []*batch.Batch
 		persisted           []objectio.ObjectStats
 		inMemorySize        int
 		memorySizeThreshold int
-		sinker              FileSinker
 	}
 	result struct {
 		persisted []objectio.ObjectStats
@@ -233,18 +250,6 @@ func (sinker *Sinker) fillDefaults() {
 	if sinker.staged.memorySizeThreshold == 0 {
 		sinker.staged.memorySizeThreshold = DefaultInMemoryStagedSize
 	}
-	if sinker.staged.sinker == nil {
-		sinker.staged.sinker = NewSinkerImpl(
-			sinker.fs,
-			sinker.mp,
-			sinker.schema.seqnums,
-			sinker.schema.sortKeyIdx,
-			sinker.schema.isPrimaryKey,
-			sinker.schema.isTombstone,
-			sinker.schema.schemaVersion,
-		)
-	}
-
 	if sinker.buffers == nil {
 		sinker.buffers = containers.NewOneSchemaBatchBuffer(
 			sinker.config.bufferSizeCap,
@@ -335,7 +340,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 
 	// 4. spill
 	fSinker := sinker.getStageFileSinker()
-	defer sinker.putStageFileSinker(fSinker)
+	defer sinker.resetFileSinker()
 	for _, bat := range data {
 		if err := fSinker.Sink(ctx, bat); err != nil {
 			return err
@@ -350,11 +355,14 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	return nil
 }
 
-func (sinker *Sinker) putStageFileSinker(fsinker FileSinker) {
-	sinker.staged.sinker.Reset()
+func (sinker *Sinker) resetFileSinker() {
+	sinker.fSinker.executor.Reset()
 }
 func (sinker *Sinker) getStageFileSinker() FileSinker {
-	return sinker.staged.sinker
+	if sinker.fSinker.executor == nil {
+		sinker.fSinker.executor = sinker.fSinker.factory(sinker.mp, sinker.fs)
+	}
+	return sinker.fSinker.executor
 }
 
 // Write always copy the data
@@ -440,8 +448,11 @@ func (sinker *Sinker) Close() error {
 		sinker.result.tail = nil
 	}
 	sinker.staged.persisted = nil
-	sinker.staged.sinker.Close()
-	sinker.staged.sinker = nil
+	if sinker.fSinker.executor != nil {
+		sinker.fSinker.executor.Close()
+		sinker.fSinker.executor = nil
+	}
+	sinker.fSinker.factory = nil
 	sinker.mp = nil
 	sinker.fs = nil
 	return nil
