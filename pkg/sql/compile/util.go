@@ -648,7 +648,7 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 	params := indexDef.IndexAlgoParams
 	tblname := indexDef.IndexTableName
 
-	var parts []string
+	parts := make([]string, 0, len(indexDef.Parts))
 	for _, p := range indexDef.Parts {
 		parts = append(parts, src_alias+"."+p)
 	}
