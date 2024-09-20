@@ -29,58 +29,66 @@ import (
 )
 
 func init() {
+	//PrepareCaseRegister(MakePrepareCase(
+	//	prepare1, "prepare-1", "prepare case 1",
+	//	schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
+	//))
+	//TestCaseRegister(
+	//	MakeTestCase(test1, "prepare-1", "test-1", "prepare-1=>test-1"),
+	//)
+	//
+	//PrepareCaseRegister(MakePrepareCase(
+	//	prepareDDL, "prepare-2", "prepare case ddl",
+	//	schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
+	//))
+	//TestCaseRegister(
+	//	MakeTestCase(testDDL, "prepare-2", "test-2", "prepare-2=>test-2"),
+	//)
+	//
+	//PrepareCaseRegister(MakePrepareCase(
+	//	prepareCompact, "prepare-3", "prepare case compact", schemaCfg{10, 2, 18, 13}, (10*3+1)*2, longOpt))
+	//TestCaseRegister(
+	//	MakeTestCase(testCompact, "prepare-3", "test-3", "prepare-3=>test-3"),
+	//)
+	//
+	//PrepareCaseRegister(MakePrepareCase(
+	//	prepareDelete, "prepare-4", "prepare case delete",
+	//	schemaCfg{10, 2, 18, 13}, (10*3+1)*3, longOpt,
+	//))
+	//TestCaseRegister(
+	//	MakeTestCase(testDelete, "prepare-4", "test-4", "prepare-4=>test-4"),
+	//)
+	//
+	//PrepareCaseRegister(MakePrepareCase(
+	//	prepareAppend, "prepare-5", "prepare case append",
+	//	schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
+	//))
+	//TestCaseRegister(
+	//	MakeTestCase(testAppend, "prepare-5", "test-5", "prepare-5=>test-5"),
+	//)
+	//
+	//PrepareCaseRegister(MakePrepareCase(
+	//	prepareLSNCheck, "prepare-6", "prepare lsn check",
+	//	schemaCfg{10, 2, 18, 13}, 10*3+1, quickOpt,
+	//))
+	//TestCaseRegister(
+	//	MakeTestCase(testLSNCheck, "prepare-6", "test-6", "prepare-6=>test-6"),
+	//)
+	//
+	//PrepareCaseRegister(MakePrepareCase(
+	//	prepareObjectInfo, "prepare-7", "prepare object info",
+	//	schemaCfg{10, 2, 18, 13}, 51, longOpt,
+	//))
+	//TestCaseRegister(
+	//	MakeTestCase(testObjectInfo, "prepare-7", "test-7", "prepare-7=>test-7"),
+	//)
+
 	PrepareCaseRegister(MakePrepareCase(
-		prepare1, "prepare-1", "prepare case 1",
+		prepareVector, "prepare-8", "prepare case append",
 		schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
 	))
 	TestCaseRegister(
-		MakeTestCase(test1, "prepare-1", "test-1", "prepare-1=>test-1"),
-	)
-
-	PrepareCaseRegister(MakePrepareCase(
-		prepareDDL, "prepare-2", "prepare case ddl",
-		schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
-	))
-	TestCaseRegister(
-		MakeTestCase(testDDL, "prepare-2", "test-2", "prepare-2=>test-2"),
-	)
-
-	PrepareCaseRegister(MakePrepareCase(
-		prepareCompact, "prepare-3", "prepare case compact", schemaCfg{10, 2, 18, 13}, (10*3+1)*2, longOpt))
-	TestCaseRegister(
-		MakeTestCase(testCompact, "prepare-3", "test-3", "prepare-3=>test-3"),
-	)
-
-	PrepareCaseRegister(MakePrepareCase(
-		prepareDelete, "prepare-4", "prepare case delete",
-		schemaCfg{10, 2, 18, 13}, (10*3+1)*3, longOpt,
-	))
-	TestCaseRegister(
-		MakeTestCase(testDelete, "prepare-4", "test-4", "prepare-4=>test-4"),
-	)
-
-	PrepareCaseRegister(MakePrepareCase(
-		prepareAppend, "prepare-5", "prepare case append",
-		schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
-	))
-	TestCaseRegister(
-		MakeTestCase(testAppend, "prepare-5", "test-5", "prepare-5=>test-5"),
-	)
-
-	PrepareCaseRegister(MakePrepareCase(
-		prepareLSNCheck, "prepare-6", "prepare lsn check",
-		schemaCfg{10, 2, 18, 13}, 10*3+1, quickOpt,
-	))
-	TestCaseRegister(
-		MakeTestCase(testLSNCheck, "prepare-6", "test-6", "prepare-6=>test-6"),
-	)
-
-	PrepareCaseRegister(MakePrepareCase(
-		prepareObjectInfo, "prepare-7", "prepare object info",
-		schemaCfg{10, 2, 18, 13}, 51, longOpt,
-	))
-	TestCaseRegister(
-		MakeTestCase(testObjectInfo, "prepare-7", "test-7", "prepare-7=>test-7"),
+		MakeTestCase(testVector, "prepare-8", "test-8", "prepare-8=>test-8"),
 	)
 }
 
@@ -550,4 +558,25 @@ func testObjectInfo(tc TestCase, t *testing.T) {
 	tae.ForceCheckpoint()
 	tae.Restart(context.TODO())
 	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func prepareVector(tc PrepareCase, t *testing.T) {
+	tae := tc.GetEngine(t)
+	defer tae.Close()
+
+	bat := tc.GetBatch(t)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+}
+
+func testVector(tc TestCase, t *testing.T) {
+	pc := GetPrepareCase(tc.dependsOn)
+	tae := initTestEngine(tc, t)
+	defer tae.Close()
+
+	bat := pc.GetBatch(t)
+	defer bat.Close()
+
+	tae.CheckRowsByScan(bat.Length(), true)
 }

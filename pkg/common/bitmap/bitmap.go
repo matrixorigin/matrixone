@@ -73,16 +73,16 @@ func (n *Bitmap) Clone() *Bitmap {
 	if n == nil {
 		return nil
 	}
-	var ret Bitmap
-	ret.InitWith(n)
-	return &ret
+	var res Bitmap
+	res.InitWith(n)
+	return &res
 }
 
 func (n *Bitmap) Iterator() Iterator {
 	// When initialization, the itr.i is set to the first rightmost_one position.
 	itr := BitmapIterator{i: 0, bm: n}
-	if first_1_pos, has_next := itr.hasNext(0); has_next {
-		itr.i = first_1_pos
+	if pos, has_next := itr.hasNext(0); has_next {
+		itr.i = pos
 		itr.has_next = true
 		return &itr
 	}
@@ -95,17 +95,17 @@ func rightmost_one_pos_64(word uint64) uint64 {
 	// Firstly, use eight bits as a group to quickly determine whether there is a 1 in it.
 	// if not, then rightmost_one exists in next group, add up the distance with result and shift the word
 	// if rightmost_one exists in this group, get the distance directly from a pre-made hash table
-	var result uint64
+	var res uint64
 	for {
 		if (word & 0xFF) == 0 {
 			word >>= 8
-			result += 8
+			res += 8
 		} else {
 			break
 		}
 	}
-	result += uint64(rightmost_one_pos_8[word&255])
-	return result
+	res += uint64(rightmost_one_pos_8[word&255])
+	return res
 }
 
 func (itr *BitmapIterator) hasNext(i uint64) (uint64, bool) {
@@ -146,14 +146,14 @@ func (itr *BitmapIterator) PeekNext() uint64 {
 func (itr *BitmapIterator) Next() uint64 {
 	// When a iterator is initialized, the itr.i is set to the first rightmost_one pos.
 	// so current itr.i is a rightmost_one pos, cal the next one pos and return current pos.
-	pos := itr.i
+	res := itr.i
 	if next, has_next := itr.hasNext(itr.i + 1); has_next { // itr.i + 1 to ignore bits check before
 		itr.i = next
 		itr.has_next = true
-		return pos
+		return res
 	}
 	itr.has_next = false
-	return pos
+	return res
 }
 
 // Reset set n.data to nil
@@ -372,31 +372,31 @@ func (n *Bitmap) Count() int {
 }
 
 func (n *Bitmap) ToArray() []uint64 {
-	var rows []uint64
+	var res []uint64
 	if n.EmptyByFlag() {
-		return rows
+		return res
 	}
 
 	itr := n.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
-		rows = append(rows, r)
+		res = append(res, r)
 	}
-	return rows
+	return res
 }
 
 func (n *Bitmap) ToI64Arrary() []int64 {
-	var rows []int64
+	var res []int64
 	if n.EmptyByFlag() {
-		return rows
+		return res
 	}
 
 	itr := n.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
-		rows = append(rows, int64(r))
+		res = append(res, int64(r))
 	}
-	return rows
+	return res
 }
 
 func (n *Bitmap) Marshal() []byte {
