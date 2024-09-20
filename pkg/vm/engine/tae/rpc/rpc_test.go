@@ -60,8 +60,8 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	//100 objs, one obj contains 50 blocks, one block contains 10 rows.
 	taeBat := catalog.MockBatch(schema, 100*50*10)
 	defer taeBat.Close()
@@ -225,8 +225,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	taeBat := catalog.MockBatch(schema, 40)
 	defer taeBat.Close()
 	taeBats := taeBat.Split(4)
@@ -375,7 +375,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	p.TableFn = func(te *catalog.TableEntry) error {
 		schema := te.GetLastestSchemaLocked(false)
 		if schema.Name == "tbtest" {
-			schema.BlockMaxRows = 10
+			schema.Extra.BlockMaxRows = 10
 		}
 		return nil
 	}
@@ -568,8 +568,8 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	//DDL
 	//create db;
 	dbName := "dbtest"
@@ -817,8 +817,8 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	dbName := "dbtest"
 	ac := AccessInfo{
 		accountId: 0,
@@ -1118,8 +1118,8 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	dbName := "dbtest"
 	ac := AccessInfo{
 		accountId: 0,
@@ -1441,8 +1441,8 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	dbName := "dbtest"
 	ac := AccessInfo{
 		accountId: 0,
@@ -1773,8 +1773,8 @@ func TestApplyDeltaloc(t *testing.T) {
 
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 5
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 2
 	//5 objs, one obj contains 2 blocks, one block contains 10 rows.
 	rowCount := 100 * 2 * 5
 	taeBat := catalog.MockBatch(schema, rowCount)
