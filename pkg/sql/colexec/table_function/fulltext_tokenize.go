@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -86,7 +87,6 @@ func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tv
 func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
 
 	if !u.inited {
-
 		if len(tf.Params) > 0 {
 			err := json.Unmarshal([]byte(tf.Params), &u.param)
 			if err != nil {
@@ -116,8 +116,8 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	var doc Document
 
-	if u.param.Parser == "" || u.param.Parser == "ngram" || u.param.Parser == "default" {
-
+	switch u.param.Parser {
+	case "", "ngram", "default":
 		tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))
 		for t := range tok.Tokenize() {
 
@@ -126,15 +126,23 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 			doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
 		}
-	} else if u.param.Parser == "json" {
-		return moerr.NewInternalError(proc.Ctx, "json fulltext parser not implemented yet")
-	} else {
-		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser ")
+	case "json":
+		var bj bytejson.ByteJson
+		if err := json.Unmarshal([]byte(c), &bj); err != nil {
+			return err
+		}
+
+		for t := range bj.TokenizeValue(false) {
+			slen := t.TokenBytes[0]
+			word := string(t.TokenBytes[1 : slen+1])
+			doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.TokenPos})
+		}
+	default:
+		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser")
 	}
 
 	// write the batch
 	for i := range doc.Words {
-
 		// type of id follow primary key column
 		vector.AppendAny(u.batch.Vecs[0], doc.Words[i].DocId, false, proc.Mp())
 		// pos

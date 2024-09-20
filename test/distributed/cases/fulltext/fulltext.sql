@@ -79,3 +79,20 @@ select * from src2 where match(body, title) against('red');
 select src2.*, match(body, title) against('blue') from src2;
 
 drop table src2;
+
+-- bytejson parser
+create table src (id bigint primary key, json text, err text);
+insert into src values  (0, '{"a":1, "b":"red"}', 'abc'), (1, '{"a":2, "b":"中文學習教材"}', 'aeee'), (2, '{"a":3, "b":"blue"}', 'ac');
+
+-- json only support singe column
+create fulltext index ftidx on src (json, err) with parser json;
+
+create fulltext index ftidx on src (json) with parser json;
+
+select * from src where match(json) against('red' in boolean mode);
+
+select * from src where match(json) against('中文學習教材' in boolean mode);
+
+drop table src;
+
+

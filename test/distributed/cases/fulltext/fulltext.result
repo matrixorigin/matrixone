@@ -101,3 +101,15 @@ id1    id2    body    title    MATCH (body, title) AGAINST (blue)
 id2    2    blue    t3    0.09061906
 id3    3    blue red    t4    0.09061906
 drop table src2;
+create table src (id bigint primary key, json text, err text);
+insert into src values  (0, '{"a":1, "b":"red"}', 'abc'), (1, '{"a":2, "b":"中文學習教材"}', 'aeee'), (2, '{"a":3, "b":"blue"}', 'ac');
+create fulltext index ftidx on src (json, err) with parser json;
+not supported: FullText JSON parser only supports single column
+create fulltext index ftidx on src (json) with parser json;
+select * from src where match(json) against('red' in boolean mode);
+id    json    err
+0    {"a":1, "b":"red"}    abc
+select * from src where match(json) against('中文學習教材' in boolean mode);
+id    json    err
+1    {"a":2, "b":"中文學習教材"}    aeee
+drop table src;
