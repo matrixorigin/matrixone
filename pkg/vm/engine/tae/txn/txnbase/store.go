@@ -180,6 +180,6 @@ func (store *NoopTxnStore) GetTransactionType() txnif.TxnType {
 func (store *NoopTxnStore) UpdateObjectStats(*common.ID, *objectio.ObjectStats, bool) error {
 	return nil
 }
-func (store *NoopTxnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls) error {
+func (store *NoopTxnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error {
 	return nil
 }
