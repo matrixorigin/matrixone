@@ -473,7 +473,7 @@ var SqlStatementCUTable = &table.Table{
 	PrimaryKeyColumn: []table.Column{},
 	ClusterBy:        []table.Column{metricAccountColumn, metricCollectTimeColumn},
 	Engine:           table.NormalTableEngine,
-	Comment:          `sql_statement_cu metric data`,
+	Comment:          `sql_statement_cu metric data` + catalog.MO_COMMENT_NO_DEL_HINT,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
 	// TimestampColumn
