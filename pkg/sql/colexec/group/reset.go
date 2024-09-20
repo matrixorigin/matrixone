@@ -39,12 +39,13 @@ func (group *Group) Reset(
 				}
 
 				group.ctr.bat.Vecs = group.ctr.bat.Vecs[:len(group.Exprs)]
-				for i := 0; i < len(group.ctr.bat.Vecs); i++ {
-					group.ctr.bat.Vecs[i].CleanOnlyData()
-				}
 			}
-			group.ctr.bat.SetRowCount(0)
 		}
+
+		for i := 0; i < len(group.ctr.bat.Vecs); i++ {
+			group.ctr.bat.Vecs[i].CleanOnlyData()
+		}
+		group.ctr.bat.SetRowCount(0)
 
 		for i := 0; i < len(group.ctr.bat.Aggs); i++ {
 			if group.ctr.bat.Aggs[i] != nil {
@@ -52,7 +53,6 @@ func (group *Group) Reset(
 				group.ctr.bat.Aggs[i] = nil
 			}
 		}
-		group.ctr.bat.CleanOnlyData()
 		group.ctr.bat.Aggs = nil
 	}
 
