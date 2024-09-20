@@ -170,6 +170,9 @@ func HandleShardingReadStatus(
 	if err != nil {
 		return nil, err
 	}
+	if info == nil {
+		return nil, nil
+	}
 
 	bys, err := info.Marshal()
 	if err != nil {
@@ -633,9 +636,13 @@ func getTxnTable(
 		return nil, err
 	}
 
-	return newTxnTableWithItem(
+	tbl := newTxnTableWithItem(
 		db,
 		item,
 		proc,
-	), nil
+		engine.(*Engine),
+	)
+	tbl.remoteWorkspace = true
+	tbl.createdInTxn = param.TxnTable.CreatedInTxn
+	return tbl, nil
 }

@@ -882,6 +882,10 @@ type txnTable struct {
 	proc atomic.Pointer[process.Process]
 
 	enableLogFilterExpr atomic.Bool
+
+	remoteWorkspace bool
+	createdInTxn    bool
+	eng             engine.Engine
 }
 
 type withFilterMixin struct {

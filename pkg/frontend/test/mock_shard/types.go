@@ -2,7 +2,6 @@
 // Source: pkg/shardservice/types.go
 
 // Package mock_shard is a generated GoMock package.
-// mockgen -source pkg/shardservice/types.go --destination pkg/frontend/test/mock_shard/types.go -package=mock_shard
 package mock_shard
 
 import (
@@ -166,11 +165,12 @@ func (mr *MockShardServiceMockRecorder) GetStorage() *gomock.Call {
 }
 
 // HasAllLocalReplicas mocks base method.
-func (m *MockShardService) HasAllLocalReplicas(tableID uint64) bool {
+func (m *MockShardService) HasAllLocalReplicas(tableID uint64) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HasAllLocalReplicas", tableID)
 	ret0, _ := ret[0].(bool)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // HasAllLocalReplicas indicates an expected call of HasAllLocalReplicas.
@@ -180,11 +180,12 @@ func (mr *MockShardServiceMockRecorder) HasAllLocalReplicas(tableID interface{})
 }
 
 // HasLocalReplica mocks base method.
-func (m *MockShardService) HasLocalReplica(tableID, shardID uint64) bool {
+func (m *MockShardService) HasLocalReplica(tableID, shardID uint64) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HasLocalReplica", tableID, shardID)
 	ret0, _ := ret[0].(bool)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // HasLocalReplica indicates an expected call of HasLocalReplica.
@@ -257,6 +258,7 @@ func NewMockscheduler(ctrl *gomock.Controller) *Mockscheduler {
 func (m *Mockscheduler) EXPECT() *MockschedulerMockRecorder {
 	return m.recorder
 }
+
 
 // MockEnv is a mock of Env interface.
 type MockEnv struct {
@@ -357,6 +359,8 @@ func NewMockfilter(ctrl *gomock.Controller) *Mockfilter {
 func (m *Mockfilter) EXPECT() *MockfilterMockRecorder {
 	return m.recorder
 }
+
+
 
 // MockShardStorage is a mock of ShardStorage interface.
 type MockShardStorage struct {

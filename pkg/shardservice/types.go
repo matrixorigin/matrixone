@@ -72,11 +72,11 @@ type ShardService interface {
 	// Read read data from shards.
 	Read(ctx context.Context, req ReadRequest, opts ReadOptions) error
 	// HasLocalReplica returns whether the shard has a local replica.
-	HasLocalReplica(tableID, shardID uint64) bool
+	HasLocalReplica(tableID, shardID uint64) (bool, error)
 	// HasAllLocalReplicas returns whether all shards of the table have local replicas.
-	HasAllLocalReplicas(tableID uint64) bool
+	HasAllLocalReplicas(tableID uint64) (bool, error)
 	// GetShardInfo returns the metadata of the shards corresponding to the table.
-	GetShardInfo(table uint64) (uint64, pb.Policy, bool, error)
+	GetShardInfo(table uint64) (shardTableID uint64, policy pb.Policy, isShardTable bool, err error)
 	// Create creates table shards metadata in current txn. And create shard
 	// binds after txn committed asynchronously. Nothing happened if txn aborted.
 	//

@@ -755,6 +755,7 @@ func (s *service) initShardService() {
 	}
 
 	store := shardservice.NewShardStorage(
+		s.cfg.UUID,
 		runtime.ServiceRuntime(s.cfg.UUID).Clock(),
 		s.sqlExecutor,
 		s.timestampWaiter,

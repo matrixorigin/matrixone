@@ -120,7 +120,11 @@ func (opts Options) DisableIncrStatement() bool {
 
 // GetTimeZone return the time zone of original session
 func (opts Options) GetTimeZone() *time.Location {
-	return opts.timeZone
+	l := opts.timeZone
+	if l == nil {
+		return time.Local
+	}
+	return l
 }
 
 // WithStatementOption set statement option

@@ -231,9 +231,14 @@ func (s *service) Delete(
 
 func (s *service) HasLocalReplica(
 	tableID, shardID uint64,
-) bool {
+) (bool, error) {
+	r, err := s.getShards(tableID)
+	if err != nil {
+		return false, err
+	}
+
 	has := false
-	s.getReadCache().selectShards(
+	r.selectShards(
 		tableID,
 		func(
 			metadata pb.ShardsMetadata,
@@ -252,15 +257,20 @@ func (s *service) HasLocalReplica(
 			return !has
 		},
 	)
-	return has
+	return has, nil
 }
 
 func (s *service) HasAllLocalReplicas(
 	tableID uint64,
-) bool {
+) (bool, error) {
+	r, err := s.getShards(tableID)
+	if err != nil {
+		return false, err
+	}
+
 	total := 0
 	local := 0
-	s.getReadCache().selectShards(
+	r.selectShards(
 		tableID,
 		func(
 			metadata pb.ShardsMetadata,
@@ -276,7 +286,7 @@ func (s *service) HasAllLocalReplicas(
 			return true
 		},
 	)
-	return total > 0 && total == local
+	return total > 0 && total == local, nil
 }
 
 func (s *service) GetShardInfo(
@@ -403,6 +413,11 @@ OUT:
 		cache = cache.clone()
 		cache.addShards(table, metadata, shards)
 		s.cache.read.Store(cache)
+		s.logger.Info("add read cache",
+			zap.Uint64("table", table),
+			zap.String("metadata", metadata.String()),
+			zap.Int("shards", len(shards)),
+		)
 		return cache, nil
 	}
 }
@@ -898,7 +913,7 @@ func (c *readCache) selectShards(
 ) {
 	sc, ok := c.shards[tableID]
 	if !ok {
-		panic("shards is empty")
+		return
 	}
 
 	for _, shard := range sc.shards {
