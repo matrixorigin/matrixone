@@ -41,9 +41,8 @@ const (
 type container struct {
 	state int
 
-	batchRowCount int64
-	rbat          *batch.Batch
-	inbat         *batch.Batch
+	rbat  *batch.Batch
+	inbat *batch.Batch
 
 	batIdx   int
 	tfFinish bool
