@@ -17,17 +17,21 @@ package embed
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"sort"
 	"sync"
 	"testing"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/stretchr/testify/require"
 )
 
 func TestBasicCluster(t *testing.T) {
@@ -223,6 +227,48 @@ func TestCreateDB(t *testing.T) {
 				rows.Scan(&id)
 				require.Equal(t, 1, id)
 			}
+		},
+	)
+}
+
+func TestConn(t *testing.T) {
+	go func() {
+		if err := http.ListenAndServe("127.0.0.1:9876", nil); err != nil {
+			panic(err)
+		}
+	}()
+	RunBaseClusterTests(
+		func(c Cluster) {
+			cn0, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",
+				cn0.GetServiceConfig().CN.Frontend.Port,
+			)
+
+			db, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer db.Close()
+			db.SetMaxIdleConns(0)
+
+			//ch := make(chan int)
+
+			for {
+				conn, err := db.Conn(context.Background())
+				require.NoError(t, err)
+				fmt.Printf("%v\n", conn)
+
+				err = conn.Raw(func(driverConn any) error {
+					c := driverConn.(driver.Conn)
+					c.Close()
+					return nil
+				})
+				require.NoError(t, err)
+
+				////hold
+				//<-ch
+			}
+
 		},
 	)
 }
