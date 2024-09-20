@@ -53,10 +53,6 @@ var (
 	}
 )
 
-const (
-	TombstonePrimaryKeyIdx int = 0
-)
-
 var (
 	TombstoneBatchIdxes = []int{0, 1}
 )

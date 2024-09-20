@@ -48,6 +48,13 @@ const (
 	TombstoneAttr_A_PhyAddr_SeqNum = TombstoneAttr_A_PhyAddr_Idx
 	TombstoneAttr_CommitTs_SeqNum  = SEQNUM_COMMITTS
 	TombstoneAttr_Abort_SeqNum     = SEQNUM_ABORT
+
+	TombstonePrimaryKeyIdx = TombstoneAttr_Rowid_Idx
+)
+
+var (
+	TombstoneSeqnums_CN_Created = []uint16{0, 1}
+	TombstoneSeqnums_DN_Created = []uint16{0, 1, TombstoneAttr_CommitTs_SeqNum}
 )
 
 const ZoneMapSize = index.ZMSize

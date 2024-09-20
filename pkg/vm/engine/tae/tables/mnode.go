@@ -203,7 +203,7 @@ func (node *memoryNode) getDataWindowLocked(
 	if *bat == nil {
 		*bat = containers.NewBatchWithCapacity(len(colIdxes))
 		for _, colIdx := range colIdxes {
-			if colIdx == catalog.COLIDX_COMMITS {
+			if colIdx == objectio.SEQNUM_COMMITTS {
 				typ := types.T_TS.ToType()
 				vec := node.object.rt.VectorPool.Transient.GetVector(&typ)
 				(*bat).AddVector(catalog.AttrCommitTs, vec)
@@ -224,7 +224,7 @@ func (node *memoryNode) getDataWindowLocked(
 		}
 	} else {
 		for _, colIdx := range colIdxes {
-			if colIdx == catalog.COLIDX_COMMITS {
+			if colIdx == objectio.SEQNUM_COMMITTS {
 				continue
 			}
 			colDef := readSchema.ColDefs[colIdx]
@@ -327,7 +327,7 @@ func (node *memoryNode) Scan(
 		mp,
 	)
 	for _, idx := range colIdxes {
-		if idx == catalog.COLIDX_COMMITS {
+		if idx == objectio.SEQNUM_COMMITTS {
 			node.object.appendMVCC.FillInCommitTSVecLocked(
 				(*bat).GetVectorByName(catalog.AttrCommitTs), maxRow, mp)
 		}

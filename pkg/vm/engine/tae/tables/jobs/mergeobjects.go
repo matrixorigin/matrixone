@@ -134,7 +134,7 @@ func NewMergeObjectsTask(
 		task.attrs = append(task.attrs, def.Name)
 	}
 	if isTombstone {
-		task.idxs = append(task.idxs, catalog.COLIDX_COMMITS)
+		task.idxs = append(task.idxs, objectio.SEQNUM_COMMITTS)
 		task.attrs = append(task.attrs, catalog.AttrCommitTs)
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
@@ -248,7 +248,7 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 
 	bat := batch.New(true, task.attrs)
 	for i, idx := range task.idxs {
-		if idx == catalog.COLIDX_COMMITS {
+		if idx == objectio.SEQNUM_COMMITTS {
 			id := 0
 			for i, attr := range task.attrs {
 				if attr == catalog.AttrCommitTs {
@@ -321,7 +321,14 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 		sortkeyPos = schema.GetSingleSortKeyIdx()
 	}
 
-	return mergesort.GetNewWriter(task.rt.Fs.Service, schema.Version, seqnums, sortkeyPos, sortkeyIsPK, task.isTombstone)
+	return blockio.ConstructWriter(
+		schema.Version,
+		seqnums,
+		sortkeyPos,
+		sortkeyIsPK,
+		task.isTombstone,
+		task.rt.Fs.Service,
+	)
 }
 
 func (task *mergeObjectsTask) DoTransfer() bool {

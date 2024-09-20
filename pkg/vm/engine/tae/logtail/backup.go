@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
 
@@ -603,7 +602,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 			writer.SetDataType(objectio.SchemaTombstone)
 			writer.SetPrimaryKeyWithType(
-				uint16(catalog.TombstonePrimaryKeyIdx),
+				uint16(objectio.TombstonePrimaryKeyIdx),
 				index.HBF,
 				index.ObjectPrefixFn,
 				index.BlockPrefixFn,
