@@ -67,8 +67,8 @@ func LoadPersistedColumnDatas(
 	location objectio.Location,
 	mp *mpool.MPool,
 ) ([]containers.Vector, error) {
-	cols := make([]uint16, 0)
-	typs := make([]types.Type, 0)
+	cols := make([]uint16, 0, len(colIdxs))
+	typs := make([]types.Type, 0, len(colIdxs))
 	vectors := make([]containers.Vector, len(colIdxs))
 	phyAddIdx := -1
 	for i, colIdx := range colIdxs {

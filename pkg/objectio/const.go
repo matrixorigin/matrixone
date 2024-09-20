@@ -54,7 +54,7 @@ const (
 
 var (
 	TombstoneSeqnums_CN_Created = []uint16{0, 1}
-	TombstoneSeqnums_DN_Created = []uint16{0, 1, 2}
+	TombstoneSeqnums_DN_Created = []uint16{0, 1, TombstoneAttr_CommitTs_SeqNum}
 )
 
 const ZoneMapSize = index.ZMSize
