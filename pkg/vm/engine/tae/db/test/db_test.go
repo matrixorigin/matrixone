@@ -4278,7 +4278,7 @@ func TestBlockRead(t *testing.T) {
 			}
 			b1 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
-				context.Background(), info, ds, colIdxs, colTyps,
+				context.Background(), false, info, ds, colIdxs, colTyps,
 				beforeDel, nil, fileservice.Policy(0), b1, pool, fs,
 			)
 			assert.NoError(t, err)
@@ -4289,7 +4289,7 @@ func TestBlockRead(t *testing.T) {
 
 			b2 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
-				context.Background(), info, ds, colIdxs, colTyps,
+				context.Background(), false, info, ds, colIdxs, colTyps,
 				afterFirstDel, nil, fileservice.Policy(0), b2, pool, fs,
 			)
 			assert.NoError(t, err)
@@ -4299,7 +4299,7 @@ func TestBlockRead(t *testing.T) {
 
 			b3 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
-				context.Background(), info, ds, colIdxs, colTyps,
+				context.Background(), false, info, ds, colIdxs, colTyps,
 				afterSecondDel, nil, fileservice.Policy(0), b3, pool, fs,
 			)
 			assert.NoError(t, err)
@@ -4308,7 +4308,7 @@ func TestBlockRead(t *testing.T) {
 			// read rowid column only
 			b4 := buildBatch([]types.Type{types.T_Rowid.ToType()})
 			err = blockio.BlockDataReadInner(
-				context.Background(), info,
+				context.Background(), false, info,
 				ds,
 				[]uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
@@ -4322,7 +4322,7 @@ func TestBlockRead(t *testing.T) {
 			//info.Appendable = false
 			b5 := buildBatch([]types.Type{types.T_Rowid.ToType()})
 			err = blockio.BlockDataReadInner(
-				context.Background(), info,
+				context.Background(), false, info,
 				ds, []uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
 				afterSecondDel, nil, fileservice.Policy(0), b5, pool, fs,
