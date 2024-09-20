@@ -52,6 +52,7 @@ func (group *Group) Reset(
 				group.ctr.bat.Aggs[i] = nil
 			}
 		}
+		group.ctr.bat.CleanOnlyData()
 		group.ctr.bat.Aggs = nil
 	}
 
