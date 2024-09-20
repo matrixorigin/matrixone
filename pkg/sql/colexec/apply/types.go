@@ -95,7 +95,7 @@ func (apply *Apply) Reset(proc *process.Process, pipelineFailed bool, err error)
 	ctr := &apply.ctr
 
 	ctr.state = Build
-
+	ctr.inbat = nil
 	apply.TableFunction.Reset(proc, pipelineFailed, err)
 
 	if apply.ProjectList != nil {

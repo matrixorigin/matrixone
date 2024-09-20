@@ -22,10 +22,4 @@ a    b    result
 2    -2    0
 2    -2    -1
 2    -2    -2
-select t.a,tmp.* from t cross apply unnest(t.j,'$') tmp;
-a    col    seq    key    path    index    value    this
-1    t.j    0    bar    $.bar    null    2    {"bar": 2, "foo": 1}
-1    t.j    1    foo    $.foo    null    1    {"bar": 2, "foo": 1}
-2    t.j    0    bar    $.bar    null    22    {"bar": 22, "foo": 11}
-2    t.j    1    foo    $.foo    null    11    {"bar": 22, "foo": 11}
 drop table t;

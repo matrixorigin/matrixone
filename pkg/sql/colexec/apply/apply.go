@@ -37,20 +37,23 @@ func (apply *Apply) String(buf *bytes.Buffer) {
 }
 
 func (apply *Apply) OpType() vm.OpType {
-	return vm.Anti
+	return vm.Apply
 }
 
 func (apply *Apply) Prepare(proc *process.Process) (err error) {
 	if apply.OpAnalyzer == nil {
-		apply.OpAnalyzer = process.NewAnalyzer(apply.GetIdx(), apply.IsFirst, apply.IsLast, "anti join")
+		apply.OpAnalyzer = process.NewAnalyzer(apply.GetIdx(), apply.IsFirst, apply.IsLast, "apply")
 	} else {
 		apply.OpAnalyzer.Reset()
 	}
 
-	apply.ctr.sels = make([]int32, colexec.DefaultBatchSize)
-	for i := range apply.ctr.sels {
-		apply.ctr.sels[i] = int32(i)
+	if apply.ctr.sels == nil {
+		apply.ctr.sels = make([]int32, colexec.DefaultBatchSize)
+		for i := range apply.ctr.sels {
+			apply.ctr.sels[i] = int32(i)
+		}
 	}
+
 	err = apply.TableFunction.ApplyPrepare(proc)
 	if err != nil {
 		return
