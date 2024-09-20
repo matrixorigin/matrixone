@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -132,10 +133,10 @@ type Schema struct {
 	Constraint     []byte
 
 	// do not send to cn
-	BlockMaxRows uint32
+	DeprecatedBlockMaxRows uint32
 	// for aobj, there're at most one blk
-	ObjectMaxBlocks uint16
-	Extra           *apipb.SchemaExtra
+	DeprecatedObjectMaxBlocks uint16
+	Extra                     *apipb.SchemaExtra
 
 	// do not write down, reconstruct them when reading
 	NameMap    map[string]int // name(letter case: origin) -> logical idx
@@ -154,8 +155,8 @@ func NewEmptySchema(name string) *Schema {
 		SeqnumMap: make(map[uint16]int),
 		Extra:     &apipb.SchemaExtra{},
 	}
-	schema.BlockMaxRows = objectio.BlockMaxRows
-	schema.ObjectMaxBlocks = options.DefaultBlocksPerObject
+	schema.Extra.BlockMaxRows = objectio.BlockMaxRows
+	schema.Extra.ObjectMaxBlocks = uint32(options.DefaultBlocksPerObject)
 	return schema
 }
 
@@ -363,11 +364,11 @@ func (s *Schema) MustRestoreExtra(data []byte) {
 
 func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
 	var sn2 int
-	if sn2, err = r.Read(types.EncodeUint32(&s.BlockMaxRows)); err != nil {
+	if sn2, err = r.Read(types.EncodeUint32(&s.DeprecatedBlockMaxRows)); err != nil {
 		return
 	}
 	n += int64(sn2)
-	if sn2, err = r.Read(types.EncodeUint16(&s.ObjectMaxBlocks)); err != nil {
+	if sn2, err = r.Read(types.EncodeUint16(&s.DeprecatedObjectMaxBlocks)); err != nil {
 		return
 	}
 	n += int64(sn2)
@@ -512,10 +513,10 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 
 func (s *Schema) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
-	if _, err = w.Write(types.EncodeUint32(&s.BlockMaxRows)); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&s.DeprecatedBlockMaxRows)); err != nil {
 		return
 	}
-	if _, err = w.Write(types.EncodeUint16(&s.ObjectMaxBlocks)); err != nil {
+	if _, err = w.Write(types.EncodeUint16(&s.DeprecatedObjectMaxBlocks)); err != nil {
 		return
 	}
 	if _, err = w.Write(types.EncodeUint32(&s.Version)); err != nil {
@@ -613,7 +614,11 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint64) (next int) {
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 	tidVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelID)
-	seenRowid := false
+	defer func() {
+		slices.SortStableFunc(s.ColDefs, func(i, j *ColDef) int {
+			return i.Idx - j.Idx
+		})
+	}()
 	for {
 		if offset >= nameVec.Length() {
 			break
@@ -621,7 +626,7 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		name := string(nameVec.Get(offset).([]byte))
 		id := tidVec.Get(offset).(uint64)
 		// every schema has 1 rowid column as last column, if have one, break
-		if name != s.Name || targetTid != id || seenRowid {
+		if name != s.Name || targetTid != id {
 			break
 		}
 		def := new(ColDef)
@@ -648,7 +653,6 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		s.NameMap[def.Name] = def.Idx
 		s.ColDefs = append(s.ColDefs, def)
 		if def.Name == PhyAddrColumnName {
-			seenRowid = true
 			def.PhyAddr = true
 		}
 		constraint := string(bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).Get(offset).([]byte))
@@ -776,6 +780,7 @@ func ColDefFromAttribute(attr engine.Attribute) (*ColDef, error) {
 		ClusterBy:     attr.ClusterBy,
 		Default:       []byte(""),
 		OnUpdate:      []byte(""),
+		SeqNum:        attr.Seqnum,
 		EnumValues:    attr.EnumVlaues,
 	}
 	if attr.Default != nil {
@@ -1138,8 +1143,8 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 		schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
 	}
 
-	schema.BlockMaxRows = 1000
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 1000
+	schema.Extra.ObjectMaxBlocks = 10
 	schema.Constraint, _ = constraintDef.MarshalBinary()
 	_ = schema.Finalize(false)
 	return schema
