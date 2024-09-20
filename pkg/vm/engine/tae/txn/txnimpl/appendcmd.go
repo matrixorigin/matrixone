@@ -171,6 +171,47 @@ func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
+func (c *AppendCmd) WriteToV2(w io.Writer) (n int64, err error) {
+	t := c.GetType()
+	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
+		return
+	}
+	ver := IOET_WALTxnCommand_Append_V2
+	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
+		return
+	}
+	if _, err = w.Write(types.EncodeUint32(&c.ID)); err != nil {
+		return
+	}
+	length := uint32(len(c.Infos))
+	if _, err = w.Write(types.EncodeUint32(&length)); err != nil {
+		return
+	}
+	var sn int64
+	n = 10
+	for _, info := range c.Infos {
+		if sn, err = info.WriteTo(w); err != nil {
+			return
+		}
+		n += sn
+	}
+	sn, err = c.Data.WriteToV2(w)
+	n += sn
+	if err != nil {
+		return n, err
+	}
+	ts := c.Node.GetTxn().GetPrepareTS()
+	if _, err = w.Write(ts[:]); err != nil {
+		return
+	}
+	n += 16
+	if _, err = w.Write(types.EncodeBool(&c.IsTombstone)); err != nil {
+		return
+	}
+	n += 1
+	return
+}
+
 func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(types.EncodeUint32(&c.ID)); err != nil {
 		return
@@ -275,6 +316,15 @@ func (c *AppendCmd) ReadFromV2(r io.Reader) (n int64, err error) {
 func (c *AppendCmd) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = c.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+
+func (c *AppendCmd) MarshalBinaryV2() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = c.WriteToV2(&bbuf); err != nil {
 		return
 	}
 	buf = bbuf.Bytes()

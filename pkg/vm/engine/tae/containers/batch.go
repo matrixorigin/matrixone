@@ -372,7 +372,7 @@ func (bat *Batch) WriteToV2(w io.Writer) (n int64, err error) {
 			return
 		}
 	}
-	if tmpn, err = buffer.WriteTo(w); err != nil {
+	if tmpn, err = buffer.WriteToV1(w); err != nil {
 		return
 	}
 	n += tmpn
@@ -387,7 +387,7 @@ func (bat *Batch) WriteToV2(w io.Writer) (n int64, err error) {
 	// 4. Deletes
 	var buf []byte
 	if bat.Deletes != nil {
-		if buf, err = bat.Deletes.Show(); err != nil {
+		if buf, err = bat.Deletes.ShowV1(); err != nil {
 			return
 		}
 	}
@@ -466,7 +466,7 @@ func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 	var tmpn int64
 	buffer := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	defer buffer.Close()
-	if tmpn, err = buffer.ReadFrom(r); err != nil {
+	if tmpn, err = buffer.ReadFromV1(r); err != nil {
 		return
 	}
 	n += tmpn
@@ -487,7 +487,7 @@ func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 	}
 	for _, vecType := range vecTypes {
 		vec := MakeVector(vecType, common.DefaultAllocator)
-		if tmpn, err = vec.ReadFrom(r); err != nil {
+		if tmpn, err = vec.ReadFromV1(r); err != nil {
 			return
 		}
 		bat.Vecs = append(bat.Vecs, vec)
@@ -519,7 +519,7 @@ func (bat *Batch) ReadFromV2(r io.Reader) (n int64, err error) {
 	var tmpn int64
 	buffer := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	defer buffer.Close()
-	if tmpn, err = buffer.ReadFrom(r); err != nil {
+	if tmpn, err = buffer.ReadFromV1(r); err != nil {
 		return
 	}
 	n += tmpn
@@ -562,7 +562,7 @@ func (bat *Batch) ReadFromV2(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(buf); err != nil {
 		return
 	}
-	if err = bat.Deletes.ReadNoCopy(buf); err != nil {
+	if err = bat.Deletes.ReadNoCopyV1(buf); err != nil {
 		return
 	}
 	n += int64(size)
