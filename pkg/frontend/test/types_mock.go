@@ -258,7 +258,6 @@ func (mr *MockComputationWrapperMockRecorder) SetExplainBuffer(buf interface{}) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExplainBuffer", reflect.TypeOf((*MockComputationWrapper)(nil).SetExplainBuffer), buf)
 }
 
-
 // ResetPlanAndStmt mocks base method.
 func (m *MockComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	m.ctrl.T.Helper()

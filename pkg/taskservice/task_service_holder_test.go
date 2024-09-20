@@ -19,10 +19,11 @@ import (
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestTaskHolderCanCreateTaskService(t *testing.T) {
@@ -134,6 +135,41 @@ func TestRefreshTaskStorageCanClose(t *testing.T) {
 	require.True(t, s.maybeRefresh("s1"))
 	require.NoError(t, s.Close())
 	<-s.refreshC
+}
+
+func Test_refreshAddCdcTask(t *testing.T) {
+	storage, mock := newMockStorage(t, "sqlmock")
+
+	stores := map[string]TaskStorage{
+		"s1": storage,
+		"s2": NewMemTaskStorage(),
+	}
+	address := "s1"
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		&testStorageFactory{stores: stores}).(*refreshableTaskStorage)
+	dt := newCdcInfo(t)
+
+	mock.ExpectBegin()
+	newInsertDaemonTaskExpect(t, mock)
+
+	callback := func(context.Context, SqlExecutor) (int, error) {
+		return 1, nil
+	}
+
+	cnt, err := s.AddCdcTask(context.Background(), dt, callback)
+	assert.NoError(t, err)
+	assert.Greater(t, cnt, 0)
+
+	mock.ExpectClose()
+
+	address = "s2"
+	require.True(t, s.maybeRefresh("s1"))
+	require.NoError(t, s.Close())
+	<-s.refreshC
+
+	_ = storage.Close()
 }
 
 type testStorageFactory struct {

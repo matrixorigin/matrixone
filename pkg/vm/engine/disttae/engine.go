@@ -631,11 +631,11 @@ func (e *Engine) Hints() (h engine.Hints) {
 	return
 }
 
-func determineScanType(relData engine.RelData, num int) (scanType int) {
+func determineScanType(relData engine.RelData, readerNum int) (scanType int) {
 	scanType = NORMAL
-	if relData.DataCnt() < num*SMALLSCAN_THRESHOLD {
+	if relData.DataCnt() < readerNum*SMALLSCAN_THRESHOLD || readerNum == 1 {
 		scanType = SMALL
-	} else if (num * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
+	} else if (readerNum * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
 		scanType = LARGE
 	}
 	return
@@ -773,4 +773,8 @@ func (e *Engine) FS() fileservice.FileService {
 
 func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
 	return e.packerPool
+}
+
+func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return e.pClient.LatestLogtailAppliedTime()
 }

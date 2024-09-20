@@ -53,7 +53,6 @@ func NewRemoteDataSource(
 	return &RemoteDataSource{
 		data: relData,
 		ctx:  ctx,
-		proc: proc,
 		fs:   fs,
 		ts:   types.TimestampToTS(snapshotTS),
 	}
@@ -145,6 +144,10 @@ func (rs *RemoteDataSource) Next(
 }
 
 func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
+	// TODO: remove proc and don't GetService
+	if rs.proc == nil {
+		return
+	}
 	if rs.batchPrefetchCursor >= rs.data.DataCnt() ||
 		rs.cursor < rs.batchPrefetchCursor {
 		return
@@ -169,7 +172,10 @@ func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
 
-	rs.data.GetTombstones().PrefetchTombstones(rs.proc.GetService(), rs.fs, bids)
+	tombstoner := rs.data.GetTombstones()
+	if tombstoner != nil {
+		rs.data.GetTombstones().PrefetchTombstones(rs.proc.GetService(), rs.fs, bids)
+	}
 
 	rs.batchPrefetchCursor = end
 }
@@ -1084,11 +1090,6 @@ func (ls *LocalDataSource) applyPStateTombstoneObjects(
 	offsets []int64,
 	deletedRows *nulls.Nulls,
 ) ([]int64, error) {
-
-	//if ls.rc.SkipPStateDeletes {
-	//	return offsets, nil
-	//}
-
 	if ls.pState.ApproxTombstoneObjectsNum() == 0 {
 		return offsets, nil
 	}
@@ -1114,6 +1115,25 @@ func (ls *LocalDataSource) applyPStateTombstoneObjects(
 			iter.Close()
 		}
 	}()
+
+	// PXU TODO: handle len(offsets) < 10 or 20, 30?
+	if len(offsets) == 1 {
+		rowid := objectio.NewRowid(&bid, uint32(offsets[0]))
+		deleted, err := blockio.IsRowDeleted(
+			ls.ctx,
+			&ls.snapshotTS,
+			rowid,
+			getTombstone,
+			ls.fs,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if deleted {
+			return nil, nil
+		}
+		return offsets, nil
+	}
 
 	if deletedRows == nil {
 		deletedRows = &nulls.Nulls{}
@@ -1198,7 +1218,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		return false
 	}
 
-	for iter.Next() && len(rowIds) > len(deleted) {
+	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
 
 		if !obj.GetAppendable() {
@@ -1220,7 +1240,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
-			if loaded, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
+			if loaded, _, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
 				return nil, err
 			}
 
@@ -1232,10 +1252,13 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				commit = vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[1])
 			}
 
-			for i := range rowIds {
-				s, e := blockio.FindStartEndOfBlockFromSortedRowids(deletedRowIds, rowIds[i].BorrowBlockID())
+			for i := 0; i < len(rowIds); i++ {
+				s, e := blockio.FindStartEndOfBlockFromSortedRowids(
+					deletedRowIds, rowIds[i].BorrowBlockID())
+
 				for j := s; j < e; j++ {
-					if rowIds[i].EQ(&deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
+					if rowIds[i].EQ(&deletedRowIds[j]) &&
+						(commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
 						deleted = append(deleted, int64(i))
 						break
 					}

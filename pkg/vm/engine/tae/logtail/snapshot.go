@@ -227,7 +227,7 @@ func (d *DeltaLocDataSource) getAndApplyTombstones(
 		return nil, nil
 	}
 	logutil.Infof("deltaLoc: %v, id is %d", deltaLoc.String(), bid.Sequence())
-	deletes, release, err := blockio.ReadDeletes(ctx, deltaLoc, d.fs, false)
+	deletes, meta, release, err := blockio.ReadDeletes(ctx, deltaLoc, d.fs, false)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +235,9 @@ func (d *DeltaLocDataSource) getAndApplyTombstones(
 	if ts.IsEmpty() {
 		ts = d.ts
 	}
-	return blockio.EvalDeleteMaskFromDNCreatedTombstones(deletes, ts, &bid), nil
+	return blockio.EvalDeleteMaskFromDNCreatedTombstones(
+		deletes, meta.GetBlockMeta(uint32(deltaLoc.ID())), ts, &bid,
+	), nil
 }
 
 func (d *DeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
@@ -472,7 +474,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 				bat := buildBatch()
 				defer bat.Clean(mp)
 				err := blockio.BlockDataRead(
-					ctx, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
+					ctx, false, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
 					nil, nil, objectio.BlockReadFilter{}, fileservice.Policy(0), "", bat, mp, fs,
 				)
 				if err != nil {

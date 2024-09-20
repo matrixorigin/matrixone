@@ -149,9 +149,11 @@ func newTxnTable(
 
 	return tbl, nil
 }
+
 func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	return tbl.origin.CollectChanges(ctx, from, to, mp)
 }
+
 func (tbl *txnTableDelegate) Stats(
 	ctx context.Context,
 	sync bool,
@@ -627,12 +629,15 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	scanType := determineScanType(relData, newNum)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
+	current := 0
 	var shard engine.RelData
 	for i := 0; i < newNum; i++ {
-		if i == 0 {
-			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
+		if i < mod {
+			shard = relData.DataSlice(current, current+divide+1)
+			current = current + divide + 1
 		} else {
-			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
+			shard = relData.DataSlice(current, current+divide)
+			current = current + divide
 		}
 
 		localRelData, remoteRelData := group(shard)

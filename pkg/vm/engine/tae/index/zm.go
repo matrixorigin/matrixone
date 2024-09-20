@@ -583,6 +583,14 @@ func (zm ZM) AnyBetween(lb, ub ZM) (res bool, ok bool) {
 	return
 }
 
+// no init check
+// no type check
+// max <= v
+func (zm ZM) FastLEValue(v []byte, scale int32) (res bool) {
+	t := zm.GetType()
+	return compute.Compare(zm.GetMaxBuf(), v, t, zm.GetScale(), scale) <= 0
+}
+
 func (zm ZM) FastIntersect(o ZM) (res bool) {
 	t := zm.GetType()
 	// zm.max >= o.min && zm.min <= v2.max
