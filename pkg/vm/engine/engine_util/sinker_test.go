@@ -57,10 +57,14 @@ func TestNewSinker(t *testing.T) {
 		WithBuffer(containers.NewOneSchemaBatchBuffer(mpool.GB, schema.Attrs(), schema.Types())),
 	)
 
-	bat := catalog.MockBatch(schema, 100)
+	bat := catalog.MockBatch(schema, 1000)
 	err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
 	assert.Nil(t, err)
 
 	require.Equal(t, 1, len(sinker.staged.persisted))
-	require.Equal(t, 100, int(sinker.staged.persisted[0].Rows()))
+	require.Equal(t, 1000, int(sinker.staged.persisted[0].Rows()))
+
+	require.NoError(t, sinker.Close())
+
+	require.Equal(t, 0, int(proc.Mp().CurrNB()))
 }

@@ -378,7 +378,7 @@ func (sinker *Sinker) Write(
 			return err
 		}
 	}
-	return sinker.stageData(ctx, data)
+	return sinker.stageData(ctx, buffer)
 }
 
 func (sinker *Sinker) Sync(ctx context.Context) error {
