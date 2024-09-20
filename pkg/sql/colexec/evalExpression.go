@@ -152,7 +152,8 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 	case *plan.Expr_List:
 		executor := NewListExpressionExecutor()
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		resultVecTyp := t.List.List[0].GetTyp()
+		typ := types.New(types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale)
 		executor.Init(proc, typ, len(t.List.List))
 		for i := range executor.parameterExecutor {
 			subExecutor, paramErr := NewExpressionExecutor(proc, t.List.List[i])
