@@ -420,18 +420,18 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	}
 	bat := batch.NewWithSize(1)
 	if ap.WStart {
-		if ctr.vec != nil {
-			ctr.vec.CleanOnlyData()
+		if ctr.startVec != nil {
+			ctr.startVec.CleanOnlyData()
 		} else {
-			ctr.vec = vector.NewVec(types.T_datetime.ToType())
+			ctr.startVec = vector.NewVec(types.T_datetime.ToType())
 		}
-		err = vector.AppendFixedList(ctr.vec, ctr.wStart, nil, proc.Mp())
+		err = vector.AppendFixedList(ctr.startVec, ctr.wStart, nil, proc.Mp())
 		if err != nil {
 			return err
 		}
 
-		bat.SetVector(0, ctr.vec)
-		batch.SetLength(bat, ctr.vec.Length())
+		bat.SetVector(0, ctr.startVec)
+		batch.SetLength(bat, ctr.startVec.Length())
 		ctr.bat.Vecs[int32(i)], err = ctr.startExe.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
@@ -440,18 +440,18 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	}
 
 	if ap.WEnd {
-		if ctr.vec != nil {
-			ctr.vec.CleanOnlyData()
+		if ctr.endVec != nil {
+			ctr.endVec.CleanOnlyData()
 		} else {
-			ctr.vec = vector.NewVec(types.T_datetime.ToType())
+			ctr.endVec = vector.NewVec(types.T_datetime.ToType())
 		}
-		err = vector.AppendFixedList(ctr.vec, ctr.wEnd, nil, proc.Mp())
+		err = vector.AppendFixedList(ctr.endVec, ctr.wEnd, nil, proc.Mp())
 		if err != nil {
 			return err
 		}
 
-		bat.SetVector(0, ctr.vec)
-		batch.SetLength(bat, ctr.vec.Length())
+		bat.SetVector(0, ctr.endVec)
+		batch.SetLength(bat, ctr.endVec.Length())
 		ctr.bat.Vecs[int32(i)], err = ctr.endExe.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err

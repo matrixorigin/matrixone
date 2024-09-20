@@ -45,7 +45,6 @@ type container struct {
 	bat    *batch.Batch
 	colCnt int
 	i      int
-	vec    *vector.Vector
 
 	aggExe []colexec.ExpressionExecutor
 	aggVec [][]*vector.Vector
@@ -55,7 +54,9 @@ type container struct {
 	tsOid types.T
 
 	startExe colexec.ExpressionExecutor
+	startVec *vector.Vector
 	endExe   colexec.ExpressionExecutor
+	endVec   *vector.Vector
 
 	status int32
 	end    bool
@@ -218,7 +219,6 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.group = -1
 	ctr.wStart = nil
 	ctr.wEnd = nil
-	ctr.aggs = nil
 }
 
 func (ctr *container) freeExes() {
@@ -263,8 +263,13 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 	}
 	ctr.aggVec = nil
 
-	if ctr.vec != nil {
-		ctr.vec.Free(mp)
+	if ctr.startVec != nil {
+		ctr.startVec.Free(mp)
 	}
-	ctr.vec = nil
+	ctr.startVec = nil
+
+	if ctr.endVec != nil {
+		ctr.endVec.Free(mp)
+	}
+	ctr.endVec = nil
 }
