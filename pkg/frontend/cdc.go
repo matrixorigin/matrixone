@@ -1747,6 +1747,12 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 	return
 }
 
+var (
+	queryTableWrapper  = queryTable
+	decrypt            = cdc2.AesCFBDecodeWithKey
+	getGlobalPuWrapper = getGlobalPu
+)
+
 func initAesKey(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32) (err error) {
 	if len(cdc2.AesKey) > 0 {
 		return nil
@@ -1756,7 +1762,7 @@ func initAesKey(ctx context.Context, executor taskservice.SqlExecutor, accountId
 	var ret bool
 	querySql := fmt.Sprintf(getDataKeyFormat, accountId, cdc2.InitKeyId)
 
-	ret, err = queryTable(ctx, executor, querySql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
+	ret, err = queryTableWrapper(ctx, executor, querySql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
 		if err = rows.Scan(&encryptedKey); err != nil {
 			return false, err
 		}
@@ -1768,6 +1774,6 @@ func initAesKey(ctx context.Context, executor taskservice.SqlExecutor, accountId
 		return moerr.NewInternalError(ctx, "no data key")
 	}
 
-	cdc2.AesKey, err = cdc2.AesCFBDecodeWithKey(ctx, encryptedKey, []byte(getGlobalPu().SV.KeyEncryptionKey))
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper().SV.KeyEncryptionKey))
 	return
 }
