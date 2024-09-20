@@ -99,12 +99,12 @@ type InsertCtx struct {
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	//@todo need add Reset method for s3Writer
 	if insert.ctr.s3Writer != nil {
-		insert.ctr.s3Writer.Free(proc)
+		insert.ctr.s3Writer.Free(proc.Mp())
 		insert.ctr.s3Writer = nil
 	}
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Free(proc)
+			writer.Free(proc.Mp())
 		}
 		insert.ctr.partitionS3Writers = nil
 	}
@@ -119,14 +119,14 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if insert.ctr.s3Writer != nil {
-		insert.ctr.s3Writer.Free(proc)
+		insert.ctr.s3Writer.Free(proc.Mp())
 		insert.ctr.s3Writer = nil
 	}
 
 	// Free the partition table S3writer object resources
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Free(proc)
+			writer.Free(proc.Mp())
 		}
 		insert.ctr.partitionS3Writers = nil
 	}
