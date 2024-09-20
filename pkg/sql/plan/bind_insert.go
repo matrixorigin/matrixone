@@ -68,6 +68,10 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		} else if tableDefs[i].TableType == catalog.SystemSequenceRel && builder.compCtx.GetContext().Value(defines.BgKey{}) == nil {
 			return 0, moerr.NewInvalidInput(builder.compCtx.GetContext(), "Cannot insert/update/delete from sequence")
 		}
+
+		if tableDefs[i].Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+			return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "fake primary key")
+		}
 	}
 
 	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
@@ -110,53 +114,56 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		}
 	}
 
+	// handle primary/unique key confliction
 	for i, tableDef := range tableDefs {
-		scanTag := builder.genNewTag()
-		builder.addNameByColRef(scanTag, tableDef)
-
-		scanNodeID := builder.appendNode(&plan.Node{
-			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     DeepCopyTableDef(tableDef, true),
-			ObjRef:       objRefs[i],
-			BindingTags:  []int32{scanTag},
-			ScanSnapshot: ctx.snapshot,
-		}, ctx)
-
 		pkName := tableDef.Pkey.PkeyColName
 		pkPos := tableDef.Name2ColIndex[pkName]
-		pkTyp := tableDef.Cols[pkPos].Typ
-		leftExpr := &plan.Expr{
-			Typ: pkTyp,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: scanTag,
-					ColPos: pkPos,
+		if pkName != catalog.FakePrimaryKeyColName {
+			scanTag := builder.genNewTag()
+			builder.addNameByColRef(scanTag, tableDef)
+
+			scanNodeID := builder.appendNode(&plan.Node{
+				NodeType:     plan.Node_TABLE_SCAN,
+				TableDef:     DeepCopyTableDef(tableDef, true),
+				ObjRef:       objRefs[i],
+				BindingTags:  []int32{scanTag},
+				ScanSnapshot: ctx.snapshot,
+			}, ctx)
+
+			pkTyp := tableDef.Cols[pkPos].Typ
+			leftExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanTag,
+						ColPos: pkPos,
+					},
 				},
-			},
-		}
+			}
 
-		rightExpr := &plan.Expr{
-			Typ: pkTyp,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: selectNode.BindingTags[0],
-					ColPos: colName2Idx[tableDef.Name+"."+pkName],
+			rightExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectNode.BindingTags[0],
+						ColPos: colName2Idx[tableDef.Name+"."+pkName],
+					},
 				},
-			},
+			}
+
+			joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+				leftExpr,
+				rightExpr,
+			})
+
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:          plan.Node_JOIN,
+				Children:          []int32{scanNodeID, lastNodeID},
+				JoinType:          plan.Node_DEDUP,
+				OnList:            []*plan.Expr{joinCond},
+				OnDuplicateAction: onDupAction,
+			}, ctx)
 		}
-
-		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			leftExpr,
-			rightExpr,
-		})
-
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:          plan.Node_JOIN,
-			Children:          []int32{scanNodeID, lastNodeID},
-			JoinType:          plan.Node_DEDUP,
-			OnList:            []*plan.Expr{joinCond},
-			OnDuplicateAction: onDupAction,
-		}, ctx)
 
 		idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
 		idxTableDefs[i] = make([]*plan.TableDef, len(tableDef.Indexes))
