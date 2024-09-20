@@ -24,11 +24,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
+
+// withHidden: true for add hidden columns `commitTs` and `abort`
+// object file created by `CN` with `withHidden` is false
+func ConstructTombstoneWriter(
+	withHidden bool,
+	fs fileservice.FileService,
+) *BlockWriter {
+	var seqnums []uint16
+	if withHidden {
+		seqnums = objectio.TombstoneSeqnums_DN_Created
+	} else {
+		seqnums = objectio.TombstoneSeqnums_CN_Created
+	}
+	sortkeyPos := objectio.TombstonePrimaryKeyIdx
+	sortkeyIsPK := true
+	isTombstone := true
+	return ConstructWriter(
+		0,
+		seqnums,
+		sortkeyPos,
+		sortkeyIsPK,
+		isTombstone,
+		fs,
+	)
+}
 
 func ConstructWriter(
 	ver uint32,
@@ -48,7 +72,7 @@ func ConstructWriter(
 		if sortkeyIsPK {
 			if isTombstone {
 				writer.SetPrimaryKeyWithType(
-					uint16(catalog.TombstonePrimaryKeyIdx),
+					uint16(objectio.TombstonePrimaryKeyIdx),
 					index.HBF,
 					index.ObjectPrefixFn,
 					index.BlockPrefixFn,

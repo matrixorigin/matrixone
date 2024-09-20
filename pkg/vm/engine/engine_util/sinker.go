@@ -87,18 +87,26 @@ type FSinkerImpl struct {
 	isTombstone   bool
 	seqnums       []uint16
 	schemaVersion uint32
+	withHidden    bool
 }
 
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
-		s.writer = blockio.ConstructWriter(
-			s.schemaVersion,
-			s.seqnums,
-			s.sortKeyPos,
-			s.isPrimaryKey,
-			s.isTombstone,
-			s.fs,
-		)
+		if s.isTombstone {
+			s.writer = blockio.ConstructTombstoneWriter(
+				s.withHidden,
+				s.fs,
+			)
+		} else {
+			s.writer = blockio.ConstructWriter(
+				s.schemaVersion,
+				s.seqnums,
+				s.sortKeyPos,
+				s.isPrimaryKey,
+				s.isTombstone,
+				s.fs,
+			)
+		}
 	}
 
 	_, err := s.writer.WriteBatch(b)
@@ -136,8 +144,22 @@ func (s *FSinkerImpl) Close() error {
 	return nil
 }
 
+// FileSinkerFactory is a factory function to create a FileSinker
 type FileSinkerFactory func(*mpool.MPool, fileservice.FileService) FileSinker
 
+// This factory is used to create a FileSinker for tombstone
+// withHidden: whether to write hidden tombstone
+//
+//	true: TN created tombstone objects
+//	false: CN created tombstone objects
+func NewTombstoneFSinkerImplFactory(withHidden bool) FileSinkerFactory {
+	return func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
+		return NewTombstoneFSinkerImpl(withHidden, mp, fs)
+	}
+}
+
+// This factory is used to create a FileSinker for all kinds of objects
+// the user should provide the seqnums, sortKeyPos, isPrimaryKey, isTombstone, schemaVersion
 func NewFSinkerImplFactory(
 	seqnums []uint16,
 	sortKeyPos int,
@@ -155,6 +177,19 @@ func NewFSinkerImplFactory(
 			mp,
 			fs,
 		)
+	}
+}
+
+func NewTombstoneFSinkerImpl(
+	withHidden bool,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) *FSinkerImpl {
+	return &FSinkerImpl{
+		fs:          fs,
+		mp:          mp,
+		isTombstone: true,
+		withHidden:  withHidden,
 	}
 }
 

@@ -292,7 +292,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 
 			writer.SetDataType(objectio.SchemaTombstone)
 			writer.SetPrimaryKeyWithType(
-				uint16(catalog.TombstonePrimaryKeyIdx),
+				uint16(objectio.TombstonePrimaryKeyIdx),
 				index.HBF,
 				index.ObjectPrefixFn,
 				index.BlockPrefixFn,
