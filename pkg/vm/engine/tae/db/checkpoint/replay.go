@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,7 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 )
 
 const (
@@ -40,18 +42,32 @@ const (
 	ReadData
 )
 
-func (r *runner) Replay(dataFactory catalog.DataFactory) (
-	maxTs types.TS,
-	maxLSN uint64,
-	isLSNValid bool,
-	err error) {
-	defer func() {
-		if maxTs.IsEmpty() {
-			isLSNValid = true
-		}
-	}()
-	t0 := time.Now()
+type CkpReplayer struct {
+	r          *runner
+	dataF      catalog.DataFactory
+	ckpEntries []*CheckpointEntry
+	ckpdatas   []*logtail.CheckpointData
+	closes     []func()
+	emptyFile  []*CheckpointEntry
+
+	globalCkpIdx int
+
+	readDuration, applyDuration       time.Duration
+	readCount, applyCount, totalCount int
+}
+
+func (c *CkpReplayer) Close() {
+	for _, close := range c.closes {
+		close()
+	}
+}
+
+func (c *CkpReplayer) ReadCkpFiles() (err error) {
+	r := c.r
 	ctx := r.ctx
+
+	// step1. read checkpoint meta data, output is the ckpEntries
+	t0 := time.Now()
 	dirs, err := r.rt.Fs.ListDir(CheckpointDir)
 	if err != nil {
 		return
@@ -60,7 +76,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		return
 	}
 	metaFiles := make([]*MetaFile, 0)
-	var readDuration, applyDuration time.Duration
 	r.checkpointMetaFiles.Lock()
 	for i, dir := range dirs {
 		r.checkpointMetaFiles.files[dir.Name] = struct{}{}
@@ -117,15 +132,16 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		}
 		bat.AddVector(colNames[i], vec)
 	}
-	readDuration += time.Since(t0)
-	datas := make([]*logtail.CheckpointData, bat.Length())
+	c.readDuration += time.Since(t0)
 
 	entries, maxGlobalEnd := replayCheckpointEntries(bat, checkpointVersion)
-	emptyFile := make([]*CheckpointEntry, 0)
-	var emptyFileMu sync.RWMutex
+	c.ckpEntries = entries
+
+	// step2. read checkpoint data, output is the ckpdatas
+	datas := make([]*logtail.CheckpointData, bat.Length())
+
 	closecbs := make([]func(), 0)
-	var readCount, applyCount, totalCount int
-	totalCount = len(entries)
+	c.totalCount = len(entries)
 	readfn := func(i int, readType uint16) {
 		checkpointEntry := entries[i]
 		checkpointEntry.sid = r.rt.SID()
@@ -138,7 +154,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 			}
 		} else if readType == PrefetchMetaIdx {
-			readCount++
+			c.readCount++
 			datas[i], err = checkpointEntry.PrefetchMetaIdx(ctx, r.rt.Fs)
 			if err != nil {
 				return
@@ -151,24 +167,17 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		} else {
 			if err2 = checkpointEntry.Read(ctx, r.rt.Fs, datas[i]); err2 != nil {
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
-				emptyFileMu.Lock()
-				emptyFile = append(emptyFile, checkpointEntry)
-				emptyFileMu.Unlock()
+				c.emptyFile = append(c.emptyFile, checkpointEntry)
 			} else {
 				entries[i] = checkpointEntry
 				closecbs = append(closecbs, func() { datas[i].CloseWhenLoadFromCache(checkpointEntry.version) })
 			}
 		}
 	}
-	defer func() {
-		for _, cb := range closecbs {
-			cb()
-		}
-	}()
+	c.closes = append(c.closes, closecbs...)
 	t0 = time.Now()
 	for i := 0; i < bat.Length(); i++ {
 		metaLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
-
 		err = blockio.PrefetchMeta(r.rt.SID(), r.rt.Fs.Service, metaLoc)
 		if err != nil {
 			return
@@ -186,19 +195,17 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	for i := 0; i < bat.Length(); i++ {
 		readfn(i, ReadData)
 	}
-	readDuration += time.Since(t0)
-	if err != nil {
-		return
-	}
-	t0 = time.Now()
-	globalIdx := 0
+	c.ckpdatas = datas
+	c.readDuration += time.Since(t0)
+
+	// step3. Add entries to the runner
 	for i := 0; i < bat.Length(); i++ {
 		checkpointEntry := entries[i]
 		if checkpointEntry == nil {
 			continue
 		}
 		if checkpointEntry.GetType() == ET_Global {
-			globalIdx = i
+			c.globalCkpIdx = i
 			r.tryAddNewGlobalCheckpointEntry(checkpointEntry)
 		} else if checkpointEntry.GetType() == ET_Incremental {
 			r.tryAddNewIncrementalCheckpointEntry(checkpointEntry)
@@ -206,22 +213,40 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			r.tryAddNewBackupCheckpointEntry(checkpointEntry)
 		}
 	}
+	return nil
+}
 
-	var ckpVers []uint32
-	var ckpDatas []*logtail.CheckpointData
+// ReplayThreeTablesObjectlist replays the object list the three tables, and check the LSN and TS.
+func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
+	maxTs types.TS,
+	maxLSN uint64,
+	isLSNValid bool,
+	err error) {
+	t0 := time.Now()
+	defer func() {
+		c.applyDuration += time.Since(t0)
+		if maxTs.IsEmpty() {
+			isLSNValid = true
+		}
+	}()
 
+	if len(c.ckpEntries) == 0 {
+		return
+	}
+
+	r := c.r
+	ctx := c.r.ctx
+	entries := c.ckpEntries
+	datas := c.ckpdatas
+	dataFactory := c.dataF
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
 		logutil.Infof("replay checkpoint %v", maxGlobal)
-		err = datas[globalIdx].ApplyReplayTo(r.catalog, dataFactory)
-		applyCount++
+		err = datas[c.globalCkpIdx].ApplyReplayTo(r.catalog, dataFactory, true)
+		c.applyCount++
 		if err != nil {
 			return
 		}
-
-		ckpVers = append(ckpVers, maxGlobal.version)
-		ckpDatas = append(ckpDatas, datas[globalIdx])
-
 		if maxTs.Less(&maxGlobal.end) {
 			maxTs = maxGlobal.end
 		}
@@ -234,7 +259,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			maxLSN = maxGlobal.ckpLSN
 		}
 	}
-	for _, e := range emptyFile {
+	for _, e := range c.emptyFile {
 		if e.end.GreaterEq(&maxTs) {
 			return types.TS{}, 0, false,
 				moerr.NewInternalErrorf(ctx,
@@ -242,7 +267,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 					e.String())
 		}
 	}
-	for i := 0; i < bat.Length(); i++ {
+	for i := 0; i < len(entries); i++ {
 		checkpointEntry := entries[i]
 		if checkpointEntry == nil {
 			continue
@@ -251,15 +276,11 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			continue
 		}
 		logutil.Infof("replay checkpoint %v", checkpointEntry)
-		err = datas[i].ApplyReplayTo(r.catalog, dataFactory)
-		applyCount++
+		err = datas[i].ApplyReplayTo(r.catalog, dataFactory, true)
+		c.applyCount++
 		if err != nil {
 			return
 		}
-
-		ckpVers = append(ckpVers, checkpointEntry.version)
-		ckpDatas = append(ckpDatas, datas[i])
-
 		if maxTs.Less(&checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
@@ -277,19 +298,81 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			isLSNValid = false
 		}
 	}
+	return
+}
 
+func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) {
+	if len(c.ckpEntries) == 0 {
+		return
+	}
+
+	logutil.Info(c.r.catalog.SimplePPString(common.PPL3))
+	sortFunc := func(cols []containers.Vector, pkidx int) error {
+		_, err := mergesort.SortBlockColumns(cols, pkidx, c.r.rt.VectorPool.Transient)
+		return err
+	}
+	// logutil.Infof(c.r.catalog.SimplePPString(common.PPL3))
+	c.r.catalog.RelayFromSysTableObjects(c.r.ctx, readTxn, c.dataF, tables.ReadSysTableBatch, sortFunc)
+}
+
+// ReplayObjectlist replays the data part of the checkpoint.
+func (c *CkpReplayer) ReplayObjectlist() (err error) {
+	if len(c.ckpEntries) == 0 {
+		return
+	}
+	t0 := time.Now()
+	r := c.r
+	entries := c.ckpEntries
+	datas := c.ckpdatas
+	dataFactory := c.dataF
+	maxTs := types.TS{}
+	var ckpVers []uint32
+	var ckpDatas []*logtail.CheckpointData
+	if maxGlobal := r.MaxGlobalCheckpoint(); maxGlobal != nil {
+		err = datas[c.globalCkpIdx].ApplyReplayTo(r.catalog, dataFactory, false)
+		if err != nil {
+			return
+		}
+		maxTs = maxGlobal.end
+		ckpVers = append(ckpVers, maxGlobal.version)
+		ckpDatas = append(ckpDatas, datas[c.globalCkpIdx])
+	}
+	for i := 0; i < len(entries); i++ {
+		checkpointEntry := entries[i]
+		if checkpointEntry == nil {
+			continue
+		}
+		if checkpointEntry.end.LessEq(&maxTs) {
+			continue
+		}
+		err = datas[i].ApplyReplayTo(r.catalog, dataFactory, false)
+		if err != nil {
+			return
+		}
+		if maxTs.Less(&checkpointEntry.end) {
+			maxTs = checkpointEntry.end
+		}
+		ckpVers = append(ckpVers, checkpointEntry.version)
+		ckpDatas = append(ckpDatas, datas[i])
+	}
+	c.applyDuration += time.Since(t0)
 	r.catalog.GetUsageMemo().(*logtail.TNUsageMemo).PrepareReplay(ckpDatas, ckpVers)
-
-	applyDuration = time.Since(t0)
+	r.source.Init(maxTs)
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("checkpoint"),
-		common.AnyField("apply cost", applyDuration),
-		common.AnyField("read cost", readDuration),
-		common.AnyField("total count", totalCount),
-		common.AnyField("read count", readCount),
-		common.AnyField("apply count", applyCount))
-	r.source.Init(maxTs)
+		common.AnyField("apply cost", c.applyDuration),
+		common.AnyField("read cost", c.readDuration),
+		common.AnyField("total entry count", c.totalCount),
+		common.AnyField("read entry count", c.readCount),
+		common.AnyField("apply entry count", c.applyCount))
 	return
+}
+
+func (r *runner) Replay(dataFactory catalog.DataFactory) *CkpReplayer {
+	return &CkpReplayer{
+		r:     r,
+		dataF: dataFactory,
+	}
 }
 
 func MergeCkpMeta(
