@@ -40,13 +40,19 @@ func TestNewSinker(t *testing.T) {
 		seqnums[i] = schema.GetSeqnum(schema.Attrs()[i])
 	}
 
-	sinker := NewSinker(schema.GetPrimaryKey().Idx,
-		schema.Attrs(),
-		schema.Types(),
+	factory := NewFSinkerImplFactory(
 		seqnums,
+		schema.GetPrimaryKey().Idx,
 		true,
 		false,
 		schema.Version,
+	)
+
+	sinker := NewSinker(
+		schema.GetPrimaryKey().Idx,
+		schema.Attrs(),
+		schema.Types(),
+		factory,
 		proc.Mp(),
 		fs,
 		WithMemorySizeThreshold(1),
