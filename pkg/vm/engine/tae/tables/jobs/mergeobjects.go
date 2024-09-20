@@ -244,7 +244,7 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 
 	bat := batch.New(true, task.attrs)
 	for i, idx := range task.idxs {
-		if idx == catalog.COLIDX_COMMITS {
+		if idx == objectio.SEQNUM_COMMITTS {
 			id := slices.Index(task.attrs, catalog.AttrCommitTs)
 			bat.Vecs[id] = data.Vecs[i].GetDownstreamVector()
 		} else {
@@ -309,7 +309,14 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
 
-	return mergesort.GetNewWriter(task.rt.Fs.Service, task.schema.Version, seqnums, sortkeyPos, sortkeyIsPK, task.isTombstone)
+	return blockio.ConstructWriter(
+		task.schema.Version,
+		seqnums,
+		sortkeyPos,
+		sortkeyIsPK,
+		task.isTombstone,
+		task.rt.Fs.Service,
+	)
 }
 
 func (task *mergeObjectsTask) DoTransfer() bool {
