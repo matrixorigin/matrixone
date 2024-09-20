@@ -1094,7 +1094,7 @@ func DedupSortedBatches(
 	)
 	var sels []int64
 	for i := 0; i < len(batches); i++ {
-		uniqueKey := batches[uniqueIdx].Vecs[uniqueIdx]
+		uniqueKey := batches[i].Vecs[uniqueIdx]
 		for j := 0; j < uniqueKey.Length(); j++ {
 			if i == 0 && j == 0 {
 				last = uniqueKey.GetRawBytesAt(j)

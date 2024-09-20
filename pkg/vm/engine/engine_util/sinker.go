@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
@@ -61,6 +62,12 @@ func WithMemorySizeThreshold(size int) SinkerOption {
 	}
 }
 
+func WithBuffer(buffer *containers.OneSchemaBatchBuffer) SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.buffers = buffer
+	}
+}
+
 type FileSinker interface {
 	Sink(context.Context, *batch.Batch) error
 	Sync(context.Context) (*objectio.ObjectStats, error)
@@ -68,44 +75,137 @@ type FileSinker interface {
 	Close() error
 }
 
+var _ FileSinker = new(SinkerImpl)
+
+type SinkerImpl struct {
+	writer *blockio.BlockWriter
+	mp     *mpool.MPool
+	fs     fileservice.FileService
+
+	sortKeyPos    int
+	isPrimaryKey  bool
+	isTombstone   bool
+	seqnums       []uint16
+	schemaVersion uint32
+}
+
+func (s *SinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
+	if s.writer == nil {
+		s.writer = mergesort.GetNewWriter(
+			s.fs,
+			s.schemaVersion,
+			s.seqnums,
+			s.sortKeyPos,
+			s.isPrimaryKey,
+			s.isTombstone)
+	}
+
+	_, err := s.writer.WriteBatch(b)
+	return err
+}
+
+func (s *SinkerImpl) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
+	if _, _, err := s.writer.Sync(ctx); err != nil {
+		return nil, err
+	}
+
+	var ss objectio.ObjectStats
+	if s.sortKeyPos > -1 {
+		ss = s.writer.GetObjectStats(objectio.WithSorted())
+	} else {
+		ss = s.writer.GetObjectStats()
+	}
+
+	// s.writer.Reset
+	s.writer = nil
+
+	return &ss, nil
+}
+
+func (s *SinkerImpl) Reset() {
+	if s.writer != nil {
+		// s.writer.Reset
+		s.writer = nil
+	}
+}
+
+func (s *SinkerImpl) Close() error {
+	// s.writer.Reset
+	s.writer = nil
+	return nil
+}
+
+func NewSinkerImpl(
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+	seqnums []uint16,
+	sortKeyPos int,
+	isPrimaryKey bool,
+	isTombstone bool,
+	schemaVersion uint32) *SinkerImpl {
+	return &SinkerImpl{
+		fs:            fs,
+		mp:            mp,
+		seqnums:       seqnums,
+		sortKeyPos:    sortKeyPos,
+		isPrimaryKey:  isPrimaryKey,
+		isTombstone:   isTombstone,
+		schemaVersion: schemaVersion,
+	}
+}
+
 func NewSinker(
 	sortKeyIdx int,
 	attrs []string,
 	attrTypes []types.Type,
+	seqnums []uint16,
+	isPrimaryKey bool,
+	isTombstone bool,
+	schemaVersion uint32,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	opts ...SinkerOption,
 ) *Sinker {
 	sinker := &Sinker{
 		schema: struct {
-			attrs      []string
-			attrTypes  []types.Type
-			sortKeyIdx int
+			attrs         []string
+			attrTypes     []types.Type
+			seqnums       []uint16
+			sortKeyIdx    int
+			schemaVersion uint32
+			isPrimaryKey  bool
+			isTombstone   bool
 		}{
-			attrs:      attrs,
-			attrTypes:  attrTypes,
-			sortKeyIdx: sortKeyIdx,
+			attrs:         attrs,
+			attrTypes:     attrTypes,
+			seqnums:       seqnums,
+			sortKeyIdx:    sortKeyIdx,
+			schemaVersion: schemaVersion,
+			isPrimaryKey:  isPrimaryKey,
+			isTombstone:   isTombstone,
 		},
+
 		mp: mp,
 		fs: fs,
 	}
+
 	for _, opt := range opts {
 		opt(sinker)
 	}
+
 	sinker.fillDefaults()
-	sinker.buffers = containers.NewOneSchemaBatchBuffer(
-		sinker.config.bufferSizeCap,
-		sinker.schema.attrs,
-		sinker.schema.attrTypes,
-	)
 	return sinker
 }
 
 type Sinker struct {
 	schema struct {
-		attrs      []string
-		attrTypes  []types.Type
-		sortKeyIdx int
+		attrs         []string
+		attrTypes     []types.Type
+		seqnums       []uint16
+		sortKeyIdx    int
+		schemaVersion uint32
+		isPrimaryKey  bool
+		isTombstone   bool
 	}
 	config struct {
 		allMergeSorted bool
@@ -132,6 +232,25 @@ type Sinker struct {
 func (sinker *Sinker) fillDefaults() {
 	if sinker.staged.memorySizeThreshold == 0 {
 		sinker.staged.memorySizeThreshold = DefaultInMemoryStagedSize
+	}
+	if sinker.staged.sinker == nil {
+		sinker.staged.sinker = NewSinkerImpl(
+			sinker.fs,
+			sinker.mp,
+			sinker.schema.seqnums,
+			sinker.schema.sortKeyIdx,
+			sinker.schema.isPrimaryKey,
+			sinker.schema.isTombstone,
+			sinker.schema.schemaVersion,
+		)
+	}
+
+	if sinker.buffers == nil {
+		sinker.buffers = containers.NewOneSchemaBatchBuffer(
+			sinker.config.bufferSizeCap,
+			sinker.schema.attrs,
+			sinker.schema.attrTypes,
+		)
 	}
 }
 
@@ -235,10 +354,6 @@ func (sinker *Sinker) putStageFileSinker(fsinker FileSinker) {
 	sinker.staged.sinker.Reset()
 }
 func (sinker *Sinker) getStageFileSinker() FileSinker {
-	// TODO
-	// if sinker.staged.sinker == nil {
-	// 	sinker.staged.sinker = NewFileSinker()
-	// }
 	return sinker.staged.sinker
 }
 
