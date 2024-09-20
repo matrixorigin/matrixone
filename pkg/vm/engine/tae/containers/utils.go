@@ -15,6 +15,7 @@
 package containers
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,6 +25,90 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+type IBatchBuffer interface {
+	FetchWithSchema([]string, []types.Type) *batch.Batch
+	Fetch() *batch.Batch
+	Putback(*batch.Batch, *mpool.MPool)
+	Close(*mpool.MPool)
+}
+
+type OneSchemaBatchBuffer struct {
+	sizeCap  int
+	currSize int
+	attrs    []string
+	typs     []types.Type
+	buffer   []*batch.Batch
+}
+
+func NewOneSchemaBatchBuffer(
+	sizeCap int,
+	attrs []string,
+	typs []types.Type,
+) *OneSchemaBatchBuffer {
+	if sizeCap <= 0 {
+		sizeCap = mpool.MB * 32
+	}
+	return &OneSchemaBatchBuffer{
+		sizeCap: sizeCap,
+		buffer:  make([]*batch.Batch, 0),
+		attrs:   attrs,
+		typs:    typs,
+	}
+}
+
+func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
+	if len(attrs) != len(bb.attrs) || len(types) != len(bb.typs) {
+		panic(fmt.Sprintf("attrs or types not match"))
+	}
+	for i, attr := range attrs {
+		if attr != bb.attrs[i] || types[i] != bb.typs[i] {
+			panic(fmt.Sprintf("attrs not match: %s %s", attr, bb.attrs[i]))
+		}
+		if types[i].Oid != bb.typs[i].Oid {
+			panic(fmt.Sprintf("types not match: %s %s", types[i].String(), bb.typs[i].String()))
+		}
+	}
+	if len(bb.buffer) == 0 {
+		return batch.NewWithSchema(false, bb.attrs, bb.typs)
+	}
+	bat := bb.buffer[len(bb.buffer)-1]
+	bb.buffer = bb.buffer[:len(bb.buffer)-1]
+	bb.currSize -= bat.Allocated()
+	return bat
+}
+
+func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
+	if len(bb.buffer) == 0 {
+		return batch.NewWithSchema(false, bb.attrs, bb.typs)
+	}
+	bat := bb.buffer[len(bb.buffer)-1]
+	bb.buffer = bb.buffer[:len(bb.buffer)-1]
+	bb.currSize -= bat.Allocated()
+	return bat
+}
+
+func (bb *OneSchemaBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
+	if bat == nil {
+		return
+	}
+	bat.CleanOnlyData()
+	newSize := bb.currSize + bat.Allocated()
+	if newSize > bb.sizeCap {
+		bat.Clean(mp)
+		return
+	}
+	bb.buffer = append(bb.buffer, bat)
+	bb.currSize = newSize
+}
+
+func (bb *OneSchemaBatchBuffer) Close(mp *mpool.MPool) {
+	for i, bat := range bb.buffer {
+		bat.Clean(mp)
+		bb.buffer[i] = nil
+	}
+	bb.buffer = nil
+}
 
 // ### Shallow copy Functions
 
@@ -995,4 +1080,37 @@ func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any 
 		return overload(args...)
 	}
 	panic(fmt.Sprintf("unsupported type: %s", t.String()))
+}
+
+func DedupSortedBatches(
+	uniqueIdx int,
+	batches []*batch.Batch,
+) error {
+	if len(batches) == 0 {
+		return nil
+	}
+	var (
+		curr, last []byte
+	)
+	var sels []int64
+	for i := 0; i < len(batches); i++ {
+		uniqueKey := batches[uniqueIdx].Vecs[uniqueIdx]
+		for j := 0; j < uniqueKey.Length(); j++ {
+			if i == 0 && j == 0 {
+				last = uniqueKey.GetRawBytesAt(j)
+			} else {
+				curr = uniqueKey.GetRawBytesAt(j)
+				if bytes.Compare(curr, last) == 0 {
+					sels = append(sels, int64(j))
+				} else {
+					last = curr
+				}
+			}
+		}
+		if len(sels) > 0 {
+			batches[i].Shrink(sels, true)
+			sels = sels[:0]
+		}
+	}
+	return nil
 }

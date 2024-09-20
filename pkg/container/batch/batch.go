@@ -47,6 +47,14 @@ func NewWithSize(n int) *Batch {
 	}
 }
 
+func NewWithSchema(ro bool, attrs []string, attTypes []types.Type) *Batch {
+	bat := New(ro, attrs)
+	for i, t := range attTypes {
+		bat.Vecs[i] = vector.NewVec(t)
+	}
+	return bat
+}
+
 func SetLength(bat *Batch, n int) {
 	for _, vec := range bat.Vecs {
 		vec.SetLength(n)
@@ -369,6 +377,16 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	//}
 
 	return rbat, nil
+}
+
+func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
+	for i, vec := range bat.Vecs {
+		if err := vec.UnionOne(bat2.Vecs[i], pos, m); err != nil {
+			return err
+		}
+	}
+	bat.rowCount++
+	return nil
 }
 
 func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
