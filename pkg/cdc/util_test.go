@@ -881,3 +881,14 @@ func TestGetTableDef(t *testing.T) {
 		})
 	}
 }
+
+func TestGetInitDataKeySql(t *testing.T) {
+	stub := gostub.Stub(&encrypt, func(data []byte, aesKey []byte) (string, error) {
+		return "encrypted", nil
+	})
+	defer stub.Reset()
+
+	s, err := GetInitDataKeySql("01234567890123456789012345678901")
+	assert.NoError(t, err)
+	assert.Equal(t, "insert into mo_catalog.mo_data_key (account_id, key_id, encrypted_key) values (0, '4e3da275-5003-4ca0-8667-5d3cdbecdd35', 'encrypted')", s)
+}

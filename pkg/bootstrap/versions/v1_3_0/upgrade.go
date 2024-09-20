@@ -37,6 +37,8 @@ var (
 	}
 )
 
+type KekKey struct{}
+
 type versionHandle struct {
 	metadata versions.Version
 }
@@ -104,6 +106,14 @@ func (v *versionHandle) HandleClusterUpgrade(
 				zap.String("version", v.Metadata().Version))
 			return err
 		}
+	}
+
+	kek := ctx.Value(KekKey{}).(string)
+	if err := InsertInitDataKey(txn, kek); err != nil {
+		getLogger(txn.Txn().TxnOptions().CN).Error("cluster InsertInitDataKey error",
+			zap.Error(err),
+			zap.String("version", v.Metadata().Version))
+		return err
 	}
 	return nil
 }
