@@ -96,7 +96,7 @@ const (
 
 // search josn element cut off point.
 const (
-	bsearchCutoff = 20
+	binarySearchCutoff = 20
 )
 
 var (
