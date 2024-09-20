@@ -101,22 +101,41 @@ id1    id2    body    title    MATCH (body, title) AGAINST (blue)
 id2    2    blue    t3    0.09061906
 id3    3    blue red    t4    0.09061906
 drop table src2;
-create table src (id bigint primary key, json text, json2 text);
+create table src (id bigint primary key, json1 json, json2 json);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
-create fulltext index ftidx on src (json) with parser json;
-select * from src where match(json) against('red' in boolean mode);
-id    json    json2
+create fulltext index ftidx on src (json1) with parser json;
+select * from src where match(json1) against('red' in boolean mode);
+id    json1    json2
+0    {"a": 1, "b": "red"}    {"d": "happy birthday", "f": "winter"}
+select * from src where match(json1) against('中文學習教材' in boolean mode);
+id    json1    json2
+1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
+create fulltext index ftidx2 on src (json1, json2) with parser json;
+select * from src where match(json1, json2) against('+red +winter' in boolean mode);
+id    json1    json2
+0    {"a": 1, "b": "red"}    {"d": "happy birthday", "f": "winter"}
+select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+id    json1    json2
+1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
+drop table src;
+create table src (id bigint primary key, json1 text, json2 varchar);
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
+(1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
+(2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
+create fulltext index ftidx on src (json1) with parser json;
+select * from src where match(json1) against('red' in boolean mode);
+id    json1    json2
 0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
-select * from src where match(json) against('中文學習教材' in boolean mode);
-id    json    json2
+select * from src where match(json1) against('中文學習教材' in boolean mode);
+id    json1    json2
 1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
-create fulltext index ftidx2 on src (json, json2) with parser json;
-select * from src where match(json, json2) against('+red +winter' in boolean mode);
-id    json    json2
+create fulltext index ftidx2 on src (json1, json2) with parser json;
+select * from src where match(json1, json2) against('+red +winter' in boolean mode);
+id    json1    json2
 0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
-select * from src where match(json, json2) against('中文學習教材' in boolean mode);
-id    json    json2
+select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+id    json1    json2
 1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
 drop table src;

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -141,11 +142,18 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		}
 	case "json":
 		for i := 1; i < vlen; i++ {
-			c := tf.ctr.argVecs[i].GetStringAt(nthRow)
+			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
 
 			var bj bytejson.ByteJson
-			if err := json.Unmarshal([]byte(c), &bj); err != nil {
-				return err
+			if tf.ctr.argVecs[i].GetType().Oid == types.T_json {
+				if err := bj.Unmarshal(c); err != nil {
+					return err
+				}
+			} else {
+
+				if err := json.Unmarshal(c, &bj); err != nil {
+					return err
+				}
 			}
 
 			for t := range bj.TokenizeValue(false) {

@@ -1513,9 +1513,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if colMap[str].Typ.Id == int32(types.T_datalink) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", str))
 		}
-		if colMap[str].Typ.Id == int32(types.T_json) {
-			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
-		}
 	}
 
 	// check Constraint Name (include index/ unique)
@@ -1620,8 +1617,8 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 				return moerr.NewInvalidInput(ctx.GetContext(), fmt.Sprintf("column '%s' does not exist", nameOrigin))
 			}
 			typid := colMap[name].Typ.Id
-			if !(typid == int32(types.T_text) || typid == int32(types.T_char) || typid == int32(types.T_varchar)) {
-				return moerr.NewNotSupported(ctx.GetContext(), "fulltext index only support char, varchar and text")
+			if !(typid == int32(types.T_text) || typid == int32(types.T_char) || typid == int32(types.T_varchar) || typid == int32(types.T_json)) {
+				return moerr.NewNotSupported(ctx.GetContext(), "fulltext index only support char, varchar, text and json")
 			}
 		}
 

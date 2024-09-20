@@ -6655,7 +6655,7 @@ var supportedOthersBuiltIns = []FuncNew{
 func fulltext_expand_overload(rettyp types.T) []overload {
 
 	overloads := make([]overload, 0)
-	supported_types := []types.T{types.T_varchar, types.T_char, types.T_text}
+	supported_types := []types.T{types.T_varchar, types.T_char, types.T_text, types.T_json}
 	curr := 0
 
 	prefix_types := []types.T{types.T_varchar, types.T_int64}
