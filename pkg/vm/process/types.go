@@ -319,6 +319,7 @@ type sqlHelper interface {
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 
+// WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
 	ReceiverDone bool
@@ -327,6 +328,11 @@ type WrapCs struct {
 	Cs           morpc.ClientSession
 	Err          chan error
 }
+
+// RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
+//
+// remote run Server will use this channel to send information to dispatch operator.
+type RemotePipelineInformationChannel chan *WrapCs
 
 func (proc *Process) GetMessageBoard() *message.MessageBoard {
 	return proc.Base.messageBoard

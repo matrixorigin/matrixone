@@ -124,7 +124,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
-		dispatchProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid)
 		if err != nil || dispatchProc == nil {
 			return err
 		}
@@ -146,7 +146,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		select {
 		case <-timeLimit.Done():
 			err = moerr.NewInternalError(receiver.messageCtx, "send notify msg to dispatch operator timeout")
-		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
+		case dispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.connectionCtx.Done():
 		case <-dispatchProc.Ctx.Done():
@@ -520,32 +520,31 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	return result, nil
 }
 
-func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, error) {
-	getCtx, getCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
-	var opProc *process.Process
-	var ok bool
+func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
+	tout, tcancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
 
 	for {
 		select {
-		case <-getCtx.Done():
+		case <-tout.Done():
 			colexec.Get().GetProcByUuid(uid, true)
-			getCancel()
-			return nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
+			tcancel()
+			return nil, nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
 
 		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)
-			getCancel()
-			return nil, nil
+			tcancel()
+			return nil, nil, nil
 
 		default:
-			if opProc, ok = colexec.Get().GetProcByUuid(uid, false); !ok {
-				// it's bad to call the Gosched() here.
-				// cut the HandleNotifyTimeout to 1ms, 1ms, 2ms, 3ms, 5ms, 8ms..., and use them as waiting time may be a better way.
-				runtime.Gosched()
-			} else {
-				getCancel()
-				return opProc, nil
+			dispatchProc, ok := colexec.Get().GetProcByUuid(uid, true)
+			if ok {
+				tcancel()
+				return dispatchProc, dispatchProc.DispatchNotifyCh, nil
 			}
+
+			// it's very bad to call the runtime.Gosched() here.
+			// get a process receive channel first, and listen to it may be a better way.
+			runtime.Gosched()
 		}
 	}
 }
