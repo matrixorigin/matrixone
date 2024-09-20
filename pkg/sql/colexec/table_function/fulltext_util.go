@@ -222,11 +222,11 @@ func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float3
 	}
 
 	nmatch := float64(len(acc.Words))
+	idf := math.Log10(float64(s.Nrow) / nmatch)
+	idfSq := float32(idf * idf)
 	for doc_id := range acc.Words {
-		tf := float64(acc.Words[doc_id].DocCount)
-		idf := math.Log10(float64(s.Nrow) / nmatch)
-		tfidf := float32(tf * idf * idf)
-		result[doc_id] = weight * tfidf
+		tf := float32(acc.Words[doc_id].DocCount)
+		result[doc_id] = weight * tf * idfSq
 	}
 
 	return result, nil
@@ -686,7 +686,7 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 		return []*Pattern{{Text: pattern + "*", Operator: STAR}}, nil
 	}
 
-	var list []*Pattern = make([]*Pattern, 0, 64)
+	list := make([]*Pattern, 0, 32)
 	tok, _ := tokenizer.NewSimpleTokenizer([]byte(pattern))
 	for t := range tok.Tokenize() {
 
