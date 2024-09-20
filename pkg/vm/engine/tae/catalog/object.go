@@ -475,10 +475,14 @@ func (entry *ObjectEntry) HasDropIntent() bool {
 	return !entry.DeletedAt.IsEmpty()
 }
 
+func (entry *ObjectEntry) IsForcePNode() bool {
+	return entry.forcePNode
+}
+
 // for old flushed objects, stats may be empty
 func (entry *ObjectEntry) ObjectPersisted() bool {
 	if entry.IsAppendable() {
-		return entry.HasDropIntent()
+		return entry.IsForcePNode() || entry.HasDropIntent()
 	} else {
 		return true
 	}

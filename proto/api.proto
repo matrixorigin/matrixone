@@ -368,6 +368,8 @@ message SchemaExtra {
     uint32 max_osize_merged_obj = 7;
     repeated MergeHint hints = 8;
     uint64 min_cn_merge_size = 9;
+    uint32 block_max_rows = 10;
+    uint32 object_max_blocks = 11;
 }
 
 // Int64Map mainly used in unit test
