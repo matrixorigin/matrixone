@@ -87,6 +87,9 @@ func NewArgument() *Apply {
 
 func (apply *Apply) Release() {
 	if apply != nil {
+		if apply.TableFunction != nil {
+			reuse.Free[table_function.TableFunction](apply.TableFunction, nil)
+		}
 		reuse.Free[Apply](apply, nil)
 	}
 }
