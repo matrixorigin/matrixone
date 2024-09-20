@@ -39,9 +39,7 @@ type filterTestCase struct {
 	getRowCount int
 }
 
-var (
-	tcs []filterTestCase
-)
+var tcs []filterTestCase
 
 func init() {
 	boolType := types.T_bool.ToType()
@@ -291,7 +289,8 @@ func MakeFilterMockBatchs() *batch.Batch {
 		27,
 		28,
 		29,
-		30}, nil)
+		30,
+	}, nil)
 	vecs[1] = testutil.MakeInt32Vector([]int32{
 		20,
 		21,
@@ -361,4 +360,343 @@ func MakeFilterMockBatchs() *batch.Batch {
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat
+}
+
+func TestIssue18454(t *testing.T) {
+	mp, _ := mpool.NewMPool("", 0, 0)
+	proc := testutil.NewProcessWithMPool("", mp)
+	proc.SetBaseProcessRunningStatus(true)
+	newParamForFoldCase2(proc)
+	expr := generateFoldCase2()
+
+	executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
+	require.NoError(t, err)
+
+	tree, err := colexec.DebugShowExecutor(executor[0])
+	require.NoError(t, err)
+	t.Log(tree)
+
+	_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+	require.NoError(t, err)
+
+	tree, err = colexec.DebugShowExecutor(executor[0])
+	require.NoError(t, err)
+	t.Log(tree)
+
+	executor[0].ResetForNextQuery()
+	tree, err = colexec.DebugShowExecutor(executor[0])
+	require.NoError(t, err)
+	t.Log(tree)
+
+	// _, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+	// require.NoError(t, err)
+	// executor[0].ResetForNextQuery()
+
+	// tree, err = colexec.DebugShowExecutor(executor[0])
+	// require.NoError(t, err)
+	// t.Log(tree)
+}
+
+func BenchmarkPlanConstandFold1(b *testing.B) {
+	mp, _ := mpool.NewMPool("", 0, 0)
+	proc := testutil.NewProcessWithMPool("", mp)
+	expr := generateFoldCase1()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		filterExpr, err := plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(expr), proc, true, true)
+		require.NoError(b, err)
+		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
+		require.NoError(b, err)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+		require.NoError(b, err)
+	}
+}
+
+func BenchmarkExecutorConstandFold1(b *testing.B) {
+	mp, _ := mpool.NewMPool("", 0, 0)
+	proc := testutil.NewProcessWithMPool("", mp)
+	expr := generateFoldCase1()
+	proc.SetBaseProcessRunningStatus(true)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
+		require.NoError(b, err)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+		require.NoError(b, err)
+	}
+}
+
+func BenchmarkExecutorConstandFold2_Reuse(b *testing.B) {
+	mp, _ := mpool.NewMPool("", 0, 0)
+	proc := testutil.NewProcessWithMPool("", mp)
+	proc.SetBaseProcessRunningStatus(true)
+	newParamForFoldCase2(proc)
+	expr := generateFoldCase2()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
+		require.NoError(b, err)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+		require.NoError(b, err)
+		executor[0].ResetForNextQuery()
+
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+		require.NoError(b, err)
+		executor[0].ResetForNextQuery()
+
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+		require.NoError(b, err)
+		executor[0].Free()
+	}
+}
+
+func BenchmarkExecutorConstandFold2_NoFree(b *testing.B) {
+	mp, _ := mpool.NewMPool("", 0, 0)
+	proc := testutil.NewProcessWithMPool("", mp)
+	newParamForFoldCase2(proc)
+	expr := generateFoldCase2()
+	proc.SetBaseProcessRunningStatus(true)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
+		require.NoError(b, err)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+		require.NoError(b, err)
+
+		executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
+		require.NoError(b, err)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+		require.NoError(b, err)
+
+		executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{expr}))
+		require.NoError(b, err)
+		_, err = executor[0].Eval(proc, newBatch(proc, 1), nil)
+		require.NoError(b, err)
+	}
+}
+
+func newBatch(proc *process.Process, rows int64) []*batch.Batch {
+	ts := []types.Type{types.New(types.T_varchar, 65535, 0), types.New(types.T_varchar, 65535, 0)}
+	bat := testutil.NewBatch(ts, false, int(rows), proc.Mp())
+	pkAttr := make([]string, 2)
+	pkAttr[0] = "compound_key_col"
+	pkAttr[1] = "val"
+	bat.SetAttributes(pkAttr)
+	return []*batch.Batch{bat, nil}
+}
+
+func newParamForFoldCase2(proc *process.Process) {
+	values := []string{"3", "3"}
+	rowCount := len(values)
+	prepareParams := testutil.NewVector(rowCount, types.New(types.T_text, types.MaxVarcharLen, 0), proc.GetMPool(), false, values)
+	proc.SetPrepareParams(prepareParams)
+}
+
+// util function to generate expr to test constand fold performance
+func generateFoldCase1() *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_bool),
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					ObjName: "=",
+					Obj:     function.EQUAL,
+				},
+				Args: []*plan.Expr{
+					{
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 65535,
+						},
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: 0,
+								ColPos: 1,
+								Name:   "compound_key_col",
+							},
+						},
+					},
+					{
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 65535,
+						},
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									ObjName: "serial",
+									Obj:     function.SerialFunctionEncodeID,
+								},
+								Args: []*plan.Expr{
+									{
+										Typ: plan.Type{
+											Id: int32(types.T_int64),
+										},
+										Expr: &plan.Expr_Lit{
+											Lit: &plan.Literal{
+												Isnull: false,
+												Value: &plan.Literal_I64Val{
+													I64Val: 1,
+												},
+											},
+										},
+									},
+									{
+										Typ: plan.Type{
+											Id: int32(types.T_int64),
+										},
+										Expr: &plan.Expr_Lit{
+											Lit: &plan.Literal{
+												Isnull: false,
+												Value: &plan.Literal_I64Val{
+													I64Val: 1,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// Expr_F(
+//
+//	Func["="](nargs=2)
+//	Expr_Col(bmsql_district.__mo_cpkey_col)	Expr_Selectivity(0)
+//	Expr_F(
+//		Func["serial"](nargs=2)
+//		Expr_F(
+//			Func["cast"](nargs=2)
+//			Expr_P(1)			Expr_Selectivity(0)
+//			Expr_T()			Expr_Selectivity(0)
+//		)		Expr_Selectivity(0)
+//		Expr_F(
+//			Func["cast"](nargs=2)
+//			Expr_P(2)			Expr_Selectivity(0)
+//			Expr_T()			Expr_Selectivity(0)
+//		)		Expr_Selectivity(0)
+//	)	Expr_Selectivity(0)
+//
+// )Expr_Selectivity(0.01)
+func generateFoldCase2() *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_bool),
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					ObjName: "=",
+				},
+				Args: []*plan.Expr{
+					{
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 65535,
+						},
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: 0,
+								ColPos: 1,
+								Name:   "compound_key_col",
+							},
+						},
+					},
+					{
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 65535,
+						},
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									ObjName: "serial",
+									Obj:     function.SerialFunctionEncodeID,
+								},
+								Args: []*plan.Expr{
+									{
+										Typ: plan.Type{
+											Id:    int32(types.T_int32),
+											Width: 32,
+											Scale: -1,
+										},
+										Expr: &plan.Expr_F{
+											F: &plan.Function{
+												Func: &plan.ObjectRef{
+													ObjName: "cast",
+													Obj:     function.CastFunctionEncodeID,
+												},
+												Args: []*plan.Expr{
+													{
+														Typ: plan.Type{
+															Id: int32(types.T_text),
+														},
+														Expr: &plan.Expr_P{
+															P: &plan.ParamRef{
+																Pos: 0,
+															},
+														},
+													},
+													{
+														Typ: plan.Type{
+															Id:    int32(types.T_int32),
+															Width: 32,
+															Scale: -1,
+														},
+														Expr: &plan.Expr_T{},
+													},
+												},
+											},
+										},
+									},
+									{
+										Typ: plan.Type{
+											Id:    int32(types.T_int32),
+											Width: 32,
+											Scale: -1,
+										},
+										Expr: &plan.Expr_F{
+											F: &plan.Function{
+												Func: &plan.ObjectRef{
+													ObjName: "cast",
+													Obj:     function.CastFunctionEncodeID,
+												},
+												Args: []*plan.Expr{
+													{
+														Typ: plan.Type{
+															Id: int32(types.T_text),
+														},
+														Expr: &plan.Expr_P{
+															P: &plan.ParamRef{
+																Pos: 1,
+															},
+														},
+													},
+													{
+														Typ: plan.Type{
+															Id:    int32(types.T_int32),
+															Width: 32,
+															Scale: -1,
+														},
+														Expr: &plan.Expr_T{},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }
