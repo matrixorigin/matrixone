@@ -888,8 +888,8 @@ type withFilterMixin struct {
 	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
-	proc     *process.Process
 	tableDef *plan.TableDef
+	name     string
 
 	// columns used for reading
 	columns struct {
@@ -918,8 +918,8 @@ type blockSortHelper struct {
 type reader struct {
 	withFilterMixin
 
-	source engine.DataSource
-	ts     timestamp.Timestamp
+	isTombstone bool
+	source      engine.DataSource
 
 	memFilter MemPKFilter
 

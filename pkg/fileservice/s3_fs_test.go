@@ -231,6 +231,32 @@ func testS3FS(
 		})
 	})
 
+	t.Run("mem and disk caching file service", func(t *testing.T) {
+		testCachingFileService(t, func() CachingFileService {
+			ctx := context.Background()
+			fs, err := NewS3FS(
+				ctx,
+				ObjectStorageArguments{
+					Name:      "s3",
+					Endpoint:  config.Endpoint,
+					Bucket:    config.Bucket,
+					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+					RoleARN:   config.RoleARN,
+				},
+				CacheConfig{
+					MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
+					DiskCapacity:   ptrTo[toml.ByteSize](128 * 1024),
+					DiskPath:       ptrTo(t.TempDir()),
+				},
+				nil,
+				false,
+				false,
+			)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
 }
 
 func TestDynamicS3(t *testing.T) {

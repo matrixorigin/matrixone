@@ -15,7 +15,9 @@
 package merge
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -54,9 +56,11 @@ func (g *policyGroup) onObject(obj *catalog.ObjectEntry) {
 func (g *policyGroup) revise(cpu, mem int64) []reviseResult {
 	results := make([]reviseResult, 0, len(g.policies))
 	for _, p := range g.policies {
-		objs, kind := p.revise(cpu, mem, g.config)
-		if len(objs) > 1 {
-			results = append(results, reviseResult{objs, kind})
+		pResult := p.revise(cpu, mem, g.config)
+		for _, r := range pResult {
+			if len(r.objs) > 0 {
+				results = append(results, r)
+			}
 		}
 	}
 	return results
@@ -108,16 +112,16 @@ func (g *policyGroup) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
 type basic struct {
 	schema  *catalog.Schema
 	hist    *common.MergeHistory
-	objHeap *heapBuilder[*catalog.ObjectEntry]
-	accBuf  []int
+	objects []*catalog.ObjectEntry
+
+	objectsSize int
+	accBuf      []int
 }
 
 func newBasicPolicy() policy {
 	return &basic{
-		objHeap: &heapBuilder[*catalog.ObjectEntry]{
-			items: make(itemSet[*catalog.ObjectEntry], 0, 32),
-		},
-		accBuf: make([]int, 1, 32),
+		objects: make([]*catalog.ObjectEntry, 0, 16),
+		accBuf:  make([]int, 1, 32),
 	}
 }
 
@@ -130,7 +134,14 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 	osize := int(obj.OriginSize())
 
 	isCandidate := func() bool {
+		if len(o.objects) >= config.MergeMaxOneRun {
+			return false
+		}
 		if osize < int(config.ObjectMinOsize) {
+			if o.objectsSize > 2*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
+				return false
+			}
+			o.objectsSize += osize
 			return true
 		}
 		// skip big object as an insurance
@@ -142,17 +153,17 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 	}
 
 	if isCandidate() {
-		o.objHeap.pushWithCap(&mItem[*catalog.ObjectEntry]{
-			row:   int(obj.Rows()),
-			entry: obj,
-		}, config.MergeMaxOneRun)
+		o.objects = append(o.objects, obj)
 		return true
 	}
 	return false
 }
 
-func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
-	objs := o.objHeap.finish()
+func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
+	slices.SortFunc(o.objects, func(a, b *catalog.ObjectEntry) int {
+		return cmp.Compare(a.Rows(), b.Rows())
+	})
+	objs := o.objects
 
 	isStandalone := common.IsStandaloneBoost.Load()
 	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
@@ -162,20 +173,23 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.Ob
 
 	dnosize, _ := estimateMergeConsume(dnobjs)
 
-	schedDN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
+	schedDN := func() []reviseResult {
 		if cpu > 85 {
 			if dnosize > 25*common.Const1MBytes {
 				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
-				return nil, TaskHostDN
+				return nil
 			}
 		}
-		return dnobjs, TaskHostDN
+		if len(dnobjs) > 1 {
+			return []reviseResult{{dnobjs, TaskHostDN}}
+		}
+		return nil
 	}
 
-	schedCN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
+	schedCN := func() []reviseResult {
 		cnobjs := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
 		cnobjs = o.optimize(cnobjs, config)
-		return cnobjs, TaskHostCN
+		return []reviseResult{{cnobjs, TaskHostCN}}
 	}
 
 	if isStandalone && mergeOnDNIfStandalone {
@@ -246,5 +260,6 @@ func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 func (o *basic) resetForTable(entry *catalog.TableEntry) {
 	o.schema = entry.GetLastestSchemaLocked(false)
 	o.hist = entry.Stats.GetLastMerge()
-	o.objHeap.reset()
+	o.objects = o.objects[:0]
+	o.objectsSize = 0
 }
