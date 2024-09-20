@@ -2347,10 +2347,8 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 
 	fn := expr.GetF()
 	if fn == nil {
-		// switch ef := expr.Expr.(type) {
 		switch expr.Expr.(type) {
 		case *plan.Expr_List:
-			//@todo need Expr_List executor
 			return true, nil
 		case *plan.Expr_Col:
 			return false, nil
@@ -2433,7 +2431,6 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			return err
 		}
 
-		//todo need use idx for performance
 		var data []byte
 		var err error
 		if vec.Length() > 1 {
