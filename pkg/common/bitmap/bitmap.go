@@ -57,10 +57,10 @@ var rightmost_one_pos_8 = [256]uint8{
 	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
 }
 
-func (n *Bitmap) InitWith(other *Bitmap) {
-	n.len = other.len
-	n.count = other.count
-	n.data = append([]uint64(nil), other.data...)
+func (n *Bitmap) InitWith(m *Bitmap) {
+	n.len = m.len
+	n.count = m.count
+	n.data = append([]uint64(nil), m.data...)
 }
 
 func (n *Bitmap) InitWithSize(len int64) {
@@ -283,35 +283,34 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 	n.count -= int64(count)
 }
 
-func (n *Bitmap) IsSame(m *Bitmap) bool {
-	//if n.len != m.len ||
-	if len(m.data) != len(n.data) {
+func (n *Bitmap) IsSame(b *Bitmap) bool {
+	if len(b.data) != len(n.data) {
 		return false
 	}
 	for i := 0; i < len(n.data); i++ {
-		if n.data[i] != m.data[i] {
+		if n.data[i] != b.data[i] {
 			return false
 		}
 	}
 	return true
 }
 
-func (n *Bitmap) Or(m *Bitmap) {
-	n.TryExpand(m)
-	size := (int(m.len) + 63) / 64
+func (n *Bitmap) Or(b *Bitmap) {
+	n.TryExpand(b)
+	size := (int(b.len) + 63) / 64
 	for i := 0; i < size; i++ {
 		cnt := bits.OnesCount64(n.data[i])
-		n.data[i] |= m.data[i]
+		n.data[i] |= b.data[i]
 		n.count += int64(bits.OnesCount64(n.data[i]) - cnt)
 	}
 }
 
-func (n *Bitmap) And(m *Bitmap) {
-	n.TryExpand(m)
-	size := (int(m.len) + 63) / 64
+func (n *Bitmap) And(b *Bitmap) {
+	n.TryExpand(b)
+	size := (int(b.len) + 63) / 64
 	for i := 0; i < size; i++ {
 		cnt := bits.OnesCount64(n.data[i])
-		n.data[i] &= m.data[i]
+		n.data[i] &= b.data[i]
 		n.count += int64(bits.OnesCount64(n.data[i]) - cnt)
 	}
 	for i := size; i < len(n.data); i++ {
@@ -357,14 +356,14 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 }
 
 func (n *Bitmap) Filter(sels []int64) *Bitmap {
-	var m Bitmap
-	m.InitWithSize(n.len)
+	var b Bitmap
+	b.InitWithSize(n.len)
 	for i, sel := range sels {
 		if n.Contains(uint64(sel)) {
-			m.Add(uint64(i))
+			b.Add(uint64(i))
 		}
 	}
-	return &m
+	return &b
 }
 
 func (n *Bitmap) Count() int {
