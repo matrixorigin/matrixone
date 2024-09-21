@@ -50,3 +50,17 @@ func TestPeakInuseTrackerMarshal(t *testing.T) {
 	// log
 	logutil.Info("peak inuse memory", zap.Any("info", tracker))
 }
+
+func BenchmarkPeakInuseTrackerUpdate(b *testing.B) {
+	tracker := NewPeakInuseTracker()
+	for i, max := uint64(0), uint64(b.N); i < max; i++ {
+		tracker.UpdateMalloc(i)
+	}
+}
+
+func BenchmarkPeakInuseTrackerNoUpdate(b *testing.B) {
+	tracker := NewPeakInuseTracker()
+	for range b.N {
+		tracker.UpdateMalloc(0)
+	}
+}
