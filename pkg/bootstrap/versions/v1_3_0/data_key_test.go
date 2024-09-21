@@ -47,4 +47,7 @@ func TestInsertInitDataKey(t *testing.T) {
 	txn := &MockTxnExecutor{}
 	err := InsertInitDataKey(txn, "01234567890123456789012345678901")
 	assert.NoError(t, err)
+
+	err = InsertInitDataKey(txn, "0123")
+	assert.Error(t, err)
 }

@@ -109,13 +109,8 @@ func (v *versionHandle) HandleClusterUpgrade(
 	}
 
 	kek := ctx.Value(KekKey{}).(string)
-	if err := InsertInitDataKey(txn, kek); err != nil {
-		getLogger(txn.Txn().TxnOptions().CN).Error("cluster InsertInitDataKey error",
-			zap.Error(err),
-			zap.String("version", v.Metadata().Version))
-		return err
-	}
-	return nil
+	err := InsertInitDataKey(txn, kek)
+	return err
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
