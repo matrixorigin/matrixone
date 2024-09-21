@@ -15,7 +15,6 @@
 package mokafka
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -517,8 +516,6 @@ func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 	return b, nil
 }
 func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string, getter DataGetter, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
-	var buf bytes.Buffer
-
 	for colIdx, typ := range typs {
 		id := typ.Oid
 		vec := bat.Vecs[colIdx]
@@ -820,14 +817,11 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			var strVal string
 			strVal = fmt.Sprintf("%v", fieldValue)
-			buf.WriteString(strVal)
-			bs := buf.Bytes()
-			err := vector.SetBytesAt(vec, rowIdx, bs, mp)
+			err := vector.SetStringAt(vec, rowIdx, strVal, mp)
 			if err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			buf.Reset()
 		case types.T_json:
 			var jsonBytes []byte
 			valueStr := fmt.Sprintf("%v", fieldValue)
