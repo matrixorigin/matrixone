@@ -167,8 +167,7 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 	if !node.object.meta.Load().IsTombstone {
 		panic("not support")
 	}
-	colIdxes := catalog.TombstoneBatchIdxes
-	colIdxes = append(colIdxes, objectio.SEQNUM_COMMITTS)
+	colIdxes := objectio.TombstoneColumns_TN_Created
 	readSchema := node.object.meta.Load().GetTable().GetLastestSchema(true)
 	var startTS types.TS
 	if !node.object.meta.Load().IsAppendable() {

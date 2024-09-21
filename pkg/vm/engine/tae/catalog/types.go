@@ -47,10 +47,6 @@ func (es EntryState) Repr() string {
 	panic("not supported")
 }
 
-var (
-	TombstoneBatchIdxes = []int{0, 1}
-)
-
 func GetTombstoneSchema(objectSchema *Schema) *Schema {
 	pkType := objectSchema.GetPrimaryKey().GetType()
 	schema := NewEmptySchema("tombstone")

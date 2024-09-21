@@ -67,6 +67,9 @@ var (
 	TombstoneSeqnums_CN_Created = []uint16{0, 1}
 	TombstoneSeqnums_DN_Created = []uint16{0, 1, TombstoneAttr_CommitTs_SeqNum}
 
+	TombstoneColumns_CN_Created = []int{0, 1}
+	TombstoneColumns_TN_Created = []int{0, 1, TombstoneAttr_CommitTs_SeqNum}
+
 	TombstoneAttrs_CN_Created = []string{TombstoneAttr_Rowid_Attr, TombstoneAttr_PK_Attr}
 	TombstoneAttrs_TN_Created = []string{TombstoneAttr_Rowid_Attr, TombstoneAttr_PK_Attr, TombstoneAttr_CommitTs_Attr}
 )
