@@ -135,6 +135,11 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
 			ebat.Vecs = e.bat.Vecs
 			ebat.Attrs = e.bat.Attrs
+
+			// no need to commit the blk info to tn
+			ebat.Vecs = ebat.Vecs[1:]
+			ebat.Attrs = e.bat.Attrs[1:]
+			ebat.SetRowCount(ebat.Vecs[0].Length())
 		} else {
 			//e.bat.Vecs[0] is rowid vector
 			ebat.Vecs = e.bat.Vecs[1:]
