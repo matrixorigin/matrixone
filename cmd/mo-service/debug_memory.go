@@ -79,14 +79,14 @@ func startCollectGoRuntimeMetrics() {
 		metrics.Read(samples)
 		var mapped, released uint64
 		for _, sample := range samples {
-			malloc.GlobalPeakInuseTracker.UpdateGoMetrics(sample)
+			malloc.GlobalPeakInuseTracker.Update(sample.Name, sample.Value.Uint64())
 			if sample.Name == "/memory/classes/total:bytes" {
 				mapped = sample.Value.Uint64()
 			} else if sample.Name == "/memory/classes/heap/released:bytes" {
 				released = sample.Value.Uint64()
 			}
 		}
-		malloc.GlobalPeakInuseTracker.UpdateEstimatedGoRSS(mapped - released)
+		malloc.GlobalPeakInuseTracker.Update("/go/estimated-rss", mapped-released)
 	}
 
 }
@@ -102,7 +102,7 @@ func startCollectProcessMemory() {
 			logutil.Error("process MemoryInfo", zap.Error(err))
 			continue
 		}
-		malloc.GlobalPeakInuseTracker.UpdateRSS(stat.RSS)
-		malloc.GlobalPeakInuseTracker.UpdateVMS(stat.VMS)
+		malloc.GlobalPeakInuseTracker.Update("/process/rss", stat.RSS)
+		malloc.GlobalPeakInuseTracker.Update("/process/vms", stat.VMS)
 	}
 }

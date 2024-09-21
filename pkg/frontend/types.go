@@ -426,7 +426,7 @@ var baseSessionAllocator = sync.OnceValue(func() malloc.Allocator {
 	allocator = malloc.NewInuseTrackingAllocator(
 		allocator,
 		func(inuse uint64) {
-			malloc.GlobalPeakInuseTracker.UpdateSession(inuse)
+			malloc.GlobalPeakInuseTracker.Update("/malloc/session", inuse)
 		},
 	)
 	return allocator
