@@ -58,7 +58,7 @@ const (
 	DefaultCommitTS_Attr = "__mo_%1_commit_time"
 	DefaultAbort_Attr    = "__mo_%1_abort"
 
-	TombstoneAttr_Rowid_Attr    = DefaultRowid_Attr
+	TombstoneAttr_Rowid_Attr    = "__mo_%1_delete_rowid"
 	TombstoneAttr_PK_Attr       = "__mo_%1_pk_val"
 	TombstoneAttr_CommitTs_Attr = DefaultCommitTS_Attr
 )
