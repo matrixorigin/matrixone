@@ -76,9 +76,9 @@ func LoadPersistedColumnDatas(
 	phyAddIdx := -1
 	var deletes *nulls.Nulls
 	for i, colIdx := range colIdxs {
-		if colIdx == catalog.COLIDX_COMMITS {
+		if colIdx == objectio.SEQNUM_COMMITTS {
 			cols = append(cols, objectio.SEQNUM_COMMITTS)
-			typs = append(typs, catalog.CommitTSType)
+			typs = append(typs, objectio.TSType)
 			continue
 		}
 		def := schema.ColDefs[colIdx]
