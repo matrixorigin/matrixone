@@ -200,7 +200,7 @@ func TestCatalogHandler(t *testing.T) {
 		assert.Nil(t, err)
 		totalColumns := len(catalog.MoDatabaseSchema) +
 			len(catalog.MoTablesSchema) +
-			len(catalog.MoColumnsSchema) - 3 /*3 hiden cpkey*/
+			len(catalog.MoColumnsSchema) - 4 /*3 hiden cpkey + hiden extra*/
 		assert.Equal(t, totalColumns, resp.Batch.RowCount())
 		assert.Equal(t, 2, len(resp.Batch.Attrs))
 	}

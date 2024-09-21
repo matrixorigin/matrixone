@@ -641,9 +641,9 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	}
 	rowsLeft := totalRowCnt
 	for rowsLeft > 0 {
-		if rowsLeft > int(schema.BlockMaxRows) {
-			toLayout = append(toLayout, schema.BlockMaxRows)
-			rowsLeft -= int(schema.BlockMaxRows)
+		if rowsLeft > int(schema.Extra.BlockMaxRows) {
+			toLayout = append(toLayout, schema.Extra.BlockMaxRows)
+			rowsLeft -= int(schema.Extra.BlockMaxRows)
 		} else {
 			toLayout = append(toLayout, uint32(rowsLeft))
 			break

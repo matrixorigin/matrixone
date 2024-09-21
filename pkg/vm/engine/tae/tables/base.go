@@ -154,7 +154,7 @@ func (obj *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) 
 	if !obj.meta.Load().ObjectPersisted() {
 		panic("logic error")
 	}
-	blkMaxRows := obj.meta.Load().GetSchema().BlockMaxRows
+	blkMaxRows := obj.meta.Load().GetSchema().Extra.BlockMaxRows
 	return obj.meta.Load().BlockLocation(bid, blkMaxRows), nil
 }
 
@@ -449,13 +449,14 @@ func (obj *baseObject) FillBlockTombstones(
 	txn txnif.TxnReader,
 	blkID *objectio.Blockid,
 	deletes **nulls.Nulls,
+	deleteStartOffset uint64,
 	mp *mpool.MPool) error {
 	node := obj.PinNode()
 	defer node.Unref()
 	if !obj.meta.Load().IsTombstone {
 		panic("logic err")
 	}
-	return node.FillBlockTombstones(ctx, txn, blkID, deletes, mp)
+	return node.FillBlockTombstones(ctx, txn, blkID, deletes, deleteStartOffset, mp)
 }
 
 func (obj *baseObject) ScanInMemory(
@@ -507,7 +508,7 @@ func (obj *baseObject) GetValue(
 			return
 		}
 		defer bat.Close()
-		err = txn.GetStore().FillInWorkspaceDeletes(obj.meta.Load().AsCommonID(), &bat.Deletes)
+		err = txn.GetStore().FillInWorkspaceDeletes(obj.meta.Load().AsCommonID(), &bat.Deletes, uint64(0))
 		if err != nil {
 			return
 		}

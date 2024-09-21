@@ -1747,7 +1747,6 @@ func (tbl *txnTable) BuildReaders(
 		}
 	}
 
-	scanType := determineScanType(relData, newNum)
 	def := tbl.GetTableDef(ctx)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
@@ -1777,8 +1776,6 @@ func (tbl *txnTable) BuildReaders(
 		if err != nil {
 			return nil, err
 		}
-
-		rd.scanType = scanType
 		rds = append(rds, rd)
 	}
 	return rds, nil
@@ -2061,18 +2058,14 @@ func (tbl *txnTable) MergeObjects(
 	}
 
 	sortKeyPos, sortKeyIsPK := tbl.getSortKeyPosAndSortKeyIsPK()
-	objInfos := make([]logtailreplay.ObjectInfo, 0, len(objStats))
+
+	// check object visibility
 	for _, objstat := range objStats {
 		info, exist := state.GetObject(*objstat.ObjectShortName())
 		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
 			logutil.Errorf("object not visible: %s", info.String())
 			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 		}
-		objInfos = append(objInfos, info)
-	}
-
-	if len(objInfos) < 2 {
-		return nil, moerr.NewInternalErrorNoCtx("no matching objects")
 	}
 
 	tbl.ensureSeqnumsAndTypesExpectRowid()
@@ -2080,7 +2073,7 @@ func (tbl *txnTable) MergeObjects(
 	taskHost, err := newCNMergeTask(
 		ctx, tbl, snapshot, // context
 		sortKeyPos, sortKeyIsPK, // schema
-		objInfos, // targets
+		objStats, // targets
 		targetObjSize)
 	if err != nil {
 		return nil, err
