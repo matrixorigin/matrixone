@@ -218,6 +218,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Before compile.runOnce, reset `StatsInfo` IO resources which in sql context
 		stats.ResetIOAccessTimeConsumption()
 		stats.ResetIOMergerTimeConsumption()
+		stats.ResetBuildReaderTimeConsumption()
 
 		// build query context and pipeline contexts for the current run.
 		runC.InitPipelineContextToExecuteQuery()
