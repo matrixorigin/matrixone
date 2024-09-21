@@ -58,9 +58,27 @@ func BenchmarkPeakInuseTrackerUpdate(b *testing.B) {
 	}
 }
 
+func BenchmarkPeakInuseTrackerUpdateParallel(b *testing.B) {
+	tracker := NewPeakInuseTracker()
+	b.RunParallel(func(pb *testing.PB) {
+		for i := uint64(0); pb.Next(); i++ {
+			tracker.UpdateMalloc(i)
+		}
+	})
+}
+
 func BenchmarkPeakInuseTrackerNoUpdate(b *testing.B) {
 	tracker := NewPeakInuseTracker()
 	for range b.N {
 		tracker.UpdateMalloc(0)
 	}
+}
+
+func BenchmarkPeakInuseTrackerNoUpdateParallel(b *testing.B) {
+	tracker := NewPeakInuseTracker()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			tracker.UpdateMalloc(0)
+		}
+	})
 }
