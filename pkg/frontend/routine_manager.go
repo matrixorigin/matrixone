@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 type RoutineManager struct {
@@ -458,6 +459,19 @@ func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *que
 		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
 	}
 	return routine.resetSession(rm.baseService.ID(), resp)
+}
+
+func (rm *RoutineManager) killClients() {
+	if rm == nil {
+		return
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	for s := range rm.clients {
+		if err := s.Close(); err != nil {
+			logutil.Error("c")
+		}
+	}
 }
 
 func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {

@@ -113,11 +113,7 @@ func (mo *MOServer) Stop() error {
 	logutil.Debug("application listener closed")
 	mo.wg.Wait()
 
-	for s := range mo.rm.clients {
-		if err := s.Close(); err != nil {
-			return err
-		}
-	}
+	mo.rm.killClients()
 	logutil.Debug("application stopped")
 	return nil
 }
