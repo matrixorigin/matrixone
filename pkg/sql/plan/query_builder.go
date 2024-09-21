@@ -3752,12 +3752,21 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		tableDef.Name2ColIndex = map[string]int32{}
+		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)
 		for i := 0; i < len(tableDef.Cols); i++ {
 			tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
+			if !tableDef.Cols[i].Hidden {
+				tbColToDataCol[tableDef.Cols[i].Name] = int32(i)
+			}
 		}
 		nodeType := plan.Node_TABLE_SCAN
+		var externScan *plan.ExternScan
 		if tableDef.TableType == catalog.SystemExternalRel {
 			nodeType = plan.Node_EXTERNAL_SCAN
+			externScan = &plan.ExternScan{
+				Type:           int32(plan.ExternType_EXTERNAL_TB),
+				TbColToDataCol: tbColToDataCol,
+			}
 			col := &ColDef{
 				Name: catalog.ExternalFilePath,
 				Typ: plan.Type{
@@ -3858,6 +3867,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			Stats:        nil,
 			ObjRef:       obj,
 			TableDef:     tableDef,
+			ExternScan:   externScan,
 			BindingTags:  []int32{builder.genNewTag()},
 			ScanSnapshot: snapshot,
 		}, ctx)
