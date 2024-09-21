@@ -210,7 +210,7 @@ func Test_ConnectionCount(t *testing.T) {
 	//running server
 	go func() {
 		defer wg.Done()
-		mo.handleConn(serverConn)
+		mo.handleConn(ctx, serverConn)
 	}()
 
 	cCounter := metric.ConnectionCounter(sysAccountName)
@@ -226,7 +226,7 @@ func Test_ConnectionCount(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mo.handleConn(serverConn2)
+		mo.handleConn(ctx, serverConn2)
 	}()
 
 	registerConn(clientConn2)
