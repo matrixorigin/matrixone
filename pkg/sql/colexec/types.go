@@ -16,7 +16,6 @@ package colexec
 
 import (
 	"context"
-	"reflect"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -96,6 +95,7 @@ func (info *runningPipelineInfo) cancelPipeline() {
 
 type uuidProcMapItem struct {
 	proc *process.Process
+	ch   process.RemotePipelineInformationChannel
 }
 
 type UuidProcMap struct {
@@ -110,16 +110,6 @@ type CnSegmentMap struct {
 	// 1.mp[segmentName] = 1 => txnWorkSpace
 	// 2.mp[segmentName] = 2 => Cn Blcok
 	mp map[objectio.Segmentid]int32
-}
-
-// ReceiverOperator need to receive batch from proc.Reg.MergeReceivers
-type ReceiverOperator struct {
-	proc               *process.Process
-	MergeReceivers     []*process.WaitRegister
-	aliveMergeReceiver int
-	chs                []chan *process.RegisterMessage
-	nilBatchCnt        []int
-	receiverListener   []reflect.SelectCase
 }
 
 const (

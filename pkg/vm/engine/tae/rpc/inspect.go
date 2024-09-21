@@ -276,8 +276,11 @@ func (c *objStatArg) String() string {
 func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
-		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl).(*merge.BasicPolicyConfig)
-		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end))
+		p := c.ctx.db.MergeScheduler.GetPolicy(c.tbl)
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end, false))
+		b.WriteByte('\n')
+		b.WriteByte('\n')
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end, true))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
 		c.ctx.resp.Payload = b.Bytes()
@@ -429,9 +432,8 @@ func (c *objectPruneArg) Run() error {
 		stale++
 		selected++
 		selectedObjs = append(selectedObjs, obj)
-		stat := obj.GetObjectStats()
-		rw := int(stat.Rows())
-		sz := int(stat.OriginSize())
+		rw := int(obj.Rows())
+		sz := int(obj.OriginSize())
 		if minR == 0 || rw < minR {
 			minR = rw
 		}
@@ -730,11 +732,9 @@ func (c *infoArg) Run() error {
 
 		schema := c.obj.GetSchema()
 		if schema.HasSortKey() {
-			zm, err := c.obj.GetPKZoneMap(context.Background())
+			zm := c.obj.SortKeyZoneMap()
 			var zmstr string
-			if err != nil {
-				zmstr = err.Error()
-			} else if c.verbose <= common.PPL1 {
+			if c.verbose <= common.PPL1 {
 				zmstr = zm.String()
 			} else if c.verbose == common.PPL2 {
 				zmstr = zm.StringForCompose()
@@ -827,19 +827,28 @@ func (c *mergePolicyArg) Run() error {
 		common.RuntimeMinCNMergeSize.Store(cnsize)
 		if c.maxMergeObjN == 0 && c.minOsizeQualified == 0 {
 			merge.StopMerge.Store(true)
+			c.ctx.resp.Payload = []byte("auto merge is disabled")
 		} else {
 			merge.StopMerge.Store(false)
+			c.ctx.resp.Payload = []byte("general setting has been refreshed")
 		}
 	} else {
-		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl, &merge.BasicPolicyConfig{
+		txn, err := c.ctx.db.StartTxn(nil)
+		if err != nil {
+			return err
+		}
+		err = c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
 			MergeMaxOneRun:    int(c.maxMergeObjN),
 			ObjectMinOsize:    minosize,
 			MaxOsizeMergedObj: maxosize,
 			MinCNMergeSize:    cnsize,
 			MergeHints:        c.hints,
 		})
+		if err != nil {
+			return err
+		}
+		c.ctx.resp.Payload = []byte("success")
 	}
-	c.ctx.resp.Payload = []byte("<empty>")
 	return nil
 }
 
@@ -1035,7 +1044,7 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 	}
 	o.tbl++
 
-	stat, _ := table.ObjectStats(common.PPL0, 0, -1)
+	stat, _ := table.ObjectStats(common.PPL0, 0, -1, false)
 	heap.Push(&o.candidates, mItem{objcnt: stat.ObjectCnt, did: table.GetDB().ID, tid: table.ID})
 	if o.candidates.Len() > o.topk {
 		heap.Pop(&o.candidates)

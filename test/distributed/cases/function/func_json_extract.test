@@ -297,3 +297,31 @@ SELECT
 FROM test_json_simplified;
 
 drop database test;
+
+create database test;
+use test;
+create table test_123(c1 json);
+insert into test_123 values ('{"a1":10, "a2":20}');
+insert into test_123 values ('{"a1":"test", "a2":"test2"}');
+select * from test_123;
+select json_extract(c1, '$.a1', '$.a2') from test_123;
+select json_extract_float64(c1, '$.a1', '$.a2') from test_123;
+select json_extract_string(c1, '$.a1', '$.a2') from test_123;
+drop database test;
+
+
+create database test;
+use test;
+
+CREATE TABLE example_table (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    data JSON NOT NULL
+);
+INSERT INTO example_table (data)
+VALUES (
+    '{"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item2": "value2", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item20": "value20"}'
+);
+select * from example_table where json_extract(data, '$.CODE') = '"CODE-3"';
+select * from example_table where json_extract(data, '$.LINE') = '"LINE-4"';
+select * from example_table where json_extract(data, '$.PANEL') = '"PANEL-17"';
+drop database test;

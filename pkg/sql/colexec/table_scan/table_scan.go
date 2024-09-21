@@ -42,6 +42,12 @@ func (tableScan *TableScan) OpType() vm.OpType {
 }
 
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
+	if tableScan.OpAnalyzer == nil {
+		tableScan.OpAnalyzer = process.NewAnalyzer(tableScan.GetIdx(), tableScan.IsFirst, tableScan.IsLast, "table_scan")
+	} else {
+		tableScan.OpAnalyzer.Reset()
+	}
+
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
 	}
@@ -73,10 +79,10 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		0,
 		nil)
 
-	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
-	anal.Start()
+	analyzer := tableScan.OpAnalyzer
+	analyzer.Start()
 	defer func() {
-		anal.Stop()
+		analyzer.Stop()
 
 		cost := time.Since(start)
 
@@ -131,20 +137,21 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			tableScan.Attrs,
 			tableScan.ctr.buf)
 
-		anal.InputBlock()
-		anal.S3IOByte(tableScan.ctr.buf)
+		analyzer.InputBlock()
+		analyzer.ScanBytes(tableScan.ctr.buf)
 		batSize := tableScan.ctr.buf.Size()
 		tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
 		break
 	}
 
-	anal.Input(tableScan.ctr.buf, tableScan.IsFirst)
+	analyzer.Input(tableScan.ctr.buf)
+
 	retBatch, err := tableScan.EvalProjection(tableScan.ctr.buf, proc)
 	if err != nil {
 		e = err
 		return vm.CancelResult, err
 	}
-	anal.Output(retBatch, tableScan.IsLast)
+	analyzer.Output(retBatch)
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
 
 }

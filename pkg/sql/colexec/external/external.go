@@ -83,8 +83,14 @@ func (external *External) OpType() vm.OpType {
 
 func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
-
 	defer span.End()
+
+	if external.OpAnalyzer == nil {
+		external.OpAnalyzer = process.NewAnalyzer(external.GetIdx(), external.IsFirst, external.IsLast, "external")
+	} else {
+		external.OpAnalyzer.Reset()
+	}
+
 	param := external.Es
 	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
@@ -166,15 +172,17 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
-	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
-	anal.Start()
+
+	analyzer := external.OpAnalyzer
+	analyzer.Start()
 	defer func() {
-		anal.Stop()
-		anal.AddScanTime(t1)
+		analyzer.Stop()
+		analyzer.AddScanTime(t1)
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
-	anal.Input(nil, external.GetIsFirst())
+	//anal.Input(nil, external.GetIsFirst())
+	analyzer.Input(nil)
 
 	var err error
 	result := vm.NewCallResult()
@@ -212,7 +220,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 	}
-	anal.Output(result.Batch, external.GetIsLast())
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -260,7 +268,6 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 		Cnt:   1,
 	}
 
-	var buf bytes.Buffer
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].GetOriginCaseName()
@@ -273,13 +280,10 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 			}
 
 			for j := 0; j < len(fileList); j++ {
-				buf.WriteString(getAccountCol(fileList[j]))
-				bs := buf.Bytes()
-				if err = vector.SetBytesAt(bat.Vecs[i], j, bs, mp); err != nil {
+				if err = vector.SetStringAt(bat.Vecs[i], j, getAccountCol(fileList[j]), mp); err != nil {
 					bat.Clean(mp)
 					return nil, err
 				}
-				buf.Reset()
 			}
 		} else if bat.Attrs[i] == catalog.ExternalFilePath {
 			typ := types.T_varchar.ToType()
@@ -290,13 +294,10 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 			}
 
 			for j := 0; j < len(fileList); j++ {
-				buf.WriteString(fileList[j])
-				bs := buf.Bytes()
-				if err = vector.SetBytesAt(bat.Vecs[i], j, bs, mp); err != nil {
+				if err = vector.SetStringAt(bat.Vecs[i], j, fileList[j], mp); err != nil {
 					bat.Clean(mp)
 					return nil, err
 				}
-				buf.Reset()
 			}
 		}
 	}
@@ -1360,8 +1361,6 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 }
 
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, colIdx int) error {
-	var buf bytes.Buffer
-
 	colName := param.Attrs[colIdx]
 	vec := bat.Vecs[colIdx]
 
@@ -1385,14 +1384,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		nulls.Add(vec.GetNulls(), uint64(rowIdx))
 		return nil
 	}
+
 	if param.ParallelLoad {
-		buf.WriteString(field.Val)
-		bs := buf.Bytes()
-		err := vector.SetBytesAt(vec, rowIdx, bs, mp)
+		err := vector.SetStringAt(vec, rowIdx, field.Val, mp)
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 		return nil
 	}
 
@@ -1421,7 +1418,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, val); err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_int8:
 		d, err := strconv.ParseInt(field.Val, 10, 8)
 		if err == nil {
@@ -1625,14 +1621,10 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		// XXX Memory accounting?
-		buf.WriteString(field.Val)
-		bs := buf.Bytes()
-		err := vector.SetBytesAt(vec, rowIdx, bs, mp)
+		err := vector.SetStringAt(vec, rowIdx, field.Val, mp)
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_array_float32:
 		arrBytes, err := types.StringToArrayToBytes[float32](field.Val)
 		if err != nil {
@@ -1642,7 +1634,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_array_float64:
 		arrBytes, err := types.StringToArrayToBytes[float64](field.Val)
 		if err != nil {
@@ -1652,7 +1643,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_json:
 		var jsonBytes []byte
 		if param.Extern.Format != tree.CSV {

@@ -15,10 +15,13 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mohae/deepcopy"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -35,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/mohae/deepcopy"
 )
 
 var (
@@ -54,6 +57,8 @@ type TxnComputationWrapper struct {
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
+
+	explainBuffer *bytes.Buffer
 }
 
 func InitTxnComputationWrapper(
@@ -267,7 +272,7 @@ func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage
 	}
 }
 
-func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
+func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		waitActiveCost := time.Duration(0)
 		if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
@@ -276,9 +281,13 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 				waitActiveCost = txn.GetWaitActiveCost()
 			}
 		}
-		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, WithWaitActiveCost(waitActiveCost)))
+		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, WithWaitActiveCost(waitActiveCost)))
 	}
 	return nil
+}
+
+func (cwft *TxnComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
+	cwft.explainBuffer = buf
 }
 
 func (cwft *TxnComputationWrapper) GetUUID() []byte {
@@ -336,6 +345,11 @@ func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputa
 	if prepareStmt.InsertBat != nil {
 		prepareStmt.InsertBat.SetCnt(1000) // we will make sure :  when retry in lock error, we will not clean up this batch
 		cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
+		for i := 0; i < len(prepareStmt.exprList); i++ {
+			for j := range prepareStmt.exprList[i] {
+				prepareStmt.exprList[i][j].ResetForNextQuery()
+			}
+		}
 		cwft.proc.SetPrepareExprList(prepareStmt.exprList)
 	}
 	numParams := len(preparePlan.ParamTypes)
@@ -437,6 +451,11 @@ func createCompile(
 	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(bat *batch.Batch) error { return nil }
 	}
+
+	if _, ok := stmt.(*tree.ExplainPhyPlan); ok {
+		fill = func(bat *batch.Batch) error { return nil }
+	}
+
 	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
 	if err != nil {
 		return

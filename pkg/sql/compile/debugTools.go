@@ -85,6 +85,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.ValueScan:               "valuescan",
 	vm.TableFunction:           "tablefunction",
 	vm.OnDuplicateKey:          "on duplicate key",
+	vm.Apply:                   "apply",
 }
 
 var debugMagicNames = map[magicType]string{
@@ -157,7 +158,6 @@ func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegi
 	if scope.Proc != nil {
 		receiverStr = getReceiverStr(scope, scope.Proc.Reg.MergeReceivers, rmp)
 	}
-
 	buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr))
 
 	// Scope DataSource
@@ -172,7 +172,7 @@ func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegi
 			ShowPipelineLink(scope.RootOp, rmp, buffer)
 		} else {
 			prefixStr := addGap(gap) + "         "
-			ShowPipelineTree(scope.RootOp, prefixStr, true, true, rmp, buffer)
+			ShowPipelineTree(scope.RootOp, prefixStr, true, true, rmp, level, buffer)
 		}
 	}
 
@@ -187,7 +187,7 @@ func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegi
 	}
 }
 
-func ShowPipelineTree(node vm.Operator, prefix string, isRoot bool, isTail bool, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
+func ShowPipelineTree(node vm.Operator, prefix string, isRoot bool, isTail bool, mp map[*process.WaitRegister]int, level DebugLevel, buffer *bytes.Buffer) {
 	if node == nil {
 		return
 	}
@@ -198,21 +198,34 @@ func ShowPipelineTree(node vm.Operator, prefix string, isRoot bool, isTail bool,
 		name = "unknown"
 	}
 
+	analyzeStr := ""
+	if level == VerboseLevel || level == AnalyzeLevel {
+		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v)",
+			node.GetOperatorBase().Idx,
+			node.GetOperatorBase().IsFirst,
+			node.GetOperatorBase().IsLast)
+	}
+	if level == AnalyzeLevel {
+		if node.GetOperatorBase().OpAnalyzer != nil && node.GetOperatorBase().OpAnalyzer.GetOpStats() != nil {
+			analyzeStr += node.GetOperatorBase().OpAnalyzer.GetOpStats().String()
+		}
+	}
+
 	// Write to the current node
 	if isRoot {
 		headPrefix := "  Pipeline: └── "
-		buffer.WriteString(fmt.Sprintf("%s%s", headPrefix, name))
+		buffer.WriteString(fmt.Sprintf("%s%s%s", headPrefix, name, analyzeStr))
 		hanldeTailNodeReceiver(node, mp, buffer)
 		buffer.WriteString("\n")
 		// Ensure that child nodes are properly indented
 		prefix += "   "
 	} else {
 		if isTail {
-			buffer.WriteString(fmt.Sprintf("%s└── %s", prefix, name))
+			buffer.WriteString(fmt.Sprintf("%s└── %s%s", prefix, name, analyzeStr))
 			hanldeTailNodeReceiver(node, mp, buffer)
 			buffer.WriteString("\n")
 		} else {
-			buffer.WriteString(fmt.Sprintf("%s├── %s\n", prefix, name))
+			buffer.WriteString(fmt.Sprintf("%s├── %s%s\n", prefix, name, analyzeStr))
 		}
 	}
 
@@ -227,7 +240,7 @@ func ShowPipelineTree(node vm.Operator, prefix string, isRoot bool, isTail bool,
 	// Write to child node
 	for i := 0; i < len(node.GetOperatorBase().Children); i++ {
 		isLast := i == len(node.GetOperatorBase().Children)-1
-		ShowPipelineTree(node.GetOperatorBase().GetChildren(i), newPrefix, false, isLast, mp, buffer)
+		ShowPipelineTree(node.GetOperatorBase().GetChildren(i), newPrefix, false, isLast, mp, level, buffer)
 	}
 
 	if isRoot {
@@ -323,7 +336,10 @@ func trimLastNewline(buf *bytes.Buffer) {
 }
 
 func gapNextLine(gap int, buffer *bytes.Buffer) {
-	buffer.WriteString("\n")
+	if buffer.Len() > 0 {
+		buffer.WriteString("\n")
+	}
+
 	for i := 0; i < gap; i++ {
 		buffer.WriteString(" ")
 	}

@@ -94,7 +94,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 				// primary key is in the cols
 				mixin.columns.pkPos = i
 			}
-			mixin.columns.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+			mixin.columns.colTypes[i] = plan2.ExprType2Type(&colDef.Typ)
 			mixin.columns.colTypes[i].Scale = colDef.Typ.Scale
 			mixin.columns.colTypes[i].Width = colDef.Typ.Width
 		}
@@ -200,7 +200,7 @@ func (r *mergeReader) Read(
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	bat *batch.Batch,
+	outBatch *batch.Batch,
 ) (bool, error) {
 	start := time.Now()
 	defer func() {
@@ -211,7 +211,7 @@ func (r *mergeReader) Read(
 		return true, nil
 	}
 	for len(r.rds) > 0 {
-		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, bat)
+		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, outBatch)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()
@@ -222,7 +222,7 @@ func (r *mergeReader) Read(
 			r.rds = r.rds[1:]
 		} else {
 			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-				logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
+				logutil.Debug(testutil.OperatorCatchBatch("merge reader", outBatch))
 			}
 			return false, nil
 		}
@@ -231,7 +231,6 @@ func (r *mergeReader) Read(
 }
 
 // -----------------------------------------------------------------
-
 func NewReader(
 	ctx context.Context,
 	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
@@ -276,12 +275,11 @@ func NewReader(
 			ctx:      ctx,
 			fs:       e.fs,
 			ts:       ts,
-			proc:     proc,
 			tableDef: tableDef,
+			name:     tableDef.Name,
 		},
 		memFilter: memFilter,
 		source:    source,
-		ts:        ts,
 	}
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
@@ -312,8 +310,9 @@ func (r *reader) Read(
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	bat *batch.Batch,
+	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
+	outBatch.CleanOnlyData()
 
 	var dataState engine.DataState
 
@@ -334,7 +333,7 @@ func (r *reader) Read(
 		r.columns.seqnums,
 		r.memFilter,
 		mp,
-		bat)
+		outBatch)
 
 	dataState = state
 
@@ -358,12 +357,16 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.scanType == LARGE || r.scanType == NORMAL {
+	if r.readBlockCnt == 0 {
+		r.smallScanThreshHold = GetSmallScanThreshHold()
+	}
+	if r.readBlockCnt > r.smallScanThreshHold {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 
 	err = blockio.BlockDataRead(
 		statsCtx,
+		r.isTombstone,
 		blkInfo,
 		r.source,
 		r.columns.seqnums,
@@ -373,28 +376,29 @@ func (r *reader) Read(
 		r.filterState.colTypes,
 		filter,
 		policy,
-		r.tableDef.Name,
-		bat,
+		r.name,
+		outBatch,
 		mp,
 		r.fs,
 	)
 	if err != nil {
 		return false, err
 	}
+	r.readBlockCnt++
 
 	if filter.Valid {
 		// we collect mem cache hit related statistics info for blk read here
 		gatherStats(numRead, numHit)
 	}
 
-	bat.SetAttributes(cols)
+	outBatch.SetAttributes(cols)
 
 	if blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
-		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
+		outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
 	}
 
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
+		logutil.Debug(testutil.OperatorCatchBatch("block reader", outBatch))
 	}
 
 	return false, nil

@@ -251,6 +251,7 @@ const (
 	APPROX_COUNT_DISTINCT
 
 	LOAD_FILE
+	SAVE_FILE
 
 	//information functions
 	//Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
@@ -315,6 +316,7 @@ const (
 
 	MO_SHOW_VISIBLE_BIN      // parse type/onUpdate/default []byte to visible string
 	MO_SHOW_VISIBLE_BIN_ENUM //  parse type/onUpdate/default []byte to visible string for enum
+	MO_SHOW_COL_QUNIQUE      // show column whether unique key
 
 	MO_TABLE_ROWS    // table rows
 	MO_TABLE_SIZE    // table size
@@ -327,6 +329,7 @@ const (
 	MO_ADMIN_NAME // get mo admin name of account
 	MO_CU
 	MO_CU_V1
+	MO_EXPLAIN_PHY
 
 	GIT_VERSION
 	BUILD_VERSION
@@ -598,6 +601,7 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
+	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
 	"md5":                            MD5,
@@ -626,6 +630,7 @@ var functionIdRegister = map[string]int32{
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
+	"mo_show_col_unique":             MO_SHOW_COL_QUNIQUE,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 	"format":                         FORMAT,
@@ -649,6 +654,7 @@ var functionIdRegister = map[string]int32{
 	"mo_admin_name":                  MO_ADMIN_NAME,
 	"mo_cu":                          MO_CU,
 	"mo_cu_v1":                       MO_CU_V1,
+	"mo_explain_phy":                 MO_EXPLAIN_PHY,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,

@@ -255,7 +255,8 @@ type StatsInfo struct {
 	CompileDuration   time.Duration `json:"CompileDuration"`
 	ExecutionDuration time.Duration `json:"ExecutionDuration"`
 	// Statistics on the time consumption of the output operator in generating data for query statements
-	OutputDuration int64 `json:"OutputDuration"`
+	OutputDuration      int64 `json:"OutputDuration"`
+	BuildReaderDuration int64 `json:"BuildReaderDuration"`
 
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
@@ -333,6 +334,13 @@ func (stats *StatsInfo) AddOutputTimeConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.OutputDuration, int64(d))
 }
 
+func (stats *StatsInfo) AddBuidReaderTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.BuildReaderDuration, int64(d))
+}
+
 func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
@@ -357,6 +365,29 @@ func (stats *StatsInfo) AddS3FSReadIOMergerTimeConsumption(d time.Duration) {
 		return
 	}
 	atomic.AddInt64(&stats.S3FSReadIOMergerTimeConsumption, int64(d))
+}
+
+func (stats *StatsInfo) ResetIOMergerTimeConsumption() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.LocalFSReadIOMergerTimeConsumption, 0)
+	atomic.StoreInt64(&stats.S3FSPrefetchFileIOMergerTimeConsumption, 0)
+	atomic.StoreInt64(&stats.S3FSReadIOMergerTimeConsumption, 0)
+}
+
+func (stats *StatsInfo) ResetIOAccessTimeConsumption() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.IOAccessTimeConsumption, 0)
+}
+
+func (stats *StatsInfo) ResetBuildReaderTimeConsumption() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.BuildReaderDuration, 0)
 }
 
 func (stats *StatsInfo) IOMergerTimeConsumption() int64 {

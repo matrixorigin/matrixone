@@ -37,14 +37,14 @@ func LoadColumnsData(
 	location objectio.Location,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, release func(), err error) {
+) (bat *batch.Batch, dataMeta objectio.ObjectDataMeta, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	dataMeta := meta.MustGetMeta(metaType)
+	dataMeta = meta.MustGetMeta(metaType)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
 		return
 	}
@@ -140,7 +140,7 @@ func LoadTombstoneColumns(
 	location objectio.Location,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, release func(), err error) {
+) (bat *batch.Batch, meta objectio.ObjectDataMeta, release func(), err error) {
 	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, policy)
 }
 
@@ -153,7 +153,8 @@ func LoadColumns(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (bat *batch.Batch, release func(), err error) {
-	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy)
+	bat, _, release, err = LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy)
+	return
 }
 
 // LoadColumns2 load columns data from file service for TN
@@ -189,6 +190,27 @@ func LoadOneBlock(
 	idxes := make([]uint16, data.BlockHeader().ColumnCount())
 	for i := range idxes {
 		idxes[i] = uint16(i)
+	}
+	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
+		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
+	return bat, sortKey, err
+}
+
+func LoadOneBlockWithIndex(
+	ctx context.Context,
+	fs fileservice.FileService,
+	idxes []uint16,
+	key objectio.Location,
+	metaType objectio.DataMetaType,
+) (*batch.Batch, uint16, error) {
+	sortKey := uint16(math.MaxUint16)
+	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
+	if err != nil {
+		return nil, sortKey, err
+	}
+	data := meta.MustGetMeta(metaType)
+	if data.BlockHeader().Appendable() {
+		sortKey = data.BlockHeader().SortKey()
 	}
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)

@@ -64,8 +64,8 @@ var (
 func GetTombstoneSchema(objectSchema *Schema) *Schema {
 	pkType := objectSchema.GetPrimaryKey().GetType()
 	schema := NewEmptySchema("tombstone")
-	schema.BlockMaxRows = objectSchema.BlockMaxRows
-	schema.ObjectMaxBlocks = objectSchema.ObjectMaxBlocks
+	schema.Extra.BlockMaxRows = objectSchema.Extra.BlockMaxRows
+	schema.Extra.ObjectMaxBlocks = objectSchema.Extra.ObjectMaxBlocks
 	colTypes := []types.Type{
 		types.T_Rowid.ToType(),
 		pkType,
@@ -87,15 +87,10 @@ func GetTombstoneSchema(objectSchema *Schema) *Schema {
 
 // rowid, pk
 // used in range delete
-func NewTombstoneBatchWithPKVector(pkVec containers.Vector, mp *mpool.MPool) *containers.Batch {
+func NewTombstoneBatchWithPKVector(pkVec, rowIDVec containers.Vector, mp *mpool.MPool) *containers.Batch {
 	bat := containers.NewBatch()
-	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), mp)
-	// commitTSVec := containers.MakeVector(types.T_TS.ToType(), mp)
-	// abortVec := containers.MakeVector(types.T_bool.ToType(), mp)
 	bat.AddVector(AttrRowID, rowIDVec)
-	// bat.AddVector(AttrCommitTs, commitTSVec)
 	bat.AddVector(AttrPKVal, pkVec)
-	// bat.AddVector(AttrAborted, abortVec)
 	return bat
 }
 
@@ -109,5 +104,16 @@ func NewTombstoneBatchByPKType(pkType types.Type, mp *mpool.MPool) *containers.B
 	bat.AddVector(AttrRowID, rowIDVec)
 	bat.AddVector(AttrPKVal, pkVec)
 	bat.AddVector(AttrCommitTs, commitTSVec)
+	return bat
+}
+
+// rowid, pk, commitTS
+// used in Collect Delete in Range
+func NewCNTombstoneBatchByPKType(pkType types.Type, mp *mpool.MPool) *containers.Batch {
+	bat := containers.NewBatch()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), mp)
+	pkVec := containers.MakeVector(pkType, mp)
+	bat.AddVector(AttrRowID, rowIDVec)
+	bat.AddVector(AttrPKVal, pkVec)
 	return bat
 }

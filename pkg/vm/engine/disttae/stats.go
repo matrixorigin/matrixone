@@ -271,6 +271,15 @@ func (gs *GlobalStats) RemoveTid(tid uint64) {
 	delete(gs.logtailUpdate.mu.updated, tid)
 }
 
+// clearTables clears the tables in the map if there are any tables in it.
+func (gs *GlobalStats) clearTables() {
+	gs.logtailUpdate.mu.Lock()
+	defer gs.logtailUpdate.mu.Unlock()
+	if len(gs.logtailUpdate.mu.updated) > 0 {
+		gs.logtailUpdate.mu.updated = make(map[uint64]struct{})
+	}
+}
+
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
 	select {
 	case gs.tailC <- tail:
@@ -689,7 +698,7 @@ func updateInfoFromZoneMap(
 				objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] = int64(objColMeta.NullCnt())
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
-				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
+				info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
 					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())
@@ -759,6 +768,12 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 			}
 			if rate < 0.2 {
 				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
+				if info.ColumnNDVs[idx] > 500 {
+					info.ColumnNDVs[idx] *= math.Pow(info.ColumnNDVs[idx], 0.2)
+					if info.ColumnSize[idx] > 0 {
+						info.ColumnNDVs[idx] *= math.Pow(float64(info.ColumnSize[idx]), 0.2)
+					}
+				}
 			}
 			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
 			if ndvUsingZonemap != -1 && info.ColumnNDVs[idx] > ndvUsingZonemap {

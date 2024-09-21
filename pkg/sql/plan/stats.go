@@ -954,6 +954,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
 		}
 
+	case plan.Node_APPLY:
+		node.Stats.Outcnt = leftStats.Outcnt
+		node.Stats.Cost = leftStats.Outcnt
+		node.Stats.Selectivity = leftStats.Selectivity
+		node.Stats.BlockNum = leftStats.BlockNum
+
 	default:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.Outcnt = childStats.Outcnt
@@ -1185,17 +1191,6 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 
-	// if there is a limit, outcnt is limit number
-	if node.Limit != nil {
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				stats.Outcnt = float64(c.U64Val)
-				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
-				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
-			}
-		}
-	}
-
 	return stats
 }
 
@@ -1297,9 +1292,25 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 
 	switch node.JoinType {
 	case plan.Node_INNER, plan.Node_OUTER:
-		if leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
+		factor1 := 1.0
+		factor2 := 1.0
+		if leftChild.NodeType == plan.Node_TABLE_SCAN && rightChild.NodeType == plan.Node_TABLE_SCAN {
+			s1 := builder.getStatsInfoByTableID(leftChild.TableDef.TblId)
+			s2 := builder.getStatsInfoByTableID(rightChild.TableDef.TblId)
+			if s1 != nil && s2 != nil {
+				var t1size, t2size uint64
+				for _, v := range s1.SizeMap {
+					t1size += v
+				}
+				factor1 = math.Pow(float64(t1size), 0.1)
+				for _, v := range s2.SizeMap {
+					t2size += v
+				}
+				factor2 = math.Pow(float64(t2size), 0.1)
+			}
+		}
+		if leftChild.Stats.Outcnt*factor1 < rightChild.Stats.Outcnt*factor2 {
 			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
-
 		}
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
@@ -1410,6 +1421,18 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 		return "AP QUERY PLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
 	}
 	return "QUERY PLAN"
+}
+
+func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
+	switch GetExecType(qry, txnHaveDDL) {
+	case ExecTypeTP:
+		return "TP QURERY PHYPLAN"
+	case ExecTypeAP_ONECN:
+		return "AP QUERY PHYPLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
+	case ExecTypeAP_MULTICN:
+		return "AP QUERY PHYPLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
+	}
+	return "QUERY PHYPLAN"
 }
 
 func PrintStats(qry *plan.Query) string {

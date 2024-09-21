@@ -4169,6 +4169,38 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_explain_phy`
+	{
+		functionId: MO_EXPLAIN_PHY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInM0ExplainPhy
+				},
+			},
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_text, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInM0ExplainPhy
+				},
+			},
+		},
+	},
+
 	// function `month`
 	{
 		functionId: MONTH,
@@ -5620,6 +5652,51 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `save_file`
+	// confused function.
+	{
+		functionId: SAVE_FILE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_datalink, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return WriteFileDatalink
+				},
+			},
+			{
+				overloadId: 1,
+				volatile:   true,
+				args:       []types.T{types.T_datalink, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return WriteFileDatalink
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_datalink, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return WriteFileDatalink
+				},
+			},
+		},
+	},
+
 	// function `mo_memory_usage`
 	{
 		functionId: MO_MEMORY_USAGE,
@@ -5745,6 +5822,28 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInMoShowVisibleBinEnum
+				},
+			},
+		},
+	},
+
+	// function `mo_show_col_qunique`
+	{
+		functionId: MO_SHOW_COL_QUNIQUE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInMoShowColUnique
 				},
 			},
 		},

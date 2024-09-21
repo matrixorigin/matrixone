@@ -122,7 +122,7 @@ func Test_mce(t *testing.T) {
 			t.Error(err)
 		}
 		use_t.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
-		use_t.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+		use_t.EXPECT().RecordExecPlan(ctx, nil).Return(nil).AnyTimes()
 
 		runner := mock_frontend.NewMockComputationRunner(ctrl)
 		runner.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -137,7 +137,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		create_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		create_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
-		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+		create_1.EXPECT().RecordExecPlan(ctx, nil).Return(nil).AnyTimes()
 		create_1.EXPECT().Clear().AnyTimes()
 		create_1.EXPECT().Free().AnyTimes()
 		create_1.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
@@ -152,7 +152,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		select_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		select_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
-		select_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+		select_1.EXPECT().RecordExecPlan(ctx, nil).Return(nil).AnyTimes()
 		select_1.EXPECT().Clear().AnyTimes()
 		select_1.EXPECT().Free().AnyTimes()
 		select_1.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
@@ -233,7 +233,7 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 			select_2.EXPECT().GetLoadTag().Return(false).AnyTimes()
 			select_2.EXPECT().GetColumns(gomock.Any()).Return(self_handle_sql_columns[i], nil).AnyTimes()
-			select_2.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+			select_2.EXPECT().RecordExecPlan(ctx, nil).Return(nil).AnyTimes()
 			select_2.EXPECT().Clear().AnyTimes()
 			select_2.EXPECT().Free().AnyTimes()
 			select_2.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
@@ -1026,7 +1026,7 @@ func TestSerializePlanToJson(t *testing.T) {
 		}
 		uid, _ := uuid.NewV7()
 		stm := &motrace.StatementInfo{StatementID: uid, Statement: sql, RequestAt: time.Now()}
-		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
+		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan, nil)
 		json := h.Marshal(mock.CurrentContext().GetContext())
 		_, stats := h.Stats(mock.CurrentContext().GetContext(), nil)
 		require.Equal(t, int64(0), stats.RowsRead)
@@ -1245,6 +1245,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 					),
 				)
 				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+				defer cluster.Close()
 				ses.SetTenantInfo(&TenantInfo{Tenant: "t1"})
 				proto.connectAttrs = map[string]string{}
 				ec := newTestExecCtx(ctx, ctrl)
@@ -1423,7 +1424,7 @@ func Test_ExecRequest(t *testing.T) {
 			t.Error(err)
 		}
 		use_t.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
-		use_t.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+		use_t.EXPECT().RecordExecPlan(ctx, nil).Return(nil).AnyTimes()
 		use_t.EXPECT().Clear().AnyTimes()
 
 		runner := mock_frontend.NewMockComputationRunner(ctrl)

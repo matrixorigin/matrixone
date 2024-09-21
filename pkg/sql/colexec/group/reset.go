@@ -39,12 +39,13 @@ func (group *Group) Reset(
 				}
 
 				group.ctr.bat.Vecs = group.ctr.bat.Vecs[:len(group.Exprs)]
-				for i := 0; i < len(group.ctr.bat.Vecs); i++ {
-					group.ctr.bat.Vecs[i].CleanOnlyData()
-				}
 			}
-			group.ctr.bat.SetRowCount(0)
 		}
+
+		for i := 0; i < len(group.ctr.bat.Vecs); i++ {
+			group.ctr.bat.Vecs[i].CleanOnlyData()
+		}
+		group.ctr.bat.SetRowCount(0)
 
 		for i := 0; i < len(group.ctr.bat.Aggs); i++ {
 			if group.ctr.bat.Aggs[i] != nil {
@@ -71,8 +72,9 @@ func (group *Group) Reset(
 
 	group.ctr.cleanHashMap()
 	if group.ProjectList != nil {
-		anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
-		anal.Alloc(group.ProjectAllocSize)
+		if group.OpAnalyzer != nil {
+			group.OpAnalyzer.Alloc(group.ProjectAllocSize)
+		}
 		group.FreeProjection(proc)
 	}
 }

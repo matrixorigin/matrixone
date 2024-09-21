@@ -18,17 +18,14 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,6 +41,12 @@ func (rightJoin *RightJoin) OpType() vm.OpType {
 }
 
 func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
+	if rightJoin.OpAnalyzer == nil {
+		rightJoin.OpAnalyzer = process.NewAnalyzer(rightJoin.GetIdx(), rightJoin.IsFirst, rightJoin.IsLast, "right join")
+	} else {
+		rightJoin.OpAnalyzer.Reset()
+	}
+
 	if len(rightJoin.ctr.vecs) == 0 {
 		rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
 		rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
@@ -57,7 +60,6 @@ func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
 			rightJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightJoin.Cond)
 		}
 	}
-	rightJoin.ctr.InitProc(proc)
 	rightJoin.ctr.handledLast = false
 	return err
 }
@@ -67,16 +69,17 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
-	analyze.Start()
-	defer analyze.Stop()
+	analyzer := rightJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &rightJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			err = rightJoin.build(analyze, proc)
+			err = rightJoin.build(analyzer, proc)
 			if err != nil {
 				return result, err
 			}
@@ -90,7 +93,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if rightJoin.ctr.buf == nil {
-				result, err = rightJoin.Children[0].Call(proc)
+				result, err = vm.ChildrenCall(rightJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -111,7 +114,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			startrow := rightJoin.ctr.lastpos
-			if err := ctr.probe(rightJoin, proc, analyze, rightJoin.GetIsFirst(), rightJoin.GetIsLast(), &result); err != nil {
+			if err := ctr.probe(rightJoin, proc, analyzer, &result); err != nil {
 				return result, err
 			}
 			if rightJoin.ctr.lastpos == 0 {
@@ -119,10 +122,11 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else if rightJoin.ctr.lastpos == startrow {
 				return result, moerr.NewInternalErrorNoCtx("right join hanging")
 			}
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case SendLast:
-			setNil, err := ctr.sendLast(rightJoin, proc, analyze, rightJoin.GetIsFirst(), rightJoin.GetIsLast(), &result)
+			setNil, err := ctr.sendLast(rightJoin, proc, analyzer, &result)
 			if err != nil {
 				return result, err
 			}
@@ -131,6 +135,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if setNil {
 				continue
 			}
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -141,10 +146,10 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (rightJoin *RightJoin) build(anal process.Analyze, proc *process.Process) (err error) {
+func (rightJoin *RightJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &rightJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	ctr.mp, err = message.ReceiveJoinMap(rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if err != nil {
 		return err
@@ -161,7 +166,7 @@ func (rightJoin *RightJoin) build(anal process.Analyze, proc *process.Process) (
 	return nil
 }
 
-func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze process.Analyze, _ bool, isLast bool, result *vm.CallResult) (bool, error) {
+func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) (bool, error) {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {
@@ -174,7 +179,7 @@ func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze pro
 			return true, nil
 		} else {
 			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
-				v := ctr.ReceiveBitmapFromChannel(ap.Channel)
+				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
 				if v != nil {
 					ctr.matched.Or(v)
 				} else {
@@ -212,13 +217,11 @@ func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze pro
 
 	}
 	ctr.rbat.AddRowCount(len(sels))
-	analyze.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return false, nil
 }
 
-func (ctr *container) probe(ap *RightJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(ap.ctr.buf, isFirst)
+func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
 	ap.resetRBat()
 
 	if err := ctr.evalJoinCondition(ap.ctr.buf, proc); err != nil {
@@ -238,7 +241,6 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, anal process.A
 	for i := ap.ctr.lastpos; i < count; i += hashmap.UnitLimit {
 		if rowCountIncrese >= colexec.DefaultBatchSize {
 			ctr.rbat.AddRowCount(rowCountIncrese)
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastpos = i
 			return nil
@@ -365,7 +367,7 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, anal process.A
 	}
 
 	ctr.rbat.AddRowCount(rowCountIncrese)
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	ap.ctr.lastpos = 0
 	return nil

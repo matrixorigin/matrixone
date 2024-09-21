@@ -47,7 +47,7 @@ func DecodeInfoHeader(h uint32) InfoHeader {
 
 var (
 	EmptyBlockInfo      = BlockInfo{}
-	EmptyBlockInfoBytes = EncodeBlockInfo(EmptyBlockInfo)
+	EmptyBlockInfoBytes = EncodeBlockInfo(&EmptyBlockInfo)
 )
 
 const (
@@ -55,28 +55,32 @@ const (
 )
 
 type BlockInfo struct {
-	BlockID   types.Blockid
-	MetaLoc   ObjectLocation
-	StateFlag int8
+	BlockID     types.Blockid
+	MetaLoc     ObjectLocation
+	ObjectFlags int8
 
 	//TODO:: remove it.
 	PartitionNum int16
 }
 
-func (b *BlockInfo) SetFlagByObjStats(stats ObjectStats) {
-	b.StateFlag = stats.GetFlag()
+func (b *BlockInfo) SetFlagByObjStats(stats *ObjectStats) {
+	b.ObjectFlags = stats.GetFlag()
+}
+
+func (b *BlockInfo) ConstructBlockID(name ObjectName, sequence uint16) {
+	BuildObjectBlockidTo(name, sequence, b.BlockID[:])
 }
 
 func (b *BlockInfo) IsAppendable() bool {
-	return b.StateFlag&AppendableFlag != 0
+	return b.ObjectFlags&ObjectFlag_Appendable != 0
 }
 
 func (b *BlockInfo) IsSorted() bool {
-	return b.StateFlag&SortedFlag != 0
+	return b.ObjectFlags&ObjectFlag_Sorted != 0
 }
 
 func (b *BlockInfo) IsCNCreated() bool {
-	return b.StateFlag&CNCreatedFlag != 0
+	return b.ObjectFlags&ObjectFlag_CNCreated != 0
 }
 
 func (b *BlockInfo) String() string {
@@ -111,7 +115,7 @@ func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 	}
 	space += uint32(LocationLen)
 
-	if _, err := w.Write(types.EncodeInt8(&b.StateFlag)); err != nil {
+	if _, err := w.Write(types.EncodeInt8(&b.ObjectFlags)); err != nil {
 		return 0, err
 	}
 	space++
@@ -131,7 +135,7 @@ func (b *BlockInfo) Unmarshal(buf []byte) error {
 	copy(b.MetaLoc[:], buf[:LocationLen])
 	buf = buf[LocationLen:]
 
-	b.StateFlag = types.DecodeInt8(buf[:1])
+	b.ObjectFlags = types.DecodeInt8(buf[:1])
 	buf = buf[1:]
 
 	b.PartitionNum = types.DecodeFixed[int16](buf[:2])
@@ -147,11 +151,11 @@ func (b *BlockInfo) SetMetaLocation(metaLoc Location) {
 }
 
 func (b *BlockInfo) IsMemBlk() bool {
-	return bytes.Equal(EncodeBlockInfo(*b), EmptyBlockInfoBytes)
+	return bytes.Equal(EncodeBlockInfo(b), EmptyBlockInfoBytes)
 }
 
-func EncodeBlockInfo(info BlockInfo) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
+func EncodeBlockInfo(info *BlockInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(info)), BlockInfoSize)
 }
 
 func DecodeBlockInfo(buf []byte) *BlockInfo {
@@ -169,7 +173,7 @@ func (s *BlockInfoSlice) GetBytes(i int) []byte {
 }
 
 func (s *BlockInfoSlice) Set(i int, info *BlockInfo) {
-	copy((*s)[i*BlockInfoSize:], EncodeBlockInfo(*info))
+	copy((*s)[i*BlockInfoSize:], EncodeBlockInfo(info))
 }
 
 func (s *BlockInfoSlice) Len() int {
@@ -188,7 +192,7 @@ func (s *BlockInfoSlice) Append(bs []byte) {
 	*s = append(*s, bs...)
 }
 
-func (s *BlockInfoSlice) AppendBlockInfo(info BlockInfo) {
+func (s *BlockInfoSlice) AppendBlockInfo(info *BlockInfo) {
 	*s = append(*s, EncodeBlockInfo(info)...)
 }
 
@@ -215,4 +219,53 @@ type BackupObject struct {
 	CrateTS  types.TS
 	DropTS   types.TS
 	NeedCopy bool
+}
+
+func MakeBlockInfoSlice(cnt int) BlockInfoSlice {
+	return make([]byte, cnt*BlockInfoSize)
+}
+
+func MultiObjectStatsToBlockInfoSlice(objs []ObjectStats, withFirstEmpty bool) BlockInfoSlice {
+	offset := 0
+	var ret BlockInfoSlice
+	cnt := 0
+	for _, obj := range objs {
+		cnt += int(obj.BlkCnt())
+	}
+	if withFirstEmpty {
+		ret = MakeBlockInfoSlice(cnt + 1)
+		offset = 1
+	} else {
+		ret = MakeBlockInfoSlice(cnt)
+	}
+	idx := 0
+	for _, obj := range objs {
+		for i := 0; i < int(obj.BlkCnt()); i++ {
+			blk := ret.Get(idx + offset)
+			obj.BlockLocationTo(uint16(i), BlockMaxRows, blk.MetaLoc[:])
+			blk.ConstructBlockID(obj.ObjectName(), uint16(i))
+			blk.SetFlagByObjStats(&obj)
+			idx++
+		}
+	}
+	return ret
+}
+
+func ObjectStatsToBlockInfoSlice(stats *ObjectStats, withFirstEmpty bool) BlockInfoSlice {
+	offset := 0
+	var ret BlockInfoSlice
+	cnt := int(stats.BlkCnt())
+	if withFirstEmpty {
+		ret = MakeBlockInfoSlice(cnt + 1)
+		offset = 1
+	} else {
+		ret = MakeBlockInfoSlice(cnt)
+	}
+	for i := 0; i < cnt; i++ {
+		blk := ret.Get(i + offset)
+		stats.BlockLocationTo(uint16(i), BlockMaxRows, blk.MetaLoc[:])
+		blk.ConstructBlockID(stats.ObjectName(), uint16(i))
+		blk.SetFlagByObjStats(stats)
+	}
+	return ret
 }

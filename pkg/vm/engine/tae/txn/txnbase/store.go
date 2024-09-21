@@ -127,6 +127,12 @@ func (store *NoopTxnStore) RangeDelete(
 ) (err error) {
 	return
 }
+func (store *NoopTxnStore) DeleteByPhyAddrKeys(
+	id *common.ID,
+	rowIDVec, pkVec containers.Vector, dt handle.DeleteType,
+) (err error) {
+	return
+}
 
 func (store *NoopTxnStore) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	return
@@ -174,6 +180,6 @@ func (store *NoopTxnStore) GetTransactionType() txnif.TxnType {
 func (store *NoopTxnStore) UpdateObjectStats(*common.ID, *objectio.ObjectStats, bool) error {
 	return nil
 }
-func (store *NoopTxnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls) error {
+func (store *NoopTxnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error {
 	return nil
 }

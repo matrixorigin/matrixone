@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -461,6 +462,25 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.SetInfo(&info)
 		return op
+	case vm.Dispatch:
+		sourceArg := sourceOp.(*dispatch.Dispatch)
+		op := dispatch.NewArgument()
+		op.IsSink = sourceArg.IsSink
+		op.RecSink = sourceArg.RecSink
+		op.ShuffleType = sourceArg.ShuffleType
+		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
+		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote
+		op.FuncId = sourceArg.FuncId
+		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
+		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
+		for j := range op.LocalRegs {
+			op.LocalRegs[j] = sourceArg.LocalRegs[j]
+		}
+		for j := range op.RemoteRegs {
+			op.RemoteRegs[j] = sourceArg.RemoteRegs[j]
+		}
+		op.SetInfo(&info)
+		return op
 	case vm.Insert:
 		t := sourceOp.(*insert.Insert)
 		op := insert.NewArgument()
@@ -516,6 +536,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.ValueScan:
 		t := sourceOp.(*value_scan.ValueScan)
 		op := value_scan.NewArgument()
+		op.ProjectList = t.ProjectList
+		op.SetInfo(&info)
+		return op
+	case vm.Apply:
+		t := sourceOp.(*apply.Apply)
+		op := apply.NewArgument()
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -1277,11 +1303,12 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 	return arg
 }
 
-func constructDispatchLocal(all bool, isSink, RecSink bool, regs []*process.WaitRegister) *dispatch.Dispatch {
+func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {
 	arg := dispatch.NewArgument()
 	arg.LocalRegs = regs
 	arg.IsSink = isSink
-	arg.RecSink = RecSink
+	arg.RecSink = rec
+	arg.RecCTE = recCTE
 	if all {
 		arg.FuncId = dispatch.SendToAllLocalFunc
 	} else {
@@ -1307,8 +1334,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 			break
 		}
 	}
-
-	if source.NodeInfo.Mcpu > 1 {
+	if hasRemote && source.NodeInfo.Mcpu > 1 {
 		panic("pipeline end with dispatch should have been merged in multi CN!")
 	}
 
@@ -1316,6 +1342,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 		if isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
+			s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = source.NodeInfo.Mcpu
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
@@ -1435,7 +1462,7 @@ func constructPartition(n *plan.Node) *partition.Partition {
 	return arg
 }
 
-func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) *indexjoin.IndexJoin {
+func constructIndexJoin(n *plan.Node, proc *process.Process) *indexjoin.IndexJoin {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
@@ -1450,7 +1477,7 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 	return arg
 }
 
-func constructProductL2(n *plan.Node, typs []types.Type, proc *process.Process) *productl2.Productl2 {
+func constructProductL2(n *plan.Node, proc *process.Process) *productl2.Productl2 {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
@@ -1827,6 +1854,20 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
+/*
+	func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
+		result := make([]colexec.ResultPos, len(n.ProjectList))
+		for i, expr := range n.ProjectList {
+			result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+		}
+		arg := apply.NewArgument()
+		arg.ApplyType = applyType
+		arg.Result = result
+		arg.Args = plan2.DeepCopyExprList(right.TblFuncExprList)
+		arg.FuncName = right.TableDef.TblFunc.Name
+		return arg
+	}
+*/
 func constructTableScan(n *plan.Node) *table_scan.TableScan {
 	types := make([]plan.Type, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {

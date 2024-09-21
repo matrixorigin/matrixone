@@ -16,11 +16,13 @@ package tables
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -40,6 +42,10 @@ func HybridScanByBlock(
 		return err
 	}
 	_, offset := blkID.Offsets()
+	deleteStartOffset := 0
+	if *bat != nil {
+		deleteStartOffset = (*bat).Length()
+	}
 	err = dataObject.GetObjectData().Scan(ctx, bat, txn, readSchema, offset, colIdxs, mp)
 	if err != nil {
 		return err
@@ -53,7 +59,7 @@ func HybridScanByBlock(
 		if !tombstone.IsVisible(txn) {
 			continue
 		}
-		err := tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, mp)
+		err := tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, uint64(deleteStartOffset), mp)
 		if err != nil {
 			(*bat).Close()
 			return err
@@ -61,7 +67,7 @@ func HybridScanByBlock(
 	}
 	id := dataObject.AsCommonID()
 	id.BlockID = *blkID
-	err = txn.GetStore().FillInWorkspaceDeletes(id, &(*bat).Deletes)
+	err = txn.GetStore().FillInWorkspaceDeletes(id, &(*bat).Deletes, uint64(deleteStartOffset))
 	if err != nil {
 		(*bat).Close()
 	}
@@ -105,8 +111,8 @@ func TombstoneRangeScanByObject(
 			}
 		}
 		if tombstone.HasCommittedPersistedData() {
-			zm := tombstone.GetSortKeyZonemap()
-			if !zm.PrefixEq(objectID[:]) {
+			zm := tombstone.SortKeyZoneMap()
+			if !zm.RowidPrefixEq(objectID[:]) {
 				continue
 			}
 			// TODO: Bloomfilter
@@ -128,4 +134,40 @@ func RangeScanInMemoryByObject(
 ) (err error) {
 	err = objEntry.GetObjectData().ScanInMemory(ctx, batches, start, end, mp)
 	return
+}
+
+// TODO: ensure bat does not exceed the 1G limit
+func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn) *containers.Batch {
+	if entry.ID > 3 {
+		panic(fmt.Sprintf("unsupported sys table id %v", entry))
+	}
+	schema := entry.GetLastestSchema(false)
+	it := entry.MakeObjectIt(false)
+	defer it.Release()
+	colIdxes := make([]int, 0, len(schema.ColDefs))
+	for _, col := range schema.ColDefs {
+		if col.IsPhyAddr() {
+			continue
+		}
+		colIdxes = append(colIdxes, col.Idx)
+	}
+	var bat *containers.Batch
+	prevLen := 0
+	for it.Next() {
+		obj := it.Item()
+		if !obj.IsVisible(readTxn) {
+			continue
+		}
+		for blkOffset := range obj.BlockCnt() {
+			blkid := objectio.NewBlockidWithObjectID(obj.ID(), uint16(blkOffset))
+			err := HybridScanByBlock(ctx, entry, readTxn, &bat, schema, colIdxes, blkid, common.CheckpointAllocator)
+			if err != nil || bat == nil || bat.Length() == prevLen {
+				panic(fmt.Sprintf("blkbat is nil, obj %v, blkid %v, err %v", obj.ID().String(), blkid, err))
+			}
+		}
+	}
+	if bat != nil {
+		bat.Compact()
+	}
+	return bat
 }

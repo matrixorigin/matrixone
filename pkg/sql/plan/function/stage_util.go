@@ -18,15 +18,19 @@ import (
 	"container/list"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"golang.org/x/sync/errgroup"
 
 	//"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -46,6 +50,7 @@ const PARAMKEY_PROVIDER = "provider"
 
 const S3_PROVIDER_AMAZON = "amazon"
 const S3_PROVIDER_MINIO = "minio"
+const S3_PROVIDER_COS = "cos"
 
 const S3_SERVICE = "s3"
 const MINIO_SERVICE = "minio"
@@ -150,6 +155,8 @@ func (s *StageDef) ToPath() (mopath string, query string, err error) {
 func getS3ServiceFromProvider(provider string) (string, error) {
 	provider = strings.ToLower(provider)
 	switch provider {
+	case S3_PROVIDER_COS:
+		return S3_SERVICE, nil
 	case S3_PROVIDER_AMAZON:
 		return S3_SERVICE, nil
 	case S3_PROVIDER_MINIO:
@@ -428,4 +435,129 @@ func StageListWithPattern(service string, pattern string, proc *process.Process)
 		}
 	}
 	return fileList, nil
+}
+
+// ParseDatalink extracts data from a Datalink string
+// and returns the Mo FS url, []int{offset,size}, fileType and error
+// Mo FS url: The URL that is used by MO FS to access the file
+// offsetSize: The offset and size of the file to be read
+func ParseDatalink(fsPath string, proc *process.Process) (string, []int, error) {
+	u, err := url.Parse(fsPath)
+	if err != nil {
+		return "", nil, err
+	}
+
+	var moUrl string
+	// 1. get moUrl from the path
+	switch u.Scheme {
+	case FILE_PROTOCOL:
+		moUrl = strings.Join([]string{u.Host, u.Path}, "")
+	case STAGE_PROTOCOL:
+		moUrl, _, err = UrlToPath(fsPath, proc)
+		if err != nil {
+			return "", nil, err
+		}
+	default:
+		return "", nil, moerr.NewNYINoCtxf("unsupported url scheme %s", u.Scheme)
+	}
+
+	// 2. get size and offset from the query
+	urlParams := make(map[string]string)
+	for k, v := range u.Query() {
+		urlParams[strings.ToLower(k)] = strings.ToLower(v[0])
+	}
+	offsetSize := []int{0, -1}
+	if _, ok := urlParams["offset"]; ok {
+		if offsetSize[0], err = strconv.Atoi(urlParams["offset"]); err != nil {
+			return "", nil, err
+		}
+	}
+	if _, ok := urlParams["size"]; ok {
+		if offsetSize[1], err = strconv.Atoi(urlParams["size"]); err != nil {
+			return "", nil, err
+		}
+	}
+
+	if offsetSize[0] < 0 {
+		return "", nil, moerr.NewInternalErrorNoCtx("offset cannot be negative")
+	}
+
+	if offsetSize[1] < -1 {
+		return "", nil, moerr.NewInternalErrorNoCtx("size cannot be less than -1")
+	}
+
+	return moUrl, offsetSize, nil
+}
+
+type FileServiceWriter struct {
+	Reader      *io.PipeReader
+	Writer      *io.PipeWriter
+	Group       *errgroup.Group
+	Filepath    string
+	FileService fileservice.FileService
+}
+
+func NewFileServiceWriter(moPath string, proc *process.Process) (*FileServiceWriter, error) {
+
+	var readPath string
+	var err error
+
+	w := &FileServiceWriter{}
+
+	w.Filepath = moPath
+
+	w.Reader, w.Writer = io.Pipe()
+
+	w.FileService, readPath, err = fileservice.GetForETL(proc.Ctx, nil, w.Filepath)
+	if err != nil {
+		return nil, err
+	}
+
+	asyncWriteFunc := func() error {
+		vec := fileservice.IOVector{
+			FilePath: readPath,
+			Entries: []fileservice.IOEntry{
+				{
+					ReaderForWrite: w.Reader,
+					Size:           -1,
+				},
+			},
+		}
+		err := w.FileService.Write(proc.Ctx, vec)
+		if err != nil {
+			err2 := w.Reader.CloseWithError(err)
+			if err2 != nil {
+				return err2
+			}
+		}
+		return err
+	}
+
+	w.Group, _ = errgroup.WithContext(proc.Ctx)
+	w.Group.Go(asyncWriteFunc)
+
+	return w, nil
+}
+
+func (w *FileServiceWriter) Write(b []byte) (int, error) {
+	n, err := w.Writer.Write(b)
+	if err != nil {
+		err2 := w.Writer.CloseWithError(err)
+		if err2 != nil {
+			return 0, err2
+		}
+	}
+	return n, err
+}
+
+func (w *FileServiceWriter) Close() error {
+	err := w.Writer.Close()
+	err2 := w.Group.Wait()
+	err3 := w.Reader.Close()
+	err = errors.Join(err, err2, err3)
+
+	w.Reader = nil
+	w.Writer = nil
+	w.Group = nil
+	return err
 }

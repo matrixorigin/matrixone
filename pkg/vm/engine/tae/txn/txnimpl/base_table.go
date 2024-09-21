@@ -75,7 +75,12 @@ func (tbl *baseTable) DedupWorkSpace(key containers.Vector) (err error) {
 	}
 	return
 }
-
+func (tbl *baseTable) approxSize() int {
+	if tbl == nil || tbl.tableSpace == nil || tbl.tableSpace.node == nil {
+		return 0
+	}
+	return tbl.tableSpace.node.data.ApproxSize()
+}
 func (tbl *baseTable) BatchDedupLocal(bat *containers.Batch) error {
 	if tbl.tableSpace == nil || !tbl.schema.HasPK() {
 		return nil
@@ -100,7 +105,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	metaLocs := make([]objectio.Location, 0)
 	blkCount := stats.BlkCnt()
 	totalRow := stats.Rows()
-	blkMaxRows := tbl.schema.BlockMaxRows
+	blkMaxRows := tbl.schema.Extra.BlockMaxRows
 	for i := uint16(0); i < uint16(blkCount); i++ {
 		var blkRow uint32
 		if totalRow > blkMaxRows {
@@ -164,6 +169,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 	); err != nil {
 		return
 	}
+	snapshotTS := tbl.txnTable.store.txn.GetSnapshotTS()
 	maxAObjectHint, maxNAObjectHint := uint64(0), uint64(0)
 	for it.Next() {
 		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
@@ -177,6 +183,9 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 				maxNAObjectHint = objectHint
 			}
 		}
+		if obj.DeletedAt.Less(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
+			continue
+		}
 		objData := obj.GetObjectData()
 		if objData == nil {
 			continue
@@ -186,7 +195,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 		// coarse check whether all rows in this block are committed before the snapshot timestamp
 		// if true, skip this block's deduplication
 		if dedupAfterSnapshotTS &&
-			objData.CoarseCheckAllRowsCommittedBefore(tbl.txnTable.store.txn.GetSnapshotTS()) {
+			objData.CoarseCheckAllRowsCommittedBefore(snapshotTS) {
 			continue
 		}
 		if obj.HasCommittedPersistedData() {
@@ -306,10 +315,6 @@ func quickSkipThisObject(
 	keysZM index.ZM,
 	meta *catalog.ObjectEntry,
 ) (ok bool, err error) {
-	zm, err := meta.GetPKZoneMap(ctx)
-	if err != nil {
-		return
-	}
-	ok = !zm.FastIntersect(keysZM)
+	ok = !meta.SortKeyZoneMap().FastIntersect(keysZM)
 	return
 }
