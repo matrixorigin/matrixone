@@ -569,13 +569,6 @@ func processDefault(ctr *container, ap *Fill, proc *process.Process, analyzer pr
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-
-	ctr.buf, err = result.Batch.Dup(proc.Mp())
-	analyzer.Alloc(int64(ctr.buf.Size()))
-	if err != nil {
-		return result, err
-	}
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 

@@ -74,6 +74,7 @@ func init() {
 		newTestCase("select * from R limit 10", new(testing.T)),
 		newTestCase("select count(*) from R group by uid", new(testing.T)),
 		newTestCase("select count(distinct uid) from R", new(testing.T)),
+		newTestCase("select _wstart, _wend, max(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, second) sliding(1, second) fill(prev)", new(testing.T)),
 		// xxx because memEngine can not handle Halloween Problem
 		// newTestCase("insert into R values('991', '992', '993')", new(testing.T)),
 		// newTestCase("insert into R select * from S", new(testing.T)),

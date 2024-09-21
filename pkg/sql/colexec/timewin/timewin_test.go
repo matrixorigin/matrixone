@@ -58,6 +58,40 @@ func init() {
 				Interval: makeInterval(),
 			},
 		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			arg: &TimeWin{
+				WStart: true,
+				WEnd:   false,
+				Types: []types.Type{
+					types.T_int32.ToType(),
+				},
+				Aggs: []aggexec.AggFuncExecExpression{
+					aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+				},
+				TsType:   plan.Type{Id: int32(types.T_datetime)},
+				Ts:       newExpression(0),
+				EndExpr:  newExpression(0),
+				Interval: makeInterval(),
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			arg: &TimeWin{
+				WStart: false,
+				WEnd:   false,
+				Types: []types.Type{
+					types.T_int32.ToType(),
+				},
+				Aggs: []aggexec.AggFuncExecExpression{
+					aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+				},
+				TsType:   plan.Type{Id: int32(types.T_datetime)},
+				Ts:       newExpression(0),
+				EndExpr:  newExpression(0),
+				Interval: makeInterval(),
+			},
+		},
 	}
 }
 
