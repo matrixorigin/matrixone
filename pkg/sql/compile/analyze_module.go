@@ -471,38 +471,35 @@ func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.St
 	if option.Analyze {
 		buffer.WriteString(fmt.Sprintf("SQL AffectRows: %d, S3InputCount: %d, S3OutputCount: %d",
 			queryResult.AffectRows, anal.phyPlan.S3IOInputCount, anal.phyPlan.S3IOOutputCount))
-	}
 
-	if statsInfo != nil {
-		buffer.WriteString("\n")
-		gblStats := extractPhyPlanGlbStats(anal.phyPlan)
-		val := gblStats.TimeConsumed + statsInfo.BuildReaderDuration +
-			int64(statsInfo.ParseDuration+
-				statsInfo.CompileDuration+
-				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
-		buffer.WriteString(fmt.Sprintf("PhyPlan TimeConsumed:%d ns,  MemorySize:%d bytes\n", gblStats.TimeConsumed, gblStats.MemorySize))
-		buffer.WriteString(fmt.Sprintf("SQL StatsInfo(%d + %d + %d + %d + %d - %d - %d) = %d, PlanStatsDuration: %d, PlanResolveVariableDuration: %d",
-			gblStats.TimeConsumed,
-			statsInfo.BuildReaderDuration,
-			statsInfo.ParseDuration,
-			statsInfo.CompileDuration,
-			statsInfo.PlanDuration,
-			statsInfo.IOAccessTimeConsumption,
-			statsInfo.IOMergerTimeConsumption(),
-			val,
-			statsInfo.BuildPlanStatsDuration,
-			statsInfo.BuildPlanResolveVarDuration,
-		))
-
+		if statsInfo != nil {
+			buffer.WriteString("\n")
+			gblStats := extractPhyPlanGlbStats(anal.phyPlan)
+			val := gblStats.TimeConsumed + statsInfo.BuildReaderDuration +
+				int64(statsInfo.ParseDuration+
+					statsInfo.CompileDuration+
+					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
+			buffer.WriteString(fmt.Sprintf("PhyPlan TimeConsumed:%d ns,  MemorySize:%d bytes\n", gblStats.TimeConsumed, gblStats.MemorySize))
+			buffer.WriteString(fmt.Sprintf("SQL StatsInfo(%d + %d + %d + %d + %d - %d - %d) = %d, PlanStatsDuration: %d, PlanResolveVariableDuration: %d",
+				gblStats.TimeConsumed,
+				statsInfo.BuildReaderDuration,
+				statsInfo.ParseDuration,
+				statsInfo.CompileDuration,
+				statsInfo.PlanDuration,
+				statsInfo.IOAccessTimeConsumption,
+				statsInfo.IOMergerTimeConsumption(),
+				val,
+				statsInfo.BuildPlanStatsDuration,
+				statsInfo.BuildPlanResolveVarDuration,
+			))
+		}
 	}
 }
 
 func explainScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption, buffer *bytes.Buffer) {
-	//buffer := bytes.NewBuffer(make([]byte, 0, 300))
 	for i := range scopes {
 		explainSingleScope(scopes[i], i, gap, rmp, option, buffer)
 	}
-	return
 }
 
 // showSingleScope generates and outputs a string representation of a single Scope.
