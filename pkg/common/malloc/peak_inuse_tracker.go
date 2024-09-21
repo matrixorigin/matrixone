@@ -53,7 +53,6 @@ func NewPeakInuseTracker() *PeakInuseTracker {
 
 func (p *peakInuseData) Copy() *peakInuseData {
 	ret := *p
-	ret.GoMetrics = maps.Clone(p.GoMetrics)
 	return &ret
 }
 
@@ -162,6 +161,7 @@ func (p *PeakInuseTracker) UpdateGoMetrics(sample metrics.Sample) {
 		}
 		// copy
 		newData := ptr.Copy()
+		newData.GoMetrics = maps.Clone(ptr.GoMetrics)
 		newData.GoMetrics[sample.Name] = peakInuseValue{
 			Value: sample.Value.Uint64(),
 			Time:  time.Now(),
