@@ -61,6 +61,7 @@ const (
 	TombstoneAttr_Rowid_Attr    = "__mo_%1_delete_rowid"
 	TombstoneAttr_PK_Attr       = "__mo_%1_pk_val"
 	TombstoneAttr_CommitTs_Attr = DefaultCommitTS_Attr
+	TombstoneAttr_Abort_Attr    = DefaultAbort_Attr
 )
 
 var (

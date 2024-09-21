@@ -43,9 +43,9 @@ const (
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 	// TableTailAttr are attrs in table tail
-	TableTailAttrDeleteRowID = "__mo_%1_delete_rowid"
-	TableTailAttrCommitTs    = objectio.DefaultCommitTS_Attr
-	TableTailAttrAborted     = objectio.DefaultAbort_Attr
+	TableTailAttrDeleteRowID = objectio.TombstoneAttr_Rowid_Attr
+	TableTailAttrCommitTs    = objectio.TombstoneAttr_CommitTs_Attr
+	TableTailAttrAborted     = objectio.TombstoneAttr_Abort_Attr
 	TableTailAttrPKVal       = objectio.TombstoneAttr_PK_Attr
 
 	MOAccountTable = "mo_account"

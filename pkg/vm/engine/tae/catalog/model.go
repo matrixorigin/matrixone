@@ -29,11 +29,6 @@ const (
 	PhyAddrColumnName    = objectio.DefaultRowid_Attr
 	PhyAddrColumnComment = "Physical address"
 
-	// AttrRowID   = pkgcatalog.TableTailAttrDeleteRowID
-	// AttrCommitTs = pkgcatalog.TableTailAttrCommitTs
-	// AttrAborted  = pkgcatalog.TableTailAttrAborted
-	// AttrPKVal    = pkgcatalog.TableTailAttrPKVal
-
 	TenantSysID = uint32(0)
 )
 
