@@ -24,8 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
@@ -91,8 +94,34 @@ func Test_Sinker(t *testing.T) {
 
 	require.Equal(t, bat1.RowCount(), rows)
 
+	r := disttae.SimpleMultiObjectsReader(
+		ctx, fs, objs, timestamp.Timestamp{},
+		disttae.WithColumns(
+			objectio.TombstoneSeqnums_CN_Created,
+			objectio.GetTombstoneTypes(pkType, false),
+		),
+	)
+	blockio.Start("")
+	defer blockio.Stop("")
+	bat2 := engine_util.NewCNTombstoneBatch(&pkType)
+	buffer := engine_util.NewCNTombstoneBatch(&pkType)
+	for {
+		done, err := r.Read(ctx, buffer.Attrs, nil, mp, buffer)
+		require.NoError(t, err)
+		if done {
+			break
+		}
+		// TODO
+		// require.True(t, IsBatchSorted(buffer, objectio.TombstonePrimaryKeyIdx))
+		err = bat2.Union(buffer, 0, buffer.RowCount(), mp)
+		require.NoError(t, err)
+	}
+	buffer.Clean(mp)
+	require.Equal(t, bat1.RowCount(), bat2.RowCount())
+
 	pkVec.Close()
 	rowIDVec.Free(mp)
+	bat2.Clean(mp)
 
 	require.True(t, mp.CurrNB() > 0)
 	sinker1.Close()
