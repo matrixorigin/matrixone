@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-// withHidden: true for add hidden columns `commitTs` and `abort`
+// ConstructTombstoneWriter withHidden: true for add hidden columns `commitTs` and `abort`
 // object file created by `CN` with `withHidden` is false
 func ConstructTombstoneWriter(
 	withHidden bool,
