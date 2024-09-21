@@ -217,21 +217,12 @@ func NewFSinkerImpl(
 func NewTombstoneSinker(
 	withHidden bool,
 	pkType types.Type,
-	factory FileSinkerFactory,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	opts ...SinkerOption,
 ) *Sinker {
-	var (
-		attrTypes []types.Type
-		attrs     []string
-	)
-	if withHidden {
-		attrs = objectio.TombstoneAttrs_TN_Created
-	} else {
-		attrs = objectio.TombstoneAttrs_CN_Created
-	}
-	attrTypes = objectio.GetTombstoneTypes(pkType, withHidden)
+	factory := NewTombstoneFSinkerImplFactory(withHidden)
+	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, withHidden)
 	return NewSinker(
 		objectio.TombstonePrimaryKeyIdx,
 		attrs,

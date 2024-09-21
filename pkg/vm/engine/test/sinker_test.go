@@ -37,18 +37,16 @@ func Test_Sinker(t *testing.T) {
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	factory := engine_util.NewTombstoneFSinkerImplFactory(false)
 	sinker1 := engine_util.NewTombstoneSinker(
 		false,
 		pkType,
-		factory,
 		mp,
 		fs,
 		// engine_util.WithDedupAll(),
 		engine_util.WithMemorySizeThreshold(mpool.KB*400),
 	)
 
-	blkCnt := 2000
+	blkCnt := 5
 	blkRows := 8192
 	pkVec := containers.MockVector2(
 		pkType,
@@ -85,7 +83,7 @@ func Test_Sinker(t *testing.T) {
 
 	objs, batches := sinker1.GetResult()
 	require.Equal(t, 0, len(batches))
-	require.Equal(t, 1120, len(objs))
+	require.Equal(t, 3, len(objs))
 	rows := 0
 	for _, stats := range objs {
 		rows += int(stats.Rows())

@@ -86,6 +86,15 @@ func GetTombstoneCommitTSAttrIdx(columnCnt uint16) uint16 {
 	panic(fmt.Sprintf("invalid tombstone column count %d", columnCnt))
 }
 
+func GetTombstoneSchema(pk types.Type, withHidden bool) (attrs []string, attrTypes []types.Type) {
+	if withHidden {
+		attrs = TombstoneAttrs_TN_Created
+	} else {
+		attrs = TombstoneAttrs_CN_Created
+	}
+	attrTypes = GetTombstoneTypes(pk, withHidden)
+	return
+}
 func GetTombstoneTypes(pk types.Type, withHidden bool) []types.Type {
 	if withHidden {
 		return []types.Type{
