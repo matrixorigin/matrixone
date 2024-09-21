@@ -60,28 +60,30 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 // GetProcByUuid used the uuid to get a process from the srv.
 // if the process is nil, it means the process has done.
 // if forcedDelete, do an action to avoid another routine to put a new item.
-func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Process, bool) {
+func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Process, process.RemotePipelineInformationChannel, bool) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	p, ok := srv.uuidCsChanMap.mp[u]
 	if !ok {
 		if forcedDelete {
-			srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: nil}
+			srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: nil, ch: nil}
 		}
-		return nil, false
+		return nil, nil, false
 	}
 
-	result := p.proc
+	result1 := p.proc
+	result2 := p.ch
 	if p.proc == nil {
 		delete(srv.uuidCsChanMap.mp, u)
 	} else {
 		p.proc = nil
+		p.ch = nil
 		srv.uuidCsChanMap.mp[u] = p
 	}
-	return result, true
+	return result1, result2, true
 }
 
-func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) error {
+func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch process.RemotePipelineInformationChannel) error {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	if _, ok := srv.uuidCsChanMap.mp[u]; ok {
@@ -89,7 +91,7 @@ func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) error {
 		return moerr.NewInternalErrorNoCtx("remote receiver already done")
 	}
 
-	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p}
+	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, ch: ch}
 	return nil
 }
 
@@ -106,6 +108,7 @@ func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
 			delete(srv.uuidCsChanMap.mp, uuids[i])
 		} else {
 			p.proc = nil
+			p.ch = nil
 			srv.uuidCsChanMap.mp[uuids[i]] = p
 		}
 	}
