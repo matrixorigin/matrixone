@@ -46,7 +46,7 @@ func Test_Closed(t *testing.T) {
 	cf := &CloseFlag{}
 	go func() {
 		defer wg.Done()
-		mo.handleConn(serverConn)
+		mo.handleConn(ctx, serverConn)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -144,7 +144,7 @@ func TestRoutineManager_killClients(t *testing.T) {
 		},
 	}
 	var rm1 *RoutineManager
-	rm1.killClients()
+	rm1.killNetConns()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rm := &RoutineManager{
@@ -156,7 +156,7 @@ func TestRoutineManager_killClients(t *testing.T) {
 				baseService:      tt.fields.baseService,
 				sessionManager:   tt.fields.sessionManager,
 			}
-			rm.killClients()
+			rm.killNetConns()
 		})
 	}
 }

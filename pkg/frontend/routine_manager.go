@@ -50,6 +50,7 @@ type RoutineManager struct {
 	sessionManager   *queryservice.SessionManager
 	// reportSystemStatusTime is the time when report system status last time.
 	reportSystemStatusTime atomic.Pointer[time.Time]
+	cancel                 context.CancelFunc
 }
 
 type AccountRoutineManager struct {
@@ -461,20 +462,33 @@ func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *que
 	return routine.resetSession(rm.baseService.ID(), resp)
 }
 
-func (rm *RoutineManager) killClients() {
+func (rm *RoutineManager) cancelCtx() {
+	if rm == nil {
+		return
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if rm.cancel != nil {
+		rm.cancel()
+	}
+}
+
+func (rm *RoutineManager) killNetConns() {
 	if rm == nil {
 		return
 	}
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	for s := range rm.clients {
-		if err := s.Close(); err != nil {
-			logutil.Error("c")
+		if err := s.closeConn(); err != nil {
+			logutil.Error("close tcp conn failed", zap.Error(err))
 		}
 	}
 }
 
 func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithCancel(ctx)
 	accountRoutine := &AccountRoutineManager{
 		killQueueMu:       sync.RWMutex{},
 		accountId2Routine: make(map[int64]map[*Routine]uint64),
@@ -487,6 +501,7 @@ func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
 		clients:          make(map[*Conn]*Routine),
 		routinesByConnID: make(map[uint32]*Routine),
 		accountRoutine:   accountRoutine,
+		cancel:           cancel,
 	}
 	if getGlobalPu().SV.EnableTls {
 		err := initTlsConfig(rm, getGlobalPu().SV)
