@@ -78,7 +78,7 @@ func createInnerServer() *MOServer {
 func startInnerServer(conn net.Conn) {
 
 	mo := createInnerServer()
-	mo.handleConn(conn)
+	mo.handleConn(context.Background(), conn)
 }
 
 func TestMysqlClientProtocol_Handshake(t *testing.T) {
@@ -274,7 +274,7 @@ func TestKill(t *testing.T) {
 	//running server
 	go func() {
 		defer wg.Done()
-		mo.handleConn(serverConn)
+		mo.handleConn(ctx, serverConn)
 	}()
 
 	dbConnPool, err = openDbConn(t, 6001)
@@ -297,7 +297,7 @@ func TestKill(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mo.handleConn(serverConn2)
+		mo.handleConn(ctx, serverConn2)
 	}()
 
 	registerConn(clientConn2)
