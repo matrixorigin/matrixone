@@ -3511,13 +3511,16 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 	}
 	statsInfo := statistic.StatsInfoFromContext(ctx)
 	if statsInfo != nil {
-		val := int64(statsByte.GetTimeConsumed()) +
+		val := int64(statsByte.GetTimeConsumed()) + statsInfo.BuildReaderDuration +
 			int64(statsInfo.ParseDuration+
 				statsInfo.CompileDuration+
 				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
 		if val < 0 {
-			ses.Debugf(ctx, "issue#14926 negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
+			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo(%d + %d + %d + %d + %d - %d - %d) = %d",
 				uuid.UUID(h.stmt.StatementID).String(),
+				h.stmt.StatementType,
+				int64(statsByte.GetTimeConsumed()),
+				statsInfo.BuildReaderDuration,
 				statsInfo.ParseDuration,
 				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
