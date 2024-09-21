@@ -1473,10 +1473,7 @@ func runUpdateCdcTask(
 		updateCdcTaskFunc,
 		conds...,
 	)
-	if err != nil {
-		return err
-	}
-	return
+	return err
 }
 
 func updateCdcTask(
