@@ -207,6 +207,12 @@ func (ctr *container) resetExes() {
 	if ctr.tsExe != nil {
 		ctr.tsExe.ResetForNextQuery()
 	}
+	if ctr.startExe != nil {
+		ctr.startExe.ResetForNextQuery()
+	}
+	if ctr.endExe != nil {
+		ctr.endExe.ResetForNextQuery()
+	}
 }
 
 func (ctr *container) resetParam(timeWin *TimeWin) {
@@ -229,6 +235,12 @@ func (ctr *container) freeExes() {
 	}
 	if ctr.tsExe != nil {
 		ctr.tsExe.Free()
+	}
+	if ctr.startExe != nil {
+		ctr.startExe.Free()
+	}
+	if ctr.endExe != nil {
+		ctr.endExe.Free()
 	}
 }
 
@@ -262,14 +274,4 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 		}
 	}
 	ctr.aggVec = nil
-
-	if ctr.startVec != nil {
-		ctr.startVec.Free(mp)
-	}
-	ctr.startVec = nil
-
-	if ctr.endVec != nil {
-		ctr.endVec.Free(mp)
-	}
-	ctr.endVec = nil
 }
