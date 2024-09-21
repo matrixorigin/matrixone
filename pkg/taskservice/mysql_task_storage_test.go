@@ -326,7 +326,7 @@ func TestAddCdcTask(t *testing.T) {
 		newDaemonTaskRows(t, dt),
 	)
 
-	affected, err = storage.UpdateCdcTask(
+	_, err = storage.UpdateCdcTask(
 		context.Background(),
 		task.TaskStatus_PauseRequested,
 		callback2,
