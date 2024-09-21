@@ -518,5 +518,6 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 			return nil, err
 		}
 	}
+	b.rowCount = end - start
 	return b, nil
 }
