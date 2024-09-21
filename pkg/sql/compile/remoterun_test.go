@@ -371,6 +371,32 @@ func Test_GetProcByUuid(t *testing.T) {
 	_ = colexec.NewServer(nil)
 
 	{
+		// first get action or deletion just convert the k-v to be `ready to remove` status.
+		// and the next action will remove it.
+		uid, err := uuid.NewV7()
+		require.Nil(t, err)
+
+		receiver := &messageReceiverOnServer{
+			connectionCtx: context.TODO(),
+		}
+
+		p0 := &process.Process{}
+		c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
+		require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+
+		// this action will convert it to be ready-to-remove status.
+		colexec.Get().DeleteUuids([]uuid.UUID{uid})
+
+		// get a nil p and c.
+		p, c, err := receiver.GetProcByUuid(uid, time.Second)
+		require.Nil(t, err)
+		require.Nil(t, p)
+		require.Nil(t, c)
+
+		colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	}
+
+	{
 		// if receiver done, get method should exit.
 		// 1. return nil.
 		// 2. no need to return error.
