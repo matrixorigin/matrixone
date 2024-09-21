@@ -377,7 +377,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 	addCdcTaskCallback := func(ctx context.Context, tx taskservice.SqlExecutor) (ret int, err error) {
 		err = checkAccounts(ctx, tx, tablePts, filterPts)
 		if err != nil {
-			return
+			return 0, err
 		}
 
 		ret, err = checkTables(ctx, tx, tablePts, filterPts)
@@ -387,7 +387,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 
 		jsonTables, err := cdc2.JsonEncode(tablePts)
 		if err != nil {
-			return
+			return 0, err
 		}
 
 		var jsonSinkUri string
