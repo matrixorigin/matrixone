@@ -230,13 +230,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
-
-	tableDef.Name2ColIndex = map[string]int32{}
-	for i, col := range tableDef.Cols {
-		if col.Name != catalog.FakePrimaryKeyColName {
-			tableDef.Name2ColIndex[col.Name] = int32(i)
-		}
-	}
 	originTableDef := tableDef
 	// load with columnlist will copy a new tableDef
 	externalProject, colToIndex, tbColToDataCol, tableDef, err := getExternalProject(stmt, ctx, tableDef, tblName)
@@ -248,9 +241,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
-	if stmt.Param.FileSize < LoadParallelMinSize {
-		stmt.Param.Parallel = false
-	}
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
 	var offset int64 = 0
 	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress && !stmt.Param.Local {
@@ -265,7 +255,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		stmt.Param.Parallel = false
 	}
 
-	stmt.Param.LoadFile = true
 	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
@@ -303,7 +292,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
 		ExternScan: &plan.ExternScan{
-			Type:           int32(stmt.Param.ScanType),
+			Type:           int32(plan.ExternType_LOAD),
+			LoadType:       int32(stmt.Param.ScanType),
 			Data:           stmt.Param.Data,
 			Format:         stmt.Param.Format,
 			IgnoredLines:   uint64(stmt.Param.Tail.IgnoredLines),
@@ -424,7 +414,6 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		}
 		return "", moerr.NewInternalError(ctx.GetContext(), err.Error())
 	}
-	param.Init = true
 	return param.Filepath, nil
 }
 

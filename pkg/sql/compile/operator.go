@@ -772,11 +772,6 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 		}
 	}
 
-	var tbColToDataCol map[string]int32
-	if n.ExternScan != nil {
-		tbColToDataCol = n.ExternScan.TbColToDataCol
-	}
-
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
@@ -784,7 +779,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				Cols:            n.TableDef.Cols,
 				Extern:          param,
 				Name2ColIndex:   n.TableDef.Name2ColIndex,
-				TbColToDataCol:  tbColToDataCol,
+				TbColToDataCol:  n.ExternScan.TbColToDataCol,
 				FileOffsetTotal: fileOffset,
 				CreateSql:       n.TableDef.Createsql,
 				Ctx:             ctx,
