@@ -116,7 +116,7 @@ func (node *persistedNode) Scan(
 		for i, idx := range colIdxes {
 			var attr string
 			if idx == objectio.SEQNUM_COMMITTS {
-				attr = catalog.AttrCommitTs
+				attr = objectio.TombstoneAttr_CommitTs_Attr
 				if vecs[i].GetType().Oid != types.T_TS {
 					vecs[i].Close()
 					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
@@ -140,7 +140,7 @@ func (node *persistedNode) Scan(
 		for i, idx := range colIdxes {
 			var attr string
 			if idx == objectio.SEQNUM_COMMITTS {
-				attr = catalog.AttrCommitTs
+				attr = objectio.TombstoneAttr_CommitTs_Attr
 				if vecs[i].GetType().Oid != types.T_TS {
 					vecs[i].Close()
 					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
@@ -167,8 +167,7 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 	if !node.object.meta.Load().IsTombstone {
 		panic("not support")
 	}
-	colIdxes := catalog.TombstoneBatchIdxes
-	colIdxes = append(colIdxes, objectio.SEQNUM_COMMITTS)
+	colIdxes := objectio.TombstoneColumns_TN_Created
 	readSchema := node.object.meta.Load().GetTable().GetLastestSchema(true)
 	var startTS types.TS
 	if !node.object.meta.Load().IsAppendable() {
@@ -239,13 +238,13 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 				if commitTS.GreaterEq(&start) && commitTS.LessEq(&end) &&
 					types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
-						pkIdx := readSchema.GetColIdx(catalog.AttrPKVal)
+						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
 						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
-					(*bat).GetVectorByName(catalog.AttrRowID).Append(rowIDs[i], false)
-					(*bat).GetVectorByName(catalog.AttrPKVal).Append(vecs[1].Get(i), false)
-					(*bat).GetVectorByName(catalog.AttrCommitTs).Append(commitTS, false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(vecs[1].Get(i), false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(commitTS, false)
 				}
 			}
 		} else {
@@ -253,13 +252,13 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 			for i := 0; i < len(rowIDs); i++ {
 				if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
-						pkIdx := readSchema.GetColIdx(catalog.AttrPKVal)
+						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
 						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
-					(*bat).GetVectorByName(catalog.AttrRowID).Append(rowIDs[i], false)
-					(*bat).GetVectorByName(catalog.AttrPKVal).Append(vecs[1].Get(i), false)
-					(*bat).GetVectorByName(catalog.AttrCommitTs).Append(startTS, false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(vecs[1].Get(i), false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(startTS, false)
 				}
 			}
 		}
