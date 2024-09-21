@@ -70,8 +70,13 @@ type container struct {
 	executors []colexec.ExpressionExecutor
 }
 
-func (filter *Filter) SetExeExpr(e *plan.Expr) {
+func (filter *Filter) SetExeExpr(proc *process.Process, e *plan.Expr) (err error) {
+	if len(filter.ctr.executors) == 0 {
+		filter.ctr.cleanExecutor()
+	}
 	filter.exeExpr = e
+	filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
+	return
 }
 
 func (filter *Filter) GetExeExpr() *plan.Expr {

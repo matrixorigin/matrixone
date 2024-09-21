@@ -543,7 +543,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if arg.E != nil {
 			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(arg.E))
 		}
-		arg.SetExeExpr(colexec.RewriteFilterExprList(appendNotPkFilter))
+		arg.SetExeExpr(s.Proc, colexec.RewriteFilterExprList(appendNotPkFilter))
 	}
 
 	// reset datasource
