@@ -21,18 +21,7 @@ import (
 )
 
 type PeakInuseTracker struct {
-	ptr atomic.Pointer[peakInuseInfo]
-}
-
-type peakInuseInfo struct {
-	Peak      peakInuseData
-	Snapshots struct {
-		Malloc      peakInuseData
-		Session     peakInuseData
-		IO          peakInuseData
-		MemoryCache peakInuseData
-		Hashmap     peakInuseData
-	}
+	ptr atomic.Pointer[peakInuseData]
 }
 
 type peakInuseData struct {
@@ -50,7 +39,7 @@ type peakInuseValue struct {
 
 func NewPeakInuseTracker() *PeakInuseTracker {
 	ret := new(PeakInuseTracker)
-	ret.ptr.Store(&peakInuseInfo{})
+	ret.ptr.Store(&peakInuseData{})
 	return ret
 }
 
@@ -64,14 +53,13 @@ func (p *PeakInuseTracker) UpdateMalloc(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Peak.Malloc.Value {
+		if n <= ptr.Malloc.Value {
 			return
 		}
 		// copy
 		newData := *ptr
-		newData.Peak.Malloc.Value = n
-		newData.Peak.Malloc.Time = time.Now()
-		newData.Snapshots.Malloc = newData.Peak
+		newData.Malloc.Value = n
+		newData.Malloc.Time = time.Now()
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
@@ -83,14 +71,13 @@ func (p *PeakInuseTracker) UpdateSession(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Peak.Session.Value {
+		if n <= ptr.Session.Value {
 			return
 		}
 		// copy
 		newData := *ptr
-		newData.Peak.Session.Value = n
-		newData.Peak.Session.Time = time.Now()
-		newData.Snapshots.Session = newData.Peak
+		newData.Session.Value = n
+		newData.Session.Time = time.Now()
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
@@ -102,14 +89,13 @@ func (p *PeakInuseTracker) UpdateIO(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Peak.IO.Value {
+		if n <= ptr.IO.Value {
 			return
 		}
 		// copy
 		newData := *ptr
-		newData.Peak.IO.Value = n
-		newData.Peak.IO.Time = time.Now()
-		newData.Snapshots.IO = newData.Peak
+		newData.IO.Value = n
+		newData.IO.Time = time.Now()
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
@@ -121,14 +107,13 @@ func (p *PeakInuseTracker) UpdateMemoryCache(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Peak.MemoryCache.Value {
+		if n <= ptr.MemoryCache.Value {
 			return
 		}
 		// copy
 		newData := *ptr
-		newData.Peak.MemoryCache.Value = n
-		newData.Peak.MemoryCache.Time = time.Now()
-		newData.Snapshots.MemoryCache = newData.Peak
+		newData.MemoryCache.Value = n
+		newData.MemoryCache.Time = time.Now()
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
@@ -140,14 +125,13 @@ func (p *PeakInuseTracker) UpdateHashmap(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Peak.Hashmap.Value {
+		if n <= ptr.Hashmap.Value {
 			return
 		}
 		// copy
 		newData := *ptr
-		newData.Peak.Hashmap.Value = n
-		newData.Peak.Hashmap.Time = time.Now()
-		newData.Snapshots.Hashmap = newData.Peak
+		newData.Hashmap.Value = n
+		newData.Hashmap.Time = time.Now()
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
