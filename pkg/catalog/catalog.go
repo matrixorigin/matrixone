@@ -58,26 +58,12 @@ func GetDefines(sid string) *Defines {
 func NewDefines() *Defines {
 	d := &Defines{}
 
-	d.MoDatabaseTableDefs = make([]engine.TableDef, len(MoDatabaseSchema))
-	for i, name := range MoDatabaseSchema {
-		d.MoDatabaseTableDefs[i] = newAttributeDef(name, MoDatabaseTypes[i], i == 0)
-	}
-	d.MoTablesTableDefs = make([]engine.TableDef, len(MoTablesSchema))
-	for i, name := range MoTablesSchema {
-		d.MoTablesTableDefs[i] = newAttributeDef(name, MoTablesTypes[i], i == 0)
-	}
-	d.MoColumnsTableDefs = make([]engine.TableDef, len(MoColumnsSchema))
-	for i, name := range MoColumnsSchema {
-		d.MoColumnsTableDefs[i] = newAttributeDef(name, MoColumnsTypes[i], i == 0)
-	}
-	d.MoTableMetaDefs = make([]engine.TableDef, len(MoTableMetaSchema))
-
 	{
 		// mo_database
-		dbCpkPos := len(MoDatabaseSchema) - 1 // cpk is the last column
+		dbCpkPos := MO_DATABASE_CPKEY_IDX
 		d.MoDatabaseTableDefs = make([]engine.TableDef, len(MoDatabaseSchema))
 		for i, name := range MoDatabaseSchema {
-			d.MoDatabaseTableDefs[i] = newAttributeDef(name, MoDatabaseTypes[i], i == dbCpkPos)
+			d.MoDatabaseTableDefs[i] = newAttributeDef(name, MoDatabaseTypes[i], i == dbCpkPos, i == dbCpkPos)
 		}
 		def := &engine.ConstraintDef{
 			Cts: []engine.Constraint{
@@ -105,10 +91,10 @@ func NewDefines() *Defines {
 
 	{
 		// mo_tables
-		tblCpkPos := len(MoTablesSchema) - 1
+		tblCpkPos := MO_TABLES_CPKEY_IDX
 		d.MoTablesTableDefs = make([]engine.TableDef, len(MoTablesSchema))
 		for i, name := range MoTablesSchema {
-			d.MoTablesTableDefs[i] = newAttributeDef(name, MoTablesTypes[i], i == tblCpkPos)
+			d.MoTablesTableDefs[i] = newAttributeDef(name, MoTablesTypes[i], i == tblCpkPos, i == tblCpkPos || i == MO_TABLES_EXTRA_INFO_IDX)
 		}
 		def := &engine.ConstraintDef{
 			Cts: []engine.Constraint{
@@ -136,10 +122,10 @@ func NewDefines() *Defines {
 
 	{
 		// mo_columns
-		colCpkPos := len(MoColumnsSchema) - 1
+		colCpkPos := MO_COLUMNS_ATT_CPKEY_IDX
 		d.MoColumnsTableDefs = make([]engine.TableDef, len(MoColumnsSchema))
 		for i, name := range MoColumnsSchema {
-			d.MoColumnsTableDefs[i] = newAttributeDef(name, MoColumnsTypes[i], i == colCpkPos)
+			d.MoColumnsTableDefs[i] = newAttributeDef(name, MoColumnsTypes[i], i == colCpkPos, i == colCpkPos)
 		}
 		def := &engine.ConstraintDef{
 			Cts: []engine.Constraint{
@@ -164,11 +150,14 @@ func NewDefines() *Defines {
 		d.MoColumnConstraint, _ = def.MarshalBinary()
 		d.MoColumnsTableDefs = append(d.MoColumnsTableDefs, def)
 	}
-
-	d.MoTableMetaDefs = make([]engine.TableDef, len(MoTableMetaSchema))
-	for i, name := range MoTableMetaSchema {
-		d.MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
+	{
+		// block meta
+		d.MoTableMetaDefs = make([]engine.TableDef, len(MoTableMetaSchema))
+		for i, name := range MoTableMetaSchema {
+			d.MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0, i == 0)
+		}
 	}
+
 	return d
 }
 
