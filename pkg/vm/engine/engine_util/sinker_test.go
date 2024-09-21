@@ -98,7 +98,7 @@ func TestNewSinker2(t *testing.T) {
 		proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	schema := catalog.MockSchema(3, -1)
+	schema := catalog.MockSchema(3, 2)
 	seqnums := make([]uint16, len(schema.Attrs()))
 	for i := range schema.Attrs() {
 		seqnums[i] = schema.GetSeqnum(schema.Attrs()[i])
