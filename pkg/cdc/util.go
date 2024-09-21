@@ -537,11 +537,14 @@ func generateSalt(n int) []byte {
 	return buf
 }
 
-var encrypt = aesCFBEncodeWithKey
+var (
+	encrypt        = aesCFBEncodeWithKey
+	cryptoRandRead = cryptorand.Read
+)
 
 func GetInitDataKeySql(kek string) (_ string, err error) {
 	aesKey := make([]byte, 32)
-	if _, err = cryptorand.Read(aesKey); err != nil {
+	if _, err = cryptoRandRead(aesKey); err != nil {
 		return
 	}
 
