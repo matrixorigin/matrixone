@@ -581,7 +581,7 @@ func MockCNDeleteInS3(
 	txn txnif.AsyncTxn,
 ) (stats objectio.ObjectStats, err error) {
 	bat := containers.NewBatch()
-	bat.AddVector(catalog.AttrRowID, rowIDVec)
+	bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
 	bat.AddVector("pk", pkVec)
 	name := objectio.MockObjectName()
 	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, nil)

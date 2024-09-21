@@ -168,7 +168,7 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 	dest, ok := batches[node.writeSchema.Version]
 	if ok {
 		dest.Extend(node.data.Window(int(from), int(to-from)))
-		dest.GetVectorByName(catalog.AttrCommitTs).Extend(commitTSVec)
+		dest.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Extend(commitTSVec)
 		commitTSVec.Close() // TODO no copy
 	} else {
 		inner := node.data.CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
@@ -178,7 +178,7 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 			Seqnums:    node.writeSchema.AllSeqnums(),
 			Batch:      inner,
 		}
-		inner.AddVector(catalog.AttrCommitTs, commitTSVec)
+		inner.AddVector(objectio.TombstoneAttr_CommitTs_Attr, commitTSVec)
 		batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_COMMITTS)
 		batches[node.writeSchema.Version] = batWithVer
 	}
@@ -206,7 +206,7 @@ func (node *memoryNode) getDataWindowLocked(
 			if colIdx == objectio.SEQNUM_COMMITTS {
 				typ := types.T_TS.ToType()
 				vec := node.object.rt.VectorPool.Transient.GetVector(&typ)
-				(*bat).AddVector(catalog.AttrCommitTs, vec)
+				(*bat).AddVector(objectio.TombstoneAttr_CommitTs_Attr, vec)
 				continue
 			}
 			colDef := readSchema.ColDefs[colIdx]
@@ -329,7 +329,7 @@ func (node *memoryNode) Scan(
 	for _, idx := range colIdxes {
 		if idx == objectio.SEQNUM_COMMITTS {
 			node.object.appendMVCC.FillInCommitTSVecLocked(
-				(*bat).GetVectorByName(catalog.AttrCommitTs), maxRow, mp)
+				(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr), maxRow, mp)
 		}
 	}
 	return
@@ -353,17 +353,17 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	defer commitTSVec.Close()
 	defer abort.Close()
 	rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](
-		node.data.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
+		node.data.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector())
 	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
-	pkVec := node.data.GetVectorByName(catalog.AttrPKVal)
+	pkVec := node.data.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
 	for i := minRow; i < maxRow; i++ {
 		if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 {
 			if *bat == nil {
 				*bat = catalog.NewTombstoneBatchByPKType(*pkVec.GetType(), mp)
 			}
-			(*bat).GetVectorByName(catalog.AttrRowID).Append(rowIDs[i], false)
-			(*bat).GetVectorByName(catalog.AttrPKVal).Append(pkVec.Get(int(i)), false)
-			(*bat).GetVectorByName(catalog.AttrCommitTs).Append(commitTSs[i-minRow], false)
+			(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
+			(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(pkVec.Get(int(i)), false)
+			(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(commitTSs[i-minRow], false)
 		}
 	}
 	return
@@ -383,7 +383,7 @@ func (node *memoryNode) FillBlockTombstones(
 		// blk.RUnlock()
 		return err
 	}
-	rowIDVec := node.data.GetVectorByName(catalog.AttrRowID)
+	rowIDVec := node.data.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr)
 	rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())
 	for i := 0; i < int(maxRow); i++ {
 		rowID := rowIDs[i]

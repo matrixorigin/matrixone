@@ -19,19 +19,20 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
-	PhyAddrColumnName    = pkgcatalog.Row_ID
+	PhyAddrColumnName    = objectio.DefaultRowid_Attr
 	PhyAddrColumnComment = "Physical address"
 
-	AttrRowID    = pkgcatalog.TableTailAttrDeleteRowID
-	AttrCommitTs = pkgcatalog.TableTailAttrCommitTs
-	AttrAborted  = pkgcatalog.TableTailAttrAborted
-	AttrPKVal    = pkgcatalog.TableTailAttrPKVal
+	// AttrRowID   = pkgcatalog.TableTailAttrDeleteRowID
+	// AttrCommitTs = pkgcatalog.TableTailAttrCommitTs
+	// AttrAborted  = pkgcatalog.TableTailAttrAborted
+	// AttrPKVal    = pkgcatalog.TableTailAttrPKVal
 
 	TenantSysID = uint32(0)
 )

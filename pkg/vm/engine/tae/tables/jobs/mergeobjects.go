@@ -133,7 +133,7 @@ func NewMergeObjectsTask(
 	}
 	if isTombstone {
 		task.idxs = append(task.idxs, objectio.SEQNUM_COMMITTS)
-		task.attrs = append(task.attrs, catalog.AttrCommitTs)
+		task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 	return
@@ -245,7 +245,7 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 	bat := batch.New(true, task.attrs)
 	for i, idx := range task.idxs {
 		if idx == objectio.SEQNUM_COMMITTS {
-			id := slices.Index(task.attrs, catalog.AttrCommitTs)
+			id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 			bat.Vecs[id] = data.Vecs[i].GetDownstreamVector()
 		} else {
 			bat.Vecs[idx] = data.Vecs[i].GetDownstreamVector()

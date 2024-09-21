@@ -1790,7 +1790,7 @@ func TestApplyDeltaloc(t *testing.T) {
 		pkVec := containers.MakeVector(schema.GetPrimaryKey().GetType(), common.DefaultAllocator)
 		pkVec.Append(val, false)
 		bat := containers.NewBatch()
-		bat.AddVector(catalog.AttrRowID, rowIDVec)
+		bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
 		bat.AddVector(schema.GetPrimaryKey().GetName(), pkVec)
 		insertEntry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "", containers.ToCNBatch(bat))
 		assert.NoError(t, err)
