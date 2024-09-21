@@ -237,6 +237,12 @@ func (c *checkpointCleaner) Replay() error {
 		}
 		c.updateInputs(table)
 	}
+	if acctFile != "" {
+		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
+		if err != nil {
+			return err
+		}
+	}
 	if snapFile != "" {
 		err = c.snapshotMeta.ReadMeta(c.ctx, GCMetaDir+snapFile, c.fs.Service)
 		if err != nil {
@@ -251,12 +257,7 @@ func (c *checkpointCleaner) Replay() error {
 		ckp = checkpoint.NewCheckpointEntry(c.sid, minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
 		c.updateMinMerged(ckp)
 	}()
-	if acctFile != "" {
-		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
-		if err != nil {
-			return err
-		}
-	} else {
+	if acctFile == "" {
 		//No account table information, it may be a new cluster or an upgraded cluster,
 		//and the table information needs to be initialized from the checkpoint
 		maxConsumed := c.maxConsumed.Load()
@@ -278,7 +279,7 @@ func (c *checkpointCleaner) Replay() error {
 			if entry.GetType() == checkpoint.ET_Global {
 				isConsumedGCkp = true
 			}
-			c.snapshotMeta.InitTableInfo(ckpData)
+			c.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
 		}
 		if !isConsumedGCkp {
 			// The global checkpoint that Specified checkpoint depends on may have been GC,
@@ -294,7 +295,7 @@ func (c *checkpointCleaner) Replay() error {
 				logutil.Warnf("load max global checkpoint data failed, err[%v]", err)
 				return nil
 			}
-			c.snapshotMeta.InitTableInfo(ckpData)
+			c.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
 		}
 		logutil.Infof("table info initialized: %s", c.snapshotMeta.TableInfoString())
 	}
@@ -995,6 +996,7 @@ func (c *checkpointCleaner) createNewInput(
 	}()
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {
+		startts, endts := candidate.GetStart(), candidate.GetEnd()
 		data, err = c.collectCkpData(candidate)
 		if err != nil {
 			logutil.Errorf("processing clean %s: %v", candidate.String(), err)
@@ -1003,7 +1005,7 @@ func (c *checkpointCleaner) createNewInput(
 		}
 		defer data.Close()
 		input.UpdateTable(data)
-		c.updateSnapshot(data)
+		c.updateSnapshot(c.ctx, c.fs.Service, data, startts, endts)
 	}
 	name := blockio.EncodeSnapshotMetadataFileName(GCMetaDir,
 		PrefixSnapMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
@@ -1033,8 +1035,12 @@ func (c *checkpointCleaner) createNewInput(
 	return
 }
 
-func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
-	c.snapshotMeta.Update(data)
+func (c *checkpointCleaner) updateSnapshot(
+	ctx context.Context,
+	fs fileservice.FileService,
+	data *logtail.CheckpointData,
+	startts, endts types.TS) error {
+	c.snapshotMeta.Update(ctx, fs, data, startts, endts)
 	return nil
 }
 

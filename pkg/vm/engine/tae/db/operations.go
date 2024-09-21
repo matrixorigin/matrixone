@@ -166,7 +166,8 @@ type WriteReq struct {
 	PkCheck PKCheckType
 	//S3 object file name
 	FileName string
-	MetaLocs []string
+	// cn flushed data object stats
+	DataObjectStats []objectio.ObjectStats
 	//for delete on S3
 	TombstoneStats []objectio.ObjectStats
 	//tasks for loading primary keys or deleted row ids

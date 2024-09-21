@@ -7,7 +7,7 @@ b varchar(10)
 
 select mo_ctl('dn', 'inspect', 'policy -r 0 -m 0');
 mo_ctl(dn, inspect, policy -r 0 -m 0)
-\nmsg: (*) maxMergeObjN: 0, maxOsizeObj: 128MB, minOsizeQualified: 0MB, offloadToCnSize: 80000MB, hints: [Auto]\n\n<empty>
+\nmsg: (*) maxMergeObjN: 0, maxOsizeObj: 128MB, minOsizeQualified: 0MB, offloadToCnSize: 80000MB, hints: [Auto]\n\nauto merge is disabled
 insert into t1 values (100, 'a');
 select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
 mo_ctl(dn, flush, mo_ctl_merge.t1)
@@ -242,4 +242,4 @@ rows_cnt
 2
 select mo_ctl('dn', 'inspect', 'policy');
 mo_ctl(dn, inspect, policy)
-\nmsg: (*) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\n<empty>
+\nmsg: (*) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\ngeneral setting has been refreshed
