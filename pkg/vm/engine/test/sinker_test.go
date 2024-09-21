@@ -142,6 +142,8 @@ func Test_Sinker(t *testing.T) {
 		objectio.TombstonePrimaryKeyIdx,
 		mp,
 	)
+	require.NoError(t, err)
+
 	rowids1 := vector.MustFixedColWithTypeCheck[types.Rowid](bat1.Vecs[0])
 	rowids2 := vector.MustFixedColWithTypeCheck[types.Rowid](bat2.Vecs[0])
 	pks1 := vector.MustFixedColWithTypeCheck[int32](bat1.Vecs[1])
