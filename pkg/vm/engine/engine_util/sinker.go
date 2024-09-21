@@ -502,11 +502,11 @@ func (sinker *Sinker) Write(
 			curr = sinker.fetchBuffer()
 		}
 
-		toAdd := objectio.BlockMaxRows
-		if data.RowCount() < toAdd {
-			toAdd = data.RowCount()
+		toAdd := left
+		currPos := curr.RowCount()
+		if currPos+toAdd > objectio.BlockMaxRows {
+			toAdd = objectio.BlockMaxRows - currPos
 		}
-		left -= toAdd
 		if err = curr.Union(data, offset, toAdd, sinker.mp); err != nil {
 			return
 		}
@@ -517,6 +517,7 @@ func (sinker *Sinker) Write(
 			}
 			curr = sinker.fetchBuffer()
 		}
+		left -= toAdd
 		offset += toAdd
 	}
 	if curr != nil && curr.RowCount() > 0 {
