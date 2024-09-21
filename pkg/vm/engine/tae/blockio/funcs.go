@@ -195,3 +195,24 @@ func LoadOneBlock(
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
 	return bat, sortKey, err
 }
+
+func LoadOneBlockWithIndex(
+	ctx context.Context,
+	fs fileservice.FileService,
+	idxes []uint16,
+	key objectio.Location,
+	metaType objectio.DataMetaType,
+) (*batch.Batch, uint16, error) {
+	sortKey := uint16(math.MaxUint16)
+	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
+	if err != nil {
+		return nil, sortKey, err
+	}
+	data := meta.MustGetMeta(metaType)
+	if data.BlockHeader().Appendable() {
+		sortKey = data.BlockHeader().SortKey()
+	}
+	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
+		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
+	return bat, sortKey, err
+}
