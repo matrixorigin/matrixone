@@ -90,15 +90,17 @@ func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
 }
 
 func (bb *OneSchemaBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
-	if bat == nil {
+	if bat == nil || bat.Vecs == nil {
 		return
 	}
+
 	bat.CleanOnlyData()
 	newSize := bb.currSize + bat.Allocated()
 	if newSize > bb.sizeCap {
 		bat.Clean(mp)
 		return
 	}
+
 	bb.buffer = append(bb.buffer, bat)
 	bb.currSize = newSize
 }
