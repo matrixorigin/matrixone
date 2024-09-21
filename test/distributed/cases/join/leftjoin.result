@@ -22,15 +22,12 @@ mo_ctl(dn, flush, d1.t2)
 select mo_ctl('dn', 'flush', 'd1.t3');
 mo_ctl(dn, flush, d1.t3)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-select Sleep(5);
-sleep(5)
-0
 explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Table Scan on d1.t2
 explain select t1.c1,t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Join
         Join Type: LEFT   hashOnPK
@@ -38,13 +35,13 @@ Project
         ->  Table Scan on d1.t2
         ->  Table Scan on d1.t1
 explain select t3.c1 from t3 left join t1 on t1.c1 =t3.c1 and t1.c1 > t3.c2 where t3.c1<10;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Table Scan on d1.t3
         Filter Cond: (t3.c1 < 10)
         Block Filter Cond: (t3.c1 < 10)
 explain select t1.c1,t3.c1 from t3 left join t1 on t1.c1 =t3.c1 where t3.c1<10;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Join
         Join Type: LEFT   hashOnPK
@@ -56,11 +53,11 @@ Project
               Filter Cond: (t1.c1 < 10)
               Block Filter Cond: (t1.c1 < 10)
 explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c2;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Table Scan on d1.t2
 explain select t3.c1 from t3 left join t2 on t3.c2=t2.c2;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Join
         Join Type: LEFT
@@ -68,11 +65,11 @@ Project
         ->  Table Scan on d1.t3
         ->  Table Scan on d1.t2
 explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1) v1 on t2.c1 =v1.c1 and t2.c2=v1.c2;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Table Scan on d1.t2
 explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1 limit 5000) v1 on t2.c1 =v1.c1;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Join
         Join Type: LEFT
@@ -150,7 +147,7 @@ insert into routines values('specific_name01','routine_catalog01','specific_name
 insert into routines values('specific_name02','routine_catalog02','specific_name01','routine_name01','rrr01','data',10,10,10,20,20,'character_set_name','collation','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
 insert into routines values('specific_name01','routine_catalog01','specific_name02','routine_name02','rrr02','data',10,10,10,20,20,'character_set_name','collation','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
 SELECT DISTINCT ROUTINE_SCHEMA, ROUTINE_NAME, PARAMS.PARAMETER FROM ROUTINES LEFT JOIN ( SELECT SPECIFIC_SCHEMA, SPECIFIC_NAME, GROUP_CONCAT(CONCAT(DATA_TYPE, ' ', PARAMETER_NAME) ORDER BY ORDINAL_POSITION SEPARATOR ', ') PARAMETER, ROUTINE_TYPE FROM PARAMETERS GROUP BY SPECIFIC_SCHEMA, SPECIFIC_NAME, ROUTINE_TYPE ) PARAMS ON ROUTINES.ROUTINE_SCHEMA = PARAMS.SPECIFIC_SCHEMA AND ROUTINES.ROUTINE_NAME = PARAMS.SPECIFIC_NAME AND ROUTINES.ROUTINE_TYPE = PARAMS.ROUTINE_TYPE WHERE ROUTINE_SCHEMA = 'specific_name01' ORDER BY ROUTINE_SCHEMA;
-routine_schema    routine_name    parameter
+ROUTINE_SCHEMA    ROUTINE_NAME    PARAMETER
 specific_name01    routine_name02    null
 specific_name01    routine_name01    data_type01 parametername01
 drop table routines;

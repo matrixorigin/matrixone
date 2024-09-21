@@ -604,6 +604,16 @@ message OnDuplicateKeyCtx {
 	uint32 table_version			= 10;
 }
 
+message UpdateCtx {
+	ObjectRef obj_ref		= 1;
+	TableDef table_def		= 2;
+	repeated Expr insert_cols		= 3;
+	repeated Expr delete_cols		= 4;
+	repeated uint64 partition_table_ids = 5;
+	repeated string partition_table_names = 6;
+	int32 partition_idx = 7;
+}
+
 message InsertCtx {
 	ObjectRef ref			= 1;
 	bool add_affected_rows 	= 2;
@@ -707,28 +717,28 @@ message Node {
 		INSERT = 51;
 		DELETE = 52;
 		REPLACE = 53;
-		//
-		LOCK_OP = 54;
-
-		//
-		INTERSECT = 55;
-		INTERSECT_ALL = 56;
-		MINUS = 57;
-		MINUS_ALL = 58;
-
-		//
-		ON_DUPLICATE_KEY = 59;
-		PRE_INSERT = 60;
-		PRE_DELETE = 61;
+		ON_DUPLICATE_KEY = 54;
+		PRE_INSERT = 55;
+		PRE_DELETE = 56;
 		// the node which build insert batch for hidden table(unique key)
-		PRE_INSERT_UK = 62;
-		PRE_INSERT_SK = 63;
+		PRE_INSERT_UK = 57;
+		PRE_INSERT_SK = 58;
+		MULTI_UPDATE = 59;
+
+		LOCK_OP = 60;
 		//
-		TIME_WINDOW = 64;
-		FILL = 65;
-		PARTITION = 66;
-		FUZZY_FILTER = 67;
-		APPLY = 68;
+		INTERSECT = 61;
+		INTERSECT_ALL = 62;
+		MINUS = 63;
+		MINUS_ALL = 64;
+
+		//
+		//
+		TIME_WINDOW = 65;
+		FILL = 66;
+		PARTITION = 67;
+		FUZZY_FILTER = 68;
+		APPLY = 69;
 	}
 
 	enum JoinType {
@@ -856,10 +866,12 @@ message Node {
 	repeated msgHeader recv_msg_list = 57;
 
 	Snapshot scan_snapshot = 58;
-
+	
 	bool recursive_cte = 59;
+	
+	repeated UpdateCtx update_ctx_list = 60;
 
-	ApplyType apply_type = 60;
+    ApplyType apply_type = 61;
 
 }
 

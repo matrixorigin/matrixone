@@ -39,8 +39,6 @@ const (
 )
 
 type container struct {
-	state int
-
 	rbat  *batch.Batch
 	inbat *batch.Batch
 
@@ -97,7 +95,6 @@ func (apply *Apply) Release() {
 func (apply *Apply) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &apply.ctr
 
-	ctr.state = Build
 	ctr.inbat = nil
 	apply.TableFunction.Reset(proc, pipelineFailed, err)
 

@@ -77,62 +77,55 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 	var err error
 	ctr := &apply.ctr
 	for {
-		switch ctr.state {
-		case Build:
-			ctr.state = Probe
-		case Probe:
+		if ctr.inbat == nil {
+			input, err = vm.ChildrenCall(apply.GetChildren(0), proc, analyzer)
+			if err != nil {
+				return result, err
+			}
+			ctr.inbat = input.Batch
 			if ctr.inbat == nil {
-				input, err = vm.ChildrenCall(apply.GetChildren(0), proc, analyzer)
-				if err != nil {
-					return result, err
-				}
-				ctr.inbat = input.Batch
-				if ctr.inbat == nil {
-					ctr.state = End
-					continue
-				}
-				if ctr.inbat.Last() {
-					result.Batch = ctr.inbat
-					analyzer.Output(result.Batch)
-					return result, nil
-				}
-				if ctr.inbat.IsEmpty() {
-					continue
-				}
-				ctr.batIdx = 0
-				ctr.tfFinish = true
-				apply.TableFunction.ApplyArgsEval(ctr.inbat, proc)
+				result.Batch = nil
+				result.Status = vm.ExecStop
+				return result, nil
 			}
-			if ctr.rbat == nil {
-				ctr.rbat = batch.NewWithSize(len(apply.Result))
-				for i, rp := range apply.Result {
-					if rp.Rel == 0 {
-						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inbat.Vecs[rp.Pos].GetType())
-					} else {
-						ctr.rbat.Vecs[i] = vector.NewVec(apply.Typs[rp.Pos])
-					}
-				}
-			} else {
-				ctr.rbat.CleanOnlyData()
+			if ctr.inbat.Last() {
+				result.Batch = ctr.inbat
+				analyzer.Output(result.Batch)
+				return result, nil
 			}
-
-			err = ctr.probe(apply, proc, &probeResult)
-			if err != nil {
-				return result, err
+			if ctr.inbat.IsEmpty() {
+				continue
 			}
-
-			result.Batch, err = apply.EvalProjection(probeResult.Batch, proc)
-			if err != nil {
-				return result, err
-			}
-
-			analyzer.Output(result.Batch)
-			return result, nil
-		default:
-			result.Batch = nil
-			result.Status = vm.ExecStop
-			return result, nil
+			ctr.batIdx = 0
+			ctr.tfFinish = true
+			apply.TableFunction.ApplyArgsEval(ctr.inbat, proc)
 		}
+		if ctr.rbat == nil {
+			ctr.rbat = batch.NewWithSize(len(apply.Result))
+			for i, rp := range apply.Result {
+				if rp.Rel == 0 {
+					ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inbat.Vecs[rp.Pos].GetType())
+				} else {
+					ctr.rbat.Vecs[i] = vector.NewVec(apply.Typs[rp.Pos])
+				}
+			}
+		} else {
+			ctr.rbat.CleanOnlyData()
+		}
+
+		err = ctr.probe(apply, proc, &probeResult)
+		if err != nil {
+			return result, err
+		}
+
+		result.Batch, err = apply.EvalProjection(probeResult.Batch, proc)
+		if err != nil {
+			return result, err
+		}
+
+		analyzer.Output(result.Batch)
+		return result, nil
+
 	}
 }
 
