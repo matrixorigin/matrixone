@@ -68,6 +68,7 @@ const (
 	Insert
 	External
 	Source
+	MultiUpdate
 
 	Minus
 	Intersect
@@ -292,6 +293,8 @@ func (op OpType) String() string {
 		return "Deletion"
 	case Insert:
 		return "Insert"
+	case MultiUpdate:
+		return "MultiUpdate"
 	case External:
 		return "External"
 	case Source:

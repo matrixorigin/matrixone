@@ -237,6 +237,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "mterial", nil
 	case plan.Node_APPLY:
 		return "apply", nil
+	case plan.Node_MULTI_UPDATE:
+		return "multi_update", nil
 	default:
 		return "", moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -637,6 +639,11 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Value: []string{},
 		})
 	case plan.Node_APPLY:
+		labels = append(labels, models.Label{
+			Name:  Label_Apply,
+			Value: []string{},
+		})
+	case plan.Node_MULTI_UPDATE:
 		labels = append(labels, models.Label{
 			Name:  Label_Apply,
 			Value: []string{},

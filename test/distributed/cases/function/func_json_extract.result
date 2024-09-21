@@ -593,3 +593,23 @@ invalid input: json_extract_float64 should use a path that retrives a single val
 select json_extract_string(c1, '$.a1', '$.a2') from test_123;
 invalid input: json_extract_string should use a path that retrives a single value
 drop database test;
+create database test;
+use test;
+CREATE TABLE example_table (
+id INT AUTO_INCREMENT PRIMARY KEY,
+data JSON NOT NULL
+);
+INSERT INTO example_table (data)
+VALUES (
+'{"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item2": "value2", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item20": "value20"}'
+);
+select * from example_table where json_extract(data, '$.CODE') = '"CODE-3"';
+id    data
+1    {"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item2": "value2", "item20": "value20", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9"}
+select * from example_table where json_extract(data, '$.LINE') = '"LINE-4"';
+id    data
+1    {"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item2": "value2", "item20": "value20", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9"}
+select * from example_table where json_extract(data, '$.PANEL') = '"PANEL-17"';
+id    data
+1    {"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item2": "value2", "item20": "value20", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9"}
+drop database test;

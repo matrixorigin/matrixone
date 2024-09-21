@@ -180,9 +180,34 @@ func TestGlobbing(t *testing.T) {
 	yDst := []string{"*", "ab*", "*defg", "a*c*efg"}
 	nDst := []string{"*def", "aab*", "*f"}
 	for _, dst := range yDst {
-		assert.True(t, globbing(src, dst))
+		assert.True(t, globbing(nil)(src, dst))
 	}
 	for _, dst := range nDst {
-		assert.False(t, globbing(src, dst))
+		assert.False(t, globbing(nil)(src, dst))
+	}
+}
+
+func BenchmarkGlobbingNoCache(b *testing.B) {
+	src := "abcdefg"
+	yDst := []string{"*", "ab*", "*defg", "a*c*efg"}
+	for j := 0; j < b.N; j++ {
+		for i := 0; i < 10000; i++ {
+			for _, dst := range yDst {
+				assert.True(b, globbing(nil)(src, dst))
+			}
+		}
+	}
+}
+
+func BenchmarkGlobbingWithCache(b *testing.B) {
+	src := "abcdefg"
+	yDst := []string{"*", "ab*", "*defg", "a*c*efg"}
+	cache := newRegexCache(0)
+	for j := 0; j < b.N; j++ {
+		for i := 0; i < 10000; i++ {
+			for _, dst := range yDst {
+				assert.True(b, globbing(cache)(src, dst))
+			}
+		}
 	}
 }

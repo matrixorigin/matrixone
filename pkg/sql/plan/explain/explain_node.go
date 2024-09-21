@@ -142,6 +142,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Lock"
 	case plan.Node_APPLY:
 		pname = "CROSS APPLY"
+	//case plan.Node_MULTI_UPDATE:
+	//	pname = "Multi Update"
 	default:
 		panic("error node type")
 	}
