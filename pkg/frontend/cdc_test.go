@@ -664,6 +664,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	ses.GetTxnCompileCtx().execCtx.stmt = create
 
 	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
+	defer func() { cdc2.AesKey = "" }()
 	stub := gostub.Stub(&initAesKeyWrapper, func(context.Context, taskservice.SqlExecutor, uint32) (err error) {
 		return nil
 	})
@@ -1037,6 +1038,7 @@ const (
 
 func TestRegisterCdcExecutor(t *testing.T) {
 	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
+	defer func() { cdc2.AesKey = "" }()
 
 	type args struct {
 		logger       *zap.Logger
@@ -2698,6 +2700,9 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		ctx context.Context
 	}
 
+	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
+	defer func() { cdc2.AesKey = "" }()
+
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
@@ -2887,25 +2892,58 @@ func Test_getSqlForGetTask(t *testing.T) {
 }
 
 func Test_initAesKey(t *testing.T) {
-	queryTableStub := gostub.Stub(&queryTableWrapper, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
-		return true, nil
-	})
-	defer queryTableStub.Reset()
+	{
+		cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
+		err := initAesKey(context.Background(), nil, 0)
+		assert.NoError(t, err)
 
-	decryptStub := gostub.Stub(&decrypt, func(context.Context, string, []byte) (string, error) {
-		return "aesKey", nil
-	})
-	defer decryptStub.Reset()
+		cdc2.AesKey = ""
+	}
 
-	getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func() *config.ParameterUnit {
-		return &config.ParameterUnit{
-			SV: &config.FrontendParameters{
-				KeyEncryptionKey: "kek",
-			},
-		}
-	})
-	defer getGlobalPuStub.Reset()
+	{
+		e := moerr.NewInternalErrorNoCtx("error")
+		queryTableStub := gostub.Stub(&queryTableWrapper, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
+			return true, e
+		})
+		defer queryTableStub.Reset()
 
-	err := initAesKey(context.Background(), nil, 0)
-	assert.NoError(t, err)
+		err := initAesKey(context.Background(), nil, 0)
+		assert.Equal(t, e, err)
+	}
+
+	{
+		queryTableStub := gostub.Stub(&queryTableWrapper, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
+			return false, nil
+		})
+		defer queryTableStub.Reset()
+
+		err := initAesKey(context.Background(), nil, 0)
+		assert.Error(t, err)
+	}
+
+	{
+		queryTableStub := gostub.Stub(&queryTableWrapper, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
+			return true, nil
+		})
+		defer queryTableStub.Reset()
+
+		decryptStub := gostub.Stub(&decrypt, func(context.Context, string, []byte) (string, error) {
+			return "aesKey", nil
+		})
+		defer decryptStub.Reset()
+
+		getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func() *config.ParameterUnit {
+			return &config.ParameterUnit{
+				SV: &config.FrontendParameters{
+					KeyEncryptionKey: "kek",
+				},
+			}
+		})
+		defer getGlobalPuStub.Reset()
+
+		err := initAesKey(context.Background(), nil, 0)
+		assert.NoError(t, err)
+		assert.Equal(t, "aesKey", cdc2.AesKey)
+		cdc2.AesKey = ""
+	}
 }

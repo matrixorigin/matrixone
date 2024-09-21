@@ -36,6 +36,9 @@ import (
 )
 
 func Test_aes(t *testing.T) {
+	AesKey = "test-aes-key-not-use-it-in-cloud"
+	defer func() { AesKey = "" }()
+
 	data := "test ase"
 	encData, err := AesCFBEncode([]byte(data))
 	assert.NoError(t, err)
@@ -891,4 +894,14 @@ func TestGetInitDataKeySql(t *testing.T) {
 	s, err := GetInitDataKeySql("01234567890123456789012345678901")
 	assert.NoError(t, err)
 	assert.Equal(t, "insert into mo_catalog.mo_data_key (account_id, key_id, encrypted_key) values (0, '4e3da275-5003-4ca0-8667-5d3cdbecdd35', 'encrypted')", s)
+}
+
+func TestAesCFBEncodeWithKey_EmptyKey(t *testing.T) {
+	_, err := aesCFBEncodeWithKey([]byte("01234567890123456789012345678901"), []byte{})
+	assert.Error(t, err)
+}
+
+func TestAesCFBDecodeWithKey_EmptyKey(t *testing.T) {
+	_, err := AesCFBDecodeWithKey(context.Background(), "01234567890123456789012345678901", []byte{})
+	assert.Error(t, err)
 }

@@ -92,6 +92,7 @@ func TestCalculateStorageUsage(t *testing.T) {
 	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KeyEncryptionKey = "0123456789abcdef0123456789abcdef"
 
 	ieFactory := func() ie.InternalExecutor {
 		return frontend.NewInternalExecutor("")
