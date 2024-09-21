@@ -71,6 +71,9 @@ func newAllocator() malloc.Allocator {
 				))
 			}
 
+			// peak
+			malloc.GlobalPeakInuseTracker.UpdateHashmap(inUse)
+
 		},
 	)
 }

@@ -26,14 +26,20 @@ type PeakInuseTracker struct {
 type peakInuseInfo struct {
 	Data      peakInuseData
 	Snapshots struct {
-		Malloc  peakInuseData
-		Session peakInuseData
+		Malloc      peakInuseData
+		Session     peakInuseData
+		IO          peakInuseData
+		MemoryCache peakInuseData
+		Hashmap     peakInuseData
 	}
 }
 
 type peakInuseData struct {
-	Malloc  peakInuseValue
-	Session peakInuseValue
+	Malloc      peakInuseValue
+	Session     peakInuseValue
+	IO          peakInuseValue
+	MemoryCache peakInuseValue
+	Hashmap     peakInuseValue
 }
 
 type peakInuseValue struct {
@@ -78,6 +84,63 @@ func (p *PeakInuseTracker) UpdateSession(n uint64) {
 		newData.Data.Session.Value = n
 		newData.Data.Session.Time = time.Now()
 		newData.Snapshots.Session = newData.Data
+		// update
+		if p.ptr.CompareAndSwap(ptr, &newData) {
+			return
+		}
+	}
+}
+
+func (p *PeakInuseTracker) UpdateIO(n uint64) {
+	for {
+		// read
+		ptr := p.ptr.Load()
+		if n <= ptr.Data.IO.Value {
+			return
+		}
+		// copy
+		newData := *ptr
+		newData.Data.IO.Value = n
+		newData.Data.IO.Time = time.Now()
+		newData.Snapshots.IO = newData.Data
+		// update
+		if p.ptr.CompareAndSwap(ptr, &newData) {
+			return
+		}
+	}
+}
+
+func (p *PeakInuseTracker) UpdateMemoryCache(n uint64) {
+	for {
+		// read
+		ptr := p.ptr.Load()
+		if n <= ptr.Data.MemoryCache.Value {
+			return
+		}
+		// copy
+		newData := *ptr
+		newData.Data.MemoryCache.Value = n
+		newData.Data.MemoryCache.Time = time.Now()
+		newData.Snapshots.MemoryCache = newData.Data
+		// update
+		if p.ptr.CompareAndSwap(ptr, &newData) {
+			return
+		}
+	}
+}
+
+func (p *PeakInuseTracker) UpdateHashmap(n uint64) {
+	for {
+		// read
+		ptr := p.ptr.Load()
+		if n <= ptr.Data.Hashmap.Value {
+			return
+		}
+		// copy
+		newData := *ptr
+		newData.Data.Hashmap.Value = n
+		newData.Data.Hashmap.Time = time.Now()
+		newData.Snapshots.Hashmap = newData.Data
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
