@@ -31,7 +31,6 @@ import (
 )
 
 func Test_Sinker(t *testing.T) {
-	t.Skip("todo")
 	mp := mpool.MustNewZeroNoFixed()
 	proc := testutil3.NewProcessWithMPool("", mp)
 	pkType := types.T_int32.ToType()
@@ -45,7 +44,7 @@ func Test_Sinker(t *testing.T) {
 		factory,
 		mp,
 		fs,
-		engine_util.WithDedupAll(),
+		// engine_util.WithDedupAll(),
 		engine_util.WithMemorySizeThreshold(mpool.KB*400),
 	)
 
@@ -87,6 +86,12 @@ func Test_Sinker(t *testing.T) {
 	objs, batches := sinker1.GetResult()
 	require.Equal(t, 0, len(batches))
 	require.Equal(t, 2, len(objs))
+	rows := 0
+	for _, stats := range objs {
+		rows += int(stats.Rows())
+	}
+
+	require.Equal(t, bat1.RowCount(), rows)
 
 	pkVec.Close()
 	rowIDVec.Free(mp)
