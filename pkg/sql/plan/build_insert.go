@@ -869,6 +869,10 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		}
 	}
 
+	if filterExpr == nil {
+		return nil, nil
+	}
+
 	filterExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, filterExpr, proc, false, true)
 	if err != nil {
 		return nil, nil
