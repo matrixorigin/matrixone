@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,6 +102,7 @@ func Test_Sinker(t *testing.T) {
 			objectio.TombstoneSeqnums_CN_Created,
 			objectio.GetTombstoneTypes(pkType, false),
 		),
+		disttae.WithTombstone(),
 	)
 	blockio.Start("")
 	defer blockio.Stop("")
@@ -111,13 +114,42 @@ func Test_Sinker(t *testing.T) {
 		if done {
 			break
 		}
-		// TODO
-		// require.True(t, IsBatchSorted(buffer, objectio.TombstonePrimaryKeyIdx))
+		rowIds := vector.MustFixedColWithTypeCheck[types.Rowid](buffer.Vecs[0])
+		var (
+			curr, last *types.Rowid
+		)
+		for i := range rowIds {
+			if i == 0 {
+				last = &rowIds[i]
+				continue
+			}
+			curr = &rowIds[i]
+			require.True(t, curr.GE(last))
+		}
 		err = bat2.Union(buffer, 0, buffer.RowCount(), mp)
 		require.NoError(t, err)
 	}
 	buffer.Clean(mp)
 	require.Equal(t, bat1.RowCount(), bat2.RowCount())
+	err = mergesort.SortColumnsByIndex(
+		bat1.Vecs,
+		objectio.TombstonePrimaryKeyIdx,
+		mp,
+	)
+	require.NoError(t, err)
+	err = mergesort.SortColumnsByIndex(
+		bat2.Vecs,
+		objectio.TombstonePrimaryKeyIdx,
+		mp,
+	)
+	rowids1 := vector.MustFixedColWithTypeCheck[types.Rowid](bat1.Vecs[0])
+	rowids2 := vector.MustFixedColWithTypeCheck[types.Rowid](bat2.Vecs[0])
+	pks1 := vector.MustFixedColWithTypeCheck[int32](bat1.Vecs[1])
+	pks2 := vector.MustFixedColWithTypeCheck[int32](bat2.Vecs[1])
+	for pos, end := 0, bat1.RowCount(); pos < end; pos++ {
+		require.Equalf(t, rowids1[pos], rowids2[pos], "pos:%d, rowids1:%s, rowids2:%s", pos, rowids1[pos], rowids2[pos])
+		require.Equalf(t, pks1[pos], pks2[pos], "pos:%d, pks1:%d, pks2:%d", pos, pks1[pos], pks2[pos])
+	}
 
 	pkVec.Close()
 	rowIDVec.Free(mp)
