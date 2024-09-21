@@ -1617,15 +1617,14 @@ func compositedUriInfo(uri string, uriPrefix string) (bool, cdc.UriInfo) {
 		return false, cdc.UriInfo{}
 	}
 	seps2 := strings.Split(seps[0], ":")
-	if len(seps2) != 2 || len(seps2[0]) == 0 {
+	if len(seps2) < 2 {
 		return false, cdc.UriInfo{}
 	}
-	userName := seps2[0]
-	password := seps2[1]
+	userName := strings.Join(seps2[0:len(seps2)-1], ":")
+	password := seps2[len(seps2)-1]
 	passwordStart := len(uriPrefix) + len(userName) + 1
 	passwordEnd := passwordStart + len(password)
-	if passwordEnd > len(uri) ||
-		password != uri[passwordStart:passwordEnd] {
+	if passwordEnd > len(uri) || password != uri[passwordStart:passwordEnd] {
 		return false, cdc.UriInfo{}
 	}
 

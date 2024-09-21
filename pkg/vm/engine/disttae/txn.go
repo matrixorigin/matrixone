@@ -1258,7 +1258,7 @@ func (txn *Transaction) delTransaction() {
 		if txn.writes[i].bat == nil {
 			continue
 		}
-		txn.proc.PutBatch(txn.writes[i].bat)
+		txn.writes[i].bat.Clean(txn.proc.Mp())
 	}
 	txn.CleanToFreeBatches()
 	txn.tableCache = nil
@@ -1425,7 +1425,7 @@ func (txn *Transaction) GetHaveDDL() bool {
 func (txn *Transaction) CleanToFreeBatches() {
 	for key := range txn.toFreeBatches {
 		for _, bat := range txn.toFreeBatches[key] {
-			txn.proc.PutBatch(bat)
+			bat.Clean(txn.proc.Mp())
 		}
 		delete(txn.toFreeBatches, key)
 	}

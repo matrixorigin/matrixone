@@ -130,21 +130,27 @@ func (bio *IOPackageImpl) AppendUint8(data []byte, value uint8) []byte {
 }
 
 func (bio *IOPackageImpl) AppendUint16(data []byte, value uint16) []byte {
-	tmp := make([]byte, 2)
-	bio.WriteUint16(tmp, 0, value)
-	return append(data, tmp...)
+	if bio.endian {
+		return binary.LittleEndian.AppendUint16(data, value)
+	} else {
+		return binary.BigEndian.AppendUint16(data, value)
+	}
 }
 
 func (bio *IOPackageImpl) AppendUint32(data []byte, value uint32) []byte {
-	tmp := make([]byte, 4)
-	bio.WriteUint32(tmp, 0, value)
-	return append(data, tmp...)
+	if bio.endian {
+		return binary.LittleEndian.AppendUint32(data, value)
+	} else {
+		return binary.BigEndian.AppendUint32(data, value)
+	}
 }
 
 func (bio *IOPackageImpl) AppendUint64(data []byte, value uint64) []byte {
-	tmp := make([]byte, 8)
-	bio.WriteUint64(tmp, 0, value)
-	return append(data, tmp...)
+	if bio.endian {
+		return binary.LittleEndian.AppendUint64(data, value)
+	} else {
+		return binary.BigEndian.AppendUint64(data, value)
+	}
 }
 
 func (bio *IOPackageImpl) ReadUint8(data []byte, pos int) (uint8, int, bool) {
