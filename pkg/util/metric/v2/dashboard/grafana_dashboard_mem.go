@@ -17,13 +17,14 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/row"
-	"strings"
 )
 
 func (c *DashboardCreator) initMemDashboard() error {
-	folder, err := c.createFolder(moFolderName)
+	folder, err := c.createFolder(c.folderName)
 	if err != nil {
 		return err
 	}
@@ -32,6 +33,7 @@ func (c *DashboardCreator) initMemDashboard() error {
 		"Memory Metrics",
 		c.withRowOptions(
 			c.initMpoolAllocatorRow(),
+			c.initMallocRow(),
 		)...)
 	if err != nil {
 		return err
@@ -99,5 +101,38 @@ func (c *DashboardCreator) initMpoolAllocatorRow() dashboard.Option {
 	return dashboard.Row(
 		"TAE Mpool Allocator",
 		options...,
+	)
+}
+
+func (c *DashboardCreator) initMallocRow() dashboard.Option {
+	makeGraph := func(prefix string) row.Option {
+		name := prefix
+		if name == "" {
+			name = "all"
+		}
+		return c.withMultiGraph(
+			name,
+			4,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_counter", `type="`+prefix+`allocate"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_gauge", `type="`+prefix+`inuse"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_counter", `type="`+prefix+`allocate-objects"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_gauge", `type="`+prefix+`inuse-objects"`) + `)`,
+			},
+			[]string{
+				prefix + "allocate bytes",
+				prefix + "inuse bytes",
+				prefix + "allocate objects",
+				prefix + "inuse objects",
+			},
+		)
+	}
+	return dashboard.Row(
+		"malloc",
+		makeGraph(""),
+		makeGraph("memory-cache-"),
+		makeGraph("io-"),
+		makeGraph("bytes-"),
+		makeGraph("session-"),
 	)
 }

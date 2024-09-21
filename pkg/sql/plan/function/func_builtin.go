@@ -25,6 +25,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -42,12 +43,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/google/uuid"
 )
 
-func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[1])
 	rs := vector.MustFunctionResult[int64](result)
@@ -67,17 +68,17 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	return nil
 }
 
-func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 
 	// TODO: not a good way to solve this problem. and will be fixed by file `specialRule.go`
 	scale := int32(6)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	resultValue := types.UnixNanoToTimestamp(proc.UnixTime)
+	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime())
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
@@ -87,12 +88,12 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
-func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 
 	scale := int32(6)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
@@ -113,7 +114,7 @@ const (
 	typWithLen
 )
 
-func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
 
@@ -153,7 +154,13 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return functionUtil.QuickStrToBytes(typ.String()), nil
+			ts := typ.String()
+			// after decimal fix, remove this
+			if typ.Oid.IsDecimal() {
+				ts = "DECIMAL"
+			}
+
+			return functionUtil.QuickStrToBytes(ts), nil
 		}
 	case typWithLen:
 		f = func(s []byte) ([]byte, error) {
@@ -162,7 +169,14 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			ret := fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
+
+			ts := typ.String()
+			// after decimal fix, remove this
+			if typ.Oid.IsDecimal() {
+				ts = "DECIMAL"
+			}
+
+			ret := fmt.Sprintf("%s(%d)", ts, typ.Width)
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
 	}
@@ -193,7 +207,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 	return nil
 }
 
-func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	enumVal := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -206,7 +220,7 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, err
 		}
 		if typ.Oid != types.T_enum {
-			return nil, moerr.NewNotSupported(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
+			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
 		}
 
 		// get enum values
@@ -250,7 +264,52 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 	return nil
 }
 
-func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInMoShowColUnique(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrStrToFixed[bool](
+		parameters,
+		result,
+		proc,
+		length,
+		moShowColUnique,
+		selectList,
+	)
+}
+
+// p1: constrain
+// p2: column name
+func moShowColUnique(constraintStr string, colName string) bool {
+	c := &engine.ConstraintDef{}
+	err := c.UnmarshalBinary([]byte(constraintStr))
+	if err != nil {
+		return false
+	}
+
+	contatinsCol := false
+	// get unique constraint
+	for _, ct := range c.Cts {
+		switch k := ct.(type) {
+		case *engine.IndexDef:
+			if k.Indexes != nil {
+				for _, index := range k.Indexes {
+					for _, part := range index.Parts {
+						if part == strings.ToLower(colName) {
+							contatinsCol = true
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if contatinsCol {
+		return true
+	} else {
+		return false
+	}
+}
+
+func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -274,7 +333,7 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 	return nil
 }
 
-func builtInInternalCharSize(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInInternalCharSize(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -298,7 +357,7 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 	return nil
 }
 
-func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -322,7 +381,7 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 	return nil
 }
 
-func builtInInternalNumericScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInInternalNumericScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -346,7 +405,7 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 	return nil
 }
 
-func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -370,7 +429,7 @@ func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.Fun
 	return nil
 }
 
-func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -381,7 +440,7 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 				return err
 			}
 			if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-				typ.Oid == types.T_blob || typ.Oid == types.T_text {
+				typ.Oid == types.T_blob || typ.Oid == types.T_text || typ.Oid == types.T_datalink {
 				if err := rs.Append(int64(typ.Scale), false); err != nil {
 					return err
 				}
@@ -422,7 +481,7 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
 	for i := range ps {
@@ -461,7 +520,7 @@ const (
 
 // MOLogDate parse 'YYYY/MM/DD' date from input string.
 // return '0001-01-01' if input string not container 'YYYY/MM/DD' substr, until DateParse Function support return NULL for invalid date string.
-func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Date](result)
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 
@@ -504,14 +563,61 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 }
 
 // builtInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
-func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint8](result)
+// moc#3199
+// - Not Support TXN
+// - Not Support Multi-table in one cmd
+// - 2 way to do purge: diff_hours = {now}-{target_date}; if diff_hours <= 24h, exec delete from ; else exec prune
+func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[1])
 
-	if proc.SessionInfo.AccountId != sysAccountID {
+	if proc.GetSessionInfo().AccountId != sysAccountID {
 		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
+	}
+
+	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+	}
+	exec := v.(executor.SQLExecutor)
+
+	deleteTable := func(tbl *table.Table, dateStr string) error {
+		sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
+			tbl.Database, tbl.Table, tbl.TimestampColumn.Name, dateStr)
+		opts := executor.Options{}.WithDatabase(tbl.Database).
+			WithTxn(proc.GetTxnOperator()).
+			WithTimeZone(proc.GetSessionInfo().TimeZone)
+		if proc.GetTxnOperator() != nil {
+			opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
+		}
+		res, err := exec.Exec(proc.Ctx, sql, opts)
+		if err != nil {
+			return err
+		}
+		res.Close()
+		return nil
+	}
+	pruneObj := func(tbl *table.Table, hours time.Duration) (string, error) {
+		var result string
+		// Tips: NO Txn guarantee
+		opts := executor.Options{}.WithDatabase(tbl.Database).
+			WithTimeZone(proc.GetSessionInfo().TimeZone)
+		// fixme: hours should > 24 * time.Hour
+		runPruneSql := fmt.Sprintf(`select mo_ctl('dn', 'inspect', 'objprune -t %s.%s -d %s -f')`, tbl.Database, tbl.Table, hours)
+		res, err := exec.Exec(proc.Ctx, runPruneSql, opts)
+		if err != nil {
+			return "", err
+		}
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				result += executor.GetStringRows(cols[0])[i]
+			}
+			return true
+		})
+		res.Close()
+		return result, nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -519,61 +625,61 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 		v2, null2 := p2.GetValue(i)
 		// fixme: should we need to support null date?
 		if null1 || null2 {
-			rs.Append(uint8(1), true)
+			rs.AppendBytes(nil, true)
 			continue
 		}
 
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
-		if !ok {
-			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+		tblName := strings.TrimSpace(util.UnsafeBytesToString(v1))
+		// not allow purge multi table in one call.
+		if strings.Contains(tblName, ",") {
+			return moerr.NewNotSupported(proc.Ctx, "table name contains comma.")
 		}
-		exec := v.(executor.SQLExecutor)
+
+		now := time.Now()
+		found := false
 		tables := table.GetAllTables()
-		tableNames := strings.Split(util.UnsafeBytesToString(v1), ",")
-		for _, tblName := range tableNames {
-			found := false
-			for _, tbl := range tables {
-				if tbl.TimestampColumn != nil && strings.TrimSpace(tblName) == tbl.Table {
-					found = true
-					break
+		for _, tbl := range tables {
+			if tbl.TimestampColumn == nil || tblName != tbl.Table {
+				continue
+			}
+
+			found = true
+			targetTime := v2.ToDatetime().ConvertToGoTime(time.Local)
+			if d := now.Sub(targetTime); d > rpc.AllowPruneDuration {
+				d = d / time.Second * time.Second
+				result, err := pruneObj(tbl, d)
+				if err != nil {
+					return err
 				}
+				rs.AppendMustBytesValue(util.UnsafeStringToBytes(result))
+			} else {
+				// try prune obj 24 hours before
+				_, err := pruneObj(tbl, rpc.AllowPruneDuration)
+				if err != nil {
+					return err
+				}
+				// do the delete job
+				if err := deleteTable(tbl, v2.String()); err != nil {
+					return err
+				}
+				rs.AppendMustBytesValue([]byte("success"))
 			}
-			if !found {
-				return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
-			}
+			break
+		}
+		if !found {
+			return moerr.NewNotSupportedf(proc.Ctx, "purge '%s'", tblName)
 		}
 
-		for _, tblName := range tableNames {
-			for _, tbl := range tables {
-				if strings.TrimSpace(tblName) == tbl.Table {
-					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
-						tbl.Database, tbl.Table, tbl.TimestampColumn.Name, v2.String())
-					opts := executor.Options{}.WithDatabase(tbl.Database).
-						WithTxn(proc.TxnOperator).
-						WithTimeZone(proc.SessionInfo.TimeZone)
-					if proc.TxnOperator != nil {
-						opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
-					}
-					res, err := exec.Exec(proc.Ctx, sql, opts)
-					if err != nil {
-						return err
-					}
-					res.Close()
-				}
-			}
-		}
-
-		rs.Append(uint8(0), false)
 	}
 
 	return nil
 }
 
-func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		db := proc.SessionInfo.GetDatabase()
+		db := proc.GetSessionInfo().GetDatabase()
 		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(db), false); err != nil {
 			return err
 		}
@@ -581,83 +687,81 @@ func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return nil
 }
 
-func builtInCurrentRole(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentRole(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.AppendBytes([]byte(proc.SessionInfo.GetRole()), false); err != nil {
+		if err := rs.AppendBytes([]byte(proc.GetSessionInfo().GetRole()), false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func builtInCurrentAccountID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentAccountID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint32](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.Append(proc.SessionInfo.AccountId, false); err != nil {
+		if err := rs.Append(proc.GetSessionInfo().AccountId, false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func builtInCurrentAccountName(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentAccountName(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.AppendBytes([]byte(proc.SessionInfo.Account), false); err != nil {
+		if err := rs.AppendBytes([]byte(proc.GetSessionInfo().Account), false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func builtInCurrentRoleID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentRoleID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint32](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.Append(proc.SessionInfo.RoleId, false); err != nil {
+		if err := rs.Append(proc.GetSessionInfo().RoleId, false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func builtInCurrentRoleName(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentRoleName(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.AppendBytes([]byte(proc.SessionInfo.Role), false); err != nil {
+		if err := rs.AppendBytes([]byte(proc.GetSessionInfo().Role), false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func builtInCurrentUserID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentUserID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint32](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.Append(proc.SessionInfo.UserId, false); err != nil {
+		if err := rs.Append(proc.GetSessionInfo().UserId, false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.AppendBytes([]byte(proc.SessionInfo.User), false); err != nil {
+		if err := rs.AppendBytes([]byte(proc.GetSessionInfo().User), false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-
-const MaxTgtLen = int64(16 * 1024 * 1024)
 
 func doLpad(src string, tgtLen int64, pad string) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
-	if tgtLen < 0 || tgtLen > MaxTgtLen {
+	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
 		return "", true
 	} else if int(tgtLen) < srcLen {
 		return string(srcRune[:tgtLen]), false
@@ -676,7 +780,7 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
-	if tgtLen < 0 || tgtLen > MaxTgtLen {
+	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
 		return "", true
 	} else if int(tgtLen) < srcLen {
 		return string(srcRune[:tgtLen]), false
@@ -691,7 +795,7 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 	}
 }
 
-func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// repeat the string n times.
 	repeatNTimes := func(base string, n int64) (r string, null bool) {
 		if n <= 0 {
@@ -702,7 +806,7 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
 		// and there is no documentation about the limit of the result length.
 		sourceLen := int64(len(base))
-		if sourceLen*n > MaxTgtLen {
+		if sourceLen*n > types.MaxVarcharLen {
 			return "", true
 		}
 		return strings.Repeat(base, int(n)), false
@@ -734,7 +838,7 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -760,7 +864,7 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -786,7 +890,7 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Uuid](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		val, err := uuid.NewV7()
@@ -800,7 +904,7 @@ func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return nil
 }
 
-func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	if len(parameters) == 0 {
 		val := types.CurrentTimestamp().Unix()
@@ -838,7 +942,7 @@ func mustTimestamp(loc *time.Location, s string) types.Timestamp {
 	return ts
 }
 
-func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 
@@ -849,7 +953,7 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 				return err
 			}
 		} else {
-			val := mustTimestamp(proc.SessionInfo.TimeZone, string(v1)).Unix()
+			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1)).Unix()
 			if val < 0 {
 				if err := rs.Append(0, true); err != nil {
 					return err
@@ -866,7 +970,7 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 
 var _ = builtInUnixTimestampVarcharToFloat64
 
-func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 
@@ -877,7 +981,7 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 				return err
 			}
 		} else {
-			val := mustTimestamp(proc.SessionInfo.TimeZone, string(v1))
+			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
 			if err := rs.Append(val.UnixToFloat(), false); err != nil {
 				return err
 			}
@@ -886,7 +990,7 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 	return nil
 }
 
-func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Decimal128](result)
 
@@ -898,7 +1002,7 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				return err
 			}
 		} else {
-			val, err := mustTimestamp(proc.SessionInfo.TimeZone, string(v1)).UnixToDecimal128()
+			val, err := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1)).UnixToDecimal128()
 			if err != nil {
 				return err
 			}
@@ -916,10 +1020,10 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 }
 
 // XXX I just copy this function.
-func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	fillStringGroupStr := func(keys [][]byte, vec *vector.Vector, n int, start int) {
 		area := vec.GetArea()
-		vs := vector.MustFixedCol[types.Varlena](vec)
+		vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
 		if !vec.GetNulls().Any() {
 			for i := 0; i < n; i++ {
 				keys[i] = append(keys[i], byte(0))
@@ -1004,7 +1108,7 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 // for example:
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
-func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	op.tryExpand(length, proc.Mp())
 
@@ -1034,7 +1138,7 @@ func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.Fun
 	return nil
 }
 
-func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	op.tryExpand(length, proc.Mp())
@@ -1370,7 +1474,7 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 			}
 		}
 	case types.T_enum:
-		s := vector.MustFixedCol[types.Enum](v)
+		s := vector.MustFixedColWithTypeCheck[types.Enum](v)
 		if hasNull {
 			for i, b := range s {
 				if nulls.Contains(v.GetNulls(), uint64(i)) {
@@ -1426,11 +1530,10 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 				ps[i].EncodeDecimal128(b)
 			}
 		}
-	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
-		vs := vector.ExpandStrCol(v)
+	case types.T_uuid:
+		s := vector.ExpandFixedCol[types.Uuid](v)
 		if hasNull {
-			for i := range vs {
+			for i, b := range s {
 				if v.IsNull(uint64(i)) {
 					if isFull {
 						ps[i].EncodeNull()
@@ -1438,12 +1541,34 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 						nulls.Add(bitMap, uint64(i))
 					}
 				} else {
-					ps[i].EncodeStringType([]byte(vs[i]))
+					ps[i].EncodeUuid(b)
 				}
 			}
 		} else {
+			for i, b := range s {
+				ps[i].EncodeUuid(b)
+			}
+		}
+	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		if hasNull {
+			fv := vector.GenerateFunctionStrParameter(v)
+			for i, j := uint64(0), uint64(v.Length()); i < j; i++ {
+				value, null := fv.GetStrValue(i)
+				if null {
+					if isFull {
+						ps[i].EncodeNull()
+					} else {
+						nulls.Add(bitMap, i)
+					}
+					continue
+				}
+				ps[i].EncodeStringType(value)
+			}
+		} else {
+			vs := vector.ExpandBytesCol(v)
 			for i := range vs {
-				ps[i].EncodeStringType([]byte(vs[i]))
+				ps[i].EncodeStringType(vs[i])
 			}
 		}
 	}
@@ -1454,7 +1579,7 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 //
 //	serial_col = serial(floatCol, varchar3Col)
 //	serial_extract(serial_col, 1, varchar(3)) will return 2
-func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	resTyp := parameters[2].GetType()
@@ -1462,72 +1587,72 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	switch resTyp.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 
 	case types.T_json, types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return serialExtractForString(p1, p2, rs, proc, length)
+		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}
-	return moerr.NewInternalError(proc.Ctx, "not supported type %s", resTyp.String())
+	return moerr.NewInternalErrorf(proc.Ctx, "not supported type %s", resTyp.String())
 
 }
 
 func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
-	result *vector.FunctionResult[T], proc *process.Process, length int) error {
+	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null := p1.GetStrValue(i)
@@ -1571,7 +1696,7 @@ func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datet
 
 func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
-	result *vector.FunctionResult[types.Varlena], proc *process.Process, length int) error {
+	result *vector.FunctionResult[types.Varlena], proc *process.Process, length int, selectList *FunctionSelectList) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
@@ -1631,7 +1756,7 @@ const (
 // ToDays: InMySQL: Given a date data, returns a day number (the number of days since year 0). Returns NULL if date is NULL.
 // note:  but Matrxone think the date of the first year of the year is 0001-01-01, this function selects compatibility with MySQL
 // reference linking: https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_to-days
-func builtInToDays(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInToDays(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	dateParams := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1791,7 +1916,7 @@ const ADZeroSeconds = 31622400
 // ToSeconds: InMySQL: Given a date date, returns a day number (the number of days since year 0000). Returns NULL if date is NULL.
 // note:  but Matrxone think the date of the first year of the year is 0001-01-01, this function selects compatibility with MySQL
 // reference linking: https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_to-seconds
-func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	dateParams := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1819,7 +1944,7 @@ func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nu
 	return res, nil
 }
 
-func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1841,7 +1966,7 @@ func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func builtInSinh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInSinh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1863,7 +1988,7 @@ func builtInSinh(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1885,7 +2010,7 @@ func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func builtInCot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInCot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1907,7 +2032,7 @@ func builtInCot(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func builtInTan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInTan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1929,7 +2054,7 @@ func builtInTan(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1951,13 +2076,13 @@ func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func builtInSqrt(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInSqrt(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Sqrt(v)
-	})
+	}, selectList)
 }
 
-func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytesWithErrorCheck(parameters, result, proc, length, func(in []byte) (out []byte, err error) {
 		_in := types.BytesToArray[T](in)
 
@@ -1967,10 +2092,10 @@ func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result v
 		}
 		return types.ArrayToBytes[float64](_out), nil
 
-	})
+	}, selectList)
 }
 
-func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1992,7 +2117,7 @@ func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInATan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInATan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2014,7 +2139,7 @@ func builtInATan(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1])
 	rs := vector.MustFunctionResult[float64](result)
@@ -2037,7 +2162,7 @@ func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
-func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2059,7 +2184,7 @@ func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
-func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1])
 	rs := vector.MustFunctionResult[float64](result)
@@ -2090,7 +2215,7 @@ func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2112,7 +2237,7 @@ func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInLog10(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInLog10(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2144,7 +2269,7 @@ func newOpBuiltInRand() *opBuiltInRand {
 	return new(opBuiltInRand)
 }
 
-func builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v := rand.Float64()
@@ -2155,7 +2280,7 @@ func builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !parameters[0].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "parameter of rand", "column")
 	}
@@ -2180,23 +2305,23 @@ func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.
 	return nil
 }
 
-func builtInConvertFake(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInConvertFake(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// ignore the second parameter and just set result the same to the first parameter.
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return v
-	})
+	}, selectList)
 }
 
-func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToUpper(v)
-	})
+	}, selectList)
 }
 
-func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToLower(v)
-	})
+	}, selectList)
 }
 
 // buildInMOCU extract cu or calculate cu from parameters
@@ -2208,11 +2333,11 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 // - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioin')
 // - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioout')
 // - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'network')
-func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return buildInMOCUWithCfg(parameters, result, proc, length, nil)
 }
 
-func buildInMOCUv1(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func buildInMOCUv1(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	cfg := motrace.GetCUConfigV1()
 	return buildInMOCUWithCfg(parameters, result, proc, length, cfg)
 }

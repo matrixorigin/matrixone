@@ -21,17 +21,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewGroupBinder(builder *QueryBuilder, ctx *BindContext) *GroupBinder {
+func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.SelectExprs) *GroupBinder {
 	b := &GroupBinder{}
 	b.sysCtx = builder.GetContext()
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b
+	b.selectList = selectList
 
 	return b
 }
 
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if isRoot {
+		if numVal, ok := astExpr.(*tree.NumVal); ok {
+			switch numVal.Kind() {
+			case tree.Int:
+				colPos, _ := numVal.Int64()
+				if colPos < 1 || int(colPos) > len(b.selectList) {
+					return nil, moerr.NewSyntaxErrorf(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
+				}
+
+				astExpr = b.selectList[colPos-1].Expr
+
+			default:
+				return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
+			}
+		}
+	}
+
 	expr, err := b.baseBindExpr(astExpr, depth, isRoot)
 	if err != nil {
 		return nil, err
@@ -80,5 +98,5 @@ func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.E
 }
 
 func (b *GroupBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind time window functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind time window functions '%s'", funcName)
 }

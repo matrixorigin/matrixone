@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
@@ -35,31 +34,20 @@ import (
 // |(uint64)|(varchar)| (uint64) | (uint64) |  (varchar) |
 // +--------+---------+----------+----------+------------+
 const (
-	SnapshotAttr_TID            = "table_id"
-	SnapshotAttr_DBID           = "db_id"
-	ObjectAttr_ID               = "id"
-	ObjectAttr_CreateAt         = "create_at"
-	ObjectAttr_SegNode          = "seg_node"
-	SnapshotAttr_BlockMaxRow    = "block_max_row"
-	SnapshotAttr_ObjectMaxBlock = "Object_max_block"
-	SnapshotAttr_SchemaExtra    = "schema_extra"
-	AccountIDDbNameTblName      = "account_id_db_name_tbl_name"
-	AccountIDDbName             = "account_id_db_name"
-	ObjectAttr_ObjectStats      = "object_stats"
-	ObjectAttr_State            = "state"
-	ObjectAttr_Sorted           = "sorted"
-	EntryNode_CreateAt          = "create_at"
-	EntryNode_DeleteAt          = "delete_at"
+	SnapshotAttr_TID       = "table_id"
+	SnapshotAttr_DBID      = "db_id"
+	ObjectAttr_ObjectStats = "object_stats"
+	EntryNode_CreateAt     = "create_at"
+	EntryNode_DeleteAt     = "delete_at"
 )
 
 type DataFactory interface {
 	MakeTableFactory() TableDataFactory
 	MakeObjectFactory() ObjectDataFactory
-	MakeTombstoneFactory() TombstoneFactory
 }
 
 type Catalog struct {
-	*IDAlloctor
+	*IDAllocator
 	*sync.RWMutex
 
 	usageMemo any
@@ -72,11 +60,11 @@ type Catalog struct {
 
 func MockCatalog() *Catalog {
 	catalog := &Catalog{
-		RWMutex:    new(sync.RWMutex),
-		IDAlloctor: NewIDAllocator(),
-		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:  make(map[string]*nodeList[*DBEntry]),
-		link:       common.NewGenericSortedDList((*DBEntry).Less),
+		RWMutex:     new(sync.RWMutex),
+		IDAllocator: NewIDAllocator(),
+		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:   make(map[string]*nodeList[*DBEntry]),
+		link:        common.NewGenericSortedDList((*DBEntry).Less),
 	}
 	catalog.InitSystemDB()
 	return catalog
@@ -84,12 +72,12 @@ func MockCatalog() *Catalog {
 
 func OpenCatalog(usageMemo any) (*Catalog, error) {
 	catalog := &Catalog{
-		RWMutex:    new(sync.RWMutex),
-		IDAlloctor: NewIDAllocator(),
-		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:  make(map[string]*nodeList[*DBEntry]),
-		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		usageMemo:  usageMemo,
+		RWMutex:     new(sync.RWMutex),
+		IDAllocator: NewIDAllocator(),
+		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:   make(map[string]*nodeList[*DBEntry]),
+		link:        common.NewGenericSortedDList((*DBEntry).Less),
+		usageMemo:   usageMemo,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil
@@ -151,23 +139,18 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		return nil
 	}
 	processor.ObjectFn = func(se *ObjectEntry) error {
-		se.RLock()
-		needGC := se.DeleteBeforeLocked(ts) && !se.InMemoryDeletesExistedLocked()
-		se.RUnlock()
+		needGC := se.DeleteBefore(ts)
 		if needGC {
 			tbl := se.table
 			tbl.RemoveEntry(se)
 		}
 		return nil
 	}
-	processor.TombstoneFn = func(t data.Tombstone) error {
-		obj := t.GetObject().(*ObjectEntry)
-		obj.RLock()
-		needGC := obj.DeleteBeforeLocked(ts) && !obj.InMemoryDeletesExistedLocked()
-		obj.RUnlock()
+	processor.TombstoneFn = func(obj *ObjectEntry) error {
+		needGC := obj.DeleteBefore(ts)
 		if needGC {
 			tbl := obj.table
-			tbl.GCTombstone(obj.ID)
+			tbl.RemoveEntry(obj)
 		}
 		return nil
 	}
@@ -177,7 +160,6 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	}
 	catalog.gcTS = ts
 }
-
 func (catalog *Catalog) Close() error {
 	return nil
 }

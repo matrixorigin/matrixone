@@ -21,6 +21,8 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/metadata";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 
 // ServiceType service type
 enum ServiceType {
@@ -125,6 +127,13 @@ message CNService {
   WorkState WorkState           = 7;
   // QueryAddress is the address of queryservice.QueryService.
   string QueryAddress           = 8;
+  string ShardServiceAddress    = 9;
+  // CommitID is the git commit ID of the cn node.
+  string CommitID = 10;
+  // CPUTotal is cpu quota from logservicepb.CNStore
+  uint64 CPUTotal = 11;
+  // MemTotal is mem quota from logservicepb.CNStore
+  uint64 MemTotal = 12;
 }
 
 // TNService tn service metadata
@@ -144,6 +153,7 @@ message TNService {
   map<string, LabelList> Labels = 7 [(gogoproto.nullable) = false];
   // QueryAddress it the address of query service on the tn
   string          QueryAddress       = 8;
+  string  ShardServiceAddress   = 9;
 }
 
 // LabelList defines the labels on CN store.

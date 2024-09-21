@@ -322,7 +322,7 @@ func runTestShouldPass(opt plan.Optimizer, t *testing.T, sqls []string) {
 
 func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 	t.Logf("SQL: %v\n", sql)
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
@@ -337,7 +337,7 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Verbose = false
 				} else {
-					return moerr.NewInvalidInput(ctx, "boolean value %v", v.Value)
+					return moerr.NewInvalidInputf(ctx, "boolean value %v", v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "ANALYZE") {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
@@ -345,20 +345,20 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Analyze = false
 				} else {
-					return moerr.NewInvalidInput(ctx, "boolean value %v", v.Value)
+					return moerr.NewInvalidInputf(ctx, "boolean value %v", v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "FORMAT") {
 				if v.Name == "NULL" {
-					return moerr.NewInvalidInput(ctx, "parameter name %v", v.Name)
+					return moerr.NewInvalidInputf(ctx, "parameter name %v", v.Name)
 				} else if strings.EqualFold(v.Value, "TEXT") {
 					es.Format = EXPLAIN_FORMAT_TEXT
 				} else if strings.EqualFold(v.Value, "JSON") {
 					es.Format = EXPLAIN_FORMAT_JSON
 				} else {
-					return moerr.NewInvalidInput(ctx, "explain format %v", v.Value)
+					return moerr.NewInvalidInputf(ctx, "explain format %v", v.Value)
 				}
 			} else {
-				return moerr.NewInvalidInput(ctx, "EXPLAIN option %v", v.Name)
+				return moerr.NewInvalidInputf(ctx, "EXPLAIN option %v", v.Name)
 			}
 		}
 
@@ -376,7 +376,7 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 			t.Errorf("explain Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err
 		}
-		t.Logf("\n" + buffer.ToString())
+		t.Log("\n" + buffer.ToString())
 	}
 	return nil
 }

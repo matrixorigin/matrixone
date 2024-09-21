@@ -19,6 +19,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -27,6 +28,7 @@ import (
 type localLockTableProxy struct {
 	remote    lockTable
 	serviceID string
+	logger    *log.MOLogger
 
 	mu struct {
 		sync.RWMutex
@@ -37,10 +39,13 @@ type localLockTableProxy struct {
 
 func newLockTableProxy(
 	serviceID string,
-	remote lockTable) lockTable {
+	remote lockTable,
+	logger *log.MOLogger,
+) lockTable {
 	lp := &localLockTableProxy{
 		remote:    remote,
 		serviceID: serviceID,
+		logger:    logger,
 	}
 	lp.mu.holders = make(map[string]*sharedOps)
 	lp.mu.currentHolder = make(map[string][]byte)
@@ -97,19 +102,19 @@ func (lp *localLockTableProxy) lock(
 				if e == nil {
 					lp.mu.currentHolder[key] = v.txns[0].txnID
 				}
-				v.done(r, e)
+				v.done(r, e, lp.logger)
 			})
 		return
 	}
 
 	defer func() {
 		bind := lp.getBind()
-		txn.lockAdded(bind.Group, bind, rows)
+		txn.lockAdded(bind.Group, bind, rows, lp.logger)
 	}()
 
 	// wait first done
 	if w != nil {
-		w.wait(ctx)
+		w.wait(ctx, lp.logger)
 		return
 	}
 
@@ -215,11 +220,13 @@ type sharedOps struct {
 
 func (s *sharedOps) done(
 	r pb.Result,
-	err error) {
+	err error,
+	logger *log.MOLogger,
+) {
 	for idx, cb := range s.cbs {
 		cb(r, err)
 		if idx > 0 {
-			s.waiters[idx].notify(notifyValue{})
+			s.waiters[idx].notify(notifyValue{}, logger)
 		}
 		s.cbs[idx] = nil
 		s.waiters[idx] = nil

@@ -1,73 +1,44 @@
-set global enable_privilege_cache = off;
-create publication pub1 database t;
+set enable_privilege_cache = off;
+create publication pub1 database t account all;
 internal error: database 't' does not exist
 create account acc0 admin_name 'root' identified by '111';
 create account acc1 admin_name 'root' identified by '111';
 create account acc2 admin_name 'root' identified by '111';
 create database t;
-create publication pub1 database t;
-create publication pub2 database t account all;
+create publication pub1 database t account all;
 create publication pub3 database t account acc0,acc1;
 create publication pub4 database t account acc0,acc1,accx;
-create publication pub5 database t account accx comment 'test';
+internal error: not existed account name 'accx'
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub5    t    2024-01-05 18:21:29    null    accx    test
-pub4    t    2024-01-05 18:21:29    null    acc0,acc1,accx    
-pub3    t    2024-01-05 18:21:29    null    acc0,acc1    
-pub2    t    2024-01-05 18:21:29    null    *    
-pub1    t    2024-01-05 18:21:29    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub3    t    *    acc0,acc1        2024-08-03 15:44:49    null    
+pub1    t    *    *        2024-08-03 15:44:49    null    
 show create publication pub1;
 Publication    Create Publication
 pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
-show create publication pub2;
-Publication    Create Publication
-pub2    CREATE PUBLICATION pub2 DATABASE t ACCOUNT all
-show create publication pub5;
-Publication    Create Publication
-pub5    CREATE PUBLICATION pub5 DATABASE t ACCOUNT accx
 alter publication pub1 account acc0,acc1;
 show create publication pub1;
 Publication    Create Publication
 pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT acc0,acc1
-alter publication pub2 account drop acc1;
-internal error: cannot drop accounts from all account option
-show create publication pub2;
-Publication    Create Publication
-pub2    CREATE PUBLICATION pub2 DATABASE t ACCOUNT all
 alter publication pub3 account add accx;
+internal error: not existed account name 'accx'
 show create publication pub3;
 Publication    Create Publication
-pub3    CREATE PUBLICATION pub3 DATABASE t ACCOUNT acc0,acc1,accx
-alter publication pub4 account drop acc1,acc2;
-show create publication pub4;
-Publication    Create Publication
-pub4    CREATE PUBLICATION pub4 DATABASE t ACCOUNT acc0,accx
-alter publication pub5 account all comment '1212';
-show create publication pub5;
-Publication    Create Publication
-pub5    CREATE PUBLICATION pub5 DATABASE t ACCOUNT all
+pub3    CREATE PUBLICATION pub3 DATABASE t ACCOUNT acc0,acc1
 drop publication pub1;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub5    t    2024-01-05 18:21:29    2024-01-05 18:21:29    *    1212
-pub4    t    2024-01-05 18:21:29    2024-01-05 18:21:29    acc0,accx    
-pub3    t    2024-01-05 18:21:29    2024-01-05 18:21:29    acc0,acc1,accx    
-pub2    t    2024-01-05 18:21:29    null    *    
-create publication pub1 database t;
-create publication pub1 database t;
-Duplicate entry 'pub1' for key 'pub_name'
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub3    t    *    acc0,acc1        2024-08-03 15:44:49    null    
+create publication pub1 database t account all;
 alter publication pub1 account `all`;
+internal error: not existed account name 'all'
 show create publication pub1;
 Publication    Create Publication
 pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
 show create publication pubx;
 Publication    Create Publication
 drop publication pub1;
-drop publication pub2;
 drop publication pub3;
-drop publication pub4;
-drop publication pub5;
 drop account acc0;
 drop account acc1;
 drop account acc2;
@@ -80,25 +51,25 @@ use sys_db_1;
 create table sys_tbl_1(a int primary key );
 insert into sys_tbl_1 values(1),(2),(3);
 create view v1 as (select * from sys_tbl_1);
-create publication sys_pub_1 database sys_db_1;
+create publication sys_pub_1 database sys_db_1 account all;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    sys_db_1    2024-01-05 18:21:30    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+sys_pub_1    sys_db_1    *    *        2024-08-03 15:44:51    null    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    sys_db_1    all
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 use sub1;
 show tables;
 Tables_in_sub1
@@ -136,15 +107,15 @@ sys_pub_1    sys_db_1    all
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 sub1
-mo_catalog
+system
+system_metrics
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 use sub1;
 show tables;
 Tables_in_sub1
@@ -167,14 +138,15 @@ select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    sys_db_1    acc1
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+sys_pub_1    sys    null    null    null    null    sub1    2024-08-09 16:06:32    1
 select * from sub1.sys_tbl_1;
 SQL parser error: table "sys_tbl_1" does not exist
 use sub1;
 internal error: the account acc0 is not allowed to subscribe the publication sys_pub_1
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -189,8 +161,8 @@ select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    sys_db_1    acc0,acc1
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -206,8 +178,8 @@ use sys_db_1;
 insert into sys_tbl_1 values(4);
 create table sys_tbl_2(b text);
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -225,19 +197,19 @@ create database acc2_db_1;
 use acc2_db_1;
 create table acc2_tbl_1(q text,c int primary key auto_increment);
 insert into acc2_tbl_1(q) values ('acc2'),('acc1'),('acc0'),('sys');
-create publication acc2_pub_1 database acc2_db_1;
+create publication acc2_pub_1 database acc2_db_1 account sys,acc0,acc1;
 create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-acc2_pub_1    acc2    acc2_db_1    2024-01-05 18:21:31    sub2    2024-01-05 18:21:31
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+acc2_pub_1    acc2    acc2_db_1    *        2024-08-03 15:44:51    sub2    2024-08-03 15:44:51    0
 show tables;
 Tables_in_sub2
 acc2_tbl_1
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 q    TEXT(0)    YES        null        
-c    INT(32)    NO    PRI    null        
+c    INT(32)    NO    PRI    null    auto_increment    
 select * from acc2_tbl_1;
 q    c
 acc2    1
@@ -247,20 +219,20 @@ sys    4
 create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-acc2_pub_1    acc2    acc2_db_1    2024-01-05 18:21:31    sub2    2024-01-05 18:21:31
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+acc2_pub_1    acc2    acc2_db_1    *        2024-08-03 15:44:51    sub2    2024-08-03 15:44:51    0
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 q    TEXT(0)    YES        null        
-c    INT(32)    NO    PRI    null        
+c    INT(32)    NO    PRI    null    auto_increment    
 select * from acc2_tbl_1;
 q    c
 acc2    1
 acc1    2
 acc0    3
 sys    4
-alter publication acc2_pub_1 account `sys`;
+alter publication acc2_pub_1 account sys;
 use acc2_db_1;
 create table acc2_tbl_2(c text);
 insert into acc2_tbl_1(q) values ('mo');
@@ -292,25 +264,8 @@ drop database sub2;
 create database sub_db4 from no_exists publication pubname4;
 internal error: there is no publication account no_exists
 create database db1;
-create publication pubname4 database db1 comment 'publication to all tenant';
+create publication pubname4 database db1 account all comment 'publication to all tenant';
 create database sub_db4 from sys publication pubname4;
 internal error: can not subscribe to self
 drop publication pubname4;
 drop database db1;
-create database db1;
-create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
-create publication pubname2 database db1 account test_tenant_1 comment 'publish db1 database';
-set global syspublications = "pubname1,pubname1";
-create account test_tenant_1 admin_name 'test_account' identified by '111';
-set global syspublications = "pubname1,pubname2";
-create account test_tenant_2 admin_name 'test_account' identified by '111';
-show publications;
-publication    database    create_time    update_time    sub_account    comments
-pubname2    db1    2024-01-05 18:21:31    null    test_tenant_1    publish db1 database
-pubname1    db1    2024-01-05 18:21:31    null    test_tenant_1    publish db1 database
-drop publication pubname1;
-drop publication pubname2;
-drop account test_tenant_1;
-drop account test_tenant_2;
-drop database db1;
-set global enable_privilege_cache = on;

@@ -16,11 +16,12 @@ package aggexec
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func testAggExecSerialize(exec AggFuncExec, checkFn func(src, dst AggFuncExec) error) error {
@@ -98,16 +99,12 @@ func TestSerial_SingleAggFuncExecSerial(t *testing.T) {
 		retType:   types.T_int64.ToType(),
 		emptyNull: true,
 	}
-	RegisterSingleAggFromFixedToFixed(
-		MakeSingleAgg1RegisteredInfo(
-			MakeSingleColumnAggInformation(info.aggID, info.argType, tSinglePrivate1Ret, true, info.emptyNull),
-			gTestSingleAggPrivateSer1,
-			nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
+	registerTheTestingCount(info.aggID, info.emptyNull)
 
 	// methods to check the correctness of the serialized AggFuncExec.
 	checkFn := func(src, dst AggFuncExec) error {
-		s1, ok1 := src.(*singleAggFuncExec1[int32, int64])
-		s2, ok2 := dst.(*singleAggFuncExec1[int32, int64])
+		s1, ok1 := src.(*singleAggFuncExecNew1[int32, int64])
+		s2, ok2 := dst.(*singleAggFuncExecNew1[int32, int64])
 		if !ok1 || !ok2 {
 			return moerr.NewInternalErrorNoCtx("type assertion failed")
 		}
@@ -445,8 +442,8 @@ func TestSerial_MedianColumnExec(t *testing.T) {
 					return moerr.NewInternalErrorNoCtx("groupData length not equal.")
 				}
 
-				vs1 := vector.MustFixedCol[int32](s1.groups[i])
-				vs2 := vector.MustFixedCol[int32](s2.groups[i])
+				vs1 := vector.MustFixedColWithTypeCheck[int32](s1.groups[i])
+				vs2 := vector.MustFixedColWithTypeCheck[int32](s2.groups[i])
 				for n := 0; n < len(vs1); n++ {
 					if vs1[n] != vs2[n] {
 						return moerr.NewInternalErrorNoCtx("groupData item not equal.")
@@ -472,49 +469,55 @@ func TestSerial_MedianColumnExec(t *testing.T) {
 	require.Equal(t, int64(0), mg.Mp().CurrNB())
 }
 
-type testSingleAggPrivateSer1 struct {
-	testSingleAggPrivate1
-}
+type mockContext struct{}
 
-func gTestSingleAggPrivateSer1() SingleAggFromFixedRetFixed[int32, int64] {
-	return &testSingleAggPrivateSer1{}
+func gMockCommonContext(_ types.Type, _ ...types.Type) AggCommonExecContext {
+	return &mockContext{}
 }
-
-func (s *testSingleAggPrivateSer1) Marshal() []byte {
-	return []byte("testSingleAggPrivateSer1")
+func gMockGroupContext(_ types.Type, _ ...types.Type) AggGroupExecContext {
+	return &mockContext{}
 }
-
-func (s *testSingleAggPrivateSer1) Unmarshal(bs []byte) {
-	if string(bs) != "testSingleAggPrivateSer1" {
-		panic("unmarshal failed")
+func (c *mockContext) Marshal() []byte {
+	return []byte("mockContext")
+}
+func (c *mockContext) Unmarshal(data []byte) {
+	if string(data) != "mockContext" {
+		panic("mockContext unmarshal failed")
 	}
 }
 
-// this test is to check if the agg framework can serialize and deserialize the private struct of the agg function.
-func TestSerial_Agg1(t *testing.T) {
+func TestSerial_ExecContext(t *testing.T) {
 	mg := newTestAggMemoryManager()
-
 	info := singleAggInfo{
-		aggID:     gUniqueAggIdForTest(),
-		distinct:  false,
-		argType:   types.T_int32.ToType(),
-		retType:   types.T_int64.ToType(),
-		emptyNull: true,
-	}
-	RegisterSingleAggFromFixedToFixed(
-		MakeSingleAgg1RegisteredInfo(
-			MakeSingleColumnAggInformation(info.aggID, info.argType, tSinglePrivate1Ret, true, info.emptyNull),
-			gTestSingleAggPrivateSer1,
-			nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
-
-	{
-		executor := MakeAgg(
-			mg,
-			info.aggID, info.distinct, info.argType)
-		require.NoError(t, fillTestData(mg, 10, executor, info.argType))
-		require.NoError(t, testAggExecSerialize(executor, nil))
-		executor.Free()
+		aggID:   gUniqueAggIdForTest(),
+		argType: types.T_int32.ToType(),
+		retType: types.T_int64.ToType(),
 	}
 
+	registerTheTestingCountWithContext(
+		info.aggID, gMockCommonContext, gMockGroupContext)
+	executor := MakeAgg(mg, info.aggID, false, info.argType)
+	require.NoError(t, executor.GroupGrow(2))
+
+	require.NoError(t,
+		testAggExecSerialize(executor, func(src, dst AggFuncExec) error {
+			s1, ok1 := src.(*singleAggFuncExecNew1[int32, int64])
+			s2, ok2 := dst.(*singleAggFuncExecNew1[int32, int64])
+			if !ok1 || !ok2 {
+				return moerr.NewInternalErrorNoCtx("type assertion failed")
+			}
+			if _, ok := s2.execContext.commonContext.(*mockContext); !ok {
+				return moerr.NewInternalErrorNoCtx("commonContext not right")
+			}
+			if len(s1.execContext.groupContext) != len(s2.execContext.groupContext) ||
+				len(s1.execContext.groupContext) != 2 {
+				return moerr.NewInternalErrorNoCtx("groupContext number not right")
+			}
+			if _, ok := s2.execContext.groupContext[0].(*mockContext); !ok {
+				return moerr.NewInternalErrorNoCtx("groupContext not right")
+			}
+			return nil
+		}))
+	executor.Free()
 	require.Equal(t, int64(0), mg.Mp().CurrNB())
 }

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -35,7 +36,7 @@ type QueryService interface {
 	// Close closes the service.
 	Close() error
 	// AddHandleFunc add message handler.
-	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool)
+	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error, async bool)
 	// SetReleaseFunc sets the release handler.
 	SetReleaseFunc(resp *pb.Response, f func())
 }
@@ -44,7 +45,7 @@ type QueryService interface {
 type queryService struct {
 	// serviceID is the UUID of CN service.
 	serviceID string
-	handler   morpc.MessageHandler[*pb.Request, *pb.Response]
+	handler   morpc.MethodBasedServer[*pb.Request, *pb.Response]
 
 	mu struct {
 		sync.Mutex
@@ -65,7 +66,7 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryS
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} })
 
-	h, err := morpc.NewMessageHandler(serviceName, address, cfg, pool,
+	h, err := morpc.NewMessageHandler(serviceID, serviceName, address, cfg, pool,
 		morpc.WithHandlerRespReleaseFunc[*pb.Request, *pb.Response](func(m morpc.Message) {
 			resp := m.(*pb.Response)
 			if resp.CmdMethod == pb.CmdMethod_GetCacheData {
@@ -89,8 +90,8 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryS
 }
 
 // AddHandleFunc implements the QueryService interface.
-func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool) {
-	s.handler.RegisterHandleFunc(uint32(method), h, async)
+func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error, async bool) {
+	s.handler.RegisterMethod(uint32(method), h, async)
 }
 
 // SetReleaseFunc implements the QueryService interface.
@@ -101,8 +102,8 @@ func (s *queryService) SetReleaseFunc(resp *pb.Response, f func()) {
 }
 
 func (s *queryService) initHandleFunc() {
-	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, handleGetProtocolVersion, false)
-	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, handleSetProtocolVersion, false)
+	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, s.handleGetProtocolVersion(), false)
+	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion(), false)
 	s.AddHandleFunc(pb.CmdMethod_CoreDumpConfig, handleCoreDumpConfig, false)
 }
 
@@ -163,6 +164,7 @@ func RequestMultipleCn(ctx context.Context,
 			// gen request and send it
 			if genRequest != nil {
 				req := genRequest()
+				logger.GetLogger("RequestMultipleCn").Infof("[send request]%s send request %s to %s", qc.ServiceID(), req.CmdMethod.String(), node)
 				resp, err := qc.SendMessage(ctx, addr, req)
 				responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
 			}
@@ -179,9 +181,7 @@ func RequestMultipleCn(ctx context.Context,
 				queryResp, ok := res.response.(*pb.Response)
 				if ok {
 					//save response
-					if handleValidResponse != nil {
-						handleValidResponse(res.nodeAddr, queryResp)
-					}
+					handleValidResponse(res.nodeAddr, queryResp)
 					if queryResp != nil {
 						qc.Release(queryResp)
 					}

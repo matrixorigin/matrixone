@@ -251,7 +251,7 @@ func TestRunFunctionDirectly(t *testing.T) {
 		}
 
 		v.Free(proc.Mp())
-		proc.FreeVectors()
+		proc.Free()
 		require.Equal(t, startMp, proc.Mp().CurrNB())
 	}
 
@@ -295,7 +295,7 @@ func TestCastNanoToTimestamp(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, CastNanoToTimestamp)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastNanoToTimestamp)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 	}
@@ -308,12 +308,12 @@ func initCastNanoToTimestampTestCase(inputs []string, outputs []int64) []tcTemp 
 		res[i] = tcTemp{
 			info: fmt.Sprintf("case %d", i),
 			typ:  types.T_int64,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{outputs[i]},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{inputs[i]},
 				[]bool{false}),
 		}

@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"go/constant"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -31,7 +29,7 @@ func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectEx
 
 func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	if colRef, ok := astExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
-		if selectItem, ok := b.ctx.aliasMap[colRef.Parts[0]]; ok {
+		if selectItem, ok := b.ctx.aliasMap[colRef.ColName()]; ok {
 			return &plan.Expr{
 				Typ: b.ctx.projects[selectItem.idx].Typ,
 				Expr: &plan.Expr_Col{
@@ -45,14 +43,14 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	}
 
 	if numVal, ok := astExpr.(*tree.NumVal); ok {
-		switch numVal.Value.Kind() {
-		case constant.Int:
-			colPos, _ := constant.Int64Val(numVal.Value)
+		switch numVal.Kind() {
+		case tree.Int:
+			colPos, _ := numVal.Int64()
 			if numVal.Negative() {
 				colPos = -colPos
 			}
 			if colPos < 1 || int(colPos) > len(b.ctx.projects) {
-				return nil, moerr.NewSyntaxError(b.GetContext(), "ORDER BY position %v is not in select list", colPos)
+				return nil, moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in select list", colPos)
 			}
 
 			colPos = colPos - 1

@@ -83,8 +83,8 @@ func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
 	var version Version
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		version.Version = cols[0].GetStringAt(0)
-		version.VersionOffset = vector.GetFixedAt[uint32](cols[1], 0)
-		version.State = vector.GetFixedAt[int32](cols[2], 0)
+		version.VersionOffset = vector.GetFixedAtWithTypeCheck[uint32](cols[1], 0)
+		version.State = vector.GetFixedAtWithTypeCheck[int32](cols[2], 0)
 		return true
 	})
 	return version, nil
@@ -110,8 +110,8 @@ func GetLatestUpgradeVersion(txn executor.TxnExecutor) (Version, error) {
 
 func MustGetLatestReadyVersion(
 	txn executor.TxnExecutor) (string, error) {
-	sql := fmt.Sprintf(`select version from %s 
-			where state = %d 
+	sql := fmt.Sprintf(`select version from %s
+			where state = %d
 			order by create_at desc limit 1`,
 		catalog.MOVersionTable,
 		StateReady)
@@ -158,7 +158,7 @@ func GetVersionState(
 	loaded := false
 	n := 0
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		state = vector.GetFixedAt[int32](cols[0], 0)
+		state = vector.GetFixedAtWithTypeCheck[int32](cols[0], 0)
 		loaded = true
 		n++
 		return true
@@ -240,7 +240,7 @@ func FetchAllTenants(txn executor.TxnExecutor) ([]int32, error) {
 
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
-			last := vector.GetFixedAt[int32](cols[0], i)
+			last := vector.GetFixedAtWithTypeCheck[int32](cols[0], i)
 			ids = append(ids, last)
 		}
 		return true

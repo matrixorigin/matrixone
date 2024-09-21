@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 func TestInsertIndexMetadata(t *testing.T) {
@@ -38,7 +39,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	proc := testutil.NewProc()
-	proc.TxnOperator = txnOperator
+	proc.Base.TxnOperator = txnOperator
 
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
 	mockEngine.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -48,13 +49,13 @@ func TestInsertIndexMetadata(t *testing.T) {
 	mockEngine.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, txnOperator).Return(catalog_database, nil).AnyTimes()
 
 	indexes_relation := mock_frontend.NewMockRelation(ctrl)
-	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	indexes_relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
-		bat := batch.NewWithSize(3)
+	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}, bat *batch.Batch) (bool, error) {
+		// bat := batch.NewWithSize(3)
 		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
 		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
@@ -74,11 +75,11 @@ func TestInsertIndexMetadata(t *testing.T) {
 			require.Nil(t, err)
 		}
 		bat.SetRowCount(bat.GetVector(1).Length())
-		return bat, nil
+		return true, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 
-	indexes_relation.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
+	//indexes_relation.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
 	catalog_database.EXPECT().Relation(gomock.Any(), catalog.MO_INDEXES, gomock.Any()).Return(indexes_relation, nil).AnyTimes()
 	//---------------------------------------------------------------------------------------------------------------------------
 	mock_emp_Relation := mock_frontend.NewMockRelation(ctrl)
@@ -129,7 +130,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 
 	proc := testutil.NewProc()
-	proc.TxnOperator = txnOperator
+	proc.Base.TxnOperator = txnOperator
 
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
 	mockEngine.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -140,37 +141,14 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	mockEngine.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, txnOperator).Return(catalog_database, nil).AnyTimes()
 
 	indexes_relation := mock_frontend.NewMockRelation(ctrl)
-	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	indexes_relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-
-		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-
-		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-
-		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-		bat.SetRowCount(bat.GetVector(1).Length())
-		return bat, nil
-	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 
-	indexes_relation.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
+	//indexes_relation.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
 	catalog_database.EXPECT().Relation(gomock.Any(), catalog.MO_INDEXES, gomock.Any()).Return(indexes_relation, nil).AnyTimes()
 	//---------------------------------------------------------------------------------------------------------------------------
 

@@ -25,7 +25,7 @@ import (
 
 func fillStringGroupStr(keys [][]byte, vec *vector.Vector, n int, start int) {
 	area := vec.GetArea()
-	vs := vector.MustFixedCol[types.Varlena](vec)
+	vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			keys[i] = append(keys[i], byte(0))
@@ -84,17 +84,17 @@ func computeMemAndHashCount(rowCount int64, probability float64) (int64, int) {
 	k := 1
 	if rowCount < 10001 {
 		k = 1
-	} else if rowCount < 100001 {
+	} else if rowCount < 10_0001 {
 		k = 1
-	} else if rowCount < 1000001 {
+	} else if rowCount < 100_0001 {
 		k = 1
-	} else if rowCount < 10000001 {
+	} else if rowCount < 1000_0001 {
 		k = 2
-	} else if rowCount < 100000001 {
+	} else if rowCount < 1_0000_0001 {
 		k = 3
-	} else if rowCount < 1000000001 {
+	} else if rowCount < 10_0000_0001 {
 		k = 3
-	} else if rowCount < 10000000001 {
+	} else if rowCount < 100_0000_0001 {
 		k = 3
 	} else {
 		panic("unsupport rowCount")

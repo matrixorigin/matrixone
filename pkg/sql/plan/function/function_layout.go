@@ -17,22 +17,23 @@ package function
 type FuncExplainLayout int32
 
 const (
-	STANDARD_FUNCTION          FuncExplainLayout = iota // standard function
-	UNARY_ARITHMETIC_OPERATOR                           // unary arithmetic operator
-	BINARY_ARITHMETIC_OPERATOR                          // binary arithmetic operator
-	UNARY_LOGICAL_OPERATOR                              // unary logical operator
-	BINARY_LOGICAL_OPERATOR                             // binary logical operator
-	COMPARISON_OPERATOR                                 // comparison operator
-	CAST_EXPRESSION                                     // CAST expression
-	CASE_WHEN_EXPRESSION                                // CASE ... WHEN ... expression
-	BETWEEN_AND_EXPRESSION                              // BETWEEN ... AND ... expression
-	IN_PREDICATE                                        // IN predicate
-	IS_EXPRESSION                                       // IS expression
-	IS_NOT_EXPRESSION                                   // IS NOT operator
-	NOPARAMETER_FUNCTION                                // noparameter function
-	DATE_INTERVAL_EXPRESSION                            // DATE expression, INTERVAL expression
-	EXTRACT_FUNCTION                                    // EXTRACT function,such as EXTRACT(MONTH/DAY/HOUR/MINUTE/SECOND FROM p)
-	POSITION_FUNCTION                                   // POSITION function, such as POSITION(substr IN str)
+	STANDARD_FUNCTION FuncExplainLayout = iota
+	UNARY_ARITHMETIC_OPERATOR
+	BINARY_ARITHMETIC_OPERATOR
+	UNARY_LOGICAL_OPERATOR
+	BINARY_LOGICAL_OPERATOR
+	MULTIARY_LOGICAL_OPERATOR
+	COMPARISON_OPERATOR
+	CAST_EXPRESSION
+	CASE_WHEN_EXPRESSION
+	BETWEEN_AND_EXPRESSION
+	IN_PREDICATE
+	IS_EXPRESSION
+	IS_NOT_EXPRESSION
+	NOPARAMETER_FUNCTION
+	DATE_INTERVAL_EXPRESSION
+	EXTRACT_FUNCTION  // EXTRACT function,such as EXTRACT(MONTH/DAY/HOUR/MINUTE/SECOND FROM p)
+	POSITION_FUNCTION // POSITION function, such as POSITION(substr IN str)
 	EXISTS_ANY_PREDICATE
 	UNKNOW_KIND_FUNCTION
 )

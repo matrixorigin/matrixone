@@ -39,19 +39,21 @@
 # pkg/catalog
 /pkg/catalog @XuPeng-SH
 
+#pkg/cdc
+/pkg/cdc @daviszhen @ck89119
+
 # pkg/cnservice
 /pkg/cnservice @reusee @daviszhen
 
-/pkg/cacheservice @volgariver6 
+/pkg/cacheservice @volgariver6
 
-/pkg/clusterservice @volgariver6 
+/pkg/clusterservice @volgariver6
 
-
-
-
-# pkg/common
+# pkg/common @fengttt
 /pkg/common @zhangxu19830126
 /pkg/common/mpool @m-schen
+/pkg/common/malloc @reusee
+/pkg/common/spool @reusee @m-schen
 /pkg/common/async @zhangxu19830126
 /pkg/common/bitmap @aunjgr
 /pkg/common/hashmap @aunjgr
@@ -70,20 +72,23 @@
 /pkg/compress @aunjgr
 
 # pkg/config
-/pkg/config @daviszhen
+/pkg/config @daviszhen @fengttt
 
 # pkg/container
 /pkg/container @XuPeng-SH
-/pkg/container/vector @aunjgr
+/pkg/container/vector @aunjgr @XuPeng-SH
 
 # pkg/defines
 /pkg/defines @daviszhen
 
+# pkg/embed
+/pkg/embed @zhangxu19830126
+
 # pkg/tnservice
-/pkg/tnservice @zhangxu19830126
+/pkg/tnservice @zhangxu19830126 @XuPeng-SH
 
 # pkg/fileservice
-/pkg/fileservice @reusee
+/pkg/fileservice @reusee @fengttt
 
 # pkg/frontend @daviszhen
 /pkg/frontend @daviszhen @qingxinhome
@@ -96,6 +101,9 @@
 
 # pkg/lockservice
 /pkg/lockservice @zhangxu19830126
+
+# pkg/shardservice
+/pkg/shardservice @zhangxu19830126
 
 # pkg/logservice
 /pkg/logservice @zhangxu19830126
@@ -127,16 +135,40 @@
 /pkg/sort @aunjgr @m-schen
 
 # pkg/bootstrap
-/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome
+/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome @LeftHandCold
 
 # pkg/sql
 /pkg/sql @aunjgr
 /pkg/sql/colexec @m-schen
-/pkg/sql/compile @m-schen @ouyuanning @aunjgr @badboynt1
+/pkg/sql/compile @m-schen @ouyuanning @aunjgr @badboynt1 @qingxinhome
+/pkg/sql/models @qingxinhome
 /pkg/sql/parsers @iamlinjunhong
 /pkg/sql/plan @ouyuanning @aunjgr @badboynt1
 /pkg/sql/plan/function @m-schen
 /pkg/sql/plan/explain @ouyuanning @aunjgr @badboynt1 @qingxinhome
+/pkg/sql/plan/tools @daviszhen @qingxinhome
+/pkg/sql/colexec/indexjoin @aunjgr @badboynt1
+/pkg/sql/colexec/indexbuild @badboynt1
+/pkg/sql/colexec/intersect @aunjgr @badboynt1
+/pkg/sql/colexec/intersectall @aunjgr @badboynt1
+/pkg/sql/colexec/loopanti @aunjgr @badboynt1
+/pkg/sql/colexec/loopjoin @aunjgr @badboynt1
+/pkg/sql/colexec/loopleft @aunjgr @badboynt1
+/pkg/sql/colexec/loopmark @aunjgr @badboynt1
+/pkg/sql/colexec/loopsingle @aunjgr @badboynt1
+/pkg/sql/colexec/right @aunjgr @badboynt1
+/pkg/sql/colexec/rightanti @aunjgr @badboynt1
+/pkg/sql/colexec/rightsemi @aunjgr @badboynt1
+/pkg/sql/colexec/anti @aunjgr @badboynt1
+/pkg/sql/colexec/single @aunjgr @badboynt1
+/pkg/sql/colexec/mark @aunjgr @badboynt1
+/pkg/sql/colexec/semi @aunjgr @badboynt1
+/pkg/sql/colexec/join @aunjgr @badboynt1
+/pkg/sql/colexec/hashbuild @aunjgr @badboynt1
+/pkg/sql/colexec/left @aunjgr @badboynt1
+/pkg/sql/colexec/shuffle @badboynt1
+/pkg/sql/colexec/shufflebuild @badboynt1
+/pkg/sql/colexec/multi_update @ouyuanning
 
 # pkg/taskservice
 /pkg/taskservice @zhangxu19830126
@@ -156,7 +188,7 @@
 # pkg/util
 /pkg/util @zhangxu19830126
 /pkg/util/internalExecutor @aptend
-/pkg/util/metric @aptend
+/pkg/util/metric @aptend @xzxiong
 /pkg/util/toml @zhangxu19830126
 /pkg/util/trace @xzxiong
 /pkg/util/export @xzxiong
@@ -170,8 +202,9 @@
 /pkg/vm/engine @XuPeng-SH
 /pkg/vm/pipeline @m-schen
 /pkg/vm/process @m-schen @XuPeng-SH @aunjgr
+/pkg/vm/message @badboynt1
 /pkg/vm/engine/disttae @XuPeng-SH @triump2020
-/pkg/vm/engine/disttae/logtailreplay @reusee @triump2020
+/pkg/vm/engine/disttae/logtailreplay @triump2020
 /pkg/vm/engine/tae @XuPeng-SH
 /pkg/vm/engine/memoryengine @reusee
 /pkg/vm/engine/tae/logtail/service @XuPeng-SH @volgariver6
@@ -185,7 +218,7 @@
 
 /pkg/stream @fengttt
 
-/pkg/udf @aylei @daviszhen
+/pkg/udf @aylei @daviszhen @fengttt
 
 /pkg/version @zhangxu19830126
 
@@ -200,3 +233,4 @@
 /proto/txn.proto @zhangxu19830126
 /proto/api.proto @XuPeng-SH
 /proto/logtail.proto @XuPeng-SH
+/proto/shard.proto @zhangxu19830126

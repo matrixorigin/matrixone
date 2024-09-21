@@ -137,7 +137,7 @@ json_extract({"a":"a1","b":"b1"}, $.*)
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
-json_extract({"a":1}, $.a)    JSON(0)    NO        null
+json_extract({"a":1}, $.a)    JSON(0)    NO        null        
 select json_extract('{"a":1}',null);
 json_extract({"a":1}, null)
 null
@@ -228,3 +228,388 @@ null
 select json_extract('[0,234,32432,423,5234,11443242,44242342424,23424323]','$[2000]');
 json_extract([0,234,32432,423,5234,11443242,44242342424,23424323], $[2000])
 null
+select json_extract_string('{"a":1,"b":2,"c":3}','$.a');
+json_extract_string({"a":1,"b":2,"c":3}, $.a)
+null
+select json_extract_string('{"a":1,"b":2,"c":3}','$.b');
+json_extract_string({"a":1,"b":2,"c":3}, $.b)
+null
+select json_extract_string('{"a":"x","b":"y","c":"z"}','$.a');
+json_extract_string({"a":"x","b":"y","c":"z"}, $.a)
+x
+select json_extract_string('{"a":"x","b":"y","c":"z"}','$.b');
+json_extract_string({"a":"x","b":"y","c":"z"}, $.b)
+y
+select json_extract_string('{"a":{"q":[1,2,3]}}','$.a.q[1]');
+json_extract_string({"a":{"q":[1,2,3]}}, $.a.q[1])
+null
+select json_extract_string('[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]','$[1].a');
+json_extract_string([{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}], $[1].a)
+null
+select json_extract_string('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q[1]');
+json_extract_string({"a":{"q":[{"a":1},{"a":2},{"a":3}]}}, $.a.q[1])
+null
+select json_extract_string('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q');
+json_extract_string({"a":{"q":[{"a":1},{"a":2},{"a":3}]}}, $.a.q)
+null
+select json_extract_string('[1,2,3]','$[*]');
+invalid input: json_extract_string should use a path that retrives a single value
+select json_extract_string('{"a":[1,2,3,{"b":4}]}','$.a[3].b');
+json_extract_string({"a":[1,2,3,{"b":4}]}, $.a[3].b)
+null
+select json_extract_string('{"a":[1,2,3,{"b":4}]}','$.a[3].c');
+json_extract_string({"a":[1,2,3,{"b":4}]}, $.a[3].c)
+null
+select json_extract_string('{"a":[1,2,3,{"b":4}],"c":5}','$.*');
+invalid input: json_extract_string should use a path that retrives a single value
+select json_extract_string('{"a":[1,2,3,{"a":4}]}','$**.a');
+invalid input: json_extract_string should use a path that retrives a single value
+select json_extract_string('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
+invalid input: json_extract_string should use a path that retrives a single value
+select json_extract_string('{"a":1}','$[0]');
+json_extract_string({"a":1}, $[0])
+null
+select json_extract_string('{"a":1}','$[0].a');
+json_extract_string({"a":1}, $[0].a)
+null
+select json_extract_string('{"a":1}','$[0].b');
+json_extract_string({"a":1}, $[0].b)
+null
+select json_extract_string('{"a":1}','$[1]');
+json_extract_string({"a":1}, $[1])
+null
+select json_extract_string('{"af": [1, "2", {"aaf": "bb"}],"eab":"888"}','$**.f');
+invalid input: json_extract_string should use a path that retrives a single value
+select json_extract_string('{"a": [1, "2", {"a": "bb"}]}','$**.a');
+invalid input: json_extract_string should use a path that retrives a single value
+select json_extract_string('{"a":"a1","b":"b1"}','$.**');
+invalid input: invalid json path '$.**'
+select json_extract_string('{"a":"a1","b":"b1"}','$**.1');
+invalid input: invalid json path '$**.1'
+select json_extract_float64('{"a":1,"b":2,"c":3}','$.a');
+json_extract_float64({"a":1,"b":2,"c":3}, $.a)
+1.0
+select json_extract_float64('{"a":1,"b":2,"c":3}','$.b');
+json_extract_float64({"a":1,"b":2,"c":3}, $.b)
+2.0
+select json_extract_float64('{"a":"x","b":"y","c":"z"}','$.a');
+json_extract_float64({"a":"x","b":"y","c":"z"}, $.a)
+null
+select json_extract_float64('{"a":"x","b":"y","c":"z"}','$.b');
+json_extract_float64({"a":"x","b":"y","c":"z"}, $.b)
+null
+select json_extract_float64('{"a":{"q":[1,2,3]}}','$.a.q[1]');
+json_extract_float64({"a":{"q":[1,2,3]}}, $.a.q[1])
+2.0
+select json_extract_float64('[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]','$[1].a');
+json_extract_float64([{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}], $[1].a)
+4.0
+select json_extract_float64('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q[1]');
+json_extract_float64({"a":{"q":[{"a":1},{"a":2},{"a":3}]}}, $.a.q[1])
+null
+select json_extract_float64('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q');
+json_extract_float64({"a":{"q":[{"a":1},{"a":2},{"a":3}]}}, $.a.q)
+null
+select json_extract_float64('[1,2,3]','$[*]');
+invalid input: json_extract_float64 should use a path that retrives a single value
+select json_extract_float64('{"a":[1,2,3,{"b":4}]}','$.a[3].b');
+json_extract_float64({"a":[1,2,3,{"b":4}]}, $.a[3].b)
+4.0
+select json_extract_float64('{"a":[1,2,3,{"b":4}]}','$.a[3].c');
+json_extract_float64({"a":[1,2,3,{"b":4}]}, $.a[3].c)
+null
+select json_extract_float64('{"a":[1,2,3,{"b":4}],"c":5}','$.*');
+invalid input: json_extract_float64 should use a path that retrives a single value
+select json_extract_float64('{"a":[1,2,3,{"a":4}]}','$**.a');
+invalid input: json_extract_float64 should use a path that retrives a single value
+select json_extract_float64('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
+invalid input: json_extract_float64 should use a path that retrives a single value
+select json_extract_float64('{"a":1}','$[0]');
+json_extract_float64({"a":1}, $[0])
+null
+select json_extract_float64('{"a":1}','$[0].a');
+json_extract_float64({"a":1}, $[0].a)
+1.0
+select json_extract_float64('{"a":1}','$[0].b');
+json_extract_float64({"a":1}, $[0].b)
+null
+select json_extract_float64('{"a":1}','$[1]');
+json_extract_float64({"a":1}, $[1])
+null
+select json_extract_float64('{"af": [1, "2", {"aaf": "bb"}],"eab":"888"}','$**.f');
+invalid input: json_extract_float64 should use a path that retrives a single value
+select json_extract_float64('{"a": [1, "2", {"a": "bb"}]}','$**.a');
+invalid input: json_extract_float64 should use a path that retrives a single value
+select json_extract_float64('{"a":"a1","b":"b1"}','$.**');
+invalid input: invalid json path '$.**'
+select json_extract_float64('{"a":"a1","b":"b1"}','$**.1');
+invalid input: invalid json path '$**.1'
+select json_extract_float64('{"a":123456789012345678901234567890,"b":2,"c":3}','$.a');
+json_extract_float64({"a":123456789012345678901234567890,"b":2,"c":3}, $.a)
+1.2345678901234568E29
+select json_extract_float64('{"a":-123456789012345678901234567890,"b":2,"c":3}','$.a');
+json_extract_float64({"a":-123456789012345678901234567890,"b":2,"c":3}, $.a)
+-1.2345678901234568E29
+select json_extract_float64('{"a":null,"b":2,"c":3}','$.a');
+json_extract_float64({"a":null,"b":2,"c":3}, $.a)
+null
+select json_extract_float64('{"a":NaN,"b":2,"c":3}','$.a');
+invalid input: json text {"a":NaN,"b":2,"c":3}
+select json_extract_float64('{"a":1e10,"b":2,"c":3}','$.a');
+json_extract_float64({"a":1e10,"b":2,"c":3}, $.a)
+1.0E10
+select json_extract_float64('{"a":3.1415926535897e1,"b":2,"c":3}','$.a');
+json_extract_float64({"a":3.1415926535897e1,"b":2,"c":3}, $.a)
+31.415926535897
+drop table if exists jtags;
+create table jtags(id int, tags json, metrics json);
+insert into jtags values
+(1, '{"tag1": "xxx", "tag2": "yyy1", "tag13": "zzz"}', '{"metric1": 1, "metric2": 1.0, "metric13": 1}'),
+(2, '{"tag1": "xxx", "tag2": "yyy2", "tag23": "zzz"}', '{"metric1": 2, "metric2": 2.0, "metric23": 2}'),
+(3, '{"tag1": "xxx", "tag2": "yyy3", "tag33": "zzz"}', '{"metric1": 3, "metric2": 3.0, "metric33": 3}'),
+(4, '{"tag1": "xxx", "tag2": "yyy4", "tag43": "zzz"}', '{"metric1": 4, "metric2": 4.0, "metric43": 4}'),
+(5, '{"tag1": "xxx", "tag2": "yyy5", "tag53": "zzz"}', '{"metric1": 5, "metric2": 5.0, "metric53": 5}'),
+(6, '{"tag1": "xxx", "tag2": "yyy6", "tag63": "zzz"}', '{"metric1": 6, "metric2": 6.0, "metric63": 6}'),
+(7, '{"tag1": "xxx", "tag2": "yyy7", "tag73": "zzz"}', '{"metric1": 7, "metric2": 7.0, "metric73": 7}'),
+(8, '{"tag1": "xxx", "tag2": "yyy8", "tag83": "zzz"}', '{"metric1": 8, "metric2": 8.0, "metric83": 8}'),
+(9, '{"tag1": "xxx", "tag2": "yyy9", "tag93": "zzz"}', '{"metric1": 9, "metric2": 9.0, "metric93": 9}');
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags;
+s1    s33
+45.0    3.0
+select count(json_extract_float64(jtags.metrics, '$.metric1')) c1, count(json_extract_float64(jtags.metrics, '$.metric33')) c33 from jtags;
+c1    c33
+9    1
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag1') = 'xxx';
+s1    s33
+45.0    3.0
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag2') = 'yyy3';
+s1    s33
+3.0    3.0
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag2') = 'yyy5';
+s1    s33
+5.0    null
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag33') = 'zzz';
+s1    s33
+3.0    3.0
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag53') = 'zzz';
+s1    s33
+5.0    null
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag35') = 'zzz';
+s1    s33
+null    null
+create database if not exists test;
+use test;
+create table json_tab (a json);
+insert into json_tab values ('{"CODE": "BOARDCODE-3", "LINE": "BOARDLINE-0", "PANEL": "BOARDPANEL-69"}');
+select * from json_tab;
+a
+{"CODE": "BOARDCODE-3", "LINE": "BOARDLINE-0", "PANEL": "BOARDPANEL-69"}
+select json_extract_string(a, '$.LINE') from json_tab;
+json_extract_string(a, $.LINE)
+BOARDLINE-0
+select a from json_tab where json_extract_string(a, '$.LINE') = 'BOARDLINE-0';
+a
+{"CODE": "BOARDCODE-3", "LINE": "BOARDLINE-0", "PANEL": "BOARDPANEL-69"}
+select a from json_tab where json_extract_string(a, '$.LINE') = '"BOARDLINE-0"';
+a
+drop database test;
+create database if not exists test;
+use test;
+CREATE TABLE test_json (
+id INT AUTO_INCREMENT PRIMARY KEY,
+json_data JSON NOT NULL
+);
+INSERT INTO test_json (json_data)
+VALUES
+('{"name": "Alice", "age": 25}'),
+('{"name": "Bob", "age": 30}'),
+('{"name": "Charlie", "age": 22}');
+SELECT
+id,
+json_data,
+json_extract_string(json_data, '$.name') AS extracted_name
+FROM test_json;
+id    json_data    extracted_name
+1    {"age": 25, "name": "Alice"}    Alice
+2    {"age": 30, "name": "Bob"}    Bob
+3    {"age": 22, "name": "Charlie"}    Charlie
+drop database test;
+create database if not exists test;
+use test;
+drop table if exists t1;
+create table t1(c1 json);
+insert into t1 values ('{"area":"A"}');
+insert into t1 values ('{"area":"B"}');
+insert into t1 values ('{"area":"C"}');
+insert into t1 values ('{"area":"D","length":10.25}');
+insert into t1 values ('{"area":"E","length":20}');
+select * from t1;
+c1
+{"area": "A"}
+{"area": "B"}
+{"area": "C"}
+{"area": "D", "length": 10.25}
+{"area": "E", "length": 20}
+select c1, json_extract(c1, '$.area'), json_extract_string(c1, '$.area') from t1;
+c1    json_extract(c1, $.area)    json_extract_string(c1, $.area)
+{"area": "A"}    "A"    A
+{"area": "B"}    "B"    B
+{"area": "C"}    "C"    C
+{"area": "D", "length": 10.25}    "D"    D
+{"area": "E", "length": 20}    "E"    E
+select c1, json_extract(c1, '$.area'), json_extract_string(c1, '$.area'), json_extract_float64(c1, '$.length') from t1;
+c1    json_extract(c1, $.area)    json_extract_string(c1, $.area)    json_extract_float64(c1, $.length)
+{"area": "A"}    "A"    A    null
+{"area": "B"}    "B"    B    null
+{"area": "C"}    "C"    C    null
+{"area": "D", "length": 10.25}    "D"    D    10.25
+{"area": "E", "length": 20}    "E"    E    20.0
+select json_extract_float64(c1, '$.length') from t1;
+json_extract_float64(c1, $.length)
+null
+null
+null
+10.25
+20.0
+select json_extract_float64(c1, '$.length') from t1 where json_extract_string(c1, '$.area') = 'E';
+json_extract_float64(c1, $.length)
+20.0
+CREATE TABLE test_json (
+id INT AUTO_INCREMENT PRIMARY KEY,
+json_data JSON NOT NULL
+);
+INSERT INTO test_json (json_data)
+VALUES
+('{"number": 25}'),
+('{"number": 25.5}'),
+('{"number": "25"}'),
+('{"number": "25.5"}'),
+('{"number": "hello"}'),
+('{"number": true}'),
+('{"number": null}'),
+('{"number": [1, 2, 3]}'),
+('{"number": {"value": 25}}');
+SELECT
+id,
+json_data,
+json_extract_float64(json_data, '$.number') AS extracted_number
+FROM test_json;
+id    json_data    extracted_number
+1    {"number": 25}    25.0
+2    {"number": 25.5}    25.5
+3    {"number": "25"}    null
+4    {"number": "25.5"}    null
+5    {"number": "hello"}    null
+6    {"number": true}    null
+7    {"number": null}    null
+8    {"number": [1, 2, 3]}    null
+9    {"number": {"value": 25}}    null
+drop table if exists test_json;
+CREATE TABLE test_json (
+id INT AUTO_INCREMENT PRIMARY KEY,
+json_data JSON NOT NULL
+);
+INSERT INTO test_json (json_data)
+VALUES
+('{"name": "Alice", "age": 25}'),
+('{"name": "Bob", "age": 25.5}'),
+('{"name": "Charlie", "age": "25"}'),
+('{"name": "David", "age": "25.5"}'),
+('{"name": "Eve", "age": "hello"}'),
+('{"name": "Frank", "age": true}'),
+('{"name": "Grace", "age": null}'),
+('{"name": "Hank", "age": [1, 2, 3]}'),
+('{"name": "Ivan", "age": {"value": 25}}');
+SELECT
+id,
+json_data,
+json_extract_string(json_data, '$.name') AS extracted_name,
+json_extract_float64(json_data, '$.age') AS extracted_age
+FROM test_json;
+id    json_data    extracted_name    extracted_age
+1    {"age": 25, "name": "Alice"}    Alice    25.0
+2    {"age": 25.5, "name": "Bob"}    Bob    25.5
+3    {"age": "25", "name": "Charlie"}    Charlie    null
+4    {"age": "25.5", "name": "David"}    David    null
+5    {"age": "hello", "name": "Eve"}    Eve    null
+6    {"age": true, "name": "Frank"}    Frank    null
+7    {"age": null, "name": "Grace"}    Grace    null
+8    {"age": [1, 2, 3], "name": "Hank"}    Hank    null
+9    {"age": {"value": 25}, "name": "Ivan"}    Ivan    null
+CREATE TABLE test_json_simplified (
+id INT AUTO_INCREMENT PRIMARY KEY,
+json_data JSON NOT NULL
+);
+INSERT INTO test_json_simplified (json_data)
+VALUES
+('{"name": "Alice", "age": 25, "scores": {"math": 85.0, "science": 90.0}}'),
+('{"name": "Bob", "age": 25, "scores": {"math": 80.5, "science": 88.0}}'),
+('{"name": "Charlie", "age": 25, "scores": {"math": null, "science": null}}'),
+('{"name": "David", "age": 25, "scores": {"math": 80.5, "science": null}}'),
+('{"name": "Eve", "age": 25, "scores": {"math": null, "science": 92.0}}'),
+('{"name": "Frank", "age": 25, "scores": {"math": 85.0, "science": 88.0}}'),
+('{"name": "Grace", "age": 25, "scores": {"math": null, "science": null}}'),
+('{"name": "Hank", "age": 25, "scores": {"math": 80.5, "science": 88.0}}'),
+('{"name": "Ivan", "age": 25, "scores": {"math": null, "science": null}}');
+SELECT
+id,
+json_extract_string(json_data, '$.name') AS extracted_name,
+json_extract_float64(json_data, '$.age') AS extracted_age,
+json_extract_float64(json_data, '$.scores.math') AS extracted_math_score,
+json_extract_float64(json_data, '$.scores.science') AS extracted_science_score
+FROM test_json_simplified;
+id    extracted_name    extracted_age    extracted_math_score    extracted_science_score
+1    Alice    25.0    85.0    90.0
+2    Bob    25.0    80.5    88.0
+3    Charlie    25.0    null    null
+4    David    25.0    80.5    null
+5    Eve    25.0    null    92.0
+6    Frank    25.0    85.0    88.0
+7    Grace    25.0    null    null
+8    Hank    25.0    80.5    88.0
+9    Ivan    25.0    null    null
+drop database test;
+create database test;
+use test;
+create table test_123(c1 json);
+insert into test_123 values ('{"a1":10, "a2":20}');
+insert into test_123 values ('{"a1":"test", "a2":"test2"}');
+select * from test_123;
+c1
+{"a1": 10, "a2": 20}
+{"a1": "test", "a2": "test2"}
+select json_extract(c1, '$.a1', '$.a2') from test_123;
+json_extract(c1, $.a1, $.a2)
+[10, 20]
+["test", "test2"]
+select json_extract_float64(c1, '$.a1', '$.a2') from test_123;
+invalid input: json_extract_float64 should use a path that retrives a single value
+select json_extract_string(c1, '$.a1', '$.a2') from test_123;
+invalid input: json_extract_string should use a path that retrives a single value
+drop database test;
+create database test;
+use test;
+CREATE TABLE example_table (
+id INT AUTO_INCREMENT PRIMARY KEY,
+data JSON NOT NULL
+);
+INSERT INTO example_table (data)
+VALUES (
+'{"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item2": "value2", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item20": "value20"}'
+);
+select * from example_table where json_extract(data, '$.CODE') = '"CODE-3"';
+id    data
+1    {"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item2": "value2", "item20": "value20", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9"}
+select * from example_table where json_extract(data, '$.LINE') = '"LINE-4"';
+id    data
+1    {"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item2": "value2", "item20": "value20", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9"}
+select * from example_table where json_extract(data, '$.PANEL') = '"PANEL-17"';
+id    data
+1    {"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item2": "value2", "item20": "value20", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9"}
+drop database test;

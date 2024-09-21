@@ -18,6 +18,8 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -30,7 +32,6 @@ type lockTableKeeper struct {
 	keepLockTableBindInterval time.Duration
 	keepRemoteLockInterval    time.Duration
 	groupTables               *lockTableHolders
-	canDoKeep                 bool
 	service                   *service
 }
 
@@ -43,7 +44,8 @@ func NewLockTableKeeper(
 	keepLockTableBindInterval time.Duration,
 	keepRemoteLockInterval time.Duration,
 	groupTables *lockTableHolders,
-	service *service) LockTableKeeper {
+	service *service,
+) LockTableKeeper {
 	s := &lockTableKeeper{
 		serviceID:                 serviceID,
 		client:                    client,
@@ -52,7 +54,7 @@ func NewLockTableKeeper(
 		keepRemoteLockInterval:    keepRemoteLockInterval,
 		service:                   service,
 		stopper: stopper.NewStopper("lock-table-keeper",
-			stopper.WithLogger(getLogger().RawLogger())),
+			stopper.WithLogger(service.logger.RawLogger())),
 	}
 	if err := s.stopper.RunTask(s.keepLockTableBind); err != nil {
 		panic(err)
@@ -69,7 +71,7 @@ func (k *lockTableKeeper) Close() error {
 }
 
 func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
-	defer getLogger().InfoAction("keep lock table bind task")()
+	defer k.service.logger.InfoAction("keep lock table bind task")()
 
 	timer := time.NewTimer(k.keepLockTableBindInterval)
 	defer timer.Stop()
@@ -86,7 +88,7 @@ func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
 }
 
 func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
-	defer getLogger().InfoAction("keep remote locks task")()
+	defer k.service.logger.InfoAction("keep remote locks task")()
 
 	timer := time.NewTimer(k.keepRemoteLockInterval)
 	defer timer.Stop()
@@ -147,7 +149,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			binds = append(binds, bind)
 			continue
 		}
-		logKeepRemoteLocksFailed(bind, err)
+		logKeepRemoteLocksFailed(k.service.logger, bind, err)
 		if !isRetryError(err) {
 			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
 				return !v.getBind().Changed(bind)
@@ -160,7 +162,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		if err == nil {
 			releaseResponse(v.(*pb.Response))
 		} else {
-			logKeepRemoteLocksFailed(binds[idx], err)
+			logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
 		}
 		f.Close()
 		futures[idx] = nil // gc
@@ -173,18 +175,6 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		k.service.activeTxnHolder.empty() {
 		k.service.setStatus(pb.Status_ServiceUnLockSucc)
 	}
-	if !k.canDoKeep {
-		k.groupTables.iter(func(_ uint64, v lockTable) bool {
-			bind := v.getBind()
-			if bind.ServiceID == k.serviceID {
-				k.canDoKeep = true
-			}
-			return true
-		})
-	}
-	if !k.canDoKeep {
-		return
-	}
 
 	req := acquireRequest()
 	defer releaseRequest(req)
@@ -193,7 +183,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	req.KeepLockTableBind.ServiceID = k.serviceID
 	req.KeepLockTableBind.Status = k.service.getStatus()
 	if !k.service.isStatus(pb.Status_ServiceLockEnable) {
-		req.KeepLockTableBind.LockTables = k.service.popGroupTables()
+		req.KeepLockTableBind.LockTables = k.service.topGroupTables()
 		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
 	}
 
@@ -201,22 +191,31 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	defer cancel()
 	resp, err := k.client.Send(ctx, req)
 	if err != nil {
-		logKeepBindFailed(err)
+		logKeepBindFailed(k.service.logger, err)
 		return
 	}
 	defer releaseResponse(resp)
 
 	if resp.KeepLockTableBind.OK {
 		switch resp.KeepLockTableBind.Status {
+		case pb.Status_ServiceLockEnable:
+			if !k.service.isStatus(pb.Status_ServiceLockEnable) {
+				k.service.logger.Error("tn has abnormal lock service status",
+					zap.String("serviceID", k.serviceID),
+					zap.String("status", k.service.getStatus().String()))
+			}
+			return
 		case pb.Status_ServiceLockWaiting:
 			// maybe pb.Status_ServiceUnLockSucc
 			if k.service.isStatus(pb.Status_ServiceLockEnable) {
-				k.service.setRestartTime()
-				k.service.setStatus(pb.Status_ServiceLockWaiting)
 				go k.service.checkCanMoveGroupTables()
 			}
 		default:
 			k.service.setStatus(resp.KeepLockTableBind.Status)
+		}
+		if len(req.KeepLockTableBind.LockTables) > 0 {
+			logBindsMove(k.service.logger, k.service.popGroupTables())
+			logStatus(k.service.logger, k.service.getStatus())
 		}
 		return
 	}
@@ -232,8 +231,8 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	})
 	if n > 0 {
 		// Keep bind receiving an explicit failure means that all the binds of the local
-		// locktable are invalid. We just need to remove it from the map, and the next
+		// lock table are invalid. We just need to remove it from the map, and the next
 		// time we access it, we will automatically get the latest bind from allocate.
-		logLocalBindsInvalid()
+		logLocalBindsInvalid(k.service.logger)
 	}
 }

@@ -31,6 +31,7 @@ import (
 
 // Engine is an engine.Engine impl
 type Engine struct {
+	sid         string
 	shardPolicy ShardPolicy
 	idGenerator IDGenerator
 	cluster     clusterservice.MOCluster
@@ -38,6 +39,7 @@ type Engine struct {
 
 func New(
 	ctx context.Context,
+	sid string,
 	shardPolicy ShardPolicy,
 	idGenerator IDGenerator,
 	cluster clusterservice.MOCluster,
@@ -45,6 +47,7 @@ func New(
 	_ = ctx
 
 	engine := &Engine{
+		sid:         sid,
 		shardPolicy: shardPolicy,
 		idGenerator: idGenerator,
 		cluster:     cluster,
@@ -54,6 +57,14 @@ func New(
 }
 
 var _ engine.Engine = new(Engine)
+
+func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
+func (e *Engine) GetService() string {
+	return e.sid
+}
 
 func (e *Engine) New(_ context.Context, _ client.TxnOperator) error {
 	return nil
@@ -67,8 +78,14 @@ func (e *Engine) Rollback(_ context.Context, _ client.TxnOperator) error {
 	return nil
 }
 
-func (e *Engine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ []byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
+func (e *Engine) BuildBlockReaders(
+	ctx context.Context,
+	proc any,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData engine.RelData,
+	num int) ([]engine.Reader, error) {
 	return nil, nil
 }
 
@@ -183,7 +200,7 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 
 func (e *Engine) Nodes(isInternal bool, tenant string, _ string, cnLabel map[string]string) (engine.Nodes, error) {
 	var nodes engine.Nodes
-	cluster := clusterservice.GetMOCluster()
+	cluster := clusterservice.GetMOCluster(e.sid)
 	var selector clusterservice.Selector
 	if isInternal || strings.ToLower(tenant) == "sys" {
 		selector = clusterservice.NewSelector()
@@ -240,4 +257,8 @@ func getTNServices(cluster clusterservice.MOCluster) []metadata.TNService {
 			return true
 		})
 	return values
+}
+
+func (e *Engine) GetMessageCenter() any {
+	return nil
 }

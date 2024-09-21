@@ -88,3 +88,17 @@ func (kv *KV) AscendRange(start, end []byte, fn func(key, value []byte) bool) {
 		return false
 	})
 }
+
+func (kv *KV) DescendRange(
+	key []byte,
+	fn func(key, value []byte) bool,
+) {
+	kv.tmp.key = key
+	kv.tree.DescendLessOrEqual(kv.tmp, func(i btree.Item) bool {
+		target := i.(treeItem)
+		if bytes.Compare(target.key, key) <= 0 {
+			return fn(target.key, target.value)
+		}
+		return false
+	})
+}

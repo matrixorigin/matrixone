@@ -15,13 +15,14 @@
 package sample
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 const nullFlag = int64(-65535)
@@ -72,7 +73,7 @@ func TestSamplePool(t *testing.T) {
 		require.Equal(t, 5, out.Vecs[0].Length())
 		require.Equal(t, 5, out.Vecs[1].Length())
 		// invalid scan row count was 9. the 10th row with null value at the sample column will be ignored.
-		require.Equal(t, int64(9), vector.GetFixedAt[int64](out.Vecs[2], 0))
+		require.Equal(t, int64(9), vector.GetFixedAtWithTypeCheck[int64](out.Vecs[2], 0))
 
 		out.Clean(proc.Mp())
 		pool1.Free()
@@ -124,7 +125,7 @@ func TestSamplePool(t *testing.T) {
 		pool3.Free()
 	}
 
-	proc.FreeVectors()
+	proc.Free()
 	b1.Clean(proc.Mp())
 	b2.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -135,7 +136,7 @@ func genSampleBatch(proc *process.Process, rows [][]int64) (*batch.Batch, error)
 
 	var err error
 	for i := range b.Vecs {
-		b.Vecs[i] = proc.GetVector(types.T_int64.ToType())
+		b.Vecs[i] = vector.NewVec(types.T_int64.ToType())
 
 		for _, rowValue := range rows {
 			err = vector.AppendFixed[int64](b.Vecs[i], rowValue[i], rowValue[i] == nullFlag, proc.Mp())

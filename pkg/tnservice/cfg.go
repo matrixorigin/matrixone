@@ -21,6 +21,7 @@ import (
 	"time"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,6 +40,8 @@ var (
 	defaultLogtailServiceAddress = "127.0.0.1:22001"
 	defaultLockListenAddress     = "0.0.0.0:22002"
 	defaultLockServiceAddress    = "127.0.0.1:22002"
+	defaultShardListenAddress    = "0.0.0.0:22003"
+	defaultShardServiceAddress   = "127.0.0.1:22003"
 	defaultZombieTimeout         = time.Hour
 	defaultDiscoveryTimeout      = time.Second * 30
 	defaultHeatbeatInterval      = time.Second
@@ -55,7 +58,8 @@ var (
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
 	defaultRPCStreamPoisonTime        = 5 * time.Second
 	defaultLogtailCollectInterval     = 2 * time.Millisecond
-	defaultLogtailResponseSendTimeout = 10 * time.Second
+	defaultLogtailResponseSendTimeout = time.Minute
+	defaultPullWorkerPoolSize         = 50
 
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
@@ -124,6 +128,7 @@ type Config struct {
 		GCTTL          toml.Duration `toml:"gc-ttl"`
 		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
 		DisableGC      bool          `toml:"disable-gc"`
+		CheckGC        bool          `toml:"check-gc"`
 	}
 
 	Merge struct {
@@ -141,6 +146,7 @@ type Config struct {
 		LogtailRPCStreamPoisonTime toml.Duration `toml:"logtail-rpc-stream-poison-time"`
 		LogtailCollectInterval     toml.Duration `toml:"logtail-collect-interval"`
 		LogtailResponseSendTimeout toml.Duration `toml:"logtail-response-send-timeout"`
+		PullWorkerPoolSize         toml.ByteSize `toml:"pull-worker-pool-size"`
 	}
 
 	// Txn transactions configuration
@@ -177,6 +183,8 @@ type Config struct {
 	// LockService lockservice config
 	LockService lockservice.Config `toml:"lockservice"`
 
+	ShardService shardservice.Config `toml:"shardservice"`
+
 	// IsStandalone indicates whether the tn is in standalone cluster not an independent process.
 	// For the tn does not boost an independent queryservice in standalone mode.
 	// cn,tn shares the same queryservice in standalone mode.
@@ -205,11 +213,17 @@ func (c *Config) Validate() error {
 	if c.LockService.ServiceAddress == "" {
 		c.LockService.ServiceAddress = defaultLockServiceAddress
 	}
+	if c.ShardService.ListenAddress == "" {
+		c.ShardService.ListenAddress = defaultShardListenAddress
+	}
+	if c.ShardService.ServiceAddress == "" {
+		c.ShardService.ServiceAddress = defaultShardServiceAddress
+	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
 	}
 	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
-		return moerr.NewInternalError(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
+		return moerr.NewInternalErrorf(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
 	}
 	if c.Txn.ZombieTimeout.Duration == 0 {
 		c.Txn.ZombieTimeout.Duration = defaultZombieTimeout
@@ -263,6 +277,9 @@ func (c *Config) Validate() error {
 	if c.LogtailServer.LogtailResponseSendTimeout.Duration <= 0 {
 		c.LogtailServer.LogtailResponseSendTimeout.Duration = defaultLogtailResponseSendTimeout
 	}
+	if c.LogtailServer.PullWorkerPoolSize <= 0 {
+		c.LogtailServer.PullWorkerPoolSize = toml.ByteSize(defaultPullWorkerPoolSize)
+	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
@@ -271,7 +288,7 @@ func (c *Config) Validate() error {
 		c.Txn.Mode = defaultTxnMode.String()
 	} else {
 		if !txn.ValidTxnMode(c.Txn.Mode) {
-			return moerr.NewInternalError(context.Background(), "invalid txn mode %s", c.Txn.Mode)
+			return moerr.NewInternalErrorf(context.Background(), "invalid txn mode %s", c.Txn.Mode)
 		}
 	}
 
@@ -291,6 +308,9 @@ func (c *Config) Validate() error {
 	c.RPC.Adjust()
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
+
+	c.ShardService.ServiceID = c.UUID
+	c.ShardService.Validate()
 
 	if c.PortBase != 0 {
 		if c.ServiceHost == "" {
@@ -369,6 +389,9 @@ func (c *Config) SetDefaultValue() {
 	if c.LogtailServer.LogtailResponseSendTimeout.Duration <= 0 {
 		c.LogtailServer.LogtailResponseSendTimeout.Duration = defaultLogtailResponseSendTimeout
 	}
+	if c.LogtailServer.PullWorkerPoolSize <= 0 {
+		c.LogtailServer.PullWorkerPoolSize = toml.ByteSize(defaultPullWorkerPoolSize)
+	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
@@ -388,9 +411,10 @@ func (c *Config) SetDefaultValue() {
 	}
 
 	c.RPC.Adjust()
-	c.LockService.ServiceID = "tmp"
-	c.LockService.Validate()
 	c.LockService.ServiceID = c.UUID
+
+	c.ShardService.RPC = c.RPC
+	c.ShardService.ServiceID = c.UUID
 
 	if c.PortBase != 0 {
 		if c.ServiceHost == "" {

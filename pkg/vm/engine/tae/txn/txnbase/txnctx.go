@@ -127,6 +127,7 @@ func (ctx *TxnCtx) HasSnapshotLag() bool      { return ctx.SnapshotTS.Less(&ctx.
 func (ctx *TxnCtx) GetSnapshotTS() types.TS   { return ctx.SnapshotTS }
 func (ctx *TxnCtx) SetSnapshotTS(ts types.TS) { ctx.SnapshotTS = ts }
 func (ctx *TxnCtx) GetStartTS() types.TS      { return ctx.StartTS }
+func (ctx *TxnCtx) SetStartTS(ts types.TS)    { ctx.StartTS = ts }
 func (ctx *TxnCtx) GetCommitTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
@@ -305,13 +306,13 @@ func (ctx *TxnCtx) ToRollbackedLocked() error {
 	if ctx.Is2PC() {
 		if ctx.State != txnif.TxnStatePrepared &&
 			ctx.State != txnif.TxnStateRollbacking {
-			return moerr.NewTAERollbackNoCtx("state %s", txnif.TxnStrState(ctx.State))
+			return moerr.NewTAERollbackNoCtxf("state %s", txnif.TxnStrState(ctx.State))
 		}
 		ctx.State = txnif.TxnStateRollbacked
 		return nil
 	}
 	if ctx.State != txnif.TxnStateRollbacking {
-		return moerr.NewTAERollbackNoCtx("state %s", txnif.TxnStrState(ctx.State))
+		return moerr.NewTAERollbackNoCtxf("state %s", txnif.TxnStrState(ctx.State))
 	}
 	ctx.State = txnif.TxnStateRollbacked
 	return nil

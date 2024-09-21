@@ -30,19 +30,24 @@ import (
 // which belongs to txn's workspace and can be appended data into.
 type anode struct {
 	*baseNode
-	data    *containers.Batch
-	rows    uint32
-	appends []*appendInfo
+	data        *containers.Batch
+	rows        uint32
+	appends     []*appendInfo
+	isTombstone bool
+
+	isMergeCompact bool
 }
 
 // NewANode creates a InsertNode with data in memory.
 func NewANode(
 	tbl *txnTable,
 	meta *catalog.ObjectEntry,
+	isTombstone bool,
 ) *anode {
 	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, meta)
 	impl.appends = make([]*appendInfo, 0)
+	impl.isTombstone = isTombstone
 	return impl
 }
 
@@ -75,7 +80,7 @@ func (n *anode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	if n.data == nil {
 		return
 	}
-	composedCmd := NewAppendCmd(id, n, n.data)
+	composedCmd := NewAppendCmd(id, n, n.data, n.isTombstone)
 	return composedCmd, nil
 }
 
@@ -92,7 +97,7 @@ func (n *anode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
 }
 
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
-	schema := n.table.GetLocalSchema()
+	schema := n.table.GetLocalSchema(n.isTombstone)
 	if n.data == nil {
 		capacity := data.Length() - int(offset)
 		n.data = containers.BuildBatchWithPool(
@@ -117,6 +122,11 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
+		// if n.isTombstone {
+		// 	if attr == catalog.AttrCommitTs || attr == catalog.AttrAborted {
+		// 		continue
+		// 	}
+		// }
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := n.data.Vecs[def.Idx]
 		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())
@@ -128,8 +138,11 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 }
 
 func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
+	if n.isTombstone {
+		return
+	}
 	col := n.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
-	blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, 0)
+	blkID := objectio.NewBlockidWithObjectID(n.meta.ID(), 0)
 	if err = objectio.ConstructRowidColumnTo(
 		col.GetDownstreamVector(),
 		blkID, startRow, length,
@@ -138,27 +151,28 @@ func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 		col.Close()
 		return
 	}
-	err = n.data.Vecs[n.table.GetLocalSchema().PhyAddrKey.Idx].ExtendVec(col.GetDownstreamVector())
+	err = n.data.Vecs[n.table.GetLocalSchema(n.isTombstone).PhyAddrKey.Idx].ExtendVec(col.GetDownstreamVector())
 	col.Close()
 	return
 }
 
 func (n *anode) FillBlockView(
-	view *containers.BlockView, colIdxes []int, mp *mpool.MPool,
+	view *containers.Batch, colIdxes []int, mp *mpool.MPool,
 ) (err error) {
 	for _, colIdx := range colIdxes {
 		orig := n.data.Vecs[colIdx]
-		view.SetData(colIdx, orig.CloneWindow(0, orig.Length(), mp))
+		view.AddVector(n.data.Attrs[colIdx], orig.CloneWindow(0, orig.Length(), mp))
 	}
-	view.DeleteMask = n.data.Deletes
+	view.Deletes = n.data.Deletes
 	return
 }
-func (n *anode) FillColumnView(view *containers.ColumnView, mp *mpool.MPool) (err error) {
-	orig := n.data.Vecs[view.ColIdx]
-	view.SetData(orig.CloneWindow(0, orig.Length(), mp))
-	view.DeleteMask = n.data.Deletes
-	return
-}
+
+// func (n *anode) FillColumnView(view *containers.Batch, idx int, mp *mpool.MPool) (err error) {
+// 	orig := n.data.GetVectorByName(n.table.schema.ColDefs[idx].Name)
+// 	view.AddVector(n.table.schema.ColDefs[idx].Name, orig.CloneWindow(0, orig.Length(), mp))
+// 	view.Deletes = n.data.Deletes
+// 	return
+// }
 
 func (n *anode) Compact() {
 	if n.data == nil {
@@ -212,22 +226,23 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 	return
 }
 
-func (n *anode) GetColumnDataByIds(
-	colIdxes []int, mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
-	view = containers.NewBlockView()
-	err = n.FillBlockView(view, colIdxes, mp)
-	return
+func (n *anode) Scan(ctx context.Context, bat **containers.Batch, colIdxes []int, mp *mpool.MPool) {
+	if *bat == nil {
+		*bat = containers.NewBatch()
+		for _, colIdx := range colIdxes {
+			orig := n.data.Vecs[colIdx]
+			attr := n.data.Attrs[colIdx]
+			(*bat).AddVector(attr, orig.CloneWindow(0, orig.Length(), mp))
+		}
+		return
+	}
+	for _, colIdx := range colIdxes {
+		orig := n.data.Vecs[colIdx]
+		attr := n.data.Attrs[colIdx]
+		(*bat).GetVectorByName(attr).Extend(orig)
+	}
 }
 
-func (n *anode) GetColumnDataById(
-	ctx context.Context, colIdx int, mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
-	view = containers.NewColumnView(colIdx)
-	err = n.FillColumnView(view, mp)
-	return
-}
-
-func (n *anode) Prefetch(idxes []uint16) error {
+func (n *anode) Prefetch() error {
 	return nil
 }

@@ -18,12 +18,15 @@
  package task; 
  option go_package = "github.com/matrixorigin/matrixone/pkg/pb/task";
  
- import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 import "metadata.proto";
 
- option (gogoproto.goproto_enum_prefix_all) = true;
- 
+option (gogoproto.goproto_enum_prefix_all) = true;
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
+
  // TaskStatus task status
  enum TaskStatus {
      // Create is the state of waiting to be scheduled.
@@ -47,6 +50,9 @@ import "metadata.proto";
      // CancelRequested is the state that cancel request has been proposed to
      // the task and has not been canceled.
      CancelRequested = 8;
+     // RestartRequested is the state that restart request has been proposed to
+     // the task and has not been restart.
+     RestartRequested = 9;
  }
 
  // TaskCode task code
@@ -63,6 +69,10 @@ import "metadata.proto";
    ConnectorKafkaSink = 4;
    // MergeObject is for the merge object task.
    MergeObject = 5;
+   // Retention is for table retention
+   Retention = 6;
+   // Init cdc task
+   InitCdc = 7;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
@@ -162,12 +172,30 @@ import "metadata.proto";
 enum TaskType {
   Unknown = 0 [(gogoproto.enumvalue_customname) = "TypeUnknown"];
   KafkaSinkConnector = 1 [(gogoproto.enumvalue_customname) = "TypeKafkaSinkConnector"];
+  RetentionType = 2 [(gogoproto.enumvalue_customname) = "TypeRetention"];
+  CreateCdc = 3 [(gogoproto.enumvalue_customname) = "CreateCdc"];
 }
 
 message ConnectorDetails {
   string TableName = 1;
   map<string, string> Options = 2;
 }
+
+message Account {
+   uint64 Id = 1;
+   string Name = 2;
+}
+
+message CreateCdcDetails {
+  //cdc task uuid
+  string TaskId = 1;
+  //cdc task name in CreateCdc
+  string TaskName = 2;
+  //cdc source account
+  repeated Account Accounts = 3;
+}
+
+message RetentionDetails {}
 
 message Details {
   string Description = 1;
@@ -177,6 +205,8 @@ message Details {
   string Error = 5;
   oneof Details {
     ConnectorDetails Connector = 10;
+    RetentionDetails Retention = 11;
+    CreateCdcDetails CreateCdc = 12;
   }
 }
 

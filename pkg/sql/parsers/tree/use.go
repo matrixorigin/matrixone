@@ -57,7 +57,7 @@ func (node *Use) Format(ctx *FmtCtx) {
 			node.Role.Format(ctx)
 		} else if node.Name != nil && !node.Name.Empty() {
 			ctx.WriteByte(' ')
-			ctx.WriteString(node.Name.ToLower())
+			ctx.WriteString(node.Name.Compare())
 		}
 	} else {
 		ctx.WriteString(" secondary role ")

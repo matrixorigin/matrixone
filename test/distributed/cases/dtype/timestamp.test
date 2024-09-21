@@ -177,4 +177,6 @@ select * from t1;
 insert into t1 values({ts now()});
 -- @ignore:0
 select * from t1;
+# reset
+SET TIME_ZONE = "SYSTEM";
 drop table t1;

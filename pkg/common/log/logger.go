@@ -144,8 +144,8 @@ func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 		panic("missing logger")
 	}
 
-	for _, fiter := range filters {
-		if !fiter(opts) {
+	for _, filter := range filters {
+		if !filter(opts) {
 			return false
 		}
 	}

@@ -5,7 +5,7 @@ a    INT(32)    YES        null
 b    UUID(0)    YES        null
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` UUID DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` uuid DEFAULT NULL\n)
 drop table t1;
 create table t2(
 a uuid primary key,

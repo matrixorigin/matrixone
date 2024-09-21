@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -41,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"go.uber.org/zap"
 )
 
@@ -55,7 +53,6 @@ type sqlExecutor struct {
 	qc        qclient.QueryClient
 	hakeeper  logservice.CNHAKeeperClient
 	us        udf.Service
-	aicm      *defines.AutoIncrCacheManager
 	buf       *buffer.Buffer
 }
 
@@ -69,8 +66,8 @@ func NewSQLExecutor(
 	qc qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	us udf.Service,
-	aicm *defines.AutoIncrCacheManager) executor.SQLExecutor {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.LockService)
+) executor.SQLExecutor {
+	v, ok := runtime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(runtime.LockService)
 	if !ok {
 		panic("missing lock service")
 	}
@@ -83,7 +80,6 @@ func NewSQLExecutor(
 		qc:        qc,
 		hakeeper:  hakeeper,
 		us:        us,
-		aicm:      aicm,
 		mp:        mp,
 		buf:       buffer.New(),
 	}
@@ -109,7 +105,8 @@ func (s *sqlExecutor) NewTxnOperator(ctx context.Context) client.TxnOperator {
 func (s *sqlExecutor) Exec(
 	ctx context.Context,
 	sql string,
-	opts executor.Options) (executor.Result, error) {
+	opts executor.Options,
+) (executor.Result, error) {
 	var res executor.Result
 	err := s.ExecTxn(
 		ctx,
@@ -128,7 +125,8 @@ func (s *sqlExecutor) Exec(
 func (s *sqlExecutor) ExecTxn(
 	ctx context.Context,
 	execFunc func(executor.TxnExecutor) error,
-	opts executor.Options) error {
+	opts executor.Options,
+) error {
 	exec, err := newTxnExecutor(ctx, s, opts)
 	if err != nil {
 		return err
@@ -158,12 +156,15 @@ func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
 func (s *sqlExecutor) getCompileContext(
 	ctx context.Context,
 	proc *process.Process,
-	db string) *compilerContext {
-	return newCompilerContext(
-		ctx,
-		db,
-		s.eng,
-		proc)
+	db string,
+	lower int64) *compilerContext {
+	return &compilerContext{
+		ctx:       ctx,
+		defaultDB: db,
+		engine:    s.eng,
+		proc:      proc,
+		lower:     lower,
+	}
 }
 
 func (s *sqlExecutor) adjustOptions(
@@ -212,7 +213,8 @@ type txnExecutor struct {
 func newTxnExecutor(
 	ctx context.Context,
 	s *sqlExecutor,
-	opts executor.Options) (*txnExecutor, error) {
+	opts executor.Options,
+) (*txnExecutor, error) {
 	ctx, opts, err := s.adjustOptions(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -231,7 +233,8 @@ func (exec *txnExecutor) Use(db string) {
 
 func (exec *txnExecutor) Exec(
 	sql string,
-	statementOption executor.StatementOption) (executor.Result, error) {
+	statementOption executor.StatementOption,
+) (executor.Result, error) {
 
 	//-----------------------------------------------------------------------------------------
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
@@ -255,8 +258,8 @@ func (exec *txnExecutor) Exec(
 	//-----------------------------------------------------------------------------------------
 
 	receiveAt := time.Now()
-
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1, 0)
+	lower := exec.opts.LowerCaseTableNames()
+	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
@@ -281,7 +284,7 @@ func (exec *txnExecutor) Exec(
 		}
 	}
 
-	proc := process.New(
+	proc := process.NewTopProcess(
 		exec.ctx,
 		exec.s.mp,
 		exec.s.txnClient,
@@ -291,19 +294,18 @@ func (exec *txnExecutor) Exec(
 		exec.s.qc,
 		exec.s.hakeeper,
 		exec.s.us,
-		exec.s.aicm,
+		nil,
 	)
-	proc.WaitPolicy = statementOption.WaitPolicy()
-	proc.SetVectorPoolSize(0)
-	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
-	proc.SessionInfo.Buf = exec.s.buf
-	proc.SessionInfo.StorageEngine = exec.s.eng
+	proc.Base.WaitPolicy = statementOption.WaitPolicy()
+	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	proc.Base.SessionInfo.Buf = exec.s.buf
+	proc.Base.SessionInfo.StorageEngine = exec.s.eng
+	proc.Base.QueryClient = exec.s.qc
 	defer func() {
-		proc.CleanValueScanBatchs()
-		proc.FreeVectors()
+		proc.Free()
 	}()
 
-	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase())
+	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
 	compileContext.SetRootSql(sql)
 
 	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
@@ -311,12 +313,13 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
-	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c.SetOriginSQL(sql)
 	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
-	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
+	c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
 		return plan.BuildPlan(
-			exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase()),
+			exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
 			stmts[0], false)
 	})
 
@@ -352,12 +355,16 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
-	logutil.Info("sql_executor exec",
-		zap.String("sql", sql),
-		zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
-		zap.Duration("duration", time.Since(receiveAt)),
-		zap.Uint64("AffectedRows", runResult.AffectRows),
-	)
+	if !statementOption.DisableLog() {
+		logutil.Info("sql_executor exec",
+			zap.String("sql", sql),
+			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
+			zap.Duration("duration", time.Since(receiveAt)),
+			zap.Int("BatchSize", len(batches)),
+			zap.Uint64("AffectedRows", runResult.AffectRows),
+		)
+	}
+
 	result.LastInsertID = proc.GetLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
@@ -376,7 +383,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 	if err != nil {
 		return err
 	}
-	proc := process.New(
+	proc := process.NewTopProcess(
 		ctx,
 		exec.s.mp,
 		exec.s.txnClient,
@@ -386,14 +393,12 @@ func (exec *txnExecutor) LockTable(table string) error {
 		exec.s.qc,
 		exec.s.hakeeper,
 		exec.s.us,
-		exec.s.aicm,
+		nil,
 	)
-	proc.SetVectorPoolSize(0)
-	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
-	proc.SessionInfo.Buf = exec.s.buf
+	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
-		proc.CleanValueScanBatchs()
-		proc.FreeVectors()
+		proc.Free()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
 }

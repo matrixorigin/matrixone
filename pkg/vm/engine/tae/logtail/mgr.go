@@ -54,7 +54,7 @@ func MockCallback(from, to timestamp.Timestamp, closeCB func(), tails ...logtail
 			}
 		}
 	}
-	logutil.Infof(s)
+	logutil.Info(s)
 	return nil
 }
 
@@ -199,7 +199,7 @@ func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) {
 	}
 	mgr.truncated = ts
 	cnt := mgr.table.TruncateByTimeStamp(ts)
-	logutil.Info("[logtail] GC", zap.String("ts", ts.ToString()), zap.Int("deleted", cnt))
+	logutil.Info("[logtail] GC", zap.String("ts", ts.ToString()), zap.Int("deleted-blk", cnt), zap.Int("remaining-blk", mgr.table.BlockCount()))
 }
 
 func (mgr *Manager) TryCompactTable() {
@@ -210,14 +210,12 @@ func (mgr *Manager) GetTableOperator(
 	from, to types.TS,
 	catalog *catalog.Catalog,
 	dbID, tableID uint64,
-	scope Scope,
 	visitor catalog.Processor,
 ) *BoundTableOperator {
 	reader := mgr.GetReader(from, to)
 	return NewBoundTableOperator(
 		catalog,
 		reader,
-		scope,
 		dbID,
 		tableID,
 		visitor,

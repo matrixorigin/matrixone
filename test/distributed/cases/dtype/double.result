@@ -42,7 +42,7 @@ drop table t1;
 create table t1(a float(34));
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` DOUBLE DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` double DEFAULT NULL\n)
 drop table t1;
 create table t1 ( a double not null default 1, big double(30,5) );
 insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);

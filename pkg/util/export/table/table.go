@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -416,7 +415,7 @@ func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 	case NormalTableEngine:
 		sb.WriteString(TableOptions.GetCreateOptions())
 	default:
-		panic(moerr.NewInternalError(ctx, "NOT support engine: %s", tbl.Engine))
+		panic(moerr.NewInternalErrorf(ctx, "NOT support engine: %s", tbl.Engine))
 	}
 	sb.WriteString("TABLE ")
 	if ifNotExists {
@@ -447,7 +446,7 @@ func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 	}
 	sb.WriteString("\n)")
 
-	if len(tbl.Comment) > 0 && slices.Contains([]string{"statement_info", "rawlog"}, tbl.Table) {
+	if len(tbl.Comment) > 0 && tbl.Engine != ExternalTableEngine {
 		sb.WriteString(fmt.Sprintf(" COMMENT %q ", tbl.Comment))
 	}
 	// cluster by
@@ -663,14 +662,14 @@ func (tbl *Table) GetRow(ctx context.Context) *Row {
 		tbl.name2ColumnIdx = make(map[string]int, len(tbl.Columns))
 		for idx, col := range tbl.Columns {
 			if _, exist := tbl.name2ColumnIdx[col.Name]; exist {
-				panic(moerr.NewInternalError(ctx, "%s table has duplicate column name: %s", tbl.GetIdentify(), col.Name))
+				panic(moerr.NewInternalErrorf(ctx, "%s table has duplicate column name: %s", tbl.GetIdentify(), col.Name))
 			}
 			tbl.name2ColumnIdx[col.Name] = idx
 		}
 		if tbl.AccountColumn != nil {
 			idx, exist := tbl.name2ColumnIdx[tbl.AccountColumn.Name]
 			if !exist {
-				panic(moerr.NewInternalError(ctx, "%s table missing %s column", tbl.GetName(), tbl.AccountColumn.Name))
+				panic(moerr.NewInternalErrorf(ctx, "%s table missing %s column", tbl.GetName(), tbl.AccountColumn.Name))
 			}
 			tbl.accountIdx = idx
 		} else {
@@ -723,7 +722,7 @@ func (r *Row) Reset() {
 		case types.T_float64:
 			r.Columns[idx] = Float64Field(0)
 		case types.T_char, types.T_varchar,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			r.Columns[idx] = StringField(typ.Default)
 		case types.T_json:
 			r.Columns[idx] = StringField(typ.Default)
@@ -779,7 +778,7 @@ func (r *Row) ToStrings() []string {
 		case types.T_float64:
 			col[idx] = strconv.FormatFloat(r.Columns[idx].GetFloat64(), 'f', -1, 64)
 		case types.T_char, types.T_varchar,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			switch r.Columns[idx].Type {
 			case TBytes:
 				// hack way for json column, avoid early copy. pls see more in BytesTIPs
@@ -879,7 +878,7 @@ func (r *Row) Size() (size int64) {
 		case types.T_float64:
 			size += 8
 		case types.T_char, types.T_varchar,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			size += int64(len(r.Columns[idx].String))
 		case types.T_json:
 			size += int64(len(r.Columns[idx].String))
@@ -940,7 +939,7 @@ func GetOptionFactory(ctx context.Context, engine string) func(db string, tbl st
 			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl, Account: account}
 		}
 	default:
-		panic(moerr.NewInternalError(ctx, "unknown engine: %s", engine))
+		panic(moerr.NewInternalErrorf(ctx, "unknown engine: %s", engine))
 	}
 }
 
@@ -978,7 +977,7 @@ func SetPathBuilder(ctx context.Context, pathBuilder string) error {
 	tables := GetAllTables()
 	bp := PathBuilderFactory(pathBuilder)
 	if bp == nil {
-		return moerr.NewNotSupported(ctx, "not support PathBuilder: %s", pathBuilder)
+		return moerr.NewNotSupportedf(ctx, "not support PathBuilder: %s", pathBuilder)
 	}
 	for _, tbl := range tables {
 		tbl.PathBuilder = bp

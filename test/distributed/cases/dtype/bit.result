@@ -2,7 +2,7 @@ drop table if exists t1;
 create table t1 (a int, b bit(10));
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` bit(10) DEFAULT NULL\n)
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
@@ -135,37 +135,37 @@ a    b    c
 ALTER TABLE t1 ADD INDEX (c);
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) DEFAULT NULL,\n`c` BIT(10) DEFAULT 0x1,\nKEY `c` (`c`)\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` bit(10) DEFAULT NULL,\n  `c` bit(10) DEFAULT 0x1,\n  KEY `c` (`c`)\n)
 ALTER TABLE t1 ADD UNIQUE (b);
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) DEFAULT NULL,\n`c` BIT(10) DEFAULT 0x1,\nKEY `c` (`c`),\nUNIQUE KEY `b` (`b`)\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` bit(10) DEFAULT NULL,\n  `c` bit(10) DEFAULT 0x1,\n  KEY `c` (`c`),\n  UNIQUE KEY `b` (`b`)\n)
 ALTER TABLE t1 ADD PRIMARY KEY (b);
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL,\n`c` BIT(10) DEFAULT 0x1,\nPRIMARY KEY (`b`),\nUNIQUE KEY `b` (`b`),\nKEY `c` (`c`)\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` bit(10) NOT NULL,\n  `c` bit(10) DEFAULT 0x1,\n  PRIMARY KEY (`b`),\n  UNIQUE KEY `b` (`b`),\n  KEY `c` (`c`)\n)
 ALTER TABLE t1 DROP INDEX c;
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL,\n`c` BIT(10) DEFAULT 0x1,\nPRIMARY KEY (`b`),\nUNIQUE KEY `b` (`b`)\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` bit(10) NOT NULL,\n  `c` bit(10) DEFAULT 0x1,\n  PRIMARY KEY (`b`),\n  UNIQUE KEY `b` (`b`)\n)
 ALTER TABLE t1 DROP COLUMN c;
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL,\nPRIMARY KEY (`b`),\nUNIQUE KEY `b` (`b`)\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` bit(10) NOT NULL,\n  PRIMARY KEY (`b`),\n  UNIQUE KEY `b` (`b`)\n)
 ALTER TABLE t1 DROP INDEX b;
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL,\nPRIMARY KEY (`b`)\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` bit(10) NOT NULL,\n  PRIMARY KEY (`b`)\n)
 ALTER TABLE t1 DROP PRIMARY KEY;
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` bit(10) NOT NULL\n)
 ALTER TABLE t1 MODIFY a bit(9);  -- error, data type length is too short
 Data truncation: data out of range: data type int9, value 1023
 ALTER TABLE t1 MODIFY a bit(10);
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` BIT(10) DEFAULT NULL,\n`b` BIT(10) NOT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` bit(10) DEFAULT NULL,\n  `b` bit(10) NOT NULL\n)
 select * from t1;
 a    b
 0    0
@@ -179,7 +179,7 @@ a    b
 ALTER TABLE t1 CHANGE a new_a int;
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`new_a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL\n)
+t1    CREATE TABLE `t1` (\n  `new_a` int DEFAULT NULL,\n  `b` bit(10) NOT NULL\n)
 select * from t1;
 new_a    b
 0    0

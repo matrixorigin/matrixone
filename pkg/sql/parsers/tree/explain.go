@@ -40,6 +40,11 @@ func init() {
 		reuse.DefaultOptions[ExplainFor](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[ExplainPhyPlan](
+		func() *ExplainPhyPlan { return &ExplainPhyPlan{} },
+		func(e *ExplainPhyPlan) { e.reset() },
+		reuse.DefaultOptions[ExplainPhyPlan](), //.
+	) //WithEnableChecker()
 }
 
 type Explain interface {
@@ -63,7 +68,7 @@ type ExplainStmt struct {
 
 func (node *ExplainStmt) Format(ctx *FmtCtx) {
 	ctx.WriteString("explain")
-	if node.Options != nil && len(node.Options) > 0 {
+	if len(node.Options) > 0 {
 		ctx.WriteString(" (")
 		var temp string
 		for _, v := range node.Options {
@@ -124,7 +129,7 @@ type ExplainAnalyze struct {
 
 func (node *ExplainAnalyze) Format(ctx *FmtCtx) {
 	ctx.WriteString("explain")
-	if node.Options != nil && len(node.Options) > 0 {
+	if len(node.Options) > 0 {
 		ctx.WriteString(" (")
 		var temp string
 		for _, v := range node.Options {
@@ -236,4 +241,75 @@ func IsContainAnalyze(options []OptionElem) bool {
 		}
 	}
 	return false
+}
+
+func IsContainPhyPlan(options []OptionElem) bool {
+	if len(options) > 0 {
+		for _, option := range options {
+			if strings.EqualFold(option.Name, "phyplan") && strings.EqualFold(option.Value, "true") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// --------------------------------------------------------------------------------------
+// EXPLAIN PhyPlan statement
+type ExplainPhyPlan struct {
+	explainImpl
+}
+
+func (node *ExplainPhyPlan) Format(ctx *FmtCtx) {
+	ctx.WriteString("explain")
+	if len(node.Options) > 0 {
+		ctx.WriteString(" (")
+		var temp string
+		for _, v := range node.Options {
+			temp += v.Name
+			if v.Value != "NULL" {
+				temp += " " + v.Value
+			}
+			temp += ","
+		}
+		ctx.WriteString(temp[:len(temp)-1] + ")")
+	}
+
+	stmt := node.explainImpl.Statement
+	switch st := stmt.(type) {
+	case *ShowColumns:
+		if st.Table != nil {
+			ctx.WriteByte(' ')
+			st.Table.ToTableName().Format(ctx)
+		}
+		if st.ColName != nil {
+			ctx.WriteByte(' ')
+			st.ColName.Format(ctx)
+		}
+	default:
+		if stmt != nil {
+			ctx.WriteByte(' ')
+			stmt.Format(ctx)
+		}
+	}
+}
+
+func (node *ExplainPhyPlan) GetStatementType() string { return "Explain PhyPlan" }
+func (node *ExplainPhyPlan) GetQueryType() string     { return QueryTypeOth }
+
+func (node *ExplainPhyPlan) Free() {
+	reuse.Free[ExplainPhyPlan](node, nil)
+}
+
+func (node *ExplainPhyPlan) reset() {
+	*node = ExplainPhyPlan{}
+}
+
+func (node ExplainPhyPlan) TypeName() string { return "tree.ExplainPhyPlan" }
+
+func NewExplainPhyPlan(stmt Statement, f string) *ExplainPhyPlan {
+	ex := reuse.Alloc[ExplainPhyPlan](nil)
+	ex.explainImpl.Statement = stmt
+	ex.explainImpl.Format = f
+	return ex
 }

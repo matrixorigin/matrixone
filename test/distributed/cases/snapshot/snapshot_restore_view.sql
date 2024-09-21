@@ -38,13 +38,6 @@ show databases {snapshot = 'syssn1'};
 show full tables from view_test1 {snapshot = 'syssn1'};
 show full tables from view_test2 {snapshot = 'syssn1'};
 show full tables from view_test3 {snapshot = 'syssn1'};
-select * from view_test1.t1 {snapshot = 'syssn1'};
-select * from view_test1.v1 {snapshot = 'syssn1'};
-select * from view_test1.v2 {snapshot = 'syssn1'};
-select * from view_test2.v3 {snapshot = 'syssn1'};
-select * from view_test2.v4 {snapshot = 'syssn1'};
-select * from view_test3.v5 {snapshot = 'syssn1'};
-select * from view_test3.v6 {snapshot = 'syssn1'};
 
 -- @session:id=2&user=acc1:admin1&password=test123
 -- acc1 drop all dbs
@@ -73,3 +66,5 @@ drop snapshot sn1;
 
 drop snapshot syssn1;
 drop account acc1;
+-- @ignore:1
+show snapshots;

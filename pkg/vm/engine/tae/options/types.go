@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,13 +32,15 @@ import (
 const (
 	DefaultIndexCacheSize = 256 * mpool.MB
 
-	DefaultBlockMaxRows    = uint32(8192)
-	DefaultBlocksPerObject = uint16(256)
+	DefaultBulkTomestoneTxnThreshold = 10000 // rows
+	DefaultLockMergePruneInterval    = time.Minute
 
-	DefaultObjectPerSegment = uint16(512)
+	DefaultBlockMaxRows    = objectio.BlockMaxRows
+	DefaultBlocksPerObject = uint16(256)
 
 	DefaultScannerInterval              = time.Second * 5
 	DefaultCheckpointFlushInterval      = time.Minute
+	DefaultCheckpointTransferInterval   = time.Second * 5
 	DefaultCheckpointMinCount           = int64(100)
 	DefaultCheckpointIncremetalInterval = time.Minute
 	DefaultCheckpointGlobalMinCount     = 10
@@ -48,12 +51,12 @@ const (
 	DefaultScanGCInterval = time.Minute * 30
 	DefaultGCTTL          = time.Hour
 
-	DefaultCatalogGCInterval = time.Minute * 30
+	DefaultCatalogGCInterval = time.Minute * 3
 
 	DefaultIOWorkers    = int(16)
 	DefaultAsyncWorkers = int(16)
 
-	DefaultLogtailTxnPageSize = 100
+	DefaultLogtailTxnPageSize = 256
 
 	DefaultLogstoreType = LogstoreBatchStore
 )
@@ -74,6 +77,7 @@ type Options struct {
 	MergeCfg      *MergeConfig
 	CatalogCfg    *CatalogCfg
 
+	BulkTomestoneTxnThreshold uint64
 	// MaxMessageSize is the size of max message which is sent to log-service.
 	MaxMessageSize   uint64
 	TransferTableTTL time.Duration
@@ -82,9 +86,11 @@ type Options struct {
 	LogStoreT        LogstoreType
 
 	Fs                fileservice.FileService                  `toml:"-"`
+	LocalFs           fileservice.FileService                  `toml:"-"`
 	Lc                logservicedriver.LogServiceClientFactory `toml:"-"`
 	Ctx               context.Context                          `toml:"-"`
 	Shard             metadata.TNShard                         `toml:"-"`
 	Clock             clock.Clock                              `toml:"-"`
 	TaskServiceGetter taskservice.Getter                       `toml:"-"`
+	SID               string                                   `toml:"-"`
 }

@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -41,7 +42,9 @@ type localLockTable struct {
 	clock     clock.Clock
 	events    *waiterEvents
 	txnHolder activeTxnHolder
-	mu        struct {
+	logger    *log.MOLogger
+
+	mu struct {
 		sync.RWMutex
 		closed           bool
 		store            LockStorage
@@ -58,13 +61,16 @@ func newLocalLockTable(
 	fsp *fixedSlicePool,
 	events *waiterEvents,
 	clock clock.Clock,
-	txnHolder activeTxnHolder) lockTable {
+	txnHolder activeTxnHolder,
+	logger *log.MOLogger,
+) lockTable {
 	l := &localLockTable{
 		bind:      bind,
 		fsp:       fsp,
 		clock:     clock,
 		events:    events,
 		txnHolder: txnHolder,
+		logger:    logger,
 	}
 	l.mu.store = newBtreeBasedStorage()
 	l.mu.tableCommittedAt, _ = clock.Now()
@@ -79,7 +85,7 @@ func (l *localLockTable) lock(
 	cb func(pb.Result, error)) {
 	v2.TxnLocalLockTotalCounter.Inc()
 
-	logLocalLock(txn, l.bind.Table, rows, opts)
+	logLocalLock(l.logger, txn, l.bind.Table, rows, opts)
 	c := l.newLockContext(ctx, txn, rows, opts, cb, l.bind)
 	if opts.async {
 		c.lockFunc = l.doLock
@@ -90,11 +96,6 @@ func (l *localLockTable) lock(
 func (l *localLockTable) doLock(
 	c *lockContext,
 	blocked bool) {
-	// deadlock detected, return
-	if c.txn.deadlockFound {
-		c.done(ErrDeadLockDetected)
-		return
-	}
 	var old *waiter
 	var err error
 	table := l.bind.Table
@@ -104,7 +105,7 @@ func (l *localLockTable) doLock(
 		if !blocked {
 			err = l.doAcquireLock(c)
 			if err != nil {
-				logLocalLockFailed(c.txn, table, c.rows, c.opts, err)
+				logLocalLockFailed(l.logger, c.txn, table, c.rows, c.opts, err)
 				if c.w != nil {
 					c.w.disableNotify()
 					c.w.close()
@@ -120,7 +121,7 @@ func (l *localLockTable) doLock(
 					old.close()
 				}
 				c.txn.clearBlocked(old)
-				logLocalLockAdded(c.txn, l.bind.Table, c.rows, c.opts)
+				logLocalLockAdded(l.logger, c.txn, l.bind.Table, c.rows, c.opts)
 				if c.result.Timestamp.IsEmpty() {
 					c.result.Timestamp = c.lockedTS
 				}
@@ -141,10 +142,10 @@ func (l *localLockTable) doLock(
 		oldTxnID := c.txn.txnID
 		old = c.w
 		c.txn.Unlock()
-		v := c.w.wait(c.ctx)
+		v := c.w.wait(c.ctx, l.logger)
 		c.txn.Lock()
 
-		logLocalLockWaitOnResult(c.txn, table, c.rows[c.idx], c.opts, c.w, v)
+		logLocalLockWaitOnResult(l.logger, c.txn, table, c.rows[c.idx], c.opts, c.w, v)
 
 		// txn closed between Unlock and get Lock again
 		e := v.err
@@ -152,13 +153,15 @@ func (l *localLockTable) doLock(
 			!bytes.Equal(c.w.txn.TxnID, oldTxnID)) {
 			e = ErrTxnNotFound
 		}
-		if e != nil {
+		if e != nil ||
+			c.txn.deadlockFound {
 			c.closed = true
 			if e != ErrTxnNotFound {
 				c.txn.closeBlockWaiters()
 			}
 
-			if len(c.w.conflictKey) > 0 &&
+			ck := *c.w.conflictKey.Load()
+			if len(ck) > 0 &&
 				c.opts.Granularity == pb.Granularity_Row {
 
 				if l.options.beforeCloseFirstWaiter != nil {
@@ -169,9 +172,9 @@ func (l *localLockTable) doLock(
 				// we must reload conflict lock, because the lock may be deleted
 				// by other txn and readd into store. So c.w.conflictWith is
 				// invalid.
-				conflictWith, ok := l.mu.store.Get(c.w.conflictKey)
+				conflictWith, ok := l.mu.store.Get(ck)
 				if ok && conflictWith.closeWaiter(c.w) {
-					l.mu.store.Delete(c.w.conflictKey)
+					l.mu.store.Delete(ck)
 				}
 				l.mu.Unlock()
 			}
@@ -185,7 +188,7 @@ func (l *localLockTable) doLock(
 			time.Sleep(time.Duration(c.opts.RetryWait))
 		}
 
-		c.w.resetWait()
+		c.w.resetWait(l.logger)
 		c.offset = c.idx
 		c.result.Timestamp = v.ts
 		c.result.HasConflict = true
@@ -220,9 +223,11 @@ func (l *localLockTable) unlock(
 	}
 
 	logUnlockTableOnLocal(
+		l.logger,
 		l.bind.ServiceID,
 		txn,
-		l.bind)
+		l.bind,
+	)
 
 	locks := ls.slice()
 	defer locks.unref()
@@ -263,7 +268,7 @@ func (l *localLockTable) unlock(
 					return true
 				}
 
-				getLogger().Fatal("BUG: unlock a lock that is not held by the current txn",
+				l.logger.Fatal("BUG: unlock a lock that is not held by the current txn",
 					zap.Bool("row", lock.isLockRow()),
 					zap.Int("keys-count", locks.len()),
 					zap.String("hold-bind", b.DebugString()),
@@ -282,7 +287,7 @@ func (l *localLockTable) unlock(
 				// cannot dead lock here, the replaceTo txn was created on the same cn.
 				replaceToTxn := l.txnHolder.getActiveTxn(mutations[idx].ReplaceTo, true, txn.remoteService)
 				replaceToTxn.Lock()
-				replaceToTxn.lockAdded(l.bind.Group, l.bind, [][]byte{key})
+				replaceToTxn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
 				replaceToTxn.Unlock()
 				return true
 			}
@@ -290,7 +295,7 @@ func (l *localLockTable) unlock(
 			lockCanRemoved := lock.closeTxn(
 				txn,
 				notifyValue{ts: commitTS})
-			logLockUnlocked(txn, key, lock)
+			logLockUnlocked(l.logger, txn, key, lock)
 
 			if lockCanRemoved {
 				v2.TxnHoldLockDurationHistogram.Observe(time.Since(lock.createAt).Seconds())
@@ -343,7 +348,7 @@ func (l *localLockTable) close() {
 		return true
 	})
 	l.mu.store.Clear()
-	logLockTableClosed(l.bind, false)
+	logLockTableClosed(l.logger, l.bind, false)
 }
 
 func (l *localLockTable) doAcquireLock(c *lockContext) error {
@@ -377,7 +382,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 		if ok &&
 			(bytes.Equal(key, row) ||
 				lock.isLockRangeEnd()) {
-			hold, newHolder := lock.tryHold(c)
+			hold, newHolder := lock.tryHold(l.logger, c)
 			if hold {
 				if c.w != nil {
 					c.w = nil
@@ -385,7 +390,8 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
-					c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{key})
+					c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
+					c.result.NewLockAdd = true
 				}
 				continue
 			}
@@ -418,7 +424,7 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 				start, end))
 		}
 
-		logLocalLockRange(c.txn, l.bind.Table, start, end, c.opts.Mode)
+		logLocalLockRange(l.logger, c.txn, l.bind.Table, start, end, c.opts.Mode)
 		conflict, conflictWith, err := l.addRangeLockLocked(c, start, end)
 		if err != nil {
 			return err
@@ -443,14 +449,15 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 func (l *localLockTable) addRowLockLocked(
 	c *lockContext,
 	row []byte) {
-	lock := newRowLock(c)
+	lock := newRowLock(l.logger, c)
 
 	// new lock added, use last committed ts to update keys last commit ts.
 	lock.waiters.resetCommittedAt(l.mu.tableCommittedAt)
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{row})
+	c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{row}, l.logger)
+	c.result.NewLockAdd = true
 	l.mu.store.Add(row, lock)
 }
 
@@ -462,20 +469,29 @@ func (l *localLockTable) handleLockConflictLocked(
 		return ErrLockConflict
 	}
 
-	c.w.conflictKey = key
-	c.w.lt = l
+	c.w.conflictKey.Store(&key)
+	c.w.lt.Store(l)
 	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
+	c.result.ConflictKey = key
+	if len(c.w.waitFor) > 0 {
+		c.result.ConflictTxn = c.w.waitFor[0]
+	}
+	c.result.Waiters = uint32(conflictWith.waiters.size())
+	conflictWith.waiters.iter(func(w *waiter) bool {
+		c.result.PrevWaiter = w.txn.TxnID
+		return true
+	})
 
-	conflictWith.addWaiter(c.w)
+	conflictWith.addWaiter(l.logger, c.w)
 	l.events.add(c)
 
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
-	c.txn.setBlocked(c.w)
-	logLocalLockWaitOn(c.txn, l.bind.Table, c.w, key, conflictWith)
+	c.txn.setBlocked(c.w, l.logger)
+	logLocalLockWaitOn(l.logger, c.txn, l.bind.Table, c.w, key, conflictWith)
 	return nil
 }
 
@@ -489,11 +505,11 @@ func (l *localLockTable) addRangeLockLocked(
 		if ok1 && ok2 &&
 			l1.isShared() && l2.isShared() &&
 			l1.isLockRangeStart() && l2.isLockRangeEnd() {
-			hold, newHolder := l1.tryHold(c)
+			hold, newHolder := l1.tryHold(l.logger, c)
 			if !hold {
 				panic("BUG: must get shared lock")
 			}
-			hold, _ = l2.tryHold(c)
+			hold, _ = l2.tryHold(l.logger, c)
 			if !hold {
 				panic("BUG: must get shared lock")
 			}
@@ -501,13 +517,15 @@ func (l *localLockTable) addRangeLockLocked(
 				c.w = nil
 			}
 			if newHolder {
-				c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end})
+				c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
+				c.result.NewLockAdd = true
 			}
 			return nil, Lock{}, nil
 		}
 	}
 
 	wq := newWaiterQueue()
+	wq.init(l.logger)
 	mc := newMergeContext(wq)
 	defer mc.close()
 
@@ -565,7 +583,7 @@ func (l *localLockTable) addRangeLockLocked(
 		}
 
 		if len(conflictKey) > 0 {
-			hold, newHolder := conflictWith.tryHold(c)
+			hold, newHolder := conflictWith.tryHold(l.logger, c)
 			if hold {
 				if c.w != nil {
 					c.w = nil
@@ -574,7 +592,8 @@ func (l *localLockTable) addRangeLockLocked(
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
-					c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{conflictKey})
+					c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{conflictKey}, l.logger)
+					c.result.NewLockAdd = true
 				}
 				conflictWith = Lock{}
 				conflictKey = nil
@@ -602,14 +621,15 @@ func (l *localLockTable) addRangeLockLocked(
 	}
 
 	mc.commit(l.bind, c.txn, l.mu.store)
-	startLock, endLock := newRangeLock(c)
+	startLock, endLock := newRangeLock(l.logger, c)
 
 	wq.resetCommittedAt(l.mu.tableCommittedAt)
 	startLock.waiters = wq
 	endLock.waiters = wq
 
 	// similar to row lock
-	c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end})
+	c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
+	c.result.NewLockAdd = true
 
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)

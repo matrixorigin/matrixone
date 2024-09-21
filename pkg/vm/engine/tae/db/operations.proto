@@ -33,19 +33,18 @@ message AccessInfo {
     uint32 RoleID               = 3;
 }
 
-message CreateDatabaseReq {
-    option (gogoproto.typedecl) = false;
-    AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
-    string name                 = 2;
-    string CreateSql            = 3;
-    uint64 DatabaseId           = 4;
-}
-
 message FlushTable {
     option (gogoproto.typedecl) = false;
     AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
     uint64 DatabaseID           = 2;
     uint64 TableID              = 3;
+}
+
+message DiskCleaner{
+    option (gogoproto.typedecl) = false;
+    string Op                   = 1;
+    string Key                  = 2;
+    string Value                = 3;
 }
 
 message Checkpoint {
@@ -113,13 +112,25 @@ message StorageUsageResp_V0 {
 
 message StorageUsageReq {
     option (gogoproto.typedecl) = false;
-    repeated int32 AccIds = 1;
+    repeated int64 AccIds = 1;
 }
 
-message StorageUsageResp {
+message StorageUsageResp_V1 {
     option (gogoproto.typedecl)     = false;
     bool Succeed                    = 1;
-    repeated int32 AccIds           = 2;
+    repeated int64 AccIds           = 2;
     repeated uint64 Sizes            = 3;
     uint64 Magic                    = 4;
+}
+
+message StorageUsageResp_V2 {
+    option (gogoproto.typedecl)     = false;
+    bool Succeed                    = 1;
+    repeated int64 AccIds           = 2;
+    repeated uint64 Sizes           = 3;
+    uint64 Magic                     = 4;
+
+    repeated uint64 ObjCnts      = 5;
+    repeated uint64 BlkCnts      = 6;
+    repeated uint64 RowCnts      = 7;
 }

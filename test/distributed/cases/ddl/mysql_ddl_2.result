@@ -3,70 +3,70 @@ use mysql_ddl_test_db;
 create table if not exists mmysql_ddl_test_t21(id int, name varchar(255)) engine = 'InnoDB';
 show create table mmysql_ddl_test_t21;
 Table    Create Table
-mmysql_ddl_test_t21    CREATE TABLE `mmysql_ddl_test_t21` (\n`id` INT DEFAULT NULL,\n`name` VARCHAR(255) DEFAULT NULL\n)
+mmysql_ddl_test_t21    CREATE TABLE `mmysql_ddl_test_t21` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
 create table if not exists mmysql_ddl_test_t22(id int, name varchar(255)) DEFAULT CHARSET=utf8 COLLATE = utf8mb4_general_ci ;
 show create table mmysql_ddl_test_t22;
 Table    Create Table
-mmysql_ddl_test_t22    CREATE TABLE `mmysql_ddl_test_t22` (\n`id` INT DEFAULT NULL,\n`name` VARCHAR(255) DEFAULT NULL\n)
+mmysql_ddl_test_t22    CREATE TABLE `mmysql_ddl_test_t22` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
 create table if not exists mmysql_ddl_test_t23(id int, name varchar(255)) DEFAULT CHARSET = utf8;
 show create table mmysql_ddl_test_t23;
 Table    Create Table
-mmysql_ddl_test_t23    CREATE TABLE `mmysql_ddl_test_t23` (\n`id` INT DEFAULT NULL,\n`name` VARCHAR(255) DEFAULT NULL\n)
+mmysql_ddl_test_t23    CREATE TABLE `mmysql_ddl_test_t23` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
 create table if not exists mmysql_ddl_test_t24(id int, name varchar(255)) DEFAULT CHARSET= utf8;
 show create table mmysql_ddl_test_t24;
 Table    Create Table
-mmysql_ddl_test_t24    CREATE TABLE `mmysql_ddl_test_t24` (\n`id` INT DEFAULT NULL,\n`name` VARCHAR(255) DEFAULT NULL\n)
+mmysql_ddl_test_t24    CREATE TABLE `mmysql_ddl_test_t24` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
 create table if not exists mmysql_ddl_test_t25(id int, name varchar(255)) DEFAULT CHARSET =utf8;
 show create table mmysql_ddl_test_t25;
 Table    Create Table
-mmysql_ddl_test_t25    CREATE TABLE `mmysql_ddl_test_t25` (\n`id` INT DEFAULT NULL,\n`name` VARCHAR(255) DEFAULT NULL\n)
+mmysql_ddl_test_t25    CREATE TABLE `mmysql_ddl_test_t25` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
 create table if not exists mmysql_ddl_test_t26(id int, name varchar(255)) DEFAULT CHARSET     =       utf8 COLLATE=utf8mb4_general_ci ;
 show create table mmysql_ddl_test_t26;
 Table    Create Table
-mmysql_ddl_test_t26    CREATE TABLE `mmysql_ddl_test_t26` (\n`id` INT DEFAULT NULL,\n`name` VARCHAR(255) DEFAULT NULL\n)
+mmysql_ddl_test_t26    CREATE TABLE `mmysql_ddl_test_t26` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
 create table if not exists mmysql_ddl_test_t27(id int, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_general_ci);
 show create table mmysql_ddl_test_t27;
 Table    Create Table
-mmysql_ddl_test_t27    CREATE TABLE `mmysql_ddl_test_t27` (\n`id` INT DEFAULT NULL,\n`name` VARCHAR(255) DEFAULT NULL\n)
+mmysql_ddl_test_t27    CREATE TABLE `mmysql_ddl_test_t27` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
 create table if not exists mmysql_ddl_test_t28(id int, name varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci);
 show create table mmysql_ddl_test_t28;
 Table    Create Table
-mmysql_ddl_test_t28    CREATE TABLE `mmysql_ddl_test_t28` (\n`id` INT DEFAULT NULL,\n`name` VARCHAR(255) DEFAULT NULL\n)
+mmysql_ddl_test_t28    CREATE TABLE `mmysql_ddl_test_t28` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
 create table if not exists mmysql_ddl_test_t29(id int, name varchar(255),primary key (id)  USING BTREE);
 show create table mmysql_ddl_test_t29;
 Table    Create Table
-mmysql_ddl_test_t29    CREATE TABLE `mmysql_ddl_test_t29` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\nPRIMARY KEY (`id`)\n)
+mmysql_ddl_test_t29    CREATE TABLE `mmysql_ddl_test_t29` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 create table mmysql_ddl_test_t210 (id int);
 LOCK TABLES t10 WRITE;
 alter table mmysql_ddl_test_t210 add column class varchar(50);
 UNLOCK TABLES;
 show create table mmysql_ddl_test_t210;
 Table    Create Table
-mmysql_ddl_test_t210    CREATE TABLE `mmysql_ddl_test_t210` (\n`id` INT DEFAULT NULL,\n`class` VARCHAR(50) DEFAULT NULL\n)
+mmysql_ddl_test_t210    CREATE TABLE `mmysql_ddl_test_t210` (\n  `id` int DEFAULT NULL,\n  `class` varchar(50) DEFAULT NULL\n)
 create table mmysql_ddl_test_t211 (id int AUTO_INCREMENT);
 show create table mmysql_ddl_test_t211;
 Table    Create Table
-mmysql_ddl_test_t211    CREATE TABLE `mmysql_ddl_test_t211` (\n`id` INT NOT NULL AUTO_INCREMENT\n)
+mmysql_ddl_test_t211    CREATE TABLE `mmysql_ddl_test_t211` (\n  `id` int NOT NULL AUTO_INCREMENT\n)
 create table mmysql_ddl_test_t212 (id int) AUTO_INCREMENT = 157472;
 show create table mmysql_ddl_test_t212;
 Table    Create Table
-mmysql_ddl_test_t212    CREATE TABLE `mmysql_ddl_test_t212` (\n`id` INT DEFAULT NULL\n)
+mmysql_ddl_test_t212    CREATE TABLE `mmysql_ddl_test_t212` (\n  `id` int DEFAULT NULL\n)
 create table mmysql_ddl_test_t213 (id int AUTO_INCREMENT) AUTO_INCREMENT = 157472;
 show create table mmysql_ddl_test_t213;
 Table    Create Table
-mmysql_ddl_test_t213    CREATE TABLE `mmysql_ddl_test_t213` (\n`id` INT NOT NULL AUTO_INCREMENT\n)
+mmysql_ddl_test_t213    CREATE TABLE `mmysql_ddl_test_t213` (\n  `id` int NOT NULL AUTO_INCREMENT\n)
 create table mmysql_ddl_test_t214 (id int) ROW_FORMAT=DYNAMIC;
 show create table mmysql_ddl_test_t214;
 Table    Create Table
-mmysql_ddl_test_t214    CREATE TABLE `mmysql_ddl_test_t214` (\n`id` INT DEFAULT NULL\n)
+mmysql_ddl_test_t214    CREATE TABLE `mmysql_ddl_test_t214` (\n  `id` int DEFAULT NULL\n)
 create table mmysql_ddl_test_t215 (id int) ROW_FORMAT = COMPACT;
 show create table mmysql_ddl_test_t215;
 Table    Create Table
-mmysql_ddl_test_t215    CREATE TABLE `mmysql_ddl_test_t215` (\n`id` INT DEFAULT NULL\n)
+mmysql_ddl_test_t215    CREATE TABLE `mmysql_ddl_test_t215` (\n  `id` int DEFAULT NULL\n)
 create table if not exists mmysql_ddl_test_t216(id int AUTO_INCREMENT, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_general_ci,primary key (id)  USING BTREE) AUTO_INCREMENT=123 engine = 'InnoDB' DEFAULT CHARSET=utf8 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
 show create table mmysql_ddl_test_t216;
 Table    Create Table
-mmysql_ddl_test_t216    CREATE TABLE `mmysql_ddl_test_t216` (\n`id` INT NOT NULL AUTO_INCREMENT,\n`name` VARCHAR(255) DEFAULT NULL,\nPRIMARY KEY (`id`)\n)
+mmysql_ddl_test_t216    CREATE TABLE `mmysql_ddl_test_t216` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 1. unre
 DROP TABLE IF EXISTS `projects`;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 2 near "1. unre
@@ -239,7 +239,7 @@ col12    DATE(0)    YES        null
 col13    DATETIME(0)    YES        null        
 col14    TIMESTAMP(0)    YES        null        
 col15    BOOL(0)    YES        null        
-col16    DECIMAL64(16)    YES        null        
+col16    DECIMAL(16)    YES        null        
 col17    TEXT(0)    YES        null        
 col18    JSON(0)    YES        null        
 col19    BLOB(0)    YES        null        
@@ -284,7 +284,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES    MUL    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL64(7)    YES        null        
+d    DECIMAL(7)    YES        null        
 drop table if exists t2;
 CREATE TABLE t2(
 col1 TINYINT DEFAULT NULL,
@@ -314,7 +314,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES    MUL    null        
-d    DECIMAL64(7)    YES    UNI    null        
+d    DECIMAL(7)    YES    UNI    null        
 drop table if exists t4;
 CREATE TABLE t4(
 a INTEGER,
@@ -329,5 +329,5 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES    UNI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL64(7)    YES        null        
+d    DECIMAL(7)    YES        null        
 drop database if exists db1;

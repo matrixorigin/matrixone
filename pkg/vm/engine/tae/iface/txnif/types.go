@@ -55,7 +55,7 @@ type TxnReader interface {
 	RUnlock()
 	IsReplay() bool
 	Is2PC() bool
-	GetDedupType() DedupType
+	GetDedupType() DedupPolicy
 	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
@@ -66,6 +66,7 @@ type TxnReader interface {
 	GetParticipants() []uint64
 	GetSnapshotTS() types.TS
 	SetSnapshotTS(types.TS)
+	SetStartTS(types.TS)
 	HasSnapshotLag() bool
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState
@@ -114,7 +115,7 @@ type TxnChanger interface {
 	Commit(ctx context.Context) error
 	Rollback(ctx context.Context) error
 	SetCommitTS(cts types.TS) error
-	SetDedupType(skip DedupType)
+	SetDedupType(skip DedupPolicy)
 	SetParticipants(ids []uint64) error
 	SetError(error)
 
@@ -123,7 +124,7 @@ type TxnChanger interface {
 }
 
 type TxnWriter interface {
-	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
 }
 
@@ -206,15 +207,13 @@ type BaseMVCCNode interface {
 	IsCommitting() bool
 	IsCommitted() bool
 	IsAborted() bool
-	Set1PC()
-	Is1PC() bool
 
 	GetEnd() types.TS
 	GetStart() types.TS
 	GetPrepare() types.TS
 	GetTxn() TxnReader
 
-	ApplyCommit() (err error)
+	ApplyCommit(string) (err error)
 	ApplyRollback() (err error)
 	PrepareCommit() (err error)
 	PrepareRollback() (err error)
@@ -226,6 +225,9 @@ type AppendNode interface {
 	TxnEntry
 	GetStartRow() uint32
 	GetMaxRow() uint32
+	IsTombstone() bool
+	SetIsMergeCompact()
+	IsMergeCompact() bool
 }
 
 type DeleteNode interface {
@@ -238,7 +240,6 @@ type DeleteNode interface {
 	DeletedPK() map[uint32]containers.Vector
 	RangeDeleteLocked(start, end uint32, pk containers.Vector, mp *mpool.MPool)
 	GetCardinalityLocked() uint32
-	IsDeletedLocked(row uint32) bool
 	GetRowMaskRefLocked() *roaring.Bitmap
 	OnApply() error
 }
@@ -268,11 +269,16 @@ type TxnStore interface {
 	RangeDelete(
 		id *common.ID, start, end uint32, pkVec containers.Vector, dt handle.DeleteType,
 	) error
-	TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
+	DeleteByPhyAddrKeys(
+		id *common.ID,
+		rowIDVec, pkVec containers.Vector, dt handle.DeleteType,
+	) (err error)
+	TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error)
+	//TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
 	GetByFilter(
 		ctx context.Context, dbId uint64, id uint64, filter *handle.Filter,
 	) (*common.ID, uint32, error)
-	GetValue(id *common.ID, row uint32, col uint16) (any, bool, error)
+	GetValue(id *common.ID, row uint32, col uint16, skipCheckDelete bool) (any, bool, error)
 
 	CreateRelation(dbId uint64, def any) (handle.Relation, error)
 	CreateRelationWithTableId(dbId uint64, tableId uint64, def any) (handle.Relation, error)
@@ -282,23 +288,21 @@ type TxnStore interface {
 	GetRelationByID(dbId uint64, tid uint64) (handle.Relation, error)
 
 	CreateDatabase(name, createSql, datTyp string) (handle.Database, error)
-	CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error)
+	CreateDatabaseWithID(ctx context.Context, name, createSql, datTyp string, id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	GetDatabaseByID(id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	DropDatabaseByID(id uint64) (handle.Database, error)
 	DatabaseNames() []string
 
-	GetObject(id *common.ID) (handle.Object, error)
-	CreateObject(dbId, tid uint64, is1PC bool) (handle.Object, error)
-	CreateNonAppendableObject(dbId, tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (handle.Object, error)
-	SoftDeleteObject(id *common.ID) error
-	SoftDeleteBlock(id *common.ID) error
-	UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error)
+	GetObject(id *common.ID, isTombstone bool) (handle.Object, error)
+	CreateObject(dbId, tid uint64, isTombstone bool) (handle.Object, error)
+	CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (handle.Object, error)
+	SoftDeleteObject(isTombstone bool, id *common.ID) error
 
 	AddTxnEntry(TxnEntryType, TxnEntry)
 
-	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
 	DoneWaitEvent(cnt int)
 	AddWaitEvent(cnt int)
@@ -308,13 +312,12 @@ type TxnStore interface {
 	ObserveTxn(
 		visitDatabase func(db any),
 		visitTable func(tbl any),
-		rotateTable func(dbName, tblName string, dbid, tid uint64),
-		visitMetadata func(block any),
+		rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
 		visitObject func(obj any),
-		visitAppend func(bat any),
-		visitDelete func(ctx context.Context, deletes DeleteNode))
+		visitAppend func(bat any, isTombstone bool))
 	GetTransactionType() TxnType
-	UpdateObjectStats(*common.ID, *objectio.ObjectStats) error
+	UpdateObjectStats(*common.ID, *objectio.ObjectStats, bool) error
+	FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error
 }
 
 type TxnType int8
@@ -329,9 +332,7 @@ type TxnEntryType int16
 type TxnEntry interface {
 	PrepareCommit() error
 	PrepareRollback() error
-	ApplyCommit() error
+	ApplyCommit(string) error
 	ApplyRollback() error
 	MakeCommand(uint32) (TxnCmd, error)
-	Is1PC() bool
-	Set1PC()
 }

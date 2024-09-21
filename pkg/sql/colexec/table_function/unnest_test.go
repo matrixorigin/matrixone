@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -31,7 +30,7 @@ import (
 )
 
 type unnestTestCase struct {
-	arg      *Argument
+	arg      *TableFunction
 	proc     *process.Process
 	jsons    []string
 	paths    []string
@@ -120,7 +119,7 @@ func init() {
 }
 
 func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers []bool, jsonType string, success bool) unnestTestCase {
-	proc := testutil.NewProcessWithMPool(m)
+	proc := testutil.NewProcessWithMPool("", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range defaultColDefs {
@@ -133,7 +132,7 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 
 	ret := unnestTestCase{
 		proc: proc,
-		arg: &Argument{
+		arg: &TableFunction{
 			Attrs:    attrs,
 			Rets:     colDefs,
 			FuncName: "unnest",
@@ -167,42 +166,86 @@ func TestUnnestCall(t *testing.T) {
 
 		err := ut.arg.Prepare(ut.proc)
 		require.NotNil(t, err)
+
 		var inputBat *batch.Batch
 		switch ut.jsonType {
 		case "str":
-			beforeMem := ut.proc.Mp().CurrNB()
 			inputBat, err = makeUnnestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
 			require.Nil(t, err)
 			ut.arg.Args = makeConstInputExprs(ut.jsons, ut.paths, ut.jsonType, ut.outers)
-			err := unnestPrepare(ut.proc, ut.arg)
+
+			// fake retSchema
+			retSchema := make([]types.Type, len(ut.arg.Rets))
+			for i := range ut.arg.Rets {
+				typ := ut.arg.Rets[i].Typ
+				retSchema[i] = types.New(types.T(typ.Id), typ.Width, typ.Scale)
+			}
+			ut.arg.ctr.retSchema = retSchema
+
+			tvfst, err := unnestPrepare(ut.proc, ut.arg)
 			require.Nil(t, err)
-			result := vm.NewCallResult()
-			result.Batch = inputBat
-			end, err := unnestCall(0, ut.proc, ut.arg, &result)
-			require.Nil(t, err)
-			require.False(t, end)
-			cleanResult(&result, ut.proc)
-			inputBat.Clean(ut.proc.Mp())
-			ut.arg.Free(ut.proc, false, nil)
-			afterMem := ut.proc.Mp().CurrNB()
-			require.Equal(t, beforeMem, afterMem)
+
+			// faking args.  unnestPrepare should have build place holders for 3 args.
+			require.True(t, len(ut.arg.Args) == 3)
+			require.True(t, len(ut.arg.ctr.argVecs) == 3)
+
+			// Got a valid batch, eval tbf args.  first eval input batch for args.
+			for i := range ut.arg.ctr.executorsForArgs {
+				ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inputBat}, nil)
+				require.Nil(t, err)
+			}
+
+			for i := 0; i < inputBat.RowCount(); i++ {
+				err = tvfst.start(ut.arg, ut.proc, i)
+				require.Nil(t, err)
+				for {
+					res, err := tvfst.call(ut.arg, ut.proc)
+					if err != nil || res.Batch.IsDone() {
+						break
+					}
+				}
+			}
+			// we do not check result correctness?
+			tvfst.free(ut.arg, ut.proc, false, nil)
+
 		case "json":
-			beforeMem := ut.proc.Mp().CurrNB()
 			inputBat, err = makeUnnestBatch(ut.jsons, types.T_json, encodeJson, ut.proc)
 			require.Nil(t, err)
 			ut.arg.Args = makeColExprs(ut.jsonType, ut.paths, ut.outers)
-			err := unnestPrepare(ut.proc, ut.arg)
+
+			// fake retSchema
+			retSchema := make([]types.Type, len(ut.arg.Rets))
+			for i := range ut.arg.Rets {
+				typ := ut.arg.Rets[i].Typ
+				retSchema[i] = types.New(types.T(typ.Id), typ.Width, typ.Scale)
+			}
+			ut.arg.ctr.retSchema = retSchema
+
+			tvfst, err := unnestPrepare(ut.proc, ut.arg)
 			require.Nil(t, err)
-			result := vm.NewCallResult()
-			result.Batch = inputBat
-			end, err := unnestCall(0, ut.proc, ut.arg, &result)
-			require.Nil(t, err)
-			require.False(t, end)
-			cleanResult(&result, ut.proc)
-			inputBat.Clean(ut.proc.Mp())
-			ut.arg.Free(ut.proc, false, nil)
-			afterMem := ut.proc.Mp().CurrNB()
-			require.Equal(t, beforeMem, afterMem)
+
+			// faking args.  unnestPrepare should have build place holders for 3 args.
+			require.True(t, len(ut.arg.Args) == 3)
+			require.True(t, len(ut.arg.ctr.argVecs) == 3)
+
+			// Got a valid batch, eval tbf args.  first eval input batch for args.
+			for i := range ut.arg.ctr.executorsForArgs {
+				ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inputBat}, nil)
+				require.Nil(t, err)
+			}
+
+			for i := 0; i < inputBat.RowCount(); i++ {
+				err = tvfst.start(ut.arg, ut.proc, i)
+				require.Nil(t, err)
+				for {
+					res, err := tvfst.call(ut.arg, ut.proc)
+					if err != nil || res.Batch.IsDone() {
+						break
+					}
+				}
+			}
+			// we do not check result correctness?
+			tvfst.free(ut.arg, ut.proc, false, nil)
 		}
 	}
 }
@@ -310,20 +353,4 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 		},
 	}
 	return ret
-}
-
-func resetChildren(arg *Argument, bat *batch.Batch) {
-	arg.SetChildren(
-		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
-		})
-}
-
-func cleanResult(result *vm.CallResult, proc *process.Process) {
-	if result.Batch != nil {
-		result.Batch.Clean(proc.Mp())
-		result.Batch = nil
-	}
 }

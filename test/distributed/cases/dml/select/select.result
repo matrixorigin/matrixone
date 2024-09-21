@@ -378,7 +378,7 @@ select * from t1;
 a
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null
+a    INT(32)    YES        null    auto_increment    
 drop table if exists t1;
 create table if not exists t1(a bigint auto_increment);
 select * from t1;
@@ -466,7 +466,7 @@ select 1 > 0;
 1 > 0
 true
 SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, CASE WHEN TABLE_TYPE='BASE TABLE' THEN CASE WHEN TABLE_SCHEMA = 'mysql' OR TABLE_SCHEMA = 'performance_schema' THEN 'SYSTEM TABLE' ELSE 'TABLE' END WHEN TABLE_TYPE='TEMPORARY' THEN 'LOCAL_TEMPORARY' ELSE TABLE_TYPE END AS TABLE_TYPE, TABLE_COMMENT AS REMARKS, NULL AS TYPE_CAT, NULL AS TYPE_SCHEM, NULL AS TYPE_NAME, NULL AS SELF_REFERENCING_COL_NAME, NULL AS REF_GENERATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'abc' group by null HAVING TABLE_TYPE IN ('LOCAL TEMPORARY','TABLE','VIEW',null,null) ORDER BY TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME;
-internal error: Invalid GROUP BY NULL
+SQL syntax error: non-integer constant in GROUP BY
 use db1;
 drop table if exists t11;
 create table t11 (a int, b int, primary key (a));
@@ -488,3 +488,10 @@ a    b
 1    1
 2    2
 3    3
+drop table if exists t1;
+create table t1 (a int, b varchar, c int, primary key (c,a), key idx_b(b));
+insert into t1 select result, result || "_a",result+100000000 from generate_series(1,10000) g;
+select * from t1 where b in ("11_a","21_a");
+a    b    c
+11    11_a    100000011
+21    21_a    100000021

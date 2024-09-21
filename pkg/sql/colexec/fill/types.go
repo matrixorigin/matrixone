@@ -25,19 +25,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Fill)
 
 const (
-	receiveBat    = 0
-	withoutNewBat = 1
-	findNull      = 2
-	findValue     = 3
-	fillValue     = 4
-	findNullPre   = 5
+	receiveBat  = 0
+	findNull    = 2
+	findValue   = 3
+	fillValue   = 4
+	findNullPre = 5
 )
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// value
 	valVecs []*vector.Vector
@@ -54,8 +52,8 @@ type container struct {
 	status    int
 	subStatus int
 	colIdx    int
-	buf       *batch.Batch
 	idx       int
+	buf       *batch.Batch
 
 	// linear
 	nullIdx int
@@ -63,62 +61,84 @@ type container struct {
 	exes    []colexec.ExpressionExecutor
 	done    bool
 
-	process func(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error)
+	process func(ctr *container, ap *Fill, proc *process.Process, anal process.Analyzer) (vm.CallResult, error)
 }
 
-type Argument struct {
-	ctr *container
+type Fill struct {
+	ctr container
 
 	ColLen   int
 	FillType plan.Node_FillType
 	FillVal  []*plan.Expr
 	AggIds   []int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (fill *Fill) GetOperatorBase() *vm.OperatorBase {
+	return &fill.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Fill](
+		func() *Fill {
+			return &Fill{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Fill) {
+			*a = Fill{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Fill]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (fill Fill) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Fill {
+	return reuse.Alloc[Fill](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (fill *Fill) Release() {
+	if fill != nil {
+		reuse.Free[Fill](fill, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExes()
+func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &fill.ctr
+	ctr.resetCtrParma()
+	ctr.resetExes()
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	for _, b := range ctr.bats {
+		if b != nil {
+			b.Clean(proc.GetMPool())
+		}
+	}
+	ctr.bats = ctr.bats[:0]
 
-		arg.ctr = nil
+	if fill.ProjectList != nil {
+		if fill.OpAnalyzer != nil {
+			fill.OpAnalyzer.Alloc(fill.ProjectAllocSize)
+		}
+		fill.ResetProjection(proc)
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &fill.ctr
+	ctr.freeBatch(proc.Mp())
+	ctr.freeExes()
+	ctr.freeVectors(proc.Mp())
+
+	fill.FreeProjection(proc)
+}
+
+func (ctr *container) freeBatch(mp *mpool.MPool) {
 	for _, b := range ctr.bats {
 		if b != nil {
 			b.Clean(mp)
@@ -130,11 +150,33 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) cleanExes() {
+func (ctr *container) freeVectors(mp *mpool.MPool) {
+	for _, vec := range ctr.prevVecs {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}
+	ctr.prevVecs = nil
+}
+
+func (ctr *container) freeExes() {
 	for i := range ctr.exes {
 		if ctr.exes[i] != nil {
 			ctr.exes[i].Free()
 		}
 	}
 	ctr.exes = nil
+}
+
+func (ctr *container) resetExes() {
+	for i := range ctr.exes {
+		if ctr.exes[i] != nil {
+			ctr.exes[i].ResetForNextQuery()
+		}
+	}
+}
+
+func (ctr *container) resetCtrParma() {
+	ctr.initIndex()
+	ctr.done = false
 }

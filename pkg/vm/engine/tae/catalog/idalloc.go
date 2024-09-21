@@ -20,62 +20,62 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-type IDAlloctor struct {
-	dbAlloc  *common.IdAlloctor
-	tblAlloc *common.IdAlloctor
-	objAlloc *common.IdAlloctor
-	blkAlloc *common.IdAlloctor
+type IDAllocator struct {
+	dbAlloc  *common.IdAllocator
+	tblAlloc *common.IdAllocator
+	objAlloc *common.IdAllocator
+	blkAlloc *common.IdAllocator
 }
 
-func NewIDAllocator() *IDAlloctor {
-	return &IDAlloctor{
-		dbAlloc:  common.NewIdAlloctor(1000),
-		tblAlloc: common.NewIdAlloctor(1000),
-		objAlloc: common.NewIdAlloctor(1000),
-		blkAlloc: common.NewIdAlloctor(1000),
+func NewIDAllocator() *IDAllocator {
+	return &IDAllocator{
+		dbAlloc:  common.NewIdAllocator(1000),
+		tblAlloc: common.NewIdAllocator(1000),
+		objAlloc: common.NewIdAllocator(1000),
+		blkAlloc: common.NewIdAllocator(1000),
 	}
 }
 
-func (alloc *IDAlloctor) Init(prevDb, prevTbl, prevObj, prevBlk uint64) {
+func (alloc *IDAllocator) Init(prevDb, prevTbl, prevObj, prevBlk uint64) {
 	alloc.dbAlloc.SetStart(prevDb)
 	alloc.tblAlloc.SetStart(prevTbl)
 	alloc.objAlloc.SetStart(prevObj)
 	alloc.blkAlloc.SetStart(prevBlk)
 }
 
-func (alloc *IDAlloctor) NextDB() uint64     { return alloc.dbAlloc.Alloc() }
-func (alloc *IDAlloctor) NextTable() uint64  { return alloc.tblAlloc.Alloc() }
-func (alloc *IDAlloctor) NextObject() uint64 { return alloc.objAlloc.Alloc() }
-func (alloc *IDAlloctor) NextBlock() uint64  { return alloc.blkAlloc.Alloc() }
+func (alloc *IDAllocator) NextDB() uint64     { return alloc.dbAlloc.Alloc() }
+func (alloc *IDAllocator) NextTable() uint64  { return alloc.tblAlloc.Alloc() }
+func (alloc *IDAllocator) NextObject() uint64 { return alloc.objAlloc.Alloc() }
+func (alloc *IDAllocator) NextBlock() uint64  { return alloc.blkAlloc.Alloc() }
 
-func (alloc *IDAlloctor) CurrDB() uint64     { return alloc.dbAlloc.Get() }
-func (alloc *IDAlloctor) CurrTable() uint64  { return alloc.tblAlloc.Get() }
-func (alloc *IDAlloctor) CurrObject() uint64 { return alloc.objAlloc.Get() }
-func (alloc *IDAlloctor) CurrBlock() uint64  { return alloc.blkAlloc.Get() }
+func (alloc *IDAllocator) CurrDB() uint64     { return alloc.dbAlloc.Get() }
+func (alloc *IDAllocator) CurrTable() uint64  { return alloc.tblAlloc.Get() }
+func (alloc *IDAllocator) CurrObject() uint64 { return alloc.objAlloc.Get() }
+func (alloc *IDAllocator) CurrBlock() uint64  { return alloc.blkAlloc.Get() }
 
-func (alloc *IDAlloctor) OnReplayBlockID(id uint64) {
+func (alloc *IDAllocator) OnReplayBlockID(id uint64) {
 	if alloc.CurrBlock() < id {
 		alloc.blkAlloc.SetStart(id)
 	}
 }
 
-func (alloc *IDAlloctor) OnReplayObjectID(id uint64) {
+func (alloc *IDAllocator) OnReplayObjectID(id uint64) {
 	if alloc.CurrObject() < id {
 		alloc.objAlloc.SetStart(id)
 	}
 }
-func (alloc *IDAlloctor) OnReplayTableID(id uint64) {
+func (alloc *IDAllocator) OnReplayTableID(id uint64) {
 	if alloc.CurrTable() < id {
 		alloc.tblAlloc.SetStart(id)
 	}
 }
-func (alloc *IDAlloctor) OnReplayDBID(id uint64) {
+func (alloc *IDAllocator) OnReplayDBID(id uint64) {
 	if alloc.CurrDB() < id {
 		alloc.dbAlloc.SetStart(id)
 	}
 }
 
-func (alloc *IDAlloctor) IDStates() string {
+func (alloc *IDAllocator) IDStates() string {
 	return fmt.Sprintf("Current DBID=%d,TID=%d,SID=%d,BID=%d",
 		alloc.CurrDB(), alloc.CurrTable(), alloc.CurrObject(), alloc.CurrBlock())
 }

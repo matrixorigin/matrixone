@@ -1,4 +1,4 @@
-set global save_query_result = on;
+set save_query_result = on;
 drop table if exists tt;
 create table tt (a int);
 insert into tt values(1), (2);
@@ -6,13 +6,13 @@ insert into tt values(1), (2);
 select * from result_scan(last_query_id()) as u;
 /* cloud_user */select * from tt;
 select count(*) from meta_scan(last_query_id()) as u;
-set global save_query_result = off;
+set save_query_result = off;
 
 select * from tt;
 -- @bvt:issue#9886
 select * from result_scan(last_query_id()) as u;
 -- @bvt:issue
-set global save_query_result = on;
+set save_query_result = on;
 drop table if exists t2;
 create table t2 (a int, b int, c int);
 insert into t2 values(1, 2, 3), (1, 2, 3);
@@ -23,20 +23,20 @@ select * from result_scan(last_query_id()) as u;
 select * from result_scan(last_query_id()) as u;
 /* cloud_user */select c from tt, t2 where tt.a = t2.a;
 select * from result_scan(last_query_id()) as u, result_scan(last_query_id()) as v limit 1;
-set global save_query_result = off;
+set save_query_result = off;
 
-set global save_query_result = on;
+set save_query_result = on;
 /* cloud_user */select tt.a from tt, t2;
 select tables from meta_scan(last_query_id()) as u;
-set global query_result_maxsize = 0;
+set query_result_maxsize = 0;
 /* cloud_user */select tt.a from tt, t2;
 select char_length(result_path) from meta_scan(last_query_id()) as u;
 /* cloud_user */select tt.a from tt, t2;
 select result_size = 0 from meta_scan(last_query_id()) as u;
-set global save_query_result = off;
+set save_query_result = off;
 
-set global save_query_result = on;
-set global query_result_maxsize = 100;
+set save_query_result = on;
+set query_result_maxsize = 100;
 create role rrrqqq;
 grant rrrqqq to dump;
 /* cloud_user */select * from tt;
@@ -59,11 +59,11 @@ drop role rrrqqq;
 select * from result_scan('d8fb97e7-e30e-11ed-8d80-d6aeb943c8b4') as u;
 --need to clean database db111
 drop database if exists db111;
-set global save_query_result = off;
+set save_query_result = off;
 
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 -- @session:id=2&user=abc:admin&password=123456
-set global save_query_result = on;
+set save_query_result = on;
 create database test;
 /* cloud_user */show databases;
 select * from result_scan(last_query_id()) as u;
@@ -77,10 +77,8 @@ select * from result_scan(last_query_id()) as u;
 select count(*) from meta_scan(last_query_id()) as u;
 /* cloud_user */show tables;
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue#12083
 /* cloud_user */show variables like 'tx_isolation';
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue
 /* cloud_user */show columns from tt;
 select * from result_scan(last_query_id()) as u;
 /* cloud_user */show grants;
@@ -90,7 +88,7 @@ select * from result_scan(last_query_id()) as u;
 alter table tt add unique index id(a);
 /* cloud_user */show index from tt;
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue#12083
+-- @bvt:issue#17598
 /* cloud_user */show node list;
 select * from result_scan(last_query_id()) as u;
 -- @bvt:issue
@@ -134,13 +132,12 @@ create view v1 as SELECT 1 IN (SELECT 1);
 /* cloud_user */select * from v1;
 select * from result_scan(last_query_id()) as u;
 drop table time_window01;
-set global save_query_result = off;
 -- @session
 drop account abc;
 
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 -- @session:id=3&user=abc:admin&password=123456
-set global save_query_result = off;
+set save_query_result = off;
 create database test;
 /* cloud_user */show databases;
 select * from result_scan(last_query_id()) as u;

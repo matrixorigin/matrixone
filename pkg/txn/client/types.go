@@ -63,10 +63,24 @@ type TxnClient interface {
 
 	// New returns a TxnOperator to handle read and write operation for a
 	// transaction.
-	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)
+	New(
+		ctx context.Context,
+		commitTS timestamp.Timestamp,
+		options ...TxnOption,
+	) (TxnOperator, error)
+
+	// RestartTxn is similar to New, but it is used a closed (committed or aborted) Txn to restart to
+	// to avoid create a new txn.
+	RestartTxn(
+		ctx context.Context,
+		txnOp TxnOperator,
+		commitTS timestamp.Timestamp,
+		options ...TxnOption,
+	) (TxnOperator, error)
+
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
-	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
+	NewWithSnapshot(snapshot txn.CNTxnSnapshot) (TxnOperator, error)
 	// Close closes client.sender
 	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
@@ -118,7 +132,7 @@ type TxnOperator interface {
 	// can be used to recover the transaction operation handle at a non-CN coordinator
 	// node, or it can be used to pass information back to the transaction coordinator
 	// after the non-CN coordinator completes the transaction operation.
-	Snapshot() ([]byte, error)
+	Snapshot() (txn.CNTxnSnapshot, error)
 	// UpdateSnapshot in some scenarios, we need to boost the snapshotTimestamp to eliminate
 	// the w-w conflict.
 	// If ts is empty, it will use the latest commit timestamp which is received from DN.
@@ -158,6 +172,8 @@ type TxnOperator interface {
 	// will be committed to tn to check. If the metadata of the lockservice changes in [lock, commit],
 	// the transaction will be rolled back.
 	AddLockTable(locktable lock.LockTable) error
+	// HasLockTable check if had locked table
+	HasLockTable(table uint64) bool
 	// AddWaitLock add wait lock for current txn
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
@@ -174,9 +190,6 @@ type TxnOperator interface {
 	// GetWorkspace from the transaction
 	GetWorkspace() Workspace
 
-	ResetRetry(bool)
-	IsRetry() bool
-
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
 	AppendEventCallback(event EventType, callbacks ...func(TxnEvent))
@@ -189,6 +202,7 @@ type TxnOperator interface {
 
 	EnterRunSql()
 	ExitRunSql()
+	SetFootPrints(prints [][2]uint32)
 }
 
 // TxnIDGenerator txn id generator
@@ -237,6 +251,8 @@ type TimestampWaiter interface {
 }
 
 type Workspace interface {
+	Readonly() bool
+
 	// StartStatement tag a statement is running
 	StartStatement()
 	// EndStatement tag end a statement is completed
@@ -264,6 +280,12 @@ type Workspace interface {
 	CloneSnapshotWS() Workspace
 
 	BindTxnOp(op TxnOperator)
+
+	SetHaveDDL(flag bool)
+	GetHaveDDL() bool
+
+	// debug & test
+	PPString() string
 }
 
 // TxnOverview txn overview include meta and status
@@ -297,4 +319,12 @@ type TxnEvent struct {
 	Sequence  uint64
 	Cost      time.Duration
 	CostEvent bool
+}
+
+func (e TxnEvent) Committed() bool {
+	return e.Txn.Status == txn.TxnStatus_Committed
+}
+
+func (e TxnEvent) Aborted() bool {
+	return e.Txn.Status == txn.TxnStatus_Aborted
 }

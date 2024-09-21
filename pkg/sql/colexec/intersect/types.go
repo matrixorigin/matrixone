@@ -18,12 +18,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Intersect)
 
 const (
 	build = iota
@@ -31,45 +30,44 @@ const (
 	end
 )
 
-type Argument struct {
-	ctr *container
+type Intersect struct {
+	ctr container
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (intersect *Intersect) GetOperatorBase() *vm.OperatorBase {
+	return &intersect.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Intersect](
+		func() *Intersect {
+			return &Intersect{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Intersect) {
+			*a = Intersect{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Intersect]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (intersect Intersect) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Intersect {
+	return reuse.Alloc[Intersect](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (intersect *Intersect) Release() {
+	if intersect != nil {
+		reuse.Free[Intersect](intersect, nil)
 	}
 }
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// operator state
 	state int
@@ -81,31 +79,37 @@ type container struct {
 	hashTable *hashmap.StrHashMap
 
 	// Result batch of intersec column execute operator
-	btc *batch.Batch
-
-	// process bucket mark
-	inBuckets []uint8
+	buf *batch.Batch
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		if ctr.hashTable != nil {
-			ctr.hashTable.Free()
-			ctr.hashTable = nil
-		}
-		if ctr.btc != nil {
-			ctr.btc.Clean(proc.Mp())
-			ctr.btc = nil
-		}
-		if ctr.cnts != nil {
-			for i := range ctr.cnts {
-				proc.Mp().PutSels(ctr.cnts[i])
-			}
-			ctr.cnts = nil
-		}
-		ctr.FreeAllReg()
-
-		arg.ctr = nil
+func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &intersect.ctr
+	ctr.state = build
+	ctr.cleanHashMap()
+	ctr.putCnts(proc)
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
 	}
+}
+
+func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &intersect.ctr
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
+	}
+}
+
+func (ctr *container) cleanHashMap() {
+	if ctr.hashTable != nil {
+		ctr.hashTable.Free()
+		ctr.hashTable = nil
+	}
+}
+
+func (ctr *container) putCnts(proc *process.Process) {
+	for i := range ctr.cnts {
+		proc.Mp().PutSels(ctr.cnts[i])
+	}
+	ctr.cnts = nil
 }

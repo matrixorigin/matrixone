@@ -15,12 +15,13 @@
 package aggexec
 
 import (
+	"sync"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
-	"sync"
-	"testing"
 )
 
 var uniqueAggIdForTest int64 = 100
@@ -42,55 +43,55 @@ type testAggMemoryManager struct {
 func (m *testAggMemoryManager) Mp() *mpool.MPool {
 	return m.mp
 }
-func (m *testAggMemoryManager) GetVector(typ types.Type) *vector.Vector {
-	return vector.NewVec(typ)
-}
-func (m *testAggMemoryManager) PutVector(v *vector.Vector) {
-	v.Free(m.mp)
-}
 func newTestAggMemoryManager() AggMemoryManager {
 	return &testAggMemoryManager{mp: mpool.MustNewNoFixed("test_agg_exec")}
 }
 
-// testSingleAggPrivate1 is a structure that implements SingleAggFromFixedRetFixed.
-// it counts the number of input values (including NULLs) and it returns the count.
-// just for testing purposes.
-type testSingleAggPrivate1 struct{}
-
-func gTesSingleAggPrivate1() SingleAggFromFixedRetFixed[int32, int64] {
-	return &testSingleAggPrivate1{}
-}
-func (t *testSingleAggPrivate1) Init(AggSetter[int64], types.Type, types.Type) error {
-	return nil
-}
-
+// the Following is a mock aggregation function that counts the number of non-null values.
+// the aggregation function is a single column aggregation function that accepts int32 values and returns int64 values.
+// it's just a simple test function.
 func tSinglePrivate1Ret(_ []types.Type) types.Type {
 	return types.T_int64.ToType()
 }
-func fillSinglePrivate1(
-	exec SingleAggFromFixedRetFixed[int32, int64], value int32, getter AggGetter[int64], setter AggSetter[int64]) error {
-	setter(getter() + 1)
-	return nil
+func tSinglePrivate1InitResult(_ types.Type, _ ...types.Type) int64 {
+	return 0
 }
-func fillNullSinglePrivate1(
-	exec SingleAggFromFixedRetFixed[int32, int64], getter AggGetter[int64], setter AggSetter[int64]) error {
+func fillSinglePrivate1(
+	execContext AggGroupExecContext, commonContext AggCommonExecContext,
+	value int32, isEmpty bool, getter AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter() + 1)
 	return nil
 }
 func fillsSinglePrivate1(
-	exec SingleAggFromFixedRetFixed[int32, int64], value int32, isNull bool, count int, getter AggGetter[int64], setter AggSetter[int64]) error {
+	execContext AggGroupExecContext, commonContext AggCommonExecContext,
+	value int32, count int, isEmpty bool,
+	getter AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter() + int64(count))
 	return nil
 }
 func mergeSinglePrivate1(
-	exec SingleAggFromFixedRetFixed[int32, int64], other SingleAggFromFixedRetFixed[int32, int64], getter1 AggGetter[int64], getter2 AggGetter[int64], setter AggSetter[int64]) error {
+	ctx1, ctx2 AggGroupExecContext,
+	commonContext AggCommonExecContext,
+	aggIsEmpty1, aggIsEmpty2 bool,
+	getter1 AggGetter[int64], getter2 AggGetter[int64],
+	setter AggSetter[int64]) error {
 	setter(getter1() + getter2())
 	return nil
 }
-func (t *testSingleAggPrivate1) Marshal() []byte {
-	return nil
+
+func registerTheTestingCount(id int64, emptyGroupToBeNull bool) {
+	RegisterAggFromFixedRetFixed(
+		MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, emptyGroupToBeNull),
+		nil, nil, tSinglePrivate1InitResult,
+		fillSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil)
 }
-func (t *testSingleAggPrivate1) Unmarshal([]byte) {}
+
+func registerTheTestingCountWithContext(id int64, commonCtx AggCommonContextInit, groupCtx AggGroupContextInit) {
+	RegisterAggFromFixedRetFixed(
+		MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, true),
+		commonCtx, groupCtx, tSinglePrivate1InitResult,
+		fillSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil)
+}
 
 func TestSingleAggFuncExec1(t *testing.T) {
 	mg := newTestAggMemoryManager()
@@ -102,21 +103,17 @@ func TestSingleAggFuncExec1(t *testing.T) {
 		retType:   types.T_int64.ToType(),
 		emptyNull: false,
 	}
-	RegisterSingleAggFromFixedToFixed(
-		MakeSingleAgg1RegisteredInfo(
-			MakeSingleColumnAggInformation(info.aggID, info.argType, tSinglePrivate1Ret, true, info.emptyNull),
-			gTesSingleAggPrivate1,
-			nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
+	registerTheTestingCount(info.aggID, info.emptyNull)
 	executor := MakeAgg(
 		mg,
 		info.aggID, info.distinct, info.argType)
 
 	// input first row of [3, null, 4, 5] - count 1
-	// input second row of [3, null, 4, 5] - count 1
-	// input [null * 2] - count 2
+	// input second row of [3, null, 4, 5] - count 0
+	// input [null * 2] - count 0
 	// input [1 * 3] - count 3
 	// input [1, 2, 3, 4] - count 4
-	// and the total count is 1+1+2+3+4 = 11
+	// and the total count is 1+1+0+3+4 = 9
 	inputType := info.argType
 	inputs := make([]*vector.Vector, 5)
 	{
@@ -149,15 +146,15 @@ func TestSingleAggFuncExec1(t *testing.T) {
 		{
 			require.NotNil(t, v)
 			require.Equal(t, 1, v.Length())
-			require.Equal(t, int64(11), vector.MustFixedCol[int64](v)[0])
+			require.Equal(t, int64(8), vector.MustFixedColWithTypeCheck[int64](v)[0])
 		}
 		v.Free(mg.Mp())
 	}
 	{
 		executor.Free()
 		// memory check.
-		for _, v := range inputs {
-			v.Free(mg.Mp())
+		for i := 1; i < len(inputs); i++ {
+			inputs[i].Free(mg.Mp())
 		}
 		require.Equal(t, int64(0), mg.Mp().CurrNB())
 	}
@@ -252,12 +249,20 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		var err error
 
 		// prepare the input data.
-		vec1 := vector.NewVec(inputType1)
-		require.NoError(t, vector.AppendFixedList[int64](vec1, []int64{0, 1}, []bool{true, false}, mg.Mp()))
-		vec2 := vector.NewVec(inputType2)
-		require.NoError(t, vector.AppendFixedList[bool](vec2, []bool{false, true}, nil, mg.Mp()))
-		inputs[0] = [2]*vector.Vector{vec1, vec2}
-		inputs[1] = [2]*vector.Vector{vec1, vec2}
+		{
+			vec1 := vector.NewVec(inputType1)
+			require.NoError(t, vector.AppendFixedList[int64](vec1, []int64{0, 1}, []bool{true, false}, mg.Mp()))
+			vec2 := vector.NewVec(inputType2)
+			require.NoError(t, vector.AppendFixedList[bool](vec2, []bool{false, true}, nil, mg.Mp()))
+			inputs[0] = [2]*vector.Vector{vec1, vec2}
+		}
+		{
+			vec1 := vector.NewVec(inputType1)
+			require.NoError(t, vector.AppendFixedList[int64](vec1, []int64{0, 1}, []bool{true, false}, mg.Mp()))
+			vec2 := vector.NewVec(inputType2)
+			require.NoError(t, vector.AppendFixedList[bool](vec2, []bool{false, true}, nil, mg.Mp()))
+			inputs[1] = [2]*vector.Vector{vec1, vec2}
+		}
 
 		inputs[2] = [2]*vector.Vector{nil, nil}
 		inputs[2][0] = vector.NewConstNull(inputType1, 2, mg.Mp())
@@ -291,7 +296,7 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		{
 			require.NotNil(t, v)
 			require.Equal(t, 1, v.Length())
-			require.Equal(t, int64(6), vector.MustFixedCol[int64](v)[0])
+			require.Equal(t, int64(6), vector.MustFixedColWithTypeCheck[int64](v)[0])
 		}
 		v.Free(mg.Mp())
 	}
@@ -339,6 +344,11 @@ func TestGroupConcatExec(t *testing.T) {
 		require.NoError(t, executor.Fill(0, 1, inputs))
 		require.NoError(t, executor.Fill(0, 2, inputs))
 		require.NoError(t, executor.Fill(0, 3, inputs))
+		// data merge
+		executor2 := MakeAgg(mg, info.aggID, info.distinct, info.argTypes...)
+		require.NoError(t, executor2.GroupGrow(1))
+		require.NoError(t, executor.Merge(executor2, 0, 0))
+		executor2.Free()
 	}
 	{
 		// result check.
@@ -347,7 +357,7 @@ func TestGroupConcatExec(t *testing.T) {
 		{
 			require.NotNil(t, v)
 			require.Equal(t, 1, v.Length())
-			bs := vector.MustStrCol(v)
+			bs := vector.InefficientMustStrCol(v)
 			require.Equal(t, 1, len(bs))
 			require.Equal(t, "ad,bc,cb,da", bs[0])
 		}
@@ -364,17 +374,12 @@ func TestGroupConcatExec(t *testing.T) {
 }
 
 // TestEmptyNullFlag test if the emptyNull flag is working.
-// the emptyNull flag is used to determine whether the NULL value is included in the aggregation result.
-// if the emptyNull flag is true, the NULL value will be returned for empty groups.
+// if the emptyNull flag is true, empty groups will return NULL as the result.
 func TestEmptyNullFlag(t *testing.T) {
 	mg := newTestAggMemoryManager()
 	{
 		id := gUniqueAggIdForTest()
-		RegisterSingleAggFromFixedToFixed(
-			MakeSingleAgg1RegisteredInfo(
-				MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, true),
-				gTesSingleAggPrivate1,
-				nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
+		registerTheTestingCount(id, true)
 		executor := MakeAgg(
 			mg,
 			id, false, types.T_int32.ToType())
@@ -387,11 +392,7 @@ func TestEmptyNullFlag(t *testing.T) {
 	}
 	{
 		id := gUniqueAggIdForTest()
-		RegisterSingleAggFromFixedToFixed(
-			MakeSingleAgg1RegisteredInfo(
-				MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, false),
-				gTesSingleAggPrivate1,
-				nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
+		registerTheTestingCount(id, false)
 		executor := MakeAgg(
 			mg,
 			id, false, types.T_int32.ToType())
@@ -399,7 +400,7 @@ func TestEmptyNullFlag(t *testing.T) {
 		v, err := executor.Flush()
 		require.NoError(t, err)
 		require.False(t, v.IsNull(0))
-		require.Equal(t, int64(0), vector.MustFixedCol[int64](v)[0])
+		require.Equal(t, int64(0), vector.MustFixedColWithTypeCheck[int64](v)[0])
 		v.Free(mg.Mp())
 		executor.Free()
 	}
@@ -448,7 +449,7 @@ func TestEmptyNullFlag(t *testing.T) {
 		v, err := executor.Flush()
 		require.NoError(t, err)
 		require.False(t, v.IsNull(0))
-		require.Equal(t, int64(0), vector.MustFixedCol[int64](v)[0])
+		require.Equal(t, int64(0), vector.MustFixedColWithTypeCheck[int64](v)[0])
 		v.Free(mg.Mp())
 		executor.Free()
 	}

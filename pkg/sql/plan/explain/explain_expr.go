@@ -21,19 +21,20 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
 	buf.WriteString("[tag ")
 	fmt.Fprintf(buf, "%d", m.MsgTag)
 	buf.WriteString(" , type ")
-	msgType := process.MsgType(m.MsgType)
+	msgType := message.MsgType(m.MsgType)
 	buf.WriteString(msgType.MessageName())
 	buf.WriteString("]")
 }
@@ -201,7 +202,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 
 	layout, err := function.GetLayoutById(ctx, funcDef.Obj&function.DistinctMask)
 	if err != nil {
-		return moerr.NewInvalidInput(ctx, "invalid function or opreator '%s'", funcName)
+		return moerr.NewInvalidInputf(ctx, "invalid function or opreator '%s'", funcName)
 	}
 
 	switch layout {
@@ -256,6 +257,20 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 		err = describeExpr(ctx, funcExpr.Args[1], options, buf)
 		if err != nil {
 			return err
+		}
+		buf.WriteString(")")
+	case function.MULTIARY_LOGICAL_OPERATOR:
+		buf.WriteString("(")
+		err = describeExpr(ctx, funcExpr.Args[0], options, buf)
+		if err != nil {
+			return err
+		}
+		for i := 1; i < len(funcExpr.Args); i++ {
+			buf.WriteString(" " + funcExpr.Func.GetObjName() + " ")
+			err = describeExpr(ctx, funcExpr.Args[i], options, buf)
+			if err != nil {
+				return err
+			}
 		}
 		buf.WriteString(")")
 	case function.CAST_EXPRESSION:

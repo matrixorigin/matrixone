@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -40,7 +40,7 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	for i := 0; i < 5; i++ {
 		if ivecs[i].IsConstNull() || !ivecs[i].IsConst() {
 			return moerr.NewInvalidArg(proc.Ctx, "AddFaultPoint", "not scalar")
@@ -71,27 +71,27 @@ type mathMultiT interface {
 type mathMultiFun[T mathMultiT] func(T, int64) T
 
 func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	cb mathMultiFun[T]) (err error) {
+	cb mathMultiFun[T], selectList *FunctionSelectList) (err error) {
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
 			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
 		}
-		digits = vector.MustFixedCol[int64](ivecs[1])[0]
+		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
 	return opUnaryFixedToFixed[T, T](ivecs, result, proc, length, func(x T) T {
 		return cb(x, digits)
-	})
+	}, selectList)
 }
 
-func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
 			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "ceil"), "not const")
 		}
-		digits = vector.MustFixedCol[int64](ivecs[1])[0]
+		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
 	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
@@ -100,7 +100,7 @@ func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			return 0, err1
 		}
 		return ceilFloat64(floatVal, digits), nil
-	})
+	}, selectList)
 }
 
 func ceilInt64(x, digits int64) int64 {
@@ -153,64 +153,64 @@ func ceilFloat64(x float64, digits int64) float64 {
 	return x
 }
 
-func CeilUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return generalMathMulti("ceil", ivecs, result, proc, length, ceilUint64)
+func CeilUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("ceil", ivecs, result, proc, length, ceilUint64, selectList)
 }
 
-func CeilInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return generalMathMulti("ceil", ivecs, result, proc, length, ceilInt64)
+func CeilInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("ceil", ivecs, result, proc, length, ceilInt64, selectList)
 }
 
-func CeilFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return generalMathMulti("ceil", ivecs, result, proc, length, ceilFloat64)
+func CeilFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("ceil", ivecs, result, proc, length, ceilFloat64, selectList)
 }
 
-func ceilDecimal64(x types.Decimal64, digits int64, scale int32) types.Decimal64 {
+func ceilDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
 	if digits > 19 {
 		digits = 19
 	}
 	if digits < -18 {
 		digits = -18
 	}
-	return x.Ceil(scale, int32(digits))
+	return x.Ceil(scale, int32(digits), isConst)
 }
 
-func ceilDecimal128(x types.Decimal128, digits int64, scale int32) types.Decimal128 {
+func ceilDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool) types.Decimal128 {
 	if digits > 39 {
 		digits = 19
 	}
 	if digits < -38 {
 		digits = -38
 	}
-	return x.Ceil(scale, int32(digits))
+	return x.Ceil(scale, int32(digits), isConst)
 }
 
-func CeilDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func CeilDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	if len(ivecs) > 1 {
-		digit := vector.MustFixedCol[int64](ivecs[1])
+		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal64", "ceil(decimal64(18,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal64", "ceil(decimal64(18,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
-		return ceilDecimal64(x, digits, scale)
+		return ceilDecimal64(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
-	return generalMathMulti("ceil", ivecs, result, proc, length, cb)
+	return generalMathMulti("ceil", ivecs, result, proc, length, cb, selectList)
 }
 
-func CeilDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func CeilDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	if len(ivecs) > 1 {
-		digit := vector.MustFixedCol[int64](ivecs[1])
+		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal128", "ceil(decimal128(38,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal128", "ceil(decimal128(38,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
-		return ceilDecimal128(x, digits, scale)
+		return ceilDecimal128(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
-	return generalMathMulti("ceil", ivecs, result, proc, length, cb)
+	return generalMathMulti("ceil", ivecs, result, proc, length, cb, selectList)
 }
 
 var MaxUint64digits = numOfDigits(math.MaxUint64) // 20
@@ -262,8 +262,8 @@ func floorUint64(x uint64, digits int64) uint64 {
 	return x
 }
 
-func FloorUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return generalMathMulti("floor", ivecs, result, proc, length, floorUint64)
+func FloorUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("floor", ivecs, result, proc, length, floorUint64, selectList)
 }
 
 func floorInt64(x int64, digits int64) int64 {
@@ -283,8 +283,8 @@ func floorInt64(x int64, digits int64) int64 {
 	return x
 }
 
-func FloorInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return generalMathMulti("floor", ivecs, result, proc, length, floorInt64)
+func FloorInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("floor", ivecs, result, proc, length, floorInt64, selectList)
 }
 
 func floorFloat64(x float64, digits int64) float64 {
@@ -296,78 +296,99 @@ func floorFloat64(x float64, digits int64) float64 {
 	return math.Floor(value) / scale
 }
 
-func FloorFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return generalMathMulti("floor", ivecs, result, proc, length, floorFloat64)
+func FloorFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("floor", ivecs, result, proc, length, floorFloat64, selectList)
 }
 
-func floorDecimal64(x types.Decimal64, digits int64, scale int32) types.Decimal64 {
+func floorDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
 	if digits > 19 {
 		digits = 19
 	}
 	if digits < -18 {
 		digits = -18
 	}
-	return x.Floor(scale, int32(digits))
+	return x.Floor(scale, int32(digits), isConst)
 }
 
-func floorDecimal128(x types.Decimal128, digits int64, scale int32) types.Decimal128 {
+func floorDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool) types.Decimal128 {
 	if digits > 39 {
 		digits = 39
 	}
 	if digits < -38 {
 		digits = -38
 	}
-	return x.Floor(scale, int32(digits))
+	return x.Floor(scale, int32(digits), isConst)
 }
 
-func FloorDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func FloorDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	if len(ivecs) > 1 {
-		digit := vector.MustFixedCol[int64](ivecs[1])
+		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal64", "floor(decimal64(18,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal64", "floor(decimal64(18,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
-		return floorDecimal64(x, digits, scale)
+		return floorDecimal64(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
 
-	return generalMathMulti("floor", ivecs, result, proc, length, cb)
+	return generalMathMulti("floor", ivecs, result, proc, length, cb, selectList)
 }
 
-func FloorDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func FloorDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	if len(ivecs) > 1 {
-		digit := vector.MustFixedCol[int64](ivecs[1])
+		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal128", "floor(decimal128(38,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal128", "floor(decimal128(38,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
-		return floorDecimal128(x, digits, scale)
+		return floorDecimal128(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
 
-	return generalMathMulti("floor", ivecs, result, proc, length, cb)
+	return generalMathMulti("floor", ivecs, result, proc, length, cb, selectList)
 }
 
-func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
 			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "ceil"), "not const")
 		}
-		digits = vector.MustFixedCol[int64](ivecs[1])[0]
+		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
 	rs := vector.MustFunctionResult[float64](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetStrValue(i)
-		if null {
-			if err = rs.Append(0, true); err != nil {
-				return err
+	rsVec := rs.GetResultVector()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
 			}
-		} else {
+		}
+	}
+
+	if ivec.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		for i := uint64(0); i < uint64(length); i++ {
+			if rsNull.Contains(i) {
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+			}
+			v, _ := ivec.GetStrValue(i)
 			floatVal, err := strconv.ParseFloat(string(v), 64)
 			if err != nil {
 				return err
@@ -375,6 +396,18 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
 				return err
 			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, _ := ivec.GetStrValue(i)
+		floatVal, err := strconv.ParseFloat(string(v), 64)
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -402,8 +435,8 @@ func roundUint64(x uint64, digits int64) uint64 {
 	return x
 }
 
-func RoundUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return generalMathMulti("round", ivecs, result, proc, length, roundUint64)
+func RoundUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("round", ivecs, result, proc, length, roundUint64, selectList)
 }
 
 func roundInt64(x int64, digits int64) int64 {
@@ -443,8 +476,8 @@ func roundInt64(x int64, digits int64) int64 {
 	return x
 }
 
-func RoundInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return generalMathMulti("round", ivecs, result, proc, length, roundInt64)
+func RoundInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("round", ivecs, result, proc, length, roundInt64, selectList)
 }
 
 func roundFloat64(x float64, digits int64) float64 {
@@ -473,44 +506,44 @@ func roundFloat64(x float64, digits int64) float64 {
 	return x
 }
 
-func RoundFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return generalMathMulti("round", ivecs, result, proc, length, roundFloat64)
+func RoundFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("round", ivecs, result, proc, length, roundFloat64, selectList)
 }
 
-func roundDecimal64(x types.Decimal64, digits int64, scale int32) types.Decimal64 {
+func roundDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
 	if digits > 19 {
 		digits = 19
 	}
 	if digits < -18 {
 		digits = -18
 	}
-	return x.Round(scale, int32(digits))
+	return x.Round(scale, int32(digits), isConst)
 }
 
-func roundDecimal128(x types.Decimal128, digits int64, scale int32) types.Decimal128 {
+func roundDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool) types.Decimal128 {
 	if digits > 39 {
 		digits = 39
 	}
 	if digits < -38 {
 		digits = -38
 	}
-	return x.Round(scale, int32(digits))
+	return x.Round(scale, int32(digits), isConst)
 }
 
-func RoundDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func RoundDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
-		return roundDecimal64(x, digits, scale)
+		return roundDecimal64(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
-	return generalMathMulti("round", ivecs, result, proc, length, cb)
+	return generalMathMulti("round", ivecs, result, proc, length, cb, selectList)
 }
 
-func RoundDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func RoundDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
-		return roundDecimal128(x, digits, scale)
+		return roundDecimal128(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
-	return generalMathMulti("round", ivecs, result, proc, length, cb)
+	return generalMathMulti("round", ivecs, result, proc, length, cb, selectList)
 }
 
 type NormalType interface {
@@ -564,7 +597,7 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func CoalesceGeneral[T NormalType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func CoalesceGeneral[T NormalType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[T](result)
 	vecs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
 	for i := range ivecs {
@@ -593,7 +626,7 @@ func CoalesceGeneral[T NormalType](ivecs []*vector.Vector, result vector.Functio
 	return nil
 }
 
-func CoalesceStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func CoalesceStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vecs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
@@ -647,7 +680,7 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vecs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
@@ -689,7 +722,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	return nil
 }
 
-func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	fromTzs := vector.GenerateFunctionStrParameter(ivecs[1])
 	toTzs := vector.GenerateFunctionStrParameter(ivecs[2])
@@ -865,16 +898,16 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 	}
 }
 
-func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
 		return doDateAdd(v1, v2, iTyp)
-	})
+	}, selectList)
 }
 
-func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	scale := ivecs[0].GetType().Scale
 	iTyp := types.IntervalType(unit)
@@ -886,10 +919,10 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Datetime, int64, types.Datetime](ivecs, result, proc, length, func(v1 types.Datetime, v2 int64) (types.Datetime, error) {
 		return doDatetimeAdd(v1, v2, iTyp)
-	})
+	}, selectList)
 }
 
-func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 	rs := vector.MustFunctionResult[types.Datetime](result)
@@ -897,10 +930,10 @@ func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 	return opBinaryStrFixedToFixedWithErrorCheck[int64, types.Datetime](ivecs, result, proc, length, func(v1 string, v2 int64) (types.Datetime, error) {
 		return doDateStringAdd(v1, v2, iTyp)
-	})
+	}, selectList)
 }
 
-func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	scale := ivecs[0].GetType().Scale
@@ -912,11 +945,11 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
-		return doTimestampAdd(proc.SessionInfo.TimeZone, v1, v2, iTyp)
-	})
+		return doTimestampAdd(proc.GetSessionInfo().TimeZone, v1, v2, iTyp)
+	}, selectList)
 }
 
-func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Time](result)
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	scale := ivecs[0].GetType().Scale
@@ -929,10 +962,10 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Time, int64, types.Time](ivecs, result, proc, length, func(v1 types.Time, v2 int64) (types.Time, error) {
 		return doTimeAdd(v1, v2, iTyp)
-	})
+	}, selectList)
 }
 
-func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[1].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "date format format", "not constant")
 	}
@@ -1272,13 +1305,13 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput(ctx, "invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputf(ctx, "invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1][:3])
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput(ctx, "invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputf(ctx, "invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':
@@ -1509,16 +1542,16 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 	}
 }
 
-func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
 		return doDateSub(v1, v2, iTyp)
-	})
+	}, selectList)
 }
 
-func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	scale := ivecs[0].GetType().Scale
 	iTyp := types.IntervalType(unit)
@@ -1530,10 +1563,10 @@ func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Datetime, int64, types.Datetime](ivecs, result, proc, length, func(v1 types.Datetime, v2 int64) (types.Datetime, error) {
 		return doDatetimeSub(v1, v2, iTyp)
-	})
+	}, selectList)
 }
 
-func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 
@@ -1563,7 +1596,7 @@ func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return nil
 }
 
-func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
@@ -1572,8 +1605,8 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
-		return doTimestampSub(proc.SessionInfo.TimeZone, v1, v2, iTyp)
-	})
+		return doTimestampSub(proc.GetSessionInfo().TimeZone, v1, v2, iTyp)
+	}, selectList)
 }
 
 type number interface {
@@ -1627,7 +1660,7 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(10)
 }
 
-func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[uint64](result)
 
 	fs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
@@ -1664,7 +1697,7 @@ func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[uint64](result)
 
 	fs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
@@ -1712,7 +1745,7 @@ func formatCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	vs1 := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -1739,7 +1772,7 @@ func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	vs1 := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -1777,7 +1810,7 @@ const (
 	maxUnixTimestampInt = 32536771199
 )
 
-func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	vs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 
@@ -1790,7 +1823,7 @@ func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 				return err
 			}
 		} else {
-			if err = rs.Append(types.DatetimeFromUnix(proc.SessionInfo.TimeZone, v), false); err != nil {
+			if err = rs.Append(types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, v), false); err != nil {
 				return err
 			}
 		}
@@ -1798,7 +1831,7 @@ func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
-func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	vs := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
 
@@ -1811,7 +1844,7 @@ func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				return err
 			}
 		} else {
-			if err = rs.Append(types.DatetimeFromUnix(proc.SessionInfo.TimeZone, int64(v)), false); err != nil {
+			if err = rs.Append(types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, int64(v)), false); err != nil {
 				return err
 			}
 		}
@@ -1826,7 +1859,7 @@ func splitDecimalToIntAndFrac(f float64) (int64, int64) {
 	return intPart, fracPart
 }
 
-func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	vs := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
 	rs.TempSetType(types.New(types.T_datetime, 0, 6))
@@ -1840,7 +1873,7 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWra
 			}
 		} else {
 			x, y := splitDecimalToIntAndFrac(v)
-			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.SessionInfo.TimeZone, x, y), false); err != nil {
+			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y), false); err != nil {
 				return err
 			}
 		}
@@ -1848,7 +1881,7 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWra
 	return nil
 }
 
-func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[1].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
 	}
@@ -1868,7 +1901,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 			}
 		} else {
 			buf.Reset()
-			r := types.DatetimeFromUnix(proc.SessionInfo.TimeZone, v)
+			r := types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, v)
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
@@ -1880,7 +1913,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
-func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[1].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
 	}
@@ -1900,7 +1933,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 			}
 		} else {
 			buf.Reset()
-			r := types.DatetimeFromUnix(proc.SessionInfo.TimeZone, int64(v))
+			r := types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, int64(v))
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
@@ -1912,7 +1945,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 	return nil
 }
 
-func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[1].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
 	}
@@ -1933,7 +1966,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 		} else {
 			buf.Reset()
 			x, y := splitDecimalToIntAndFrac(v)
-			r := types.DatetimeFromUnixWithNsec(proc.SessionInfo.TimeZone, x, y)
+			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
@@ -1967,7 +2000,7 @@ func getSliceFromRight(s string, offset int64) string {
 	return string(substrRune)
 }
 
-func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -2035,7 +2068,7 @@ func getSliceFromRightWithLength(s string, offset int64, length int64) string {
 	return getSliceOffsetLen(s, -offset, length)
 }
 
-func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -2127,7 +2160,7 @@ func getCount[T number](typ types.Type, val T) int64 {
 	return r
 }
 
-func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	delims := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -2157,16 +2190,16 @@ func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasPrefix)
+func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasPrefix, selectList)
 }
 
-func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasSuffix)
+func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasSuffix, selectList)
 }
 
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
-func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
 	strs := vector.GenerateFunctionStrParameter(args[0])
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
@@ -2214,7 +2247,7 @@ func isSha2Family(len int64) bool {
 	return len == 0 || len == 224 || len == 256 || len == 384 || len == 512
 }
 
-func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	extractFromDate := func(unit string, d types.Date) (uint32, error) {
 		var r uint32
 		switch unit {
@@ -2240,10 +2273,10 @@ func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
 	}
 
-	return opBinaryStrFixedToFixedWithErrorCheck[types.Date, uint32](ivecs, result, proc, length, extractFromDate)
+	return opBinaryStrFixedToFixedWithErrorCheck[types.Date, uint32](ivecs, result, proc, length, extractFromDate, selectList)
 }
 
-func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[0].IsConst() {
 		return moerr.NewInternalError(proc.Ctx, "invalid input")
 	}
@@ -2352,7 +2385,7 @@ func extractFromDatetime(unit string, d types.Datetime) (string, error) {
 	return value, nil
 }
 
-func ExtractFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func ExtractFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[0].IsConst() {
 		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
 	}
@@ -2438,7 +2471,7 @@ func extractFromTime(unit string, t types.Time) (string, error) {
 	return value, nil
 }
 
-func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[0].IsConst() {
 		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
 	}
@@ -2499,7 +2532,7 @@ func extractFromVarchar(unit string, t string, scale int32) (string, error) {
 	return result, nil
 }
 
-func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	findInStrList := func(str, strlist string) uint64 {
 		for j, s := range strings.Split(strlist, ",") {
 			if s == str {
@@ -2509,14 +2542,14 @@ func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		return 0
 	}
 
-	return opBinaryStrStrToFixed[uint64](ivecs, result, proc, length, findInStrList)
+	return opBinaryStrStrToFixed[uint64](ivecs, result, proc, length, findInStrList, nil)
 }
 
-func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return opBinaryStrStrToFixed[int64](ivecs, result, proc, length, instr.Single)
+func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opBinaryStrStrToFixed[int64](ivecs, result, proc, length, instr.Single, nil)
 }
 
-func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2550,7 +2583,7 @@ func evalLeft(str string, length int64) string {
 	return string(runeStr[:leftLength])
 }
 
-func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
 	rs := vector.MustFunctionResult[float64](result)
@@ -2573,8 +2606,8 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	return nil
 }
 
-func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return opBinaryFixedFixedToFixedWithErrorCheck[T, T, types.Time](ivecs, result, proc, length, timeDiff[T])
+func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opBinaryFixedFixedToFixedWithErrorCheck[T, T, types.Time](ivecs, result, proc, length, timeDiff[T], selectList)
 }
 
 func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
@@ -2597,7 +2630,7 @@ func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
 	return tt, nil
 }
 
-func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[2])
@@ -2621,7 +2654,77 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return nil
 }
 
-func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func MakeDateString(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		yearStr, null1 := p1.GetStrValue(i)
+		dayStr, null2 := p2.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			// null
+			yearStrStr := functionUtil.QuickBytesToStr(yearStr)
+			year, err := strconv.ParseInt(yearStrStr, 10, 64)
+			if err != nil {
+				yearFloat, err := strconv.ParseFloat(yearStrStr, 64)
+				if err != nil {
+					year = castBinaryArrayToInt(yearStr)
+				} else {
+					year = int64(yearFloat)
+				}
+			}
+			day, err := strconv.ParseInt(functionUtil.QuickBytesToStr(dayStr), 10, 64)
+			if err != nil {
+				// parse as float64
+				dayFloat, err := strconv.ParseFloat(functionUtil.QuickBytesToStr(dayStr), 64)
+				if err != nil {
+					day = castBinaryArrayToInt(dayStr)
+				} else {
+					day = int64(dayFloat)
+				}
+			}
+			if day <= 0 || year < 0 || year > 9999 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if year < 70 {
+				year += 2000
+			} else if year < 100 {
+				year += 1900
+			}
+
+			resDt := types.MakeDate(int32(year), 1, int32(day))
+
+			if resDt.Year() > 9999 || resDt <= 0 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := rs.AppendBytes([]byte(resDt.String()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
@@ -2654,7 +2757,7 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
-func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
@@ -2682,7 +2785,7 @@ func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			case "trailing":
 				res = trimTrailing(string(cut), string(src))
 			default:
-				return moerr.NewNotSupported(proc.Ctx, "trim type %s", v1Str)
+				return moerr.NewNotSupportedf(proc.Ctx, "trim type %s", v1Str)
 			}
 
 			if err = rs.AppendBytes([]byte(res), false); err != nil {
@@ -2721,114 +2824,9 @@ func trimTrailing(src, cuts string) string {
 	return src
 }
 
-// JSON_EXTRACT
-func jsonExtractCheckFn(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) > 1 {
-		ts := make([]types.Type, 0, len(inputs))
-		allMatch := true
-		for _, input := range inputs {
-			if input.Oid == types.T_json || input.Oid.IsMySQLString() {
-				ts = append(ts, input)
-			} else {
-				if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
-					ts = append(ts, types.T_varchar.ToType())
-					allMatch = false
-				} else {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-			}
-		}
-		if allMatch {
-			return newCheckResultWithSuccess(0)
-		}
-		return newCheckResultWithCast(0, ts)
-	}
-	return newCheckResultWithFailure(failedFunctionParametersWrong)
-}
-
-type computeFn func([]byte, []*bytejson.Path) (*bytejson.ByteJson, error)
-
-func computeJson(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
-	bj := types.DecodeJson(json)
-	return bj.Query(paths), nil
-}
-
-func computeString(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
-	bj, err := types.ParseSliceToByteJson(json)
-	if err != nil {
-		return nil, err
-	}
-	return bj.Query(paths), nil
-}
-
-func JsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	jsonVec := parameters[0]
-	var fn computeFn
-	switch jsonVec.GetType().Oid {
-	case types.T_json:
-		fn = computeJson
-	default:
-		fn = computeString
-	}
-	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
-	pathWrapers := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters)-1)
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	paths := make([]*bytejson.Path, len(parameters)-1)
-	for i := 0; i < len(parameters)-1; i++ {
-		pathWrapers[i] = vector.GenerateFunctionStrParameter(parameters[i+1])
-	}
-	for i := uint64(0); i < uint64(length); i++ {
-		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
-		if jIsNull {
-			err := rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		skip := false
-		for j := 0; j < len(parameters)-1; j++ {
-			pathBytes, pIsNull := pathWrapers[j].GetStrValue(i)
-			if pIsNull {
-				skip = true
-				break
-			}
-			p, err := types.ParseStringToPath(string(pathBytes))
-			if err != nil {
-				return err
-			}
-			paths[j] = &p
-		}
-		if skip {
-			err := rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		out, err := fn(jsonBytes, paths)
-		if err != nil {
-			return err
-		}
-		if out.IsNull() {
-			err := rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		dt, _ := out.Marshal()
-		err = rs.AppendBytes(dt, false)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // SPLIT PART
 
-func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[2])
@@ -2873,35 +2871,51 @@ func SplitSingle(str, sep string, cnt uint32) (string, bool) {
 	return strSlice[cnt-1], false
 }
 
-func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
 
 		return moarray.InnerProduct[T](_v1, _v2)
-	})
+	}, selectList)
 }
 
-func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
 		return moarray.CosineSimilarity[T](_v1, _v2)
-	})
+	}, selectList)
 }
 
-func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
 		return moarray.L2Distance[T](_v1, _v2)
-	})
+	}, selectList)
 }
 
-func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.L2DistanceSq[T](_v1, _v2)
+	}, selectList)
+}
+
+func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
 		return moarray.CosineDistance[T](_v1, _v2)
-	})
+	}, selectList)
+}
+
+func castBinaryArrayToInt(array []uint8) int64 {
+	var result int64
+	for i, value := range array {
+		result += int64(value) << uint(8*(len(array)-i-1))
+	}
+	return result
 }

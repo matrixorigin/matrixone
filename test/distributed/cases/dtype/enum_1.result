@@ -157,7 +157,7 @@ drop table if exists table01;
 create table table03(type enum('1','2','3','4','5') not null comment 'type');
 show create table table03;
 Table    Create Table
-table03    CREATE TABLE `table03` (\n`type` ENUM('1','2','3','4','5') NOT NULL COMMENT 'type'\n)
+table03    CREATE TABLE `table03` (\n  `type` enum('1','2','3','4','5') NOT NULL COMMENT 'type'\n)
 desc table03;
 Field    Type    Null    Key    Default    Extra    Comment
 type    ENUM('1','2','3','4','5')    NO        null        type

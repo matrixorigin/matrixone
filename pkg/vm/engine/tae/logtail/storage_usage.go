@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,16 +91,44 @@ const (
 	UsageMAX
 )
 
+const cluster = "cluster"
 const StorageUsageMagic uint64 = 0x1A2B3C4D5E6F
+
+type triode int
+
+const (
+	unknown triode = 0
+	yeah    triode = 1
+	nope    triode = 2
+)
 
 type UsageData struct {
 	AccId uint64
 	DbId  uint64
 	TblId uint64
 	Size  uint64
+
+	special triode
+
+	// this will not persist
+	// only global ckp will update
+	ObjectAbstract
 }
 
-var zeroUsageData UsageData = UsageData{math.MaxUint32, math.MaxUint64, math.MaxUint64, math.MaxInt64}
+type ObjectAbstract struct {
+	TotalObjCnt  int
+	TotalObjSize int
+	TotalBlkCnt  int
+	TotalRowCnt  int
+}
+
+var zeroUsageData UsageData = UsageData{
+	AccId:   math.MaxUint32,
+	DbId:    math.MaxUint64,
+	TblId:   math.MaxUint64,
+	Size:    math.MaxInt64,
+	special: unknown,
+}
 
 // MockUsageData generates accCnt * dbCnt * tblCnt UsageDatas.
 // the accIds, dbIds and tblIds are random produced.
@@ -127,6 +157,29 @@ func MockUsageData(accCnt, dbCnt, tblCnt int, allocator *atomic.Uint64) (result 
 func (u UsageData) String() string {
 	return fmt.Sprintf("account id = %d; database id = %d; table id = %d; size = %d",
 		u.AccId, u.DbId, u.TblId, u.Size)
+}
+
+func (u *UsageData) Merge(other UsageData, delete bool) {
+	if delete {
+		if u.Size <= other.Size {
+			u.Size = 0
+			u.TotalObjSize = 0
+		} else {
+			u.Size -= other.Size
+			u.TotalObjSize -= other.TotalObjSize
+		}
+
+		u.TotalObjCnt -= other.TotalObjCnt
+		u.TotalRowCnt -= other.TotalRowCnt
+		u.TotalBlkCnt -= other.TotalBlkCnt
+
+	} else {
+		u.Size += other.Size
+		u.TotalObjSize += other.TotalObjSize
+		u.TotalObjCnt += other.TotalObjCnt
+		u.TotalRowCnt += other.TotalRowCnt
+		u.TotalBlkCnt += other.TotalBlkCnt
+	}
 }
 
 func (u UsageData) IsZero() bool {
@@ -249,6 +302,21 @@ func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint64]uint64) {
 	return
 }
 
+func (c *StorageUsageCache) GatherObjectAbstractForAccounts() (abstract map[uint64]ObjectAbstract) {
+	abstract = make(map[uint64]ObjectAbstract)
+	c.data.Scan(func(item UsageData) bool {
+		a := abstract[item.AccId]
+		a.TotalObjCnt += item.TotalObjCnt
+		a.TotalObjSize += item.TotalObjSize
+		a.TotalBlkCnt += item.TotalBlkCnt
+		a.TotalRowCnt += item.TotalRowCnt
+		abstract[item.AccId] = a
+		return true
+	})
+
+	return
+}
+
 func (c *StorageUsageCache) GatherAccountSize(id uint64) (size uint64, exist bool) {
 	iter := c.data.Iter()
 	defer iter.Release()
@@ -300,12 +368,15 @@ type TNUsageMemo struct {
 		vers    []uint32
 		delayed map[uint64]UsageData
 	}
+
+	C *catalog.Catalog
 }
 
-func NewTNUsageMemo() *TNUsageMemo {
+func NewTNUsageMemo(c *catalog.Catalog) *TNUsageMemo {
 	memo := new(TNUsageMemo)
 	memo.cache = NewStorageUsageCache()
 	memo.newAccCache = NewStorageUsageCache()
+	memo.C = c
 	return memo
 }
 
@@ -408,8 +479,96 @@ func (m *TNUsageMemo) gatherAccountSizeHelper(cache *StorageUsageCache, id uint6
 	return cache.GatherAccountSize(id)
 }
 
+func (m *TNUsageMemo) GatherObjectAbstractForAllAccount() map[uint64]ObjectAbstract {
+	return m.cache.GatherObjectAbstractForAccounts()
+}
+
 func (m *TNUsageMemo) GatherAccountSize(id uint64) (size uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.cache, id)
+}
+
+var specialNameRegexp = regexp.MustCompile(fmt.Sprintf("%s|%s|%s", pkgcatalog.MO_DATABASE, pkgcatalog.MO_TABLES, pkgcatalog.MO_COLUMNS))
+var indexNameRegexp = regexp.MustCompile("__mo_index.*")
+
+func (m *TNUsageMemo) checkSpecial(usage UsageData, tbl *catalog.TableEntry) triode {
+	if usage.special != unknown {
+		return usage.special
+	}
+
+	if tbl == nil {
+		return unknown
+	}
+
+	name := strings.ToLower(tbl.GetFullName())
+	if indexNameRegexp.MatchString(name) {
+		// we don't know if an index table is special or not
+		return nope
+	}
+
+	if specialNameRegexp.MatchString(name) {
+		return yeah
+	}
+
+	schema := tbl.GetLastestSchema(false)
+	if strings.ToLower(schema.Relkind) == cluster {
+		return yeah
+	}
+
+	return nope
+}
+
+func (m *TNUsageMemo) GatherSpecialTableSize() (size uint64) {
+	dbEntry, err := m.C.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	if err != nil {
+		logutil.Errorf("[storage]: get mo_catalog from catalog failed: %v", err)
+		return 0
+	}
+
+	usage := UsageData{AccId: uint64(pkgcatalog.System_Account), DbId: pkgcatalog.MO_CATALOG_ID}
+	iter := m.cache.Iter()
+
+	var updates []UsageData
+
+	ok := iter.Seek(usage)
+	for ok {
+		item := iter.Item()
+		if item.AccId != uint64(pkgcatalog.System_Account) || item.DbId != pkgcatalog.MO_CATALOG_ID {
+			break
+		}
+		//fmt.Println(item.String(), item.special)
+		var ret triode
+		if ret = m.checkSpecial(item, nil); ret != unknown {
+			if ret == yeah {
+				size += item.Size
+			}
+			ok = iter.Next()
+			continue
+		}
+
+		tbl, err := dbEntry.GetTableEntryByID(item.TblId)
+		if err != nil {
+			logutil.Errorf("[storage]: get table %d from db %s failed: %v", item.TblId, dbEntry.GetName(), err)
+			ok = iter.Next()
+			continue
+		}
+
+		if ret = m.checkSpecial(item, tbl); ret == yeah {
+			size += item.Size
+		}
+
+		item.special = ret
+		updates = append(updates, item)
+
+		ok = iter.Next()
+	}
+
+	iter.Release()
+
+	for _, item := range updates {
+		m.Replace(item)
+	}
+
+	return size
 }
 
 func (m *TNUsageMemo) GatherNewAccountSize(id uint64) (size uint64, exist bool) {
@@ -422,9 +581,14 @@ func (m *TNUsageMemo) GatherAllAccSize() (usages map[uint64]uint64) {
 
 func (m *TNUsageMemo) updateHelper(cache *StorageUsageCache, usage UsageData, del bool) {
 	size := uint64(0)
+	special := unknown
 	if old, found := cache.Get(usage); found {
 		size = old.Size
+		special = old.special
+
+		usage.ObjectAbstract = old.ObjectAbstract
 	}
+	usage.special = special
 
 	if del {
 		if usage.Size > size {
@@ -473,8 +637,10 @@ func (m *TNUsageMemo) applyDeletes(
 			dbs = append(dbs, e)
 		case *catalog.TableEntry:
 			piovt := UsageData{
-				uint64(e.GetDB().GetTenantID()),
-				e.GetDB().GetID(), e.GetID(), 0}
+				AccId:   uint64(e.GetDB().GetTenantID()),
+				DbId:    e.GetDB().GetID(),
+				TblId:   e.GetID(),
+				special: unknown}
 			if usage, exist := m.cache.Get(piovt); exist {
 				appendToStorageUsageBat(ckpData, usage, true, mp)
 				m.Delete(usage)
@@ -491,7 +657,10 @@ func (m *TNUsageMemo) applyDeletes(
 	usages := make([]UsageData, 0)
 	for _, db := range dbs {
 		iter := m.cache.Iter()
-		iter.Seek(UsageData{uint64(db.GetTenantID()), db.ID, 0, 0})
+		iter.Seek(UsageData{
+			AccId:   uint64(db.GetTenantID()),
+			DbId:    db.ID,
+			special: unknown})
 
 		if !isSameDBFunc(iter.Item(), db) {
 			iter.Release()
@@ -550,43 +719,9 @@ func (m *TNUsageMemo) replayIntoGCKP(collector *GlobalCollector) {
 	iter.Release()
 }
 
-func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, string, bool) {
-	if c == nil {
-		return usage, "", false
-	}
-
-	var err error
-	var dbEntry *catalog.DBEntry
-	var tblEntry *catalog.TableEntry
-
-	dbEntry, err = c.GetDatabaseByID(usage.DbId)
-	if err != nil || dbEntry.HasDropCommitted() {
-		// the db has been deleted
-		name := "deleted"
-		if dbEntry != nil {
-			name = dbEntry.GetName()
-		}
-		log := fmt.Sprintf("[d-db]%s_%d_%d_%d; ", name, usage.AccId, usage.DbId, usage.Size)
-		return usage, log, true
-	}
-
-	tblEntry, err = dbEntry.GetTableEntryByID(usage.TblId)
-	if err != nil || tblEntry.HasDropCommitted() {
-		// the tbl has been deleted
-		name := "deleted"
-		if tblEntry != nil {
-			name = tblEntry.GetFullName()
-		}
-		log := fmt.Sprintf("[d-tbl]%s_%d_%d_%d_%d; ", name, usage.AccId, usage.DbId, usage.TblId, usage.Size)
-		return usage, log, true
-	}
-
-	return usage, "", false
-}
-
 func (m *TNUsageMemo) deleteAccount(accId uint64) (size uint64) {
 	trash := make([]UsageData, 0)
-	povit := UsageData{accId, 0, 0, 0}
+	povit := UsageData{AccId: accId, special: unknown}
 
 	iter := m.cache.Iter()
 
@@ -653,56 +788,27 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 	}()
 
 	for x := range m.pendingReplay.datas {
-		if m.pendingReplay.vers[x] < CheckpointVersion9 {
-			// haven't StorageUsageIns batch
-			// haven't StorageUsageDel batch
-			continue
-		}
 
 		insVecs := getStorageUsageBatVectors(m.pendingReplay.datas[x].bats[StorageUsageInsIDX])
 		accCol, dbCol, tblCol, sizeCol := getStorageUsageVectorCols(insVecs)
 
-		var skip bool
-		var log string
+		// var skip bool
+		// var log string
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
-
-			// these ckps, older than version 11, haven't del bat, we need clear the
-			// usage data which belongs the deleted databases or tables.
-			//
-			// (if a table or db recreate, it's id will change)
-			//
-			if m.pendingReplay.vers[x] < CheckpointVersion11 {
-				// here only remove the deleted db and table.
-				// if table has deletes, we update it in gckp
-				usage, log, skip = try2RemoveStaleData(usage, c)
-				if skip {
-					buf.WriteString(log)
-					continue
-				}
-				if m.pendingReplay.delayed == nil {
-					m.pendingReplay.delayed = make(map[uint64]UsageData)
-				}
-				if old, ok := m.pendingReplay.delayed[usage.TblId]; !ok {
-					m.pendingReplay.delayed[usage.TblId] = usage
-				} else {
-					old.Size += usage.Size
-					m.pendingReplay.delayed[usage.TblId] = old
-				}
-			}
+			usage := UsageData{AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y], Size: sizeCol[y], special: unknown}
 			m.DeltaUpdate(usage, false)
 		}
 
-		if m.pendingReplay.vers[x] < CheckpointVersion11 {
-			// haven't StorageUsageDel batch
-			continue
-		}
+		// if m.pendingReplay.vers[x] < CheckpointVersion11 {
+		// 	// haven't StorageUsageDel batch
+		// 	continue
+		// }
 
 		delVecs := getStorageUsageBatVectors(m.pendingReplay.datas[x].bats[StorageUsageDelIDX])
 		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
 
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
+			usage := UsageData{AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y], Size: sizeCol[y], special: unknown}
 			m.DeltaUpdate(usage, true)
 		}
 	}
@@ -725,10 +831,10 @@ func getStorageUsageBatVectors(bat *containers.Batch) []*vector.Vector {
 func getStorageUsageVectorCols(vecs []*vector.Vector) (
 	accCol []uint64, dbCol []uint64, tblCol []uint64, sizeCol []uint64) {
 
-	dbCol = vector.MustFixedCol[uint64](vecs[UsageDBID])
-	accCol = vector.MustFixedCol[uint64](vecs[UsageAccID])
-	tblCol = vector.MustFixedCol[uint64](vecs[UsageTblID])
-	sizeCol = vector.MustFixedCol[uint64](vecs[UsageSize])
+	dbCol = vector.MustFixedColWithTypeCheck[uint64](vecs[UsageDBID])
+	accCol = vector.MustFixedColWithTypeCheck[uint64](vecs[UsageAccID])
+	tblCol = vector.MustFixedColWithTypeCheck[uint64](vecs[UsageTblID])
+	sizeCol = vector.MustFixedColWithTypeCheck[uint64](vecs[UsageSize])
 
 	return
 }
@@ -761,7 +867,7 @@ func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp
 	}
 
 	updateFunc := func(vecs []*vector.Vector, size uint64) {
-		vector.SetFixedAt[uint64](vecs[UsageSize], vecs[UsageSize].Length()-1, size)
+		vector.SetFixedAtWithTypeCheck[uint64](vecs[UsageSize], vecs[UsageSize].Length()-1, size)
 
 		if del {
 			summaryLog[1][len(summaryLog[1])-1].Size = size
@@ -801,14 +907,25 @@ func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp
 	}
 }
 
-func objects2Usages(objs []*catalog.ObjectEntry) (usages []UsageData) {
+func Objects2Usages(objs []*catalog.ObjectEntry, isGlobal bool) (usages []UsageData) {
 	toUsage := func(obj *catalog.ObjectEntry) UsageData {
-		return UsageData{
+		usage := UsageData{
 			DbId:  obj.GetTable().GetDB().GetID(),
-			Size:  uint64(obj.GetCompSize()),
+			Size:  uint64(obj.Size()),
 			TblId: obj.GetTable().GetID(),
 			AccId: uint64(obj.GetTable().GetDB().GetTenantID()),
 		}
+
+		if isGlobal {
+			usage.ObjectAbstract = ObjectAbstract{
+				TotalBlkCnt:  int(obj.BlkCnt()),
+				TotalObjCnt:  1,
+				TotalObjSize: int(obj.Size()),
+				TotalRowCnt:  int(obj.Rows()),
+			}
+		}
+
+		return usage
 	}
 
 	for idx := range objs {
@@ -833,18 +950,22 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 
 	var buf bytes.Buffer
 
-	tblChanges := make(map[[3]uint64]int64)
+	tblChanges := make(map[[3]uint64]UsageData)
 
-	usages := objects2Usages(collector.Usage.ObjDeletes)
+	usages := Objects2Usages(collector.Usage.ObjInserts, true)
 	for idx := range usages {
 		uniqueTbl := [3]uint64{usages[idx].AccId, usages[idx].DbId, usages[idx].TblId}
-		tblChanges[uniqueTbl] -= int64(usages[idx].Size)
+		final := tblChanges[uniqueTbl]
+		final.Merge(usages[idx], false)
+		tblChanges[uniqueTbl] = final
 	}
 
-	usages = objects2Usages(collector.Usage.ObjInserts)
+	usages = Objects2Usages(collector.Usage.ObjDeletes, true)
 	for idx := range usages {
 		uniqueTbl := [3]uint64{usages[idx].AccId, usages[idx].DbId, usages[idx].TblId}
-		tblChanges[uniqueTbl] += int64(usages[idx].Size)
+		final := tblChanges[uniqueTbl]
+		final.Merge(usages[idx], true)
+		tblChanges[uniqueTbl] = final
 	}
 
 	delDbs := make(map[uint64]struct{})
@@ -864,9 +985,9 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 
 	memo.GetCache().ClearForUpdate()
 
-	for uniqueTbl, size := range tblChanges {
-		if size <= 0 {
-			size = 0
+	for uniqueTbl, usage := range tblChanges {
+		if usage.Size <= 0 {
+			usage.Size = 0
 		}
 
 		if _, ok := delDbs[uniqueTbl[1]]; ok {
@@ -878,19 +999,20 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 		}
 
 		memo.Replace(UsageData{
-			Size:  uint64(size),
-			TblId: uniqueTbl[2],
-			DbId:  uniqueTbl[1],
-			AccId: uniqueTbl[0],
+			Size:           uint64(usage.Size),
+			TblId:          uniqueTbl[2],
+			DbId:           uniqueTbl[1],
+			AccId:          uniqueTbl[0],
+			ObjectAbstract: usage.ObjectAbstract,
 		})
 
 		if len(memo.pendingReplay.delayed) == 0 {
 			continue
 		}
 
-		if usage, ok := memo.pendingReplay.delayed[uniqueTbl[2]]; ok {
+		if uu, ok := memo.pendingReplay.delayed[uniqueTbl[2]]; ok {
 			buf.WriteString(fmt.Sprintf("[u-tbl]%d_%d_%d_(o)%d_(n)%d; ",
-				usage.AccId, usage.DbId, usage.TblId, usage.Size, size))
+				uu.AccId, uu.DbId, uu.TblId, uu.Size, usage.Size))
 
 			delete(memo.pendingReplay.delayed, uniqueTbl[2])
 		}
@@ -904,14 +1026,14 @@ func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 
 	// must apply seg insert first
 	// step 1: apply seg insert (non-appendable, committed)
-	usage := objects2Usages(collector.Usage.ObjInserts)
+	usage := Objects2Usages(collector.Usage.ObjInserts, false)
 	tnUsageMemo.applySegInserts(usage, collector.data, collector.Allocator())
 
 	// step 2: apply db, tbl deletes
 	log := tnUsageMemo.applyDeletes(collector.Usage.Deletes, collector.data, collector.Allocator())
 
 	// step 3: apply seg deletes
-	usage = objects2Usages(collector.Usage.ObjDeletes)
+	usage = Objects2Usages(collector.Usage.ObjDeletes, false)
 	tnUsageMemo.applySegDeletes(usage, collector.data, collector.Allocator())
 
 	return log
@@ -932,26 +1054,26 @@ func doSummary(ckp string, fields ...zap.Field) {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("\nCKP[%s]\t%s\n", ckp, time.Now().UTC().String()))
 
-	format := "\t%19d\t%19d\t%19d\t%19.6fmb"
+	//format := "\t%19d\t%19d\t%19d\t%19.6fmb"
 	accumulated := int64(0)
 
 	for idx := range summaryLog[0] {
-		buf.WriteString(fmt.Sprintf(format+" -> i\n",
-			summaryLog[0][idx].AccId,
-			summaryLog[0][idx].DbId,
-			summaryLog[0][idx].TblId,
-			float64(summaryLog[0][idx].Size)/(1024*1024)))
+		//buf.WriteString(fmt.Sprintf(format+" -> i\n",
+		//	summaryLog[0][idx].AccId,
+		//	summaryLog[0][idx].DbId,
+		//	summaryLog[0][idx].TblId,
+		//	float64(summaryLog[0][idx].Size)/(1024*1024)))
 
 		accumulated += int64(summaryLog[0][idx].Size)
 	}
 
 	for idx := range summaryLog[1] {
-		buf.WriteString(fmt.Sprintf(format+" -> d\n",
-			summaryLog[1][idx].AccId,
-			summaryLog[1][idx].DbId,
-			summaryLog[1][idx].TblId,
-			float64(summaryLog[1][idx].Size)/(1024*1024)))
-
+		//buf.WriteString(fmt.Sprintf(format+" -> d\n",
+		//	summaryLog[1][idx].AccId,
+		//	summaryLog[1][idx].DbId,
+		//	summaryLog[1][idx].TblId,
+		//	float64(summaryLog[1][idx].Size)/(1024*1024)))
+		//
 		accumulated -= int64(summaryLog[1][idx].Size)
 	}
 
@@ -993,7 +1115,6 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 	}()
 
 	log1 := applyChanges(collector.BaseCollector, collector.UsageMemo)
-	//log2 := applyTransfer(collector.BaseCollector, collector.UsageMemo)
 
 	memoryUsed = collector.UsageMemo.MemoryUsed()
 	doSummary("I",
@@ -1008,13 +1129,17 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 // 2. load the specified storage usage ins/del batch using locations storing in meta batch.
 func GetStorageUsageHistory(
 	ctx context.Context,
-	locations []objectio.Location, versions []uint32,
-	fs fileservice.FileService, mp *mpool.MPool) ([][]UsageData, [][]UsageData, error) {
+	sid string,
+	locations []objectio.Location,
+	versions []uint32,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) ([][]UsageData, [][]UsageData, error) {
 
 	var err error
 
 	// 1. load each ckp meta batch
-	datas, selectedVers, selectedLocs, err := loadMetaBat(ctx, versions, locations, fs, mp)
+	datas, selectedVers, selectedLocs, err := loadMetaBat(ctx, sid, versions, locations, fs, mp)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1035,14 +1160,14 @@ func GetStorageUsageHistory(
 
 		// 2.1. load storage usage ins bat
 		if usageInsBat, err = loadStorageUsageBatch(
-			ctx, usageMeta.tables[StorageUsageIns].locations,
+			ctx, sid, usageMeta.tables[StorageUsageIns].locations,
 			selectedVers[idx], StorageUsageInsIDX, fs, mp); err != nil {
 			return nil, nil, err
 		}
 
 		// 2.2. load storage usage del bat
 		if usageDelBat, err = loadStorageUsageBatch(
-			ctx, usageMeta.tables[StorageUsageDel].locations,
+			ctx, sid, usageMeta.tables[StorageUsageDel].locations,
 			selectedVers[idx], StorageUsageDelIDX, fs, mp); err != nil {
 			return nil, nil, err
 		}
@@ -1078,19 +1203,20 @@ func GetStorageUsageHistory(
 }
 
 func cnBatchToUsageDatas(bat *batch.Batch) []UsageData {
-	accCol := vector.MustFixedCol[uint64](bat.GetVector(2))
-	dbCol := vector.MustFixedCol[uint64](bat.GetVector(3))
-	tblCol := vector.MustFixedCol[uint64](bat.GetVector(4))
-	sizeCol := vector.MustFixedCol[uint64](bat.GetVector(6))
+	accCol := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(2))
+	dbCol := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(3))
+	tblCol := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(4))
+	sizeCol := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(6))
 
 	usages := make([]UsageData, 0)
 
 	for idx := range accCol {
 		usages = append(usages, UsageData{
-			accCol[idx],
-			dbCol[idx],
-			tblCol[idx],
-			sizeCol[idx],
+			AccId:   accCol[idx],
+			DbId:    dbCol[idx],
+			TblId:   tblCol[idx],
+			Size:    sizeCol[idx],
+			special: unknown,
 		})
 	}
 	return usages
@@ -1098,6 +1224,7 @@ func cnBatchToUsageDatas(bat *batch.Batch) []UsageData {
 
 func loadMetaBat(
 	ctx context.Context,
+	sid string,
 	versions []uint32, locations []objectio.Location,
 	fs fileservice.FileService, mp *mpool.MPool) (
 	datas []*CNCheckpointData,
@@ -1108,12 +1235,12 @@ func loadMetaBat(
 	var idxes []uint16
 
 	for idx := 0; idx < len(locations); idx++ {
-		if versions[idx] < CheckpointVersion11 {
-			// start with version 11, storage usage ins/del bat's locations is recorded in meta bat.
-			continue
-		}
+		// if versions[idx] < CheckpointVersion11 {
+		// 	// start with version 11, storage usage ins/del bat's locations is recorded in meta bat.
+		// 	continue
+		// }
 
-		data := NewCNCheckpointData()
+		data := NewCNCheckpointData(sid)
 
 		// 1.1. prefetch meta bat
 		meteIdxSchema := checkpointDataReferVersions[versions[idx]][MetaIDX]
@@ -1124,7 +1251,7 @@ func loadMetaBat(
 		data.PrefetchMetaIdx(ctx, versions[idx], idxes, locations[idx], fs)
 
 		// 1.2. read meta bat
-		reader, err := blockio.NewObjectReader(fs, locations[idx])
+		reader, err := blockio.NewObjectReader(sid, fs, locations[idx])
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -1141,8 +1268,14 @@ func loadMetaBat(
 }
 
 func loadStorageUsageBatch(
-	ctx context.Context, locations BlockLocations, version uint32,
-	batIdx uint16, fs fileservice.FileService, mp *mpool.MPool) ([]*batch.Batch, error) {
+	ctx context.Context,
+	sid string,
+	locations BlockLocations,
+	version uint32,
+	batIdx uint16,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) ([]*batch.Batch, error) {
 
 	var bats []*batch.Batch
 
@@ -1150,7 +1283,7 @@ func loadStorageUsageBatch(
 	for it.HasNext() {
 		block := it.Next()
 		schema := checkpointDataReferVersions[version][uint32(batIdx)]
-		reader, err := blockio.NewObjectReader(fs, block.GetLocation())
+		reader, err := blockio.NewObjectReader(sid, fs, block.GetLocation())
 		if err != nil {
 			return nil, err
 		}
@@ -1230,17 +1363,14 @@ func EliminateErrorsOnCache(c *catalog.Catalog, end types.TS) int {
 		}
 
 		// PXU TODO
-		if entry.IsAppendable() || !entry.IsCommittedLocked() {
+		if entry.IsAppendable() || !entry.IsCommitted() {
 			return nil
 		}
 
-		entry.Lock()
-		createTS := entry.GetCreatedAtLocked()
+		createTS := entry.GetCreatedAt()
 		if createTS.GreaterEq(&end) {
-			entry.Unlock()
 			return nil
 		}
-		entry.Unlock()
 
 		if entry.HasDropCommitted() {
 			collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)

@@ -19,15 +19,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Window)
 
 const (
 	receive = iota
@@ -37,7 +37,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 	status int
 
 	bat *batch.Batch
@@ -50,10 +49,13 @@ type container struct {
 	ps      []int64 // index of partition by
 	os      []int64 // Sorted partitions
 	aggVecs []group.ExprEvalVector
+
+	vec  *vector.Vector
+	rBat *batch.Batch
 }
 
-type Argument struct {
-	ctr         *container
+type Window struct {
+	ctr         container
 	WinSpecList []*plan.Expr
 	// sort and partition
 	Fs []*plan.OrderBySpec
@@ -64,66 +66,125 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (window *Window) GetOperatorBase() *vm.OperatorBase {
+	return &window.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Window](
+		func() *Window {
+			return &Window{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Window) {
+			*a = Window{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Window]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (window Window) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Window {
+	return reuse.Alloc[Window](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (window *Window) Release() {
+	if window != nil {
+		reuse.Free[Window](window, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		ctr.cleanBatch(mp)
-		ctr.cleanAggVectors()
-		ctr.cleanOrderVectors()
-		arg.ctr = nil
+func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &window.ctr
+
+	ctr.resetParam()
+	ctr.resetVectors()
+	if ctr.bat != nil {
+		ctr.bat.CleanOnlyData()
+	}
+	// It needs to free, because the result of agg eval is not reuse the vector
+	if ctr.vec != nil {
+		ctr.vec.Free(proc.Mp())
+		ctr.vec = nil
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &window.ctr
+
+	ctr.freeBatch(proc.Mp())
+	ctr.freeExes()
+	ctr.freeVector(proc.Mp())
+}
+
+func (ctr *container) resetParam() {
+	ctr.status = receive
+	ctr.desc = nil
+	ctr.nullsLast = nil
+	ctr.sels = nil
+	ctr.ps = nil
+	ctr.os = nil
+}
+
+func (ctr *container) resetVectors() {
+	for i := range ctr.orderVecs {
+		ctr.orderVecs[i].ResetForNextQuery()
+	}
+
+	for i := range ctr.aggVecs {
+		ctr.aggVecs[i].ResetForNextQuery()
+	}
+}
+
+func (ctr *container) freeBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
 	}
 }
 
-func (ctr *container) cleanOrderVectors() {
+func (ctr *container) freeAggFun() {
+	if ctr.bat != nil {
+		for _, a := range ctr.bat.Aggs {
+			if a != nil {
+				a.Free()
+			}
+		}
+		ctr.bat.Aggs = nil
+	}
+}
+
+func (ctr *container) freeExes() {
 	for i := range ctr.orderVecs {
 		ctr.orderVecs[i].Free()
 	}
-	ctr.orderVecs = nil
-}
 
-func (ctr *container) cleanAggVectors() {
 	for i := range ctr.aggVecs {
 		ctr.aggVecs[i].Free()
 	}
-	ctr.aggVecs = nil
+}
+
+func (ctr *container) freeVector(mp *mpool.MPool) {
+	for _, e := range ctr.orderVecs {
+		for _, vec := range e.Vec {
+			if vec != nil {
+				vec.Free(mp)
+			}
+		}
+	}
+
+	for _, e := range ctr.aggVecs {
+		for _, vec := range e.Vec {
+			if vec != nil {
+				vec.Free(mp)
+			}
+		}
+	}
+
+	if ctr.vec != nil {
+		ctr.vec.Free(mp)
+	}
 }

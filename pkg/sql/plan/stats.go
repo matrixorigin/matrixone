@@ -19,11 +19,11 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -39,10 +40,23 @@ import (
 )
 
 const DefaultBlockMaxRows = 8192
-const BlockNumForceOneCN = 200
+const blockThresholdForTpQuery = 32
+const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
+
+var ncpu = runtime.GOMAXPROCS(0)
+var BlockThresholdForOneCN = ncpu * blockThresholdForTpQuery
+var costThresholdForOneCN = ncpu * costThresholdForTpQuery
+
+type ExecType int
+
+const (
+	ExecTypeTP ExecType = iota
+	ExecTypeAP_ONECN
+	ExecTypeAP_MULTICN
+)
 
 type StatsCache struct {
 	cache map[uint64]*pb.StatsInfo
@@ -187,18 +201,27 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		case types.T_datetime:
 			s.MinValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_char, types.T_varchar, types.T_text:
+		case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_decimal64:
+			s.MinValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_decimal128:
+			val := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
+			s.MinValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
+			val = types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
+			s.MaxValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
 		}
 
 		if info.ShuffleRanges[i] != nil {
 			if s.MinValMap[colName] != s.MaxValMap[colName] &&
-				s.TableCnt > HashMapSizeForShuffle &&
+				s.TableCnt > ShuffleThreshHoldOfNDV*2 &&
 				info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV &&
 				!util.JudgeIsCompositeClusterByColumn(colName) &&
 				colName != catalog.CPrimaryKeyColName {
 				info.ShuffleRanges[i].Eval()
+				info.ShuffleRanges[i].ReleaseUnused()
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
 			}
 			info.ShuffleRanges[i] = nil
@@ -335,12 +358,19 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 	return -1
 }
 
-func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
+func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.StatsInfo) float64 {
 	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	col := extractColRefInFilter(expr)
 	if col == nil {
 		return 0.01
+	}
+	if col.Name == catalog.CPrimaryKeyColName {
+		if s != nil {
+			return 1 / s.TableCnt
+		} else {
+			return 0.0000001
+		}
 	}
 	ndv := getExprNdv(expr, builder)
 	if ndv > 0 {
@@ -350,29 +380,28 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64
 }
 
 func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) (ret float64) {
+	var ok bool
+	var val1, val2 float64
 	switch funcName {
 	case ">", ">=":
-		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			ret = (max - val + 1) / (max - min)
+		if val1, ok = getFloat64Value(typ, vals[0]); ok {
+			ret = (max - val1 + 1) / (max - min)
 		}
 	case "<", "<=":
-		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			ret = (val - min + 1) / (max - min)
+		if val1, ok = getFloat64Value(typ, vals[0]); ok {
+			ret = (val1 - min + 1) / (max - min)
 		}
 	case "between":
-		if lb, ok := getFloat64Value(typ, vals[0]); ok {
-			if ub, ok := getFloat64Value(typ, vals[1]); ok {
-				ret = (ub - lb + 1) / (max - min)
+		if val1, ok = getFloat64Value(typ, vals[0]); ok {
+			if val2, ok = getFloat64Value(typ, vals[1]); ok {
+				ret = (val2 - val1 + 1) / (max - min)
 			}
 		}
 	default:
-		ret = 0.3
+		ret = 0.1
 	}
-	if ret < 0 {
-		ret = 0
-	}
-	if ret > 1 {
-		ret = 1
+	if !ok || ret < 0 || ret > 1 {
+		return 0.1
 	}
 	return ret
 }
@@ -423,9 +452,26 @@ func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
 		if val, valOk := lit.Value.(*plan.Literal_Dateval); valOk {
 			return float64(val.Dateval), true
 		}
+	case types.T_time:
+		if val, valOk := lit.Value.(*plan.Literal_Timeval); valOk {
+			return float64(val.Timeval), true
+		}
 	case types.T_datetime:
 		if val, valOk := lit.Value.(*plan.Literal_Datetimeval); valOk {
 			return float64(val.Datetimeval), true
+		}
+	case types.T_timestamp:
+		if val, valOk := lit.Value.(*plan.Literal_Timestampval); valOk {
+			return float64(val.Timestampval), true
+		}
+	case types.T_decimal64:
+		if val, valOk := lit.Value.(*plan.Literal_Decimal64Val); valOk {
+			return float64(val.Decimal64Val.A), true
+		}
+	case types.T_decimal128:
+		if val, valOk := lit.Value.(*plan.Literal_Decimal128Val); valOk {
+			d := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
+			return float64(types.Decimal128ToFloat64(d, 0)), true
 		}
 	}
 
@@ -443,13 +489,19 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	if s == nil {
 		return 0.1
 	}
+
 	//check strict filter, otherwise can not estimate outcnt by min/max val
-	col, litType, literals, colFnName := extractColRefAndLiteralsInFilter(expr)
+	col, litType, literals, colFnName, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
+	if hasDynamicParam {
+		// assume dynamic parameter always has low selectivity
+		if funcName == "between" {
+			return 0.0001
+		} else {
+			return 0.01
+		}
+	}
 	if col != nil && len(literals) > 0 {
 		typ := types.T(s.DataTypeMap[col.Name])
-		if !(typ.IsInteger() || typ.IsDateRelate()) {
-			return 0.1
-		}
 
 		switch colFnName {
 		case "":
@@ -469,99 +521,126 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	return 0.1
 }
 
-func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
+func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.StatsInfo) float64 {
 	if expr == nil {
-		return 1
+		return 1.0
+	}
+	if expr.Selectivity != 0 {
+		return expr.Selectivity // already calculated
 	}
 
+	ret := 1.0
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
-			return estimateEqualitySelectivity(expr, builder)
+			ret = estimateEqualitySelectivity(expr, builder, s)
 		case "!=", "<>":
-			return 0.9
+			ret = 0.9
 		case ">", "<", ">=", "<=", "between":
-			return estimateNonEqualitySelectivity(expr, funcName, builder)
+			ret = estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
-			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
-			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
-			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (sel1+sel2) > 1 {
-				return sel1 + sel2 - 1
+			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
+			if len(exprImpl.F.Args) == 2 {
+				sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder, s)
+				if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (ret+sel2) > 1 {
+					ret = ret + sel2 - 1
+				} else {
+					ret = andSelectivity(ret, sel2)
+				}
 			} else {
-				return andSelectivity(sel1, sel2)
+				for i := 1; i < len(exprImpl.F.Args); i++ {
+					sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder, s)
+					ret = andSelectivity(ret, sel2)
+				}
 			}
 		case "or":
-			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
-			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
-			return orSelectivity(sel1, sel2)
-		case "not":
-			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
-		case "like":
-			return 0.2
-		case "prefix_eq":
-			ndv := getExprNdv(expr, builder)
-			if ndv > 10 {
-				return 10 / ndv
+			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
+			for i := 1; i < len(exprImpl.F.Args); i++ {
+				sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder, s)
+				ret = orSelectivity(ret, sel2)
 			}
-			return 0.5
-		case "in":
-			card := float64(exprImpl.F.Args[1].GetVec().Len)
+		case "not":
+			ret = 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
+		case "like":
+			ret = 0.2
+		case "prefix_eq":
+			if containsDynamicParam(expr) {
+				if s != nil {
+					return 100 / s.TableCnt
+				} else {
+					return 0.0000001
+				}
+			} else {
+				return 0.0001
+			}
+		case "in", "prefix_in":
+			card := 1.0
+			switch arg1Impl := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_Vec:
+				card = float64(arg1Impl.Vec.Len)
+			case *plan.Expr_List:
+				card = float64(len(arg1Impl.List.List))
+			}
+			if funcName == "prefix_in" {
+				card *= 10
+			}
 			ndv := getExprNdv(expr, builder)
 			if ndv > card {
-				return card / ndv
+				ret = card / ndv
+			} else {
+				ret = 0.5
 			}
-			return 1
-		case "prefix_in":
-			card := float64(exprImpl.F.Args[1].GetVec().Len)
-			ndv := getExprNdv(expr, builder)
-			if ndv > 10*card {
-				return 10 * card / ndv
-			}
-			return 0.5
 		case "prefix_between":
-			return 0.1
+			ret = 0.1
 		case "isnull", "is_null":
-			return getNullSelectivity(exprImpl.F.Args[0], builder, true)
+			ret = getNullSelectivity(exprImpl.F.Args[0], builder, true)
 		case "isnotnull", "is_not_null":
-			return getNullSelectivity(exprImpl.F.Args[0], builder, false)
+			ret = getNullSelectivity(exprImpl.F.Args[0], builder, false)
 		default:
-			return 0.15
+			ret = 0.15
 		}
 	case *plan.Expr_Lit:
-		return 1
+		ret = 1.0
 	}
-	return 1
+	expr.Selectivity = ret
+	return ret
 }
 
 func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	switch expr.Typ.Id {
 	case int32(types.T_decimal64):
-		w += 64
+		w += 8
 	case int32(types.T_decimal128):
-		w += 128
+		w += 16
 	case int32(types.T_float32), int32(types.T_float64):
 		w += 8
-	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text), int32(types.T_json):
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text):
 		w += 4
+	case int32(types.T_json), int32(types.T_datalink):
+		w += 32
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcImpl := exprImpl.F
-		switch funcImpl.Func.GetObjName() {
+		objName := funcImpl.Func.GetObjName()
+		switch objName {
 		case "like":
-			w += 10
+			w += 32
 		case "cast":
-			w += 3
+			w += 8
 		case "in":
-			w += 2
+			w += 3
 		case "<>", "!=":
-			w += 1.2
+			w += 2
 		case "<", "<=":
-			w += 1.1
+			w += 1.5
 		default:
 			w += 1
+		}
+		if strings.HasPrefix(objName, "json_") {
+			w += 512
 		}
 		for _, child := range exprImpl.F.Args {
 			w += estimateFilterWeight(child, 0)
@@ -577,7 +656,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
-		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr.Selectivity)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr)
 		switch GetSortOrder(tableDef, col.ColPos) {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
@@ -602,8 +681,8 @@ func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryB
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil && len(node.FilterList) >= 1 {
 			sort.Slice(node.FilterList, func(i, j int) bool {
-				cost1 := estimateFilterWeight(node.FilterList[i], 0) * estimateExprSelectivity(node.FilterList[i], builder)
-				cost2 := estimateFilterWeight(node.FilterList[j], 0) * estimateExprSelectivity(node.FilterList[j], builder)
+				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
+				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
 				return cost1 <= cost2
 			})
 			sort.Slice(node.BlockFilterList, func(i, j int) bool {
@@ -712,6 +791,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
 		}
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_AGG:
 		if needResetHashMapStats {
@@ -744,6 +824,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = 1
 			node.Stats.Selectivity = 1
 		}
+		node.Stats.BlockNum = int32(childStats.Outcnt/DefaultBlockMaxRows) + 1
 
 	case plan.Node_UNION:
 		if needResetHashMapStats {
@@ -753,11 +834,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_UNION_ALL:
 		node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_INTERSECT:
 		if needResetHashMapStats {
@@ -767,6 +850,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_INTERSECT_ALL:
 		if needResetHashMapStats {
@@ -776,6 +860,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_MINUS:
 		if needResetHashMapStats {
@@ -786,6 +871,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_MINUS_ALL:
 		if needResetHashMapStats {
@@ -796,6 +882,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_VALUE_SCAN:
 		if node.RowsetData != nil {
@@ -824,14 +911,18 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
-			if len(node.BindingTags) > 0 {
-				builder.tag2Table[node.BindingTags[0]] = node.TableDef
+			if builder.isRestore {
+				node.Stats = DefaultHugeStats()
+			} else {
+				if len(node.BindingTags) > 0 {
+					builder.tag2Table[node.BindingTags[0]] = node.TableDef
+				}
+				newStats := calcScanStats(node, builder)
+				if needResetHashMapStats {
+					resetHashMapStats(newStats)
+				}
+				node.Stats = newStats
 			}
-			newStats := calcScanStats(node, builder)
-			if needResetHashMapStats {
-				resetHashMapStats(newStats)
-			}
-			node.Stats = newStats
 		}
 
 	case plan.Node_FILTER:
@@ -842,6 +933,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 		node.Stats.Cost = childStats.Cost
 		node.Stats.Selectivity = 0.05
+		node.Stats.BlockNum = childStats.BlockNum
 
 	case plan.Node_FUNCTION_SCAN:
 		if !computeFunctionScan(node.TableDef.TblFunc.Name, node.TblFuncExprList, node.Stats) {
@@ -849,22 +941,31 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				node.Stats.Outcnt = childStats.Outcnt
 				node.Stats.Cost = childStats.Outcnt
 				node.Stats.Selectivity = childStats.Selectivity
+				node.Stats.BlockNum = childStats.BlockNum
 			}
 		}
 
 	case plan.Node_INSERT:
 		if len(node.Children) > 0 && childStats != nil {
+			node.Stats.BlockNum = childStats.BlockNum
 			node.Stats.Outcnt = childStats.Outcnt
 			node.Stats.Cost = childStats.Outcnt
 			node.Stats.Selectivity = childStats.Selectivity
 			node.Stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
 		}
 
+	case plan.Node_APPLY:
+		node.Stats.Outcnt = leftStats.Outcnt
+		node.Stats.Cost = leftStats.Outcnt
+		node.Stats.Selectivity = leftStats.Selectivity
+		node.Stats.BlockNum = leftStats.BlockNum
+
 	default:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.Outcnt = childStats.Outcnt
 			node.Stats.Cost = childStats.Outcnt
 			node.Stats.Selectivity = childStats.Selectivity
+			node.Stats.BlockNum = childStats.BlockNum
 		}
 	}
 
@@ -873,12 +974,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		limitExpr := DeepCopyExpr(node.Limit)
 		if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
 			if !hasParam(limitExpr) {
-				limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true)
+				limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
 			}
 		}
 		if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				node.Stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				node.Stats.Outcnt = float64(c.U64Val)
 				node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
 			}
 		}
@@ -970,39 +1071,62 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 	return ret, true
 }
 
-func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error {
+func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32, foldInExpr bool) {
 	node := qry.Nodes[nodeId]
 	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
 		for i, e := range node.FilterList {
-			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false)
-			if err != nil {
-				return err
+			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false, foldInExpr)
+			if err == nil && foldedExpr != nil {
+				node.FilterList[i] = foldedExpr
 			}
-			node.FilterList[i] = foldedExpr
 		}
 	}
 	for _, childId := range node.Children {
-		err := foldTableScanFilters(proc, qry, childId)
-		if err != nil {
-			return err
-		}
+		foldTableScanFilters(proc, qry, childId, foldInExpr)
 	}
-	return nil
 }
 
-func recalcStatsByRuntimeFilter(node *plan.Node, joinNode *plan.Node, runtimeFilterSel float64) {
-	if node.NodeType != plan.Node_TABLE_SCAN {
+func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builder *QueryBuilder) {
+	if scanNode.NodeType != plan.Node_TABLE_SCAN {
 		return
 	}
-	node.Stats.Cost *= runtimeFilterSel
-	node.Stats.Outcnt *= runtimeFilterSel
-	if node.Stats.Cost < 1 {
-		node.Stats.Cost = 1
+	if joinNode.NodeType != plan.Node_JOIN && joinNode.NodeType != plan.Node_FUZZY_FILTER {
+		return
 	}
-	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
+
+	if joinNode.JoinType == plan.Node_INDEX || joinNode.NodeType == plan.Node_FUZZY_FILTER {
+		scanNode.Stats.Outcnt = builder.qry.Nodes[joinNode.Children[1]].Stats.Outcnt
+		if scanNode.Stats.Outcnt > scanNode.Stats.TableCnt {
+			scanNode.Stats.Outcnt = scanNode.Stats.TableCnt
+		}
+		newBlockNum := int32(scanNode.Stats.Outcnt/3) + 1
+		if newBlockNum < scanNode.Stats.BlockNum {
+			scanNode.Stats.BlockNum = newBlockNum
+		}
+		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * DefaultBlockMaxRows
+		if scanNode.Stats.Cost > scanNode.Stats.TableCnt {
+			scanNode.Stats.Cost = scanNode.Stats.TableCnt
+		}
+		scanNode.Stats.Selectivity = scanNode.Stats.Outcnt / scanNode.Stats.TableCnt
+		return
+	}
+	runtimeFilterSel := builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
+	scanNode.Stats.Cost *= runtimeFilterSel
+	scanNode.Stats.Outcnt *= runtimeFilterSel
+	if scanNode.Stats.Cost < 1 {
+		scanNode.Stats.Cost = 1
+	}
+	newBlockNum := int32(scanNode.Stats.Outcnt/3) + 1
+	if newBlockNum < scanNode.Stats.BlockNum {
+		scanNode.Stats.BlockNum = newBlockNum
+	}
+	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
+	if builder.isRestore {
+		return DefaultHugeStats()
+	}
 	if builder.skipStats {
 		return DefaultStats()
 	}
@@ -1018,12 +1142,12 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	//	ts = *node.ScanTS
 	//}
 
-	scanSnapshot := node.ScanSnapshot
-	if scanSnapshot == nil {
-		scanSnapshot = &Snapshot{}
+	var scanSnapshot *plan.Snapshot
+	if node.ScanSnapshot != nil {
+		scanSnapshot = node.ScanSnapshot
 	}
 
-	s, err := builder.compCtx.Stats(node.ObjRef, *scanSnapshot)
+	s, err := builder.compCtx.Stats(node.ObjRef, scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}
@@ -1034,7 +1158,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
-		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
+		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder, s)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
 		if builder.optimizerHints != nil {
 			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
@@ -1062,21 +1186,10 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	node.BlockFilterList = blockExprList
-	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder)
+	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
-
-	// if there is a limit, outcnt is limit number
-	if node.Limit != nil {
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				stats.Outcnt = float64(c.I64Val)
-				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
-				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
-			}
-		}
-	}
 
 	return stats
 }
@@ -1101,11 +1214,25 @@ func InternalTable(tableDef *TableDef) bool {
 
 func DefaultHugeStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 10000000
-	stats.Cost = 10000000
-	stats.Outcnt = 10000000
+	stats.TableCnt = 100000000
+	stats.Cost = 100000000
+	stats.Outcnt = 100000000
 	stats.Selectivity = 1
-	stats.BlockNum = 1000
+	stats.BlockNum = 10000
+	stats.Rowsize = 10000
+	stats.HashmapStats = &plan.HashMapStats{}
+	return stats
+}
+
+func DefaultBigStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 10000000
+	stats.Cost = float64(costThresholdForOneCN)
+	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.Selectivity = 1
+	stats.BlockNum = int32(BlockThresholdForOneCN)
+	stats.Rowsize = 1000
+	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
 
@@ -1116,6 +1243,8 @@ func DefaultStats() *plan.Stats {
 	stats.Outcnt = 1000
 	stats.Selectivity = 1
 	stats.BlockNum = 1
+	stats.Rowsize = 100
+	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
 
@@ -1126,17 +1255,18 @@ func DefaultMinimalStats() *plan.Stats {
 	stats.Outcnt = 10
 	stats.Selectivity = 0.0001
 	stats.BlockNum = 1
+	stats.Rowsize = 1
+	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
 }
 
 func resetHashMapStats(stats *plan.Stats) {
 	if stats.HashmapStats == nil {
 		stats.HashmapStats = &plan.HashMapStats{}
-	} else {
-		stats.HashmapStats.HashmapSize = 0
-		stats.HashmapStats.HashOnPK = false
-		stats.HashmapStats.Shuffle = false
 	}
+	stats.HashmapStats.HashmapSize = 1
+	stats.HashmapStats.HashOnPK = false
+	stats.HashmapStats.Shuffle = false
 }
 
 func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive bool) {
@@ -1162,14 +1292,32 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 
 	switch node.JoinType {
 	case plan.Node_INNER, plan.Node_OUTER:
-		if leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
+		factor1 := 1.0
+		factor2 := 1.0
+		if leftChild.NodeType == plan.Node_TABLE_SCAN && rightChild.NodeType == plan.Node_TABLE_SCAN {
+			s1 := builder.getStatsInfoByTableID(leftChild.TableDef.TblId)
+			s2 := builder.getStatsInfoByTableID(rightChild.TableDef.TblId)
+			if s1 != nil && s2 != nil {
+				var t1size, t2size uint64
+				for _, v := range s1.SizeMap {
+					t1size += v
+				}
+				factor1 = math.Pow(float64(t1size), 0.1)
+				for _, v := range s2.SizeMap {
+					t2size += v
+				}
+				factor2 = math.Pow(float64(t2size), 0.1)
+			}
+		}
+		if leftChild.Stats.Outcnt*factor1 < rightChild.Stats.Outcnt*factor2 {
 			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
-
 		}
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
+		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
+			node.BuildOnLeft = false
+		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
 			node.BuildOnLeft = true
 		}
 	}
@@ -1203,6 +1351,9 @@ func compareStats(stats1, stats2 *Stats) bool {
 }
 
 func andSelectivity(s1, s2 float64) float64 {
+	if s1 < s2 {
+		s1, s2 = s2, s1
+	}
 	if s1 > 0.15 || s2 > 0.15 || s1*s2 > 0.1 {
 		return s1 * s2
 	}
@@ -1211,6 +1362,9 @@ func andSelectivity(s1, s2 float64) float64 {
 
 func orSelectivity(s1, s2 float64) float64 {
 	var s float64
+	if s1 < s2 {
+		s1, s2 = s2, s1
+	}
 	if math.Abs(s1-s2) < 0.001 && s1 < 0.2 {
 		s = s1 + s2
 	} else {
@@ -1223,22 +1377,62 @@ func orSelectivity(s1, s2 float64) float64 {
 	}
 }
 
-const blockThresholdForTpQuery = 16
-
-func IsTpQuery(qry *plan.Query) bool {
+func HasShuffleInPlan(qry *plan.Query) bool {
 	for _, node := range qry.GetNodes() {
-		stats := node.Stats
-		if stats == nil || stats.BlockNum > blockThresholdForTpQuery {
-			return false
+		if node.NodeType != plan.Node_TABLE_SCAN && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
-func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
-	for _, rootID := range builder.qry.Steps {
-		ReCalcNodeStats(rootID, builder, true, false, true)
+func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
+	ret := ExecTypeTP
+	for _, node := range qry.GetNodes() {
+		switch node.NodeType {
+		case plan.Node_RECURSIVE_CTE, plan.Node_RECURSIVE_SCAN:
+			ret = ExecTypeAP_ONECN
+		}
+		stats := node.Stats
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
+			if txnHaveDDL {
+				return ExecTypeAP_ONECN
+			} else {
+				return ExecTypeAP_MULTICN
+			}
+		}
+		if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+			ret = ExecTypeAP_ONECN
+		}
+		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
+			ret = ExecTypeAP_ONECN
+		}
 	}
+	return ret
+}
+
+func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
+	switch GetExecType(qry, txnHaveDDL) {
+	case ExecTypeTP:
+		return "TP QURERY PLAN"
+	case ExecTypeAP_ONECN:
+		return "AP QUERY PLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
+	case ExecTypeAP_MULTICN:
+		return "AP QUERY PLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
+	}
+	return "QUERY PLAN"
+}
+
+func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
+	switch GetExecType(qry, txnHaveDDL) {
+	case ExecTypeTP:
+		return "TP QURERY PHYPLAN"
+	case ExecTypeAP_ONECN:
+		return "AP QUERY PHYPLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
+	case ExecTypeAP_MULTICN:
+		return "AP QUERY PHYPLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
+	}
+	return "QUERY PHYPLAN"
 }
 
 func PrintStats(qry *plan.Query) string {
@@ -1285,8 +1479,13 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 	}
 }
 
-func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) float64 {
+func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, expr *plan.Expr) float64 {
+	sel := expr.Selectivity
 	if s == nil {
+		if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
+			//speicial handle for isnull
+			return sel
+		}
 		if sel <= 0.01 {
 			return sel * 100
 		} else {
@@ -1301,24 +1500,60 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) floa
 }
 
 func (builder *QueryBuilder) canSkipStats() bool {
-	//for now ,only skip stats for select count(*) from xx
-	if len(builder.qry.Steps) != 1 || len(builder.qry.Nodes) != 3 {
-		return false
+	if builder.skipStats {
+		// if already set to true by other parts, just skip stats
+		return true
 	}
-	project := builder.qry.Nodes[builder.qry.Steps[0]]
-	if project.NodeType != plan.Node_PROJECT {
-		return false
+	//skip stats for select count(*) from xx
+	if len(builder.qry.Steps) == 1 && len(builder.qry.Nodes) == 3 {
+		project := builder.qry.Nodes[builder.qry.Steps[0]]
+		if project.NodeType != plan.Node_PROJECT {
+			return false
+		}
+		agg := builder.qry.Nodes[project.Children[0]]
+		if agg.NodeType != plan.Node_AGG {
+			return false
+		}
+		if len(agg.AggList) != 1 || len(agg.GroupBy) != 0 {
+			return false
+		}
+		if agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func.ObjName != "starcount" {
+			return false
+		}
+		scan := builder.qry.Nodes[agg.Children[0]]
+		return scan.NodeType == plan.Node_TABLE_SCAN
 	}
-	agg := builder.qry.Nodes[project.Children[0]]
-	if agg.NodeType != plan.Node_AGG {
-		return false
+	//skip stats for select * from xx limit 0, including view
+	if len(builder.qry.Steps) == 1 {
+		project := builder.qry.Nodes[builder.qry.Steps[0]]
+		if project.NodeType != plan.Node_PROJECT {
+			return false
+		}
+		if project.Limit != nil {
+			if cExpr, ok := project.Limit.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					return c.U64Val == 0
+				}
+			}
+		}
 	}
-	if len(agg.AggList) != 1 || len(agg.GroupBy) != 0 {
-		return false
+	return false
+}
+
+func (builder *QueryBuilder) hintQueryType() {
+	if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
+		for _, node := range builder.qry.GetNodes() {
+			switch builder.optimizerHints.execType {
+			case 1:
+				*node.Stats = *DefaultMinimalStats()
+			case 2:
+				*node.Stats = *DefaultBigStats()
+			case 3:
+				*node.Stats = *DefaultHugeStats()
+			default:
+				panic("wrong optimizer hints for execType!")
+			}
+		}
+		return
 	}
-	if agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func.ObjName != "starcount" {
-		return false
-	}
-	scan := builder.qry.Nodes[agg.Children[0]]
-	return scan.NodeType == plan.Node_TABLE_SCAN
 }

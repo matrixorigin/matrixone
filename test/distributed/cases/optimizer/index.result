@@ -1,4 +1,3 @@
-SET GLOBAL experimental_master_index = 1;
 drop database if exists d1;
 create database d1;
 use d1;
@@ -17,7 +16,7 @@ select mo_ctl('dn', 'flush', 'd1.t2');
 mo_ctl(dn, flush, d1.t2)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select Sleep(1);
-sleep(1)
+Sleep(1)
 0
 select * from t1 where c2=1;
 c1    c2    c3
@@ -173,5 +172,63 @@ select * from t1 where b in (1,2) for update;
 a    b
 1    1
 2    2
+create view v1 as select (case when a in (1,2,3) then 'y' else 'n' end) as a from t1;
+select count(a) from v1;
+count(a)
+10000
+drop table t1;
+create table t1(a int unsigned, b int, c varchar, primary key(a, c));
+select a from t1 where a = current_account_id() or (a = 0 and c in ('mo_catalog'));
+a
+drop table if exists t1;
+create table t1(c1 int , c2 int, c3 int, key(c2), unique key id1(c3)) cluster by c1;
+insert into t1 select *,*,* from generate_series(1,100000)g;
+select mo_ctl('dn','flush','d1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from t1 where c2=1;
+c1    c2    c3
+1    1    1
+explain select * from t1 where c3<2000;
+TP QURERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c3 < 2000)
+select count(*) from t1 where c3<2000;
+count(*)
+1999
+drop table if exists t1;
+set session optimizer_hints="execType=3";
 drop database if exists d1;
-SET GLOBAL experimental_master_index = 0;
+create database d1;
+use d1;
+create table t1(c1 int primary key, c2 int, c3 int, key(c2), unique key id1(c3));
+insert into t1 select *,*,* from generate_series(1,100000) g;
+insert into t1 select *,1111,* from generate_series(100001,150000) g;
+update t1 set c1=c1+1000000, c2=1,c3=c3-1000000 where c2=1;
+delete from t1;
+drop table t1;
+drop database d1;
+set session optimizer_hints="execType=2";
+drop database if exists d1;
+create database d1;
+use d1;
+create table t1(c1 int primary key, c2 int, c3 int, key(c2), unique key id1(c3));
+insert into t1 select *,*,* from generate_series(1,100000) g;
+insert into t1 select *,1111,* from generate_series(100001,150000) g;
+update t1 set c1=c1+1000000, c2=1,c3=c3-1000000 where c2=1;
+delete from t1;
+drop table t1;
+drop database d1;
+set session optimizer_hints="execType=1";
+drop database if exists d1;
+create database d1;
+use d1;
+create table t1(c1 int primary key, c2 int, c3 int, key(c2), unique key id1(c3));
+insert into t1 select *,*,* from generate_series(1,100000) g;
+insert into t1 select *,1111,* from generate_series(100001,150000) g;
+update t1 set c1=c1+1000000, c2=1,c3=c3-1000000 where c2=1;
+delete from t1;
+drop table t1;
+drop database d1; 
+set session optimizer_hints="";

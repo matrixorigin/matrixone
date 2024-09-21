@@ -15,11 +15,17 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"math"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/panjf2000/ants/v2"
 
@@ -33,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -49,42 +56,70 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	PREFETCH_THRESHOLD  = 256
-	PREFETCH_ROUNDS     = 24
-	SMALLSCAN_THRESHOLD = 100
-	LARGESCAN_THRESHOLD = 1500
-)
+func GetSmallScanThreshHold() uint64 {
+	if ncpu > 32 {
+		return 100
+	}
+	if ncpu > 16 {
+		return 200
+	}
+	return 400
+}
 
 const (
 	INSERT = iota
 	DELETE
-	COMPACTION_CN
-	UPDATE
-	ALTER
-	INSERT_TXN // Only for CN workspace consumption, not sent to DN
-	DELETE_TXN // Only for CN workspace consumption, not sent to DN
+	ALTER // alter command for TN. Update batches for mo_tables and mo_columns will fall into the category of INSERT and DELETE.
+)
 
-	MERGEOBJECT
+type NoteLevel string
+
+const (
+	DATABASE NoteLevel = "database"
+	TABLE    NoteLevel = "table"
+	COLUMN   NoteLevel = "column"
 )
 
 var (
 	typesNames = map[int]string{
-		INSERT:        "insert",
-		DELETE:        "delete",
-		COMPACTION_CN: "compaction_cn",
-		UPDATE:        "update",
-		ALTER:         "alter",
-		INSERT_TXN:    "insert_txn",
-		DELETE_TXN:    "delete_txn",
+		INSERT: "insert",
+		DELETE: "delete",
+		ALTER:  "alter",
 	}
 )
 
-const (
-	SMALL = iota
-	NORMAL
-	LARGE
-)
+func noteForCreate(id uint64, name string) string {
+	return fmt.Sprintf("create-%v-%v", id, name)
+}
+
+func noteForDrop(id uint64, name string) string {
+	return fmt.Sprintf("drop-%v-%v", id, name)
+}
+
+func noteForAlterDel(tid uint64, name string) string {
+	return fmt.Sprintf("alter-d-%v-%v", tid, name)
+}
+
+func noteForAlterIns(tid uint64, name string) string {
+	return fmt.Sprintf("alter-i-%v-%v", tid, name)
+}
+
+func noteSplitAlter(note string) (bool, int, uint64, string) {
+	if len(note) < 6 || note[:5] != "alter" {
+		return false, 0, 0, ""
+	}
+	typ := INSERT
+	if note[6] == 'd' {
+		typ = DELETE
+	}
+	for i := 8; i < len(note); i++ {
+		if note[i] == '-' {
+			id, _ := strconv.ParseUint(note[8:i], 10, 64)
+			return true, typ, id, note[i+1:]
+		}
+	}
+	panic("bad format of alter note")
+}
 
 const (
 	MO_DATABASE_ID_NAME_IDX       = 1
@@ -100,9 +135,10 @@ const (
 )
 
 const (
-	WorkspaceThreshold uint64 = 1 * mpool.MB
-	GCBatchOfFileCount int    = 1000
-	GCPoolSize         int    = 5
+	WorkspaceThreshold   uint64 = 1 * mpool.MB
+	InsertEntryThreshold        = 5000
+	GCBatchOfFileCount   int    = 1000
+	GCPoolSize           int    = 5
 )
 
 var (
@@ -119,8 +155,23 @@ type IDGenerator interface {
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 }
 
+type EngineOptions func(*Engine)
+
+func WithWorkspaceThreshold(th uint64) EngineOptions {
+	return func(e *Engine) {
+		e.workspaceThreshold = th
+	}
+}
+
+func WithInsertEntryMaxCount(th int) EngineOptions {
+	return func(e *Engine) {
+		e.insertEntryMaxCount = th
+	}
+}
+
 type Engine struct {
 	sync.RWMutex
+	service  string
 	mp       *mpool.MPool
 	fs       fileservice.FileService
 	ls       lockservice.LockService
@@ -130,6 +181,9 @@ type Engine struct {
 	cli      client.TxnClient
 	idGen    IDGenerator
 	tnID     string
+
+	workspaceThreshold  uint64
+	insertEntryMaxCount int
 
 	//latest catalog will be loaded from TN when engine is initialized.
 	catalog *cache.CatalogCache
@@ -159,6 +213,23 @@ type Engine struct {
 	// globalStats is the global stats information, which is updated
 	// from logtail updates.
 	globalStats *GlobalStats
+
+	//for message on multiCN, use uuid to get the messageBoard
+	messageCenter *message.MessageCenter
+
+	timeFixed             bool
+	moCatalogCreatedTime  *vector.Vector
+	moDatabaseCreatedTime *vector.Vector
+	moTablesCreatedTime   *vector.Vector
+	moColumnsCreatedTime  *vector.Vector
+}
+
+func (e *Engine) SetService(svr string) {
+	e.service = svr
+}
+
+func (txn *Transaction) String() string {
+	return fmt.Sprintf("writes %v", txn.writes)
 }
 
 // Transaction represents a transaction
@@ -179,7 +250,10 @@ type Transaction struct {
 	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
-
+	// the total row count for insert entries when txn commits.
+	insertCount int
+	// the approximation of total row count for delete entries when txn commits.
+	approximateInMemDeleteCnt int
 	// the last snapshot write offset
 	snapshotWriteOffset int
 
@@ -192,30 +266,20 @@ type Transaction struct {
 	rowId [6]uint32
 	segId types.Uuid
 	// use to cache opened snapshot tables by current txn.
-	tableCache struct {
-		cachedIndex int
-		tableMap    *sync.Map
-	}
+	tableCache *sync.Map
 	// use to cache databases created by current txn.
 	databaseMap *sync.Map
 	// Used to record deleted databases in transactions.
 	deletedDatabaseMap *sync.Map
-	// use to cache tables created by current txn.
-	createMap *sync.Map
-	/*
-		for deleted table
-		CORNER CASE
-		create table t1(a int);
-		begin;
-		drop table t1; // t1 does not exist
-		select * from t1; // can not access t1
-		create table t2(a int); // new table
-		drop table t2;
-		create table t2(a int,b int); //new table
-		commit;
-		show tables; //no table t1; has table t2(a,b)
-	*/
-	deletedTableMap *sync.Map
+
+	// used to keep updated tables in the current txn
+	tableOps            *tableOpsChain
+	restoreTxnTableFunc []func()
+
+	// record the table dropped in the txn,
+	// for filtering effortless inserts and deletes before committing.
+	// tableid -> statementId
+	tablesInVain map[uint64]int
 
 	//deletes for uncommitted blocks generated by CN writing S3.
 	deletedBlocks *deletedBlocks
@@ -224,9 +288,9 @@ type Transaction struct {
 	// notice that it's guarded by txn.Lock() and has the same lifecycle as transaction.
 	cnBlkId_Pos map[types.Blockid]Pos
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	blockId_tn_delete_metaLoc_batch struct {
+	cn_flushed_s3_tombstone_object_stats_list struct {
 		sync.RWMutex
-		data map[types.Blockid][]*batch.Batch
+		data []objectio.ObjectStats
 	}
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
@@ -239,6 +303,8 @@ type Transaction struct {
 	offsets []int
 	//for RC isolation, the txn's snapshot TS for each statement.
 	timestamps []timestamp.Timestamp
+	//the start time of first statement in a txn.
+	start time.Time
 
 	hasS3Op              atomic.Bool
 	removed              bool
@@ -248,6 +314,8 @@ type Transaction struct {
 	pkCount              int
 
 	adjustCount int
+
+	haveDDL atomic.Bool
 }
 
 type Pos struct {
@@ -275,24 +343,15 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) hasDeletes(blockID *types.Blockid) bool {
+func (b *deletedBlocks) getDeletedRowIDs(dest *[]types.Rowid) {
 	b.RLock()
 	defer b.RUnlock()
-	_, ok := b.offsets[*blockID]
-	return ok
-}
-
-func (b *deletedBlocks) isEmpty() bool {
-	b.RLock()
-	defer b.RUnlock()
-	return len(b.offsets) == 0
-}
-
-func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets *[]int64) {
-	b.RLock()
-	defer b.RUnlock()
-	res := b.offsets[*blockID]
-	*offsets = append(*offsets, res...)
+	for bid, offsets := range b.offsets {
+		for _, offset := range offsets {
+			rowId := types.NewRowid(&bid, uint32(offset))
+			*dest = append(*dest, *rowId)
+		}
+	}
 }
 
 func (b *deletedBlocks) clean() {
@@ -311,8 +370,102 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 	}
 }
 
+func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
+	id := objectio.NewSegmentid()
+	bytes := types.EncodeUuid(id)
+	txn := &Transaction{
+		proc:               proc,
+		engine:             eng,
+		idGen:              eng.idGen,
+		tnStores:           eng.getTNServices(),
+		tableCache:         new(sync.Map),
+		databaseMap:        new(sync.Map),
+		deletedDatabaseMap: new(sync.Map),
+		tableOps:           newTableOps(),
+		tablesInVain:       make(map[uint64]int),
+		rowId: [6]uint32{
+			types.DecodeUint32(bytes[0:4]),
+			types.DecodeUint32(bytes[4:8]),
+			types.DecodeUint32(bytes[8:12]),
+			types.DecodeUint32(bytes[12:16]),
+			0,
+			0,
+		},
+		segId: *id,
+		deletedBlocks: &deletedBlocks{
+			offsets: map[types.Blockid][]int64{},
+		},
+		cnBlkId_Pos:          map[types.Blockid]Pos{},
+		batchSelectList:      make(map[*batch.Batch][]int64),
+		toFreeBatches:        make(map[tableKey][]*batch.Batch),
+		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
+	}
+
+	txn.readOnly.Store(true)
+	// transaction's local segment for raw batch.
+	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
+	return txn
+}
+
 func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int64) {
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
+}
+
+func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
+	txn.cn_flushed_s3_tombstone_object_stats_list.Lock()
+	defer txn.cn_flushed_s3_tombstone_object_stats_list.Unlock()
+
+	txn.cn_flushed_s3_tombstone_object_stats_list.data =
+		append(txn.cn_flushed_s3_tombstone_object_stats_list.data, stats)
+}
+
+func (txn *Transaction) Readonly() bool {
+	return txn.readOnly.Load()
+}
+
+func (txn *Transaction) PPString() string {
+
+	writesString := stringifySlice(txn.writes, func(a any) string {
+		ent := a.(Entry)
+		return ent.String()
+	})
+	buf := &bytes.Buffer{}
+
+	stringifySyncMap := func(m *sync.Map) string {
+		buf.Reset()
+		i := 0
+		buf.WriteRune('{')
+		m.Range(func(key, _ interface{}) bool {
+			if i > 0 {
+				buf.WriteString(",")
+			}
+			k := key.(tableKey)
+			buf.WriteString(k.String())
+			i++
+			return true
+		})
+		buf.WriteRune('}')
+		buf.WriteString(fmt.Sprintf("[%d]", i))
+		return buf.String()
+	}
+
+	return fmt.Sprintf("Transaction{writes: %v, batchSelectList: %v, tableOps:%v, tablesInVain: %v,  tableCache: %v,  toFreeBatches: %v, insertCount: %v, snapshotWriteOffset: %v, rollbackCount: %v, statementID: %v, offsets: %v, timestamps: %v}",
+		writesString,
+		stringifyMap(txn.batchSelectList, func(k, v any) string {
+			return fmt.Sprintf("%p:%v", k, len(v.([]int64)))
+		}),
+		txn.tableOps.string(),
+		stringifyMap(txn.tablesInVain, func(k, v any) string {
+			return fmt.Sprintf("%v:%v", k.(uint64), v.(int))
+		}),
+		stringifySyncMap(txn.tableCache),
+		len(txn.toFreeBatches),
+		txn.insertCount,
+		txn.snapshotWriteOffset,
+		txn.rollbackCount,
+		txn.statementID,
+		stringifySlice(txn.offsets, func(a any) string { return fmt.Sprintf("%v", a) }),
+		stringifySlice(txn.timestamps, func(a any) string { t := a.(timestamp.Timestamp); return t.DebugString() }))
 }
 
 func (txn *Transaction) StartStatement() {
@@ -346,12 +499,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	txn.Lock()
 	defer txn.Unlock()
 	//free batches
-	for key := range txn.toFreeBatches {
-		for _, bat := range txn.toFreeBatches[key] {
-			txn.proc.PutBatch(bat)
-		}
-		delete(txn.toFreeBatches, key)
-	}
+	txn.CleanToFreeBatches()
 	//merge writes for the last statement
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
@@ -377,7 +525,7 @@ func (txn *Transaction) WriteOffset() uint64 {
 func (txn *Transaction) Adjust(writeOffset uint64) error {
 	start := time.Now()
 	seq := txn.op.NextSequence()
-	trace.GetService().AddTxnDurationAction(
+	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
 		txn.op,
 		client.WorkspaceAdjustEvent,
 		seq,
@@ -385,7 +533,7 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 		0,
 		nil)
 	defer func() {
-		trace.GetService().AddTxnDurationAction(
+		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
 			txn.op,
 			client.WorkspaceAdjustEvent,
 			seq,
@@ -399,11 +547,12 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 	if err := txn.adjustUpdateOrderLocked(writeOffset); err != nil {
 		return err
 	}
-	//FIXME:: Do merge the workspace here, is it a must ?
-	//        since it has been called already in IncrStatementID.
-	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
-		return err
-	}
+
+	// DO NOT merge workspace here, branch-out internal sql, like ones reading mo-tables,
+	// have not rights to confirm the status of the workspace.
+	// if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+	// 	return err
+	// }
 
 	txn.traceWorkspaceLocked(false)
 	return nil
@@ -415,7 +564,7 @@ func (txn *Transaction) traceWorkspaceLocked(commit bool) {
 		index = -1
 	}
 	idx := 0
-	trace.GetService().TxnAdjustWorkspace(
+	trace.GetService(txn.proc.GetService()).TxnAdjustWorkspace(
 		txn.op,
 		index,
 		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
@@ -453,16 +602,17 @@ func (txn *Transaction) gcObjs(start int) error {
 	objsToGC := make(map[string]struct{})
 	var objsName []string
 	for i := start; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil {
+		if txn.writes[i].bat == nil ||
+			txn.writes[i].bat.RowCount() == 0 {
 			continue
 		}
 		//1. Remove blocks from txn.cnBlkId_Pos lazily till txn commits or rollback.
 		//2. Remove the segments generated by this statement lazily till txn commits or rollback.
 		//3. Now, GC the s3 objects(data objects and tombstone objects) asynchronously.
 		if txn.writes[i].fileName != "" {
-			vs := vector.MustStrCol(txn.writes[i].bat.GetVector(0))
-			for _, s := range vs {
-				loc, _ := blockio.EncodeLocationFromString(s)
+			vs, area := vector.MustVarlenaRawData(txn.writes[i].bat.GetVector(0))
+			for i := range vs {
+				loc, _ := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 				if _, ok := objsToGC[loc.Name().String()]; !ok {
 					objsToGC[loc.Name().String()] = struct{}{}
 					objsName = append(objsName, loc.Name().String())
@@ -518,7 +668,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.rollbackCount++
 	if txn.statementID > 0 {
 		txn.clearTableCache()
-		txn.rollbackCreateTableLocked()
+		txn.rollbackTableOpLocked()
 
 		txn.statementID--
 		end := txn.offsets[txn.statementID]
@@ -539,6 +689,13 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
 	}
+
+	txn.CleanToFreeBatches()
+
+	for i := len(txn.restoreTxnTableFunc) - 1; i >= 0; i-- {
+		txn.restoreTxnTableFunc[i]()
+	}
+	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 	//rollback the deleted blocks for the current statement.
 	txn.deletedBlocks.clean()
 
@@ -547,8 +704,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
 func (txn *Transaction) resetSnapshot() error {
-	txn.tableCache.tableMap.Range(func(key, value interface{}) bool {
-		value.(*txnTable).resetSnapshot()
+	txn.tableCache.Range(func(key, value interface{}) bool {
+		value.(*txnTableDelegate).origin.resetSnapshot()
 		return true
 	})
 	return nil
@@ -557,6 +714,10 @@ func (txn *Transaction) resetSnapshot() error {
 func (txn *Transaction) IncrSQLCount() {
 	n := txn.sqlCount.Add(1)
 	v2.TxnLifeCycleStatementsTotalHistogram.Observe(float64(n))
+}
+
+func (txn *Transaction) GetProc() *process.Process {
+	return txn.proc
 }
 
 func (txn *Transaction) GetSQLCount() uint64 {
@@ -569,14 +730,14 @@ func (txn *Transaction) GetSQLCount() uint64 {
 // 2. not first sql
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error {
 	needResetSnapshot := false
-	newTimes := txn.proc.TxnClient.GetSyncLatestCommitTSTimes()
+	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
 	if newTimes > txn.syncCommittedTSCount {
 		txn.syncCommittedTSCount = newTimes
 		needResetSnapshot = true
 	}
 	if !commit && txn.op.Txn().IsRCIsolation() &&
 		(txn.GetSQLCount() > 0 || needResetSnapshot) {
-		trace.GetService().TxnUpdateSnapshot(
+		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op,
 			0,
 			"before execute")
@@ -588,41 +749,49 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		txn.resetSnapshot()
 	}
 	//Transfer row ids for deletes in RC isolation
-	if !commit {
-		return txn.transferDeletesLocked()
-	}
-	return nil
+	return txn.transferDeletesLocked(ctx, commit)
 }
 
 // Entry represents a delete/insert
 type Entry struct {
-	typ int
-	//the tenant owns the tableId and databaseId
-	accountId    uint32
-	tableId      uint64
-	databaseId   uint64
+	typ          int
+	note         string // debug friendly note
 	tableName    string
 	databaseName string
+
+	//the tenant owns the tableId and databaseId
+	accountId  uint32
+	tableId    uint64
+	databaseId uint64
+
 	// blockName for s3 file
 	fileName string
 	//tuples would be applied to the table which belongs to the tenant(accountId)
 	bat       *batch.Batch
 	tnStore   DNStore
 	pkChkByTN int8
-	/*
-		if truncate is true,it denotes the Entry with typ DELETE
-		on mo_tables is generated by the Truncate operation.
-	*/
-	truncate bool
 }
 
-// isGeneratedByTruncate denotes the entry is yielded by the truncate operation.
-func (e *Entry) isGeneratedByTruncate() bool {
-	return e.typ == DELETE &&
-		e.databaseId == catalog.MO_CATALOG_ID &&
-		e.tableId == catalog.MO_TABLES_ID &&
-		e.truncate
+func (e *Entry) String() string {
+	batinfo := "nil"
+	if e.bat != nil {
+		batinfo = fmt.Sprintf("{rows:%v, cols:%v, ptr:%p}", e.bat.RowCount(), len(e.bat.Vecs), e.bat)
+	}
+	return fmt.Sprintf("Entry{type:%v, note:%v, table:%v, db:%v, account:%v, tableId:%v, dbId:%v, bat:%v, fileName:%v}",
+		typesNames[e.typ], e.note, e.tableName, e.databaseName, e.accountId, e.tableId, e.databaseId, batinfo, e.fileName)
 }
+
+func (e *Entry) DatabaseId() uint64 {
+	return e.databaseId
+}
+
+func (e *Entry) TableId() uint64 {
+	return e.tableId
+}
+
+func (e *Entry) Type() int         { return e.typ }
+func (e *Entry) FileName() string  { return e.fileName }
+func (e *Entry) Bat() *batch.Batch { return e.bat }
 
 // isCatalog denotes the entry is apply the tree tables
 func (e *Entry) isCatalog() bool {
@@ -639,8 +808,6 @@ type txnDatabase struct {
 	databaseCreateSql string
 	//txn               *Transaction
 	op client.TxnOperator
-
-	rowId types.Rowid
 }
 
 type tableKey struct {
@@ -650,9 +817,24 @@ type tableKey struct {
 	name       string
 }
 
+func (k tableKey) String() string {
+	return fmt.Sprintf("%v-%v-%v-%v", k.accountId, k.databaseId, k.dbName, k.name)
+}
+
+type tableOp struct {
+	kind        int
+	tableId     uint64
+	statementId int
+	payload     *txnTable
+}
+
+type tableOpsChain struct {
+	sync.RWMutex
+	names map[tableKey][]tableOp
+}
+
 type databaseKey struct {
 	accountId uint32
-	id        uint64
 	name      string
 }
 
@@ -666,14 +848,11 @@ type txnTable struct {
 	tableName string
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
-	defs       []engine.TableDef
-	tableDef   *plan.TableDef
-	seqnums    []uint16
-	typs       []types.Type
-	_partState atomic.Pointer[logtailreplay.PartitionState]
-	// specify whether the logtail is updated. once it is updated, it will not be updated again
-	logtailUpdated atomic.Bool
-
+	defs          []engine.TableDef
+	tableDef      *plan.TableDef
+	seqnums       []uint16
+	typs          []types.Type
+	_partState    atomic.Pointer[logtailreplay.PartitionState]
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key
 	clusterByIdx  int // -1 means no clusterBy key
@@ -684,123 +863,58 @@ type txnTable struct {
 	relKind       string
 	createSql     string
 	constraint    []byte
+	extraInfo     *api.SchemaExtra
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
-
-	// this should be the statement id
-	// but seems that we're not maintaining it at the moment
-	// localTS timestamp.Timestamp
-	//rowid in mo_tables
-	rowid types.Rowid
-	//rowids in mo_columns
-	rowids []types.Rowid
-	//the old table id before truncate
-	oldTableId uint64
 
 	// process for statement
 	//proc *process.Process
 	proc atomic.Pointer[process.Process]
 
-	createByStatementID int
-}
-
-type column struct {
-	accountId  uint32
-	tableId    uint64
-	databaseId uint64
-	// column name
-	name            string
-	tableName       string
-	databaseName    string
-	typ             []byte
-	typLen          int32
-	num             int32
-	comment         string
-	notNull         int8
-	hasDef          int8
-	defaultExpr     []byte
-	constraintType  string
-	isClusterBy     int8
-	isHidden        int8
-	isAutoIncrement int8
-	hasUpdate       int8
-	updateExpr      []byte
-	seqnum          uint16
-	enumValues      string
+	enableLogFilterExpr atomic.Bool
 }
 
 type withFilterMixin struct {
 	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
-	proc     *process.Process
 	tableDef *plan.TableDef
+	name     string
 
 	// columns used for reading
 	columns struct {
 		seqnums  []uint16
 		colTypes []types.Type
-		// colNulls []bool
 
-		compPKPositions []uint16 // composite primary key pos in the columns
-
-		pkPos int // -1 means no primary key in columns
-
+		pkPos                    int // -1 means no primary key in columns
 		indexOfFirstSortedColumn int
 	}
 
 	filterState struct {
-		evaluated bool
 		//point select for primary key
 		expr     *plan.Expr
-		filter   blockio.ReadFilter
+		filter   objectio.BlockReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
-		hasNull  bool
 	}
-
-	sels []int32
 }
 
+// FIXME: no pointer here
 type blockSortHelper struct {
 	blk *objectio.BlockInfo
 	zm  index.ZM
 }
 
-type blockReader struct {
+type reader struct {
 	withFilterMixin
 
-	// used for prefetch
-	dontPrefetch bool
-	infos        [][]*objectio.BlockInfo
-	steps        []int
-	currentStep  int
+	isTombstone bool
+	source      engine.DataSource
 
-	scanType int
-	// block list to scan
-	blks []*objectio.BlockInfo
-	//buffer for block's deletes
-	buffer []int64
-
-	// for ordered scan
-	desc     bool
-	blockZMS []index.ZM
-	OrderBy  []*plan.OrderBySpec
-	sorted   bool // blks need to be sorted by zonemap
-	filterZM objectio.ZoneMap
-}
-
-type blockMergeReader struct {
-	*blockReader
-	table *txnTable
-
-	pkVal []byte
-
-	//for perfetch deletes
-	loaded     bool
-	pkidx      int
-	deletaLocs map[string][]objectio.Location
+	memFilter           MemPKFilter
+	readBlockCnt        uint64
+	smallScanThreshHold uint64
 }
 
 type mergeReader struct {

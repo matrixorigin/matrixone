@@ -53,7 +53,7 @@ func TestParseUuid(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			uuid, err := ParseUuid(c.str)
-			t.Log(uuid.ToString())
+			t.Log(uuid.String())
 			if err != nil {
 				t.Error(err)
 			}

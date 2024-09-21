@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type Merger interface {
@@ -39,17 +38,57 @@ type releasableBatch struct {
 	releaseF func()
 }
 
-type merger[T any] struct {
+type fixedDataFetcher[T any] struct {
+	mustColFunc func(*vector.Vector) []T
+	cols        [][]T
+}
+
+func (f *fixedDataFetcher[T]) mustToCol(v *vector.Vector, i uint32) {
+	f.cols[i] = f.mustColFunc(v)
+}
+
+func (f *fixedDataFetcher[T]) length(i uint32) int {
+	return len(f.cols[i])
+}
+
+func (f *fixedDataFetcher[T]) at(i, j uint32) T {
+	return f.cols[i][j]
+}
+
+type varlenaDataFetcher struct {
+	cols []struct {
+		data []types.Varlena
+		area []byte
+	}
+}
+
+func (f *varlenaDataFetcher) mustToCol(v *vector.Vector, i uint32) {
+	data, area := vector.MustVarlenaRawData(v)
+	f.cols[i] = struct {
+		data []types.Varlena
+		area []byte
+	}{data: data, area: area}
+}
+
+func (f *varlenaDataFetcher) at(i, j uint32) string {
+	return f.cols[i].data[j].UnsafeGetString(f.cols[i].area)
+}
+
+func (f *varlenaDataFetcher) length(i uint32) int {
+	return len(f.cols[i].data)
+}
+
+type merger[T comparable] struct {
 	heap *heapSlice[T]
 
-	cols    [][]T
+	df      dataFetcher[T]
 	deletes []*nulls.Nulls
 	nulls   []*nulls.Nulls
 
 	buffer *batch.Batch
 
 	bats   []releasableBatch
-	rowIdx []int64
+	rowIdx []uint32
 
 	objCnt           int
 	objBlkCnts       []int
@@ -62,46 +101,44 @@ type merger[T any] struct {
 
 	sortKeyIdx int
 
-	mustColFunc func(*vector.Vector) []T
-
-	totalRowCnt   uint32
-	totalSize     uint32
-	rowPerBlk     uint32
-	blkPerObj     uint16
-	rowSize       uint32
-	targetObjSize uint32
+	isTombstone bool
+	rowPerBlk   uint32
+	stats       mergeStats
 }
 
-func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
+func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, isTombstone bool, df dataFetcher[T]) Merger {
 	size := host.GetObjectCnt()
+	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	m := &merger[T]{
-		host:       host,
-		objCnt:     size,
+		host:   host,
+		objCnt: size,
+
+		df:         df,
 		bats:       make([]releasableBatch, size),
-		rowIdx:     make([]int64, size),
-		cols:       make([][]T, size),
+		rowIdx:     make([]uint32, size),
 		deletes:    make([]*nulls.Nulls, size),
 		nulls:      make([]*nulls.Nulls, size),
-		heap:       newHeapSlice[T](size, lessFunc),
+		heap:       newHeapSlice(size, lessFunc),
 		sortKeyIdx: sortKeyPos,
 
-		accObjBlkCnts:    host.GetAccBlkCnts(),
-		objBlkCnts:       host.GetBlkCnts(),
-		rowPerBlk:        host.GetBlockMaxRows(),
-		blkPerObj:        host.GetObjectMaxBlocks(),
-		targetObjSize:    host.GetTargetObjSize(),
-		totalSize:        host.GetTotalSize(),
-		totalRowCnt:      host.GetTotalRowCnt(),
+		accObjBlkCnts: host.GetAccBlkCnts(),
+		objBlkCnts:    host.GetBlkCnts(),
+		rowPerBlk:     host.GetBlockMaxRows(),
+		stats: mergeStats{
+			totalRowCnt:   host.GetTotalRowCnt(),
+			rowSize:       uint32(rowSizeU64),
+			targetObjSize: host.GetTargetObjSize(),
+			blkPerObj:     host.GetObjectMaxBlocks(),
+		},
 		loadedObjBlkCnts: make([]int, size),
-		mustColFunc:      mustColFunc,
+		isTombstone:      isTombstone,
 	}
-	m.rowSize = m.totalSize / m.totalRowCnt
 	totalBlkCnt := 0
 	for _, cnt := range m.objBlkCnts {
 		totalBlkCnt += cnt
 	}
 	if host.DoTransfer() {
-		initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
+		host.InitTransferMaps(totalBlkCnt)
 	}
 
 	return m
@@ -110,26 +147,34 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 func (m *merger[T]) merge(ctx context.Context) error {
 	for i := 0; i < m.objCnt; i++ {
 		if ok, err := m.loadBlk(ctx, uint32(i)); !ok {
+			if err == nil {
+				continue
+			}
 			return errors.Join(moerr.NewInternalError(ctx, "failed to load first blk"), err)
 		}
 
 		heapPush(m.heap, heapElem[T]{
-			data:   m.cols[i][m.rowIdx[i]],
-			isNull: m.nulls[i].Contains(uint64(m.rowIdx[i])),
+			data:   m.df.at(uint32(i), 0),
+			isNull: m.nulls[i].Contains(0),
 			src:    uint32(i),
 		})
 	}
+	defer m.release()
 
 	var releaseF func()
-	m.buffer, releaseF = getSimilarBatch(m.bats[0].bat, int(m.rowPerBlk), m.host)
+	for i := 0; i < m.objCnt; i++ {
+		if m.bats[i].bat != nil {
+			m.buffer, releaseF = getSimilarBatch(m.bats[i].bat, int(m.rowPerBlk), m.host)
+			break
+		}
+	}
+	// all batches are empty.
+	if m.buffer == nil {
+		return nil
+	}
 	defer releaseF()
 
-	objCnt := 0
-	objBlkCnt := 0
-	bufferRowCnt := 0
-	objRowCnt := uint32(0)
-	mergedRowCnt := uint32(0)
-	commitEntry := m.host.GetCommitEntry()
+	transferMaps := m.host.GetTransferMaps()
 	for m.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
@@ -146,48 +191,55 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		}
 		rowIdx := m.rowIdx[objIdx]
 		for i := range m.buffer.Vecs {
-			err := m.buffer.Vecs[i].UnionOne(m.bats[objIdx].bat.Vecs[i], rowIdx, m.host.GetMPool())
+			err := m.buffer.Vecs[i].UnionOne(m.bats[objIdx].bat.Vecs[i], int64(rowIdx), m.host.GetMPool())
 			if err != nil {
 				return err
 			}
 		}
 
 		if m.host.DoTransfer() {
-			commitEntry.Booking.Mappings[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1].M[int32(rowIdx)] = api.TransDestPos{
-				ObjIdx: int32(objCnt),
-				BlkIdx: int32(uint32(objBlkCnt)),
-				RowIdx: int32(bufferRowCnt),
+			transferMaps[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1][rowIdx] = api.TransferDestPos{
+				ObjIdx: uint8(m.stats.objCnt),
+				BlkIdx: uint16(m.stats.objBlkCnt),
+				RowIdx: uint32(m.stats.blkRowCnt),
 			}
 		}
 
-		bufferRowCnt++
-		objRowCnt++
-		mergedRowCnt++
+		m.stats.blkRowCnt++
+		m.stats.objRowCnt++
+		m.stats.mergedRowCnt++
 		// write new block
-		if bufferRowCnt == int(m.rowPerBlk) {
-			bufferRowCnt = 0
-			objBlkCnt++
+		if m.stats.blkRowCnt == int(m.rowPerBlk) {
+			m.stats.blkRowCnt = 0
+			m.stats.objBlkCnt++
 
 			if m.writer == nil {
 				m.writer = m.host.PrepareNewWriter()
 			}
-
-			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
-				return err
+			if m.isTombstone {
+				m.writer.SetDataType(objectio.SchemaTombstone)
+				if _, err := m.writer.WriteBatch(m.buffer); err != nil {
+					return err
+				}
+			} else {
+				m.writer.SetDataType(objectio.SchemaData)
+				if _, err := m.writer.WriteBatch(m.buffer); err != nil {
+					return err
+				}
 			}
 			// force clean
 			m.buffer.CleanOnlyData()
 
 			// write new object
-			if m.needNewObject(objBlkCnt, objRowCnt, mergedRowCnt) {
+			if m.stats.needNewObject() {
 				// write object and reset writer
 				if err := m.syncObject(ctx); err != nil {
 					return err
 				}
 				// reset writer after sync
-				objBlkCnt = 0
-				objRowCnt = 0
-				objCnt++
+				m.stats.objBlkCnt = 0
+				m.stats.objRowCnt = 0
+				m.stats.objCnt++
 			}
 		}
 
@@ -197,37 +249,31 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	}
 
 	// write remain data
-	if bufferRowCnt > 0 {
-		objBlkCnt++
+	if m.stats.blkRowCnt > 0 {
+		m.stats.objBlkCnt++
 
 		if m.writer == nil {
 			m.writer = m.host.PrepareNewWriter()
 		}
-		if _, err := m.writer.WriteBatch(m.buffer); err != nil {
-			return err
+		if m.isTombstone {
+			m.writer.SetDataType(objectio.SchemaTombstone)
+			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
+				return err
+			}
+		} else {
+
+			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
+				return err
+			}
 		}
 		m.buffer.CleanOnlyData()
 	}
-	if objBlkCnt > 0 {
+	if m.stats.objBlkCnt > 0 {
 		if err := m.syncObject(ctx); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (m *merger[T]) needNewObject(objBlkCnt int, objRowCnt, mergedRowCnt uint32) bool {
-	if m.targetObjSize == 0 {
-		if m.blkPerObj == 0 {
-			return objBlkCnt == int(options.DefaultBlocksPerObject)
-		}
-		return objBlkCnt == int(m.blkPerObj)
-	}
-
-	if objRowCnt*m.rowSize > m.targetObjSize {
-		return (m.totalRowCnt-mergedRowCnt)*m.rowSize > m.targetObjSize
-	}
-	return false
 }
 
 func (m *merger[T]) nextPos() uint32 {
@@ -238,6 +284,7 @@ func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
 	nextBatch, del, releaseF, err := m.host.LoadNextBatch(ctx, objIdx)
 	if m.bats[objIdx].bat != nil {
 		m.bats[objIdx].releaseF()
+		m.bats[objIdx].releaseF = nil
 	}
 	if err != nil {
 		if errors.Is(err, ErrNoMoreBlocks) {
@@ -245,12 +292,22 @@ func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
 		}
 		return false, err
 	}
+	for nextBatch.RowCount() == 0 {
+		releaseF()
+		nextBatch, del, releaseF, err = m.host.LoadNextBatch(ctx, objIdx)
+		if err != nil {
+			if errors.Is(err, ErrNoMoreBlocks) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
 
 	m.bats[objIdx] = releasableBatch{bat: nextBatch, releaseF: releaseF}
 	m.loadedObjBlkCnts[objIdx]++
 
 	vec := nextBatch.GetVector(int32(m.sortKeyIdx))
-	m.cols[objIdx] = m.mustColFunc(vec)
+	m.df.mustToCol(vec, objIdx)
 	m.nulls[objIdx] = vec.GetNulls()
 	m.deletes[objIdx] = del
 	m.rowIdx[objIdx] = 0
@@ -259,14 +316,14 @@ func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
 
 func (m *merger[T]) pushNewElem(ctx context.Context, objIdx uint32) error {
 	m.rowIdx[objIdx]++
-	if m.rowIdx[objIdx] >= int64(len(m.cols[objIdx])) {
+	if m.rowIdx[objIdx] >= uint32(m.df.length(objIdx)) {
 		if ok, err := m.loadBlk(ctx, objIdx); !ok {
 			return err
 		}
 	}
 	nextRow := m.rowIdx[objIdx]
 	heapPush(m.heap, heapElem[T]{
-		data:   m.cols[objIdx][nextRow],
+		data:   m.df.at(objIdx, nextRow),
 		isNull: m.nulls[objIdx].Contains(uint64(nextRow)),
 		src:    objIdx,
 	})
@@ -277,68 +334,173 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 	if _, _, err := m.writer.Sync(ctx); err != nil {
 		return err
 	}
-	cobjstats := m.writer.GetObjectStats()[:objectio.SchemaTombstone]
+	cobjstats := m.writer.GetObjectStats()
 	commitEntry := m.host.GetCommitEntry()
-	for _, cobj := range cobjstats {
-		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
-	}
+	commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobjstats.Clone().Marshal())
 	m.writer = nil
 	return nil
 }
 
-func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) error {
+func (m *merger[T]) release() {
+	for _, bat := range m.bats {
+		if bat.releaseF != nil {
+			bat.releaseF()
+		}
+	}
+}
+
+func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int, isTombstone bool) error {
 	var merger Merger
 	typ := mergeHost.GetSortKeyType()
+	size := mergeHost.GetObjectCnt()
 	if typ.IsVarlen() {
-		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.MustStrCol)
+		df := &varlenaDataFetcher{
+			cols: make([]struct {
+				data []types.Varlena
+				area []byte
+			}, size),
+		}
+		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, isTombstone, df)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:
-			merger = newMerger(mergeHost, sort.BoolLess, sortKeyPos, vector.MustFixedCol[bool])
+			df := &fixedDataFetcher[bool]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[bool],
+				cols:        make([][]bool, size),
+			}
+			merger = newMerger(mergeHost, sort.BoolLess, sortKeyPos, isTombstone, df)
 		case types.T_bit:
-			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
+			df := &fixedDataFetcher[uint64]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[uint64],
+				cols:        make([][]uint64, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, isTombstone, df)
 		case types.T_int8:
-			merger = newMerger(mergeHost, sort.GenericLess[int8], sortKeyPos, vector.MustFixedCol[int8])
+			df := &fixedDataFetcher[int8]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[int8],
+				cols:        make([][]int8, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[int8], sortKeyPos, isTombstone, df)
 		case types.T_int16:
-			merger = newMerger(mergeHost, sort.GenericLess[int16], sortKeyPos, vector.MustFixedCol[int16])
+			df := &fixedDataFetcher[int16]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[int16],
+				cols:        make([][]int16, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[int16], sortKeyPos, isTombstone, df)
 		case types.T_int32:
-			merger = newMerger(mergeHost, sort.GenericLess[int32], sortKeyPos, vector.MustFixedCol[int32])
+			df := &fixedDataFetcher[int32]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[int32],
+				cols:        make([][]int32, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[int32], sortKeyPos, isTombstone, df)
 		case types.T_int64:
-			merger = newMerger(mergeHost, sort.GenericLess[int64], sortKeyPos, vector.MustFixedCol[int64])
+			df := &fixedDataFetcher[int64]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[int64],
+				cols:        make([][]int64, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[int64], sortKeyPos, isTombstone, df)
 		case types.T_float32:
-			merger = newMerger(mergeHost, sort.GenericLess[float32], sortKeyPos, vector.MustFixedCol[float32])
+			df := &fixedDataFetcher[float32]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[float32],
+				cols:        make([][]float32, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[float32], sortKeyPos, isTombstone, df)
 		case types.T_float64:
-			merger = newMerger(mergeHost, sort.GenericLess[float64], sortKeyPos, vector.MustFixedCol[float64])
+			df := &fixedDataFetcher[float64]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[float64],
+				cols:        make([][]float64, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[float64], sortKeyPos, isTombstone, df)
 		case types.T_uint8:
-			merger = newMerger(mergeHost, sort.GenericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8])
+			df := &fixedDataFetcher[uint8]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[uint8],
+				cols:        make([][]uint8, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[uint8], sortKeyPos, isTombstone, df)
 		case types.T_uint16:
-			merger = newMerger(mergeHost, sort.GenericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16])
+			df := &fixedDataFetcher[uint16]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[uint16],
+				cols:        make([][]uint16, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[uint16], sortKeyPos, isTombstone, df)
 		case types.T_uint32:
-			merger = newMerger(mergeHost, sort.GenericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32])
+			df := &fixedDataFetcher[uint32]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[uint32],
+				cols:        make([][]uint32, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[uint32], sortKeyPos, isTombstone, df)
 		case types.T_uint64:
-			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
+			df := &fixedDataFetcher[uint64]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[uint64],
+				cols:        make([][]uint64, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, isTombstone, df)
 		case types.T_date:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date])
+			df := &fixedDataFetcher[types.Date]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Date],
+				cols:        make([][]types.Date, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[types.Date], sortKeyPos, isTombstone, df)
 		case types.T_timestamp:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp])
+			df := &fixedDataFetcher[types.Timestamp]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Timestamp],
+				cols:        make([][]types.Timestamp, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[types.Timestamp], sortKeyPos, isTombstone, df)
 		case types.T_datetime:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime])
+			df := &fixedDataFetcher[types.Datetime]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Datetime],
+				cols:        make([][]types.Datetime, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[types.Datetime], sortKeyPos, isTombstone, df)
 		case types.T_time:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time])
+			df := &fixedDataFetcher[types.Time]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Time],
+				cols:        make([][]types.Time, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[types.Time], sortKeyPos, isTombstone, df)
 		case types.T_enum:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum])
+			df := &fixedDataFetcher[types.Enum]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Enum],
+				cols:        make([][]types.Enum, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[types.Enum], sortKeyPos, isTombstone, df)
 		case types.T_decimal64:
-			merger = newMerger(mergeHost, sort.Decimal64Less, sortKeyPos, vector.MustFixedCol[types.Decimal64])
+			df := &fixedDataFetcher[types.Decimal64]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Decimal64],
+				cols:        make([][]types.Decimal64, size),
+			}
+			merger = newMerger(mergeHost, sort.Decimal64Less, sortKeyPos, isTombstone, df)
 		case types.T_decimal128:
-			merger = newMerger(mergeHost, sort.Decimal128Less, sortKeyPos, vector.MustFixedCol[types.Decimal128])
+			df := &fixedDataFetcher[types.Decimal128]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Decimal128],
+				cols:        make([][]types.Decimal128, size),
+			}
+			merger = newMerger(mergeHost, sort.Decimal128Less, sortKeyPos, isTombstone, df)
 		case types.T_uuid:
-			merger = newMerger(mergeHost, sort.UuidLess, sortKeyPos, vector.MustFixedCol[types.Uuid])
+			df := &fixedDataFetcher[types.Uuid]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Uuid],
+				cols:        make([][]types.Uuid, size),
+			}
+			merger = newMerger(mergeHost, sort.UuidLess, sortKeyPos, isTombstone, df)
 		case types.T_TS:
-			merger = newMerger(mergeHost, sort.TsLess, sortKeyPos, vector.MustFixedCol[types.TS])
+			df := &fixedDataFetcher[types.TS]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.TS],
+				cols:        make([][]types.TS, size),
+			}
+			merger = newMerger(mergeHost, sort.TsLess, sortKeyPos, isTombstone, df)
 		case types.T_Rowid:
-			merger = newMerger(mergeHost, sort.RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid])
+			df := &fixedDataFetcher[types.Rowid]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Rowid],
+				cols:        make([][]types.Rowid, size),
+			}
+			merger = newMerger(mergeHost, sort.RowidLess, sortKeyPos, isTombstone, df)
 		case types.T_Blockid:
-			merger = newMerger(mergeHost, sort.BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid])
+			df := &fixedDataFetcher[types.Blockid]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Blockid],
+				cols:        make([][]types.Blockid, size),
+			}
+			merger = newMerger(mergeHost, sort.BlockidLess, sortKeyPos, isTombstone, df)
 		default:
 			return moerr.NewErrUnsupportedDataType(ctx, typ)
 		}

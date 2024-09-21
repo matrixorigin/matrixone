@@ -113,12 +113,9 @@ aa""""aa    bb""""bb    cc""""cc    dd""""dd
 aa"""aa    bb""bb    cc""cc    dd""dd
 delete from t2;
 load data infile '$resources/load_data/char_varchar_3.csv' into table t2 fields terminated by ',';
+invalid input: the data of row 2 contained is not equal to input columns
 select * from t2;
 col1    col2    col3    col4
-aa",aa    bb",bb    cc",cc    dd",dd
-aa"    aa"    bb"    bb"
-aa"",aa    bb"",bb    cc"",cc    dd"",dd
-aa""    aa"    bb"",bb    cc"",cc
 delete from t2;
 load data infile '$resources/load_data/char_varchar_4.csv' into table t2 fields terminated by'|';
 select * from t2;
@@ -319,48 +316,20 @@ col1    col2    col3
 2    2    2
 3    3    3
 4    4    4
-4    5    5
+5    5    5
 drop table t7;
 create table t8(a int, b int);
 load data infile '$resources/load_data/auto_increment_20.csv' into table t7 fields terminated by ',' set col2=nullif(col2, '1');
 no such table load_data.t7
 create table t9(a varchar, b varchar, c varchar, d varchar);
 load data infile {"filepath"="$resources/load_data/parallel.txt.gz", "compression"="gzip"} into table t9 FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+invalid input: the data of row 1 contained is not equal to input columns
 select * from t9;
 a    b    c    d
-1    155190    7706    1
-1    67310    7311    2
-1    63700    3701    3
-1    2132    4633    4
-1    24027    1534    5
-1    15635    638    6
-2    106170    1191    1
-3    4297    1798    1
-3    19036    6540    2
-3    128449    3474    3
 load data infile {"filepath"="$resources/load_data/parallel.txt.gz", "compression"="gzip"} into table t9 FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n' parallel 'true';
+invalid input: the data of row 1 contained is not equal to input columns
 select * from t9;
 a    b    c    d
-1    155190    7706    1
-1    67310    7311    2
-1    63700    3701    3
-1    2132    4633    4
-1    24027    1534    5
-1    15635    638    6
-2    106170    1191    1
-3    4297    1798    1
-3    19036    6540    2
-3    128449    3474    3
-1    155190    7706    1
-1    67310    7311    2
-1    63700    3701    3
-1    2132    4633    4
-1    24027    1534    5
-1    15635    638    6
-2    106170    1191    1
-3    4297    1798    1
-3    19036    6540    2
-3    128449    3474    3
 create account if not exists `abc2` admin_name 'user' identified by '111';
 create database if not exists ssb;
 use ssb;
@@ -671,15 +640,17 @@ Steve    'wr43vew43g43
 yyWGfve    ""vdvrervevre
 drop table test05;
 drop table if exists test06;
-
 create table test06(col1 varchar(20), col2 varchar(20));
-
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
-
+invalid input: the data of row 1 contained is not equal to input columns
 select * from test06;
-
+col1    col2
+load data local infile '$resources_local/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test06;
+col1    col2
+Hello","Hi    null
+database    "db
 drop table test06;
-
 drop table if exists test07;
 create table test07(col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_enclosed_by02.csv' into table test07 fields terminated by ',' enclosed by '`' lines terminated by '\n';
@@ -688,15 +659,13 @@ col1    col2
 hello ,    
 drop table test07;
 drop table if exists test08;
-
 create table test08 (col1 varchar(20), col2 varchar(20));
-
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table test08 fields terminated by ',' enclosed by '`' lines terminated by '\n';
-
 select * from test08;
-
+col1    col2
+"Hello""    "Hi"
+"database"    ""db"
 drop table test08;
-
 drop table if exists test09;
 create table test09(col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_starting_by04.csv' into table test09 CHARACTER SET "utf_8" fields terminated by ',' lines starting by ' ';
@@ -705,7 +674,6 @@ col1    col2
 @@ db"    -234242
    32423"    3283
 drop table test09;
-
 drop table if exists test10;
 create table test10(col1 text, col2 text);
 load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
@@ -721,3 +689,219 @@ hello    2
 hello    1
 hello    2
 drop table test10;
+drop table if exists load_data_t1;
+CREATE TABLE load_data_t1 (
+`name` VARCHAR(255) DEFAULT null,
+`age` INT DEFAULT null,
+`city` VARCHAR(255) DEFAULT null
+);
+load data inline format='csv', data=$XXX$ zhangsan,26,XiAn $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age,name);
+select * from load_data_t1;
+name    age    city
+XiAn     26     zhangsan
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
+select * from load_data_t1;
+name    age    city
+null    26     XiAn
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (@name, city,age);
+select * from load_data_t1;
+name    age    city
+null    26     XiAn
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (@aa, city,age);
+select * from load_data_t1;
+name    age    city
+null    26     XiAn
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
+invalid input: the data of row 1 contained is not equal to input columns
+load data inline format='csv', data=$XXX$ zhangsan $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
+invalid input: the data of row 1 contained is not equal to input columns
+drop table load_data_t1;
+drop table if exists load_data_t2;
+create table load_data_t2(id int, name varchar(20), age int);
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age);
+select * from load_data_t2 order by id;
+id    name    age
+1     aron    32
+2     ben    35
+3     cindy    22
+4     david    33
+5     emma    18
+6     frank    59
+delete from load_data_t2;
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (name, id, age);
+internal error: the input value 'aron' is not int32 type for column 1
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name );
+invalid input: the data of row 1 contained is not equal to input columns
+select * from load_data_t2 order by id;
+id    name    age
+delete from load_data_t2;
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age, address);
+internal error: column 'address' does not exist
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id, name, age);
+invalid input: the data of row 1 contained is not equal to input columns
+select * from load_data_t2;
+id    name    age
+delete from load_data_t2;
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id, name);
+select * from load_data_t2 order by id;
+id    name    age
+1     aron    null
+2     ben    null
+3     cindy    null
+4     david    null
+5     emma    null
+6     frank    null
+delete from load_data_t2;
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (age, name);
+select * from load_data_t2 order by id;
+id    name    age
+null     aron    1
+null     ben    2
+null     cindy    3
+null     david    4
+null     emma    5
+null     frank    6
+drop table load_data_t2;
+drop table if exists load_data_t3;
+create table load_data_t3(col1 int not null, col2 varchar(20) default "jane", col3 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t3 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col3, col2);
+invalid input: invalid default value for column 'col1'
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t3 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col3);
+select * from load_data_t3 order by id;
+invalid input: column id does not exist
+drop table load_data_t3;
+drop table if exists load_data_t4;
+create table load_data_t4(col1 int default 22, col2 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, @col2);
+select * from load_data_t4;
+col1    col2
+1    null
+2    null
+delete from load_data_t4;
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+select * from load_data_t4;
+col1    col2
+22    32
+22    35
+delete from load_data_t4;
+LOAD DATA infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+invalid input: the data of row 1 contained is not equal to input columns
+drop table load_data_t4;
+drop table if exists load_data_t5;
+create table load_data_t5(col1 int, col2 int, col3 int);
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+select * from load_data_t5;
+col1    col2    col3
+null    null    null
+null    null    null
+delete from load_data_t5;
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col2);
+select * from load_data_t5;
+col1    col2    col3
+1    null    null
+2    null    null
+delete from load_data_t5;
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select * from load_data_t5;
+col1    col2    col3
+1    null    null
+2    null    null
+delete from load_data_t5;
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(col1, @col2);
+select * from load_data_t5;
+col1    col2    col3
+1    null    null
+2    null    null
+delete from load_data_t5;
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select * from load_data_t5;
+col1    col2    col3
+1    32    null
+2    35    null
+delete from load_data_t5;
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(@col1, col2);
+select * from load_data_t5;
+col1    col2    col3
+null    32    null
+null    35    null
+drop table load_data_t5;
+drop table if exists load_data_t6;
+create table load_data_t6(col1 int);
+LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t6 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select * from load_data_t6;
+col1
+1
+2
+drop table load_data_t6;
+drop table if exists load_data_t7;
+create table load_data_t7 (col1 varchar(20), col2 varchar(20), col3 varchar(20));
+load data local infile '$resources_local/load_data/test_escaped_by03.csv' into table load_data_t7 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from load_data_t7;
+col1    col2    col3
+hello ", ,        null
+delete from load_data_t7;
+load data infile '$resources/load_data/test_escaped_by03.csv' into table load_data_t7 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+invalid input: the data of row 1 contained is not equal to input columns
+select * from load_data_t7;
+col1    col2    col3
+drop table load_data_t7;
+drop account if exists test_load;
+create account test_load ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+show session variables like 'sql_mode';
+Variable_name    Value
+sql_mode    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+set session sql_mode = "NO_ENGINE_SUBSTITUTION";
+show session variables like 'sql_mode';
+Variable_name    Value
+sql_mode    NO_ENGINE_SUBSTITUTION
+create database test_load_db;
+use test_load_db;
+drop table if exists load_data_t8;
+create table load_data_t8(col1 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select * from load_data_t8;
+col1
+1
+2
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+invalid input: the data of row 1 contained is not equal to input columns
+drop table load_data_t8;
+drop database test_load_db;
+drop account test_load;
+drop table if exists load_data_t9;
+create table load_data_t9(col1 int, col2 varchar(100), col3 varchar(100));
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true';
+select count(*) from load_data_t9;
+count(*)
+10000
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' ignore 99999 lines parallel 'true';
+select count(*) from load_data_t9;
+count(*)
+0
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' ignore 9999 lines parallel 'true';
+select count(*) from load_data_t9;
+count(*)
+1
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' enclosed by '"' LINES TERMINATED BY '\n' parallel 'true';
+select count(*) from load_data_t9;
+count(*)
+10000
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true' strict 'true';
+select count(*) from load_data_t9;
+count(*)
+10000
+delete from load_data_t9;
+load data infile {'filepath'='$resources/load_data/test_parallel_gz.csv.gz'} into table load_data_t9 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
+select count(*) from load_data_t9;
+count(*)
+400000
+drop table load_data_t9;

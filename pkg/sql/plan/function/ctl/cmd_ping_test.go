@@ -32,13 +32,15 @@ import (
 func TestCmdPingTNWithEmptyTN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime()
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	result, err := handlePing()(proc,
+	proc := process.NewTopProcess(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	result, err := handlePing()(
+		proc,
 		tn,
 		"",
 		func(ctx context.Context, proc *process.Process, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return nil, nil
-		})
+		},
+	)
 	require.NoError(t, err)
 	assert.Equal(t,
 		Result{
@@ -53,7 +55,7 @@ func TestCmdPingTNWithSingleTN(t *testing.T) {
 
 	shardID := uint64(1)
 	ctx := context.Background()
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.NewTopProcess(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"",
@@ -72,7 +74,7 @@ func TestCmdPingTNWithSingleTN(t *testing.T) {
 func TestCmdPingTNWithMultiTN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime(1, 2)
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.NewTopProcess(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"",
@@ -92,7 +94,7 @@ func TestCmdPingTNWithMultiTN(t *testing.T) {
 func TestCmdPingTNWithParameter(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime(1, 2)
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.NewTopProcess(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"1",
@@ -109,7 +111,7 @@ func TestCmdPingTNWithParameter(t *testing.T) {
 }
 
 func initTestRuntime(shardIDs ...uint64) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	var shards = make([]metadata.TNShard, 0, len(shardIDs))
 	for _, id := range shardIDs {
 		shards = append(shards, metadata.TNShard{
@@ -118,6 +120,7 @@ func initTestRuntime(shardIDs ...uint64) {
 	}
 
 	cluster := clusterservice.NewMOCluster(
+		"",
 		nil,
 		0,
 		clusterservice.WithDisableRefresh(),
@@ -126,5 +129,5 @@ func initTestRuntime(shardIDs ...uint64) {
 				Shards: shards,
 			},
 		}))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, cluster)
 }

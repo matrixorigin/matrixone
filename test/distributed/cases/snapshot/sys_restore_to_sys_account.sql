@@ -1,4 +1,3 @@
--- @bvt:issue#16150
 use mo_catalog;
 create cluster table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2,0);
@@ -11,7 +10,6 @@ restore account sys from snapshot sp01;
 
 select * from clu01;
 drop table clu01;
--- @bvt:issue
 
 
 
@@ -133,9 +131,7 @@ show databases;
 select count(*) from rs02;
 select count(*) from rs03;
 use mo_catalog;
--- @bvt:issue#16150
 select count(*) from cluster01;
--- @bvt:issue
 drop table cluster01;
 use test02;
 drop table rs02;
@@ -216,12 +212,11 @@ select * from test03.aff01{snapshot = 'sp04'};
 select * from test03.pri01{snapshot = 'sp04'};
 select count(*) from test03.aff01{snapshot = 'sp04'};
 
--- @bvt:issue#15971
 restore account sys from snapshot sp04;
+use test03;
 show create table aff01;
 show create table pri01;
 select count(*) from aff01;
--- @bvt:issue
 drop database test03;
 drop snapshot sp04;
 
@@ -308,13 +303,15 @@ drop snapshot snap01;
 
 
 -- restore null
--- @bvt:issue#15943
 drop snapshot if exists sp05;
 create snapshot sp05 for account sys;
 create database db01;
 restore account sys FROM snapshot sp05;
 show databases;
--- @bvt:issue
+drop snapshot sp05;
+
+
+
 
 -- sys create sp01,sp02, restore sp02, restore sp01
 drop database if exists db01;
@@ -454,13 +451,9 @@ truncate tm2;
 drop snapshot if exists sp15;
 create snapshot sp15 for account sys;
 
--- @bvt:issue#15971
 show create table ti1 {snapshot = 'sp14'};
--- @bvt:issue
 show create table tm1 {snapshot = 'sp15'};
--- @bvt:issue#15971
 show create table ti1 {snapshot = 'sp14'};
--- @bvt:issue
 show create table tm1 {snapshot = 'sp15'};
 
 select count(*) from ti1;
@@ -479,7 +472,6 @@ show create table db03.tm1;
 show create table db03.ti2;
 show create table db03.tm2;
 
--- @bvt:issue#15971
 restore account sys from snapshot sp14;
 show databases;
 select * from db03.ti1;
@@ -490,7 +482,6 @@ show create table db03.ti1;
 show create table db03.tm1;
 show create table db03.ti2;
 show create table db03.tm2;
--- @bvt:issue
 
 drop database db03;
 drop snapshot sp15;
@@ -584,14 +575,12 @@ create snapshot sp15 for account sys;
 restore account sys database db07 from snapshot sp15;
 restore account sys database db08 from snapshot sp15;
 
--- @bvt:issue#15943
 show databases;
 use db07;
 show tables;
 show create table table01 {snapshot = 'sp14'};
 show create table table01;
 select * from table01;
--- @bvt:issue
 
 -- @ignore:1
 show snapshots;
@@ -743,6 +732,5 @@ select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database 
 drop database db11;
 drop snapshot sp18;
 drop snapshot sp17;
-
-
-
+-- @ignore:1
+show snapshots;

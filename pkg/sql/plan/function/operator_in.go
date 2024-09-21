@@ -98,7 +98,7 @@ func (op *opOperatorStrIn) init(tuple *vector.Vector) {
 	}
 }
 
-func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !op.ready {
 		op.init(parameters[1])
 	}
@@ -121,7 +121,7 @@ func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result v
 	return nil
 }
 
-func (op *opOperatorFixedIn[T]) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opOperatorFixedIn[T]) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !op.ready {
 		op.init(parameters[1])
 	}
@@ -144,7 +144,7 @@ func (op *opOperatorFixedIn[T]) operatorNotIn(parameters []*vector.Vector, resul
 	return nil
 }
 
-func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !op.ready {
 		op.init(parameters[1])
 	}
@@ -167,7 +167,7 @@ func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector
 	return nil
 }
 
-func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !op.ready {
 		op.init(parameters[1])
 	}

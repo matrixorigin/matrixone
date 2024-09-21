@@ -20,12 +20,15 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
+	stRuntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -35,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -84,23 +88,31 @@ func WithFlushDuration(value time.Duration) Option {
 	}
 }
 
+func WithLoadToS3(
+	writeToS3 bool,
+	fs fileservice.FileService,
+) Option {
+	return func(s *service) {
+		if writeToS3 {
+			s.options.writeFunc = s.writeToS3
+			s.options.fs = fs
+		}
+	}
+}
+
 type service struct {
-	cn            string
-	client        client.TxnClient
-	clock         clock.Clock
-	executor      executor.SQLExecutor
-	stopper       *stopper.Stopper
-	txnC          chan csvEvent
-	txnBufC       chan *buffer
-	entryC        chan csvEvent
-	entryBufC     chan *buffer
-	txnActionC    chan csvEvent
-	txnActionBufC chan *buffer
-	statementC    chan csvEvent
-	statementBufC chan *buffer
+	cn         string
+	client     client.TxnClient
+	clock      clock.Clock
+	executor   executor.SQLExecutor
+	stopper    *stopper.Stopper
+	txnC       chan event
+	entryC     chan event
+	txnActionC chan event
+	statementC chan event
+	txnErrorC  chan string
 
 	loadC  chan loadAction
-	seq    atomic.Uint64
 	dir    string
 	logger *log.MOLogger
 
@@ -119,6 +131,8 @@ type service struct {
 	}
 
 	options struct {
+		fs            fileservice.FileService
+		writeFunc     func(loadAction) error
 		flushDuration time.Duration
 		flushBytes    int
 		bufferSize    int
@@ -131,7 +145,8 @@ func NewService(
 	client client.TxnClient,
 	clock clock.Clock,
 	executor executor.SQLExecutor,
-	opts ...Option) (Service, error) {
+	opts ...Option,
+) (Service, error) {
 	if err := os.RemoveAll(dataDir); err != nil {
 		return nil, err
 	}
@@ -140,14 +155,15 @@ func NewService(
 	}
 
 	s := &service{
-		stopper:  stopper.NewStopper("txn-trace"),
-		cn:       cn,
-		client:   client,
-		clock:    clock,
-		executor: executor,
-		dir:      dataDir,
-		logger:   runtime.ProcessLevelRuntime().Logger().Named("txn-trace"),
-		loadC:    make(chan loadAction, 100000),
+		stopper:   stopper.NewStopper("txn-trace"),
+		cn:        cn,
+		client:    client,
+		clock:     clock,
+		executor:  executor,
+		dir:       dataDir,
+		logger:    runtime.ServiceRuntime(cn).Logger().Named("txn-trace"),
+		loadC:     make(chan loadAction, 4),
+		txnErrorC: make(chan string, stRuntime.NumCPU()*10),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -162,14 +178,14 @@ func NewService(
 	if s.options.bufferSize == 0 {
 		s.options.bufferSize = 1000000
 	}
-	s.txnBufC = make(chan *buffer, s.options.bufferSize)
-	s.entryBufC = make(chan *buffer, s.options.bufferSize)
-	s.entryC = make(chan csvEvent, s.options.bufferSize)
-	s.txnC = make(chan csvEvent, s.options.bufferSize)
-	s.txnActionC = make(chan csvEvent, s.options.bufferSize)
-	s.txnActionBufC = make(chan *buffer, s.options.bufferSize)
-	s.statementC = make(chan csvEvent, s.options.bufferSize)
-	s.statementBufC = make(chan *buffer, s.options.bufferSize)
+	if s.options.writeFunc == nil {
+		s.options.writeFunc = s.writeToMO
+	}
+
+	s.entryC = make(chan event, s.options.bufferSize)
+	s.txnC = make(chan event, s.options.bufferSize)
+	s.txnActionC = make(chan event, s.options.bufferSize)
+	s.statementC = make(chan event, s.options.bufferSize)
 
 	if err := s.stopper.RunTask(s.handleTxnEvents); err != nil {
 		panic(err)
@@ -187,6 +203,9 @@ func NewService(
 		panic(err)
 	}
 	if err := s.stopper.RunTask(s.watch); err != nil {
+		panic(err)
+	}
+	if err := s.stopper.RunTask(s.handleTxnError); err != nil {
 		panic(err)
 	}
 	return s, nil
@@ -254,20 +273,16 @@ func (s *service) DecodeHexComplexPK(hexPK string) (string, error) {
 func (s *service) Close() {
 	s.stopper.Stop()
 	s.atomic.closed.Store(true)
-	close(s.entryBufC)
 	close(s.entryC)
 	close(s.txnC)
-	close(s.txnBufC)
 	close(s.loadC)
 }
 
 func (s *service) handleEvent(
 	ctx context.Context,
-	fileCreator func() string,
 	columns int,
 	tableName string,
-	csvC chan csvEvent,
-	bufferC chan *buffer) {
+	eventC chan event) {
 	ticker := time.NewTicker(s.options.flushDuration)
 	defer ticker.Stop()
 
@@ -281,7 +296,7 @@ func (s *service) handleEvent(
 	defer buf.close()
 
 	open := func() {
-		current = fileCreator()
+		current = s.newFileName()
 
 		v, err := os.OpenFile(current, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
 		if err != nil {
@@ -325,7 +340,8 @@ func (s *service) handleEvent(
 			sql: fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','",
 				current,
 				tableName),
-			file: current,
+			file:  current,
+			table: tableName,
 		}
 		sum = 0
 		open()
@@ -340,47 +356,27 @@ func (s *service) handleEvent(
 			if s.atomic.flushEnabled.Load() {
 				flush()
 			}
-		case e := <-csvC:
-			e.toCSVRecord(s.cn, buf, records)
-			if err := w.Write(records); err != nil {
-				s.logger.Fatal("failed to write csv record",
-					zap.Error(err))
-			}
+		case e := <-eventC:
+			if e.buffer != nil {
+				e.buffer.close()
+			} else {
+				e.csv.toCSVRecord(s.cn, buf, records)
+				if err := w.Write(records); err != nil {
+					s.logger.Fatal("failed to write csv record",
+						zap.Error(err))
+				}
 
-			sum += bytes()
-			if sum > s.options.flushBytes &&
-				s.atomic.flushEnabled.Load() {
-				flush()
-			}
-
-			select {
-			case v := <-bufferC:
-				v.close()
-			default:
+				sum += bytes()
+				if sum > s.options.flushBytes &&
+					s.atomic.flushEnabled.Load() {
+					flush()
+				}
 			}
 		}
 	}
 }
 
 func (s *service) handleLoad(ctx context.Context) {
-	load := func(sql string) error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		return s.executor.ExecTxn(
-			ctx,
-			func(txn executor.TxnExecutor) error {
-				res, err := txn.Exec(sql, executor.StatementOption{})
-				if err != nil {
-					return err
-				}
-				res.Close()
-				return nil
-			},
-			executor.Options{}.
-				WithDatabase(DebugDB).
-				WithDisableTrace())
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -393,9 +389,9 @@ func (s *service) handleLoad(ctx context.Context) {
 				default:
 				}
 
-				if err := load(e.sql); err != nil {
+				if err := s.options.writeFunc(e); err != nil {
 					s.logger.Error("load trace data to table failed, retry later",
-						zap.String("sql", e.sql),
+						zap.String("file", e.file),
 						zap.Error(err))
 					time.Sleep(time.Second * 5)
 					continue
@@ -417,7 +413,7 @@ func (s *service) watch(ctx context.Context) {
 	defer ticker.Stop()
 
 	fetch := func() ([]string, []string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 		defer cancel()
 		var features []string
 		var states []string
@@ -432,8 +428,8 @@ func (s *service) watch(ctx context.Context) {
 				defer res.Close()
 				res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 					for i := 0; i < rows; i++ {
-						features = append(features, cols[0].GetStringAt(i))
-						states = append(states, cols[1].GetStringAt(i))
+						features = append(features, cols[0].UnsafeGetStringAt(i))
+						states = append(states, cols[1].UnsafeGetStringAt(i))
 					}
 					return true
 				})
@@ -505,10 +501,10 @@ func (s *service) updateState(feature, state string) error {
 	switch feature {
 	case FeatureTraceData, FeatureTraceTxnAction, FeatureTraceTxn, FeatureTraceStatement, FeatureTraceTxnWorkspace:
 	default:
-		return moerr.NewNotSupportedNoCtx("feature %s", feature)
+		return moerr.NewNotSupportedNoCtxf("feature %s", feature)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -532,6 +528,10 @@ func (s *service) updateState(feature, state string) error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
+}
+
+func (s *service) newFileName() string {
+	return filepath.Join(s.dir, uuid.Must(uuid.NewV7()).String())
 }
 
 // EntryData entry data
@@ -650,7 +650,7 @@ func (l *EntryData) createApply(
 	buf *buffer,
 	fn func(e dataEvent),
 	completedPKTables *sync.Map) {
-	commitTS := vector.MustFixedCol[types.TS](l.commitVec)
+	commitTS := vector.MustFixedColWithTypeCheck[types.TS](l.commitVec)
 
 	l.writeToBuf(
 		buf,
@@ -776,6 +776,9 @@ func (l *EntryData) writeToBuf(
 	rows := l.vecs[0].Length()
 	for row := 0; row < rows; row++ {
 		idx := buf.buf.GetWriteIndex()
+		buf.buf.WriteString("row-")
+		buf.buf.MustWrite(intToString(dst, int64(row)))
+		buf.buf.WriteString("{")
 		for col, name := range l.columns {
 			if _, ok := disableColumns[name]; ok {
 				continue
@@ -796,6 +799,7 @@ func (l *EntryData) writeToBuf(
 				buf.buf.WriteString(", ")
 			}
 		}
+		buf.buf.WriteString("}")
 		if buf.buf.GetWriteIndex() > idx {
 			data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
 			fn(factory(data, row))
@@ -881,6 +885,38 @@ func escape(value string) string {
 }
 
 type loadAction struct {
-	sql  string
-	file string
+	sql   string
+	file  string
+	table string
+}
+
+type writer struct {
+	buf *buf.ByteBuf
+	dst []byte
+	idx int
+}
+
+func (w writer) WriteUint(v uint64) {
+	w.buf.MustWrite(uintToString(w.dst, v))
+}
+
+func (w writer) WriteInt(v int64) {
+	w.buf.MustWrite(intToString(w.dst, v))
+}
+
+func (w writer) WriteString(v string) {
+	w.buf.WriteString(v)
+}
+
+func (w writer) WriteHex(v []byte) {
+	if len(v) == 0 {
+		return
+	}
+	dst := w.dst[:hex.EncodedLen(len(v))]
+	hex.Encode(dst, v)
+	w.buf.MustWrite(dst)
+}
+
+func (w writer) data() string {
+	return util.UnsafeBytesToString(w.buf.RawSlice(w.idx, w.buf.GetWriteIndex()))
 }

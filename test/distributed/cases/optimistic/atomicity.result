@@ -91,7 +91,7 @@ select * from test_12;
 col1    col2
 show create table test_12;
 Table    Create Table
-test_12    CREATE TABLE `test_12` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `id_01` (`col2`)\n)
+test_12    CREATE TABLE `test_12` (\n  `col1` int NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `id_01` (`col2`)\n)
 show create table test_12;
 not connect to a database
 rollback ;
@@ -113,12 +113,12 @@ col1    col2
 2    b
 show create table test_12;
 Table    Create Table
-test_12    CREATE TABLE `test_12` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
+test_12    CREATE TABLE `test_12` (\n  `col1` int NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 commit;
 w-w conflict
 show create table test_12;
 Table    Create Table
-test_12    CREATE TABLE `test_12` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(25) DEFAULT NULL\n)
+test_12    CREATE TABLE `test_12` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(25) DEFAULT NULL\n)
 select * from test_12;
 col1    col2
 90    tt
@@ -134,11 +134,11 @@ col1    col2
 3    e
 show create table test_12;
 Table    Create Table
-test_12    CREATE TABLE `test_12` (\n`col1` INT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nKEY `id_01` (`col2`)\n)
+test_12    CREATE TABLE `test_12` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  KEY `id_01` (`col2`)\n)
 commit;
 show create table test_12;
 Table    Create Table
-test_12    CREATE TABLE `test_12` (\n`col1` INT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nKEY `id_01` (`col2`)\n)
+test_12    CREATE TABLE `test_12` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  KEY `id_01` (`col2`)\n)
 select * from test_12;
 col1    col2
 1    c
@@ -171,7 +171,7 @@ select * from test_view_1;
 SQL parser error: table "test_view_1" does not exist
 show create table test_14;
 Table    Create Table
-test_14    CREATE TABLE `test_14` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`)\n)
+test_14    CREATE TABLE `test_14` (\n  `col1` int NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `col2` (`col2`)\n)
 select  * from test_view_1;
 col1    col2
 1    a

@@ -18,11 +18,12 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
-func handleCoreDumpConfig(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+func handleCoreDumpConfig(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 	if req.CoreDumpConfig == nil {
 		return nil
 	}

@@ -24,6 +24,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
+	ToSliceNoTypeCheck(v, ret)
+	if v.class == CONSTANT {
+		*ret = (*ret)[:1]
+	} else {
+		*ret = (*ret)[:v.length]
+	}
+}
+
 func ToFixedCol[T any](v *Vector, ret *[]T) {
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
@@ -38,16 +47,30 @@ func ToFixedCol[T any](v *Vector, ret *[]T) {
 	}
 }
 
-func MustFixedCol[T any](v *Vector) (ret []T) {
+func MustFixedColNoTypeCheck[T any](v *Vector) (ret []T) {
+	ToFixedColNoTypeCheck(v, &ret)
+	return
+}
+
+func MustFixedColWithTypeCheck[T any](v *Vector) (ret []T) {
 	ToFixedCol(v, &ret)
 	return
 }
 
-func MustBytesCol(v *Vector) [][]byte {
+// InefficientMustBytesCol
+// It should only be used for debugging purposes or in cases where performance is not a critical factor.
+// The function performs a potentially slow and memory-intensive operation to extract the byte representation of the column.
+// Avoid using this function in scenarios where speed is important.
+//
+//	vs, area := vector.MustVarlenaRawData(vec)
+//	for i := range vs {
+//		vs[i].GetByteSlice(area)
+//	}
+func InefficientMustBytesCol(v *Vector) [][]byte {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
-	varcol := MustFixedCol[types.Varlena](v)
+	varcol := MustFixedColWithTypeCheck[types.Varlena](v)
 	if v.class == CONSTANT {
 		return [][]byte{(&varcol[0]).GetByteSlice(v.area)}
 	} else {
@@ -59,17 +82,32 @@ func MustBytesCol(v *Vector) [][]byte {
 	}
 }
 
-func MustStrCol(v *Vector) []string {
+// InefficientMustStrCol
+// It should only be used for debugging purposes or in cases where performance is not a critical factor.
+// The function performs a potentially slow and memory-intensive operation to extract the byte representation of the column.
+// Avoid using this function in scenarios where speed is important.
+//
+//	vs, area := vector.MustVarlenaRawData(vec)
+//	for i := range vs {
+//		vs[i].UnsafeGetString(area)
+//	}
+//
+// todo:
+// There is a bug here.
+// If the vector is reused, that is, the initial value of Varlena is not 0,
+// it will cause the UnsafeGetString method to panic. This is because what is stored here is the offset of the last value.
+// and InefficientMustBytesCol has a same bug.
+func InefficientMustStrCol(v *Vector) []string {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
-	varcol := MustFixedCol[types.Varlena](v)
+	varcol := MustFixedColNoTypeCheck[types.Varlena](v)
 	if v.class == CONSTANT {
-		return []string{(&varcol[0]).GetString(v.area)}
+		return []string{(&varcol[0]).UnsafeGetString(v.area)}
 	} else {
 		ret := make([]string, v.length)
 		for i := range varcol {
-			ret[i] = (&varcol[i]).GetString(v.area)
+			ret[i] = (&varcol[i]).UnsafeGetString(v.area)
 		}
 		return ret
 	}
@@ -80,7 +118,7 @@ func MustArrayCol[T types.RealNumbers](v *Vector) [][]T {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
-	varcol := MustFixedCol[types.Varlena](v)
+	varcol := MustFixedColWithTypeCheck[types.Varlena](v)
 	if v.class == CONSTANT {
 		return [][]T{types.GetArray[T](&varcol[0], v.area)}
 	} else {
@@ -106,7 +144,7 @@ func ExpandFixedCol[T any](v *Vector) []T {
 		}
 		return vs
 	}
-	return MustFixedCol[T](v)
+	return MustFixedColWithTypeCheck[T](v)
 }
 
 func ExpandStrCol(v *Vector) []string {
@@ -114,15 +152,15 @@ func ExpandStrCol(v *Vector) []string {
 		vs := make([]string, v.Length())
 		if len(v.data) > 0 {
 			var cols []types.Varlena
-			ToSlice(v, &cols)
-			ss := cols[0].GetString(v.area)
+			ToSliceNoTypeCheck(v, &cols)
+			ss := cols[0].UnsafeGetString(v.area)
 			for i := range vs {
 				vs[i] = ss
 			}
 		}
 		return vs
 	}
-	return MustStrCol(v)
+	return InefficientMustStrCol(v)
 }
 
 func ExpandBytesCol(v *Vector) [][]byte {
@@ -130,7 +168,7 @@ func ExpandBytesCol(v *Vector) [][]byte {
 		vs := make([][]byte, v.Length())
 		if len(v.data) > 0 {
 			var cols []types.Varlena
-			ToSlice(v, &cols)
+			ToSliceNoTypeCheck(v, &cols)
 			ss := cols[0].GetByteSlice(v.area)
 			for i := range vs {
 				vs[i] = ss
@@ -138,17 +176,17 @@ func ExpandBytesCol(v *Vector) [][]byte {
 		}
 		return vs
 	}
-	return MustBytesCol(v)
+	return InefficientMustBytesCol(v)
 }
 
 func MustVarlenaToInt64Slice(v *Vector) [][3]int64 {
-	data := MustFixedCol[types.Varlena](v)
+	data := MustFixedColNoTypeCheck[types.Varlena](v)
 	pointer := (*[3]int64)(data[0].UnsafePtr())
 	return unsafe.Slice(pointer, len(data))
 }
 
 func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
-	data = MustFixedCol[types.Varlena](v)
+	data = MustFixedColNoTypeCheck[types.Varlena](v)
 	area = v.area
 	return
 }
@@ -162,12 +200,12 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 			return err
 		}
 		v.data = ndata[:cap(ndata)]
-		v.setupColFromData()
+		v.setupFromData()
 	}
 	return nil
 }
 
-func (v *Vector) setupColFromData() {
+func (v *Vector) setupFromData() {
 	if v.GetType().IsVarlen() {
 		v.col.setFromVector(v)
 	} else {
@@ -246,13 +284,13 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 }
 
 func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
-	rvec := &Vector{
-		area:         vec.Area,
-		length:       int(vec.Len),
-		typ:          ProtoTypeToType(vec.Type),
-		cantFreeData: true,
-		cantFreeArea: true,
-	}
+	rvec := NewVecFromReuse()
+	rvec.area = vec.Area
+	rvec.length = int(vec.Len)
+	rvec.typ = ProtoTypeToType(vec.Type)
+	rvec.cantFreeData = true
+	rvec.cantFreeArea = true
+
 	if vec.IsConst {
 		rvec.class = CONSTANT
 	} else {
@@ -265,7 +303,7 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 		return rvec, nil
 	}
 	rvec.data = vec.Data
-	rvec.setupColFromData()
+	rvec.setupFromData()
 	return rvec, nil
 }
 

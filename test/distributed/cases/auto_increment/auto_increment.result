@@ -194,27 +194,27 @@ col1
 200
 Drop table auto_increment11;
 Drop table if exists auto_increment12;
-[unknown result because it is related to issue#10842]
 create table auto_increment12(col1 int auto_increment primary key)auto_increment = 10;
-[unknown result because it is related to issue#10842]
 Insert into auto_increment12 values();
-[unknown result because it is related to issue#10842]
 Insert into auto_increment12 values();
-[unknown result because it is related to issue#10842]
 Select * from auto_increment12;
-[unknown result because it is related to issue#10842]
+col1
+10
+11
 Insert into auto_increment12 values(16.898291);
-[unknown result because it is related to issue#10842]
 insert into auto_increment12 values(124312.4321424324);
-[unknown result because it is related to issue#10842]
 insert into auto_increment12 values();
-[unknown result because it is related to issue#10842]
 select last_insert_id();
-[unknown result because it is related to issue#10842]
+last_insert_id()
+124313
 Select * from auto_increment12;
-[unknown result because it is related to issue#10842]
+col1
+10
+11
+16
+124312
+124313
 Drop table auto_increment12;
-[unknown result because it is related to issue#10842]
 Drop table if exists auto_increment10;
 Create table auto_increment13(col1 int auto_increment primary key)auto_increment = 30000;
 Insert into auto_increment13 values();
@@ -270,7 +270,7 @@ e bigint auto_increment
 );
 show create table auto_increment15;
 Table    Create Table
-auto_increment15    CREATE TABLE `auto_increment15` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` BIGINT NOT NULL AUTO_INCREMENT,\n`c` INT NOT NULL AUTO_INCREMENT,\n`d` INT NOT NULL AUTO_INCREMENT,\n`e` BIGINT NOT NULL AUTO_INCREMENT,\nPRIMARY KEY (`a`)\n)
+auto_increment15    CREATE TABLE `auto_increment15` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` bigint NOT NULL AUTO_INCREMENT,\n  `c` int NOT NULL AUTO_INCREMENT,\n  `d` int NOT NULL AUTO_INCREMENT,\n  `e` bigint NOT NULL AUTO_INCREMENT,\n  PRIMARY KEY (`a`)\n)
 insert into auto_increment15 values (),(),(),();
 select * from auto_increment15 order by a;
 a    b    c    d    e
@@ -435,77 +435,80 @@ Select * from auto_increment05;
 Drop table auto_increment05;
 [unknown result because it is related to issue#10834]
 Drop table if exists auto_increment06;
-[unknown result because it is related to issue#10834]
+
 Create temporary table auto_increment06(col1 int unsigned auto_increment primary key) auto_increment = 2147483646;
-[unknown result because it is related to issue#10834]
+
 Insert into auto_increment06 values();
-[unknown result because it is related to issue#10834]
+
 Insert into auto_increment06 values();
-[unknown result because it is related to issue#10834]
+
 Insert into auto_increment06 values();
-[unknown result because it is related to issue#10834]
+
 select last_insert_id();
-[unknown result because it is related to issue#10834]
+last_insert_id()
+2147483648
 Select * from auto_increment06;
-[unknown result because it is related to issue#10834]
+col1
+2147483646
+2147483647
+2147483648
 Insert into auto_increment06 values(10001);
-[unknown result because it is related to issue#10834]
+
 Insert into auto_increment06 values(10002);
-[unknown result because it is related to issue#10834]
+
 Select * from auto_increment06;
-[unknown result because it is related to issue#10834]
+col1
+10001
+10002
+2147483646
+2147483647
+2147483648
 Drop table auto_increment06;
-[unknown result because it is related to issue#10834]
+
 Drop table if exists auto_increment07;
-[unknown result because it is related to issue#10834]
 Create table auto_increment07(col1 smallint unsigned auto_increment primary key) auto_increment = 65534;
-[unknown result because it is related to issue#10834]
 Insert into auto_increment07 values();
-[unknown result because it is related to issue#10834]
 Insert into auto_increment07 values();
-[unknown result because it is related to issue#10834]
 Insert into auto_increment07 values();
-[unknown result because it is related to issue#10834]
+Data truncation: data out of range: data type smallint unsigned, value 65536
 Insert into auto_increment07 values();
-[unknown result because it is related to issue#10834]
+Data truncation: data out of range: data type smallint unsigned, value 65537
 select last_insert_id();
-[unknown result because it is related to issue#10834]
+last_insert_id()
+65535
 Select * from auto_increment07;
-[unknown result because it is related to issue#10834]
+col1
+65534
+65535
 Drop table auto_increment07;
-[unknown result because it is related to issue#10834]
 Drop table if exists auto_increment08;
-[unknown result because it is related to issue#10834]
 Create table auto_increment08(col1 bigint unsigned auto_increment primary key) auto_increment = 9223372036854775806;
-[unknown result because it is related to issue#10834]
 Insert into auto_increment08 values();
-[unknown result because it is related to issue#10834]
 Insert into auto_increment08 values();
-[unknown result because it is related to issue#10834]
 Insert into auto_increment08 values();
-[unknown result because it is related to issue#10834]
 select last_insert_id();
-[unknown result because it is related to issue#10834]
+last_insert_id()
+9223372036854775808
 Select * from auto_increment08;
-[unknown result because it is related to issue#10834]
+col1
+9223372036854775806
+9223372036854775807
+9223372036854775808
 Drop table auto_increment08;
-[unknown result because it is related to issue#10834]
 Drop table if exists auto_increment09;
-[unknown result because it is related to issue#10834]
 Create table auto_increment09(col1 tinyint auto_increment primary key) auto_increment = 254;
-[unknown result because it is related to issue#10834]
 Insert into auto_increment09 values();
-[unknown result because it is related to issue#10834]
+Data truncation: data out of range: data type tinyint, value 254
 Insert into auto_increment09 values();
-[unknown result because it is related to issue#10834]
+Data truncation: data out of range: data type tinyint, value 255
 Insert into auto_increment09 values();
-[unknown result because it is related to issue#10834]
+Data truncation: data out of range: data type tinyint, value 256
 select last_insert_id();
-[unknown result because it is related to issue#10834]
+last_insert_id()
+9223372036854775808
 Select * from auto_increment09;
-[unknown result because it is related to issue#10834]
+col1
 Drop table auto_increment09;
-[unknown result because it is related to issue#10834]
 Drop table if exists auto_increment10;
 [unknown result because it is related to issue#10834]
 Create temporary table auto_increment10(col1 int auto_increment, col2 int, unique index(col1)) auto_increment = 3267183;
@@ -545,25 +548,32 @@ Select * from auto_increment11;
 Drop table auto_increment11;
 [unknown result because it is related to issue#10834]
 Drop table if exists auto_increment12;
-[unknown result because it is related to issue#10842]
+
 create temporary table auto_increment12(col1 int auto_increment primary key)auto_increment = 10;
-[unknown result because it is related to issue#10842]
+
 Insert into auto_increment12 values();
-[unknown result because it is related to issue#10842]
+
 Insert into auto_increment12 values();
-[unknown result because it is related to issue#10842]
+
 Select * from auto_increment12;
-[unknown result because it is related to issue#10842]
+col1
+10
+11
 Insert into auto_increment12 values(16.898291);
-[unknown result because it is related to issue#10842]
+
 insert into auto_increment12 values();
-[unknown result because it is related to issue#10842]
+
 select last_insert_id();
-[unknown result because it is related to issue#10842]
+last_insert_id()
+17
 Select * from auto_increment12;
-[unknown result because it is related to issue#10842]
+col1
+10
+11
+16
+17
 Drop table auto_increment12;
-[unknown result because it is related to issue#10842]
+
 Drop table if exists auto_increment13;
 Create table auto_increment13(col1 int auto_increment primary key)auto_increment = 30000;
 Insert into auto_increment13 values();
@@ -610,6 +620,7 @@ col1    col2
 -2147483648    aaa
 Drop table auto_increment14;
 drop table if exists auto_increment15;
+
 create temporary table auto_increment15(
 a int primary key auto_increment,
 b bigint auto_increment,
@@ -617,10 +628,12 @@ c int auto_increment,
 d int auto_increment,
 e bigint auto_increment
 )auto_increment = 100;
+
 show create table auto_increment15;
 Table    Create Table
 auto_increment15    CREATE TABLE `auto_increment15` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` BIGINT NOT NULL AUTO_INCREMENT,\n`c` INT NOT NULL AUTO_INCREMENT,\n`d` INT NOT NULL AUTO_INCREMENT,\n`e` BIGINT NOT NULL AUTO_INCREMENT,\nPRIMARY KEY (`a`)\n)
 insert into auto_increment15 values (),(),(),();
+
 select * from auto_increment15 order by a;
 a    b    c    d    e
 100    100    100    100    100
@@ -628,6 +641,7 @@ a    b    c    d    e
 102    102    102    102    102
 103    103    103    103    103
 insert into auto_increment15 values (NULL, NULL, NULL, NULL, NULL);
+
 select * from auto_increment15 order by a;
 a    b    c    d    e
 100    100    100    100    100
@@ -636,6 +650,7 @@ a    b    c    d    e
 103    103    103    103    103
 104    104    104    104    104
 insert into auto_increment15(b,c,d) values (NULL,NULL,NULL);
+
 select * from auto_increment15 order by a;
 a    b    c    d    e
 100    100    100    100    100
@@ -655,6 +670,7 @@ a    b    c    d    e
 104    104    104    104    104
 105    105    105    105    105
 insert into auto_increment15(c,d,e) values (200, 200, 200);
+
 select * from auto_increment15;
 a    b    c    d    e
 100    100    100    100    100
@@ -665,6 +681,7 @@ a    b    c    d    e
 105    105    105    105    105
 106    401    200    200    200
 insert into auto_increment15(c,d,e) values (200, 400, 600);
+
 select * from auto_increment15;
 a    b    c    d    e
 100    100    100    100    100
@@ -676,13 +693,14 @@ a    b    c    d    e
 106    401    200    200    200
 107    402    200    400    600
 Drop table auto_increment15;
+
 Drop table if exists auto_increment16;
 Create temporary table auto_increment16(col1 int auto_increment)auto_increment < 0;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 80 near " < 0;";
 Drop table auto_increment16;
 no such table auto_increment.auto_increment16
 drop table if exists auto_increment17;
-set global auto_increment_offset= 10;
+set auto_increment_offset = 10;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
 select * from auto_increment17;
@@ -697,4 +715,3 @@ col1
 100
 drop table auto_increment17;
 set auto_increment_offset = 1;
-set global auto_increment_offset= 1;

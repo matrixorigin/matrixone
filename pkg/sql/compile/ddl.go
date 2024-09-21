@@ -20,9 +20,6 @@ import (
 	"math"
 	"strings"
 
-	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -34,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -42,61 +40,75 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
-	var span trace.Span
-	c.ctx, span = trace.Start(c.ctx, "CreateDatabase")
+	ctx, span := trace.Start(c.proc.Ctx, "CreateDatabase")
 	defer span.End()
-	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err == nil {
-		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
+
+	createDatabase := s.Plan.GetDdl().GetCreateDatabase()
+	dbName := createDatabase.GetDatabase()
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+		if createDatabase.GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewDBAlreadyExists(c.ctx, dbName)
+		return moerr.NewDBAlreadyExists(ctx, dbName)
 	}
 
 	if err := lockMoDatabase(c, dbName); err != nil {
 		return err
 	}
 
-	ctx := context.WithValue(c.ctx, defines.SqlKey{}, s.Plan.GetDdl().GetCreateDatabase().GetSql())
+	ctx = context.WithValue(ctx, defines.SqlKey{}, createDatabase.GetSql())
 	datType := ""
-	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
+	// handle sub
+	if subOption := createDatabase.SubscriptionOption; subOption != nil {
 		datType = catalog.SystemDBTypeSubscription
+		if err := createSubscription(ctx, c, dbName, subOption); err != nil {
+			return err
+		}
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	return c.e.Create(ctx, dbName, c.proc.TxnOperator)
+	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
-	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err != nil {
+	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
-		return moerr.NewErrDropNonExistsDB(c.ctx, dbName)
+		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
 
-	if err := lockMoDatabase(c, dbName); err != nil {
+	if err = lockMoDatabase(c, dbName); err != nil {
 		return err
+	}
+
+	// handle sub
+	if db.IsSubscription(c.proc.Ctx) {
+		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {
+			return err
+		}
 	}
 
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
 	if len(sql) != 0 {
-		err := runDetectFkReferToDBSql(c, sql)
-		if err != nil {
+		if err = runDetectFkReferToDBSql(c, sql); err != nil {
 			return err
 		}
 	}
 
 	// whether foreign_key_checks = 0 or 1
-	err := s.removeFkeysRelationships(c, dbName)
+	err = s.removeFkeysRelationships(c, dbName)
 	if err != nil {
 		return err
 	}
 
-	err = c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
@@ -115,30 +127,31 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	//3. delete fks
+	// 3. delete fks
 	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql())
 	if err != nil {
 		return err
 	}
-	return nil
+	// 4. delete retention info
+	return c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
 }
 
 func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
-	database, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
 
-	relations, err := database.Relations(c.ctx)
+	relations, err := database.Relations(c.proc.Ctx)
 	if err != nil {
 		return err
 	}
 	for _, rel := range relations {
-		relation, err := database.Relation(c.ctx, rel, nil)
+		relation, err := database.Relation(c.proc.Ctx, rel, nil)
 		if err != nil {
 			return err
 		}
-		tblId := relation.GetTableID(c.ctx)
+		tblId := relation.GetTableID(c.proc.Ctx)
 		fkeys, refChild, err := s.getFkDefs(c, relation)
 		if err != nil {
 			return err
@@ -149,7 +162,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 				continue
 			}
 
-			_, _, parentTable, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkey.ForeignTbl)
+			_, _, parentTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkey.ForeignTbl)
 			if err != nil {
 				return err
 			}
@@ -163,7 +176,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 			if childId == 0 {
 				continue
 			}
-			_, _, childTable, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childId)
+			_, _, childTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childId)
 			if err != nil {
 				return err
 			}
@@ -183,14 +196,14 @@ func (s *Scope) AlterView(c *Compile) error {
 	dbName := c.db
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
 		}
 		return err
 	}
-	if _, err = dbSource.Relation(c.ctx, tblName, nil); err != nil {
+	if _, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
 		if qry.GetIfExists() {
 			return nil
 		}
@@ -202,7 +215,7 @@ func (s *Scope) AlterView(c *Compile) error {
 	}
 
 	// Drop view table.
-	if err := dbSource.Delete(c.ctx, tblName); err != nil {
+	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
 		return err
 	}
 
@@ -217,11 +230,11 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
-	// if _, err := dbSource.Relation(c.ctx, tblName); err == nil {
-	//  	 return moerr.NewTableAlreadyExists(c.ctx, tblName)
+	// if _, err := dbSource.Relation(c.proc.Ctx, tblName); err == nil {
+	//  	 return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 	// }
 
-	return dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+	return dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
 }
 
 func addAlterKind(alterKind []api.AlterKind, kind api.AlterKind) []api.AlterKind {
@@ -254,7 +267,7 @@ func getAddColPos(cols []*plan.ColDef, def *plan.ColDef, colName string, pos int
 			return cols, int32(idx + 1), nil
 		}
 	}
-	return nil, 0, moerr.NewInvalidInputNoCtx("column '%s' doesn't exist in table", colName)
+	return nil, 0, moerr.NewInvalidInputNoCtxf("column '%s' doesn't exist in table", colName)
 }
 
 func (s *Scope) AlterTableInplace(c *Compile) error {
@@ -266,25 +279,25 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
-	databaseId := dbSource.GetDatabaseId(c.ctx)
+	databaseId := dbSource.GetDatabaseId(c.proc.Ctx)
 
-	rel, err := dbSource.Relation(c.ctx, tblName, nil)
+	rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		return err
 	}
-	tblId := rel.GetTableID(c.ctx)
+	tblId := rel.GetTableID(c.proc.Ctx)
 
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
-	oldCt, err := GetConstraintDef(c.ctx, rel)
+	oldCt, err := GetConstraintDef(c.proc.Ctx, rel)
 	if err != nil {
 		return err
 	}
 
-	if c.proc.TxnOperator.Txn().IsPessimistic() {
+	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
 		// 1. lock origin table metadata in catalog
 		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
@@ -300,7 +313,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		if tableDef.Partition != nil {
 			partitionTableNames = tableDef.Partition.PartitionTableNames
 		}
-		if err = lockTable(c.ctx, c.e, c.proc, rel, dbName, partitionTableNames, true); err != nil {
+		if err = lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, partitionTableNames, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
@@ -359,16 +372,16 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
 				//check fk existed in table
 				if _, has := oldFkNames[constraintName]; !has {
-					return moerr.NewErrCantDropFieldOrKey(c.ctx, constraintName)
+					return moerr.NewErrCantDropFieldOrKey(c.proc.Ctx, constraintName)
 				}
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
-				for i, fk := range tableDef.Fkeys {
+				tableDef.Fkeys = plan2.RemoveIf[*plan.ForeignKeyDef](tableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
 					if fk.Name == constraintName {
 						removeRefChildTbls[constraintName] = fk.ForeignTbl
-						tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
-						break
+						return true
 					}
-				}
+					return false
+				})
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				var notDroppedIndex []*plan.IndexDef
@@ -378,10 +391,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 						//1. drop index table
 						if indexdef.TableExist {
-							if _, err = dbSource.Relation(c.ctx, indexdef.IndexTableName, nil); err != nil {
+							if _, err = dbSource.Relation(c.proc.Ctx, indexdef.IndexTableName, nil); err != nil {
 								return err
 							}
-							if err = dbSource.Delete(c.ctx, indexdef.IndexTableName); err != nil {
+							if err = dbSource.Delete(c.proc.Ctx, indexdef.IndexTableName); err != nil {
 								return err
 							}
 						}
@@ -416,11 +429,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case *plan.AlterTable_Action_AddFk:
 			//check fk existed in table
 			if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
-				return moerr.NewErrDuplicateKeyName(c.ctx, act.AddFk.Fkey.Name)
+				return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
 			}
 			//check fk existed in this alter table statement
 			if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
-				return moerr.NewErrDuplicateKeyName(c.ctx, act.AddFk.Fkey.Name)
+				return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
 			}
 			newAddedFkNames[act.AddFk.Fkey.Name] = true
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
@@ -440,7 +453,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 				for i := range addIndex {
 					if indexDef.IndexName == addIndex[i].IndexName {
-						return moerr.NewDuplicateKey(c.ctx, indexDef.IndexName)
+						return moerr.NewDuplicateKey(c.proc.Ctx, indexDef.IndexName)
 					}
 				}
 				addIndex = append(addIndex, indexDef)
@@ -482,7 +495,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 			//1. build and update constraint def
 			for _, indexDef := range indexTableDef.Indexes {
-				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
+				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef, tableDef)
 				if err != nil {
 					return err
 				}
@@ -541,7 +554,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					case catalog.MoIndexIvfFlatAlgo.ToString():
 						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
 					default:
-						return moerr.NewInternalError(c.ctx, "invalid index algo type for alter reindex")
+						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
 
 					// 2.b generate new AlgoParams string
@@ -573,7 +586,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 
 			if len(multiTableIndexes) != 1 {
-				return moerr.NewInternalError(c.ctx, "invalid index algo type for alter reindex")
+				return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 			}
 
 			// update the hidden tables
@@ -597,9 +610,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case *plan.AlterTable_Action_AddColumn:
 			alterKinds = append(alterKinds, api.AlterKind_AddColumn)
 			col := &plan.ColDef{
-				Name: act.AddColumn.Name,
-				Alg:  plan.CompressType_Lz4,
-				Typ:  act.AddColumn.Type,
+				Name:       strings.ToLower(act.AddColumn.Name),
+				OriginName: act.AddColumn.Name,
+				Alg:        plan.CompressType_Lz4,
+				Typ:        act.AddColumn.Type,
 			}
 			var pos int32
 			cols, pos, err = getAddColPos(cols, col, act.AddColumn.PreName, act.AddColumn.Pos)
@@ -618,7 +632,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				if err != nil {
 					return err
 				}
-				err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
+				err = dbSource.Create(c.proc.Ctx, table.GetName(), append(storageCols, storageDefs...))
 				if err != nil {
 					return err
 				}
@@ -693,7 +707,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 	var addColIdx int
 	var dropColIdx int
-	constraint := make([][]byte, 0)
+	reqs := make([]*api.AlterTableReq, 0)
 	for _, kind := range alterKinds {
 		var req *api.AlterTableReq
 		switch kind {
@@ -702,32 +716,28 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			if err != nil {
 				return err
 			}
-			req = api.NewUpdateConstraintReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), string(ct))
+			req = api.NewUpdateConstraintReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), string(ct))
 		case api.AlterKind_UpdateComment:
-			req = api.NewUpdateCommentReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), comment)
+			req = api.NewUpdateCommentReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), comment)
 		case api.AlterKind_RenameTable:
-			req = api.NewRenameTableReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), oldName, newName)
+			req = api.NewRenameTableReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), oldName, newName)
 		case api.AlterKind_AddColumn:
 			name := addCol[addColIdx].Name
 			typ := &addCol[addColIdx].Type
 			pos := addCol[addColIdx].Pos
 			addColIdx++
-			req = api.NewAddColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), name, typ, pos)
+			req = api.NewAddColumnReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), name, typ, pos)
 		case api.AlterKind_DropColumn:
-			req = api.NewRemoveColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
+			req = api.NewRemoveColumnReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
 			dropColIdx++
 		case api.AlterKind_AddPartition:
-			req = api.NewAddPartitionReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), changePartitionDef)
+			req = api.NewAddPartitionReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), changePartitionDef)
 		default:
 		}
-		tmp, err := req.Marshal()
-		if err != nil {
-			return err
-		}
-		constraint = append(constraint, tmp)
+		reqs = append(reqs, req)
 	}
 
-	err = rel.AlterTable(c.ctx, newCt, constraint)
+	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
 	}
@@ -740,7 +750,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			//fk self refer
 			fkRelation = rel
 		} else {
-			_, _, fkRelation, err = c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
+			_, _, fkRelation, err = c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId)
 			if err != nil {
 				return err
 			}
@@ -757,16 +767,16 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	for _, fkTblId := range addRefChildTbls {
 		if fkTblId == 0 {
 			//fk self refer
-			err = AddChildTblIdToParentTable(c.ctx, rel, fkTblId)
+			err = AddChildTblIdToParentTable(c.proc.Ctx, rel, fkTblId)
 			if err != nil {
 				return err
 			}
 		} else {
-			_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
+			_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId)
 			if err != nil {
 				return err
 			}
-			err = AddChildTblIdToParentTable(c.ctx, fkRelation, tblId)
+			err = AddChildTblIdToParentTable(c.proc.Ctx, fkRelation, tblId)
 			if err != nil {
 				return err
 			}
@@ -780,19 +790,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		c.proc.Info(c.ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-		)
-	}
 
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
-		c.proc.Info(c.ctx, "createTable",
+		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -806,79 +808,44 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				c.proc.Info(c.ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-				)
-			}
-			return moerr.NewNoDB(c.ctx)
-		}
-		// TODO: debug for #11917
-		if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-			c.proc.Info(c.ctx, "createTable no exist",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-			)
+			return moerr.NewNoDB(c.proc.Ctx)
 		}
 		return err
 	}
-	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
+	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				c.proc.Info(c.ctx, "createTable no exist",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-				)
-			}
 			return nil
 		}
-		if qry.GetReplace() {
-			err := c.runSql(fmt.Sprintf("drop view if exists %s", tblName))
-			if err != nil {
-				c.proc.Info(c.ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.Error(err),
-				)
-				return err
-			}
-		} else {
-			c.proc.Info(c.ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
-			return moerr.NewTableAlreadyExists(c.ctx, tblName)
-		}
+
+		c.proc.Info(c.proc.Ctx, "createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
-	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 	if err == nil {
-		if _, err := tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
+		if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
 			if qry.GetIfNotExists() {
 				return nil
 			}
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
-			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
 		}
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		c.proc.Info(c.ctx, "createTable",
+	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -886,21 +853,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
-		c.proc.Info(c.ctx, "createTable",
+	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
 		)
 		return err
-	}
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		c.proc.Info(c.ctx, "createTable ok",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-		)
 	}
 
 	partitionTables := qry.GetPartitionTables()
@@ -908,16 +867,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 		storageCols := planColsToExeCols(table.GetCols())
 		storageDefs, err := planDefsToExeDefs(table)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return err
 		}
-		err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
+		err = dbSource.Create(c.proc.Ctx, table.GetName(), append(storageCols, storageDefs...))
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -940,20 +899,20 @@ func (s *Scope) CreateTable(c *Compile) error {
 		fkTables := qry.GetFkTables()
 		//get the relation of created table above again.
 		//due to the colId may be changed.
-		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
+		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return err
 		}
-		tblId := newRelation.GetTableID(c.ctx)
+		tblId := newRelation.GetTableID(c.proc.Ctx)
 
-		newTableDef, err := newRelation.TableDefs(c.ctx)
+		newTableDef, err := newRelation.TableDefs(c.proc.Ctx)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -966,7 +925,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var colNameToId = make(map[string]uint64)
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				colNameToId[attr.Attr.Name] = attr.Attr.ID
+				colNameToId[strings.ToLower(attr.Attr.Name)] = attr.Attr.ID
 			}
 		}
 		//old colId -> colName
@@ -974,12 +933,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 		for _, col := range planCols {
 			colId2Name[col.ColId] = col.Name
 		}
+		dedupFkName := make(plan2.UnorderedSet[string])
 		//1. update fk info in child table.
 		//column ids of column names in child table have changed after
 		//the table is created by engine.Database.Create.
 		//refresh column ids of column names in child table.
 		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
 		for i, fkey := range qry.GetTableDef().Fkeys {
+			if dedupFkName.Find(fkey.Name) {
+				return moerr.NewInternalErrorf(c.proc.Ctx, "deduplicate fk name %s", fkey.Name)
+			}
+			dedupFkName.Insert(fkey.Name)
 			newDef := &plan.ForeignKeyDef{
 				Name:        fkey.Name,
 				Cols:        make([]uint64, len(fkey.Cols)),
@@ -999,8 +963,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 					//colName -> new colId
 					newDef.ForeignCols[j] = colNameToId[colName]
 				}
-			} else {
-				copy(newDef.ForeignCols, fkey.ForeignCols)
 			}
 
 			//refresh child table column id
@@ -1014,16 +976,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 			Fkeys: newFkeys,
 		})
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return err
 		}
-		err = newRelation.UpdateConstraint(c.ctx, newCt)
+		err = newRelation.UpdateConstraint(c.proc.Ctx, newCt)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1038,9 +1000,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 			if fkey.ForeignTbl == 0 {
 				//fk self refer
 				//add current table to parent's children table
-				err = AddChildTblIdToParentTable(c.ctx, newRelation, 0)
+				err = AddChildTblIdToParentTable(c.proc.Ctx, newRelation, 0)
 				if err != nil {
-					c.proc.Info(c.ctx, "createTable",
+					c.proc.Info(c.proc.Ctx, "createTable",
 						zap.String("databaseName", c.db),
 						zap.String("tableName", qry.GetTableDef().GetName()),
 						zap.Error(err),
@@ -1049,18 +1011,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 				}
 				continue
 			}
-			fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
+			fkDbSource, err := c.e.Database(c.proc.Ctx, fkDbName, c.proc.GetTxnOperator())
 			if err != nil {
-				c.proc.Info(c.ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
 				)
 				return err
 			}
-			fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName, nil)
+			fkRelation, err := fkDbSource.Relation(c.proc.Ctx, fkTableName, nil)
 			if err != nil {
-				c.proc.Info(c.ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1068,9 +1030,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 				return err
 			}
 			//add current table to parent's children table
-			err = AddChildTblIdToParentTable(c.ctx, fkRelation, tblId)
+			err = AddChildTblIdToParentTable(c.proc.Ctx, fkRelation, tblId)
 			if err != nil {
-				c.proc.Info(c.ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1086,20 +1048,20 @@ func (s *Scope) CreateTable(c *Compile) error {
 		//1. get the relation of created table above again.
 		//get the relation of created table above again.
 		//due to the colId may be changed.
-		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
+		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return err
 		}
-		tblId := newRelation.GetTableID(c.ctx)
+		tblId := newRelation.GetTableID(c.proc.Ctx)
 
-		newTableDef, err := newRelation.TableDefs(c.ctx)
+		newTableDef, err := newRelation.TableDefs(c.proc.Ctx)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1110,7 +1072,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var colNameToId = make(map[string]uint64)
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				colNameToId[attr.Attr.Name] = attr.Attr.ID
+				colNameToId[strings.ToLower(attr.Attr.Name)] = attr.Attr.ID
 			}
 		}
 		//1.1 update the column id of the column names in this table.
@@ -1133,8 +1095,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 				if id, has := colNameToId[colReferred]; has {
 					newDef.ForeignCols[j] = id
 				} else {
-					err := moerr.NewInternalError(c.ctx, "no column %s", colReferred)
-					c.proc.Info(c.ctx, "createTable",
+					err := moerr.NewInternalErrorf(c.proc.Ctx, "no column %s", colReferred)
+					c.proc.Info(c.proc.Ctx, "createTable",
 						zap.String("databaseName", c.db),
 						zap.String("tableName", qry.GetTableDef().GetName()),
 						zap.Error(err),
@@ -1144,27 +1106,27 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 
 			// add the fk def into the child table
-			childDb, err := c.e.Database(c.ctx, info.Db, c.proc.TxnOperator)
+			childDb, err := c.e.Database(c.proc.Ctx, info.Db, c.proc.GetTxnOperator())
 			if err != nil {
-				c.proc.Info(c.ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
 				)
 				return err
 			}
-			childTable, err := childDb.Relation(c.ctx, info.Table, nil)
+			childTable, err := childDb.Relation(c.proc.Ctx, info.Table, nil)
 			if err != nil {
-				c.proc.Info(c.ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
 				)
 				return err
 			}
-			err = AddFkeyToRelation(c.ctx, childTable, newDef)
+			err = AddFkeyToRelation(c.proc.Ctx, childTable, newDef)
 			if err != nil {
-				c.proc.Info(c.ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1172,9 +1134,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 				return err
 			}
 			// add the child table id -- tblId into the current table -- refChildDef
-			err = AddChildTblIdToParentTable(c.ctx, newRelation, childTable.GetTableID(c.ctx))
+			err = AddChildTblIdToParentTable(c.proc.Ctx, newRelation, childTable.GetTableID(c.proc.Ctx))
 			if err != nil {
-				c.proc.Info(c.ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1190,23 +1152,23 @@ func (s *Scope) CreateTable(c *Compile) error {
 		exeCols = planColsToExeCols(planCols)
 		exeDefs, err = planDefsToExeDefs(def)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return err
 		}
-		if _, err := dbSource.Relation(c.ctx, def.Name, nil); err == nil {
-			c.proc.Info(c.ctx, "createTable",
+		if _, err := dbSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
-			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
 		}
-		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-			c.proc.Info(c.ctx, "createTable",
+		if err := dbSource.Create(c.proc.Ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1241,18 +1203,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if checkIndexInitializable(dbName, tblName) {
-		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
+		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return err
 		}
-		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
+		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.proc.Ctx, c.proc, dbSource, newRelation)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1261,7 +1223,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = c.runSql(insertSQL)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
+				zap.String("insertSQL", insertSQL),
+				zap.String("dbName0", dbName),
+				zap.String("tblName0", tblName),
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1269,9 +1234,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		insertSQL2, err := makeInsertTablePartitionsSQL(c.ctx, dbSource, newRelation)
+		insertSQL2, err := makeInsertTablePartitionsSQL(c.proc.Ctx, dbSource, newRelation)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1280,7 +1245,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = c.runSql(insertSQL2)
 		if err != nil {
-			c.proc.Info(c.ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1290,12 +1255,128 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	}
 
-	return maybeCreateAutoIncrement(
-		c.ctx,
+	err = maybeCreateAutoIncrement(
+		c.proc.Ctx,
+		c.proc.GetService(),
 		dbSource,
 		qry.GetTableDef(),
-		c.proc.TxnOperator,
-		nil)
+		c.proc.GetTxnOperator(),
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	if qry.RetentionDeadline != 0 {
+		insertRetention := fmt.Sprintf("insert into `%s`.`%s` values ('%s','%s', %d)",
+			catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName, qry.RetentionDeadline)
+		err = c.runSql(insertRetention)
+		if err != nil {
+			return err
+		}
+	}
+
+	if len(partitionTables) == 0 {
+		return nil
+	}
+
+	return shardservice.GetService(c.proc.GetService()).Create(
+		c.proc.Ctx,
+		qry.GetTableDef().TblId,
+		c.proc.GetTxnOperator(),
+	)
+}
+
+func (s *Scope) CreateView(c *Compile) error {
+	qry := s.Plan.GetDdl().GetCreateView()
+
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	if err != nil {
+		getLogger(s.Proc.GetService()).Info("createView",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
+		if dbName == "" {
+			return moerr.NewNoDB(c.proc.Ctx)
+		}
+		return err
+	}
+
+	viewName := qry.GetTableDef().GetName()
+	if _, err = dbSource.Relation(c.proc.Ctx, viewName, nil); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+
+		if qry.GetReplace() {
+			err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
+			if err != nil {
+				getLogger(s.Proc.GetService()).Info("createView",
+					zap.String("databaseName", c.db),
+					zap.String("viewName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+		} else {
+			getLogger(s.Proc.GetService()).Info("createView",
+				zap.String("databaseName", c.db),
+				zap.String("viewName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
+		}
+	}
+
+	// check in EntireEngine.TempEngine, notice that TempEngine may not init
+	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
+	if err == nil {
+		if _, err = tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, viewName), nil); err == nil {
+			if qry.GetIfNotExists() {
+				return nil
+			}
+			getLogger(s.Proc.GetService()).Info("createView",
+				zap.String("databaseName", c.db),
+				zap.String("viewName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", viewName))
+		}
+	}
+
+	if err = lockMoTable(c, dbName, viewName, lock.LockMode_Exclusive); err != nil {
+		getLogger(s.Proc.GetService()).Info("createView",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), viewName, append(exeCols, exeDefs...)); err != nil {
+		getLogger(s.Proc.GetService()).Info("createView",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+	return nil
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
@@ -1334,32 +1415,32 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	}
 
 	// check in EntireEngine.TempEngine
-	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
 	tblName := qry.GetTableDef().GetName()
-	if _, err := tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
+	if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
 		if qry.GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
+		return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
 	}
 
 	// check in EntireEngine.Engine
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
-	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
+	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewTableAlreadyExists(c.ctx, tblName)
+		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 	}
 
 	// create temporary table
-	if err := tmpDBSource.Create(c.ctx, engine.GetTempTableName(dbName, tblName), append(exeCols, exeDefs...)); err != nil {
+	if err := tmpDBSource.Create(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 
@@ -1371,20 +1452,21 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tmpDBSource.Relation(c.ctx, def.Name, nil); err == nil {
-			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
+		if _, err := tmpDBSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
 		}
 
-		if err := tmpDBSource.Create(c.ctx, engine.GetTempTableName(dbName, def.Name), append(exeCols, exeDefs...)); err != nil {
+		if err := tmpDBSource.Create(c.proc.Ctx, engine.GetTempTableName(dbName, def.Name), append(exeCols, exeDefs...)); err != nil {
 			return err
 		}
 	}
 
 	return maybeCreateAutoIncrement(
-		c.ctx,
+		c.proc.Ctx,
+		c.proc.GetService(),
 		tmpDBSource,
 		qry.GetTableDef(),
-		c.proc.TxnOperator,
+		c.proc.GetTxnOperator(),
 		func() string {
 			return engine.GetTempTableName(dbName, tblName)
 		})
@@ -1406,17 +1488,18 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		}
 	}
 
-	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
+	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
-	databaseId := d.GetDatabaseId(c.ctx)
+	databaseId := d.GetDatabaseId(c.proc.Ctx)
 
-	r, err := d.Relation(c.ctx, qry.Table, nil)
+	r, err := d.Relation(c.proc.Ctx, qry.Table, nil)
 	if err != nil {
 		return err
 	}
-	tableId := r.GetTableID(c.ctx)
+	tableId := r.GetTableID(c.proc.Ctx)
+	tableDef := r.GetTableDef(c.proc.Ctx)
 
 	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
@@ -1471,7 +1554,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	ct := defs[0].(*engine.ConstraintDef)
 
-	oldCt, err := GetConstraintDef(c.ctx, r)
+	oldCt, err := GetConstraintDef(c.proc.Ctx, r)
 	if err != nil {
 		return err
 	}
@@ -1479,14 +1562,14 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	err = r.UpdateConstraint(c.ctx, newCt)
+	err = r.UpdateConstraint(c.proc.Ctx, newCt)
 	if err != nil {
 		return err
 	}
 
 	// generate inserts into mo_indexes metadata
 	for _, indexDef := range indexTableDef.Indexes {
-		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
+		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef, tableDef)
 		if err != nil {
 			return err
 		}
@@ -1572,17 +1655,17 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 
 func (s *Scope) DropIndex(c *Compile) error {
 	qry := s.Plan.GetDdl().GetDropIndex()
-	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
+	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
-	r, err := d.Relation(c.ctx, qry.Table, nil)
+	r, err := d.Relation(c.proc.Ctx, qry.Table, nil)
 	if err != nil {
 		return err
 	}
 
 	//1. build and update constraint def
-	oldCt, err := GetConstraintDef(c.ctx, r)
+	oldCt, err := GetConstraintDef(c.proc.Ctx, r)
 	if err != nil {
 		return err
 	}
@@ -1590,23 +1673,23 @@ func (s *Scope) DropIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	err = r.UpdateConstraint(c.ctx, newCt)
+	err = r.UpdateConstraint(c.proc.Ctx, newCt)
 	if err != nil {
 		return err
 	}
 
 	//2. drop index table
 	if qry.IndexTableName != "" {
-		if _, err = d.Relation(c.ctx, qry.IndexTableName, nil); err != nil {
+		if _, err = d.Relation(c.proc.Ctx, qry.IndexTableName, nil); err != nil {
 			return err
 		}
-		if err = d.Delete(c.ctx, qry.IndexTableName); err != nil {
+		if err = d.Delete(c.proc.Ctx, qry.IndexTableName); err != nil {
 			return err
 		}
 	}
 
 	//3. delete index object from mo_catalog.mo_indexes
-	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.ctx), qry.IndexName)
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
 	err = c.runSql(deleteSql)
 	if err != nil {
 		return err
@@ -1616,26 +1699,21 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engine.ConstraintDef, error) {
 	// must fount dropName because of being checked in plan
-	for i, ct := range oldCt.Cts {
+	for i := 0; i < len(oldCt.Cts); i++ {
+		ct := oldCt.Cts[i]
 		switch def := ct.(type) {
 		case *engine.ForeignKeyDef:
-			for idx, fkDef := range def.Fkeys {
-				if fkDef.Name == dropName {
-					def.Fkeys = append(def.Fkeys[:idx], def.Fkeys[idx+1:]...)
-					oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-					oldCt.Cts = append(oldCt.Cts, def)
-					break
-				}
+			pred := func(fkDef *plan.ForeignKeyDef) bool {
+				return fkDef.Name == dropName
 			}
+			def.Fkeys = plan2.RemoveIf[*plan.ForeignKeyDef](def.Fkeys, pred)
+			oldCt.Cts[i] = def
 		case *engine.IndexDef:
-			for idx, index := range def.Indexes {
-				if index.IndexName == dropName {
-					def.Indexes = append(def.Indexes[:idx], def.Indexes[idx+1:]...)
-					oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-					oldCt.Cts = append(oldCt.Cts, def)
-					break
-				}
+			pred := func(index *plan.IndexDef) bool {
+				return index.IndexName == dropName
 			}
+			def.Indexes = plan2.RemoveIf[*plan.IndexDef](def.Indexes, pred)
+			oldCt.Cts[i] = def
 		}
 	}
 	return oldCt, nil
@@ -1648,33 +1726,23 @@ func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 			Cts: []engine.Constraint{c},
 		}, nil
 	}
+	ok := false
+	var pred func(engine.Constraint) bool
 	switch t := c.(type) {
 	case *engine.ForeignKeyDef:
-		ok := false
-		for i, ct := range oldCt.Cts {
-			if _, ok = ct.(*engine.ForeignKeyDef); ok {
-				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-				oldCt.Cts = append(oldCt.Cts, t)
-				break
-			}
+		pred = func(ct engine.Constraint) bool {
+			_, ok = ct.(*engine.ForeignKeyDef)
+			return ok
 		}
-		if !ok {
-			oldCt.Cts = append(oldCt.Cts, c)
-		}
-
+		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.RefChildTableDef:
-		ok := false
-		for i, ct := range oldCt.Cts {
-			if _, ok = ct.(*engine.RefChildTableDef); ok {
-				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-				oldCt.Cts = append(oldCt.Cts, t)
-				break
-			}
+		pred = func(ct engine.Constraint) bool {
+			_, ok = ct.(*engine.RefChildTableDef)
+			return ok
 		}
-		if !ok {
-			oldCt.Cts = append(oldCt.Cts, c)
-		}
-
+		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.IndexDef:
 		ok := false
 		var indexdef *engine.IndexDef
@@ -1742,26 +1810,23 @@ func AddFkeyToRelation(ctx context.Context, fkRelation engine.Relation, fkey *pl
 // input the fkRelation as the parameter instead of retrieving it again
 // to embrace the fk self refer situation
 func (s *Scope) removeChildTblIdFromParentTable(c *Compile, fkRelation engine.Relation, tblId uint64) error {
-	oldCt, err := GetConstraintDef(c.ctx, fkRelation)
+	oldCt, err := GetConstraintDef(c.proc.Ctx, fkRelation)
 	if err != nil {
 		return err
 	}
 	for _, ct := range oldCt.Cts {
 		if def, ok := ct.(*engine.RefChildTableDef); ok {
-			for idx, refTable := range def.Tables {
-				if refTable == tblId {
-					def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
-					break
-				}
-			}
+			def.Tables = plan2.RemoveIf[uint64](def.Tables, func(id uint64) bool {
+				return id == tblId
+			})
 			break
 		}
 	}
-	return fkRelation.UpdateConstraint(c.ctx, oldCt)
+	return fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 
 func (s *Scope) removeParentTblIdFromChildTable(c *Compile, fkRelation engine.Relation, tblId uint64) error {
-	oldCt, err := GetConstraintDef(c.ctx, fkRelation)
+	oldCt, err := GetConstraintDef(c.proc.Ctx, fkRelation)
 	if err != nil {
 		return err
 	}
@@ -1784,13 +1849,13 @@ func (s *Scope) removeParentTblIdFromChildTable(c *Compile, fkRelation engine.Re
 	if err != nil {
 		return err
 	}
-	return fkRelation.UpdateConstraint(c.ctx, newCt)
+	return fkRelation.UpdateConstraint(c.proc.Ctx, newCt)
 }
 
 func (s *Scope) getFkDefs(c *Compile, fkRelation engine.Relation) (*engine.ForeignKeyDef, *engine.RefChildTableDef, error) {
 	var oldFkeys *engine.ForeignKeyDef
 	var oldRefChild *engine.RefChildTableDef
-	oldCt, err := GetConstraintDef(c.ctx, fkRelation)
+	oldCt, err := GetConstraintDef(c.proc.Ctx, fkRelation)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1825,25 +1890,25 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	keepAutoIncrement := false
 	affectedRows := uint64(0)
 
-	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
 
-	if rel, err = dbSource.Relation(c.ctx, tblName, nil); err != nil {
+	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
 		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 		if e != nil {
 			return err
 		}
-		rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName), nil)
+		rel, e = dbSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
 		if e != nil {
 			return err
 		}
 		isTemp = true
 	}
 
-	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
+	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
@@ -1853,7 +1918,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, tqry.PartitionTableNames, false); e != nil {
+		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, tqry.PartitionTableNames, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -1867,7 +1932,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if tqry.IsDelete {
 		keepAutoIncrement = true
-		affectedRows, err = rel.Rows(c.ctx)
+		affectedRows, err = rel.Rows(c.proc.Ctx)
 		if err != nil {
 			return err
 		}
@@ -1875,10 +1940,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if isTemp {
 		// memoryengine truncate always return 0, so for temporary table, just use origin tableId as newId
-		_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
-		newId = rel.GetTableID(c.ctx)
+		_, err = dbSource.Truncate(c.proc.Ctx, engine.GetTempTableName(dbName, tblName))
+		newId = rel.GetTableID(c.proc.Ctx)
 	} else {
-		newId, err = dbSource.Truncate(c.ctx, tblName)
+		newId, err = dbSource.Truncate(c.proc.Ctx, tblName)
 	}
 
 	if err != nil {
@@ -1889,9 +1954,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	for _, name := range tqry.IndexTableNames {
 		var err error
 		if isTemp {
-			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
+			_, err = dbSource.Truncate(c.proc.Ctx, engine.GetTempTableName(dbName, name))
 		} else {
-			_, err = dbSource.Truncate(c.ctx, name)
+			_, err = dbSource.Truncate(c.proc.Ctx, name)
 		}
 		if err != nil {
 			return err
@@ -1902,9 +1967,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	for _, name := range tqry.PartitionTableNames {
 		var err error
 		if isTemp {
-			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
+			_, err = dbSource.Truncate(c.proc.Ctx, engine.GetTempTableName(dbName, name))
 		} else {
-			_, err = dbSource.Truncate(c.ctx, name)
+			_, err = dbSource.Truncate(c.proc.Ctx, name)
 		}
 		if err != nil {
 			return err
@@ -1913,11 +1978,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	// update tableDef of foreign key's table with new table id
 	for _, ftblId := range tqry.ForeignTbl {
-		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
+		_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), ftblId)
 		if err != nil {
 			return err
 		}
-		oldCt, err := GetConstraintDef(c.ctx, fkRelation)
+		oldCt, err := GetConstraintDef(c.proc.Ctx, fkRelation)
 		if err != nil {
 			return err
 		}
@@ -1932,7 +1997,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 				break
 			}
 		}
-		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
+		err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
 		if err != nil {
 			return err
 		}
@@ -1940,16 +2005,28 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	if isTemp {
-		oldId = rel.GetTableID(c.ctx)
+		oldId = rel.GetTableID(c.proc.Ctx)
 	}
-	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
-		c.ctx,
-		oldId,
-		newId,
-		keepAutoIncrement,
-		c.proc.TxnOperator)
-	if err != nil {
-		return err
+
+	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
+	tblDef := rel.GetTableDef(c.proc.Ctx)
+	var containAuto bool
+	for _, col := range tblDef.Cols {
+		if col.Typ.AutoIncr {
+			containAuto = true
+			break
+		}
+	}
+	if containAuto {
+		err = incrservice.GetAutoIncrementService(c.proc.GetService()).Reset(
+			c.proc.Ctx,
+			oldId,
+			newId,
+			keepAutoIncrement,
+			c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
 	}
 
 	// update index information in mo_catalog.mo_indexes
@@ -1969,7 +2046,7 @@ func (s *Scope) DropSequence(c *Compile) error {
 	var err error
 
 	tblName := qry.GetTable()
-	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
@@ -1978,7 +2055,7 @@ func (s *Scope) DropSequence(c *Compile) error {
 	}
 
 	var rel engine.Relation
-	if rel, err = dbSource.Relation(c.ctx, tblName, nil); err != nil {
+	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
 		if qry.GetIfExists() {
 			return nil
 		}
@@ -1990,9 +2067,9 @@ func (s *Scope) DropSequence(c *Compile) error {
 	}
 
 	// Delete the stored session value.
-	c.proc.SessionInfo.SeqDeleteKeys = append(c.proc.SessionInfo.SeqDeleteKeys, rel.GetTableID(c.ctx))
+	c.proc.GetSessionInfo().SeqDeleteKeys = append(c.proc.GetSessionInfo().SeqDeleteKeys, rel.GetTableID(c.proc.Ctx))
 
-	return dbSource.Delete(c.ctx, tblName)
+	return dbSource.Delete(c.proc.Ctx, tblName)
 }
 
 func (s *Scope) DropTable(c *Compile) error {
@@ -2011,7 +2088,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	tblId := qry.GetTableId()
 
-	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
@@ -2019,15 +2096,15 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
-	if rel, err = dbSource.Relation(c.ctx, tblName, nil); err != nil {
+	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
 		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 		if dbSource == nil && qry.GetIfExists() {
 			return nil
 		} else if e != nil {
 			return err
 		}
-		rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName), nil)
+		rel, e = dbSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
 		if e != nil {
 			if qry.GetIfExists() {
 				return nil
@@ -2038,7 +2115,12 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if !isTemp && !isView && !isSource && c.proc.TxnOperator.Txn().IsPessimistic() {
+	// if dbSource is a pub, update tableList
+	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
+		return err
+	}
+
+	if !isTemp && !isView && !isSource && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
@@ -2048,7 +2130,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, qry.PartitionTableNames, false); e != nil {
+		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, qry.PartitionTableNames, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -2075,7 +2157,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			//fk self refer
 			continue
 		}
-		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
+		_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId)
 		if err != nil {
 			return err
 		}
@@ -2091,7 +2173,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		if childTblId == 0 {
 			continue
 		}
-		_, _, childRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childTblId)
+		_, _, childRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childTblId)
 		if err != nil {
 			return err
 		}
@@ -2124,61 +2206,105 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	if isTemp {
-		if err := dbSource.Delete(c.ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
+		if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
 			return err
 		}
 		for _, name := range qry.IndexTableNames {
-			if err := dbSource.Delete(c.ctx, name); err != nil {
+			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
 				return err
 			}
 		}
 
 		//delete partition table
 		for _, name := range qry.GetPartitionTableNames() {
-			if err = dbSource.Delete(c.ctx, name); err != nil {
+			if err = dbSource.Delete(c.proc.Ctx, name); err != nil {
 				return err
 			}
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
-				c.ctx,
-				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
-			if err != nil {
+			tblDef := rel.GetTableDef(c.proc.Ctx)
+			var containAuto bool
+			for _, col := range tblDef.Cols {
+				if col.Typ.AutoIncr {
+					containAuto = true
+					break
+				}
+			}
+			if containAuto {
+				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
+					c.proc.Ctx,
+					rel.GetTableID(c.proc.Ctx),
+					c.proc.GetTxnOperator())
+				if err != nil {
+					return err
+				}
+			}
+
+			if err := shardservice.GetService(c.proc.GetService()).Delete(
+				c.proc.Ctx,
+				rel.GetTableID(c.proc.Ctx),
+				c.proc.GetTxnOperator(),
+			); err != nil {
 				return err
 			}
 		}
 
 	} else {
-		if err := dbSource.Delete(c.ctx, tblName); err != nil {
+		if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
 			return err
 		}
 		for _, name := range qry.IndexTableNames {
-			if err := dbSource.Delete(c.ctx, name); err != nil {
+			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
 				return err
 			}
 		}
 
 		// delete partition subtable
 		for _, name := range qry.GetPartitionTableNames() {
-			if err = dbSource.Delete(c.ctx, name); err != nil {
+			if err = dbSource.Delete(c.proc.Ctx, name); err != nil {
 				return err
 			}
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
-				c.ctx,
-				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
-			if err != nil {
+			tblDef := rel.GetTableDef(c.proc.Ctx)
+			var containAuto bool
+			for _, col := range tblDef.Cols {
+				if col.Typ.AutoIncr {
+					containAuto = true
+					break
+				}
+			}
+			if containAuto {
+				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
+					c.proc.Ctx,
+					rel.GetTableID(c.proc.Ctx),
+					c.proc.GetTxnOperator())
+				if err != nil {
+					return err
+				}
+			}
+
+			if err := shardservice.GetService(c.proc.GetService()).Delete(
+				c.proc.Ctx,
+				rel.GetTableID(c.proc.Ctx),
+				c.proc.GetTxnOperator(),
+			); err != nil {
 				return err
 			}
 		}
 	}
-	return nil
+
+	// remove entry in mo_retention if exists
+	// skip tables in mo_catalog.
+	// These tables do not have retention info.
+	if dbName == catalog.MO_CATALOG {
+		return nil
+	}
+	deleteRetentionSQL := fmt.Sprintf(deleteMoRetentionWithDatabaseNameAndTableNameFormat, dbName, tblName)
+	return c.runSql(deleteRetentionSQL)
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
@@ -2270,7 +2396,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 		colTyp := col.GetTyp()
 		exeCols[i] = &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Name:          col.Name,
+				Name:          col.GetOriginCaseName(),
 				Alg:           alg,
 				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
 				Default:       planCols[i].GetDefault(),
@@ -2306,36 +2432,36 @@ func (s *Scope) CreateSequence(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
-			return moerr.NewNoDB(c.ctx)
+			return moerr.NewNoDB(c.proc.Ctx)
 		}
 		return err
 	}
 
-	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
+	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
 			return nil
 		}
 		// Just report table exists error.
-		return moerr.NewTableAlreadyExists(c.ctx, tblName)
+		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 	}
 
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	if err := dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 
 	// Init the only row of sequence.
-	if rel, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
+	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if rel == nil {
-			return moerr.NewTableAlreadyExists(c.ctx, tblName)
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 		}
-		bat, err := makeSequenceInitBatch(c.ctx, c.stmt.(*tree.CreateSequence), qry.GetTableDef(), c.proc)
+		bat, err := makeSequenceInitBatch(c.proc.Ctx, c.stmt.(*tree.CreateSequence), qry.GetTableDef(), c.proc)
 		defer func() {
 			if bat != nil {
 				bat.Clean(c.proc.Mp())
@@ -2372,28 +2498,29 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
-			return moerr.NewNoDB(c.ctx)
+			return moerr.NewNoDB(c.proc.Ctx)
 		}
 		return err
 	}
 
-	if rel, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
+	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		// sequence table exists
 		// get pre sequence table row values
-		values, err = c.proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
+		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
 		if err != nil {
 			return err
 		}
-		if values == nil {
-			return moerr.NewInternalError(c.ctx, "Failed to get sequence meta data.")
+		if _values == nil {
+			return moerr.NewInternalError(c.proc.Ctx, "Failed to get sequence meta data.")
 		}
+		values = _values[0]
 
 		// get pre curval
 
-		curval = c.proc.SessionInfo.SeqCurValues[rel.GetTableID(c.ctx)]
+		curval = c.proc.GetSessionInfo().SeqCurValues[rel.GetTableID(c.proc.Ctx)]
 		// dorp the pre sequence
 		err = c.runSql(fmt.Sprintf("drop sequence %s", tblName))
 		if err != nil {
@@ -2404,23 +2531,23 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		if qry.GetIfExists() {
 			return nil
 		}
-		return moerr.NewInternalError(c.ctx, "sequence %s not exists", tblName)
+		return moerr.NewInternalErrorf(c.proc.Ctx, "sequence %s not exists", tblName)
 	}
 
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	if err := dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 
 	//Init the only row of sequence.
-	if rel, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
+	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if rel == nil {
-			return moerr.NewLockTableNotFound(c.ctx)
+			return moerr.NewLockTableNotFound(c.proc.Ctx)
 		}
-		bat, err := makeSequenceAlterBatch(c.ctx, c.stmt.(*tree.AlterSequence), qry.GetTableDef(), c.proc, values, curval)
+		bat, err := makeSequenceAlterBatch(c.proc.Ctx, c.stmt.(*tree.AlterSequence), qry.GetTableDef(), c.proc, values, curval)
 		defer func() {
 			if bat != nil {
 				bat.Clean(c.proc.Mp())
@@ -2942,10 +3069,10 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 // Checkout values.
 func valueCheckOut[T constraints.Integer](maxValue, minValue, startNum T, ctx context.Context) error {
 	if maxValue <= minValue {
-		return moerr.NewInvalidInput(ctx, "MAXVALUE (%d) of sequence must be bigger than MINVALUE (%d) of it", maxValue, minValue)
+		return moerr.NewInvalidInputf(ctx, "MAXVALUE (%d) of sequence must be bigger than MINVALUE (%d) of it", maxValue, minValue)
 	}
 	if startNum < minValue || startNum > maxValue {
-		return moerr.NewInvalidInput(ctx, "STARTVALUE (%d) for sequence must between MINVALUE (%d) and MAXVALUE (%d)", startNum, minValue, maxValue)
+		return moerr.NewInvalidInputf(ctx, "STARTVALUE (%d) for sequence must between MINVALUE (%d) and MAXVALUE (%d)", startNum, minValue, maxValue)
 	}
 	return nil
 }
@@ -3021,7 +3148,7 @@ func lockTable(
 		return doLockTable(eng, proc, rel, defChanged)
 	}
 
-	dbSource, err := eng.Database(ctx, dbName, proc.TxnOperator)
+	dbSource, err := eng.Database(ctx, dbName, proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
@@ -3068,6 +3195,7 @@ func lockRows(
 
 func maybeCreateAutoIncrement(
 	ctx context.Context,
+	sid string,
 	db engine.Database,
 	def *plan.TableDef,
 	txnOp client.TxnOperator,
@@ -3086,7 +3214,8 @@ func maybeCreateAutoIncrement(
 	if len(cols) == 0 {
 		return nil
 	}
-	return incrservice.GetAutoIncrementService(ctx).Create(
+
+	return incrservice.GetAutoIncrementService(sid).Create(
 		ctx,
 		def.TblId,
 		cols,
@@ -3094,12 +3223,12 @@ func maybeCreateAutoIncrement(
 }
 
 func getRelFromMoCatalog(c *Compile, tblName string) (engine.Relation, error) {
-	dbSource, err := c.e.Database(c.ctx, catalog.MO_CATALOG, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, catalog.MO_CATALOG, c.proc.GetTxnOperator())
 	if err != nil {
 		return nil, err
 	}
 
-	rel, err := dbSource.Relation(c.ctx, tblName, nil)
+	rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -3112,13 +3241,13 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	defer func() {
 		for _, v := range vecs {
 			if v != nil {
-				proc.PutVector(v)
+				v.Free(proc.GetMPool())
 			}
 		}
 	}()
 
 	// append account_id
-	accountIdVec := proc.GetVector(types.T_uint32.ToType())
+	accountIdVec := vector.NewVec(types.T_uint32.ToType())
 	err := vector.AppendFixed(accountIdVec, accountId, false, proc.GetMPool())
 	if err != nil {
 		return nil, err
@@ -3126,7 +3255,7 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	vecs[0] = accountIdVec
 	// append names
 	for i, name := range names {
-		nameVec := proc.GetVector(types.T_varchar.ToType())
+		nameVec := vector.NewVec(types.T_varchar.ToType())
 		err := vector.AppendBytes(nameVec, []byte(name), false, proc.GetMPool())
 		if err != nil {
 			return nil, err
@@ -3146,12 +3275,12 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
-	vec, err := getLockVector(c.proc, c.proc.SessionInfo.AccountId, []string{dbName})
+	vec, err := getLockVector(c.proc, c.proc.GetSessionInfo().AccountId, []string{dbName})
 	if err != nil {
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.GetSessionInfo().AccountId); err != nil {
 		return err
 	}
 	return nil
@@ -3166,13 +3295,13 @@ func lockMoTable(
 	if err != nil {
 		return err
 	}
-	vec, err := getLockVector(c.proc, c.proc.SessionInfo.AccountId, []string{dbName, tblName})
+	vec, err := getLockVector(c.proc, c.proc.GetSessionInfo().AccountId, []string{dbName, tblName})
 	if err != nil {
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
 
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.GetSessionInfo().AccountId); err != nil {
 		return err
 	}
 	return nil

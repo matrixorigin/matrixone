@@ -50,7 +50,7 @@ type mockRouter struct {
 	refreshCount int
 }
 
-func (r *mockRouter) Route(ctx context.Context, ci clientInfo, f func(string) bool) (*CNServer, error) {
+func (r *mockRouter) Route(ctx context.Context, sid string, ci clientInfo, f func(string) bool) (*CNServer, error) {
 	if r.mockRouteFn != nil {
 		return r.mockRouteFn(ctx, ci)
 	}
@@ -65,6 +65,10 @@ func (r *mockRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tun
 	return nil, nil, nil
 }
 
+func (r *mockRouter) AllServers(sid string) ([]*CNServer, error) {
+	return nil, nil
+}
+
 func (r *mockRouter) Refresh(sync bool) {
 	r.refreshCount++
 }
@@ -72,7 +76,7 @@ func (r *mockRouter) Refresh(sync bool) {
 func TestPluginRouter_Route(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	tests := []struct {
 		name              string
 		mockRouteFn       func(ctx context.Context, ci clientInfo) (*CNServer, error)
@@ -80,6 +84,7 @@ func TestPluginRouter_Route(t *testing.T) {
 		expectErr         bool
 		expectUUID        string
 		expectRefresh     int
+		filter            func(prevAddr string) bool
 	}{{
 		name: "recommend select CN",
 		mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
@@ -149,20 +154,40 @@ func TestPluginRouter_Route(t *testing.T) {
 		},
 		expectUUID:    "cn0",
 		expectRefresh: 1,
+	}, {
+		name: "filter out current CN",
+		mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
+			return &plugin.Recommendation{
+				Action: plugin.Select,
+				CN: &metadata.CNService{
+					ServiceID:  "cn0",
+					SQLAddress: "8.8.8.8:6001",
+				},
+				Updated: true,
+			}, nil
+		},
+		mockRouteFn: func(ctx context.Context, ci clientInfo) (*CNServer, error) {
+			return &CNServer{uuid: "cn1"}, nil
+		},
+		expectRefresh: 1,
+		expectUUID:    "cn1",
+		filter: func(addr string) bool {
+			return addr == "8.8.8.8:6001"
+		},
 	}}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &mockPlugin{mockRecommendCNFn: tt.mockRecommendCNFn}
 			r := &mockRouter{mockRouteFn: tt.mockRouteFn}
-			pr := newPluginRouter(r, p)
-			cn, err := pr.Route(context.TODO(), clientInfo{}, nil)
+			pr := newPluginRouter("", r, p)
+			cn, err := pr.Route(context.TODO(), "", clientInfo{}, tt.filter)
 			if tt.expectErr {
 				require.Error(t, err)
 				require.Nil(t, cn)
 			} else {
 				require.NotNil(t, cn)
-				require.Equal(t, cn.uuid, tt.expectUUID)
+				require.Equal(t, tt.expectUUID, cn.uuid)
 			}
 			require.Equal(t, r.refreshCount, tt.expectRefresh)
 		})
@@ -172,7 +197,7 @@ func TestPluginRouter_Route(t *testing.T) {
 func TestRPCPlugin(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	tests := []struct {
 		name       string
 		response   *plugin.Recommendation
@@ -204,9 +229,12 @@ func TestRPCPlugin(t *testing.T) {
 			addr := "unix:///tmp/plugin.sock"
 			s, err := morpc.NewRPCServer("test-plugin-server",
 				addr,
-				morpc.NewMessageCodec(func() morpc.Message {
-					return &plugin.Request{}
-				}),
+				morpc.NewMessageCodec(
+					"",
+					func() morpc.Message {
+						return &plugin.Request{}
+					},
+				),
 			)
 			require.NoError(t, err)
 			s.RegisterRequestHandler(func(ctx context.Context, msg morpc.RPCMessage, sequence uint64, cs morpc.ClientSession) error {
@@ -222,7 +250,7 @@ func TestRPCPlugin(t *testing.T) {
 			defer func() {
 				require.NoError(t, s.Close())
 			}()
-			p, err := newRPCPlugin(addr, time.Second)
+			p, err := newRPCPlugin("", addr, time.Second)
 			defer func() {
 				require.NoError(t, p.Close())
 			}()

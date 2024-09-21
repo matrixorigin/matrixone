@@ -122,7 +122,7 @@ const (
 //			atomic.AddUint64(&all, uint64(len(nodes)))
 //		}
 //	}
-//	idAlloc := common.NewIdAlloctor(1)
+//	idAlloc := common.NewIdAllocator(1)
 //	for {
 //		id := idAlloc.Alloc()
 //		if id > 10 {
@@ -148,8 +148,8 @@ func TestTable(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(3, 2)
-	schema.BlockMaxRows = 10000
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 10000
+	schema.Extra.ObjectMaxBlocks = 10
 	{
 		txn, _ := mgr.StartTxn(nil)
 		db, err := txn.CreateDatabase("db", "", "")
@@ -170,15 +170,15 @@ func TestTable(t *testing.T) {
 		assert.Nil(t, err)
 		err = tbl.RangeDeleteLocalRows(1024*10+38, 1024*40+40)
 		assert.Nil(t, err)
-		assert.True(t, tbl.IsLocalDeleted(1024+20))
-		assert.True(t, tbl.IsLocalDeleted(1024+30))
-		assert.True(t, tbl.IsLocalDeleted(1024*10+38))
-		assert.True(t, tbl.IsLocalDeleted(1024*40+40))
-		assert.True(t, tbl.IsLocalDeleted(1024*30+40))
-		assert.False(t, tbl.IsLocalDeleted(1024+19))
-		assert.False(t, tbl.IsLocalDeleted(1024+31))
-		assert.False(t, tbl.IsLocalDeleted(1024*10+37))
-		assert.False(t, tbl.IsLocalDeleted(1024*40+41))
+		assert.True(t, tbl.dataTable.tableSpace.IsDeleted(1024+20))
+		assert.True(t, tbl.dataTable.tableSpace.IsDeleted(1024+30))
+		assert.True(t, tbl.dataTable.tableSpace.IsDeleted(1024*10+38))
+		assert.True(t, tbl.dataTable.tableSpace.IsDeleted(1024*40+40))
+		assert.True(t, tbl.dataTable.tableSpace.IsDeleted(1024*30+40))
+		assert.False(t, tbl.dataTable.tableSpace.IsDeleted(1024+19))
+		assert.False(t, tbl.dataTable.tableSpace.IsDeleted(1024+31))
+		assert.False(t, tbl.dataTable.tableSpace.IsDeleted(1024*10+37))
+		assert.False(t, tbl.dataTable.tableSpace.IsDeleted(1024*40+41))
 		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 	}
@@ -195,8 +195,8 @@ func TestAppend(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(3, 1)
-	schema.BlockMaxRows = 10000
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 10000
+	schema.Extra.ObjectMaxBlocks = 10
 
 	txn, _ := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db", "", "")
@@ -206,7 +206,7 @@ func TestAppend(t *testing.T) {
 	rows := uint64(MaxNodeRows) / 8 * 3
 	brows := rows / 3
 
-	bat := catalog.MockBatch(tbl.GetLocalSchema(), int(rows))
+	bat := catalog.MockBatch(tbl.GetLocalSchema(false), int(rows))
 	defer bat.Close()
 	bats := bat.Split(3)
 
@@ -214,8 +214,8 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	err = tbl.Append(context.Background(), bats[0])
 	assert.Nil(t, err)
-	assert.Equal(t, int(brows), int(tbl.UncommittedRows()))
-	assert.Equal(t, int(brows), int(tbl.tableSpace.index.Count()))
+	assert.Equal(t, int(brows), int(tbl.dataTable.tableSpace.Rows()))
+	assert.Equal(t, int(brows), int(tbl.dataTable.tableSpace.index.Count()))
 
 	err = tbl.BatchDedupLocal(bats[0])
 	assert.NotNil(t, err)
@@ -224,15 +224,15 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	err = tbl.Append(context.Background(), bats[1])
 	assert.Nil(t, err)
-	assert.Equal(t, 2*int(brows), int(tbl.UncommittedRows()))
-	assert.Equal(t, 2*int(brows), int(tbl.tableSpace.index.Count()))
+	assert.Equal(t, 2*int(brows), int(tbl.dataTable.tableSpace.Rows()))
+	assert.Equal(t, 2*int(brows), int(tbl.dataTable.tableSpace.index.Count()))
 
 	err = tbl.BatchDedupLocal(bats[2])
 	assert.Nil(t, err)
 	err = tbl.Append(context.Background(), bats[2])
 	assert.Nil(t, err)
-	assert.Equal(t, 3*int(brows), int(tbl.UncommittedRows()))
-	assert.Equal(t, 3*int(brows), int(tbl.tableSpace.index.Count()))
+	assert.Equal(t, 3*int(brows), int(tbl.dataTable.tableSpace.Rows()))
+	assert.Equal(t, 3*int(brows), int(tbl.dataTable.tableSpace.index.Count()))
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
@@ -313,8 +313,8 @@ func TestLoad(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(14, 13)
-	schema.BlockMaxRows = 10000
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 10000
+	schema.Extra.ObjectMaxBlocks = 10
 
 	bat := catalog.MockBatch(schema, 60000)
 	defer bat.Close()
@@ -329,7 +329,7 @@ func TestLoad(t *testing.T) {
 	err := tbl.Append(context.Background(), bats[0])
 	assert.NoError(t, err)
 
-	v, _, err := tbl.GetLocalValue(100, 0)
+	v, _, err := tbl.dataTable.tableSpace.GetValue(100, 0)
 	assert.NoError(t, err)
 	t.Logf("Row %d, Col %d, Val %v", 100, 0, v)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -346,8 +346,8 @@ func TestNodeCommand(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(14, 13)
-	schema.BlockMaxRows = 10000
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 10000
+	schema.Extra.ObjectMaxBlocks = 10
 
 	bat := catalog.MockBatch(schema, 15000)
 	defer bat.Close()
@@ -364,17 +364,16 @@ func TestNodeCommand(t *testing.T) {
 	err = tbl.RangeDeleteLocalRows(100, 200)
 	assert.NoError(t, err)
 
-	for i, inode := range tbl.tableSpace.nodes {
-		cmd, err := inode.MakeCommand(uint32(i))
-		assert.NoError(t, err)
-		assert.NotNil(t, cmd.(*AppendCmd).Data)
-		//if entry != nil {
-		//	_ = entry.WaitDone()
-		//	entry.Free()
-		//}
-		if cmd != nil {
-			t.Log(cmd.String())
-		}
+	inode := tbl.dataTable.tableSpace.node
+	cmd, err := inode.MakeCommand(uint32(0))
+	assert.NoError(t, err)
+	assert.NotNil(t, cmd.(*AppendCmd).Data)
+	//if entry != nil {
+	//	_ = entry.WaitDone()
+	//	entry.Free()
+	//}
+	if cmd != nil {
+		t.Log(cmd.String())
 	}
 	assert.NoError(t, txn.Commit(context.Background()))
 }
@@ -620,52 +619,48 @@ func TestObject1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	objIt := rel.MakeObjectIt()
+	objIt := rel.MakeObjectIt(false)
 	cnt := 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 
 	_, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 
-	objIt = rel.MakeObjectIt()
+	objIt = rel.MakeObjectIt(false)
 	cnt = 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 2, cnt)
 
 	txn3, _ := mgr.StartTxn(nil)
 	db, _ = txn3.GetDatabase(name)
 	rel, _ = db.GetRelationByName(schema.Name)
-	objIt = rel.MakeObjectIt()
+	objIt = rel.MakeObjectIt(false)
 	cnt = 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 
 	err = txn2.Commit(context.Background())
 	assert.Nil(t, err)
 
-	objIt = rel.MakeObjectIt()
+	objIt = rel.MakeObjectIt(false)
 	cnt = 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 }
@@ -690,12 +685,11 @@ func TestObject2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	it := rel.MakeObjectIt()
+	it := rel.MakeObjectIt(false)
 	cnt := 0
-	for it.Valid() {
+	for it.Next() {
 		cnt++
 		// iobj := it.GetObject()
-		it.Next()
 	}
 	assert.Equal(t, objCnt, cnt)
 	// err := txn1.Commit()
@@ -714,10 +708,10 @@ func TestDedup1(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(4, 2)
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 4
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 4
 	cnt := uint64(10)
-	rows := uint64(schema.BlockMaxRows) / 2 * cnt
+	rows := uint64(schema.Extra.BlockMaxRows) / 2 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
 	defer bat.Close()
 	bats := bat.Split(int(cnt))

@@ -16,14 +16,9 @@ package fileservice
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"io"
-	"net"
-	"net/http"
 	"net/url"
-	"os"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -124,47 +119,7 @@ func NewMinioSDK(
 	}
 
 	// transport
-	dialer := &net.Dialer{
-		KeepAlive: 5 * time.Second,
-	}
-	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       180 * time.Second,
-		MaxIdleConnsPerHost:   100,
-		MaxConnsPerHost:       1000,
-		TLSHandshakeTimeout:   3 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-	if len(args.CertFiles) > 0 {
-		// custom certs
-		pool, err := x509.SystemCertPool()
-		if err != nil {
-			panic(err)
-		}
-		for _, path := range args.CertFiles {
-			content, err := os.ReadFile(path)
-			if err != nil {
-				logutil.Info("load cert file error",
-					zap.Any("err", err),
-				)
-				// ignore
-				continue
-			}
-			logutil.Info("file service: load cert file",
-				zap.Any("path", path),
-			)
-			pool.AppendCertsFromPEM(content)
-		}
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
-			RootCAs:            pool,
-		}
-		transport.TLSClientConfig = tlsConfig
-	}
-	options.Transport = transport
+	options.Transport = newHTTPClient(args).Transport
 
 	// endpoint
 	isSecure, err := minioValidateEndpoint(&args)
@@ -194,7 +149,7 @@ func NewMinioSDK(
 			return nil, err
 		}
 		if !ok {
-			return nil, moerr.NewInternalErrorNoCtx(
+			return nil, moerr.NewInternalErrorNoCtxf(
 				"bad s3 config, no such bucket or no permissions: %v",
 				args.Bucket,
 			)

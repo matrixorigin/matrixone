@@ -36,8 +36,14 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bindingByTag:   make(map[int32]*Binding),
 		bindingByTable: make(map[string]*Binding),
 		bindingByCol:   make(map[string]*Binding),
+		lower:          1,
 		parent:         parent,
 	}
+
+	if builder != nil {
+		bc.lower = builder.compCtx.GetLowerCaseTableNames()
+	}
+
 	if parent != nil {
 		bc.defaultDatabase = parent.defaultDatabase
 		bc.normalCTE = parent.normalCTE
@@ -108,7 +114,7 @@ func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindConte
 
 	for _, binding := range right.bindings {
 		if _, ok := bc.bindingByTable[binding.table]; ok {
-			return moerr.NewInvalidInput(ctx, "table '%s' specified more than once", binding.table)
+			return moerr.NewInvalidInputf(ctx, "table '%s' specified more than once", binding.table)
 		}
 
 		bc.bindings = append(bc.bindings, binding)
@@ -139,18 +145,18 @@ func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindConte
 func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, right *BindContext) (*plan.Expr, error) {
 	leftBinding, ok := left.bindingByCol[col]
 	if !ok {
-		return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in left table", col)
+		return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in left table", col)
 	}
 	if leftBinding == nil {
-		return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "common column '%s' appears more than once in left table", col)
+		return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "common column '%s' appears more than once in left table", col)
 	}
 
 	rightBinding, ok := right.bindingByCol[col]
 	if !ok {
-		return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in right table", col)
+		return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in right table", col)
 	}
 	if rightBinding == nil {
-		return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "common column '%s' appears more than once in right table", col)
+		return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "common column '%s' appears more than once in right table", col)
 	}
 
 	if typ != plan.Node_RIGHT {
@@ -193,6 +199,37 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 	return expr, err
 }
 
+func (bc *BindContext) addUsingColForCrossL2(col string, typ plan.Node_JoinType, left, right *BindContext) (*plan.Expr, error) {
+	leftBinding, ok := left.bindingByCol[col]
+	if ok {
+		leftPos := leftBinding.colIdByName[col]
+		return &plan.Expr{
+			Typ: *leftBinding.types[leftPos],
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: leftBinding.tag,
+					ColPos: leftPos,
+				},
+			},
+		}, nil
+	}
+
+	rightBinding, ok := right.bindingByCol[col]
+	if ok {
+		rightPos := rightBinding.colIdByName[col]
+		return &plan.Expr{
+			Typ: *rightBinding.types[rightPos],
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: rightBinding.tag,
+					ColPos: rightPos,
+				},
+			},
+		}, nil
+	}
+	return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in left or right table", col)
+}
+
 func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccount bool) ([]tree.SelectExpr, []string, error) {
 	if len(table) == 0 {
 		// unfold *
@@ -206,7 +243,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 		// unfold tbl.*
 		binding, ok := bc.bindingByTable[table]
 		if !ok {
-			return nil, nil, moerr.NewInvalidInput(ctx, "missing FROM-clause entry for table '%s'", table)
+			return nil, nil, moerr.NewInvalidInputf(ctx, "missing FROM-clause entry for table '%s'", table)
 		}
 
 		exprs := make([]tree.SelectExpr, 0)
@@ -223,7 +260,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 			if !isSysAccount && binding.isClusterTable && util.IsClusterTableAttribute(col) {
 				continue
 			}
-			expr, _ := tree.NewUnresolvedName(ctx, table, col)
+			expr := tree.NewUnresolvedName(tree.NewCStr(table, bc.lower), tree.NewCStr(col, 1))
 			exprs = append(exprs, tree.SelectExpr{Expr: expr})
 			names = append(names, col)
 		}
@@ -249,7 +286,7 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 				continue
 			}
 			if !visitedUsingCols[col] {
-				expr, _ := tree.NewUnresolvedName(ctx, root.binding.table, col)
+				expr := tree.NewUnresolvedName(tree.NewCStr(root.binding.table, bc.lower), tree.NewCStr(col, 1))
 				*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 				*names = append(*names, col)
 			}
@@ -272,7 +309,7 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 			handledUsingCols = append(handledUsingCols, using.col)
 			visitedUsingCols[using.col] = true
 
-			expr, _ := tree.NewUnresolvedName(ctx, using.table, using.col)
+			expr := tree.NewUnresolvedName(tree.NewCStr(using.table, bc.lower), tree.NewCStr(using.col, 1))
 			*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 			*names = append(*names, using.col)
 		}
@@ -368,7 +405,7 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 
 	case *tree.UnresolvedName:
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
-			col := exprImpl.Parts[0]
+			col := exprImpl.ColName()
 			if expandAlias == AliasBeforeColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
 					return selectItem.astExpr, nil
@@ -378,10 +415,10 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 			if binding, ok := bc.bindingByCol[col]; ok {
 				if binding != nil {
 					exprImpl.NumParts = 2
-					exprImpl.Parts[1] = binding.table
+					exprImpl.CStrParts[1] = tree.NewCStr(binding.table, bc.lower)
 					return astExpr, nil
 				} else {
-					return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "ambiguouse column reference to '%s'", col)
+					return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "ambiguouse column reference to '%s'", exprImpl.ColNameOrigin())
 				}
 			}
 

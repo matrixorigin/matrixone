@@ -16,78 +16,122 @@ package product
 
 import (
 	"bytes"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "product"
+const opName = "product"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (product *Product) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": cross join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
+func (product *Product) OpType() vm.OpType {
+	return vm.Product
+}
+
+func (product *Product) Prepare(proc *process.Process) error {
+	if product.OpAnalyzer == nil {
+		product.OpAnalyzer = process.NewAnalyzer(product.GetIdx(), product.IsFirst, product.IsLast, "cross join")
+	} else {
+		product.OpAnalyzer.Reset()
+	}
+
+	if product.ProjectList != nil {
+		return product.PrepareProjection(proc)
+	}
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
-	ap := arg
-	ctr := ap.ctr
+	analyzer := product.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	ap := product
+	ctr := &ap.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if ctr.inBat == nil { // get one batch from leftchild before receive from build side
+				result, err = vm.ChildrenCall(product.GetChildren(0), proc, analyzer)
+				if err != nil {
+					return result, err
+				}
+				ctr.inBat = result.Batch
+				if ctr.inBat == nil {
+					ctr.state = End
+					continue
+				}
+				if ctr.inBat.IsEmpty() {
+					ctr.inBat = nil
+					continue
+				}
+			}
+
+			if err = product.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
-			if ctr.inBat != nil {
-				if err := ctr.probe(ap, proc, anal, arg.GetIsLast(), &result); err != nil {
+			if ctr.inBat == nil {
+				result, err = vm.ChildrenCall(product.GetChildren(0), proc, analyzer)
+				if err != nil {
 					return result, err
 				}
-				return result, nil
-			}
-			ctr.inBat, _, err = ctr.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
-			}
-
-			if ctr.inBat == nil {
-				ctr.state = End
-				continue
-			}
-			if ctr.inBat.IsEmpty() {
-				proc.PutBatch(ctr.inBat)
-				ctr.inBat = nil
-				continue
+				ctr.inBat = result.Batch
+				if ctr.inBat == nil {
+					ctr.state = End
+					continue
+				}
+				if ctr.inBat.IsEmpty() {
+					ctr.inBat = nil
+					continue
+				}
 			}
 			if ctr.bat == nil {
-				proc.PutBatch(ctr.inBat)
 				ctr.inBat = nil
 				continue
 			}
-			anal.Input(ctr.inBat, arg.GetIsFirst())
-			if err := ctr.probe(ap, proc, anal, arg.GetIsLast(), &result); err != nil {
+
+			if ctr.rbat == nil {
+				ctr.rbat = batch.NewWithSize(len(product.Result))
+				for i, rp := range product.Result {
+					if rp.Rel == 0 {
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inBat.Vecs[rp.Pos].GetType())
+					} else {
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
+					}
+				}
+			} else {
+				ctr.rbat.CleanOnlyData()
+			}
+
+			if err := ctr.probe(ap, proc, &result); err != nil {
 				return result, err
 			}
+			if product.ProjectList != nil {
+				var err error
+				result.Batch, err = product.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -98,37 +142,31 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
-	for {
-		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-		if err != nil {
-			return err
-		}
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
-		if err != nil {
-			return err
-		}
-		proc.PutBatch(bat)
+func (product *Product) build(proc *process.Process, analyzer process.Analyzer) error {
+	ctr := &product.ctr
+	start := time.Now()
+	defer analyzer.WaitStop(start)
+	mp, err := message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
 	}
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
+
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
+		if err != nil {
+			return err
+		}
+	}
+	mp.Free()
 	return nil
 }
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			ctr.rbat.Vecs[i] = proc.GetVector(*ctr.inBat.Vecs[rp.Pos].GetType())
-		} else {
-			ctr.rbat.Vecs[i] = proc.GetVector(*ctr.bat.Vecs[rp.Pos].GetType())
-		}
-	}
+func (ctr *container) probe(ap *Product, proc *process.Process, result *vm.CallResult) error {
 	count := ctr.inBat.RowCount()
 	count2 := ctr.bat.RowCount()
 	var i, j int
@@ -147,7 +185,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			}
 		}
 		if ctr.rbat.Vecs[0].Length() >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
 			ctr.probeIdx = j + 1
@@ -157,10 +194,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	// ctr.rbat.AddRowCount(count * count2)
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-
-	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil
 	return nil
 }

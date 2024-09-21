@@ -17,9 +17,10 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 // checkConstraintNames Check whether the name of the constraint(index,unqiue etc) is legal, and handle constraints without a name
@@ -56,7 +57,7 @@ func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign boo
 	nameLower := strings.ToLower(name)
 	if namesMap[nameLower] {
 		if foreign {
-			return moerr.NewInvalidInput(ctx, "Duplicate foreign key constraint name '%s'", name)
+			return moerr.NewInvalidInputf(ctx, "Duplicate foreign key constraint name '%s'", name)
 		}
 		return moerr.NewDuplicateKey(ctx, name)
 	}
@@ -67,7 +68,7 @@ func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign boo
 // setEmptyUniqueIndexName Set name for unqiue index constraint with an empty name
 func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueIndex) {
 	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
-		colName := indexConstr.KeyParts[0].ColName.Parts[0]
+		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
 		if strings.EqualFold(constrName, "PRIMARY") {
@@ -87,10 +88,7 @@ func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueI
 // setEmptyIndexName Set name for index constraint with an empty name
 func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
 	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
-		var colName string
-		if colName == "" {
-			colName = indexConstr.KeyParts[0].ColName.Parts[0]
-		}
+		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
 		if strings.EqualFold(constrName, "PRIMARY") {

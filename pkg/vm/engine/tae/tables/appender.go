@@ -36,7 +36,7 @@ func newAppender(aobj *aobject) *objectAppender {
 }
 
 func (appender *objectAppender) GetMeta() any {
-	return appender.obj.meta
+	return appender.obj.meta.Load()
 }
 
 func (appender *objectAppender) LockFreeze() {
@@ -50,11 +50,11 @@ func (appender *objectAppender) CheckFreeze() bool {
 }
 
 func (appender *objectAppender) GetID() *common.ID {
-	return appender.obj.meta.AsCommonID()
+	return appender.obj.meta.Load().AsCommonID()
 }
 
 func (appender *objectAppender) IsAppendable() bool {
-	return appender.rows+appender.placeholder < appender.obj.meta.GetSchema().BlockMaxRows
+	return appender.rows+appender.placeholder < appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows
 }
 
 func (appender *objectAppender) Close() {
@@ -68,9 +68,10 @@ func (appender *objectAppender) IsSameColumns(other any) bool {
 }
 
 func (appender *objectAppender) PrepareAppend(
+	isMergeCompact bool,
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
-	left := appender.obj.meta.GetSchema().BlockMaxRows - appender.rows - appender.placeholder
+	left := appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows - appender.rows - appender.placeholder
 	if left == 0 {
 		// n = rows
 		return
@@ -86,6 +87,9 @@ func (appender *objectAppender) PrepareAppend(
 		txn,
 		appender.rows+appender.placeholder,
 		appender.placeholder+appender.rows+n)
+	if isMergeCompact {
+		node.SetIsMergeCompact()
+	}
 	appender.placeholder += n
 	return
 }
@@ -96,7 +100,7 @@ func (appender *objectAppender) ReplayAppend(
 		return
 	}
 	// TODO: Remove ReplayAppend
-	appender.obj.meta.GetTable().AddRows(uint64(bat.Length()))
+	appender.obj.meta.Load().GetTable().AddRows(uint64(bat.Length()))
 	return
 }
 func (appender *objectAppender) ApplyAppend(
@@ -108,7 +112,7 @@ func (appender *objectAppender) ApplyAppend(
 	node := n.MustMNode()
 	appender.obj.Lock()
 	defer appender.obj.Unlock()
-	from, err = node.ApplyAppend(bat, txn)
+	from, err = node.ApplyAppendLocked(bat, txn)
 
 	schema := node.writeSchema
 	for _, colDef := range schema.ColDefs {

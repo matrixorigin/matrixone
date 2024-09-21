@@ -52,7 +52,7 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 		err = rbat.UnmarshalBinary(data)
 		require.NoError(t, err)
 		for i, vec := range rbat.Vecs {
-			require.Equal(t, vector.MustFixedCol[int8](tc.bat.Vecs[i]), vector.MustFixedCol[int8](vec))
+			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
 		}
 	}
 }
@@ -65,7 +65,7 @@ func TestBatch(t *testing.T) {
 		err = types.Decode(data, rbat)
 		require.NoError(t, err)
 		for i, vec := range rbat.Vecs {
-			require.Equal(t, vector.MustFixedCol[int8](tc.bat.Vecs[i]), vector.MustFixedCol[int8](vec))
+			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
 		}
 	}
 }
@@ -79,7 +79,7 @@ func TestBatchShrink(t *testing.T) {
 }
 
 func TestBatch_ReplaceVector(t *testing.T) {
-	v1, v2, v3 := &vector.Vector{}, &vector.Vector{}, &vector.Vector{}
+	v1, v2, v3 := vector.NewVecFromReuse(), vector.NewVecFromReuse(), vector.NewVecFromReuse()
 	bat := &Batch{
 		Vecs: []*vector.Vector{
 			v1,
@@ -89,7 +89,7 @@ func TestBatch_ReplaceVector(t *testing.T) {
 			v2,
 		},
 	}
-	bat.ReplaceVector(bat.Vecs[0], v3)
+	bat.ReplaceVector(bat.Vecs[0], v3, 0)
 	require.Equal(t, v3, bat.Vecs[0])
 	require.Equal(t, v3, bat.Vecs[1])
 	require.Equal(t, v3, bat.Vecs[2])
@@ -117,7 +117,7 @@ func newBatch(ts []types.Type, rows int) *Batch {
 				panic(err)
 			}
 			vec.SetLength(rows)
-			vs := vector.MustFixedCol[int8](vec)
+			vs := vector.MustFixedColWithTypeCheck[int8](vec)
 			for j := range vs {
 				vs[j] = int8(j)
 			}

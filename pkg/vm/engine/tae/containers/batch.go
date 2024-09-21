@@ -78,7 +78,7 @@ func NewBatchWithCapacity(cap int) *Batch {
 
 func (bat *Batch) AddVector(attr string, vec Vector) {
 	if _, exist := bat.Nameidx[attr]; exist {
-		panic(moerr.NewInternalErrorNoCtx("duplicate vector %s", attr))
+		panic(moerr.NewInternalErrorNoCtxf("duplicate vector %s", attr))
 	}
 	idx := len(bat.Vecs)
 	bat.Nameidx[attr] = idx
@@ -237,8 +237,11 @@ func (bat *Batch) PPString(num int) string {
 }
 
 func (bat *Batch) Close() {
-	for _, vec := range bat.Vecs {
-		vec.Close()
+	for i, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Close()
+			bat.Vecs[i] = nil
+		}
 	}
 }
 

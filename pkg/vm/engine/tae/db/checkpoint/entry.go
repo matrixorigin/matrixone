@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -33,6 +32,7 @@ import (
 
 type CheckpointEntry struct {
 	sync.RWMutex
+	sid        string
 	start, end types.TS
 	state      State
 	entryType  EntryType
@@ -46,8 +46,9 @@ type CheckpointEntry struct {
 	truncateLSN uint64
 }
 
-func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
+func NewCheckpointEntry(sid string, start, end types.TS, typ EntryType) *CheckpointEntry {
 	return &CheckpointEntry{
+		sid:       sid,
 		start:     start,
 		end:       end,
 		state:     ST_Pending,
@@ -79,10 +80,11 @@ func (e *CheckpointEntry) CheckPrintTime() bool {
 	return time.Since(e.lastPrint) > e.waterLine
 }
 func (e *CheckpointEntry) LSNString() string {
-	if e.version < logtail.CheckpointVersion7 {
-		return fmt.Sprintf("version too small: v%d", e.version)
-	}
 	return fmt.Sprintf("ckp %d, truncate %d", e.ckpLSN, e.truncateLSN)
+}
+
+func (e *CheckpointEntry) LSN() uint64 {
+	return e.ckpLSN
 }
 
 func (e *CheckpointEntry) GetStart() types.TS { return e.start }
@@ -184,10 +186,7 @@ func (e *CheckpointEntry) Prefetch(
 	data *logtail.CheckpointData,
 ) (err error) {
 	if err = data.PrefetchFrom(
-		ctx,
-		e.version,
 		fs.Service,
-		e.tnLocation,
 	); err != nil {
 		return
 	}
@@ -199,7 +198,7 @@ func (e *CheckpointEntry) Read(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.tnLocation)
+	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.tnLocation)
 	if err != nil {
 		return
 	}
@@ -220,10 +219,8 @@ func (e *CheckpointEntry) PrefetchMetaIdx(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	data = logtail.NewCheckpointData(common.CheckpointAllocator)
+	data = logtail.NewCheckpointData(e.sid, common.CheckpointAllocator)
 	if err = data.PrefetchMeta(
-		ctx,
-		e.version,
 		fs.Service,
 		e.tnLocation,
 	); err != nil {
@@ -237,20 +234,20 @@ func (e *CheckpointEntry) ReadMetaIdx(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.tnLocation)
+	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.tnLocation)
 	if err != nil {
 		return
 	}
 	return data.ReadTNMetaBatch(ctx, e.version, e.tnLocation, reader)
 }
 
-func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.cnLocation)
+func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, dataObject, tombstoneObject *api.Batch, err error) {
+	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.cnLocation)
 	if err != nil {
 		return
 	}
-	data := logtail.NewCNCheckpointData()
-	err = blockio.PrefetchMeta(fs.Service, e.cnLocation)
+	data := logtail.NewCNCheckpointData(e.sid)
+	err = blockio.PrefetchMeta(e.sid, fs.Service, e.cnLocation)
 	if err != nil {
 		return
 	}
@@ -275,7 +272,7 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 	if bats, err = data.ReadFromData(ctx, tid, e.cnLocation, reader, e.version, common.CheckpointAllocator); err != nil {
 		return
 	}
-	ins, del, cnIns, segDel, err = data.GetTableDataFromBats(tid, bats)
+	ins, del, dataObject, tombstoneObject, err = data.GetTableDataFromBats(tid, bats)
 	return
 }
 
@@ -317,4 +314,14 @@ func (m *MetaFile) GetEnd() types.TS {
 
 func (m *MetaFile) GetName() string {
 	return m.name
+}
+
+func NewMetaFile(index int, start, end types.TS, name string) *MetaFile {
+	return &MetaFile{
+		index: index,
+		start: start,
+		end:   end,
+		name:  name,
+	}
+
 }

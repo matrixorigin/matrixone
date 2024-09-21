@@ -32,6 +32,24 @@ var (
 		},
 		[]string{constTenantKey},
 	)
+
+	ObjectCountFactory = NewGaugeVec(
+		GaugeOpts{
+			Subsystem: "server",
+			Name:      "object_count",
+			Help:      "object number of each account",
+		},
+		[]string{constTenantKey},
+	)
+
+	SnapshotUsageFactory = NewGaugeVec(
+		GaugeOpts{
+			Subsystem: "server",
+			Name:      "snapshot_usage",
+			Help:      "Snapshot usage of each account",
+		},
+		[]string{constTenantKey},
+	)
 )
 
 func ConnectionCounter(account string) Gauge {
@@ -40,4 +58,12 @@ func ConnectionCounter(account string) Gauge {
 
 func StorageUsage(account string) Gauge {
 	return StorageUsageFactory.WithLabelValues(account)
+}
+
+func ObjectCount(account string) Gauge {
+	return ObjectCountFactory.WithLabelValues(account)
+}
+
+func SnapshotUsage(account string) Gauge {
+	return SnapshotUsageFactory.WithLabelValues(account)
 }

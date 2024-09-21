@@ -99,42 +99,34 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, i
 		e.acInfo.TenantID = txn.GetTenantID()
 		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
-	e.CreateWithTxn(txn, &EmptyMVCCNode{})
+	e.CreateWithTxnLocked(txn, &EmptyMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
 
 func NewSystemDBEntry(catalog *Catalog) *DBEntry {
-	entry := &DBEntry{
-		ID: pkgcatalog.MO_CATALOG_ID,
-		BaseEntryImpl: NewBaseEntry(
-			func() *EmptyMVCCNode {
-				return &EmptyMVCCNode{}
-			}),
-		catalog: catalog,
-		DBNode: &DBNode{
-			name:      pkgcatalog.MO_CATALOG,
-			createSql: "create database " + pkgcatalog.MO_CATALOG,
-		},
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList((*TableEntry).Less),
-		isSys:     true,
+	entry := NewReplayDBEntry()
+	entry.isSys = true
+	entry.ID = pkgcatalog.MO_CATALOG_ID
+	entry.catalog = catalog
+	entry.DBNode = &DBNode{
+		name:      pkgcatalog.MO_CATALOG,
+		createSql: "create database " + pkgcatalog.MO_CATALOG,
 	}
-	entry.CreateWithTS(types.SystemDBTS, &EmptyMVCCNode{})
+	entry.CreateWithTSLocked(types.SystemDBTS, &EmptyMVCCNode{})
 	return entry
 }
 
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
-		BaseEntryImpl: NewReplayBaseEntry(
-			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList((*TableEntry).Less),
+		BaseEntryImpl: NewBaseEntry(func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
+		entries:       make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes:     make(map[string]*nodeList[*TableEntry]),
+		link:          common.NewGenericSortedDList((*TableEntry).Less),
 	}
 	return entry
 }
+
 func (e *DBEntry) GetID() uint64    { return e.ID }
 func (e *DBEntry) IsSystemDB() bool { return e.isSys }
 func (e *DBEntry) CoarseTableCnt() int {
@@ -173,6 +165,7 @@ func (e *DBEntry) String() string {
 func (e *DBEntry) StringLocked() string {
 	return e.StringWithlevelLocked(common.PPL1)
 }
+
 func (e *DBEntry) StringWithLevel(level common.PPLevel) string {
 	e.RLock()
 	defer e.RUnlock()
@@ -213,14 +206,14 @@ func (e *DBEntry) AsCommonID() *common.ID {
 		DbID: e.ID,
 	}
 }
-func (e *DBEntry) GetObjectEntryByID(id *common.ID) (obj *ObjectEntry, err error) {
+func (e *DBEntry) GetObjectEntryByID(id *common.ID, isTombstone bool) (obj *ObjectEntry, err error) {
 	e.RLock()
 	table, err := e.GetTableEntryByID(id.TableID)
 	e.RUnlock()
 	if err != nil {
 		return
 	}
-	obj, err = table.GetObjectByID(id.ObjectID())
+	obj, err = table.GetObjectByID(id.ObjectID(), isTombstone)
 	return
 }
 
@@ -339,7 +332,7 @@ func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn
 	e.Lock()
 	defer e.Unlock()
 	if tableId < pkgcatalog.MO_RESERVED_MAX {
-		return nil, moerr.NewInternalErrorNoCtx("reserved table ID %d", tableId)
+		return nil, moerr.NewInternalErrorNoCtxf("reserved table ID %d", tableId)
 	}
 	//Deduplicate for tableId
 	if _, exist := e.entries[tableId]; exist {
@@ -454,6 +447,16 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 			}
 			return true
 		})
+
+		// When Rollback, the last mvcc has already removed
+		fullname := table.GetFullName()
+		nn := e.nameNodes[fullname]
+		if nn != nil {
+			nn.DeleteNode(table.ID)
+			if nn.Length() == 0 {
+				delete(e.nameNodes, fullname)
+			}
+		}
 		e.link.Delete(n)
 		delete(e.entries, table.ID)
 	}
@@ -487,7 +490,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 		nn.CreateNode(table.ID)
 	} else {
 		if !skipDedup {
-			name := table.GetLastestSchemaLocked().Name
+			name := table.GetLastestSchemaLocked(false).Name
 			err = e.checkAddNameConflictLocked(name, table.ID, nn, txn)
 			if err != nil {
 				return
@@ -535,12 +538,6 @@ func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {
 	return newDBCmd(id, cmdType, e), nil
 }
 
-func (e *DBEntry) Set1PC() {
-	e.GetLatestNodeLocked().Set1PC()
-}
-func (e *DBEntry) Is1PC() bool {
-	return e.GetLatestNodeLocked().Is1PC()
-}
 func (e *DBEntry) GetCatalog() *Catalog { return e.catalog }
 
 func (e *DBEntry) RecurLoop(processor Processor) (err error) {
@@ -595,17 +592,7 @@ func MockDBEntryWithAccInfo(accId uint64, dbId uint64) *DBEntry {
 
 	entry.DBNode = &DBNode{}
 	entry.DBNode.acInfo.TenantID = uint32(accId)
+	entry.BaseEntryImpl = NewBaseEntry(func() *EmptyMVCCNode { return &EmptyMVCCNode{} })
 
 	return entry
-}
-
-func (e *DBEntry) GetBlockEntryByID(id *common.ID) (obj *ObjectEntry, err error) {
-	e.RLock()
-	table, err := e.GetTableEntryByID(id.TableID)
-	e.RUnlock()
-	if err != nil {
-		return
-	}
-	obj, err = table.GetObjectByID(id.ObjectID())
-	return
 }

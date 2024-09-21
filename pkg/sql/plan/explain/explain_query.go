@@ -20,10 +20,72 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+)
+
+const (
+	Label_Table_Name                = "Full table name"
+	Label_Table_Columns             = "Columns"
+	Label_Total_Columns             = "Total columns"
+	Label_Scan_Columns              = "Scan columns"
+	Label_List_Expression           = "List of expressions"
+	Label_Grouping_Keys             = "Grouping keys"
+	Label_Agg_Functions             = "Aggregate functions"
+	Label_Filter_Conditions         = "Filter conditions"
+	Label_Block_Filter_Conditions   = "Block Filter conditions"
+	Label_Join_Type                 = "Join type"
+	Label_Join_Conditions           = "Join conditions"
+	Label_Left_NodeId               = "Left node id"
+	Label_Right_NodeId              = "Right node id"
+	Label_Sort_Keys                 = "Sort keys"
+	Label_List_Values               = "List of values"
+	Label_Union_Expressions         = "Union expressions"
+	Label_Union_All_Expressions     = "Union all expressions"
+	Label_Intersect_Expressions     = "Intersect expressions"
+	Label_Intersect_All_Expressions = "Intersect all expressions"
+	Label_Minus_Expressions         = "Minus expressions"
+	Label_Pre_Insert                = "Pre insert"
+	Label_Pre_InsertUk              = "Pre insert uk"
+	Label_Pre_InsertSk              = "Pre insert sk"
+	Label_Pre_Delete                = "Pre delete"
+	Label_Sink                      = "Sink"
+	Label_Sink_Scan                 = "Sink scan"
+	Label_Recursive_SCAN            = "Recursive scan"
+	Label_Recursive_CTE             = "CTE scan"
+	Label_Lock_Op                   = "Lock op"
+	Label_Row_Number                = "Number of rows"
+	Label_Offset                    = "Offset"
+
+	Label_Time_Window       = "Time window"
+	Label_Partition         = "Partition"
+	Label_Fill              = "Fill"
+	Label_Boardcast         = "Boardcast"
+	Label_Split             = "Split"
+	Label_Gather            = "Gather"
+	Label_Assert            = "Assert"
+	Label_On_Duplicate_Key  = "On duplicate key"
+	Label_Fuzzy_Filter      = "Fuzzy filter"
+	Label_External_Function = "External Function"
+	Label_Distinct          = "Distinct"
+	Label_Sample            = "Sample"
+	Label_Window            = "Window"
+	Label_Minus_All         = "Minus All"
+	Label_Unique            = "Unique"
+	Label_Replace           = "Replace"
+	Label_Unknown           = "Unknown"
+	Label_Meterial          = "Meterial"
+	Label_Apply             = "Apply"
+)
+
+const (
+	Statistic_Unit_ns    = "ns"
+	Statistic_Unit_count = "count"
+	Statistic_Unit_byte  = "byte"
 )
 
 var _ ExplainQuery = &ExplainQueryImpl{}
@@ -68,35 +130,35 @@ func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataB
 	return nil
 }
 
-func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions, query *plan.Query) *ExplainData {
+func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions, query *plan.Query) *models.ExplainData {
 	nodes := query.Nodes
-	expdata := NewExplainData(uuid)
+	expdata := models.NewExplainData(uuid)
 	for index, rootNodeId := range query.Steps {
-		graphData := NewGraphData(len(nodes))
+		graphData := models.NewGraphData(len(nodes))
 		err := PreOrderPlan(ctx, nodes[rootNodeId], nodes, graphData, options)
 		if err != nil {
-			var errdata *ExplainData
+			var errdata *models.ExplainData
 			if moErr, ok := err.(*moerr.Error); ok {
-				errdata = NewExplainDataFail(uuid, moErr.MySQLCode(), moErr.Error())
+				errdata = models.NewExplainDataFail(uuid, moErr.MySQLCode(), moErr.Error())
 			} else {
 				newError := moerr.NewInternalError(ctx, "An error occurred when plan is serialized to json")
-				errdata = NewExplainDataFail(uuid, newError.MySQLCode(), newError.Error())
+				errdata = models.NewExplainDataFail(uuid, newError.MySQLCode(), newError.Error())
 			}
 			return errdata
 		}
 		err = graphData.StatisticsGlobalResource(ctx)
 		if err != nil {
-			var errdata *ExplainData
+			var errdata *models.ExplainData
 			if moErr, ok := err.(*moerr.Error); ok {
-				errdata = NewExplainDataFail(uuid, moErr.MySQLCode(), moErr.Error())
+				errdata = models.NewExplainDataFail(uuid, moErr.MySQLCode(), moErr.Error())
 			} else {
 				newError := moerr.NewInternalError(ctx, "An error occurred when plan is serialized to json")
-				errdata = NewExplainDataFail(uuid, newError.MySQLCode(), newError.Error())
+				errdata = models.NewExplainDataFail(uuid, newError.MySQLCode(), newError.Error())
 			}
 			return errdata
 		}
 
-		step := NewStep(index)
+		step := models.NewStep(index)
 		step.GraphData = *graphData
 
 		expdata.Steps = append(expdata.Steps, *step)
@@ -126,7 +188,7 @@ func DebugPlan(pl *plan.Plan) string {
 	}
 }
 
-func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings, options *ExplainOptions) error {
+func explainStep(ctx context.Context, step *plan.Node, nodes []*plan.Node, settings *FormatSettings, options *ExplainOptions) error {
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
@@ -216,6 +278,33 @@ func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings,
 					settings.buffer.PushNewLine(buf.String(), false, settings.level)
 				}
 			}
+
+			if nodedescImpl.Node.NodeType == plan.Node_FUZZY_FILTER {
+				buf := bytes.NewBuffer(make([]byte, 0, 360))
+				buf.WriteString("Build on: ")
+				var sinkScan, tableScan *plan.Node
+				for _, childNodeID := range step.Children {
+					index, err := serachNodeIndex(ctx, childNodeID, nodes)
+					if err != nil {
+						return err
+					}
+					childNode := nodes[index]
+					if childNode.NodeType == plan.Node_TABLE_SCAN {
+						tableScan = childNode
+					} else {
+						sinkScan = childNode
+					}
+				}
+				if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.5 {
+					buf.WriteString("TableScan")
+					if step.IfInsertFromUnique {
+						buf.WriteString(" (InsertFromUnique)")
+					}
+				} else {
+					buf.WriteString("SinkScan")
+				}
+				settings.buffer.PushNewLine(buf.String(), false, settings.level)
+			}
 		}
 
 		// print out the actual operation information
@@ -249,7 +338,7 @@ func traversalPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, set
 	if node == nil {
 		return nil
 	}
-	err1 := explainStep(ctx, node, settings, options)
+	err1 := explainStep(ctx, node, Nodes, settings, options)
 	if err1 != nil {
 		return err1
 	}
@@ -278,10 +367,10 @@ func serachNodeIndex(ctx context.Context, nodeID int32, Nodes []*plan.Node) (int
 			return int32(i), nil
 		}
 	}
-	return -1, moerr.NewInvalidInput(ctx, "invliad plan nodeID %d", nodeID)
+	return -1, moerr.NewInvalidInputf(ctx, "invliad plan nodeID %d", nodeID)
 }
 
-func PreOrderPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, graphData *GraphData, options *ExplainOptions) error {
+func PreOrderPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, graphData *models.GraphData, options *ExplainOptions) error {
 	if node != nil {
 		newNode, err := ConvertNode(ctx, node, options)
 		if err != nil {
@@ -304,132 +393,6 @@ func PreOrderPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, grap
 				}
 			}
 		}
-	}
-	return nil
-}
-
-// StatisticsRead statistics read rows, size in ExplainData
-//
-// Deprecated: please use explain.GetInputRowsAndInputSize instead.
-func (d *ExplainData) StatisticsRead() (rows int64, size int64) {
-	for _, step := range d.Steps {
-		for _, node := range step.GraphData.Nodes {
-			if node.Name != TableScan && node.Name != ExternalScan {
-				continue
-			}
-			for _, s := range node.Statistics.Throughput {
-				switch s.Name {
-				case InputRows:
-					rows += s.Value
-				case InputSize:
-					size += s.Value
-				}
-			}
-		}
-	}
-	return
-}
-
-// Statistics of global resource usage, adding resources of all nodes
-func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error {
-	if graphData == nil {
-		return moerr.NewInternalError(ctx, "explain graphData data is null")
-	} else {
-		// time
-		gtimeConsumed := NewStatisticValue(TimeConsumed, "ns")
-		gwaitTime := NewStatisticValue(WaitTime, "ns")
-
-		// Throughput
-		ginputRows := NewStatisticValue(InputRows, "count")
-		goutputRows := NewStatisticValue(OutputRows, "count")
-		ginputSize := NewStatisticValue(InputSize, "byte")
-		goutputSize := NewStatisticValue(OutputSize, "byte")
-
-		// memory
-		gMemorySize := NewStatisticValue(MemorySize, "byte")
-
-		//io
-		gDiskIO := NewStatisticValue(DiskIO, "byte")
-		gS3IOByte := NewStatisticValue(S3IOByte, "byte")
-		gS3IOInputCount := NewStatisticValue(S3IOInputCount, "count")
-		gS3IOOutputCount := NewStatisticValue(S3IOOutputCount, "count")
-
-		// network
-		gNetwork := NewStatisticValue(Network, "byte")
-
-		gtotalStats := TotalStats{
-			Name:  "Time spent",
-			Value: 0,
-			Unit:  "ns",
-		}
-
-		for _, node := range graphData.Nodes {
-			for _, timeStatValue := range node.Statistics.Time {
-				if timeStatValue.Name == TimeConsumed {
-					gtimeConsumed.Value += timeStatValue.Value
-				}
-				if timeStatValue.Name == WaitTime {
-					gwaitTime.Value += timeStatValue.Value
-				}
-			}
-
-			for _, throughputValue := range node.Statistics.Throughput {
-				if throughputValue.Name == InputRows {
-					ginputRows.Value += throughputValue.Value
-				}
-				if throughputValue.Name == OutputRows {
-					goutputRows.Value += throughputValue.Value
-				}
-				if throughputValue.Name == InputSize {
-					ginputSize.Value += throughputValue.Value
-				}
-				if throughputValue.Name == OutputSize {
-					goutputSize.Value += throughputValue.Value
-				}
-			}
-
-			for _, memoryValue := range node.Statistics.Memory {
-				if memoryValue.Name == MemorySize {
-					gMemorySize.Value += memoryValue.Value
-				}
-			}
-
-			for _, ioValue := range node.Statistics.IO {
-				if ioValue.Name == DiskIO {
-					gDiskIO.Value += ioValue.Value
-				}
-				if ioValue.Name == S3IOByte {
-					gS3IOByte.Value += ioValue.Value
-				}
-				if ioValue.Name == S3IOInputCount {
-					gS3IOInputCount.Value += ioValue.Value
-				}
-				if ioValue.Name == S3IOOutputCount {
-					gS3IOOutputCount.Value += ioValue.Value
-				}
-			}
-
-			for _, networkValue := range node.Statistics.Network {
-				if networkValue.Name == Network {
-					gNetwork.Value += networkValue.Value
-				}
-			}
-			gtotalStats.Value += node.TotalStats.Value
-		}
-
-		times := []StatisticValue{*gtimeConsumed, *gwaitTime}
-		mbps := []StatisticValue{*ginputRows, *goutputRows, *ginputSize, *goutputSize}
-		mems := []StatisticValue{*gMemorySize}
-		io := []StatisticValue{*gDiskIO, *gS3IOByte, *gS3IOInputCount, *gS3IOOutputCount}
-		nw := []StatisticValue{*gNetwork}
-
-		graphData.Global.Statistics.Time = append(graphData.Global.Statistics.Time, times...)
-		graphData.Global.Statistics.Throughput = append(graphData.Global.Statistics.Throughput, mbps...)
-		graphData.Global.Statistics.Memory = append(graphData.Global.Statistics.Memory, mems...)
-		graphData.Global.Statistics.IO = append(graphData.Global.Statistics.IO, io...)
-		graphData.Global.Statistics.Network = append(graphData.Global.Statistics.Network, nw...)
-
-		graphData.Global.TotalStats = gtotalStats
 	}
 	return nil
 }

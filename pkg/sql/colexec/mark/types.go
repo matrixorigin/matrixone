@@ -15,20 +15,19 @@
 package mark
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(MarkJoin)
 
 const (
 	Build = iota
@@ -44,32 +43,16 @@ const (
 	condUnkown
 )
 
-type evalVector struct {
-	// In MO,for example, select a from t1 where a+1 > 1, col a will be transformed as a vector,
-	// when it comes to be accepted by the operator,will firstly calculate the a+1, so it's up to
-	// the eval implementor whether he store the a+1 result in the old col a vector or create a
-	// new vector to store it.
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 // note that, different from other joins,the result vector is like below:
 // Result[0],Result[1],......,Result[n-1],bool
 // we will give more one bool type vector as a marker col
 // so if you use mark join result, remember to get the last vector,that's what you want
 type container struct {
-	colexec.ReceiverOperator
-
 	// here, we will have three states:
 	// Build：we will use the right table to build a hashtable
 	// Probe: we will use the left table data to probe the hashtable
 	// End: Join working is over
 	state int
-
-	// in the probe stage, when we invoke func find to find rows in the hashtable,it will modify the
-	// inBuckets Slice, inBuckets[i] means the i-th row is whether in the bucket
-	// 0 means no, 1 means yes
-	inBuckets []uint8
 
 	// store the all batch from the build table
 	bat     *batch.Batch
@@ -85,7 +68,7 @@ type container struct {
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
 	// records the eval result of the batch from the probe table
-	evecs []evalVector
+	executor []colexec.ExpressionExecutor
 	// vecs is same as the evecs.vec's union, we need this because
 	// when we use the Insert func to build the hashtable, we need
 	// vecs not evecs
@@ -97,13 +80,13 @@ type container struct {
 	sels []int64
 	// the result of eval join condtion for conds[1] and cons[0], those two vectors is used to
 	// check equal condition when zval == 0 or condState is False from JoinMap
-	buildEqVec   []*vector.Vector
-	buildEqEvecs []evalVector
+	buildEqVec      []*vector.Vector
+	buildEqExecutor []colexec.ExpressionExecutor
 
 	markVals  []bool
 	markNulls *nulls.Nulls
 
-	mp *hashmap.JoinMap
+	mp *message.JoinMap
 
 	nullWithBatch *batch.Batch
 	rewriteCond   *plan.Expr
@@ -122,9 +105,9 @@ type container struct {
 // remember that we may use partition stragey, for example, if the origin table has data squence
 // like 1,2,3,4. If we use the hash method, after using hash function,assume that we get 13,14,15,16.
 // and we divide them into 3 buckets. so 13%3 = 1,so 3 is in the 1-th bucket and so on like this
-type Argument struct {
+type MarkJoin struct {
 	// container means the local parameters defined by the operator constructor
-	ctr *container
+	ctr container
 	// the five attributes below are passed by the outside
 
 	// // the input batch's columns' type
@@ -150,75 +133,94 @@ type Argument struct {
 	// they are both ok
 	Conditions [][]*plan.Expr
 
-	Typs []types.Type
 	Cond *plan.Expr
 
-	OnList   []*plan.Expr
-	HashOnPK bool
+	OnList     []*plan.Expr
+	HashOnPK   bool
+	JoinMapTag int32
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (markJoin *MarkJoin) GetOperatorBase() *vm.OperatorBase {
+	return &markJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[MarkJoin](
+		func() *MarkJoin {
+			return &MarkJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *MarkJoin) {
+			*a = MarkJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[MarkJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (markJoin MarkJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *MarkJoin {
+	return reuse.Alloc[MarkJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (markJoin *MarkJoin) Release() {
+	if markJoin != nil {
+		reuse.Free[MarkJoin](markJoin, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors()
-		ctr.cleanEqVectors()
-		ctr.cleanHashMap()
-		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
+func (markJoin *MarkJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &markJoin.ctr
 
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
-		arg.ctr = nil
+	ctr.resetExecutor()
+	ctr.cleanHashMap()
+	ctr.resetBatch(proc.Mp())
+	ctr.state = Build
+	ctr.sels = nil
+	ctr.nullSels = nil
+	ctr.markVals = nil
+	ctr.markNulls = nil
+
+	if markJoin.ProjectList != nil {
+		if markJoin.OpAnalyzer != nil {
+			markJoin.OpAnalyzer.Alloc(markJoin.ProjectAllocSize + markJoin.ctr.maxAllocSize)
+		}
+		markJoin.ctr.maxAllocSize = 0
+		markJoin.ResetProjection(proc)
+	} else {
+		if markJoin.OpAnalyzer != nil {
+			markJoin.OpAnalyzer.Alloc(markJoin.ctr.maxAllocSize)
+		}
+		markJoin.ctr.maxAllocSize = 0
 	}
 }
 
-func (ctr *container) cleanExprExecutor() {
-	if ctr.expr != nil {
-		ctr.expr.Free()
-		ctr.expr = nil
-	}
+func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &markJoin.ctr
+
+	ctr.cleanBatch(proc.Mp())
+	ctr.cleanExecutor()
+
+	markJoin.FreeProjection(proc)
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) resetBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
 	}
+	if ctr.nullWithBatch != nil {
+		ctr.nullWithBatch.Clean(mp)
+		ctr.nullWithBatch = nil
+	}
+}
+
+func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)
 		ctr.rbat = nil
@@ -244,21 +246,34 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors() {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
-		}
-		ctr.evecs[i].vec = nil
+func (ctr *container) resetExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
-	ctr.evecs = nil
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].ResetForNextQuery()
+		}
+	}
+	for i := range ctr.buildEqExecutor {
+		if ctr.buildEqExecutor[i] != nil {
+			ctr.buildEqExecutor[i].ResetForNextQuery()
+		}
+	}
 }
 
-func (ctr *container) cleanEqVectors() {
-	for i := range ctr.buildEqEvecs {
-		if ctr.buildEqEvecs[i].executor != nil {
-			ctr.buildEqEvecs[i].executor.Free()
+func (ctr *container) cleanExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.Free()
+	}
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].Free()
 		}
-		ctr.buildEqEvecs[i].vec = nil
+	}
+	for i := range ctr.buildEqExecutor {
+		if ctr.buildEqExecutor[i] != nil {
+			ctr.buildEqExecutor[i].Free()
+		}
 	}
 }

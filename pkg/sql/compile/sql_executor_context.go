@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -45,6 +48,12 @@ type compilerContext struct {
 	dbOfView, nameOfView string
 	sql                  string
 	mu                   sync.Mutex
+
+	lower int64
+}
+
+func (c *compilerContext) GetLowerCaseTableNames() int64 {
+	return c.lower
 }
 
 func (c *compilerContext) GetViews() []string {
@@ -60,7 +69,7 @@ func (c *compilerContext) GetSnapshot() *plan.Snapshot {
 func (c *compilerContext) SetSnapshot(snapshot *plan.Snapshot) {
 }
 
-func (c *compilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
+func (c *compilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -74,6 +83,10 @@ func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *
 }
 
 func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
+	panic("not supported in internal sql executor")
+}
+
+func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
 	panic("not supported in internal sql executor")
 }
 
@@ -93,19 +106,6 @@ func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
 	return nil
 }
 
-func newCompilerContext(
-	ctx context.Context,
-	defaultDB string,
-	eng engine.Engine,
-	proc *process.Process) *compilerContext {
-	return &compilerContext{
-		ctx:       ctx,
-		defaultDB: defaultDB,
-		engine:    eng,
-		proc:      proc,
-	}
-}
-
 func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
 	panic("not supported in internal sql executor")
 }
@@ -114,12 +114,58 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot plan.Snapshot) (*pb.StatsInfo, error) {
-	ctx, t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName(), snapshot)
+func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
+	dbName := obj.GetSchemaName()
+	tableName := obj.GetObjName()
+
+	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, err
 	}
-	return t.Stats(ctx, true)
+	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	tableDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var partitionInfo *plan.PartitionByDef
+	for _, def := range tableDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return nil, err
+				}
+				partitionInfo = p
+			}
+			break
+		}
+	}
+	var statsInfo *pb.StatsInfo
+	// This is a partition table.
+	if partitionInfo != nil {
+		statsInfo = plan.NewStatsInfo()
+		for _, partitionTable := range partitionInfo.PartitionTableNames {
+			parCtx, parTable, err := c.getRelation(dbName, partitionTable, snapshot)
+			if err != nil {
+				return nil, err
+			}
+			parStats, err := parTable.Stats(parCtx, true)
+			if err != nil {
+				return nil, err
+			}
+			statsInfo.Merge(parStats)
+		}
+	} else {
+		statsInfo, err = table.Stats(ctx, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return statsInfo, nil
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {
@@ -129,7 +175,7 @@ func (c *compilerContext) GetStatsCache() *plan.StatsCache {
 	return c.statsCache
 }
 
-func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot plan.Snapshot) (*plan.SubscriptionMeta, error) {
+func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snapshot) (*plan.SubscriptionMeta, error) {
 	return nil, nil
 }
 
@@ -141,12 +187,12 @@ func (c *compilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, strin
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bool {
+func (c *compilerContext) DatabaseExists(name string, snapshot *plan.Snapshot) bool {
 	ctx := c.GetContext()
-	txnOpt := c.proc.TxnOperator
+	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
@@ -161,12 +207,12 @@ func (c *compilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bo
 	return err == nil
 }
 
-func (c *compilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (uint64, error) {
+func (c *compilerContext) GetDatabaseId(dbName string, snapshot *plan.Snapshot) (uint64, error) {
 	ctx := c.GetContext()
-	txnOpt := c.proc.TxnOperator
+	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
@@ -180,19 +226,32 @@ func (c *compilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (
 	}
 	databaseId, err := strconv.ParseUint(database.GetDatabaseId(ctx), 10, 64)
 	if err != nil {
-		return 0, moerr.NewInternalError(ctx, "The databaseid of '%s' is not a valid number", dbName)
+		return 0, moerr.NewInternalErrorf(ctx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
 }
 
+func (c *compilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	switch varName {
+	// For scenarios that are background SQL, use the default configuration to avoid triggering background SQL again.
+	case "unique_check_on_autoincr":
+		return "Check", nil
+	default:
+		return "", moerr.NewInternalErrorf(c.GetContext(), "The variable '%s' is not a valid database level variable", varName)
+	}
+}
+
 func (c *compilerContext) DefaultDatabase() string {
-	return c.defaultDB
+	if c.lower == 0 {
+		return c.defaultDB
+	}
+	return strings.ToLower(c.defaultDB)
 }
 
 func (c *compilerContext) GetPrimaryKeyDef(
 	dbName string,
 	tableName string,
-	snapshot plan.Snapshot) []*plan.ColDef {
+	snapshot *plan.Snapshot) []*plan.ColDef {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -213,7 +272,8 @@ func (c *compilerContext) GetPrimaryKeyDef(
 	priDefs := make([]*plan.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan.ColDef{
-			Name: key.Name,
+			Name:       strings.ToLower(key.Name),
+			OriginName: key.Name,
 			Typ: plan.Type{
 				Id:    int32(key.Type.Oid),
 				Width: key.Type.Width,
@@ -240,19 +300,23 @@ func (c *compilerContext) GetUserName() string {
 }
 
 func (c *compilerContext) GetAccountId() (uint32, error) {
-	return defines.GetAccountId(c.ctx)
+	return defines.GetAccountId(c.proc.GetTopContext())
 }
 
 func (c *compilerContext) GetContext() context.Context {
-	return c.ctx
+	return c.proc.GetTopContext()
 }
 
-func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
-	ctx := c.GetContext()
-	txnOpt := c.proc.TxnOperator
+func (c *compilerContext) SetContext(ctx context.Context) {
+	c.proc.ReplaceTopCtx(ctx)
+}
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+	ctx := c.GetContext()
+	txnOpt := c.proc.GetTxnOperator()
+
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
@@ -266,7 +330,13 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (o
 	return c.Resolve(dbName, tableName, snapshot)
 }
 
-func (c *compilerContext) Resolve(dbName string, tableName string, snapshot plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+		tableName = strings.ToLower(tableName)
+	}
+
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, nil
@@ -310,17 +380,18 @@ func (c *compilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error
 func (c *compilerContext) getRelation(
 	dbName string,
 	tableName string,
-	snapshot plan.Snapshot) (context.Context, engine.Relation, error) {
+	snapshot *plan.Snapshot,
+) (context.Context, engine.Relation, error) {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	ctx := c.GetContext()
-	txnOpt := c.proc.TxnOperator
+	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
@@ -366,8 +437,9 @@ func (c *compilerContext) getTableDef(
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			col := &plan.ColDef{
-				ColId: attr.Attr.ID,
-				Name:  attr.Attr.Name,
+				ColId:      attr.Attr.ID,
+				Name:       strings.ToLower(attr.Attr.Name),
+				OriginName: attr.Attr.Name,
 				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
@@ -391,7 +463,7 @@ func (c *compilerContext) getTableDef(
 			//}
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{
-					Name: attr.Attr.Name,
+					Name: strings.ToLower(attr.Attr.Name),
 				}
 				//if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
 				//	continue

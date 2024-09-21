@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,135 +27,88 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func metadataScanPrepare(proc *process.Process, arg *Argument) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
-
-	for i := range arg.Attrs {
-		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
-	}
-	return err
+// XXX: TODO:
+// to all my understanding, we are getting metadata info of a table
+// as a simple one batch TVF.   This won't work at all for large tables.
+// This need to be a REAL scanner.
+type metadataScanState struct {
+	simpleOneBatchState
 }
 
-func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
-	var (
-		err         error
-		source, col *vector.Vector
-		rbat        *batch.Batch
-	)
-	defer func() {
-		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
-		}
-	}()
-
-	bat := result.Batch
-	if bat == nil {
-		return true, nil
+func metadataScanPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+	var err error
+	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
+	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
+	for i := range tableFunction.Attrs {
+		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
 	}
+	return &metadataScanState{}, err
+}
 
-	source, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
-	if err != nil {
-		return false, err
-	}
-	col, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
-	if err != nil {
-		return false, err
-	}
+func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+	s.startPreamble(tf, proc, nthRow)
 
-	dbname, tablename, colname, err := handleDatasource(vector.MustStrCol(source), vector.MustStrCol(col))
+	source := tf.ctr.argVecs[0]
+	col := tf.ctr.argVecs[1]
+	dbname, tablename, colname, err := handleDataSource(source, col)
 	logutil.Infof("db: %s, table: %s, col: %s in metadataScan", dbname, tablename, colname)
 	if err != nil {
-		return false, err
+		return err
 	}
 
+	// Oh my
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	db, err := e.Database(proc.Ctx, dbname, proc.TxnOperator)
+	db, err := e.Database(proc.Ctx, dbname, proc.GetTxnOperator())
 	if err != nil {
-		return false, moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan")
+		return moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan")
 	}
 
 	rel, err := db.Relation(proc.Ctx, tablename, nil)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	metaInfos, err := rel.GetColumMetadataScanInfo(proc.Ctx, colname)
 	if err != nil {
-		return false, err
-	}
-
-	rbat, err = genRetBatch(*proc, arg, metaInfos)
-	if err != nil {
-		return false, err
-	}
-
-	result.Batch = rbat
-	return false, nil
-}
-
-func handleDatasource(first []string, second []string) (string, string, string, error) {
-	if len(first) != 1 || len(second) != 1 {
-		return "", "", "", moerr.NewInternalErrorNoCtx("wrong input len")
-	}
-	s := first[0]
-	strs := strings.Split(s, ".")
-	if len(strs) != 2 {
-		return "", "", "", moerr.NewInternalErrorNoCtx("wrong len of db and tbl input")
-	}
-	return strs[0], strs[1], second[0], nil
-}
-
-func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.MetadataScanInfo) (*batch.Batch, error) {
-	retBat, err := initMetadataInfoBat(proc, arg)
-	if err != nil {
-		return nil, err
+		return err
 	}
 
 	for i := range metaInfos {
-		fillMetadataInfoBat(retBat, proc, arg, metaInfos[i])
-	}
-
-	retBat.AddRowCount(len(metaInfos))
-
-	return retBat, nil
-}
-
-func initMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, error) {
-	retBat := batch.New(false, arg.Attrs)
-	retBat.Cnt = 1
-
-	for i, a := range arg.Attrs {
-		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[a]
-		if !ok {
-			return nil, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", a)
+		err = fillMetadataInfoBat(s.batch, proc, tf, metaInfos[i])
+		if err != nil {
+			return err
 		}
-
-		tp := plan2.MetadataScanColTypes[idx]
-		retBat.Vecs[i] = proc.GetVector(tp)
 	}
-
-	return retBat, nil
+	s.batch.AddRowCount(len(metaInfos))
+	return nil
 }
 
-func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument, info *plan.MetadataScanInfo) error {
+func handleDataSource(source, col *vector.Vector) (string, string, string, error) {
+	if source.Length() != 1 || col.Length() != 1 {
+		return "", "", "", moerr.NewInternalErrorNoCtx("wrong input len")
+	}
+	strs := strings.Split(source.GetStringAt(0), ".")
+	if len(strs) != 2 {
+		return "", "", "", moerr.NewInternalErrorNoCtx("wrong len of db and tbl input")
+	}
+	return strs[0], strs[1], col.GetStringAt(0), nil
+}
+
+func fillMetadataInfoBat(opBat *batch.Batch, proc *process.Process, tableFunction *TableFunction, info *plan.MetadataScanInfo) error {
 	mp := proc.GetMPool()
 	zm := index.ZM(info.ZoneMap)
 	zmNull := !zm.IsInited()
 
-	for i, colname := range arg.Attrs {
+	for i, colname := range tableFunction.Attrs {
 		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[colname]
 		if !ok {
 			opBat.Clean(proc.GetMPool())
-			return moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", colname)
+			return moerr.NewInternalErrorf(proc.Ctx, "bad input select columns name %v", colname)
 		}
 
 		switch plan.MetadataScanInfo_MetadataScanInfoType(idx) {

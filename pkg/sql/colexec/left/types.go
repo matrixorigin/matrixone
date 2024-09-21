@@ -15,7 +15,6 @@
 package left
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,10 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(LeftJoin)
 
 const (
 	Build = iota
@@ -34,20 +34,12 @@ const (
 	End
 )
 
-type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 type container struct {
-	colexec.ReceiverOperator
-
 	state int
 
-	inBuckets []uint8
-
-	batches       []*batch.Batch
-	batchRowCount int
+	batchRowCount int64
+	lastrow       int
+	inbat         *batch.Batch
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -58,78 +50,100 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
-	evecs []evalVector
-	vecs  []*vector.Vector
+	executor []colexec.ExpressionExecutor
+	vecs     []*vector.Vector
 
-	mp *hashmap.JoinMap
+	mp *message.JoinMap
 
 	maxAllocSize int64
 }
 
-type Argument struct {
-	ctr        *container
+type LeftJoin struct {
+	ctr        container
 	Result     []colexec.ResultPos
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	bat        *batch.Batch
-	lastrow    int
 
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	JoinMapTag         int32
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (leftJoin *LeftJoin) GetOperatorBase() *vm.OperatorBase {
+	return &leftJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[LeftJoin](
+		func() *LeftJoin {
+			return &LeftJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *LeftJoin) {
+			*a = LeftJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[LeftJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (leftJoin LeftJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *LeftJoin {
+	return reuse.Alloc[LeftJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (leftJoin *LeftJoin) Release() {
+	if leftJoin != nil {
+		reuse.Free[LeftJoin](leftJoin, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		ctr.cleanBatch(proc)
-		ctr.cleanHashMap()
-		ctr.cleanExprExecutor()
-		ctr.cleanEvalVectors()
-		ctr.FreeAllReg()
+func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &leftJoin.ctr
 
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+	ctr.resetExecutor()
+	ctr.resetExprExecutor()
+	ctr.cleanHashMap()
+	ctr.inbat = nil
+	ctr.lastrow = 0
+	ctr.state = Build
+	ctr.batchRowCount = 0
 
-		arg.ctr = nil
+	if leftJoin.ProjectList != nil {
+		if leftJoin.OpAnalyzer != nil {
+			leftJoin.OpAnalyzer.Alloc(leftJoin.ProjectAllocSize + leftJoin.ctr.maxAllocSize)
+		}
+		leftJoin.ctr.maxAllocSize = 0
+		leftJoin.ResetProjection(proc)
+	} else {
+		if leftJoin.OpAnalyzer != nil {
+			leftJoin.OpAnalyzer.Alloc(leftJoin.ctr.maxAllocSize)
+		}
+		leftJoin.ctr.maxAllocSize = 0
 	}
-	if arg.bat != nil {
-		proc.PutBatch(arg.bat)
-		arg.bat = nil
+}
+
+func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &leftJoin.ctr
+
+	ctr.cleanExecutor()
+	ctr.cleanExprExecutor()
+	ctr.cleanBatch(proc)
+
+	leftJoin.FreeProjection(proc)
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 
@@ -141,21 +155,14 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
-	ctr.batches = nil
 	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
+		ctr.rbat.Clean(proc.Mp())
 	}
 	if ctr.joinBat1 != nil {
-		proc.PutBatch(ctr.joinBat1)
-		ctr.joinBat1 = nil
+		ctr.joinBat1.Clean(proc.Mp())
 	}
 	if ctr.joinBat2 != nil {
-		proc.PutBatch(ctr.joinBat2)
-		ctr.joinBat2 = nil
+		ctr.joinBat2.Clean(proc.Mp())
 	}
 }
 
@@ -166,12 +173,18 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors() {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
+func (ctr *container) resetExecutor() {
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].ResetForNextQuery()
 		}
-		ctr.evecs[i].vec = nil
 	}
-	ctr.evecs = nil
+}
+
+func (ctr *container) cleanExecutor() {
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].Free()
+		}
+	}
 }

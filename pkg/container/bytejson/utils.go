@@ -19,7 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"math"
-	"sort"
+	"math/bits"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -30,70 +30,29 @@ import (
 
 func ParseFromString(s string) (ret ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtx("json text %s", s)
+		err = moerr.NewInvalidInputNoCtxf("json text %s", s)
 		return
 	}
 	data := util.UnsafeStringToBytes(s)
 	ret, err = ParseFromByteSlice(data)
 	return
 }
+
 func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtx("json text %s", string(s))
+		err = moerr.NewInvalidInputNoCtxf("json text %s", string(s))
 		return
 	}
 	if !json.Valid(s) {
-		err = moerr.NewInvalidInputNoCtx("json text %s", string(s))
+		err = moerr.NewInvalidInputNoCtxf("json text %s", string(s))
 		return
 	}
 	err = bj.UnmarshalJSON(s)
 	return
 }
 
-func toString(buf, data []byte) []byte {
-	return strconv.AppendQuote(buf, string(data))
-}
-
-func addElem(buf []byte, in interface{}) (TpCode, []byte, error) {
-	var (
-		tpCode TpCode
-		err    error
-	)
-	switch x := in.(type) {
-	case nil:
-		tpCode = TpCodeLiteral
-		buf = append(buf, LiteralNull)
-	case bool:
-		tpCode = TpCodeLiteral
-		lit := LiteralFalse
-		if x {
-			lit = LiteralTrue
-		}
-		buf = append(buf, lit)
-	case int64:
-		tpCode = TpCodeInt64
-		buf = addUint64(buf, uint64(x))
-	case uint64:
-		tpCode = TpCodeUint64
-		buf = addUint64(buf, x)
-	case json.Number:
-		tpCode, buf, err = addJsonNumber(buf, x)
-	case string:
-		tpCode = TpCodeString
-		buf = addString(buf, x)
-	case ByteJson:
-		tpCode = x.Type
-		buf = append(buf, x.Data...)
-	case []interface{}:
-		tpCode = TpCodeArray
-		buf, err = addArray(buf, x)
-	case map[string]interface{}:
-		tpCode = TpCodeObject
-		buf, err = addObject(buf, x)
-	default:
-		return tpCode, nil, moerr.NewInvalidInputNoCtx("json element %v", in)
-	}
-	return tpCode, buf, err
+func toString(buf, data []byte) ([]byte, error) {
+	return appendString(buf, util.UnsafeBytesToString(data))
 }
 
 // extend slice to have n zero bytes
@@ -102,24 +61,6 @@ func extendByte(buf []byte, n int) []byte {
 	return buf
 }
 
-// add a uint64 to slice
-func addUint64(buf []byte, x uint64) []byte {
-	off := len(buf)
-	buf = extendByte(buf, numberSize)
-	endian.PutUint64(buf[off:], x)
-	return buf
-}
-
-func addInt64(buf []byte, x int64) []byte {
-	return addUint64(buf, uint64(x))
-}
-
-func addFloat64(buf []byte, num float64) []byte {
-	off := len(buf)
-	buf = extendByte(buf, numberSize)
-	endian.PutUint64(buf[off:], math.Float64bits(num))
-	return buf
-}
 func addString(buf []byte, in string) []byte {
 	off := len(buf)
 	//encoding length
@@ -132,133 +73,11 @@ func addString(buf []byte, in string) []byte {
 	return buf
 }
 
-func addKeyEntry(buf []byte, start, keyOff int, key string) ([]byte, error) {
-	keyLen := uint32(len(key))
-	if keyLen > math.MaxUint16 {
-		return nil, moerr.NewInvalidInputNoCtx("json key %s", key)
-	}
-	//put key offset
-	endian.PutUint32(buf[start:], uint32(keyOff))
-	//put key length
-	endian.PutUint16(buf[start+keyOriginOff:], uint16(keyLen))
-	buf = append(buf, key...)
-	return buf, nil
-}
-
-func addObject(buf []byte, in map[string]interface{}) ([]byte, error) {
-	off := len(buf)
-	buf = addUint32(buf, uint32(len(in)))
-	objStart := len(buf)
-	buf = extendByte(buf, docSizeOff)
-	keyEntryStart := len(buf)
-	buf = extendByte(buf, len(in)*keyEntrySize)
-	valEntryStart := len(buf)
-	buf = extendByte(buf, len(in)*valEntrySize)
-	kvs := make([]kv, 0, len(in))
-	for k, v := range in {
-		kvs = append(kvs, kv{k, v})
-	}
-	sort.Slice(kvs, func(i, j int) bool {
-		return kvs[i].key < kvs[j].key
-	})
-	for i, kv := range kvs {
-		start := keyEntryStart + i*keyEntrySize
-		keyOff := len(buf) - off
-		var err error
-		buf, err = addKeyEntry(buf, start, keyOff, kv.key)
-		if err != nil {
-			return nil, err
-		}
-	}
-	for i, kv := range kvs {
-		var err error
-		valEntryOff := valEntryStart + i*valEntrySize
-		buf, err = addValEntry(buf, off, valEntryOff, kv.val)
-		if err != nil {
-			return nil, err
-		}
-	}
-	endian.PutUint32(buf[objStart:], uint32(len(buf)-off))
-	return buf, nil
-}
-func addArray(buf []byte, in []interface{}) ([]byte, error) {
-	off := len(buf)
-	buf = addUint32(buf, uint32(len(in)))
-	arrSizeStart := len(buf)
-	buf = extendByte(buf, docSizeOff)
-	valEntryStart := len(buf)
-	buf = extendByte(buf, len(in)*valEntrySize)
-	for i, v := range in {
-		var err error
-		buf, err = addValEntry(buf, off, valEntryStart+i*valEntrySize, v)
-		if err != nil {
-			return nil, err
-		}
-	}
-	arrSize := len(buf) - off
-	endian.PutUint32(buf[arrSizeStart:], uint32(arrSize))
-	return buf, nil
-}
-
-func addValEntry(buf []byte, bufStart, entryStart int, in interface{}) ([]byte, error) {
-	valStart := len(buf)
-	tpCode, buf, err := addElem(buf, in)
-	if err != nil {
-		return nil, err
-	}
-	switch tpCode {
-	case TpCodeLiteral:
-		lit := buf[valStart]
-		buf = buf[:valStart]
-		buf[entryStart] = byte(TpCodeLiteral)
-		buf[entryStart+1] = lit
-		return buf, nil
-	}
-	buf[entryStart] = byte(tpCode)
-	endian.PutUint32(buf[entryStart+1:], uint32(valStart-bufStart))
-	return buf, nil
-}
-
-func addUint32(buf []byte, x uint32) []byte {
-	off := len(buf)
-	buf = extendByte(buf, 4)
-	endian.PutUint32(buf[off:], x)
-	return buf
-}
-
 func checkFloat64(n float64) error {
 	if math.IsInf(n, 0) || math.IsNaN(n) {
-		return moerr.NewInvalidInputNoCtx("json float64 %f", n)
+		return moerr.NewInvalidInputNoCtxf("json float64 %f", n)
 	}
 	return nil
-}
-
-func addJsonNumber(buf []byte, in json.Number) (TpCode, []byte, error) {
-	//check if it is a float
-	if strings.ContainsAny(string(in), "Ee.") {
-		val, err := in.Float64()
-		if err != nil {
-			return TpCodeFloat64, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
-		}
-		if err = checkFloat64(val); err != nil {
-			return TpCodeFloat64, nil, err
-		}
-		return TpCodeFloat64, addFloat64(buf, val), nil
-	}
-	if val, err := in.Int64(); err == nil { //check if it is an int
-		return TpCodeInt64, addInt64(buf, val), nil
-	}
-	if val, err := strconv.ParseUint(string(in), 10, 64); err == nil { //check if it is a uint
-		return TpCodeUint64, addUint64(buf, val), nil
-	}
-	if val, err := in.Float64(); err == nil { //check if it is a float
-		if err = checkFloat64(val); err != nil {
-			return TpCodeFloat64, nil, err
-		}
-		return TpCodeFloat64, addFloat64(buf, val), nil
-	}
-	var tpCode TpCode
-	return tpCode, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
 }
 
 func calStrLen(buf []byte) (int, int) {
@@ -288,7 +107,7 @@ func ParseJsonPath(path string) (p Path, err error) {
 	pg := newPathGenerator(path)
 	pg.trimSpace()
 	if !pg.hasNext() || pg.next() != '$' {
-		err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)
+		err = moerr.NewInvalidInputNoCtxf("invalid json path '%s'", path)
 	}
 	pg.trimSpace()
 	subPaths := make([]subPath, 0, 8)
@@ -305,14 +124,14 @@ func ParseJsonPath(path string) (p Path, err error) {
 			ok = false
 		}
 		if !ok {
-			err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)
+			err = moerr.NewInvalidInputNoCtxf("invalid json path '%s'", path)
 			return
 		}
 		pg.trimSpace()
 	}
 
 	if len(subPaths) > 0 && subPaths[len(subPaths)-1].tp == subPathDoubleStar {
-		err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)
+		err = moerr.NewInvalidInputNoCtxf("invalid json path '%s'", path)
 		return
 	}
 	p.init(subPaths)
@@ -332,7 +151,7 @@ func addByteElem(buf []byte, entryStart int, elems []ByteJson) []byte {
 	return buf
 }
 
-func mergeToArray(origin []ByteJson) *ByteJson {
+func mergeToArray(origin []ByteJson) ByteJson {
 	totalSize := headerSize + len(origin)*valEntrySize
 	for _, el := range origin {
 		if el.Type != TpCodeLiteral {
@@ -343,7 +162,7 @@ func mergeToArray(origin []ByteJson) *ByteJson {
 	endian.PutUint32(buf, uint32(len(origin)))
 	endian.PutUint32(buf[docSizeOff:], uint32(totalSize))
 	buf = addByteElem(buf, headerSize, origin)
-	return &ByteJson{Type: TpCodeArray, Data: buf}
+	return ByteJson{Type: TpCodeArray, Data: buf}
 }
 
 // check unnest mode
@@ -406,4 +225,222 @@ func checkAllNull(vals []ByteJson) bool {
 		}
 	}
 	return allNull
+}
+
+// NumberParts is the result of parsing out a valid JSON number. It contains
+// the parts of a number. The parts are used for integer conversion.
+type NumberParts struct {
+	Neg  bool
+	Intp []byte
+	Frac []byte
+	Exp  []byte
+}
+
+// ParseNumber constructs numberParts from given []byte. The logic here is
+// similar to consumeNumber above with the difference of having to construct
+// numberParts. The slice fields in numberParts are subslices of the input.
+func ParseNumberParts(input []byte) (NumberParts, bool) {
+	var neg bool
+	var intp []byte
+	var frac []byte
+	var exp []byte
+
+	s := input
+	if len(s) == 0 {
+		return NumberParts{}, false
+	}
+
+	// Optional -
+	if s[0] == '-' {
+		neg = true
+		s = s[1:]
+		if len(s) == 0 {
+			return NumberParts{}, false
+		}
+	}
+
+	// Digits
+	switch {
+	case s[0] == '0':
+		// Skip first 0 and no need to store.
+		s = s[1:]
+
+	case '1' <= s[0] && s[0] <= '9':
+		intp = s
+		n := 1
+		s = s[1:]
+		for len(s) > 0 && '0' <= s[0] && s[0] <= '9' {
+			s = s[1:]
+			n++
+		}
+		intp = intp[:n]
+
+	default:
+		return NumberParts{}, false
+	}
+
+	// . followed by 1 or more digits.
+	if len(s) >= 2 && s[0] == '.' && '0' <= s[1] && s[1] <= '9' {
+		frac = s[1:]
+		n := 1
+		s = s[2:]
+		for len(s) > 0 && '0' <= s[0] && s[0] <= '9' {
+			s = s[1:]
+			n++
+		}
+		frac = frac[:n]
+	}
+
+	// e or E followed by an optional - or + and
+	// 1 or more digits.
+	if len(s) >= 2 && (s[0] == 'e' || s[0] == 'E') {
+		s = s[1:]
+		exp = s
+		n := 0
+		if s[0] == '+' || s[0] == '-' {
+			s = s[1:]
+			n++
+			if len(s) == 0 {
+				return NumberParts{}, false
+			}
+		}
+		for len(s) > 0 && '0' <= s[0] && s[0] <= '9' {
+			s = s[1:]
+			n++
+		}
+		exp = exp[:n]
+	}
+
+	return NumberParts{
+		Neg:  neg,
+		Intp: intp,
+		Frac: bytes.TrimRight(frac, "0"), // Remove unnecessary 0s to the right.
+		Exp:  exp,
+	}, true
+}
+
+// NormalizeToIntString returns an integer string in normal form without the
+// E-notation for given numberParts. It will return false if it is not an
+// integer or if the exponent exceeds than max/min int value.
+func NormalizeToIntString(n NumberParts) (string, bool) {
+	intpSize := len(n.Intp)
+	fracSize := len(n.Frac)
+
+	if intpSize == 0 && fracSize == 0 {
+		return "0", true
+	}
+
+	var exp int
+	if len(n.Exp) > 0 {
+		i, err := strconv.ParseInt(string(n.Exp), 10, 32)
+		if err != nil {
+			return "", false
+		}
+		exp = int(i)
+	}
+
+	var num []byte
+	if exp >= 0 {
+		// For positive E, shift fraction digits into integer part and also pad
+		// with zeroes as needed.
+
+		// If there are more digits in fraction than the E value, then the
+		// number is not an integer.
+		if fracSize > exp {
+			return "", false
+		}
+
+		// Make sure resulting digits are within max value limit to avoid
+		// unnecessarily constructing a large byte slice that may simply fail
+		// later on.
+		const maxDigits = 20 // Max uint64 value has 20 decimal digits.
+		if intpSize+exp > maxDigits {
+			return "", false
+		}
+
+		// Set cap to make a copy of integer part when appended.
+		num = n.Intp[:len(n.Intp):len(n.Intp)]
+		num = append(num, n.Frac...)
+		for i := 0; i < exp-fracSize; i++ {
+			num = append(num, '0')
+		}
+	} else {
+		// For negative E, shift digits in integer part out.
+
+		// If there are fractions, then the number is not an integer.
+		if fracSize > 0 {
+			return "", false
+		}
+
+		// index is where the decimal point will be after adjusting for negative
+		// exponent.
+		index := intpSize + exp
+		if index < 0 {
+			return "", false
+		}
+
+		num = n.Intp
+		// If any of the digits being shifted to the right of the decimal point
+		// is non-zero, then the number is not an integer.
+		for i := index; i < intpSize; i++ {
+			if num[i] != '0' {
+				return "", false
+			}
+		}
+		num = num[:index]
+	}
+
+	if n.Neg {
+		return "-" + string(num), true
+	}
+	return string(num), true
+}
+
+// indexNeedEscapeInString returns the index of the character that needs
+// escaping. If no characters need escaping, this returns the input length.
+func indexNeedEscapeInString(s string) int {
+	for i, r := range s {
+		if r < ' ' || r == '\\' || r == '"' || r == utf8.RuneError {
+			return i
+		}
+	}
+	return len(s)
+}
+
+func appendString(out []byte, in string) ([]byte, error) {
+	out = append(out, '"')
+	i := indexNeedEscapeInString(in)
+	in, out = in[i:], append(out, in[:i]...)
+	for len(in) > 0 {
+		switch r, n := utf8.DecodeRuneInString(in); {
+		case r == utf8.RuneError && n == 1:
+			return out, moerr.NewInvalidInputNoCtx("invalid UTF-8")
+		case r < ' ' || r == '"' || r == '\\':
+			out = append(out, '\\')
+			switch r {
+			case '"', '\\':
+				out = append(out, byte(r))
+			case '\b':
+				out = append(out, 'b')
+			case '\f':
+				out = append(out, 'f')
+			case '\n':
+				out = append(out, 'n')
+			case '\r':
+				out = append(out, 'r')
+			case '\t':
+				out = append(out, 't')
+			default:
+				out = append(out, 'u')
+				out = append(out, "0000"[1+(bits.Len32(uint32(r))-1)/4:]...)
+				out = strconv.AppendUint(out, uint64(r), 16)
+			}
+			in = in[n:]
+		default:
+			i := indexNeedEscapeInString(in[n:])
+			in, out = in[n+i:], append(out, in[:n+i]...)
+		}
+	}
+	out = append(out, '"')
+	return out, nil
 }

@@ -34,7 +34,7 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 	primaryKeys := make([]string, 0)
 	pksMap := map[string]bool{}
 	for _, key := range spec.KeyParts {
-		colName := key.ColName.Parts[0] // name of primary key column
+		colName := key.ColName.ColName() // name of primary key column
 		col := FindColumn(tableDef.Cols, colName)
 		if col == nil {
 			return moerr.NewErrKeyColumnDoesNotExist(ctx.GetContext(), colName)
@@ -47,7 +47,7 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 		}
 
 		if _, ok := pksMap[colName]; ok {
-			return moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name '%s' in primary key", colName)
+			return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate column name '%s' in primary key", colName)
 		}
 
 		primaryKeys = append(primaryKeys, colName)
@@ -110,12 +110,9 @@ func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *A
 			}
 		}
 	} else {
-		for idx, coldef := range tableDef.Cols {
-			if coldef.Hidden && pkey.PkeyColName == coldef.Name {
-				tableDef.Cols = append(tableDef.Cols[:idx], tableDef.Cols[idx+1:]...)
-				break
-			}
-		}
+		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(coldef *ColDef) bool {
+			return coldef.Hidden && pkey.PkeyColName == coldef.Name
+		})
 	}
 	tableDef.Pkey = nil
 	return nil

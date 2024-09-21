@@ -25,74 +25,77 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "limit"
+const opName = "limit"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	buf.WriteString(fmt.Sprintf("limit(%v)", arg.LimitExpr))
+func (limit *Limit) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	buf.WriteString(fmt.Sprintf("limit(%v)", limit.LimitExpr))
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (limit *Limit) OpType() vm.OpType {
+	return vm.Limit
+}
+
+func (limit *Limit) Prepare(proc *process.Process) error {
 	var err error
-	if arg.limitExecutor == nil {
-		arg.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.LimitExpr)
+	if limit.OpAnalyzer == nil {
+		limit.OpAnalyzer = process.NewAnalyzer(limit.GetIdx(), limit.IsFirst, limit.IsLast, "limit")
+	} else {
+		limit.OpAnalyzer.Reset()
+	}
+
+	if limit.ctr.limitExecutor == nil {
+		limit.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, limit.LimitExpr)
 		if err != nil {
 			return err
 		}
 	}
-	vec, err := arg.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+
+	vec, err := limit.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	arg.limit = uint64(vector.MustFixedCol[int64](vec)[0])
+	limit.ctr.limit = uint64(vector.MustFixedColWithTypeCheck[uint64](vec)[0])
+	// do not free the vector from executor.Eval after used.
+	// should use executor.Free to free it in Operator.Free()
 
 	return nil
 }
 
 // Call returning only the first n tuples from its input
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	if arg.limit == 0 {
+	if limit.ctr.seen >= limit.ctr.limit {
 		result := vm.NewCallResult()
-		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
-	result, err := arg.GetChildren(0).Call(proc)
+	analyzer := limit.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	result, err := vm.ChildrenCall(limit.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
-
-	anal.Start()
-	defer anal.Stop()
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
 	bat := result.Batch
-	anal.Input(bat, arg.GetIsFirst())
-
-	if arg.Seen >= arg.limit {
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, nil
-	}
 	length := bat.RowCount()
-	newSeen := arg.Seen + uint64(length)
-	if newSeen >= arg.limit { // limit - seen
-		batch.SetLength(bat, int(arg.limit-arg.Seen))
-		arg.Seen = newSeen
-		anal.Output(bat, arg.GetIsLast())
-
+	newSeen := limit.ctr.seen + uint64(length)
+	if newSeen >= limit.ctr.limit { // limit - seen
+		// reset length is ok.
+		// we do not change the batch.Vecs & batch.Agg from pre Operator
+		batch.SetLength(bat, int(limit.ctr.limit-limit.ctr.seen))
 		result.Status = vm.ExecStop
-		return result, nil
 	}
-	anal.Output(bat, arg.GetIsLast())
-	arg.Seen = newSeen
+	limit.ctr.seen = newSeen
+	analyzer.Output(result.Batch)
 	return result, nil
 }

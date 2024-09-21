@@ -21,17 +21,23 @@ import (
 
 func execInFrontendInBack(backSes *backSession,
 	execCtx *ExecCtx) (err error) {
+	execCtx.ses.EnterFPrint(FPExecInFrontEndInBack)
+	defer execCtx.ses.ExitFPrint(FPExecInFrontEndInBack)
 	//check transaction states
 	switch st := execCtx.stmt.(type) {
 	case *tree.BeginTransaction:
 	case *tree.CommitTransaction:
 	case *tree.RollbackTransaction:
 	case *tree.Use:
+		execCtx.ses.EnterFPrint(FPInBackUse)
+		defer execCtx.ses.ExitFPrint(FPInBackUse)
 		err = handleChangeDB(backSes, execCtx, st.Name.Compare())
 		if err != nil {
 			return
 		}
 	case *tree.CreateDatabase:
+		execCtx.ses.EnterFPrint(FPInBackCreateDatabase)
+		defer execCtx.ses.ExitFPrint(FPInBackCreateDatabase)
 		err = inputNameIsInvalid(execCtx.reqCtx, string(st.Name))
 		if err != nil {
 			return
@@ -42,6 +48,8 @@ func execInFrontendInBack(backSes *backSession,
 		}
 		st.Sql = execCtx.sqlOfStmt
 	case *tree.DropDatabase:
+		execCtx.ses.EnterFPrint(FPInBackDropDatabase)
+		defer execCtx.ses.ExitFPrint(FPInBackDropDatabase)
 		err = inputNameIsInvalid(execCtx.reqCtx, string(st.Name))
 		if err != nil {
 			return
@@ -51,6 +59,8 @@ func execInFrontendInBack(backSes *backSession,
 			backSes.SetDatabaseName("")
 		}
 	case *tree.Grant:
+		execCtx.ses.EnterFPrint(FPInBackGrant)
+		defer execCtx.ses.ExitFPrint(FPInBackGrant)
 		switch st.Typ {
 		case tree.GrantTypeRole:
 			if err = handleGrantRole(backSes, execCtx, &st.GrantRole); err != nil {
@@ -62,6 +72,8 @@ func execInFrontendInBack(backSes *backSession,
 			}
 		}
 	case *tree.Revoke:
+		execCtx.ses.EnterFPrint(FPInBackRevoke)
+		defer execCtx.ses.ExitFPrint(FPInBackRevoke)
 		switch st.Typ {
 		case tree.RevokeTypeRole:
 			if err = handleRevokeRole(backSes, execCtx, &st.RevokeRole); err != nil {
@@ -77,7 +89,7 @@ func execInFrontendInBack(backSes *backSession,
 			return
 		}
 	default:
-		return moerr.NewInternalError(execCtx.reqCtx, "backExec does not support %s", execCtx.sqlOfStmt)
+		return moerr.NewInternalErrorf(execCtx.reqCtx, "backExec does not support %s", execCtx.sqlOfStmt)
 	}
 	return
 }

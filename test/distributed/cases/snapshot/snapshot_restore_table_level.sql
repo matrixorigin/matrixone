@@ -37,7 +37,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 
 select id, username, email from snapshot_read.users where email = 'john@example.com';
 select id, username, email from snapshot_read.users where email = 'alice.jones@gmail.com';
-
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account sys;
 
 DELETE FROM  users where email = 'john@example.com';
@@ -82,6 +82,7 @@ INSERT INTO users (username, email, password) VALUES ('jane_smith', 'jane.smith@
 INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adams@icloud.com', 'Em1Ly123'), ('francis_nguyen', 'francis.nguyen@domain.com', 'fNguyenPass'), ('grace_parker', 'grace.parker@server.com', 'G1race123'), ('henry_miller', 'henry.miller@company.org', 'hMillerSecret'), ('isabella_grant', 'isabella.grant@university.edu', 'iGrantPass');
 
 select count(*) from snapshot_read.users;
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account sys;
 drop table users;
 select count(*) from snapshot_read.users;
@@ -105,6 +106,7 @@ INSERT INTO users (username, email, password) VALUES ('jane_smith', 'jane.smith@
 INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adams@icloud.com', 'Em1Ly123'), ('francis_nguyen', 'francis.nguyen@domain.com', 'fNguyenPass'), ('grace_parker', 'grace.parker@server.com', 'G1race123'), ('henry_miller', 'henry.miller@company.org', 'hMillerSecret'), ('isabella_grant', 'isabella.grant@university.edu', 'iGrantPass');
 
 select count(*) from snapshot_read.users;
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account sys;
 drop database snapshot_read;
 select count(*) from snapshot_read.users;
@@ -156,7 +158,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 
 select id, username, email from snapshot_read.users where email = 'john@example.com';
 select id, username, email from snapshot_read.users where email = 'alice.jones@gmail.com';
-
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 
 DELETE FROM users where email = 'john@example.com';
@@ -201,6 +203,7 @@ INSERT INTO users (username, email, password) VALUES ('jane_smith', 'jane.smith@
 INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adams@icloud.com', 'Em1Ly123'), ('francis_nguyen', 'francis.nguyen@domain.com', 'fNguyenPass'), ('grace_parker', 'grace.parker@server.com', 'G1race123'), ('henry_miller', 'henry.miller@company.org', 'hMillerSecret'), ('isabella_grant', 'isabella.grant@university.edu', 'iGrantPass');
 
 select count(*) from snapshot_read.users;
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 drop table users;
 select count(*) from snapshot_read.users;
@@ -224,6 +227,7 @@ INSERT INTO users (username, email, password) VALUES ('jane_smith', 'jane.smith@
 INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adams@icloud.com', 'Em1Ly123'), ('francis_nguyen', 'francis.nguyen@domain.com', 'fNguyenPass'), ('grace_parker', 'grace.parker@server.com', 'G1race123'), ('henry_miller', 'henry.miller@company.org', 'hMillerSecret'), ('isabella_grant', 'isabella.grant@university.edu', 'iGrantPass');
 
 select count(*) from snapshot_read.users;
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 drop database snapshot_read;
 select count(*) from snapshot_read.users;
@@ -255,7 +259,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 
 select count(*) from snapshot_read.users;
 -- @session
-
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 
 -- @session:id=4&user=test_account:test_user&password=111
@@ -263,7 +267,7 @@ DELETE FROM snapshot_read.users;
 select count(*) from snapshot_read.users;
 -- @session
 
-restore account test_account database snapshot_read table users from snapshot sp_01 to account test_account;
+restore account test_account database snapshot_read table users from snapshot sp_01;
 
 -- @session:id=5&user=test_account:test_user&password=111
 select count(*) from snapshot_read.users;
@@ -291,6 +295,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 
 
 select count(*) from snapshot_read.users;
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account sys;
 delete from test_snapshot_read where a <= 50;
 select count(*) from snapshot_read.test_snapshot_read;
@@ -324,7 +329,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 
 select count(*) from snapshot_read.users;
 -- @session
-
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 
 -- @session:id=7&user=test_account:test_user&password=111
@@ -333,7 +338,7 @@ select count(*) from snapshot_read.users;
 -- @session
 
 create account test_account_2 admin_name = 'test_user' identified by '111';
-restore account test_account database snapshot_read table users from snapshot sp_01 to account test_account_2;
+restore account test_account from snapshot sp_01 to account test_account_2;
 
 -- @session:id=8&user=test_account_2:test_user&password=111
 select count(*) from snapshot_read.users;
@@ -342,3 +347,5 @@ select count(*) from snapshot_read.users;
 drop snapshot sp_01;
 drop account test_account;
 drop account test_account_2;
+-- @ignore:1
+show snapshots;

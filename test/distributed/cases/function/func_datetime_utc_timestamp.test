@@ -58,3 +58,6 @@ DROP TABLE t1;
 #create table t1 select utc_timestamp() - utc_timestamp(), curtime() - curtime(), sec_to_time(1) + 0, from_unixtime(1) + 0;
 #select * from t1;
 #drop table t1;
+
+# reset
+SET TIME_ZONE = "SYSTEM";

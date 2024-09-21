@@ -35,6 +35,7 @@ func consumeEntry(
 	cache *cache.CatalogCache,
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
+	isSub bool,
 ) error {
 	start := time.Now()
 	defer func() {
@@ -47,14 +48,24 @@ func consumeEntry(
 
 	if state != nil {
 		t0 := time.Now()
-		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
+		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer, engine.mp)
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
-	if logtailreplay.IsMetaTable(e.TableName) {
+	// Try to handle the memory records of the three tables
+	if !catalog.IsSystemTable(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) {
 		return nil
 	}
 
+	if engine.PushClient().dcaTryDelay(isSub, func() { applyToCatalogCache(cache, e) }) {
+		return nil
+	}
+
+	applyToCatalogCache(cache, e)
+	return nil
+}
+
+func applyToCatalogCache(cache *cache.CatalogCache, e *api.Entry) {
 	t0 := time.Now()
 	if e.EntryType == api.Entry_Insert {
 		switch e.TableId {
@@ -75,22 +86,20 @@ func consumeEntry(
 			}
 		}
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
-		return nil
+		return
 	}
 
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
-		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		if cache != nil {
+		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			cache.DeleteTable(bat)
 		}
 	case catalog.MO_DATABASE_ID:
-		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		if cache != nil {
+		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			cache.DeleteDatabase(bat)
 		}
 	}
 	v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
-
-	return nil
 }

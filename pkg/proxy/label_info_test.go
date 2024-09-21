@@ -270,8 +270,8 @@ func TestLabelSelector(t *testing.T) {
 	hc.updateCN("cn1", "", cnLabels1)
 	hc.updateCN("cn2", "", cnLabels2)
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer func() { mc.Close() }()
 	mc.ForceRefresh(true)
 

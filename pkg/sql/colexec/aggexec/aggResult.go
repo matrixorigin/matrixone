@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,8 +45,8 @@ func (r *basicResult) init(
 	}
 	r.mg = mg
 	r.mp = mg.Mp()
-	r.res = mg.GetVector(typ)
-	r.ess = mg.GetVector(types.T_bool.ToType())
+	r.res = vector.NewVec(typ)
+	r.ess = vector.NewVec(types.T_bool.ToType())
 }
 
 func (r *basicResult) extend(more int) (oldLen, newLen int, err error) {
@@ -59,7 +60,7 @@ func (r *basicResult) extend(more int) (oldLen, newLen int, err error) {
 	r.res.SetLength(newLen)
 	r.ess.SetLength(newLen)
 
-	r.empty = vector.MustFixedCol[bool](r.ess)
+	r.empty = vector.MustFixedColWithTypeCheck[bool](r.ess)
 	for i := oldLen; i < newLen; i++ {
 		r.empty[i] = true
 	}
@@ -111,18 +112,12 @@ func (r *basicResult) free() {
 		return
 	}
 	if r.res != nil {
-		if r.res.NeedDup() {
-			r.res.Free(r.mp)
-		} else {
-			r.mg.PutVector(r.res)
-		}
+		r.res.Free(r.mp)
+		r.res = nil
 	}
 	if r.ess != nil {
-		if r.ess.NeedDup() {
-			r.ess.Free(r.mp)
-		} else {
-			r.mg.PutVector(r.ess)
-		}
+		r.ess.Free(r.mp)
+		r.ess = nil
 	}
 }
 
@@ -130,8 +125,8 @@ func (r *basicResult) eq0(other basicResult) bool {
 	if !r.typ.Eq(other.typ) {
 		return false
 	}
-	bs1 := vector.MustFixedCol[bool](r.ess)
-	bs2 := vector.MustFixedCol[bool](other.ess)
+	bs1 := vector.MustFixedColWithTypeCheck[bool](r.ess)
+	bs2 := vector.MustFixedColWithTypeCheck[bool](other.ess)
 	if len(bs1) != len(bs2) {
 		return false
 	}
@@ -161,13 +156,8 @@ func (r *basicResult) marshal() ([]byte, error) {
 }
 
 func (r *basicResult) unmarshal0(data []byte) error {
-	if r.mg == nil {
-		r.res = vector.NewVec(r.typ)
-		r.ess = vector.NewVec(types.T_bool.ToType())
-	} else {
-		r.res = r.mg.GetVector(r.typ)
-		r.ess = r.mg.GetVector(types.T_bool.ToType())
-	}
+	r.res = vector.NewVec(r.typ)
+	r.ess = vector.NewVec(types.T_bool.ToType())
 
 	length := types.DecodeUint32(data[:4])
 	data = data[4:]
@@ -185,17 +175,22 @@ func (r *basicResult) unmarshal0(data []byte) error {
 		r.res.Free(mp)
 		return err
 	}
-	r.empty = vector.MustFixedCol[bool](r.ess)
+	r.empty = vector.MustFixedColWithTypeCheck[bool](r.ess)
 	return nil
 }
 
 type aggFuncResult[T types.FixedSizeTExceptStrType] struct {
 	basicResult
+	requireInit    bool
+	requiredResult T
+
 	values []T // for quick get/set
 }
 
 type aggFuncBytesResult struct {
 	basicResult
+	requireInit    bool
+	requiredResult []byte
 }
 
 func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
@@ -206,14 +201,28 @@ func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
 	return r
 }
 
+// initFixedAggFuncResult2 is used to initialize the result with a fixed value.
+// fixed value is the required first value of the result.
+// e.g. max(int) = math.MinInt64, min(int) = math.MaxInt64.
+func initFixedAggFuncResult2[T types.FixedSizeTExceptStrType](
+	mg AggMemoryManager, typ types.Type, emptyNull bool, value T) aggFuncResult[T] {
+	r := initFixedAggFuncResult[T](mg, typ, emptyNull)
+	r.requireInit = true
+	r.requiredResult = value
+	return r
+}
+
 func (r *aggFuncResult[T]) grows(more int) error {
 	oldLen, newLen, err := r.extend(more)
 	if err != nil {
 		return err
 	}
-	r.values = vector.MustFixedCol[T](r.res)
+	r.values = vector.MustFixedColWithTypeCheck[T](r.res)
 	// reset the new row.
 	var v T
+	if r.requireInit {
+		v = r.requiredResult
+	}
 	for i, j := oldLen, newLen; i < j; i++ {
 		r.values[i] = v
 	}
@@ -229,11 +238,32 @@ func (r *aggFuncResult[T]) aggSet(v T) {
 	r.values[r.groupToSet] = v
 }
 
+func (r *aggFuncResult[T]) marshal() ([]byte, error) {
+	d, err := r.basicResult.marshal()
+	if err != nil {
+		return nil, err
+	}
+	rLen := int64(len(d))
+	bs := types.EncodeInt64(&rLen)
+	bs = append(bs, d...)
+	bs = append(bs, types.EncodeBool(&r.requireInit)...)
+	if r.requireInit {
+		bs = append(bs, types.EncodeFixed[T](r.requiredResult)...)
+	}
+	return bs, nil
+}
+
 func (r *aggFuncResult[T]) unmarshal(data []byte) error {
-	if err := r.unmarshal0(data); err != nil {
+	l := types.DecodeInt64(data[:8])
+	d1, d2 := data[8:8+l], data[8+l:]
+	if err := r.unmarshal0(d1); err != nil {
 		return err
 	}
-	r.values = vector.MustFixedCol[T](r.res)
+	r.values = vector.MustFixedColWithTypeCheck[T](r.res)
+	r.requireInit = types.DecodeBool(d2[:1])
+	if r.requireInit {
+		r.requiredResult = types.DecodeFixed[T](d2[1:])
+	}
 	return nil
 }
 
@@ -241,12 +271,12 @@ func (r *aggFuncResult[T]) eq(other aggFuncResult[T]) bool {
 	if !r.basicResult.eq0(other.basicResult) {
 		return false
 	}
-	vs1 := vector.MustFixedCol[T](r.res)
-	vs2 := vector.MustFixedCol[T](other.res)
+	vs1 := vector.MustFixedColWithTypeCheck[T](r.res)
+	vs2 := vector.MustFixedColWithTypeCheck[T](other.res)
 	if len(vs1) != len(vs2) {
 		return false
 	}
-	bs1 := vector.MustFixedCol[bool](r.ess)
+	bs1 := vector.MustFixedColWithTypeCheck[bool](r.ess)
 	for i, j := 0, len(vs1); i < j; i++ {
 		if bs1[i] {
 			continue
@@ -266,16 +296,34 @@ func initBytesAggFuncResult(
 	return r
 }
 
+func initBytesAggFuncResult2(
+	mg AggMemoryManager, typ types.Type, emptyNull bool, value []byte) aggFuncBytesResult {
+	r := initBytesAggFuncResult(mg, typ, emptyNull)
+	r.requireInit = true
+	r.requiredResult = value
+	return r
+}
+
 func (r *aggFuncBytesResult) grows(more int) error {
 	oldLen, newLen, err := r.extend(more)
 	if err != nil {
 		return err
 	}
 
-	var v = []byte("")
-	for i, j := oldLen, newLen; i < j; i++ {
-		// this will never cause error.
-		_ = vector.SetBytesAt(r.res, i, v, r.mp)
+	if r.requireInit {
+		v := r.requiredResult
+		for i, j := oldLen, newLen; i < j; i++ {
+			if err = vector.SetBytesAt(r.res, i, v, r.mp); err != nil {
+				return err
+			}
+		}
+
+	} else {
+		v := []byte("")
+		for i, j := oldLen, newLen; i < j; i++ {
+			// this will never cause error.
+			_ = vector.SetBytesAt(r.res, i, v, r.mp)
+		}
 	}
 	return nil
 }
@@ -291,25 +339,49 @@ func (r *aggFuncBytesResult) aggSet(v []byte) error {
 	return vector.SetBytesAt(r.res, r.groupToSet, v, r.mp)
 }
 
+func (r *aggFuncBytesResult) marshal() ([]byte, error) {
+	d, err := r.basicResult.marshal()
+	if err != nil {
+		return nil, err
+	}
+	rLen := int64(len(d))
+	bs := types.EncodeInt64(&rLen)
+	bs = append(bs, d...)
+	bs = append(bs, types.EncodeBool(&r.requireInit)...)
+	if r.requireInit {
+		bs = append(bs, r.requiredResult...)
+	}
+	return bs, nil
+}
+
 func (r *aggFuncBytesResult) unmarshal(data []byte) error {
-	return r.unmarshal0(data)
+	l := types.DecodeInt64(data[:8])
+	d1, d2 := data[8:8+l], data[8+l:]
+	if err := r.unmarshal0(d1); err != nil {
+		return err
+	}
+	r.requireInit = types.DecodeBool(d2[:1])
+	if r.requireInit {
+		r.requiredResult = append(r.requiredResult, d2[1:]...)
+	}
+	return nil
 }
 
 func (r *aggFuncBytesResult) eq(other aggFuncBytesResult) bool {
 	if !r.basicResult.eq0(other.basicResult) {
 		return false
 	}
-	vs1 := vector.MustBytesCol(r.res)
-	vs2 := vector.MustBytesCol(other.res)
+	vs1, area1 := vector.MustVarlenaRawData(r.res)
+	vs2, area2 := vector.MustVarlenaRawData(other.res)
 	if len(vs1) != len(vs2) {
 		return false
 	}
-	bs1 := vector.MustFixedCol[bool](r.ess)
+	bs1 := vector.MustFixedColWithTypeCheck[bool](r.ess)
 	for i, j := 0, len(vs1); i < j; i++ {
 		if bs1[i] {
 			continue
 		}
-		if !bytes.Equal(vs1[i], vs2[i]) {
+		if !bytes.Equal(vs1[i].GetByteSlice(area1), vs2[i].GetByteSlice(area2)) {
 			return false
 		}
 	}

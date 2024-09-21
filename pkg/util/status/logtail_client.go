@@ -16,8 +16,9 @@ package status
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
@@ -28,7 +29,7 @@ type SubTableID struct {
 }
 
 type SubTableStatus struct {
-	IsDeleting bool      `json:"is_deleting"`
+	SubState   int32     `json:"sub_state"`
 	LatestTime time.Time `json:"latest_time"`
 }
 
@@ -44,9 +45,9 @@ func (s *LogtailStatus) fill(c *disttae.PushClient) {
 	st := c.GetState()
 	s.SubscribedTables = make(map[string]SubTableStatus, len(st.SubTables))
 	for id, status := range st.SubTables {
-		tid := fmt.Sprintf("%d-%d", id.DatabaseID, id.TableID)
+		tid := fmt.Sprintf("%d-%d", status.DBID, id)
 		s.SubscribedTables[tid] = SubTableStatus{
-			IsDeleting: status.IsDeleting,
+			SubState:   int32(status.SubState),
 			LatestTime: status.LatestTime,
 		}
 	}

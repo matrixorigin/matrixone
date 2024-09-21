@@ -31,6 +31,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/chaos"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -151,6 +152,9 @@ type Config struct {
 
 	// Goroutine goroutine config
 	Goroutine goroutine.Config `toml:"goroutine"`
+
+	// Malloc default config
+	Malloc malloc.Config `toml:"malloc"`
 }
 
 // NewConfig return Config with default values.
@@ -189,6 +193,7 @@ func parseFromString(data string, cfg any) error {
 }
 
 func (c *Config) validate() error {
+	// data dir
 	if c.DataDir == "" ||
 		c.DataDir == "./mo-data" ||
 		c.DataDir == "mo-data" {
@@ -198,9 +203,13 @@ func (c *Config) validate() error {
 		}
 		c.DataDir = filepath.Join(path, "mo-data")
 	}
+
+	// service type
 	if _, err := c.getServiceType(); err != nil {
 		return err
 	}
+
+	// clock
 	if c.Clock.MaxClockOffset.Duration == 0 {
 		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
 	}
@@ -208,39 +217,35 @@ func (c *Config) validate() error {
 		c.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
-		return moerr.NewInternalError(context.Background(), "%s clock backend not support", c.Clock.Backend)
+		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
 	}
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
 	}
-	for i, config := range c.FileServices {
-		// rename 's3' to 'shared'
-		if strings.EqualFold(config.Name, "s3") {
-			c.FileServices[i].Name = defines.SharedFileServiceName
-		}
-		// set default data dir
-		if config.DataDir == "" {
-			c.FileServices[i].DataDir = c.defaultFileServiceDataDir(config.Name)
-		}
-		// set default disk cache dir
-		if config.Cache.DiskPath == nil {
-			path := filepath.Join(c.DataDir, strings.ToLower(config.Name)+"-cache")
-			c.FileServices[i].Cache.DiskPath = &path
-		}
-	}
+
+	// file service
+	c.setFileserviceDefaultValues()
+
+	// limit
 	if c.Limit.Memory == 0 {
 		c.Limit.Memory = tomlutil.ByteSize(defaultMemoryLimit)
 	}
+
+	// log
 	if c.Log.StacktraceLevel == "" {
 		c.Log.StacktraceLevel = zap.PanicLevel.String()
 	}
+
 	return nil
 }
 
 func (c *Config) setDefaultValue() error {
+	// data dir
 	if c.DataDir == "" {
 		c.DataDir = "./mo-data"
 	}
+
+	// clock
 	if c.Clock.MaxClockOffset.Duration == 0 {
 		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
 	}
@@ -248,46 +253,48 @@ func (c *Config) setDefaultValue() error {
 		c.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
-		return moerr.NewInternalError(context.Background(), "%s clock backend not support", c.Clock.Backend)
+		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
 	}
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
 	}
-	for i, config := range c.FileServices {
-		// rename 's3' to 'shared'
-		if strings.EqualFold(config.Name, "s3") {
-			c.FileServices[i].Name = defines.SharedFileServiceName
-		}
-		// set default data dir
-		if config.DataDir == "" {
-			c.FileServices[i].DataDir = c.defaultFileServiceDataDir(config.Name)
-		}
-		// set default disk cache dir
-		if config.Cache.DiskPath == nil {
-			path := filepath.Join(c.DataDir, strings.ToLower(config.Name)+"-cache")
-			c.FileServices[i].Cache.DiskPath = &path
-		}
-	}
+
+	// file service
+	c.setFileserviceDefaultValues()
+
+	// limit
 	if c.Limit.Memory == 0 {
 		c.Limit.Memory = tomlutil.ByteSize(defaultMemoryLimit)
 	}
+
+	// log
 	if c.Log.StacktraceLevel == "" {
 		c.Log.StacktraceLevel = zap.PanicLevel.String()
 	}
-	//set set default value
 	c.Log = logutil.GetDefaultConfig()
+
 	// HAKeeperClient has been set in NewConfig
+
+	// tn
 	if c.TN_please_use_getTNServiceConfig != nil {
 		c.TN_please_use_getTNServiceConfig.SetDefaultValue()
 	}
 	if c.TNCompatible != nil {
 		c.TNCompatible.SetDefaultValue()
 	}
+
 	// LogService has been set in NewConfig
+
+	// cn
 	c.CN.SetDefaultValue()
+
 	//no default proxy config
+
 	// Observability has been set in NewConfig
+
+	// meta cache
 	c.initMetaCache()
+
 	return nil
 }
 
@@ -306,65 +313,13 @@ func (c *Config) createFileService(
 	serviceType metadata.ServiceType,
 	nodeUUID string,
 ) (*fileservice.FileServices, error) {
-	// create all services
-	services := make([]fileservice.FileService, 0, len(c.FileServices))
-
-	// default LOCAL fs
-	ok := false
-	for _, config := range c.FileServices {
-		if strings.EqualFold(config.Name, defines.LocalFileServiceName) {
-			ok = true
-			break
-		}
-	}
-	// default to local disk
-	if !ok {
-		c.FileServices = append(c.FileServices, fileservice.Config{
-			Name:    defines.LocalFileServiceName,
-			Backend: "DISK",
-			DataDir: c.defaultFileServiceDataDir(defines.LocalFileServiceName),
-		})
-	}
-
-	// default SHARED fs
-	ok = false
-	for _, config := range c.FileServices {
-		if strings.EqualFold(config.Name, defines.SharedFileServiceName) {
-			ok = true
-			break
-		}
-	}
-	// default to local disk
-	if !ok {
-		c.FileServices = append(c.FileServices, fileservice.Config{
-			Name:    defines.SharedFileServiceName,
-			Backend: "DISK",
-			DataDir: c.defaultFileServiceDataDir(defines.SharedFileServiceName),
-		})
-	}
-
-	// default ETL fs
-	ok = false
-	for _, config := range c.FileServices {
-		if strings.EqualFold(config.Name, defines.ETLFileServiceName) {
-			ok = true
-			break
-		}
-	}
-	// default to local disk
-	if !ok {
-		c.FileServices = append(c.FileServices, fileservice.Config{
-			Name:    defines.ETLFileServiceName,
-			Backend: "DISK-ETL", // must be ETL
-			DataDir: c.defaultFileServiceDataDir(defines.ETLFileServiceName),
-		})
-	}
 
 	// set distributed cache callbacks
 	for i := range c.FileServices {
 		c.setCacheCallbacks(&c.FileServices[i])
 	}
 
+	services := make([]fileservice.FileService, 0, len(c.FileServices))
 	for _, config := range c.FileServices {
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
@@ -511,7 +466,7 @@ func (c *Config) resolveGossipSeedAddresses() error {
 			}
 		}
 		if len(filtered) != 1 {
-			return moerr.NewBadConfig(context.Background(), "GossipSeedAddress %s", addr)
+			return moerr.NewBadConfigf(context.Background(), "GossipSeedAddress %s", addr)
 		}
 		result = append(result, net.JoinHostPort(filtered[0], port))
 	}
@@ -553,7 +508,7 @@ func (c *Config) getServiceType() (metadata.ServiceType, error) {
 	if v, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; ok {
 		return v, nil
 	}
-	return metadata.ServiceType(0), moerr.NewInternalError(context.Background(), "service type %s not support", c.ServiceType)
+	return metadata.ServiceType(0), moerr.NewInternalErrorf(context.Background(), "service type %s not support", c.ServiceType)
 }
 
 func (c *Config) mustGetServiceType() metadata.ServiceType {
@@ -574,6 +529,8 @@ func (c *Config) mustGetServiceUUID() string {
 		return c.LogService.UUID
 	case metadata.ServiceType_PROXY:
 		return c.ProxyConfig.UUID
+	case metadata.ServiceType_PYTHON_UDF:
+		return c.PythonUdfServerConfig.UUID
 	}
 	panic("impossible")
 }
@@ -625,4 +582,120 @@ func dumpCommonConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
 	}
 
 	return newMap, err
+}
+
+func (c *Config) setFileserviceDefaultValues() {
+
+	for i := 0; i < len(c.FileServices); i++ {
+		config := &c.FileServices[i]
+
+		// rename 's3' to 'shared'
+		oldName := config.Name
+		if strings.EqualFold(config.Name, "s3") {
+			config.Name = defines.SharedFileServiceName
+		}
+
+		// set default data dir
+		if config.DataDir == "" {
+			// compatibility check
+			// if 's3' was renamed to 'shared' but 's3' is not empty, use it
+			oldDir := c.defaultFileServiceDataDir(oldName)
+			_, err := os.Stat(oldDir)
+			if err == nil {
+				config.DataDir = oldDir
+			} else {
+				config.DataDir = c.defaultFileServiceDataDir(config.Name)
+			}
+		}
+
+	}
+
+	// default LOCAL fs
+	ok := false
+	for _, config := range c.FileServices {
+		if strings.EqualFold(config.Name, defines.LocalFileServiceName) {
+			ok = true
+			break
+		}
+	}
+	// default to local disk
+	if !ok {
+		c.FileServices = append(c.FileServices, fileservice.Config{
+			Name:    defines.LocalFileServiceName,
+			Backend: "DISK",
+			DataDir: c.defaultFileServiceDataDir(defines.LocalFileServiceName),
+		})
+	}
+
+	// default SHARED fs
+	ok = false
+	for _, config := range c.FileServices {
+		if strings.EqualFold(config.Name, defines.SharedFileServiceName) {
+			ok = true
+			break
+		}
+	}
+	// default to local disk
+	if !ok {
+		c.FileServices = append(c.FileServices, fileservice.Config{
+			Name:    defines.SharedFileServiceName,
+			Backend: "DISK",
+			DataDir: c.defaultFileServiceDataDir(defines.SharedFileServiceName),
+		})
+	}
+
+	// default ETL fs
+	ok = false
+	for _, config := range c.FileServices {
+		if strings.EqualFold(config.Name, defines.ETLFileServiceName) {
+			ok = true
+			break
+		}
+	}
+	// default to local disk
+	if !ok {
+		c.FileServices = append(c.FileServices, fileservice.Config{
+			Name:    defines.ETLFileServiceName,
+			Backend: "DISK-ETL", // must be ETL
+			DataDir: c.defaultFileServiceDataDir(defines.ETLFileServiceName),
+		})
+	}
+
+	for i := 0; i < len(c.FileServices); i++ {
+		config := &c.FileServices[i]
+
+		// cache configs
+		switch config.Name {
+
+		case defines.LocalFileServiceName:
+			// memory
+			if config.Cache.MemoryCapacity == nil {
+				capacity := tomlutil.ByteSize(512 * (1 << 20))
+				config.Cache.MemoryCapacity = &capacity
+			}
+			// no disk
+
+		case defines.SharedFileServiceName:
+			// memory
+			if config.Cache.MemoryCapacity == nil {
+				capacity := tomlutil.ByteSize(512 * (1 << 20))
+				config.Cache.MemoryCapacity = &capacity
+			}
+			// disk
+			if config.Cache.DiskPath == nil {
+				path := config.DataDir + "-cache"
+				config.Cache.DiskPath = &path
+			}
+			if config.Cache.DiskCapacity == nil {
+				capacity := tomlutil.ByteSize(8 * (1 << 30))
+				config.Cache.DiskCapacity = &capacity
+			}
+
+		case defines.ETLFileServiceName:
+			// no caches
+
+		}
+
+	}
+
 }

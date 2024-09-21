@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 
@@ -205,7 +204,9 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
-	if _, ok := mgr.IDMap.Load(util.UnsafeBytesToString(id)); !ok {
+	if value, ok := mgr.IDMap.Load(util.UnsafeBytesToString(id)); ok {
+		txn = value.(txnif.AsyncTxn)
+	} else {
 		store := mgr.TxnStoreFactory()
 		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 		store.BindTxn(txn)
@@ -249,7 +250,7 @@ func (mgr *TxnManager) heartbeat(ctx context.Context) {
 		case <-heartbeatTicker.C:
 			op := mgr.newHeartbeatOpTxn(ctx)
 			op.Txn.(*Txn).Add(1)
-			_, err := mgr.PreparingSM.EnqueueRecevied(op)
+			_, err := mgr.PreparingSM.EnqueueReceived(op)
 			if err != nil {
 				panic(err)
 			}
@@ -276,7 +277,7 @@ func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
 }
 
 func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
-	_, err = mgr.PreparingSM.EnqueueRecevied(op)
+	_, err = mgr.PreparingSM.EnqueueReceived(op)
 	return
 }
 
@@ -559,7 +560,6 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 		store.TriggerTrace(txnif.TracePrepared)
 		mgr.workers.Submit(func() {
 			//Notice that WaitPrepared do nothing when op is OpRollback
-			t0 := time.Now()
 			if err := op.Txn.WaitPrepared(op.ctx); err != nil {
 				// v0.6 TODO: Error handling
 				panic(err)
@@ -570,8 +570,6 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 			} else {
 				mgr.on1PCPrepared(op)
 			}
-			dequeuePreparedDuration := time.Since(t0)
-			v2.TxnDequeuePreparedDurationHistogram.Observe(dequeuePreparedDuration.Seconds())
 		})
 	}
 	common.DoIfDebugEnabled(func() {

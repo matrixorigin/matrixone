@@ -22,6 +22,7 @@ const (
 	LockService
 	QueryService
 	Gossip
+	ShardService
 	MaxService
 )
 
@@ -81,6 +82,20 @@ func (s *service) lockServiceListenAddr() string {
 		return s.addressMgr.ListenAddress(int(LockService))
 	}
 	return s.cfg.LockService.ListenAddress
+}
+
+func (s *service) shardServiceServiceAddr() string {
+	if s.newPortStrategy() {
+		return s.addressMgr.ServiceAddress(int(ShardService))
+	}
+	return s.cfg.ShardService.ServiceAddress
+}
+
+func (s *service) shardServiceListenAddr() string {
+	if s.newPortStrategy() {
+		return s.addressMgr.ListenAddress(int(ShardService))
+	}
+	return s.cfg.ShardService.ListenAddress
 }
 
 func (s *service) queryServiceServiceAddr() string {

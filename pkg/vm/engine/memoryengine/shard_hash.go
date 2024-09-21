@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"sort"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -124,7 +123,7 @@ func (*HashShard) Batch(
 		hasher := fnv.New32()
 		for _, info := range infos {
 			vec := bat.Vecs[info.Index]
-			bs, err := getBytesFromPrimaryVectorForHash(ctx, vec, i, info.Attr.Type)
+			bs, err := getBytesFromPrimaryVectorForHash(ctx, vec, i)
 			if err != nil {
 				return nil, err
 			}
@@ -211,7 +210,7 @@ func (h *HashShard) Vector(
 	// shard vector
 	for i := 0; i < vec.Length(); i++ {
 		hasher := fnv.New32()
-		bs, err := getBytesFromPrimaryVectorForHash(ctx, vec, i, shardAttr.Type)
+		bs, err := getBytesFromPrimaryVectorForHash(ctx, vec, i)
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +248,7 @@ func getBytesFromPrimaryVectorForHash(
 	ctx context.Context,
 	vec *vector.Vector,
 	i int,
-	typ types.Type) ([]byte, error) {
+) ([]byte, error) {
 	if vec.IsConst() {
 		panic("primary value vector should not be const")
 	}
@@ -258,27 +257,10 @@ func getBytesFromPrimaryVectorForHash(
 		return nil, moerr.NewDuplicate(ctx)
 		//panic("primary value vector should not contain nulls")
 	}
-	if vec.GetType().IsFixedLen() {
-		// WTF is this?   Fix later when vector is refactored.
-		// is slice
-		size := vec.GetType().TypeSize()
-		l := vec.Length() * size
-		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), l)
-		end := (i + 1) * size
-		if end > len(data) {
-			//TODO mimic to pass BVT
-			return nil, moerr.NewDuplicate(ctx)
-			//return nil, moerr.NewInvalidInput("vector size not match")
-		}
-		return data[i*size : (i+1)*size], nil
-	} else if vec.GetType().IsVarlen() {
-		slice := vector.MustBytesCol(vec)
-		if i >= len(slice) {
-			return []byte{}, nil
-		}
-		return slice[i], nil
+	if i >= vec.Length() {
+		return []byte{}, nil
 	}
-	panic(fmt.Sprintf("unknown type: %v", typ))
+	return vec.GetRawBytesAt(i), nil
 }
 
 type Nullable struct {
@@ -302,7 +284,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[bool](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[bool](vec)[i],
 		}
 		return
 
@@ -316,7 +298,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[uint64](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[uint64](vec)[i],
 		}
 		return
 
@@ -330,7 +312,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[int8](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[int8](vec)[i],
 		}
 		return
 
@@ -344,7 +326,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[int16](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[int16](vec)[i],
 		}
 		return
 
@@ -358,7 +340,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[int32](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[int32](vec)[i],
 		}
 		return
 
@@ -372,7 +354,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[int64](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[int64](vec)[i],
 		}
 		return
 
@@ -386,7 +368,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[uint8](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[uint8](vec)[i],
 		}
 		return
 
@@ -400,7 +382,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[uint16](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[uint16](vec)[i],
 		}
 		return
 
@@ -414,7 +396,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[uint32](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[uint32](vec)[i],
 		}
 		return
 
@@ -428,7 +410,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[uint64](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[uint64](vec)[i],
 		}
 		return
 
@@ -442,7 +424,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[float32](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[float32](vec)[i],
 		}
 		return
 
@@ -456,7 +438,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[float64](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[float64](vec)[i],
 		}
 		return
 
@@ -470,12 +452,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[[]any](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[[]any](vec)[i],
 		}
 		return
 
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
@@ -500,7 +482,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Date](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[types.Date](vec)[i],
 		}
 		return
 
@@ -515,7 +497,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Time](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[types.Time](vec)[i],
 		}
 		return
 
@@ -530,7 +512,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Datetime](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[types.Datetime](vec)[i],
 		}
 		return
 
@@ -545,7 +527,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Timestamp](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[i],
 		}
 		return
 
@@ -560,7 +542,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Enum](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[types.Enum](vec)[i],
 		}
 		return
 
@@ -575,7 +557,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Decimal64](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[i],
 		}
 		return
 
@@ -590,7 +572,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Decimal128](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[i],
 		}
 		return
 
@@ -605,7 +587,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Rowid](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[types.Rowid](vec)[i],
 		}
 		return
 	case types.T_Blockid:
@@ -619,7 +601,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Blockid](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[types.Blockid](vec)[i],
 		}
 		return
 	case types.T_uuid:
@@ -633,7 +615,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustFixedCol[types.Uuid](vec)[i],
+			Value:  vector.MustFixedColNoTypeCheck[types.Uuid](vec)[i],
 		}
 		return
 

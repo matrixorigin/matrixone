@@ -16,48 +16,46 @@ package fileservice
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
+	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-func setCachedData[P interface {
-	*A
-	CacheDataAllocator
-}, A any](i *IOEntry, allocator P) error {
+func (i *IOEntry) setCachedData(ctx context.Context, allocator CacheDataAllocator) error {
+	LogEvent(ctx, str_set_cache_data_begin)
+	t0 := time.Now()
+	defer func() {
+		LogEvent(ctx, str_set_cache_data_end)
+		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
+	}()
 	if i.ToCacheData == nil {
 		return nil
 	}
 	if len(i.Data) == 0 {
 		return nil
 	}
-	var bs memorycache.CacheData
-	var err error
-	if allocator == nil {
-		bs, err = i.ToCacheData(bytes.NewReader(i.Data), i.Data, DefaultCacheDataAllocator)
-	} else {
-		bs, err = i.ToCacheData(bytes.NewReader(i.Data), i.Data, allocator)
-	}
+	LogEvent(ctx, str_to_cache_data_begin)
+	cacheData, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, allocator)
+	LogEvent(ctx, str_to_cache_data_end)
 	if err != nil {
 		return err
 	}
-	i.CachedData = bs
+	if cacheData == nil {
+		panic("ToCacheData returns nil cache data")
+	}
+	i.CachedData = cacheData
 	return nil
 }
 
-func readFromOSFile[P interface {
-	*A
-	CacheDataAllocator
-}, A any](i *IOEntry, file *os.File, allocator P) error {
+func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File, allocator CacheDataAllocator) (err error) {
+	finally := i.prepareData()
+	defer finally(&err)
 	r := io.LimitReader(file, i.Size)
-
-	if cap(i.Data) < int(i.Size) {
-		i.Data = make([]byte, i.Size)
-	} else {
-		i.Data = i.Data[:i.Size]
-	}
-
 	n, err := io.ReadFull(r, i.Data)
 	if err != nil {
 		return err
@@ -74,7 +72,7 @@ func readFromOSFile[P interface {
 	if i.ReadCloserForRead != nil {
 		*i.ReadCloserForRead = io.NopCloser(bytes.NewReader(i.Data))
 	}
-	if err := setCachedData(i, allocator); err != nil {
+	if err := i.setCachedData(ctx, allocator); err != nil {
 		return err
 	}
 
@@ -83,14 +81,43 @@ func readFromOSFile[P interface {
 	return nil
 }
 
-func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData memorycache.CacheData, err error) {
+func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData fscache.Data, err error) {
 	if len(data) == 0 {
 		data, err = io.ReadAll(r)
 		if err != nil {
 			return
 		}
 	}
-	cacheData = allocator.Alloc(len(data))
+	cacheData = allocator.AllocateCacheData(len(data))
 	copy(cacheData.Bytes(), data)
 	return
 }
+
+func (i *IOEntry) prepareData() (finally func(err *error)) {
+	if cap(i.Data) < int(i.Size) {
+		slice, dec, err := ioAllocator().Allocate(uint64(i.Size), malloc.NoHints)
+		if err != nil {
+			panic(err)
+		}
+		i.Data = slice
+		if i.releaseData != nil {
+			i.releaseData()
+		}
+		i.releaseData = func() {
+			dec.Deallocate(malloc.NoHints)
+		}
+		finally = func(err *error) {
+			if err != nil && *err != nil {
+				dec.Deallocate(malloc.NoHints)
+			}
+		}
+
+	} else {
+		i.Data = i.Data[:i.Size]
+		finally = noopFinally
+	}
+
+	return
+}
+
+func noopFinally(*error) {}

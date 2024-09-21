@@ -23,10 +23,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if parameters[1].AllNull() {
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
+		return nil
+	}
+
 	lvec := parameters[0]
 	rval := parameters[1].GetBytesAt(0)
-	res := vector.MustFixedCol[bool](result.GetResultVector())
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
 	lcol, larea := vector.MustVarlenaRawData(lvec)
 
@@ -58,11 +63,11 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 	return nil
 }
 
-func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	ivec := parameters[0]
 	lval := parameters[1].GetBytesAt(0)
 	rval := parameters[2].GetBytesAt(0)
-	res := vector.MustFixedCol[bool](result.GetResultVector())
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
 	icol, iarea := vector.MustVarlenaRawData(ivec)
 
@@ -94,18 +99,44 @@ func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+type implPrefixIn struct {
+	ready bool
+	vals  [][]byte
+}
+
+func newImplPrefixIn() *implPrefixIn {
+	return &implPrefixIn{ready: false}
+}
+
+func (op *implPrefixIn) init(rvec *vector.Vector) {
+	op.ready = true
+	op.vals = make([][]byte, rvec.Length())
+	vlen := 0
+	rcol, rarea := vector.MustVarlenaRawData(rvec)
+	for i := 0; i < rvec.Length(); i++ {
+		rval := rcol[i].GetByteSlice(rarea)
+		if vlen == 0 || !bytes.HasPrefix(rval, op.vals[vlen-1]) {
+			op.vals[vlen] = rval
+			vlen++
+		}
+	}
+	op.vals = op.vals[:vlen]
+}
+
+func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if !op.ready {
+		op.init(parameters[1])
+	}
+
 	lvec := parameters[0]
-	rvec := parameters[1]
-	res := vector.MustFixedCol[bool](result.GetResultVector())
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
 	lcol, larea := vector.MustVarlenaRawData(lvec)
-	rcol, rarea := vector.MustVarlenaRawData(rvec)
 
 	if lvec.GetSorted() {
-		rval := rcol[0].GetByteSlice(rarea)
+		rval := op.vals[0]
 		rpos := 0
-		rlen := rvec.Length()
+		rlen := len(op.vals)
 
 		for i := 0; i < length; i++ {
 			lval := lcol[i].GetByteSlice(larea)
@@ -118,7 +149,7 @@ func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 					return nil
 				}
 
-				rval = rcol[rpos].GetByteSlice(rarea)
+				rval = op.vals[rpos]
 			}
 
 			res[i] = bytes.HasPrefix(lval, rval)
@@ -126,11 +157,11 @@ func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 	} else {
 		for i := 0; i < length; i++ {
 			lval := lcol[i].GetByteSlice(larea)
-			rpos, _ := sort.Find(len(rcol), func(j int) int {
-				return types.PrefixCompare(lval, rcol[j].GetByteSlice(rarea))
+			rpos, _ := sort.Find(len(op.vals), func(j int) int {
+				return types.PrefixCompare(lval, op.vals[j])
 			})
 
-			res[i] = rpos < len(rcol) && bytes.HasPrefix(lval, rcol[rpos].GetByteSlice(rarea))
+			res[i] = rpos < len(op.vals) && bytes.HasPrefix(lval, op.vals[rpos])
 		}
 	}
 

@@ -15,19 +15,20 @@
 package objectio
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
-type CacheConstructor = func(r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (memorycache.CacheData, error)
+type CacheConstructor = func(r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
 // use this to replace all other constructors
 func constructorFactory(size int64, algo uint8) CacheConstructor {
-	return func(reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData memorycache.CacheData, err error) {
+	return func(reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData fscache.Data, err error) {
 		if len(data) == 0 {
 			data, err = io.ReadAll(reader)
 			if err != nil {
@@ -37,13 +38,13 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 
 		// no compress
 		if algo == compress.None {
-			cacheData = allocator.Alloc(len(data))
+			cacheData = allocator.AllocateCacheData(len(data))
 			copy(cacheData.Bytes(), data)
 			return cacheData, nil
 		}
 
 		// lz4 compress
-		decompressed := allocator.Alloc(int(size))
+		decompressed := allocator.AllocateCacheData(int(size))
 		bs, err := compress.Decompress(data, decompressed.Bytes(), compress.Lz4)
 		if err != nil {
 			return
@@ -64,4 +65,12 @@ func Decode(buf []byte) (any, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+func MustObjectMeta(buf []byte) ObjectMeta {
+	header := DecodeIOEntryHeader(buf)
+	if header.Type != IOET_ObjMeta {
+		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
+	}
+	return ObjectMeta(buf)
 }

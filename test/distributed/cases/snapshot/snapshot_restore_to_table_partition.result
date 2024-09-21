@@ -1,0 +1,252 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111';
+drop database if exists acc_test04;
+create database acc_test04;
+use acc_test04;
+drop table if exists index03;
+create table index03 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
+(9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+select count(*) from acc_test04.index03;
+count(*)
+2
+show create table acc_test04.index03;
+Table    Create Table
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+drop snapshot if exists sp04;
+create snapshot sp04 for account acc01;
+show create table acc_test04.index03;
+Table    Create Table
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+restore account acc01 database acc_test04 table index03 from snapshot sp04;
+restore account acc01 from snapshot sp04 to account acc02;
+select count(*) from acc_test04.index03;
+count(*)
+2
+select count(*) from acc_test04.index03;
+count(*)
+2
+drop account if exists acc01;
+drop account if exists acc02;
+drop snapshot if exists sp04;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111';
+drop database if exists acc_test02;
+create database acc_test02;
+use acc_test02;
+drop table if exists pri01;
+create table pri01(
+deptno int unsigned comment '部门编号',
+dname varchar(15) comment '部门名称',
+loc varchar(50)  comment '部门所在位置',
+primary key(deptno)
+) comment='部门表';
+insert into pri01 values (10,'ACCOUNTING','NEW YORK');
+insert into pri01 values (20,'RESEARCH','DALLAS');
+insert into pri01 values (30,'SALES','CHICAGO');
+insert into pri01 values (40,'OPERATIONS','BOSTON');
+select count(*) from pri01;
+count(*)
+4
+drop table if exists aff01;
+create table aff01(
+empno int unsigned auto_increment COMMENT '雇员编号',
+ename varchar(15) comment '雇员姓名',
+job varchar(10) comment '雇员职位',
+mgr int unsigned comment '雇员对应的领导的编号',
+hiredate date comment '雇员的雇佣日期',
+sal decimal(7,2) comment '雇员的基本工资',
+comm decimal(7,2) comment '奖金',
+deptno int unsigned comment '所在部门',
+primary key(empno),
+constraint `c1` foreign key (deptno) references pri01 (deptno)
+);
+insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
+insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
+insert into aff01 values (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
+insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
+insert into aff01 values (7654,'MARTIN','SALESMAN',7698,'1981-09-28',1250,1400,30);
+insert into aff01 values (7698,'BLAKE','MANAGER',7839,'1981-05-01',2850,NULL,30);
+insert into aff01 values (7782,'CLARK','MANAGER',7839,'1981-06-09',2450,NULL,10);
+insert into aff01 values (7788,'SCOTT','ANALYST',7566,'0087-07-13',3000,NULL,20);
+insert into aff01 values (7839,'KING','PRESIDENT',NULL,'1981-11-17',5000,NULL,10);
+insert into aff01 values (7844,'TURNER','SALESMAN',7698,'1981-09-08',1500,0,30);
+insert into aff01 values (7876,'ADAMS','CLERK',7788,'0087-07-13',1100,NULL,20);
+insert into aff01 values (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
+insert into aff01 values (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
+insert into aff01 values (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
+select count(*) from aff01;
+count(*)
+14
+drop database if exists acc_test03;
+create database acc_test03;
+use acc_test03;
+drop table if exists table01;
+create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
+insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
+create table table02 (col1 int unique key, col2 varchar(20));
+insert into table02 (col1, col2) values (133, 'database');
+create table table03(a INT primary key AUTO_INCREMENT, b INT, c INT);
+create table table04(a INT primary key AUTO_INCREMENT, b INT, c INT);
+insert into table03 values (1,1,1), (2,2,2);
+insert into table04 values (0,1,2), (2,3,4);
+select count(*) from table01;
+count(*)
+2
+select count(*) from table02;
+count(*)
+1
+select count(*) from table03;
+count(*)
+2
+select count(*) from table04;
+count(*)
+2
+drop database if exists acc_test04;
+create database acc_test04;
+use acc_test04;
+drop table if exists index03;
+create table index03 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
+(9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+select count(*) from acc_test02.pri01;
+count(*)
+4
+select count(*) from acc_test02.aff01;
+count(*)
+14
+select * from acc_test02.pri01;
+deptno    dname    loc
+10    ACCOUNTING    NEW YORK
+20    RESEARCH    DALLAS
+30    SALES    CHICAGO
+40    OPERATIONS    BOSTON
+show create table acc_test02.pri01;
+Table    Create Table
+pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+show create table acc_test02.aff01;
+Table    Create Table
+aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+select count(*) from acc_test03.table01;
+count(*)
+2
+select count(*) from acc_test03.table02;
+count(*)
+1
+select count(*) from acc_test03.table03;
+count(*)
+2
+select count(*) from acc_test03.table04;
+count(*)
+2
+show create table acc_test03.table01;
+Table    Create Table
+table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` char(1) DEFAULT NULL,\n  `col4` varchar(20) DEFAULT NULL,\n  `col5` text DEFAULT NULL,\n  `col6` double DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+show create table acc_test03.table02;
+Table    Create Table
+table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+show create table acc_test03.table03;
+Table    Create Table
+table03    CREATE TABLE `table03` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+show create table acc_test03.table04;
+Table    Create Table
+table04    CREATE TABLE `table04` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+select count(*) from acc_test04.index03;
+count(*)
+2
+show create table acc_test04.index03;
+Table    Create Table
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+drop snapshot if exists sp04;
+create snapshot sp04 for account acc01;
+insert into acc_test02.pri01 values (50,'ACCOUNTING','NEW YORK');
+insert into acc_test02.aff01 values (9000,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,50);
+truncate table acc_test03.table01;
+drop table acc_test03.table02;
+delete from acc_test03.table03 where a = 1;
+update acc_test03.table04 set a = 6000 where a = 1;
+select count(*) from acc_test02.pri01;
+count(*)
+5
+select count(*) from acc_test02.aff01;
+count(*)
+15
+select * from acc_test03.table01;
+col1    col2    col3    col4    col5    col6
+select count(*) from acc_test03.table03;
+count(*)
+1
+select * from acc_test03.table04;
+a    b    c
+0    1    2
+2    3    4
+show create table acc_test04.index03;
+Table    Create Table
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+restore account acc01 from snapshot sp04 to account acc02;
+show databases;
+Database
+acc_test02
+acc_test03
+acc_test04
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+select count(*) from acc_test02.pri01;
+count(*)
+4
+select count(*) from acc_test02.aff01;
+count(*)
+14
+select count(*) from acc_test03.table01;
+count(*)
+2
+select count(*) from acc_test03.table02;
+count(*)
+1
+select count(*) from acc_test03.table03;
+count(*)
+2
+select count(*) from acc_test03.table04;
+count(*)
+2
+select count(*) from acc_test03.table04;
+count(*)
+2
+drop database acc_test03;
+drop snapshot sp04;
+drop account acc01;
+drop account acc02;

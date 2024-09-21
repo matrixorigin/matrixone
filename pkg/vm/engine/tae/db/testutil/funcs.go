@@ -16,10 +16,10 @@ package testutil
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -28,12 +28,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
+
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func WithTestAllPKType(t *testing.T, tae *db.DB, test func(*testing.T, *db.DB, *catalog.Schema)) {
@@ -42,8 +45,8 @@ func WithTestAllPKType(t *testing.T, tae *db.DB, test func(*testing.T, *db.DB, *
 	defer pool.Release()
 	for i := 0; i < 17; i++ {
 		schema := catalog.MockSchemaAll(18, i)
-		schema.BlockMaxRows = 10
-		schema.ObjectMaxBlocks = 2
+		schema.Extra.BlockMaxRows = 10
+		schema.Extra.ObjectMaxBlocks = 2
 		wg.Add(1)
 		_ = pool.Submit(func() {
 			defer wg.Done()
@@ -104,6 +107,181 @@ func CreateRelationNoCommit(t *testing.T, e *db.DB, dbName string, schema *catal
 	return
 }
 
+func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
+	bat := containers.NewBatch()
+	typs := schema.AllTypes()
+	attrs := schema.AllNames()
+	for i, attr := range attrs {
+		if attr == catalog.PhyAddrColumnName {
+			continue
+		}
+		bat.AddVector(attr, containers.MakeVector(typs[i], common.CheckpointAllocator))
+	}
+	return bat
+}
+
+func DropDatabase2(ctx context.Context, txn txnif.AsyncTxn, dbName string) error {
+	db, err := txn.DropDatabase(dbName)
+	if err != nil {
+		return err
+	}
+
+	packer := types.NewPacker()
+	defer packer.Close()
+	packer.EncodeUint32(txn.GetTenantID())
+	packer.EncodeStringType([]byte(db.GetName()))
+
+	catalogdb, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	if err != nil {
+		return err
+	}
+	dbHandle, err := catalogdb.GetRelationByID(pkgcatalog.MO_DATABASE_ID)
+	if err != nil {
+		return err
+	}
+	return dbHandle.DeleteByFilter(ctx, handle.NewEQFilter(packer.Bytes()))
+}
+
+func CreateDatabase2Ext(ctx context.Context, txn txnif.AsyncTxn, dbName, createsql, dattype string) (handle.Database, error) {
+	db, err := txn.CreateDatabase(dbName, createsql, dattype)
+	if err != nil {
+		return nil, err
+	}
+	catalogdb, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	if err != nil {
+		return nil, err
+	}
+	dbHandle, err := catalogdb.GetRelationByID(pkgcatalog.MO_DATABASE_ID)
+	if err != nil {
+		return nil, err
+	}
+	bat := makeRespBatchFromSchema(catalog.SystemDBSchema)
+	for _, def := range catalog.SystemDBSchema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		txnimpl.FillDBRow(db.GetMeta().(*catalog.DBEntry), def.Name, bat.Vecs[def.Idx])
+	}
+
+	if err := dbHandle.Append(ctx, bat); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+func CreateDatabase2(ctx context.Context, txn txnif.AsyncTxn, dbName string) (handle.Database, error) {
+	return CreateDatabase2Ext(ctx, txn, dbName, "", "")
+}
+
+func DropRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database, tblName string) error {
+	rel, err := db.DropRelationByName(tblName)
+	if err != nil {
+		return err
+	}
+	catalogdb, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	if err != nil {
+		return err
+	}
+	tblHandle, err := catalogdb.GetRelationByID(pkgcatalog.MO_TABLES_ID)
+	if err != nil {
+		return err
+	}
+	colHandle, err := catalogdb.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
+	if err != nil {
+		return err
+	}
+	packer := types.NewPacker()
+	defer packer.Close()
+	packer.EncodeUint32(txn.GetTenantID())
+	packer.EncodeStringType([]byte(db.GetName()))
+	packer.EncodeStringType([]byte(tblName))
+	if err := tblHandle.DeleteByFilter(ctx, handle.NewEQFilter(packer.Bytes())); err != nil {
+		return err
+	}
+
+	for _, col := range rel.Schema(false).(*catalog.Schema).ColDefs {
+		packer.Reset()
+		packer.EncodeUint32(txn.GetTenantID())
+		packer.EncodeStringType([]byte(db.GetName()))
+		packer.EncodeStringType([]byte(tblName))
+		packer.EncodeStringType([]byte(col.Name))
+		if err := colHandle.DeleteByFilter(ctx, handle.NewEQFilter(packer.Bytes())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func CreateRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database, schema *catalog.Schema) (handle.Relation, error) {
+	rel, err := db.CreateRelation(schema)
+	if err != nil {
+		return nil, err
+	}
+	relEntry := rel.GetMeta().(*catalog.TableEntry)
+	catalogdb, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	if err != nil {
+		return nil, err
+	}
+	tblHandle, err := catalogdb.GetRelationByID(pkgcatalog.MO_TABLES_ID)
+	if err != nil {
+		return nil, err
+	}
+	colHandle, err := catalogdb.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
+	if err != nil {
+		return nil, err
+	}
+
+	bat := makeRespBatchFromSchema(catalog.SystemTableSchema)
+	for _, def := range catalog.SystemTableSchema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		txnimpl.FillTableRow(relEntry, schema, def.Name, bat.Vecs[def.Idx])
+	}
+	if err := tblHandle.Append(ctx, bat); err != nil {
+		return nil, err
+	}
+	colBat := makeRespBatchFromSchema(catalog.SystemColumnSchema)
+	for _, def := range catalog.SystemColumnSchema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		txnimpl.FillColumnRow(relEntry, schema, def.Name, colBat.Vecs[def.Idx])
+	}
+
+	if err := colHandle.Append(ctx, colBat); err != nil {
+		return nil, err
+	}
+	return rel, nil
+}
+
+func CreateRelationAndAppend2(
+	t *testing.T,
+	tenantID uint32,
+	e *db.DB,
+	dbName string,
+	schema *catalog.Schema,
+	bat *containers.Batch,
+	createDB bool) {
+	ctx := context.Background()
+	txn, err := e.StartTxn(nil)
+	txn.BindAccessInfo(tenantID, 0, 0)
+	require.NoError(t, err)
+	var db handle.Database
+	if createDB {
+		db, err = CreateDatabase2(ctx, txn, dbName)
+		require.NoError(t, err)
+	} else {
+		db, err = txn.GetDatabase(dbName)
+		require.NoError(t, err)
+	}
+	rel, err := CreateRelation2(ctx, txn, db, schema)
+	require.NoError(t, err)
+	err = rel.Append(context.Background(), bat)
+	require.NoError(t, err)
+	require.Nil(t, txn.Commit(context.Background()))
+}
+
 func CreateRelationAndAppend(
 	t *testing.T,
 	tenantID uint32,
@@ -111,10 +289,11 @@ func CreateRelationAndAppend(
 	dbName string,
 	schema *catalog.Schema,
 	bat *containers.Batch,
-	createDB bool) (db handle.Database, rel handle.Relation) {
+	createDB bool) {
 	txn, err := e.StartTxn(nil)
 	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
+	var db handle.Database
 	if createDB {
 		db, err = txn.CreateDatabase(dbName, "", "")
 		assert.NoError(t, err)
@@ -122,16 +301,16 @@ func CreateRelationAndAppend(
 		db, err = txn.GetDatabase(dbName)
 		assert.NoError(t, err)
 	}
-	rel, err = db.CreateRelation(schema)
+	rel, err := db.CreateRelation(schema)
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
-	return
 }
 
 func GetRelation(t *testing.T, tenantID uint32, e *db.DB, dbName, tblName string) (txn txnif.AsyncTxn, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
+	require.NoError(t, err)
 	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
 	db, err := txn.GetDatabase(dbName)
@@ -154,26 +333,63 @@ func GetDefaultRelation(t *testing.T, e *db.DB, name string) (txn txnif.AsyncTxn
 }
 
 func GetOneObject(rel handle.Relation) handle.Object {
-	it := rel.MakeObjectIt()
+	it := rel.MakeObjectIt(false)
+	it.Next()
+	defer it.Close()
 	return it.GetObject()
 }
 
 func GetOneBlockMeta(rel handle.Relation) *catalog.ObjectEntry {
-	it := rel.MakeObjectIt()
+	it := rel.MakeObjectIt(false)
+	it.Next()
+	defer it.Close()
 	return it.GetObject().GetMeta().(*catalog.ObjectEntry)
 }
 
-func GetAllBlockMetas(rel handle.Relation) (metas []*catalog.ObjectEntry) {
-	it := rel.MakeObjectIt()
-	for ; it.Valid(); it.Next() {
+func GetOneTombstoneMeta(rel handle.Relation) *catalog.ObjectEntry {
+	it := rel.MakeObjectIt(true)
+	it.Next()
+	it.Close()
+	return it.GetObject().GetMeta().(*catalog.ObjectEntry)
+}
+
+func GetAllBlockMetas(rel handle.Relation, isTombstone bool) (metas []*catalog.ObjectEntry) {
+	it := rel.MakeObjectIt(isTombstone)
+	for it.Next() {
 		blk := it.GetObject()
 		metas = append(metas, blk.GetMeta().(*catalog.ObjectEntry))
+	}
+	it.Close()
+	return
+}
+func GetAllAppendableMetas(rel handle.Relation, isTombstone bool) (metas []*catalog.ObjectEntry) {
+	it := rel.MakeObjectIt(isTombstone)
+	for it.Next() {
+		blk := it.GetObject()
+		meta := blk.GetMeta().(*catalog.ObjectEntry)
+		if !meta.IsAppendable() {
+			continue
+		}
+		if meta.HasDropCommitted() {
+			continue
+		}
+		metas = append(metas, meta)
 	}
 	return
 }
 
+func MockObjectStats(t *testing.T, obj handle.Object) {
+	objName := objectio.BuildObjectNameWithObjectID(obj.GetID())
+	location := objectio.MockLocation(objName)
+	stats := objectio.NewObjectStats()
+	objectio.SetObjectStatsLocation(stats, location)
+	objectio.SetObjectStatsSize(stats, 1)
+	err := obj.UpdateStats(*stats)
+	assert.Nil(t, err)
+}
+
 func CheckAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, applyDelete bool) {
-	schema := rel.Schema().(*catalog.Schema)
+	schema := rel.Schema(false).(*catalog.Schema)
 	for _, def := range schema.ColDefs {
 		rows := GetColumnRowsByScan(t, rel, def.Idx, applyDelete)
 		assert.Equal(t, expectRows, rows)
@@ -182,9 +398,9 @@ func CheckAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, ap
 
 func GetColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDelete bool) int {
 	rows := 0
-	ForEachColumnView(rel, colIdx, func(view *containers.ColumnView) (err error) {
+	ForEachColumnView(t, rel, colIdx, func(view *containers.Batch) (err error) {
 		if applyDelete {
-			view.ApplyDeletes()
+			view.Compact()
 		}
 		rows += view.Length()
 		// t.Log(view.String())
@@ -193,16 +409,18 @@ func GetColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 	return rows
 }
 
-func ForEachColumnView(rel handle.Relation, colIdx int, fn func(view *containers.ColumnView) error) {
-	ForEachObject(rel, func(blk handle.Object) (err error) {
+func ForEachColumnView(t *testing.T, rel handle.Relation, colIdx int, fn func(view *containers.Batch) error) {
+	ForEachObject(t, rel, func(blk handle.Object) (err error) {
 		blkCnt := blk.GetMeta().(*catalog.ObjectEntry).BlockCnt()
 		for i := 0; i < blkCnt; i++ {
-			view, err := blk.GetColumnDataById(context.Background(), uint16(i), colIdx, common.DefaultAllocator)
+			var view *containers.Batch
+			err := blk.HybridScan(context.Background(), &view, uint16(i), []int{colIdx}, common.DefaultAllocator)
 			if view == nil {
 				logutil.Warnf("blk %v", blk.String())
 				continue
 			}
 			if err != nil {
+				t.Errorf("blk %v, %v", blk.String(), err)
 				return err
 			}
 			defer view.Close()
@@ -215,20 +433,23 @@ func ForEachColumnView(rel handle.Relation, colIdx int, fn func(view *containers
 	})
 }
 
-func ForEachObject(rel handle.Relation, fn func(obj handle.Object) error) {
-	it := rel.MakeObjectIt()
+func ForEachObject(t *testing.T, rel handle.Relation, fn func(obj handle.Object) error) {
+	forEachObject(t, rel, fn, false)
+}
+func ForEachTombstone(t *testing.T, rel handle.Relation, fn func(obj handle.Object) error) {
+	forEachObject(t, rel, fn, true)
+}
+
+func forEachObject(t *testing.T, rel handle.Relation, fn func(obj handle.Object) error, isTombstone bool) {
+	it := rel.MakeObjectIt(isTombstone)
 	var err error
-	for it.Valid() {
+	for it.Next() {
 		obj := it.GetObject()
 		defer obj.Close()
 		if err = fn(obj); err != nil {
-			if errors.Is(err, handle.ErrIteratorEnd) {
-				return
-			} else {
-				panic(err)
-			}
+			t.Error(err)
+			t.FailNow()
 		}
-		it.Next()
 	}
 }
 
@@ -263,20 +484,14 @@ func AppendClosure(t *testing.T, data *containers.Batch, name string, e *db.DB, 
 func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema *catalog.Schema, skipConflict bool) {
 	txn, rel := GetRelation(t, tenantID, e, dbName, schema.Name)
 
-	var metas []*catalog.ObjectEntry
-	it := rel.MakeObjectIt()
-	for it.Valid() {
-		blk := it.GetObject()
-		meta := blk.GetMeta().(*catalog.ObjectEntry)
-		metas = append(metas, meta)
-		it.Next()
-	}
-	_ = txn.Commit(context.Background())
-	if len(metas) == 0 {
+	metas := GetAllAppendableMetas(rel, false)
+	tombstones := GetAllAppendableMetas(rel, true)
+	assert.NoError(t, txn.Commit(context.Background()))
+	if len(metas) == 0 && len(tombstones) == 0 {
 		return
 	}
 	txn, _ = GetRelation(t, tenantID, e, dbName, schema.Name)
-	task, err := jobs.NewFlushTableTailTask(nil, txn, metas, e.Runtime, txn.GetStartTS())
+	task, err := jobs.NewFlushTableTailTask(nil, txn, metas, tombstones, e.Runtime)
 	if skipConflict && err != nil {
 		_ = txn.Rollback(context.Background())
 		return
@@ -296,19 +511,22 @@ func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schem
 }
 
 func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	mergeBlocks(t, tenantID, e, dbName, schema, skipConflict, false)
+	mergeBlocks(t, tenantID, e, dbName, schema, skipConflict, true)
+}
+func mergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema *catalog.Schema, skipConflict, isTombstone bool) {
 	txn, _ := e.StartTxn(nil)
 	txn.BindAccessInfo(tenantID, 0, 0)
 	db, _ := txn.GetDatabase(dbName)
 	rel, _ := db.GetRelationByName(schema.Name)
 
 	var objs []*catalog.ObjectEntry
-	objIt := rel.MakeObjectIt()
-	for objIt.Valid() {
+	objIt := rel.MakeObjectIt(isTombstone)
+	for objIt.Next() {
 		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
 		if !obj.IsAppendable() {
 			objs = append(objs, obj)
 		}
-		objIt.Next()
 	}
 	_ = txn.Commit(context.Background())
 	metas := make([]*catalog.ObjectEntry, 0)
@@ -317,7 +535,7 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		objHandle, err := rel.GetObject(&obj.ID)
+		objHandle, err := rel.GetObject(obj.ID(), isTombstone)
 		if err != nil {
 			if skipConflict {
 				continue
@@ -327,7 +545,11 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 		}
 		metas = append(metas, objHandle.GetMeta().(*catalog.ObjectEntry))
 	}
-	task, err := jobs.NewMergeObjectsTask(nil, txn, metas, e.Runtime, 0)
+	if len(metas) == 0 {
+		t.Logf("no objects to merge, type %v", isTombstone)
+		return
+	}
+	task, err := jobs.NewMergeObjectsTask(nil, txn, metas, e.Runtime, 0, isTombstone)
 	if skipConflict && err != nil {
 		_ = txn.Rollback(context.Background())
 		return
@@ -353,40 +575,31 @@ func GetSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row in
 
 func MockCNDeleteInS3(
 	fs *objectio.ObjectFS,
-	obj data.Object,
-	blkOffset uint16,
+	rowIDVec containers.Vector,
+	pkVec containers.Vector,
 	schema *catalog.Schema,
 	txn txnif.AsyncTxn,
-	deleteRows []uint32,
-) (location objectio.Location, err error) {
-	pkDef := schema.GetPrimaryKey()
-	view, err := obj.GetColumnDataById(context.Background(), txn, schema, blkOffset, pkDef.Idx, common.DefaultAllocator)
-	pkVec := containers.MakeVector(pkDef.Type, common.DefaultAllocator)
-	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	objID := &obj.GetMeta().(*catalog.ObjectEntry).ID
-	blkID := objectio.NewBlockidWithObjectID(objID, blkOffset)
-	if err != nil {
-		return
-	}
-	for _, row := range deleteRows {
-		pkVal := view.GetData().Get(int(row))
-		pkVec.Append(pkVal, false)
-		rowID := objectio.NewRowid(blkID, row)
-		rowIDVec.Append(*rowID, false)
-	}
+) (stats objectio.ObjectStats, err error) {
 	bat := containers.NewBatch()
 	bat.AddVector(catalog.AttrRowID, rowIDVec)
 	bat.AddVector("pk", pkVec)
 	name := objectio.MockObjectName()
 	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, nil)
+	writer.SetDataType(objectio.SchemaTombstone)
+	writer.SetPrimaryKeyWithType(uint16(catalog.TombstonePrimaryKeyIdx), index.HBF,
+		index.ObjectPrefixFn,
+		index.BlockPrefixFn)
 	if err != nil {
 		return
 	}
-	_, err = writer.WriteTombstoneBatch(containers.ToCNBatch(bat))
+	_, err = writer.WriteBatch(containers.ToCNBatch(bat))
 	if err != nil {
 		return
 	}
-	blks, _, err := writer.Sync(context.Background())
-	location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
+	_, _, err = writer.Sync(context.Background())
+	//location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
+
+	stats = writer.GetObjectStats(objectio.WithCNCreated())
+
 	return
 }

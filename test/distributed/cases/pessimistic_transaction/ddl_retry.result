@@ -1,0 +1,98 @@
+select enable_fault_injection();
+enable_fault_injection()
+true
+begin;
+select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'create table xx');
+add_fault_point(runOnce_fail, :::, echo, 0, create table xx)
+true
+create table xx (a int);
+select remove_fault_point('runOnce_fail');
+remove_fault_point(runOnce_fail)
+true
+select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'drop table xx');
+add_fault_point(runOnce_fail, :::, echo, 0, drop table xx)
+true
+drop table xx;
+select remove_fault_point('runOnce_fail');
+remove_fault_point(runOnce_fail)
+true
+create table bb (a int);
+insert into bb values (1);
+select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'alter table bb');
+add_fault_point(runOnce_fail, :::, echo, 0, alter table bb)
+true
+alter table bb rename to xx;
+select remove_fault_point('runOnce_fail');
+remove_fault_point(runOnce_fail)
+true
+show tables;
+Tables_in_ddl_retry
+xx
+select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'alter table xx');
+add_fault_point(runOnce_fail, :::, echo, 0, alter table xx)
+true
+alter table xx add primary key (a);
+select remove_fault_point('runOnce_fail');
+remove_fault_point(runOnce_fail)
+true
+select * from xx;
+a
+1
+commit;
+select * from xx;
+a
+1
+show create table xx;
+Table    Create Table
+xx    CREATE TABLE `xx` (\n  `a` int NOT NULL,\n  PRIMARY KEY (`a`)\n)
+drop table xx;
+drop table if exists foreign01;
+create table foreign01(col1 int primary key,
+col2 varchar(20),
+col3 int,
+col4 bigint);
+drop table if exists foreign02;
+create table foreign02(col1 int,
+col2 int,
+col3 int primary key,
+constraint `c1` foreign key(col1) references foreign01(col1));
+insert into foreign01 values(1,'sfhuwe',1,1);
+insert into foreign01 values(2,'37829901k3d',2,2);
+insert into foreign02 values(1,1,1);
+insert into foreign02 values(2,2,2);
+begin;
+select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'insert into foreign01');
+add_fault_point(runOnce_fail, :::, echo, 0, insert into foreign01)
+true
+insert into foreign01 values(3,'anykind',3,3);
+select remove_fault_point('runOnce_fail');
+remove_fault_point(runOnce_fail)
+true
+select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'alter table foreign01');
+add_fault_point(runOnce_fail, :::, echo, 0, alter table foreign01)
+true
+alter table foreign01 drop column col2;
+select remove_fault_point('runOnce_fail');
+remove_fault_point(runOnce_fail)
+true
+select * from foreign01;
+col1    col3    col4
+3    3    3
+1    1    1
+2    2    2
+commit;
+select * from foreign01;
+col1    col3    col4
+3    3    3
+1    1    1
+2    2    2
+show columns from foreign01;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    INT(32)    NO    PRI    null        
+col3    INT(32)    YES        null        
+col4    BIGINT(64)    YES        null        
+drop table foreign02;
+drop table foreign01;
+select disable_fault_injection();
+disable_fault_injection()
+true

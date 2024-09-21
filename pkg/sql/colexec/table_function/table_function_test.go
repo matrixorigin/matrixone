@@ -24,41 +24,12 @@ import (
 )
 
 func TestString(t *testing.T) {
-	arg := Argument{FuncName: "unnest"}
+	arg := TableFunction{FuncName: "unnest"}
 	arg.String(bytes.NewBuffer(nil))
 }
 
-func TestCall(t *testing.T) {
-	arg := Argument{FuncName: "unnest",
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
-	}
-
-	resetChildren(&arg, nil)
-	end, err := arg.Call(testutil.NewProc())
-	require.NoError(t, err)
-	require.True(t, end.Status == vm.ExecStop)
-	// arg.Name = "generate_series"
-	// end, err = arg.Call(testutil.NewProc())
-	// require.NoError(t, err)
-	require.True(t, end.Status == vm.ExecStop)
-	arg.FuncName = "metadata_scan"
-	end, err = arg.Call(testutil.NewProc())
-	require.NoError(t, err)
-	require.True(t, end.Status == vm.ExecStop)
-	arg.FuncName = "not_exist"
-	end, err = arg.Call(testutil.NewProc())
-	require.Error(t, err)
-	require.True(t, end.Status == vm.ExecStop)
-}
-
 func TestPrepare(t *testing.T) {
-	arg := Argument{FuncName: "unnest",
+	arg := TableFunction{FuncName: "unnest",
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,

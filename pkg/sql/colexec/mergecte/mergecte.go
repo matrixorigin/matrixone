@@ -24,80 +24,159 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_cte"
+const opName = "merge_cte"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (mergeCTE *MergeCTE) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": merge cte ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, true)
-	arg.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
-	arg.ctr.curNodeCnt = arg.ctr.nodeCnt
-	arg.ctr.status = sendInitial
+func (mergeCTE *MergeCTE) OpType() vm.OpType {
+	return vm.MergeCTE
+}
+
+func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
+	if mergeCTE.OpAnalyzer == nil {
+		mergeCTE.OpAnalyzer = process.NewAnalyzer(mergeCTE.GetIdx(), mergeCTE.IsFirst, mergeCTE.IsLast, "merge cte")
+	} else {
+		mergeCTE.OpAnalyzer.Reset()
+	}
+
+	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
+	mergeCTE.ctr.status = sendInitial
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
-	var end bool
-	var err error
+	analyzer := mergeCTE.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	result := vm.NewCallResult()
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
-	}
-	switch arg.ctr.status {
+	var err error
+	ctr := &mergeCTE.ctr
+
+	switch ctr.status {
 	case sendInitial:
-		arg.buf, _, err = arg.ctr.ReceiveFromSingleReg(0, anal)
+		result, err = vm.ChildrenCall(mergeCTE.GetChildren(0), proc, analyzer)
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
 		}
-		if arg.buf == nil {
-			arg.ctr.status = sendLastTag
+
+		if result.Batch == nil {
+			ctr.status = sendLastTag
+		} else {
+			if len(ctr.freeBats) > ctr.i {
+				if ctr.freeBats[ctr.i] != nil {
+					ctr.freeBats[ctr.i].CleanOnlyData()
+				}
+				ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+				if err != nil {
+					return result, err
+				}
+			} else {
+				appBat, err := result.Batch.Dup(proc.Mp())
+				if err != nil {
+					return result, err
+				}
+				analyzer.Alloc(int64(appBat.Size()))
+				ctr.freeBats = append(ctr.freeBats, appBat)
+			}
+			ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
+			ctr.i++
 		}
+
 		fallthrough
 	case sendLastTag:
-		if arg.ctr.status == sendLastTag {
-			arg.ctr.status = sendRecursive
-			arg.buf = makeRecursiveBatch(proc)
-			arg.ctr.RemoveChosen(1)
+		if mergeCTE.ctr.status == sendLastTag {
+			mergeCTE.ctr.status = sendRecursive
+			if len(ctr.freeBats) > ctr.i {
+				ctr.freeBats[ctr.i].SetLast()
+			} else {
+				ctr.freeBats = append(ctr.freeBats, makeRecursiveBatch(proc))
+			}
+			if len(mergeCTE.ctr.bats) == 0 {
+				mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, ctr.freeBats[ctr.i])
+			} else {
+				mergeCTE.ctr.bats[0] = ctr.freeBats[ctr.i]
+			}
+			ctr.i++
 		}
 	case sendRecursive:
-		for {
-			arg.buf, end, _ = arg.ctr.ReceiveFromAllRegs(anal)
-			if arg.buf == nil || end {
-				result.Batch = nil
+		for !mergeCTE.ctr.last {
+			result, err = vm.ChildrenCall(mergeCTE.GetChildren(1), proc, analyzer)
+			if err != nil {
+				result.Status = vm.ExecStop
+				return result, err
+			}
+			if result.Batch == nil {
 				result.Status = vm.ExecStop
 				return result, nil
 			}
-			if !arg.buf.Last() {
-				break
+
+			if result.Batch.Last() {
+				mergeCTE.ctr.curNodeCnt--
+				if mergeCTE.ctr.curNodeCnt == 0 {
+					mergeCTE.ctr.last = true
+					mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
+					if len(ctr.freeBats) > ctr.i {
+						if ctr.freeBats[ctr.i] != nil {
+							ctr.freeBats[ctr.i].CleanOnlyData()
+						}
+						ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+						if err != nil {
+							return result, err
+						}
+					} else {
+						appBat, err := result.Batch.Dup(proc.Mp())
+						if err != nil {
+							return result, err
+						}
+						analyzer.Alloc(int64(appBat.Size()))
+						ctr.freeBats = append(ctr.freeBats, appBat)
+					}
+					ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
+					ctr.i++
+					break
+				}
+			} else {
+				if len(ctr.freeBats) > ctr.i {
+					if ctr.freeBats[ctr.i] != nil {
+						ctr.freeBats[ctr.i].CleanOnlyData()
+					}
+					ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+					if err != nil {
+						return result, err
+					}
+				} else {
+					appBat, err := result.Batch.Dup(proc.Mp())
+					if err != nil {
+						return result, err
+					}
+					analyzer.Alloc(int64(appBat.Size()))
+					ctr.freeBats = append(ctr.freeBats, appBat)
+				}
+				ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
+				ctr.i++
 			}
 
-			arg.buf.SetLast()
-			arg.ctr.curNodeCnt--
-			if arg.ctr.curNodeCnt == 0 {
-				arg.ctr.curNodeCnt = arg.ctr.nodeCnt
-				break
-			} else {
-				proc.PutBatch(arg.buf)
-			}
 		}
 	}
 
-	anal.Input(arg.buf, arg.GetIsFirst())
-	anal.Output(arg.buf, arg.GetIsLast())
-	result.Batch = arg.buf
+	mergeCTE.ctr.buf = mergeCTE.ctr.bats[0]
+	mergeCTE.ctr.bats = mergeCTE.ctr.bats[1:]
+	if mergeCTE.ctr.buf.Last() {
+		mergeCTE.ctr.last = false
+	}
+
+	result.Batch = mergeCTE.ctr.buf
+	result.Status = vm.ExecHasMore
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -106,8 +185,10 @@ func makeRecursiveBatch(proc *process.Process) *batch.Batch {
 	b.Attrs = []string{
 		"recursive_col",
 	}
-	b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
-	vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
+	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	if err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool()); err != nil {
+		panic(err)
+	}
 	batch.SetLength(b, 1)
 	b.SetLast()
 	return b

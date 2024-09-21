@@ -16,9 +16,11 @@ package fileservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -88,7 +90,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 			continue
 		}
 
-		cacheKey := CacheKey{
+		cacheKey := fscache.CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
 			Sz:     entry.Size,
@@ -128,7 +130,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 					idx := int(cacheData.Index)
 					if cacheData.Hit {
 						vector.Entries[idx].done = true
-						vector.Entries[idx].CachedData = Bytes(cacheData.Data)
+						vector.Entries[idx].CachedData = Bytes{bytes: cacheData.Data}
 						vector.Entries[idx].fromCache = r
 						numHit++
 					}
@@ -148,6 +150,13 @@ func (r *RemoteCache) Flush() {}
 func (r *RemoteCache) DeletePaths(ctx context.Context, paths []string) error {
 	//TODO
 	return nil
+}
+
+func (r *RemoteCache) Evict(done chan int64) {
+}
+
+func (r *RemoteCache) Close() {
+	_ = r.client.Close()
 }
 
 func HandleRemoteRead(

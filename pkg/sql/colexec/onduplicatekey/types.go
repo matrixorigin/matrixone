@@ -20,11 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(OnDuplicatekey)
 
 const (
 	Build = iota
@@ -33,20 +32,20 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state            int
 	checkConflictBat *batch.Batch // batch to check conflict
-	rbat             *batch.Batch
+	rbat             *batch.Batch // return batch
+	uniqueCheckExes  []colexec.ExpressionExecutor
 }
 
-type Argument struct {
+type OnDuplicatekey struct {
 	Affected uint64
-	Engine   engine.Engine
 
 	// Source       engine.Relation
 	// UniqueSource []engine.Relation
 	// Ref          *plan.ObjectRef
+
+	// letter case: origin
 	Attrs              []string
 	InsertColCount     int32
 	UniqueColCheckExpr []*plan.Expr
@@ -54,54 +53,71 @@ type Argument struct {
 	OnDuplicateIdx     []int32
 	OnDuplicateExpr    map[string]*plan.Expr
 
-	IdxIdx []int32
-
-	ctr      *container
+	ctr      container
 	IsIgnore bool
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (onDuplicatekey *OnDuplicatekey) GetOperatorBase() *vm.OperatorBase {
+	return &onDuplicatekey.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[OnDuplicatekey](
+		func() *OnDuplicatekey {
+			return &OnDuplicatekey{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *OnDuplicatekey) {
+			*a = OnDuplicatekey{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[OnDuplicatekey]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (onDuplicatekey OnDuplicatekey) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *OnDuplicatekey {
+	return reuse.Alloc[OnDuplicatekey](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (onDuplicatekey *OnDuplicatekey) Release() {
+	if onDuplicatekey != nil {
+		reuse.Free[OnDuplicatekey](onDuplicatekey, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if arg.ctr.rbat != nil {
-			arg.ctr.rbat.Clean(proc.GetMPool())
-		}
-		if arg.ctr.checkConflictBat != nil {
-			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
-		}
-		arg.ctr = nil
+func (onDuplicatekey *OnDuplicatekey) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if onDuplicatekey.ctr.rbat != nil {
+		onDuplicatekey.ctr.rbat.CleanOnlyData()
 	}
+	if onDuplicatekey.ctr.checkConflictBat != nil {
+		onDuplicatekey.ctr.checkConflictBat.CleanOnlyData()
+	}
+	for _, exe := range onDuplicatekey.ctr.uniqueCheckExes {
+		if exe != nil {
+			exe.ResetForNextQuery()
+		}
+	}
+	onDuplicatekey.ctr.state = Build
+}
+
+func (onDuplicatekey *OnDuplicatekey) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if onDuplicatekey.ctr.rbat != nil {
+		onDuplicatekey.ctr.rbat.Clean(proc.GetMPool())
+		onDuplicatekey.ctr.rbat = nil
+	}
+	if onDuplicatekey.ctr.checkConflictBat != nil {
+		onDuplicatekey.ctr.checkConflictBat.Clean(proc.GetMPool())
+		onDuplicatekey.ctr.checkConflictBat = nil
+	}
+	for _, exe := range onDuplicatekey.ctr.uniqueCheckExes {
+		if exe != nil {
+			exe.Free()
+		}
+	}
+	onDuplicatekey.ctr.uniqueCheckExes = nil
 }

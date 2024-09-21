@@ -16,213 +16,161 @@ package agg
 
 import (
 	"bytes"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"math"
 )
 
-func RegisterMin1(id int64) {
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), MinReturnType, false, true),
-			newAggMin[uint8],
-			InitAggMin1[uint8],
-			FillAggMin1[uint8], nil, FillsAggMin1[uint8],
-			MergeAggMin1[uint8],
-			nil,
-		))
+func RegisterMin2(id int64) {
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[uint64],
+		aggMinFill[uint64], aggMinFills[uint64], aggMinMerge[uint64], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), MinReturnType, false, true),
-			newAggMin[uint16],
-			InitAggMin1[uint16],
-			FillAggMin1[uint16], nil, FillsAggMin1[uint16],
-			MergeAggMin1[uint16],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[int8],
+		aggMinFill[int8], aggMinFills[int8], aggMinMerge[int8], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), MinReturnType, false, true),
-			newAggMin[uint32],
-			InitAggMin1[uint32],
-			FillAggMin1[uint32], nil, FillsAggMin1[uint32],
-			MergeAggMin1[uint32],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[int16],
+		aggMinFill[int16], aggMinFills[int16], aggMinMerge[int16], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), MinReturnType, false, true),
-			newAggMin[uint64],
-			InitAggMin1[uint64],
-			FillAggMin1[uint64], nil, FillsAggMin1[uint64],
-			MergeAggMin1[uint64],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[int32],
+		aggMinFill[int32], aggMinFills[int32], aggMinMerge[int32], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), MinReturnType, false, true),
-			newAggMin[int8],
-			InitAggMin1[int8],
-			FillAggMin1[int8], nil, FillsAggMin1[int8],
-			MergeAggMin1[int8],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[int64],
+		aggMinFill[int64], aggMinFills[int64], aggMinMerge[int64], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), MinReturnType, false, true),
-			newAggMin[int16],
-			InitAggMin1[int16],
-			FillAggMin1[int16], nil, FillsAggMin1[int16],
-			MergeAggMin1[int16],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[uint8],
+		aggMinFill[uint8], aggMinFills[uint8], aggMinMerge[uint8], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), MinReturnType, false, true),
-			newAggMin[int32],
-			InitAggMin1[int32],
-			FillAggMin1[int32], nil, FillsAggMin1[int32],
-			MergeAggMin1[int32],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[uint16],
+		aggMinFill[uint16], aggMinFills[uint16], aggMinMerge[uint16], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), MinReturnType, false, true),
-			newAggMin[int64],
-			InitAggMin1[int64],
-			FillAggMin1[int64], nil, FillsAggMin1[int64],
-			MergeAggMin1[int64],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[uint32],
+		aggMinFill[uint32], aggMinFills[uint32], aggMinMerge[uint32], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), MinReturnType, false, true),
-			newAggMin[float32],
-			InitAggMin1[float32],
-			FillAggMin1[float32], nil, FillsAggMin1[float32],
-			MergeAggMin1[float32],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[uint64],
+		aggMinFill[uint64], aggMinFills[uint64], aggMinMerge[uint64], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), MinReturnType, false, true),
-			newAggMin[float64],
-			InitAggMin1[float64],
-			FillAggMin1[float64], nil, FillsAggMin1[float64],
-			MergeAggMin1[float64],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[float32],
+		aggMinFill[float32], aggMinFills[float32], aggMinMerge[float32], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_date.ToType(), MinReturnType, false, true),
-			newAggMin[types.Date],
-			InitAggMin1[types.Date],
-			FillAggMin1[types.Date], nil, FillsAggMin1[types.Date],
-			MergeAggMin1[types.Date],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[float64],
+		aggMinFill[float64], aggMinFills[float64], aggMinMerge[float64], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_datetime.ToType(), MinReturnType, false, true),
-			newAggMin[types.Datetime],
-			InitAggMin1[types.Datetime],
-			FillAggMin1[types.Datetime], nil, FillsAggMin1[types.Datetime],
-			MergeAggMin1[types.Datetime],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_date.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.Date],
+		aggMinFill[types.Date], aggMinFills[types.Date], aggMinMerge[types.Date], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_timestamp.ToType(), MinReturnType, false, true),
-			newAggMin[types.Timestamp],
-			InitAggMin1[types.Timestamp],
-			FillAggMin1[types.Timestamp], nil, FillsAggMin1[types.Timestamp],
-			MergeAggMin1[types.Timestamp],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_datetime.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.Datetime],
+		aggMinFill[types.Datetime], aggMinFills[types.Datetime], aggMinMerge[types.Datetime], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_time.ToType(), MinReturnType, false, true),
-			newAggMin[types.Time],
-			InitAggMin1[types.Time],
-			FillAggMin1[types.Time], nil, FillsAggMin1[types.Time],
-			MergeAggMin1[types.Time],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_timestamp.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.Timestamp],
+		aggMinFill[types.Timestamp], aggMinFills[types.Timestamp], aggMinMerge[types.Timestamp], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), MinReturnType, false, true),
-			newAggMin[uint64],
-			InitAggMin1[uint64],
-			FillAggMin1[uint64], nil, FillsAggMin1[uint64],
-			MergeAggMin1[uint64],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_time.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.Time],
+		aggMinFill[types.Time], aggMinFills[types.Time], aggMinMerge[types.Time], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MinReturnType, false, true),
-			newAggMinBool,
-			InitAggMinBool,
-			FillAggMinBool, nil, FillsAggMinBool,
-			MergeAggMinBool,
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[bool],
+		aggMinOfBoolFill, aggMinOfBoolFills, aggMinOfBoolMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MinReturnType, false, true),
-			aggexec.GenerateFlagContextFromFixedToFixed[types.Uuid, types.Uuid],
-			aggexec.InitFlagContextFromFixedToFixed[types.Uuid, types.Uuid],
-			FillAggMinUuid, nil, FillsAggMinUuid,
-			MergeAggMinUuid,
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_enum.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.Enum],
+		aggMinFill[types.Enum], aggMinFills[types.Enum], aggMinMerge[types.Enum], nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), MinReturnType, false, true),
-			newAggMinDecimal64,
-			InitAggMinDecimal64,
-			FillAggMinDecimal64, nil, FillsAggMinDecimal64,
-			MergeAggMinDecimal64,
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.Uuid],
+		aggMinOfUuidFill, aggMinOfUuidFills, aggMinOfUuidMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), MinReturnType, false, true),
-			newAggMinDecimal128,
-			InitAggMinDecimal128,
-			FillAggMinDecimal128, nil, FillsAggMinDecimal128,
-			MergeAggMinDecimal128,
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.Decimal64],
+		aggMinOfDecimal64Fill, aggMinOfDecimal64Fills, aggMinOfDecimal64Merge, nil)
 
-	varlenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary}
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.Decimal128],
+		aggMinOfDecimal128Fill, aggMinOfDecimal128Fills, aggMinOfDecimal128Merge, nil)
+
+	varlenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink, types.T_binary, types.T_varbinary}
 	for _, t := range varlenList {
-		aggexec.RegisterSingleAggFromVarToVar(
-			aggexec.MakeSingleAgg4RegisteredInfo(
-				aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MinReturnType, false, true),
-				aggexec.GenerateFlagContextFromVarToVar,
-				aggexec.InitFlagContextFromVarToVar,
-				FillAggMinBytes, nil, FillsAggMinBytes,
-				MergeAggMinBytes,
-				nil,
-			))
+		aggexec.RegisterAggFromBytesRetBytes(
+			aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MinReturnType, true),
+			nil,
+			nil,
+			nil,
+			aggMinOfBytesFill, aggMinOfBytesFills, aggMinOfBytesMerge, nil)
 	}
 }
 
@@ -235,7 +183,7 @@ var MinSupportedTypes = []types.T{
 	types.T_decimal64, types.T_decimal128,
 	types.T_bool,
 	types.T_bit,
-	types.T_varchar, types.T_char, types.T_blob, types.T_text,
+	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary,
 }
@@ -243,15 +191,6 @@ var MinSupportedTypes = []types.T{
 func MinReturnType(typs []types.Type) types.Type {
 	return typs[0]
 }
-
-type aggMin[from canCompare] struct{}
-
-func newAggMin[from canCompare]() aggexec.SingleAggFromFixedRetFixed[from, from] {
-	return aggMin[from]{}
-}
-
-func (a aggMin[from]) Marshal() []byte  { return nil }
-func (a aggMin[from]) Unmarshal([]byte) {}
 
 var fromTypeIDtoMaxValue = map[types.T]interface{}{
 	types.T_bit:       uint64(math.MaxUint64),
@@ -269,227 +208,195 @@ var fromTypeIDtoMaxValue = map[types.T]interface{}{
 	types.T_datetime:  types.Datetime(math.MaxInt64),
 	types.T_timestamp: types.Timestamp(math.MaxInt64),
 	types.T_time:      types.Time(math.MaxInt64),
+	types.T_bool:      true,
+	types.T_uuid: types.Uuid([16]byte{
+		math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8,
+		math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8}),
+	types.T_decimal64:  types.Decimal64Max,
+	types.T_decimal128: types.Decimal128Max,
 }
 
-func InitAggMin1[from canCompare](
-	exec aggexec.SingleAggFromFixedRetFixed[from, from], setter aggexec.AggSetter[from], arg, ret types.Type) error {
-	setter(fromTypeIDtoMaxValue[arg.Oid].(from))
-	return nil
+func aggMinInitResult[from canCompare | bool | types.Uuid | types.Decimal64 | types.Decimal128](
+	_ types.Type, parameters ...types.Type) from {
+	return fromTypeIDtoMaxValue[parameters[0].Oid].(from)
 }
 
-func FillAggMin1[from canCompare](
-	exec aggexec.SingleAggFromFixedRetFixed[from, from],
-	value from, getter aggexec.AggGetter[from], setter aggexec.AggSetter[from]) error {
-	if value < getter() {
-		setter(value)
+// min(numeric)
+func aggMinFill[from canCompare](
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value from, isEmpty bool,
+	resultGetter aggexec.AggGetter[from], resultSetter aggexec.AggSetter[from]) error {
+	if value < resultGetter() {
+		resultSetter(value)
 	}
 	return nil
 }
-func FillsAggMin1[from canCompare](
-	exec aggexec.SingleAggFromFixedRetFixed[from, from],
-	value from, isNull bool, count int, getter aggexec.AggGetter[from], setter aggexec.AggSetter[from]) error {
-	if isNull {
-		return nil
+func aggMinFills[from canCompare](
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value from, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[from], resultSetter aggexec.AggSetter[from]) error {
+	if value < resultGetter() {
+		resultSetter(value)
 	}
-	return FillAggMin1(exec, value, getter, setter)
+	return nil
 }
-func MergeAggMin1[from canCompare](
-	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[from, from],
-	getter1, getter2 aggexec.AggGetter[from], setter1 aggexec.AggSetter[from]) error {
-	if getter2() < getter1() {
-		setter1(getter2())
+func aggMinMerge[from canCompare](
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[from],
+	resultSetter aggexec.AggSetter[from]) error {
+	if resultGetter2() < resultGetter1() {
+		resultSetter(resultGetter2())
 	}
 	return nil
 }
 
-type aggMinBool struct{}
-
-func newAggMinBool() aggexec.SingleAggFromFixedRetFixed[bool, bool] {
-	return aggMinBool{}
-}
-func (a aggMinBool) Marshal() []byte     { return nil }
-func (a aggMinBool) Unmarshal(bs []byte) {}
-
-func InitAggMinBool(
-	exec aggexec.SingleAggFromFixedRetFixed[bool, bool],
-	setter aggexec.AggSetter[bool], arg, ret types.Type) error {
-	setter(true)
-	return nil
-}
-func FillAggMinBool(
-	exec aggexec.SingleAggFromFixedRetFixed[bool, bool],
-	value bool, getter aggexec.AggGetter[bool], setter aggexec.AggSetter[bool]) error {
+// min(bool)
+func aggMinOfBoolFill(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value bool, isEmpty bool,
+	resultGetter aggexec.AggGetter[bool], resultSetter aggexec.AggSetter[bool]) error {
 	if !value {
-		setter(false)
+		resultSetter(false)
 	}
 	return nil
 }
-func FillsAggMinBool(
-	exec aggexec.SingleAggFromFixedRetFixed[bool, bool],
-	value bool, isNull bool, count int, getter aggexec.AggGetter[bool], setter aggexec.AggSetter[bool]) error {
-	if isNull {
-		return nil
-	}
-	return FillAggMinBool(exec, value, getter, setter)
+func aggMinOfBoolFills(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value bool, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[bool], resultSetter aggexec.AggSetter[bool]) error {
+	return aggMinOfBoolFill(nil, nil, value, isEmpty, resultGetter, resultSetter)
 }
-func MergeAggMinBool(
-	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[bool, bool],
-	getter1, getter2 aggexec.AggGetter[bool], setter1 aggexec.AggSetter[bool]) error {
-	if !getter2() {
-		setter1(false)
-	}
-	return nil
-}
-
-func FillAggMinUuid(
-	exec aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid],
-	value types.Uuid, getter aggexec.AggGetter[types.Uuid], setter aggexec.AggSetter[types.Uuid]) error {
-	a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetFixed[types.Uuid])
-	if a.IsEmpty {
-		a.IsEmpty = false
-		setter(value)
-	} else {
-		if value.Compare(getter()) < 0 {
-			setter(value)
-		}
-	}
-	return nil
-}
-func FillsAggMinUuid(
-	exec aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid],
-	value types.Uuid, isNull bool, count int, getter aggexec.AggGetter[types.Uuid], setter aggexec.AggSetter[types.Uuid]) error {
-	if isNull {
-		return nil
-	}
-	return FillAggMinUuid(exec, value, getter, setter)
-}
-func MergeAggMinUuid(
-	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid],
-	getter1, getter2 aggexec.AggGetter[types.Uuid], setter1 aggexec.AggSetter[types.Uuid]) error {
-	a := exec1.(*aggexec.ContextWithEmptyFlagOfSingleAggRetFixed[types.Uuid])
-	b := exec2.(*aggexec.ContextWithEmptyFlagOfSingleAggRetFixed[types.Uuid])
-	if a.IsEmpty && !b.IsEmpty {
-		a.IsEmpty = false
-		setter1(getter2())
-	} else if !a.IsEmpty && !b.IsEmpty {
-		if getter1().Compare(getter2()) > 0 {
-			setter1(getter2())
-		}
+func aggMinOfBoolMerge(
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[bool],
+	resultSetter aggexec.AggSetter[bool]) error {
+	if !resultGetter2() {
+		resultSetter(false)
 	}
 	return nil
 }
 
-func FillAggMinBytes(
-	exec aggexec.SingleAggFromVarRetVar,
-	value []byte, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
-	if a.IsEmpty {
-		a.IsEmpty = false
-		return setter(value)
-	}
-	if bytes.Compare(value, getter()) < 0 {
-		return setter(value)
+// min(uuid)
+func aggMinOfUuidFill(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.Uuid, isEmpty bool,
+	resultGetter aggexec.AggGetter[types.Uuid], resultSetter aggexec.AggSetter[types.Uuid]) error {
+	if value.Compare(resultGetter()) < 0 {
+		resultSetter(value)
 	}
 	return nil
 }
-func FillsAggMinBytes(
-	exec aggexec.SingleAggFromVarRetVar,
-	value []byte, isNull bool, count int, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	if isNull {
-		return nil
+func aggMinOfUuidFills(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.Uuid, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[types.Uuid], resultSetter aggexec.AggSetter[types.Uuid]) error {
+	if value.Compare(resultGetter()) < 0 {
+		resultSetter(value)
 	}
-	return FillAggMinBytes(exec, value, getter, setter)
+	return nil
 }
-func MergeAggMinBytes(
-	exec1, exec2 aggexec.SingleAggFromVarRetVar,
-	getter1, getter2 aggexec.AggBytesGetter, setter1 aggexec.AggBytesSetter) error {
-	a := exec1.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
-	b := exec2.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
-	if a.IsEmpty && !b.IsEmpty {
-		a.IsEmpty = false
-		return setter1(getter2())
-	} else if !a.IsEmpty && !b.IsEmpty {
-		if bytes.Compare(getter1(), getter2()) > 0 {
-			return setter1(getter2())
-		}
+func aggMinOfUuidMerge(
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[types.Uuid],
+	resultSetter aggexec.AggSetter[types.Uuid]) error {
+	if resultGetter1().Compare(resultGetter2()) > 0 {
+		resultSetter(resultGetter2())
 	}
 	return nil
 }
 
-type aggMinDecimal64 struct{}
-
-func newAggMinDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64] {
-	return aggMinDecimal64{}
-}
-func (a aggMinDecimal64) Marshal() []byte  { return nil }
-func (a aggMinDecimal64) Unmarshal([]byte) {}
-
-func InitAggMinDecimal64(
-	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64],
-	setter aggexec.AggSetter[types.Decimal64], arg, ret types.Type) error {
-	setter(types.Decimal64Max)
-	return nil
-}
-func FillAggMinDecimal64(
-	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64],
-	value types.Decimal64, getter aggexec.AggGetter[types.Decimal64], setter aggexec.AggSetter[types.Decimal64]) error {
-	if value.Compare(getter()) < 0 {
-		setter(value)
+// min(decimal64)
+func aggMinOfDecimal64Fill(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.Decimal64, isEmpty bool,
+	resultGetter aggexec.AggGetter[types.Decimal64], resultSetter aggexec.AggSetter[types.Decimal64]) error {
+	if value.Compare(resultGetter()) < 0 {
+		resultSetter(value)
 	}
 	return nil
 }
-func FillsAggMinDecimal64(
-	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64],
-	value types.Decimal64, isNull bool, count int, getter aggexec.AggGetter[types.Decimal64], setter aggexec.AggSetter[types.Decimal64]) error {
-	if isNull {
-		return nil
+func aggMinOfDecimal64Fills(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.Decimal64, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[types.Decimal64], resultSetter aggexec.AggSetter[types.Decimal64]) error {
+	if value.Compare(resultGetter()) < 0 {
+		resultSetter(value)
 	}
-	return FillAggMinDecimal64(exec, value, getter, setter)
+	return nil
 }
-func MergeAggMinDecimal64(
-	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64],
-	getter1, getter2 aggexec.AggGetter[types.Decimal64], setter1 aggexec.AggSetter[types.Decimal64]) error {
-	if getter2().Compare(getter1()) < 0 {
-		setter1(getter2())
+func aggMinOfDecimal64Merge(
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[types.Decimal64],
+	resultSetter aggexec.AggSetter[types.Decimal64]) error {
+	if r := resultGetter2(); r.Compare(resultGetter1()) < 0 {
+		resultSetter(r)
 	}
 	return nil
 }
 
-type aggMinDecimal128 struct{}
-
-func newAggMinDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128] {
-	return aggMinDecimal128{}
-}
-func (a aggMinDecimal128) Marshal() []byte  { return nil }
-func (a aggMinDecimal128) Unmarshal([]byte) {}
-
-func InitAggMinDecimal128(
-	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
-	setter aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
-	setter(types.Decimal128Max)
-	return nil
-}
-func FillAggMinDecimal128(
-	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
-	value types.Decimal128, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
-	if value.Compare(getter()) < 0 {
-		setter(value)
+// min(decimal128)
+func aggMinOfDecimal128Fill(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.Decimal128, isEmpty bool,
+	resultGetter aggexec.AggGetter[types.Decimal128], resultSetter aggexec.AggSetter[types.Decimal128]) error {
+	if value.Compare(resultGetter()) < 0 {
+		resultSetter(value)
 	}
 	return nil
 }
-func FillsAggMinDecimal128(
-	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
-	value types.Decimal128, isNull bool, count int, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
-	if isNull {
-		return nil
+func aggMinOfDecimal128Fills(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.Decimal128, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[types.Decimal128], resultSetter aggexec.AggSetter[types.Decimal128]) error {
+	if value.Compare(resultGetter()) < 0 {
+		resultSetter(value)
 	}
-	return FillAggMinDecimal128(exec, value, getter, setter)
+	return nil
 }
-func MergeAggMinDecimal128(
-	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
-	getter1, getter2 aggexec.AggGetter[types.Decimal128], setter1 aggexec.AggSetter[types.Decimal128]) error {
-	if getter2().Compare(getter1()) < 0 {
-		setter1(getter2())
+func aggMinOfDecimal128Merge(
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[types.Decimal128],
+	resultSetter aggexec.AggSetter[types.Decimal128]) error {
+	if r := resultGetter2(); r.Compare(resultGetter1()) < 0 {
+		resultSetter(r)
+	}
+	return nil
+}
+
+// min(bytes)
+func aggMinOfBytesFill(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value []byte, isEmpty bool,
+	resultGetter aggexec.AggBytesGetter, resultSetter aggexec.AggBytesSetter) error {
+	if isEmpty || bytes.Compare(value, resultGetter()) < 0 {
+		return resultSetter(value)
+	}
+	return nil
+}
+func aggMinOfBytesFills(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value []byte, count int, isEmpty bool,
+	resultGetter aggexec.AggBytesGetter, resultSetter aggexec.AggBytesSetter) error {
+	return aggMinOfBytesFill(nil, nil, value, isEmpty, resultGetter, resultSetter)
+}
+func aggMinOfBytesMerge(
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggBytesGetter,
+	resultSetter aggexec.AggBytesSetter) error {
+	if !isEmpty2 {
+		return aggMinOfBytesFill(nil, nil, resultGetter2(), isEmpty1, resultGetter1, resultSetter)
 	}
 	return nil
 }

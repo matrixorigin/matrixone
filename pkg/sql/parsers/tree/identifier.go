@@ -14,12 +14,6 @@
 
 package tree
 
-import (
-	"context"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-)
-
 // IdentifierName is referenced in the expression
 type IdentifierName interface {
 	Expr
@@ -30,6 +24,10 @@ type Identifier string
 
 func (node *Identifier) Format(ctx *FmtCtx) {
 	ctx.WriteString(string(*node))
+}
+
+func (node *Identifier) String() string {
+	return string(*node)
 }
 
 type UnrestrictedIdentifier string
@@ -62,19 +60,55 @@ type UnresolvedName struct {
 	//the name ends with a star. then the first element is empty in the Parts
 	Star bool
 
-	// Parts are the name components (at most 4: column, table, db/schema, catalog.), in reverse order.
-	Parts NameParts
-
+	// CStrParts are the name components (at most 4: column, table, db/schema, catalog.), in reverse order.
 	CStrParts CStrParts
+}
+
+func (node *UnresolvedName) DbName() string {
+	if node.NumParts < 3 {
+		return ""
+	}
+	return node.CStrParts[2].Compare()
+}
+
+func (node *UnresolvedName) DbNameOrigin() string {
+	if node.NumParts < 3 {
+		return ""
+	}
+	return node.CStrParts[2].Origin()
+}
+
+func (node *UnresolvedName) TblName() string {
+	if node.NumParts < 2 {
+		return ""
+	}
+	return node.CStrParts[1].Compare()
+}
+
+func (node *UnresolvedName) TblNameOrigin() string {
+	if node.NumParts < 2 {
+		return ""
+	}
+	return node.CStrParts[1].Origin()
+}
+
+func (node *UnresolvedName) ColName() string {
+	if node.NumParts < 1 {
+		return ""
+	}
+	return node.CStrParts[0].Compare()
+}
+
+func (node *UnresolvedName) ColNameOrigin() string {
+	if node.NumParts < 1 {
+		return ""
+	}
+	return node.CStrParts[0].Origin()
 }
 
 func (node *UnresolvedName) Format(ctx *FmtCtx) {
 	for i := node.NumParts - 1; i >= 0; i-- {
-		if node.CStrParts[i] != nil {
-			ctx.WriteString(node.CStrParts[i].Compare())
-		} else {
-			ctx.WriteString(node.Parts[i])
-		}
+		ctx.WriteString(node.CStrParts[i].Origin())
 		if i > 0 {
 			ctx.WriteByte('.')
 		}
@@ -95,72 +129,38 @@ func (node *UnresolvedName) Accept(v Visitor) (Expr, bool) {
 	return v.Exit(newNode)
 }
 
-// GetNames dbName, tableName, colName
-func (node *UnresolvedName) GetNames() (string, string, string) {
-	return node.Parts[2], node.Parts[1], node.Parts[0]
-}
-
-// the path in an UnresolvedName.
-type NameParts = [4]string
-
-func NewUnresolvedName(ctx context.Context, parts ...string) (*UnresolvedName, error) {
-	l := len(parts)
-	if l < 1 || l > 4 {
-		return nil, moerr.NewInternalError(ctx, "the count of name parts among [1,4]")
-	}
-	u := &UnresolvedName{
-		NumParts: len(parts),
-		Star:     false,
-	}
-	for i := 0; i < len(parts); i++ {
-		u.Parts[i] = parts[l-1-i]
-	}
-	return u, nil
-}
-
-func SetUnresolvedName(parts ...string) *UnresolvedName {
+func NewUnresolvedName(parts ...*CStr) *UnresolvedName {
 	l := len(parts)
 	u := &UnresolvedName{
-		NumParts: len(parts),
+		NumParts: l,
 		Star:     false,
 	}
+	// parts[0] is the column name
 	for i := 0; i < l; i++ {
-		u.Parts[i] = parts[l-1-i]
+		u.CStrParts[i] = parts[l-1-i]
 	}
 	return u
 }
 
-func (node *UnresolvedName) SetUnresolvedNameCStrParts(useOrigin int64, parts ...string) {
+func NewUnresolvedColName(colName string) *UnresolvedName {
+	u := &UnresolvedName{
+		NumParts: 1,
+		Star:     false,
+	}
+	// colName always ignore case sensitivity
+	u.CStrParts[0] = NewCStr(colName, 1)
+	return u
+}
+
+func NewUnresolvedNameWithStar(parts ...*CStr) *UnresolvedName {
 	l := len(parts)
+	u := &UnresolvedName{
+		NumParts: l,
+		Star:     true,
+	}
+	// parts[0] is the table name
 	for i := 0; i < l; i++ {
-		node.CStrParts[i] = NewCStrUseOrigin(parts[l-1-i], useOrigin)
-	}
-}
-
-func NewUnresolvedNameWithStar(ctx context.Context, parts ...string) (*UnresolvedName, error) {
-	l := len(parts)
-	if l < 1 || l > 3 {
-		return nil, moerr.NewInternalError(ctx, "the count of name parts among [1,3]")
-	}
-	u := &UnresolvedName{
-		NumParts: len(parts),
-		Star:     true,
-	}
-	u.Parts[0] = ""
-	for i := 0; i < len(parts); i++ {
-		u.Parts[i] = parts[l-1-i]
-	}
-	return u, nil
-}
-
-func SetUnresolvedNameWithStar(parts ...string) *UnresolvedName {
-	l := len(parts)
-	u := &UnresolvedName{
-		NumParts: len(parts),
-		Star:     true,
-	}
-	for i := 0; i < len(parts); i++ {
-		u.Parts[i] = parts[l-1-i]
+		u.CStrParts[i] = parts[l-1-i]
 	}
 	return u
 }

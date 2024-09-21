@@ -64,6 +64,7 @@ var (
 		InformationSchemaCollationsDDL,
 		InformationSchemaTableConstraintsDDL,
 		InformationSchemaEventsDDL,
+		InformationSchemaFilesDDL,
 		informationSchemaKeywordsData,
 	}
 )
@@ -95,7 +96,7 @@ func initMysqlTables(ctx context.Context, txn executor.TxnExecutor) error {
 	begin := time.Now()
 	for _, sql := range InitMysqlSysTables {
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
-			return moerr.NewInternalError(ctx, "[Mysql] init mysql tables error: %v, sql: %s", err, sql)
+			return moerr.NewInternalErrorf(ctx, "[Mysql] init mysql tables error: %v, sql: %s", err, sql)
 		}
 	}
 	timeCost = time.Since(begin)

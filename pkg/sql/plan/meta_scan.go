@@ -17,12 +17,9 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -106,12 +103,26 @@ var (
 				NotNullable: false,
 			},
 		},
+		{
+			Name: catalog.MetaColNames[catalog.SAVED_ROW_COUNT_IDX],
+			Typ: plan.Type{
+				Id:          int32(catalog.MetaColTypes[catalog.SAVED_ROW_COUNT_IDX].Oid),
+				NotNullable: false,
+			},
+		},
+		{
+			Name: catalog.MetaColNames[catalog.QUERY_ROW_COUNT_IDX],
+			Typ: plan.Type{
+				Id:          int32(catalog.MetaColTypes[catalog.QUERY_ROW_COUNT_IDX].Oid),
+				NotNullable: false,
+			},
+		},
 	}
 )
 
 func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 	var err error
-	val, err := builder.compCtx.ResolveVariable("save_query_result", true, true)
+	val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
 	if err == nil {
 		if v, _ := val.(int8); v == 0 {
 			return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
@@ -128,19 +139,11 @@ func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindCon
 	if err != nil {
 		return 0, err
 	}
-	// calculate uuid
-	vec, err := colexec.EvalExpressionOnce(builder.compCtx.GetProcess(), exprs[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
-	if err != nil {
-		return 0, err
-	}
-	uuid := vector.MustFixedCol[types.Uuid](vec)[0]
-	vec.Free(builder.compCtx.GetProcess().GetMPool())
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},
 		TableDef: &plan.TableDef{
-			Name:      uuid.ToString(),
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
 				Name: "meta_scan",
@@ -148,8 +151,10 @@ func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindCon
 			Cols: MetaColDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
-		Children:        []int32{childId},
 		TblFuncExprList: exprs,
+	}
+	if childId >= 0 {
+		node.Children = []int32{childId}
 	}
 	return builder.appendNode(node, ctx), nil
 }

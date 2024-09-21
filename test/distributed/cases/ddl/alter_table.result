@@ -301,11 +301,11 @@ create table t5(a int);
 alter table t5 comment = "comment_1";
 show create table t5;
 Table    Create Table
-t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL\n) COMMENT='comment_1'
+t5    CREATE TABLE `t5` (\n  `a` int DEFAULT NULL\n) COMMENT='comment_1'
 alter table t5 comment = "comment_2", comment = "comment_3";
 show create table t5;
 Table    Create Table
-t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL\n) COMMENT='comment_3'
+t5    CREATE TABLE `t5` (\n  `a` int DEFAULT NULL\n) COMMENT='comment_3'
 alter table t5 add column a int;
 Duplicate column name 'a'
 alter table t5 add column b tinyint, add column c smallint, add column d int, add column e bigint, add column f tinyint unsigned;
@@ -314,7 +314,7 @@ alter table t5 add column l varchar(255), add column m Date, add column n DateTi
 alter table t5 add column q decimal(5,2), add column r text;
 show create table t5;
 Table    Create Table
-t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL,\n`b` TINYINT DEFAULT NULL,\n`c` SMALLINT DEFAULT NULL,\n`d` INT DEFAULT NULL,\n`e` BIGINT DEFAULT NULL,\n`f` TINYINT UNSIGNED DEFAULT NULL,\n`g` SMALLINT UNSIGNED DEFAULT NULL,\n`h` INT UNSIGNED DEFAULT NULL,\n`i` BIGINT UNSIGNED DEFAULT NULL,\n`j` FLOAT DEFAULT NULL,\n`k` DOUBLE DEFAULT NULL,\n`l` VARCHAR(255) DEFAULT NULL,\n`m` DATE DEFAULT NULL,\n`n` DATETIME DEFAULT NULL,\n`o` TIMESTAMP DEFAULT NULL,\n`p` BOOL DEFAULT NULL,\n`q` DECIMAL(5,2) DEFAULT NULL,\n`r` TEXT DEFAULT NULL\n) COMMENT='comment_3'
+t5    CREATE TABLE `t5` (\n  `a` int DEFAULT NULL,\n  `b` tinyint DEFAULT NULL,\n  `c` smallint DEFAULT NULL,\n  `d` int DEFAULT NULL,\n  `e` bigint DEFAULT NULL,\n  `f` tinyint unsigned DEFAULT NULL,\n  `g` smallint unsigned DEFAULT NULL,\n  `h` int unsigned DEFAULT NULL,\n  `i` bigint unsigned DEFAULT NULL,\n  `j` float DEFAULT NULL,\n  `k` double DEFAULT NULL,\n  `l` varchar(255) DEFAULT NULL,\n  `m` date DEFAULT NULL,\n  `n` datetime DEFAULT NULL,\n  `o` timestamp NULL DEFAULT NULL,\n  `p` bool DEFAULT NULL,\n  `q` decimal(5,2) DEFAULT NULL,\n  `r` text DEFAULT NULL\n) COMMENT='comment_3'
 show columns from t5;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
@@ -333,7 +333,7 @@ m    DATE(0)    YES        null
 n    DATETIME(0)    YES        null        
 o    TIMESTAMP(0)    YES        null        
 p    BOOL(0)    YES        null        
-q    DECIMAL64(5)    YES        null        
+q    DECIMAL(5)    YES        null        
 r    TEXT(0)    YES        null        
 alter table t5 drop column b, drop column c, drop column d, drop column e, drop column f, drop column g, drop column h;
 show columns from t5;
@@ -347,14 +347,14 @@ m    DATE(0)    YES        null
 n    DATETIME(0)    YES        null        
 o    TIMESTAMP(0)    YES        null        
 p    BOOL(0)    YES        null        
-q    DECIMAL64(5)    YES        null        
+q    DECIMAL(5)    YES        null        
 r    TEXT(0)    YES        null        
 alter table t5 drop column i, drop column j, drop column k, drop column l, drop column m, drop column n, drop column o;
 show columns from t5;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 p    BOOL(0)    YES        null        
-q    DECIMAL64(5)    YES        null        
+q    DECIMAL(5)    YES        null        
 r    TEXT(0)    YES        null        
 alter table t5 drop column p, drop column q, drop column r;
 show columns from t5;

@@ -26,7 +26,7 @@ import (
 func TestIntHashMap_Iterator(t *testing.T) {
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(false, m)
+		mp, err := NewIntHashMap(false)
 		require.NoError(t, err)
 		rowCount := 10
 		vecs := []*vector.Vector{
@@ -41,7 +41,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, rowCount, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 1, 1, 2, 2, 2, 3, 3, 3, 4}, vs)
-		vs, _ = itr.Find(0, rowCount, vecs, nil)
+		vs, _ = itr.Find(0, rowCount, vecs)
 		require.Equal(t, []uint64{1, 1, 1, 2, 2, 2, 3, 3, 3, 4}, vs)
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -51,7 +51,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true, m)
+		mp, err := NewIntHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -62,7 +62,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -72,7 +72,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true, m)
+		mp, err := NewIntHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int64, 0, 0),
@@ -82,7 +82,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -92,7 +92,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true, m)
+		mp, err := NewIntHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_char, 1, 0),
@@ -102,7 +102,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -112,7 +112,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true, m)
+		mp, err := NewIntHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_char, 1, 0),
@@ -122,7 +122,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -132,7 +132,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(false, m)
+		mp, err := NewIntHashMap(false)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_char, 1, 0),
@@ -142,7 +142,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{0, 1, 0, 2, 0, 3, 0, 4, 0, 5}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{0, 1, 0, 2, 0, 3, 0, 4, 0, 5}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)

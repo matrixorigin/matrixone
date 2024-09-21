@@ -39,9 +39,9 @@ func TestCheckpoint1(t *testing.T) {
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 	schema := catalog.MockSchema(13, 12)
-	schema.BlockMaxRows = 1000
-	schema.ObjectMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	schema.Extra.BlockMaxRows = 1000
+	schema.Extra.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows))
 	defer bat.Close()
 	{
 		txn, _ := db.StartTxn(nil)
@@ -55,9 +55,8 @@ func TestCheckpoint1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeObjectIt()
-		blk := it.GetObject()
-		err := blk.RangeDelete(0, 3, 3, handle.DT_Normal, common.DefaultAllocator)
+		blk := testutil.GetOneObject(rel)
+		err := rel.RangeDelete(blk.Fingerprint(), 3, 3, handle.DT_Normal)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
@@ -73,11 +72,11 @@ func TestCheckpoint1(t *testing.T) {
 		processor.ObjectFn = objectFn
 		err := db.Catalog.RecurLoop(processor)
 		assert.NoError(t, err)
-		return blockCnt == 2+3
+		return blockCnt == 2
 	}
 	testutils.WaitExpect(1000, fn)
 	fn()
-	assert.Equal(t, 2+3, blockCnt)
+	assert.Equal(t, 2, blockCnt)
 }
 
 func TestCheckpoint2(t *testing.T) {
@@ -93,12 +92,12 @@ func TestCheckpoint2(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema1 := catalog.MockSchema(4, 2)
-	schema1.BlockMaxRows = 10
-	schema1.ObjectMaxBlocks = 2
+	schema1.Extra.BlockMaxRows = 10
+	schema1.Extra.ObjectMaxBlocks = 2
 	schema2 := catalog.MockSchema(4, 2)
-	schema2.BlockMaxRows = 10
-	schema2.ObjectMaxBlocks = 2
-	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*2))
+	schema2.Extra.BlockMaxRows = 10
+	schema2.Extra.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*2))
 	defer bat.Close()
 	bats := bat.Split(10)
 	var (
@@ -140,10 +139,9 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(schema1.Name)
 		assert.Nil(t, err)
-		it := rel.MakeObjectIt()
-		blk := it.GetObject()
+		blk := testutil.GetOneObject(rel)
 		meta = blk.GetMeta().(*catalog.ObjectEntry)
-		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.ObjectEntry{meta}, tae.Runtime, txn.GetStartTS())
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.ObjectEntry{meta}, nil, tae.Runtime)
 		assert.Nil(t, err)
 		err = tae.Runtime.Scheduler.Schedule(task)
 		assert.Nil(t, err)
@@ -160,9 +158,9 @@ func TestSchedule1(t *testing.T) {
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(13, 12)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows))
 	defer bat.Close()
 	{
 		txn, _ := db.StartTxn(nil)

@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(TimeWin)
 
 const (
 	initTag     = 0
@@ -55,18 +55,19 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	rbat   *batch.Batch
 	colCnt int
 
+	i    int
 	bats []*batch.Batch
 
-	aggExe []colexec.ExpressionExecutor
-	aggVec [][]*vector.Vector
+	aggExe   []colexec.ExpressionExecutor
+	aggVec   [][]*vector.Vector
+	aggIndex int
 
-	tsExe colexec.ExpressionExecutor
-	tsVec []*vector.Vector
+	tsExe   colexec.ExpressionExecutor
+	tsVec   []*vector.Vector
+	tsIndex int
 
 	tsOid types.T
 	tsTyp *types.Type
@@ -91,12 +92,12 @@ type container struct {
 	wstart []int64
 	wend   []int64
 
-	calRes func(ctr *container, ap *Argument, proc *process.Process) (err error)
-	eval   func(ctr *container, ap *Argument, proc *process.Process) (err error)
+	calRes func(ctr *container, ap *TimeWin, proc *process.Process) (err error)
+	eval   func(ctr *container, ap *TimeWin, proc *process.Process) (err error)
 }
 
-type Argument struct {
-	ctr *container
+type TimeWin struct {
+	ctr container
 
 	Types []types.Type
 	Aggs  []aggexec.AggFuncExecExpression
@@ -111,34 +112,34 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (timeWin *TimeWin) GetOperatorBase() *vm.OperatorBase {
+	return &timeWin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[TimeWin](
+		func() *TimeWin {
+			return &TimeWin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *TimeWin) {
+			*a = TimeWin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[TimeWin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (timeWin TimeWin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *TimeWin {
+	return reuse.Alloc[TimeWin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (timeWin *TimeWin) Release() {
+	if timeWin != nil {
+		reuse.Free[TimeWin](timeWin, nil)
 	}
 }
 
@@ -147,19 +148,58 @@ type Interval struct {
 	Val int64
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanTsVector()
-		ctr.cleanAggVector()
-		ctr.cleanWin()
-		arg.ctr = nil
+func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &timeWin.ctr
+	ctr.resetExes()
+	ctr.resetParam()
+	ctr.resetWin()
+}
+
+func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &timeWin.ctr
+	ctr.freeBatch(proc.Mp())
+	ctr.freeVector(proc.Mp())
+	ctr.freeExes()
+	ctr.freeAgg()
+}
+
+func (ctr *container) resetExes() {
+	for _, exe := range ctr.aggExe {
+		if exe != nil {
+			exe.ResetForNextQuery()
+		}
+	}
+	if ctr.tsExe != nil {
+		ctr.tsExe.ResetForNextQuery()
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) resetParam() {
+	ctr.cur = withoutGrow
+	ctr.pre = withoutPre
+	ctr.status = initTag
+	ctr.i = 0
+	ctr.curIdx = 0
+	ctr.curRow = 0
+	ctr.preIdx = 0
+	ctr.preRow = 0
+	ctr.nextStart = 0
+	ctr.tsIndex = 0
+	ctr.aggIndex = 0
+}
+
+func (ctr *container) freeExes() {
+	for _, exe := range ctr.aggExe {
+		if exe != nil {
+			exe.Free()
+		}
+	}
+	if ctr.tsExe != nil {
+		ctr.tsExe.Free()
+	}
+}
+
+func (ctr *container) freeBatch(mp *mpool.MPool) {
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)
 	}
@@ -170,25 +210,33 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) cleanTsVector() {
-	if ctr.tsExe != nil {
-		ctr.tsExe.Free()
+func (ctr *container) freeAgg() {
+	for _, a := range ctr.aggs {
+		if a != nil {
+			a.Free()
+		}
 	}
-	ctr.tsVec = nil
-	ctr.tsExe = nil
 }
 
-func (ctr *container) cleanAggVector() {
-	for i := range ctr.aggExe {
-		if ctr.aggExe[i] != nil {
-			ctr.aggExe[i].Free()
+func (ctr *container) freeVector(mp *mpool.MPool) {
+	for _, vec := range ctr.tsVec {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}
+	ctr.tsVec = nil
+
+	for _, vecs := range ctr.aggVec {
+		for _, vec := range vecs {
+			if vec != nil {
+				vec.Free(mp)
+			}
 		}
 	}
 	ctr.aggVec = nil
-	ctr.aggExe = nil
 }
 
-func (ctr *container) cleanWin() {
+func (ctr *container) resetWin() {
 	ctr.wstart = nil
 	ctr.wend = nil
 	ctr.aggs = nil

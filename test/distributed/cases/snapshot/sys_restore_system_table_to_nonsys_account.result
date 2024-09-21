@@ -1,0 +1,708 @@
+set global enable_privilege_cache = off;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop database if exists udf_db;
+create database udf_db;
+use udf_db;
+select name, db from mo_catalog.mo_user_defined_function;
+name    db
+create function `addAB`(x int, y int) returns int
+language sql as
+'$1 + $2';
+select addAB(10, 5);
+addAB(10, 5)
+15
+select name, db from mo_catalog.mo_user_defined_function;
+name    db
+addab    udf_db
+drop snapshot if exists udf_dsp01;
+create snapshot udf_dsp01 for account acc01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+udf_dsp01    2024-08-07 09:46:00.17249539    account    acc01        
+create function`concatenate`(str1 varchar(255), str2 varchar(255)) returns varchar(255)
+language sql as
+'$1 + $2';
+select concatenate('Hello, ', 'World!');
+concatenate(Hello, , World!)
+Hello, World!
+drop snapshot if exists udf_dsp02;
+create snapshot udf_dsp02 for account acc01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+udf_dsp02    2024-08-07 09:46:00.188348149    account    acc01        
+udf_dsp01    2024-08-07 09:46:00.17249539    account    acc01        
+drop database if exists udf_db2;
+create database udf_db2;
+use udf_db2;
+create function `subAB`(x int, y int) returns int
+language sql as
+'$1 - $2';
+select subAB(10, 5);
+subAB(10, 5)
+5
+select name, db from mo_catalog.mo_user_defined_function;
+name    db
+addab    udf_db
+concatenate    udf_db
+subab    udf_db2
+drop snapshot if exists udf_dsp03;
+create snapshot udf_dsp03 for account acc01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+udf_dsp03    2024-08-07 09:46:00.221115771    account    acc01        
+udf_dsp02    2024-08-07 09:46:00.188348149    account    acc01        
+udf_dsp01    2024-08-07 09:46:00.17249539    account    acc01        
+select * from mo_catalog.mo_user_defined_function;
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+drop function subab(x int,y int);
+drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
+restore account acc01 from snapshot udf_dsp03;
+select * from mo_catalog.mo_user_defined_function;
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+restore account acc01 from snapshot udf_dsp02;
+select * from mo_catalog.mo_user_defined_function;
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+drop database udf_db;
+drop snapshot udf_dsp01;
+drop snapshot udf_dsp02;
+drop snapshot udf_dsp03;
+drop database if exists udf_db2;
+create database udf_db2;
+use udf_db2;
+create function `addab`(x int, y int) returns int
+language sql as
+'$1 + $2';
+select * from mo_catalog.mo_user_defined_function;
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+3    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+drop snapshot if exists udf_sp04;
+create snapshot udf_sp04 for account acc01;
+drop database udf_db2;
+select * from mo_catalog.mo_user_defined_function;
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+restore account acc01 from snapshot udf_sp04;
+select * from mo_catalog.mo_user_defined_function;
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+3    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+drop database udf_db2;
+drop snapshot udf_sp04;
+drop database if exists procedure_test;
+create database procedure_test;
+use procedure_test;
+drop table if exists tbh1;
+drop table if exists tbh2;
+drop table if exists tbh2;
+create table tbh1(id int primary key, val int);
+create table tbh2(id int primary key, val char);
+create table tbh3(id int primary key, val float);
+insert into tbh1(id, val) values(1,10),(2,20),(3,30);
+insert into tbh2(id, val) values(1,'a'),(2,'b'),(3,'c');
+insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
+drop procedure if exists test_if_hit_elseif_first_elseif;
+create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
+call test_if_hit_elseif_first_elseif();
+id    val
+1    a
+2    b
+3    c
+drop procedure if exists test_if_hit_if;
+create procedure test_if_hit_if() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
+call test_if_hit_if();
+id    val
+1    a
+2    b
+3    c
+select * from mo_catalog.mo_stored_procedure;
+proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+1    test_if_hit_elseif_first_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    test_if_hit_if    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+drop snapshot if exists sp_sp05;
+create snapshot sp_sp05 for account acc01;
+drop procedure test_if_hit_elseif_first_elseif;
+drop procedure test_if_hit_if;
+restore account acc01 from snapshot sp_sp05;
+select * from mo_catalog.mo_stored_procedure;
+proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+1    test_if_hit_elseif_first_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    test_if_hit_if    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+call test_if_hit_elseif_first_elseif();
+id    val
+1    a
+2    b
+3    c
+call test_if_hit_if();
+id    val
+1    a
+2    b
+3    c
+drop procedure test_if_hit_elseif_first_elseif;
+drop procedure test_if_hit_if;
+drop database procedure_test;
+drop snapshot sp_sp05;
+drop database if exists procedure_test;
+create database procedure_test;
+use procedure_test;
+drop table if exists tbh1;
+drop table if exists tbh2;
+drop table if exists tbh2;
+create table tbh1(id int primary key, val int);
+create table tbh2(id int primary key, val char);
+create table tbh3(id int primary key, val float);
+insert into tbh1(id, val) values(1,10),(2,20),(3,30);
+insert into tbh2(id, val) values(1,'a'),(2,'b'),(3,'c');
+insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
+drop procedure if exists test_if_hit_second_elseif;
+create procedure test_if_hit_second_elseif() 'begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
+call test_if_hit_second_elseif();
+id    val
+1    a
+drop procedure if exists test_if_hit_else;
+create procedure test_if_hit_else() 'begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
+call test_if_hit_else();
+id    val
+1    1.5
+2    2.5
+3    3.5
+select * from mo_catalog.mo_stored_procedure;
+proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+3    test_if_hit_second_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:01    2024-08-07 09:46:01    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:01    2024-08-07 09:46:01    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+drop snapshot if exists sp_sp06;
+create snapshot sp_sp06 for account acc01;
+drop table tbh1;
+drop table tbh2;
+drop procedure test_if_hit_second_elseif;
+select * from mo_catalog.mo_stored_procedure;
+proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:01    2024-08-07 09:46:01    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+restore account acc01 from snapshot sp_sp06;
+call test_if_hit_else();
+id    val
+1    1.5
+2    2.5
+3    3.5
+call test_if_hit_second_elseif();
+id    val
+1    a
+select * from mo_catalog.mo_stored_procedure;
+proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+3    test_if_hit_second_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:01    2024-08-07 09:46:01    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:01    2024-08-07 09:46:01    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+drop procedure test_if_hit_second_elseif;
+drop procedure test_if_hit_else;
+drop snapshot sp_sp06;
+drop stage if exists my_ext_stage;
+create stage my_ext_stage URL='s3://load/files/';
+drop stage if exists my_ext_stage1;
+create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
+select * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+1    my_ext_stage    s3://load/files/        disabled    2024-08-07 09:46:01    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    disabled    2024-08-07 09:46:01    
+drop snapshot if exists stage_sp01;
+create snapshot stage_sp01 for account acc01;
+alter stage my_ext_stage1 SET URL='s3://load/files2/';
+drop stage my_ext_stage;
+select * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+2    my_ext_stage1    s3://load/files2/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    disabled    2024-08-07 09:46:01    
+restore account acc01 from snapshot stage_sp01;
+select * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+1    my_ext_stage    s3://load/files/        disabled    2024-08-07 09:46:01    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    disabled    2024-08-07 09:46:01    
+drop stage my_ext_stage;
+drop stage my_ext_stage1;
+drop snapshot stage_sp01;
+drop user if exists userx;
+create user userx identified by '111';
+drop user if exists usery;
+create user usery identified by '222';
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+userx    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
+usery    *899ECD04E40F745BD52A4C552BE4A818AC65FAF8    unlock    PASSWORD    2    2    1
+drop snapshot if exists user_sp01;
+create snapshot user_sp01 for account acc01;
+drop user if exists userz;
+create user userz identified by '111';
+drop snapshot if exists user_sp02;
+create snapshot user_sp02 for account acc01;
+restore account acc01 from snapshot user_sp01;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+userx    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
+usery    *899ECD04E40F745BD52A4C552BE4A818AC65FAF8    unlock    PASSWORD    2    2    1
+restore account acc01 from snapshot user_sp02;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+userx    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
+usery    *899ECD04E40F745BD52A4C552BE4A818AC65FAF8    unlock    PASSWORD    2    2    1
+userz    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
+drop user userx;
+drop user usery;
+drop user userz;
+drop snapshot user_sp01;
+drop snapshot user_sp02;
+drop role if exists role1;
+drop role if exists role2;
+create role role1;
+create role role2;
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+role1    2    2
+role2    2    2
+drop snapshot if exists role_sp01;
+create snapshot role_sp01 for account acc01;
+drop role role1;
+drop role role2;
+restore account acc01 from snapshot role_sp01;
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+role1    2    2
+role2    2    2
+drop role role1;
+drop role role2;
+drop snapshot role_sp01;
+drop role if exists test_role;
+create role test_role;
+grant select,insert,update on table testdb.* to test_role with grant option;
+internal error: there is no database "testdb"
+grant all on account * to test_role;
+grant ownership on database *.* to test_role;
+grant ownership on table *.* to test_role;
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+test_role    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
+role_name    privilege_id    with_grant_option
+test_role    14    false
+test_role    29    false
+test_role    38    false
+drop snapshot if exists prvis_sp01;
+create snapshot prvis_sp01 for account acc01;
+drop role test_role;
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
+role_name    privilege_id    with_grant_option
+restore account acc01 from snapshot prvis_sp01;
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+test_role    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
+role_name    privilege_id    with_grant_option
+test_role    14    false
+test_role    29    false
+test_role    38    false
+drop database testdb;
+Can't drop database 'testdb'; database doesn't exist
+drop role test_role;
+drop snapshot prvis_sp01;
+drop user if exists user_grant_2;
+create user if not exists user_grant_2 identified by '123456';
+drop role if exists role_account_priv_1;
+create role 'role_account_priv_1';
+grant create user, drop user, alter user, create role, drop role, create database,drop database,show databases,connect,manage grants on account *  to role_account_priv_1 with grant option;
+grant select on table *.* to role_account_priv_1;
+grant role_account_priv_1 to user_grant_2;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+user_grant_2    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+role_account_priv_1    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
+role_name    privilege_id    with_grant_option
+role_account_priv_1    3    true
+role_account_priv_1    4    true
+role_account_priv_1    5    true
+role_account_priv_1    6    true
+role_account_priv_1    7    true
+role_account_priv_1    9    true
+role_account_priv_1    10    true
+role_account_priv_1    11    true
+role_account_priv_1    12    true
+role_account_priv_1    13    true
+role_account_priv_1    30    false
+drop snapshot if exists grant_sp01;
+create snapshot grant_sp01 for account acc01;
+drop user user_grant_2;
+drop role 'role_account_priv_1';
+restore account acc01 from snapshot grant_sp01;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+user_grant_2    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+role_account_priv_1    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
+role_name    privilege_id    with_grant_option
+role_account_priv_1    3    true
+role_account_priv_1    4    true
+role_account_priv_1    5    true
+role_account_priv_1    6    true
+role_account_priv_1    7    true
+role_account_priv_1    9    true
+role_account_priv_1    10    true
+role_account_priv_1    11    true
+role_account_priv_1    12    true
+role_account_priv_1    13    true
+role_account_priv_1    30    false
+drop user user_grant_2;
+drop role role_account_priv_1;
+drop snapshot grant_sp01;
+drop user if exists user_grant_3;
+create user if not exists user_grant_3 identified by '123456';
+drop role if exists role_account_priv_3;
+create role 'role_account_priv_3';
+drop snapshot if exists grant_sp02;
+create snapshot grant_sp02 for account acc01;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+user_grant_3    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+role_account_priv_3    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
+role_name    privilege_id    with_grant_option
+grant create user, drop user, alter user, create role, drop role, create database,drop database,show databases,connect,manage grants on account *  to role_account_priv_3 with grant option;
+grant select on table *.* to role_account_priv_3;
+grant role_account_priv_3 to user_grant_3;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+user_grant_3    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+role_account_priv_3    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
+role_name    privilege_id    with_grant_option
+role_account_priv_3    3    true
+role_account_priv_3    4    true
+role_account_priv_3    5    true
+role_account_priv_3    6    true
+role_account_priv_3    7    true
+role_account_priv_3    9    true
+role_account_priv_3    10    true
+role_account_priv_3    11    true
+role_account_priv_3    12    true
+role_account_priv_3    13    true
+role_account_priv_3    30    false
+restore account acc01 from snapshot grant_sp02;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+user_grant_3    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+role_account_priv_3    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
+role_name    privilege_id    with_grant_option
+drop user user_grant_3;
+drop role role_account_priv_3;
+drop snapshot grant_sp02;
+drop role if exists r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
+create role r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
+grant select,insert ,update on table *.* to r1,r2,r3,r4,r5;
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+r1    2    2
+r2    2    2
+r3    2    2
+r4    2    2
+r5    2    2
+r6    2    2
+r7    2    2
+r8    2    2
+r9    2    2
+r10    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
+role_name    privilege_id    with_grant_option
+r1    30    false
+r2    30    false
+r3    30    false
+r4    30    false
+r5    30    false
+r1    31    false
+r2    31    false
+r3    31    false
+r4    31    false
+r5    31    false
+r1    32    false
+r2    32    false
+r3    32    false
+r4    32    false
+r5    32    false
+drop snapshot if exists sp01;
+create snapshot sp01 for account acc01;
+drop role r1,r2,r3,r4,r5;
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+r6    2    2
+r7    2    2
+r8    2    2
+r9    2    2
+r10    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
+role_name    privilege_id    with_grant_option
+restore account acc01 from snapshot sp01;
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+r1    2    2
+r2    2    2
+r3    2    2
+r4    2    2
+r5    2    2
+r6    2    2
+r7    2    2
+r8    2    2
+r9    2    2
+r10    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
+role_name    privilege_id    with_grant_option
+r1    30    false
+r2    30    false
+r3    30    false
+r4    30    false
+r5    30    false
+r1    31    false
+r2    31    false
+r3    31    false
+r4    31    false
+r5    31    false
+r1    32    false
+r2    32    false
+r3    32    false
+r4    32    false
+r5    32    false
+drop role r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
+drop snapshot sp01;
+drop role if exists r1, r2, r6, r7;
+create role r1, r2, r6, r7;
+grant select ,insert ,update on table *.* to r1,r2 with grant option;
+grant r1,r2 to r6,r7;
+select mr.role_name,mp.role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_role_grant mg,mo_catalog.mo_role mr ,mo_catalog.mo_role_privs mp where  mg.grantee_id=mr.role_id and mg.granted_id = mp.role_id and mr.role_name in ('r6','r7');
+role_name    role_name    obj_type    privilege_name    privilege_level
+r6    r1    table    select    *.*
+r6    r1    table    insert    *.*
+r6    r1    table    update    *.*
+r7    r1    table    select    *.*
+r7    r1    table    insert    *.*
+r7    r1    table    update    *.*
+r6    r2    table    select    *.*
+r6    r2    table    insert    *.*
+r6    r2    table    update    *.*
+r7    r2    table    select    *.*
+r7    r2    table    insert    *.*
+r7    r2    table    update    *.*
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+r1    2    2
+r2    2    2
+r6    2    2
+r7    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
+role_name    privilege_id    with_grant_option
+r1    30    true
+r2    30    true
+r1    31    true
+r2    31    true
+r1    32    true
+r2    32    true
+drop snapshot if exists sp02;
+create snapshot sp02 for account acc01;
+drop role r1, r2;
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+r6    2    2
+r7    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
+role_name    privilege_id    with_grant_option
+restore account acc01 from snapshot sp02;
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+r1    2    2
+r2    2    2
+r6    2    2
+r7    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
+role_name    privilege_id    with_grant_option
+r1    30    true
+r2    30    true
+r1    31    true
+r2    31    true
+r1    32    true
+r2    32    true
+drop role r1, r2;
+drop snapshot sp02;
+drop role if exists r5;
+create role r5;
+drop user if exists user01, user02, user03, user04, user05;
+create user user01 identified by '123456';
+create user user02 identified by '123456';
+create user user03 identified by '123456';
+create user user04 identified by '123456';
+create user user05 identified by '123456';
+grant create role on account * to r5;
+grant r5 to user01, user02, user03, user04, user05;
+select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and role_name in ('r5');
+user_name    role_name    obj_type    privilege_name    privilege_level
+user01    r5    account    create role    *
+user02    r5    account    create role    *
+user03    r5    account    create role    *
+user04    r5    account    create role    *
+user05    r5    account    create role    *
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+user01    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+user02    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+user03    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+user04    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+user05    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+r6    2    2
+r7    2    2
+r5    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
+role_name    privilege_id    with_grant_option
+r5    6    false
+drop snapshot if exists sp03;
+create snapshot sp03 for account acc01;
+drop role r5;
+drop user user01, user02, user03;
+select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and role_name in ('r5');
+user_name    role_name    obj_type    privilege_name    privilege_level
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+user04    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+user05    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+r6    2    2
+r7    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
+role_name    privilege_id    with_grant_option
+restore account acc01 from snapshot sp03;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+user01    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+user02    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+user03    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+user04    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+user05    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    unlock    PASSWORD    2    2    1
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+r6    2    2
+r7    2    2
+r5    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
+role_name    privilege_id    with_grant_option
+r5    6    false
+drop user user01, user02, user03, user04, user05;
+drop role r5;
+drop snapshot sp03;
+drop role if exists role_r1,role_r2,role_r3;
+create role role_r1,role_r2,role_r3;
+drop user if exists role_u1, role_u2, role_u3;
+create user role_u1 identified by '111', role_u2 identified by '111', role_u3 identified by '111';
+grant role_r1 to role_u1;
+grant role_r1,role_r2,role_r3 to role_u1,role_u2,role_u2;
+grant role_r1 to role_r2;
+grant role_r2 to role_r3;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+user_name    authentication_string    status    login_type    creator    owner    default_role
+test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
+role_u1    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
+role_u2    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
+role_u3    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
+select role_name, creator, owner from mo_catalog.mo_role;
+role_name    creator    owner
+accountadmin    2    2
+public    2    2
+r6    2    2
+r7    2    2
+role_r1    2    2
+role_r2    2    2
+role_r3    2    2
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('role_r1','role_r2');
+role_name    privilege_id    with_grant_option
+select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
+operation_role_id    operation_user_id
+2    2
+2    2
+drop snapshot if exists sp01;
+create snapshot sp01 for account acc01;
+revoke role_r2 from role_r3;
+revoke role_r1 from role_r2;
+select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
+operation_role_id    operation_user_id
+restore account acc01 from snapshot sp01;
+select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
+operation_role_id    operation_user_id
+2    2
+2    2
+drop role role_r1, role_r2, role_r3;
+drop user role_u1, role_u2, role_u3;
+drop snapshot sp01;
+drop account acc01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+set global enable_privilege_cache = on;

@@ -21,16 +21,16 @@ create snapshot sp01 for account acc01;
 -- @ignore:1
 show snapshots;
 
--- @session:id=2&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 show snapshots;
 insert into s3t values (300001, 34, 23, 1);
 select count(*) from s3t;
 select * from s3t where col1 = 23;
 -- @session
 
-restore account acc01 from snapshot sp01 to account acc01;
+restore account acc01 from snapshot sp01;
 
--- @session:id=3&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 show databases;
 use acc_test01;
 show tables;
@@ -44,7 +44,7 @@ alter table s3t drop column col4;
 drop snapshot if exists sp02;
 create snapshot sp02 for account acc01;
 
--- @session:id=4&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 insert into s3t select result, 2, 12 from generate_series(30002, 60000, 1) g;
 select count(*) from s3t where col1 > 2000;
 select sum(col1) from s3t;
@@ -52,18 +52,18 @@ select avg(col1) from s3t;
 delete from s3t where col1 > 30000;
 -- @session
 
-restore account acc01 from snapshot sp02 to account acc01;
+restore account acc01 from snapshot sp02;
 
--- @session:id=5&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 select count(*) from s3t where col1 > 2000;
 select sum(col1) from s3t;
 select avg(col1) from s3t;
 show create table s3t;
 -- @session
 
-restore account acc01 from snapshot sp01 to account acc01;
+restore account acc01 from snapshot sp01;
 
--- @session:id=6&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 show databases;
 use acc_test01;
 show tables;
@@ -75,14 +75,14 @@ show create table s3t;
 -- @session
 drop snapshot sp01;
 drop snapshot sp02;
--- @session:id=7&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 drop database acc_test01;
 -- @session
 
 
 
 -- under account, multi db, multi table
--- @session:id=8&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists acc_test02;
 create database acc_test02;
 use acc_test02;
@@ -101,16 +101,16 @@ insert into pri01 values (40,'OPERATIONS','BOSTON');
 
 drop table if exists aff01;
 create table aff01(
-          empno int unsigned auto_increment COMMENT '雇员编号',
-          ename varchar(15) comment '雇员姓名',
-          job varchar(10) comment '雇员职位',
-          mgr int unsigned comment '雇员对应的领导的编号',
-          hiredate date comment '雇员的雇佣日期',
-          sal decimal(7,2) comment '雇员的基本工资',
-          comm decimal(7,2) comment '奖金',
-          deptno int unsigned comment '所在部门',
-          primary key(empno),
-          constraint `c1` foreign key (deptno) references pri01 (deptno)
+                      empno int unsigned auto_increment COMMENT '雇员编号',
+                      ename varchar(15) comment '雇员姓名',
+                      job varchar(10) comment '雇员职位',
+                      mgr int unsigned comment '雇员对应的领导的编号',
+                      hiredate date comment '雇员的雇佣日期',
+                      sal decimal(7,2) comment '雇员的基本工资',
+                      comm decimal(7,2) comment '奖金',
+                      deptno int unsigned comment '所在部门',
+                      primary key(empno),
+                      constraint `c1` foreign key (deptno) references pri01 (deptno)
 );
 
 insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
@@ -147,13 +147,13 @@ create database acc_test04;
 use acc_test04;
 drop table if exists index03;
 create table index03 (
-         emp_no      int             not null,
-         birth_date  date            not null,
-         first_name  varchar(14)     not null,
-         last_name   varchar(16)     not null,
-         gender      varchar(5)      not null,
-         hire_date   date            not null,
-         primary key (emp_no)
+                         emp_no      int             not null,
+                         birth_date  date            not null,
+                         first_name  varchar(14)     not null,
+                         last_name   varchar(16)     not null,
+                         gender      varchar(5)      not null,
+                         hire_date   date            not null,
+                         primary key (emp_no)
 ) partition by range columns (emp_no)(
     partition p01 values less than (100001),
     partition p02 values less than (200001),
@@ -185,7 +185,7 @@ show create table acc_test04.index03;
 drop snapshot if exists sp04;
 create snapshot sp04 for account acc01;
 
--- @session:id=9&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 insert into acc_test02.pri01 values (50,'ACCOUNTING','NEW YORK');
 insert into acc_test02.aff01 values (7900,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,50);
 truncate table acc_test03.table01;
@@ -201,10 +201,9 @@ select * from acc_test03.table04;
 show create table acc_test04.index03;
 -- @session
 
--- @bvt:issue#15971
-restore account acc01 from snapshot sp04 to account acc01;
+restore account acc01 from snapshot sp04;
 
--- @session:id=10&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 show databases;
 select count(*) from acc_test02.pri01;
 select count(*) from acc_test02.aff01;
@@ -215,13 +214,13 @@ select count(*) from acc_test03.table04;
 select count(*) from acc_test03.table04;
 drop database acc_test03;
 -- @session
--- @bvt:issue
 drop snapshot sp04;
 
 
 
+
 -- acc01 create sp01,sp02, restore sp02, restore sp01
--- @session:id=11&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test01;
 create database test01;
 use test01;
@@ -237,7 +236,7 @@ insert into table02 (col1, col2) values (133, 'database');
 drop snapshot if exists sp07;
 create snapshot sp07 for account acc01;
 
--- @session:id=12&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 use test01;
 drop table table01;
 insert into table02 values(134, 'database');
@@ -248,25 +247,24 @@ create snapshot sp08 for account acc01;
 -- @ignore:1
 show snapshots;
 
--- @session:id=13&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 use test01;
 create table table03 (col1 int);
 insert into table03 values (1),(2);
 -- @session
 
--- @bvt:issue#15971
-restore account acc01 from snapshot sp07 to account acc01;
+restore account acc01 from snapshot sp07;
 
--- @session:id=14&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 use test01;
 show tables;
 select * from table01;
 select * from table02;
 -- @session
 
-restore account acc01 from snapshot sp08 to account acc01;
+restore account acc01 from snapshot sp08;
 
--- @session:id=15&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 use test01;
 show tables;
 select * from table01;
@@ -274,7 +272,6 @@ select * from table02;
 show create table table02;
 drop database test01;
 -- @session
--- @bvt:issue
 drop snapshot sp07;
 drop snapshot sp08;
 
@@ -282,7 +279,7 @@ drop snapshot sp08;
 
 
 -- sys create sp01,sp02, restore sp02, restore sp01
--- @session:id=16&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test02;
 create database test02;
 use test02;
@@ -298,7 +295,7 @@ insert into table02 (col1, col2) values (133, 'database');
 drop snapshot if exists sp09;
 create snapshot sp09 for account acc01;
 
--- @session:id=17&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 use test02;
 drop table table01;
 insert into table02 values(134, 'database');
@@ -308,7 +305,7 @@ alter table table02 add column new decimal after col2;
 drop snapshot if exists sp10;
 create snapshot sp10 for account acc01;
 
--- @session:id=18&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 use test02;
 show create table table01;
 show create table table02;
@@ -316,19 +313,17 @@ insert into table02 values(139, 'database', null);
 alter table table02 drop column new;
 -- @session
 
--- @bvt:issue#15971
-restore account acc01 from snapshot sp10 to account acc01;
+restore account acc01 from snapshot sp10;
 
--- @session:id=19&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 use test02;
 show create table table01;
 show create table table02;
 select * from table02;
 select * from table01;
 -- @session
--- @bvt:issue
 
--- @session:id=20&user=acc01:test_account&password=111
+-- @session:id=2&user=acc01:test_account&password=111
 drop database test02;
 -- @session
 
@@ -339,7 +334,7 @@ drop snapshot sp10;
 
 
 -- abnormal test: sys restore non-sys account:acc01 to sys
--- @session:id=21&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test01;
 create database test01;
 use test01;
@@ -358,7 +353,7 @@ select count(*) from rs01;
 drop snapshot if exists sp03;
 create snapshot sp03 for account acc01;
 
--- @session:id=22&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 use test01;
 delete from rs01 where col1 = 4;
 insert into rs01 values (10, -1, null);
@@ -368,8 +363,10 @@ select count(*) from rs01;
 restore account acc01 from snapshot sp03 to account sys;
 drop snapshot sp03;
 
--- @session:id=23&user=acc01:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 drop database test01;
 -- @session
 
 drop account acc01;
+-- @ignore:1
+show snapshots;

@@ -18,19 +18,17 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "projection"
+const opName = "projection"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (projection *Projection) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": projection(")
-	for i, e := range arg.Es {
+	for i, e := range projection.ProjectList {
 		if i > 0 {
 			buf.WriteString(",")
 		}
@@ -39,73 +37,62 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Es)
-	arg.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(arg.Es))
-	for i, e := range arg.Es {
-		if e.Typ.Id != 0 {
-			arg.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
-		}
+func (projection *Projection) OpType() vm.OpType {
+	return vm.Projection
+}
+
+func (projection *Projection) Prepare(proc *process.Process) (err error) {
+	if projection.OpAnalyzer == nil {
+		projection.OpAnalyzer = process.NewAnalyzer(projection.GetIdx(), projection.IsFirst, projection.IsLast, "projection")
+	} else {
+		projection.OpAnalyzer.Reset()
+	}
+
+	if len(projection.ctr.projExecutors) == 0 {
+		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
+
+		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.GetChildren(0).Call(proc)
+	analyzer := projection.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	result, err := vm.ChildrenCall(projection.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
-
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
 	bat := result.Batch
-	anal.Input(bat, arg.GetIsFirst())
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
-	}
-
-	arg.buf = batch.NewWithSize(len(arg.Es))
 	// keep shuffleIDX unchanged
-	arg.buf.ShuffleIDX = bat.ShuffleIDX
-	// do projection.
-	for i := range arg.ctr.projExecutors {
-		vec, err := arg.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
+	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
+	for i := range projection.ctr.projExecutors {
+		vec, err := projection.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
-			for _, newV := range arg.buf.Vecs {
-				if newV != nil {
-					for k, oldV := range bat.Vecs {
-						if oldV != nil && newV == oldV {
-							bat.Vecs[k] = nil
-						}
-					}
-				}
-			}
-			arg.buf = nil
-			return result, err
+			return vm.CancelResult, err
 		}
-		arg.buf.Vecs[i] = vec
+		// for projection operator, all Vectors of projectBat come from executor.Eval
+		// and will not be modified within projection operator. so we can used the result of executor.Eval directly.
+		// (if operator will modify vector/agg of batch, you should make a copy)
+		// however, it should be noted that since they directly come from executor.Eval
+		// these vectors cannot be free by batch.Clean directly and must be handed over executor.Free
+		projection.ctr.buf.Vecs[i] = vec
 	}
+	projection.maxAllocSize = max(projection.maxAllocSize, projection.ctr.buf.Size())
+	projection.ctr.buf.SetRowCount(bat.RowCount())
 
-	newAlloc, err := colexec.FixProjectionResult(proc, arg.ctr.projExecutors, arg.ctr.uafs, arg.buf, bat)
-	if err != nil {
-		return result, err
-	}
-	arg.maxAllocSize = max(arg.maxAllocSize, newAlloc)
-	arg.buf.SetRowCount(bat.RowCount())
-
-	anal.Output(arg.buf, arg.GetIsLast())
-	result.Batch = arg.buf
+	result.Batch = projection.ctr.buf
+	analyzer.Output(result.Batch)
 	return result, nil
 }

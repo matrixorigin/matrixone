@@ -29,6 +29,8 @@ type migrateController struct {
 	// c is the channel which is used to wait for the migration
 	// finished when close the routine.
 	c chan struct{}
+	// the id of goroutine that executes the migration
+	goroutineID uint64
 }
 
 func newMigrateController() *migrateController {
@@ -58,6 +60,7 @@ func (mc *migrateController) beginMigrate() bool {
 	if mc.closed {
 		return false
 	}
+	mc.goroutineID = GetRoutineId()
 	mc.inProgress = true
 	return true
 }
@@ -72,4 +75,9 @@ func (mc *migrateController) endMigrate() {
 	mc.Lock()
 	defer mc.Unlock()
 	mc.inProgress = false
+	mc.goroutineID = 0
+}
+
+func (mc *migrateController) getGoroutineId() uint64 {
+	return mc.goroutineID
 }

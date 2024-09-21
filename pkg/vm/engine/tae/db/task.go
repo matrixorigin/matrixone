@@ -41,7 +41,7 @@ func NewScheduledTxnTask(ctx *tasks.Context, db *DB, taskType tasks.TaskType, sc
 
 func (task *ScheduledTxnTask) Scopes() []common.ID { return task.scopes }
 func (task *ScheduledTxnTask) Scope() *common.ID {
-	if task.scopes == nil || len(task.scopes) == 0 {
+	if len(task.scopes) == 0 {
 		return nil
 	}
 	return &task.scopes[0]
@@ -52,7 +52,7 @@ func (task *ScheduledTxnTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	txnTask, err := task.factory(nil, txn)
+	txnTask, err := task.factory(&tasks.Context{ID: task.ID()}, txn)
 	if err != nil {
 		err2 := txn.Rollback(ctx)
 		if err2 != nil {

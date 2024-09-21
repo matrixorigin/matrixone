@@ -15,129 +15,34 @@
 package dispatch
 
 import (
-	"bytes"
-	"context"
-	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
-const (
-	Rows = 10 // default rows
-)
+func TestPrepareRemote(t *testing.T) {
+	_ = colexec.NewServer(nil)
 
-// add unit tests for cases
-type dispatchTestCase struct {
-	arg    *Argument
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
-}
+	proc := testutil.NewProcess()
 
-var (
-	tcs []dispatchTestCase
-)
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
 
-func init() {
-	tcs = []dispatchTestCase{
-		newTestCase(),
-		newTestCase(),
-	}
-}
-
-func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
-		tc.arg.String(buf)
-	}
-}
-
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-	}
-}
-
-func TestDispatch(t *testing.T) {
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		bats := []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, bats)
-		/*{
-			for _, vec := range bat.Vecs {
-				if vec.IsOriginal() {
-					vec.FreeOriginal(tc.proc.Mp())
-				}
-			}
-		}*/
-		_, _ = tc.arg.Call(tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.Children[0].Free(tc.proc, false, nil)
-		for _, re := range tc.arg.LocalRegs {
-			for len(re.Ch) > 0 {
-				bat := <-re.Ch
-				if bat == nil {
-					break
-				}
-				bat.Clean(tc.proc.Mp())
-			}
-		}
-		tc.proc.FreeVectors()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-	}
-}
-
-func newTestCase() dispatchTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	ctx, cancel := context.WithCancel(context.Background())
-	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *batch.Batch, 3)}
-	return dispatchTestCase{
-		proc:  proc,
-		types: []types.Type{types.T_int8.ToType()},
-		arg: &Argument{
-			FuncId:    SendToAllLocalFunc,
-			LocalRegs: []*process.WaitRegister{reg},
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
+	d := Dispatch{
+		FuncId: SendToAllFunc,
+		ctr:    &container{},
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid},
 		},
-		cancel: cancel,
 	}
 
-}
+	// uuid map should have this pipeline information after prepare remote.
+	require.NoError(t, d.prepareRemote(proc))
 
-// create a new block based on the type information
-func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
-
-func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.Children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-
-	} else {
-		arg.Children = arg.Children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-	}
+	p, c, b := colexec.Get().GetProcByUuid(uid, false)
+	require.True(t, b)
+	require.Equal(t, proc, p)
+	require.Equal(t, d.ctr.remoteInfo, c)
 }

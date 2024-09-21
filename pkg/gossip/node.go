@@ -16,7 +16,6 @@ package gossip
 
 import (
 	"context"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"io"
 	"net"
 	"strconv"
@@ -28,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"go.uber.org/zap"
 )
@@ -55,8 +55,12 @@ type Node struct {
 	cacheServerAddrFn func() string
 }
 
-func NewNode(ctx context.Context, nid string, opts ...Option) (*Node, error) {
-	rt := runtime.ProcessLevelRuntime()
+func NewNode(
+	ctx context.Context,
+	nid string,
+	opts ...Option,
+) (*Node, error) {
+	rt := runtime.ServiceRuntime(nid)
 	if rt == nil {
 		rt = runtime.DefaultRuntime()
 	}
@@ -115,7 +119,7 @@ func (n *Node) Create() error {
 
 	ml, err := memberlist.Create(cfg)
 	if err != nil {
-		return moerr.NewInternalError(n.ctx, "CN gossip create node failed: %s", err)
+		return moerr.NewInternalErrorf(n.ctx, "CN gossip create node failed: %s", err)
 	}
 	n.list = ml
 	n.created = true

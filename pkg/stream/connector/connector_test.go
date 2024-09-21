@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -56,6 +57,10 @@ type internalExecResult struct {
 	err          error
 }
 
+func (res *internalExecResult) GetUint64(ctx context.Context, u uint64, u2 uint64) (uint64, error) {
+	return 0, nil
+}
+
 func (res *internalExecResult) Error() error {
 	return res.err
 }
@@ -80,17 +85,13 @@ func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint
 	return nil, nil
 }
 
-func (res *internalExecResult) ValueByName(ctx context.Context, ridx uint64, col string) (interface{}, error) {
-	return nil, nil
+func (res *internalExecResult) GetFloat64(ctx context.Context, ridx uint64, cid uint64) (float64, error) {
+	return 0.0, nil
+}
+func (res *internalExecResult) GetString(ctx context.Context, ridx uint64, cid uint64) (string, error) {
+	return "", nil
 }
 
-func (res *internalExecResult) StringValueByName(ctx context.Context, ridx uint64, col string) (string, error) {
-	return "test", nil
-}
-
-func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint64, col string) (float64, error) {
-	return 0, nil
-}
 func (m *MockSQLExecutor) Query(ctx context.Context, sql string, pts ie.SessionOverrideOptions) ie.InternalExecResult {
 	return &internalExecResult{affectedRows: 1, resultSet: nil, err: moerr.NewInternalError(context.TODO(), "random")}
 }

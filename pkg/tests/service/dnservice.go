@@ -186,6 +186,7 @@ func buildTNConfig(
 	cfg.LogtailServer.LogtailCollectInterval.Duration = opt.logtailPushServer.logtailCollectInterval
 	cfg.LogtailServer.LogtailRPCStreamPoisonTime.Duration = opt.logtailPushServer.logtailRPCStreamPoisonTIme
 	cfg.LogtailServer.LogtailResponseSendTimeout.Duration = opt.logtailPushServer.logtailResponseSendTimeout
+	cfg.LogtailServer.PullWorkerPoolSize = toml.ByteSize(opt.logtailPushServer.pullWorkerPoolSize)
 
 	// We need the filled version of configuration.
 	// It's necessary when building tnservice.Option.
@@ -211,7 +212,7 @@ func buildTNOptions(cfg *tnservice.Config, filter FilterFunc) tnOptions {
 		ctx = logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(filter))
 
 		client, err := logservice.NewTNHAKeeperClient(
-			ctx, cfg.HAKeeper.ClientConfig,
+			ctx, cfg.UUID, cfg.HAKeeper.ClientConfig,
 		)
 		if err != nil {
 			return nil, err
@@ -229,7 +230,7 @@ func buildTNOptions(cfg *tnservice.Config, filter FilterFunc) tnOptions {
 		// transfer morpc.BackendOption via context
 		ctx = logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(filter))
 
-		return logservice.NewClient(ctx, logservice.ClientConfig{
+		return logservice.NewClient(ctx, cfg.UUID, logservice.ClientConfig{
 			Tag:              "Test-TN",
 			ReadOnly:         false,
 			LogShardID:       shard.LogShardID,

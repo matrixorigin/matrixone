@@ -1,7 +1,7 @@
+SET experimental_ivf_index = 1;
 drop database if exists vecdb2;
 create database vecdb2;
 use vecdb2;
-SET GLOBAL experimental_ivf_index = 1;
 drop table if exists t1;
 create table t1(a int primary key,b vecf32(3), c vecf64(5));
 insert into t1 values(1, "[1,2,3]" , "[1,2,3,4,5");
@@ -78,7 +78,7 @@ tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        
 tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
@@ -91,7 +91,7 @@ tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        
 tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"3","op_type":"vector_l2_ops"}
@@ -104,7 +104,7 @@ tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat  
 tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\n`c` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `c` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"3","op_type":"vector_l2_ops"}
@@ -119,7 +119,7 @@ tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        Y
 tbl    1    idx2    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF64(5) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx2` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  `c` vecf64(5) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx2` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx2";
 name    type    column_name    algo    algo_table_type    algo_params
 idx2    MULTIPLE    b    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
@@ -163,7 +163,7 @@ tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        Y
 tbl    1    idx8    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx8` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx8` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx8";
 name    type    column_name    algo    algo_table_type    algo_params
 idx8    MULTIPLE    b    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
@@ -181,7 +181,7 @@ tbl    1    idx10    1    b    A    0    NULL    NULL    YES    ivfflat         
 tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx10` USING ivfflat (`b`) lists = 1  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx10` USING ivfflat (`b`) lists = 1  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx10";
 name    type    column_name    algo    algo_table_type    algo_params
 idx10    MULTIPLE    b    ivfflat    metadata    {"lists":"1","op_type":"vector_l2_ops"}
@@ -193,7 +193,7 @@ Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    C
 tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\nPRIMARY KEY (`a`)\n)
+tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  PRIMARY KEY (`a`)\n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx10";
 name    type    column_name    algo    algo_table_type    algo_params
 drop table if exists tbl;
@@ -206,7 +206,7 @@ tbl    1    idx11    1    b    A    0    NULL    NULL    YES    ivfflat         
 tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx11` USING ivfflat (`b`) lists = 1  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx11` USING ivfflat (`b`) lists = 1  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx11";
 name    type    column_name    algo    algo_table_type    algo_params
 idx11    MULTIPLE    b    ivfflat    metadata    {"lists":"1","op_type":"vector_l2_ops"}
@@ -218,7 +218,7 @@ Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    C
 tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx11";
 name    type    column_name    algo    algo_table_type    algo_params
 drop table if exists tbl;
@@ -238,7 +238,7 @@ tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        
 tbl    1    idx12    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx12` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx12` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
 insert into tbl values(15, "[1,3,5]"); -- inserted to centroid 1 of version 0
 insert into tbl values(18, "[130,40,90]"); -- inserted to centroid 2 of version 0
 alter table tbl alter reindex idx12 ivfflat lists=2;
@@ -262,7 +262,7 @@ tbl    0    PRIMARY    2    age    A    0    NULL    NULL                       
 tbl    1    idx13    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`age` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`,`age`),\nKEY `idx13` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `age` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`,`age`),\n  KEY `idx13` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
 insert into tbl values(15, 90, "[1,3,5]"); -- inserted to centroid 1 of version 0
 insert into tbl values(18, 100, "[130,40,90]"); -- inserted to centroid 2 of version 0
 alter table tbl alter reindex idx13 ivfflat lists=2;
@@ -284,7 +284,7 @@ Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    C
 tbl    1    idx14    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`id` INT DEFAULT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nKEY `idx14` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n  `id` int DEFAULT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  KEY `idx14` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
 insert into tbl values(15, "[1,3,5]"); -- inserted to centroid 1 of version 0
 insert into tbl values(18, "[130,40,90]"); -- inserted to centroid 2 of version 0
 alter table tbl alter reindex idx14 ivfflat lists=2;
@@ -566,22 +566,22 @@ create table vector_index_05(a int primary key, b vecf32(3),c vecf32(4));
 create index idx01 using ivfflat on vector_index_05(c) lists=4 op_type "vector_l2_ops";
 show create table vector_index_05;
 Table    Create Table
-vector_index_05    CREATE TABLE `vector_index_05` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 4  op_type 'vector_l2_ops' \n)
+vector_index_05    CREATE TABLE `vector_index_05` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  `c` vecf32(4) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx01` USING ivfflat (`c`) lists = 4  op_type 'vector_l2_ops' \n)
 alter table vector_index_05 alter reindex idx01 ivfflat lists=5;
 show create table vector_index_05;
 Table    Create Table
-vector_index_05    CREATE TABLE `vector_index_05` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 5  op_type 'vector_l2_ops' \n)
+vector_index_05    CREATE TABLE `vector_index_05` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  `c` vecf32(4) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx01` USING ivfflat (`c`) lists = 5  op_type 'vector_l2_ops' \n)
 create table vector_index_04(a int primary key, b vecf32(3),c vecf32(4));
 insert into vector_index_04 values(1,"[56,23,6]","[0.25,0.14,0.88,0.0001]"),(2,"[77,45,3]","[1.25,5.25,8.699,4.25]"),(3,"[8,56,3]","[9.66,5.22,1.22,7.02]");
 create index idx01 using ivfflat on vector_index_04(c) lists=5 op_type "vector_l2_ops";
 insert into vector_index_04 values(4,"[156,213,61]","[10.25,0.14,0.88,10.0001]"),(5,"[177,425,30]","[11.25,51.25,80.699,44.25]"),(6,"[80,56,3]","[90.686,5.212,19.22,7.02]");
 show create table vector_index_04;
 Table    Create Table
-vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 5  op_type 'vector_l2_ops' \n)
+vector_index_04    CREATE TABLE `vector_index_04` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  `c` vecf32(4) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx01` USING ivfflat (`c`) lists = 5  op_type 'vector_l2_ops' \n)
 alter table vector_index_04 alter reindex idx01 ivfflat lists=8;
 show create table vector_index_04;
 Table    Create Table
-vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 8  op_type 'vector_l2_ops' \n)
+vector_index_04    CREATE TABLE `vector_index_04` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  `c` vecf32(4) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx01` USING ivfflat (`c`) lists = 8  op_type 'vector_l2_ops' \n)
 create table vector_index_08(a int primary key, b vecf32(128),c int,key c_k(c));
 create index idx01 using ivfflat on vector_index_08(b) lists=3 op_type "vector_l2_ops";
 alter table vector_index_08 add column d vecf32(3) not null after c;
@@ -679,5 +679,5 @@ a    b    c    d
 9776    [10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]    3    [0, 0, 0]
 9777    [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]    4    [0, 0, 0]
 9778    [41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]    4    [0, 0, 0]
-SET GLOBAL experimental_ivf_index = 0;
+SET experimental_ivf_index = 0;
 drop database vecdb2;

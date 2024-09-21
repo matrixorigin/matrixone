@@ -47,9 +47,10 @@ import (
 )
 
 func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
+
 	table.RegisterTableDefine(dummyTable)
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 }
 
 var mux sync.Mutex
@@ -124,8 +125,8 @@ func TestInitCronExpr(t *testing.T) {
 				sche, err := parser.Parse(MergeTaskCronExpr)
 				require.Nil(t, err)
 
-				now := time.Unix(60, 0)
-				next := sche.Next(time.UnixMilli(now.UnixMilli()))
+				now := time.Unix(60, 0).UTC()
+				next := sche.Next(time.UnixMilli(now.UnixMilli()).UTC())
 				t.Logf("duration: %v, expr: %s, next: %v", tt.args.duration, MergeTaskCronExpr, next)
 				if tt.expectDuration > 0 {
 					require.Equal(t, tt.expectDuration, next.Sub(now))
@@ -297,7 +298,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			got, err := NewMerge(tt.args.ctx, tt.args.opts...)
+			got, err := NewMerge(tt.args.ctx, "", tt.args.opts...)
 			require.Nil(t, err)
 			require.NotNil(t, got)
 
@@ -354,7 +355,7 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 			_, err := initSingleLogsFile(tt.args.ctx, fs, dummyTable, ts, table.CsvExtension)
 			require.Nil(t, err)
 
-			got := MergeTaskExecutorFactory(tt.args.opts...)
+			got := MergeTaskExecutorFactory("", tt.args.opts...)
 			require.NotNil(t, got)
 
 			err = got(tt.args.ctx, tt.args.task)
@@ -411,7 +412,7 @@ func TestCreateCronTask(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := CreateCronTask(tt.args.ctx, tt.args.executorID, tt.args.taskService)
+			got := CreateCronTask(tt.args.ctx, "", tt.args.executorID, tt.args.taskService)
 			require.Nil(t, got)
 		})
 	}
@@ -444,7 +445,7 @@ func TestNewMergeService(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, got1, err := NewMergeService(tt.args.ctx, tt.args.opts...)
+			got, got1, err := NewMergeService(tt.args.ctx, "", tt.args.opts...)
 			require.Nil(t, err)
 			require.NotNil(t, got)
 			require.Equal(t, tt.want1, got1)
@@ -500,7 +501,7 @@ func Test_newETLReader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path, err := initSingleLogsFile(tt.args.ctx, tt.args.fs, tt.args.tbl, time.Now(), tt.args.ext)
 			assert.Nil(t, err)
-			got, err := newETLReader(tt.args.ctx, tt.args.tbl, tt.args.fs, path, tt.args.size, tt.args.mp)
+			got, err := newETLReader(tt.args.ctx, "", tt.args.tbl, tt.args.fs, path, tt.args.size, tt.args.mp)
 			assert.Nil(t, err)
 			assert.Equal(t, reflect.TypeOf(tt.want), reflect.TypeOf(got))
 			defer got.Close()

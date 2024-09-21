@@ -22,7 +22,7 @@ import (
 )
 
 func (c *DashboardCreator) initFileServiceDashboard() error {
-	folder, err := c.createFolder(moFolderName)
+	folder, err := c.createFolder(c.folderName)
 	if err != nil {
 		return err
 	}
@@ -31,11 +31,13 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 		"FileService Metrics",
 		c.withRowOptions(
 			c.initFSOverviewRow(),
+			c.initFSObjectStorageRow(),
+			c.initFSIOMergerDurationRow(),
 			c.initFSReadWriteDurationRow(),
+			c.initFSMallocRow(),
 			c.initFSReadWriteBytesRow(),
 			c.initFSS3ConnOverviewRow(),
 			c.initFSS3ConnDurationRow(),
-			c.initFSIOMergerDurationRow(),
 		)...)
 	if err != nil {
 		return err
@@ -52,55 +54,18 @@ func (c *DashboardCreator) initFSOverviewRow() dashboard.Option {
 			6,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="s3"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="local"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="hit-mem"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="hit-disk"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="hit-remote"`) + `[$interval]))`,
 			},
 			[]string{
 				"s3",
+				"local",
 				"hit-mem",
-				"hit-dist",
+				"hit-disk",
 				"hit-remote",
 			}),
-
-		c.withMultiGraph(
-			"S3 Write requests",
-			6,
-			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_fs_write_total", `type="s3"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_fs_write_total", `type="local"`) + `[$interval]))`,
-			},
-			[]string{
-				"s3",
-				"local",
-			}),
-	)
-}
-
-func (c *DashboardCreator) initFSReadWriteDurationRow() dashboard.Option {
-	return dashboard.Row(
-		"FileService read write duration",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter(`mo_fs_s3_io_duration_seconds_bucket`, `type="read"`),
-				c.getMetricWithFilter(`mo_fs_s3_io_duration_seconds_bucket`, `type="write"`),
-				c.getMetricWithFilter(`mo_fs_local_io_duration_seconds_bucket`, `type="read"`),
-				c.getMetricWithFilter(`mo_fs_local_io_duration_seconds_bucket`, `type="write"`),
-				c.getMetricWithFilter(`mo_fs_s3_io_duration_seconds_bucket`, `type="list"`),
-				c.getMetricWithFilter(`mo_fs_s3_io_duration_seconds_bucket`, `type="stat"`),
-			},
-			[]string{
-				"s3-read",
-				"s3-write",
-				"local-read",
-				"local-write",
-				"s3-list",
-				"s3-stat",
-			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			axis.Unit("s"),
-			axis.Min(0))...,
 	)
 }
 
@@ -171,16 +136,137 @@ func (c *DashboardCreator) initFSIOMergerDurationRow() dashboard.Option {
 		"FileService io merger duration",
 		c.getMultiHistogram(
 			[]string{
-				c.getMetricWithFilter(`mo_fs_io_merger_duration`, `type="wait"`),
-				c.getMetricWithFilter(`mo_fs_io_merger_duration`, `type="initiate"`),
+				c.getMetricWithFilter(`mo_fs_io_merger_duration_seconds_bucket`, `type="wait"`),
+				c.getMetricWithFilter(`mo_fs_io_merger_duration_seconds_bucket`, `type="initiate"`),
 			},
 			[]string{
 				"wait",
 				"initiate",
 			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
+			[]float64{0.90, 0.99, 1},
+			[]float32{3, 3, 3},
 			axis.Unit("seconds"),
 			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initFSReadWriteDurationRow() dashboard.Option {
+	return dashboard.Row(
+		"FileService read write duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="read-vector-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="update-vector-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="read-memory-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="update-memory-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="read-disk-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="update-disk-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="read-remote-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="get-reader"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="get-content"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="get-entry-data "`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="write-to-writer"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="set-cached-data"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="disk-cache-set-file"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="list"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="stat"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="write"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="io-read-all"`),
+			},
+			[]string{
+				"read-vector-cache",
+				"update-vector-cache",
+				"read-memory-cache",
+				"update-memory-cache",
+				"read-disk-cache",
+				"update-disk-cache",
+				"read-remote-cache",
+				"get-reader",
+				"get-content",
+				"get-entry-data ",
+				"write-to-writer",
+				"set-cached-data",
+				"disk-cache-set-file",
+				"list",
+				"stat",
+				"write",
+				"io-read-all",
+			},
+			[]float64{0.90, 0.99, 1},
+			[]float32{3, 3, 3},
+			axis.Unit("seconds"),
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initFSMallocRow() dashboard.Option {
+	return dashboard.Row(
+		"malloc stats",
+
+		c.withMultiGraph(
+			"active objects",
+			3,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="io_entry_data"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="bytes"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="memory_cache"`) + `)`,
+			},
+			[]string{
+				"io_entry_data",
+				"bytes",
+				"memory_cache",
+			}),
+	)
+}
+
+func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
+	return dashboard.Row(
+		"Object Storage",
+
+		c.withMultiGraph(
+			"s3 operations",
+			3,
+			[]string{
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="read"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="active-read"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="write"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="delete"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="list"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="exists"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="stat"`),
+			},
+			[]string{
+				"read",
+				"active-read",
+				"write",
+				"delete",
+				"list",
+				"exists",
+				"stat",
+			},
+		),
+
+		c.withMultiGraph(
+			"s3 operations rate",
+			3,
+			[]string{
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="read"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="active-read"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="write"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="delete"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="list"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="exists"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="stat"`) + `[$interval])`,
+			},
+			[]string{
+				"read",
+				"active-read",
+				"write",
+				"delete",
+				"list",
+				"exists",
+				"stat",
+			},
+		),
 	)
 }

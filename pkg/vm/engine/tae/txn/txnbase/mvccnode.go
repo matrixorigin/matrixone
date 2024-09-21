@@ -29,7 +29,6 @@ type TxnMVCCNode struct {
 	Start, Prepare, End types.TS
 	Txn                 txnif.TxnReader
 	Aborted             bool
-	is1PC               bool // for subTxn
 }
 
 var (
@@ -69,12 +68,6 @@ func NewTxnMVCCNodeWithStartEnd(start, end types.TS) *TxnMVCCNode {
 }
 func (un *TxnMVCCNode) IsAborted() bool {
 	return un.Aborted
-}
-func (un *TxnMVCCNode) Is1PC() bool {
-	return un.is1PC
-}
-func (un *TxnMVCCNode) Set1PC() {
-	un.is1PC = true
 }
 
 // Check w-w confilct
@@ -120,6 +113,16 @@ func (un *TxnMVCCNode) IsVisible(txn txnif.TxnReader) (visible bool) {
 	// Node is not invisible if the commit ts is gt ts
 	return false
 
+}
+func (un *TxnMVCCNode) Reset() {
+	un.Start = types.TS{}
+	un.Prepare = types.TS{}
+	un.End = types.TS{}
+	un.Aborted = false
+	un.Txn = nil
+}
+func (un *TxnMVCCNode) IsEmpty() bool {
+	return un.Start.IsEmpty()
 }
 
 // Check whether is mvcc node is visible to ts
@@ -313,12 +316,15 @@ func (un *TxnMVCCNode) Compare2(o *TxnMVCCNode) int {
 	return 1
 }
 
-func (un *TxnMVCCNode) ApplyCommit() (ts types.TS, err error) {
-	if un.Is1PC() {
-		un.End = un.Txn.GetPrepareTS()
-	} else {
-		un.End = un.Txn.GetCommitTS()
+func (un *TxnMVCCNode) ApplyCommit(id string) (ts types.TS, err error) {
+	if un.Txn == nil {
+		err = moerr.NewTxnNotFoundNoCtx()
+		return
 	}
+	if un.Txn.GetID() != id {
+		err = moerr.NewMissingTxnNoCtx()
+	}
+	un.End = un.Txn.GetCommitTS()
 	un.Txn = nil
 	ts = un.End
 	return
@@ -351,10 +357,6 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(sn1)
-	if sn1, err = w.Write(types.EncodeBool(&un.is1PC)); err != nil {
-		return
-	}
-	n += int64(sn1)
 	return
 }
 
@@ -369,11 +371,6 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(sn)
 	if sn, err = r.Read(un.End[:]); err != nil {
-		return
-	}
-	n += int64(sn)
-
-	if sn, err = r.Read(types.EncodeBool(&un.is1PC)); err != nil {
 		return
 	}
 	n += int64(sn)
@@ -398,13 +395,14 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 	n.Start = un.Start
 	n.Prepare = un.Prepare
 	n.End = un.End
+	n.Txn = un.Txn
 	return n
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%s,%s]",
+	return fmt.Sprintf("[%s,%s][Committed(%v)]",
 		un.Start.ToString(),
-		un.End.ToString())
+		un.End.ToString(), un.Txn == nil)
 }
 
 func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {

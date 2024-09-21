@@ -18,17 +18,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"go/constant"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/assert"
 )
 
 func BenchmarkInsert(b *testing.B) {
@@ -38,7 +38,7 @@ func BenchmarkInsert(b *testing.B) {
 	targetType.Width = 1024
 
 	originStr := "0123456789"
-	testExpr := tree.NewNumValWithType(constant.MakeString(originStr), originStr, false, tree.P_char)
+	testExpr := tree.NewNumVal(originStr, originStr, false, tree.P_char)
 	targetT := &plan.Expr{
 		Typ: targetType,
 		Expr: &plan.Expr_T{
@@ -1109,12 +1109,12 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 			t.Logf("%+v", err)
 		}
 	} else {
-		t.Logf(string(json))
+		t.Log(string(json))
 	}
 }
 
 func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
@@ -1174,4 +1174,22 @@ func Test_mergeContexts(t *testing.T) {
 	err = bc.mergeContexts(ctx, bc1, bc2)
 	assert.Error(t, err)
 	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
+}
+
+func Test_limitUint64(t *testing.T) {
+	sqls := []string{
+		"select * from t1 limit 0, 18446744073709551615",
+		"select * from t1 limit 18446744073709551615, 18446744073709551615",
+		"SELECT IFNULL(CAST(@var AS BIGINT UNSIGNED), 1)",
+	}
+	testutil.NewProc()
+	mock := NewMockOptimizer(false)
+
+	for _, sql := range sqls {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		outPutPlan(logicPlan, true, t)
+	}
 }

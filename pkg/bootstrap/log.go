@@ -15,34 +15,10 @@
 package bootstrap
 
 import (
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"go.uber.org/zap"
 )
 
-var (
-	logger        *log.MOLogger
-	upgradeLogger *log.MOLogger
-	once          sync.Once
-)
-
-func getLogger() *log.MOLogger {
-	once.Do(initLogger)
-	return logger
-}
-
-func getUpgradeLogger() *log.MOLogger {
-	once.Do(initLogger)
-	return upgradeLogger
-}
-
-func initLogger() {
-	rt := runtime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = runtime.DefaultRuntime()
-	}
-	logger = rt.Logger()
-	upgradeLogger = logger.With(zap.String("module", "upgrade-framework"))
+func getLogger(sid string) *log.MOLogger {
+	return runtime.GetLogger(sid)
 }

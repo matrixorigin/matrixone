@@ -48,50 +48,49 @@ var (
 )
 
 func getErrorConvertFromStringToBoolFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToBoolFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToBoolFailedFormat, str)
 }
 
 func getErrorConvertFromStringToIntFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToIntFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToIntFailedFormat, str)
 }
 
 func getErrorConvertFromStringToUintFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToUintFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToUintFailedFormat, str)
 }
 
 func getErrorConvertFromStringToDoubleFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToDoubleFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToDoubleFailedFormat, str)
 }
 
 func getErrorConvertFromStringToEnumFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToEnumFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToEnumFailedFormat, str)
 }
 
 func getErrorConvertFromStringToSetFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToSetFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToSetFailedFormat, str)
 }
 
 func getErrorConvertFromStringToNullFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToNullFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToNullFailedFormat, str)
 }
 
+func errorConfigDoesNotExist() string { return "the config variable does not exist" }
+
 func errorSystemVariableDoesNotExist() string { return "the system variable does not exist" }
-func errorSystemVariableIsSession() string    { return "the system variable is session" }
-func errorSystemVariableSessionEmpty() string {
-	return "the value of the system variable with scope session is empty"
-}
-func errorSystemVariableIsGlobal() string   { return "the system variable is global" }
+
+func errorSystemVariableIsSession() string { return "the system variable is session" }
+
+func errorSystemVariableIsGlobal() string { return "the system variable is global" }
+
 func errorSystemVariableIsReadOnly() string { return "the system variable is read only" }
 
 type Scope int
 
 const (
-	ScopeGlobal       Scope = iota //it is only in global
-	ScopeSession                   //it is only in session
-	ScopeBoth                      //it is both in global and session
-	ScopePersist                   //it is global and persisted
-	ScopePersistOnly               //it is persisted without updating global and session values
-	ScopeResetPersist              //to remove a persisted variable
+	ScopeGlobal  Scope = iota //it is only in global
+	ScopeSession              //it is only in session
+	ScopeBoth                 //it is both in global and session
 )
 
 func (s Scope) String() string {
@@ -102,12 +101,6 @@ func (s Scope) String() string {
 		return "SESSION"
 	case ScopeBoth:
 		return "GLOBAL, SESSION"
-	case ScopePersist:
-		return "GLOBAL, PERSIST"
-	case ScopePersistOnly:
-		return "PERSIST"
-	case ScopeResetPersist:
-		return "RESET PERSIST"
 	default:
 		return "UNKNOWN_SYSTEM_SCOPE"
 	}
@@ -272,7 +265,7 @@ func (svbt SystemVariableBoolType) IsTrue(v interface{}) bool {
 	case bool:
 		return vv
 	case string:
-		return strings.ToLower(vv) == "on"
+		return strings.ToLower(vv) == "on" || strings.ToLower(vv) == "true"
 	default:
 		return false
 	}
@@ -305,7 +298,6 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 		return nil, getErrorConvertFromStringToBoolFailed(value)
 	}
 	return int8(convertVal), nil
-
 }
 
 type SystemVariableIntType struct {
@@ -604,7 +596,7 @@ func (svet SystemVariableEnumType) String() string {
 
 func (svet SystemVariableEnumType) Convert(value interface{}) (interface{}, error) {
 	cv1 := func(x int) (interface{}, error) {
-		if x >= 0 && x <= len(svet.id2TagName) {
+		if x >= 0 && x < len(svet.id2TagName) {
 			return svet.id2TagName[x], nil
 		}
 		return nil, errorConvertToEnumFailed
@@ -668,7 +660,7 @@ func (svet SystemVariableEnumType) ConvertFromString(value string) (interface{},
 	if val, ok := svet.tagName2Id[lowerName]; !ok {
 		return nil, getErrorConvertFromStringToEnumFailed(value)
 	} else {
-		return val, nil
+		return svet.id2TagName[val], nil
 	}
 }
 
@@ -931,7 +923,7 @@ type SystemVariable struct {
 
 	Default interface{}
 
-	UpdateSessVar func(context.Context, *Session, map[string]interface{}, string, interface{}) error
+	UpdateSessVar func(context.Context, *Session, *SystemVariables, string, interface{}) error
 }
 
 func (sv SystemVariable) GetName() string {
@@ -958,118 +950,71 @@ func (sv SystemVariable) GetDefault() interface{} {
 	return sv.Default
 }
 
-type GlobalSystemVariables struct {
+type GlobalSysVarsMgr struct {
+	sync.Mutex
+	accountsGlobalSysVarsMap map[uint32]*SystemVariables
+}
+
+// Get return sys vars of accountId
+func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context) (*SystemVariables, error) {
+	sysVarsMp, err := ses.getGlobalSysVars(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	m.Lock()
+	defer m.Unlock()
+
+	if sysVars, ok := m.accountsGlobalSysVarsMap[accountId]; ok {
+		sysVars.mu.Lock()
+		sysVars.mp = sysVarsMp
+		sysVars.mu.Unlock()
+	} else {
+		m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{mp: sysVarsMp}
+	}
+	return m.accountsGlobalSysVarsMap[accountId], nil
+}
+
+func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {
+	m.Lock()
+	defer m.Unlock()
+	m.accountsGlobalSysVarsMap[accountId] = vars
+}
+
+var GSysVarsMgr = &GlobalSysVarsMgr{
+	accountsGlobalSysVarsMap: make(map[uint32]*SystemVariables),
+}
+
+// SystemVariables is account level
+type SystemVariables struct {
 	mu sync.Mutex
 	// name -> value/default
-	sysVars map[string]interface{}
+	mp map[string]interface{}
 }
 
-// the set of variables
-var GSysVariables = &GlobalSystemVariables{
-	sysVars: make(map[string]interface{}),
-}
-
-// initialize system variables from definition
-func InitGlobalSystemVariables(gsv *GlobalSystemVariables) {
-	if gsv.sysVars == nil {
-		gsv.sysVars = make(map[string]interface{})
+// Clone returns a copy of sv
+func (sv *SystemVariables) Clone() *SystemVariables {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	mp := make(map[string]interface{}, len(sv.mp))
+	for name, value := range sv.mp {
+		mp[name] = value
 	}
-	for _, def := range gSysVarsDefs {
-		gsv.sysVars[def.GetName()] = def.GetDefault()
-	}
+	return &SystemVariables{mp: mp}
 }
 
-// add custom system variables
-func (gsv *GlobalSystemVariables) AddSysVariables(vars []SystemVariable) {
-	gsv.mu.Lock()
-	defer gsv.mu.Unlock()
-	for _, v := range vars {
-		vv := v
-		lname := strings.ToLower(vv.GetName())
-		vv.Name = lname
-		gSysVarsDefs[lname] = vv
-		gsv.sysVars[lname] = vv.GetDefault()
-	}
-}
-
-// set values to system variables
-func (gsv *GlobalSystemVariables) SetValues(ctx context.Context, values map[string]interface{}) error {
-	gsv.mu.Lock()
-	defer gsv.mu.Unlock()
-	for name, val := range values {
-		name = strings.ToLower(name)
-		if sv, ok := gSysVarsDefs[name]; ok {
-			cv, err := sv.GetType().Convert(val)
-			if err != nil {
-				return err
-			}
-			gsv.sysVars[name] = cv
-		} else {
-			return moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
-		}
-	}
-	return nil
-}
-
-// copy global system variable to session
-func (gsv *GlobalSystemVariables) CopySysVarsToSession() map[string]interface{} {
-	gsv.mu.Lock()
-	defer gsv.mu.Unlock()
-	sesSysVars := make(map[string]interface{}, len(gsv.sysVars))
-	for name, value := range gsv.sysVars {
-		sesSysVars[name] = value
-	}
-	return sesSysVars
-}
-
-// get system variable definition ,value.
-// return false, if there is no such variable.
-func (gsv *GlobalSystemVariables) GetGlobalSysVar(name string) (SystemVariable, interface{}, bool) {
-	gsv.mu.Lock()
-	defer gsv.mu.Unlock()
+func (sv *SystemVariables) Get(name string) interface{} {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
 	name = strings.ToLower(name)
-	if v, ok := gSysVarsDefs[name]; ok {
-		return v, gsv.sysVars[name], true
-	}
-	return SystemVariable{}, nil, false
+	return sv.mp[name]
 }
 
-// get the definition of the system variable
-func (gsv *GlobalSystemVariables) GetDefinitionOfSysVar(name string) (SystemVariable, bool) {
-	gsv.mu.Lock()
-	defer gsv.mu.Unlock()
+func (sv *SystemVariables) Set(name string, value interface{}) {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
 	name = strings.ToLower(name)
-	if v, ok := gSysVarsDefs[name]; ok {
-		return v, ok
-	}
-	return SystemVariable{}, false
-}
-
-// set global dynamic variable by SET GLOBAL
-func (gsv *GlobalSystemVariables) SetGlobalSysVar(ctx context.Context, name string, value interface{}) error {
-	gsv.mu.Lock()
-	defer gsv.mu.Unlock()
-	name = strings.ToLower(name)
-	if sv, ok := gSysVarsDefs[name]; ok {
-		if sv.GetScope() == ScopeSession {
-			return moerr.NewInternalError(ctx, errorSystemVariableIsSession())
-		}
-		if !sv.GetDynamic() {
-			return moerr.NewInternalError(ctx, errorSystemVariableIsReadOnly())
-		}
-		val, err := sv.GetType().Convert(value)
-		if err != nil {
-			return err
-		}
-		gsv.sysVars[name] = val
-	} else {
-		return moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
-	}
-	return nil
-}
-
-func init() {
-	InitGlobalSystemVariables(GSysVariables)
+	sv.mp[name] = value
 }
 
 // definitions of system variables
@@ -1095,7 +1040,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 1073741824, false),
+		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 67108864, false),
 		Default:           int64(67108864),
 	},
 	"version_comment": {
@@ -1412,14 +1357,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("mo_pk_check_by_dn"),
 		Default:           int8(0),
 	},
-	"syspublications": {
-		Name:              "syspublications",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("syspublications"),
-		Default:           "",
-	},
 	"net_buffer_length": {
 		Name:              "net_buffer_length",
 		Scope:             ScopeBoth,
@@ -1700,6 +1637,15 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("debug_sync"),
 		Default:           "",
 	},
+	"debug_break": {
+		Name:              "debug_break",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("debug_break"),
+		Default:           int64(0),
+	},
+
 	"default_authentication_plugin": {
 		Name:              "default_authentication_plugin",
 		Scope:             ScopeGlobal,
@@ -1893,7 +1839,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           int64(84),
 	},
 	"ft_min_word_len": {
-		Name:              "ft_max_word_len",
+		Name:              "ft_min_word_len",
 		Scope:             ScopeGlobal,
 		Dynamic:           false,
 		SetVarHintApplies: false,
@@ -3564,37 +3510,29 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("disable_txn_trace"),
 		Default:           int64(0),
 	},
-	"keep_user_target_list_in_result": {
-		Name:              "keep_user_target_list_in_result",
-		Scope:             ScopeGlobal,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("keep_user_target_list_in_result", 0, 2, false),
-		Default:           int64(0),
-	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",
-		Scope:             ScopeGlobal,
+		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
-	"experimental_master_index": {
-		Name:              "experimental_master_index",
-		Scope:             ScopeGlobal,
+	"disable_agg_statement": {
+		Name:              "disable_agg_statement",
+		Scope:             ScopeSession,
 		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("experimental_master_index"),
+		SetVarHintApplies: true,
+		Type:              InitSystemVariableBoolType("disable_agg_statement"),
 		Default:           int64(0),
 	},
 }
 
-func updateTimeZone(ctx context.Context, sess *Session, vars map[string]interface{}, name string, val interface{}) error {
+func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
 	tzStr := val.(string)
 	tzStr = strings.TrimSpace(strings.ToLower(tzStr))
 	if tzStr == "system" {
-		vars[name] = "SYSTEM"
+		sv.Set(name, "SYSTEM")
 		sess.SetTimeZone(time.Local)
 	} else if len(tzStr) > 0 && (tzStr[0] == '-' || tzStr[0] == '+') {
 		if len(tzStr) != 5 && len(tzStr) != 6 {
@@ -3646,14 +3584,14 @@ func updateTimeZone(ctx context.Context, sess *Session, vars map[string]interfac
 			sess.SetTimeZone(time.FixedZone("FixedZone", minute*60))
 		}
 
-		vars[name] = tzStr
+		sv.Set(name, tzStr)
 	} else {
 		loc, err := time.LoadLocation(tzStr)
 		if err != nil {
 			return err
 		}
 
-		vars[name] = tzStr
+		sv.Set(name, tzStr)
 		sess.SetTimeZone(loc)
 	}
 
@@ -3679,8 +3617,8 @@ type UserDefinedVar struct {
 	Sql   string
 }
 
-func autocommitValue(ctx context.Context, ses FeSession) (bool, error) {
-	value, err := ses.GetSessionVar(ctx, "autocommit")
+func autocommitValue(ses FeSession) (bool, error) {
+	value, err := ses.GetSessionSysVar("autocommit")
 	if err != nil {
 		return false, err
 	}

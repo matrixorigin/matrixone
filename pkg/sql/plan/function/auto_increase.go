@@ -27,7 +27,7 @@ import (
 )
 
 // XXX confused function.
-func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[uint64](result)
@@ -43,25 +43,27 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		dbName := functionUtil.QuickBytesToStr(s1)
 		tableName := functionUtil.QuickBytesToStr(s2)
 
-		database, err := eng.Database(proc.Ctx, dbName, proc.TxnOperator)
+		database, err := eng.Database(proc.Ctx, dbName, proc.GetTxnOperator())
 		if err != nil {
-			return moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
+			return moerr.NewInvalidInputf(proc.Ctx, "Database '%s' does not exist", dbName)
 		}
 		relation, err := database.Relation(proc.Ctx, tableName, nil)
 		if err != nil {
-			return moerr.NewInvalidInput(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
+			return moerr.NewInvalidInputf(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
 		}
 		tableId := relation.GetTableID(proc.Ctx)
 		engineDefs, err := relation.TableDefs(proc.Ctx)
 		if err != nil {
 			return err
 		}
-		autoIncrCol := getTableAutoIncrCol(engineDefs, tableName)
+		autoIncrCol := getTableAutoIncrCol(engineDefs)
 		if autoIncrCol != "" {
 			autoIncrement, err := getCurrentValue(
 				proc.Ctx,
+				proc.GetService(),
 				tableId,
-				autoIncrCol)
+				autoIncrCol,
+			)
 			if err != nil {
 				return err
 			}
@@ -77,24 +79,29 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 	return nil
 }
 
-func getTableAutoIncrCol(
-	engineDefs []engine.TableDef,
-	tableName string) string {
+func getTableAutoIncrCol(engineDefs []engine.TableDef) string {
+	autoIncrCol := ""
 	for _, def := range engineDefs {
+		if _, ok := def.(*engine.ViewDef); ok {
+			return ""
+		}
+
 		// FIXME: more than one auto cols??
 		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement {
-			return attr.Attr.Name
+			autoIncrCol = attr.Attr.Name
 		}
 	}
-	return ""
+	return autoIncrCol
 }
 
 func getCurrentValue(
 	ctx context.Context,
+	sid string,
 	tableID uint64,
 	col string) (uint64, error) {
-	return incrservice.GetAutoIncrementService(ctx).CurrentValue(
+	return incrservice.GetAutoIncrementService(sid).CurrentValue(
 		ctx,
 		tableID,
-		col)
+		col,
+	)
 }

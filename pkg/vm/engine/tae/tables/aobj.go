@@ -17,21 +17,21 @@ package tables
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -46,17 +46,18 @@ type aobject struct {
 func newAObject(
 	meta *catalog.ObjectEntry,
 	rt *dbutils.Runtime,
+	isTombstone bool,
 ) *aobject {
 	obj := &aobject{}
 	obj.baseObject = newBaseObject(obj, meta, rt)
-	if obj.meta.HasDropCommitted() {
+	if meta.IsForcePNode() || obj.meta.Load().HasDropCommitted() {
 		pnode := newPersistedNode(obj.baseObject)
 		node := NewNode(pnode)
 		node.Ref()
 		obj.node.Store(node)
 		obj.FreezeAppend()
 	} else {
-		mnode := newMemoryNode(obj.baseObject)
+		mnode := newMemoryNode(obj.baseObject, isTombstone)
 		node := NewNode(mnode)
 		node.Ref()
 		obj.node.Store(node)
@@ -82,7 +83,7 @@ func (obj *aobject) IsAppendable() bool {
 		return false
 	}
 	rows, _ := node.Rows()
-	return rows < obj.meta.GetSchema().BlockMaxRows
+	return rows < obj.meta.Load().GetSchema().Extra.BlockMaxRows
 }
 
 func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
@@ -91,8 +92,8 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 		return
 	}
 	obj.FreezeAppend()
-	if !obj.meta.PrepareCompact() || !obj.appendMVCC.PrepareCompact() {
-		if !obj.meta.PrepareCompact() {
+	if !obj.meta.Load().PrepareCompact() || !obj.appendMVCC.PrepareCompact() {
+		if !obj.meta.Load().PrepareCompact() {
 			reason = "meta preparecomp false"
 		} else {
 			reason = "mvcc preparecomp false"
@@ -109,6 +110,12 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 
 func (obj *aobject) PrepareCompact() bool {
 	if obj.RefCount() > 0 {
+		if obj.meta.Load().CheckPrintPrepareCompactLocked(1 * time.Second) {
+			if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
+				logutil.Infof("object ref count is %d", obj.RefCount())
+			}
+			obj.meta.Load().PrintPrepareCompactDebugLog()
+		}
 		return false
 	}
 
@@ -117,90 +124,48 @@ func (obj *aobject) PrepareCompact() bool {
 	obj.FreezeAppend()
 	obj.freezelock.Unlock()
 
-	droppedCommitted := obj.meta.HasDropCommitted()
+	droppedCommitted := obj.meta.Load().HasDropCommitted()
 
+	checkDuration := 10 * time.Minute
+	if obj.GetRuntime().Options.CheckpointCfg.FlushInterval < 50*time.Millisecond {
+		checkDuration = 8 * time.Second
+	}
 	if droppedCommitted {
-		if !obj.meta.PrepareCompact() {
+		if !obj.meta.Load().PrepareCompactLocked() {
+			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
+				obj.meta.Load().PrintPrepareCompactDebugLog()
+			}
 			return false
 		}
 	} else {
-		if !obj.meta.PrepareCompact() ||
-			!obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
+		if !obj.meta.Load().PrepareCompactLocked() {
+			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
+				obj.meta.Load().PrintPrepareCompactDebugLog()
+			}
+			return false
+		}
+		if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
+			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
+				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
+				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
+					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
+					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
+				}
+			}
 			return false
 		}
 	}
-	return obj.RefCount() == 0
+	prepareCompact := obj.RefCount() == 0
+	if !prepareCompact && obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
+		logutil.Infof("obj %v, data ref count is %d", obj.meta.Load().ID().String(), obj.RefCount())
+	}
+	return prepareCompact
 }
 
 func (obj *aobject) Pin() *common.PinnedItem[*aobject] {
 	obj.Ref()
 	return &common.PinnedItem[*aobject]{
 		Val: obj,
-	}
-}
-
-func (obj *aobject) GetColumnDataByIds(
-	ctx context.Context,
-	txn txnif.AsyncTxn,
-	readSchema any,
-	_ uint16,
-	colIdxes []int,
-	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
-	return obj.resolveColumnDatas(
-		ctx,
-		txn,
-		readSchema.(*catalog.Schema),
-		colIdxes,
-		false,
-		mp,
-	)
-}
-
-func (obj *aobject) GetColumnDataById(
-	ctx context.Context,
-	txn txnif.AsyncTxn,
-	readSchema any,
-	_ uint16,
-	col int,
-	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
-	return obj.resolveColumnData(
-		ctx,
-		txn,
-		readSchema.(*catalog.Schema),
-		col,
-		false,
-		mp,
-	)
-}
-
-func (obj *aobject) resolveColumnDatas(
-	ctx context.Context,
-	txn txnif.TxnReader,
-	readSchema *catalog.Schema,
-	colIdxes []int,
-	skipDeletes bool,
-	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
-	node := obj.PinNode()
-	defer node.Unref()
-
-	if !node.IsPersisted() {
-		return node.MustMNode().resolveInMemoryColumnDatas(
-			ctx,
-			txn, readSchema, colIdxes, skipDeletes, mp,
-		)
-	} else {
-		return obj.ResolvePersistedColumnDatas(
-			ctx,
-			txn,
-			readSchema,
-			0,
-			colIdxes,
-			skipDeletes,
-			mp,
-		)
 	}
 }
 
@@ -228,171 +193,113 @@ func (obj *aobject) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	return false
 }
 
-func (obj *aobject) resolveColumnData(
+func (obj *aobject) GetDuplicatedRows(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	readSchema *catalog.Schema,
-	col int,
-	skipDeletes bool,
+	keys containers.Vector,
+	keysZM index.ZM,
+	precommit bool,
+	checkWWConflict bool,
+	skipCommittedBeforeTxnForAblk bool,
+	rowIDs containers.Vector,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
+) (err error) {
+	defer func() {
+		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			logutil.Debugf("BatchDedup obj-%s: %v", obj.meta.Load().ID().String(), err)
+		}
+	}()
 	node := obj.PinNode()
 	defer node.Unref()
-
+	maxRow := uint32(math.MaxUint32)
+	if !precommit {
+		maxRow, err = obj.GetMaxRowByTS(txn.GetStartTS())
+	}
 	if !node.IsPersisted() {
-		return node.MustMNode().resolveInMemoryColumnData(
-			txn, readSchema, col, skipDeletes, mp,
-		)
-	} else {
-		return obj.ResolvePersistedColumnData(
+		return node.GetDuplicatedRows(
 			ctx,
 			txn,
-			readSchema,
-			0,
-			col,
-			skipDeletes,
+			maxRow,
+			keys,
+			keysZM,
+			rowIDs,
+			precommit,
+			checkWWConflict,
+			skipCommittedBeforeTxnForAblk,
+			mp,
+		)
+	} else {
+		return obj.persistedGetDuplicatedRows(
+			ctx,
+			txn,
+			skipCommittedBeforeTxnForAblk,
+			keys,
+			keysZM,
+			rowIDs,
+			true,
+			maxRow,
 			mp,
 		)
 	}
 }
 
-func (obj *aobject) GetValue(
-	ctx context.Context,
-	txn txnif.AsyncTxn,
-	readSchema any,
-	_ uint16,
-	row, col int,
-	mp *mpool.MPool,
-) (v any, isNull bool, err error) {
+func (obj *aobject) GetMaxRowByTS(ts types.TS) (uint32, error) {
 	node := obj.PinNode()
 	defer node.Unref()
-	schema := readSchema.(*catalog.Schema)
 	if !node.IsPersisted() {
-		return node.MustMNode().getInMemoryValue(txn, schema, row, col, mp)
+		obj.RLock()
+		defer obj.RUnlock()
+		return obj.appendMVCC.GetMaxRowByTSLocked(ts), nil
 	} else {
-		return obj.getPersistedValue(
-			ctx, txn, schema, 0, row, col, true, mp,
-		)
+		vec, err := obj.LoadPersistedCommitTS(0)
+		if err != nil {
+			return 0, err
+		}
+		defer vec.Close()
+		tsVec := vector.MustFixedColNoTypeCheck[types.TS](vec.GetDownstreamVector())
+		for i := range tsVec {
+			if tsVec[i].Greater(&ts) {
+				return uint32(i), nil
+			}
+		}
+		return uint32(vec.Length()), nil
 	}
 }
-
-// GetByFilter will read pk column, which seqnum will not change, no need to pass the read schema.
-func (obj *aobject) GetByFilter(
+func (obj *aobject) Contains(
 	ctx context.Context,
-	txn txnif.AsyncTxn,
-	filter *handle.Filter,
-	mp *mpool.MPool,
-) (blkID uint16, offset uint32, err error) {
-	if filter.Op != handle.FilterEq {
-		panic("logic error")
-	}
-	if obj.meta.GetSchema().SortKey == nil {
-		rid := filter.Val.(types.Rowid)
-		offset = rid.GetRowOffset()
-		return
-	}
-
-	node := obj.PinNode()
-	defer node.Unref()
-	_, offset, err = node.GetRowByFilter(ctx, txn, filter, mp)
-	return
-}
-
-func (obj *aobject) BatchDedup(
-	ctx context.Context,
-	txn txnif.AsyncTxn,
+	txn txnif.TxnReader,
+	precommit bool,
 	keys containers.Vector,
 	keysZM index.ZM,
-	rowmask *roaring.Bitmap,
-	precommit bool,
-	bf objectio.BloomFilter,
 	mp *mpool.MPool,
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Debugf("BatchDedup obj-%s: %v", obj.meta.ID.String(), err)
+			logutil.Debugf("BatchDedup obj-%s: %v", obj.meta.Load().ID().String(), err)
 		}
 	}()
 	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		return node.BatchDedup(
+		return node.Contains(
 			ctx,
-			txn,
-			precommit,
 			keys,
 			keysZM,
-			rowmask,
-			bf,
+			txn,
+			precommit,
+			mp,
 		)
 	} else {
-		return obj.PersistedBatchDedup(
+		return obj.persistedContains(
 			ctx,
 			txn,
 			precommit,
 			keys,
 			keysZM,
-			rowmask,
 			true,
-			bf,
 			mp,
 		)
 	}
-}
-
-func (obj *aobject) CollectAppendInRange(
-	start, end types.TS,
-	withAborted bool,
-	mp *mpool.MPool,
-) (*containers.BatchWithVersion, error) {
-	node := obj.PinNode()
-	defer node.Unref()
-	return node.CollectAppendInRange(start, end, withAborted, mp)
-}
-
-func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
-	if obj.meta.HasDropCommitted() && !obj.meta.InMemoryDeletesExisted() {
-		dropped = true
-		return
-	}
-	obj.meta.RLock()
-	atLeastOneCommitted := obj.meta.HasCommittedNodeLocked()
-	obj.meta.RUnlock()
-	if !atLeastOneCommitted {
-		score = 1
-		return
-	}
-
-	rows, err := obj.Rows()
-	if rows == int(obj.meta.GetSchema().BlockMaxRows) {
-		score = 100
-		return
-	}
-
-	changesCnt := uint32(0)
-	obj.meta.RLock()
-	objectMVCC := obj.tryGetMVCC()
-	if objectMVCC != nil {
-		changesCnt = objectMVCC.GetChangeIntentionCntLocked()
-	}
-	obj.meta.RUnlock()
-	if changesCnt == 0 && rows == 0 {
-		score = 0
-	} else {
-		score = 1
-	}
-
-	if score > 0 {
-		if _, terminated := obj.meta.GetTerminationTS(); terminated {
-			score = 100
-		}
-	}
-	return
-}
-
-func (obj *aobject) RunCalibration() (score int, err error) {
-	score, _, err = obj.estimateRawScore()
-	return
 }
 
 func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
@@ -426,24 +333,17 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 	defer node.Unref()
 	obj.RLock()
 	defer obj.RUnlock()
-	dsize := 0
-	objMVCC := obj.tryGetMVCC()
-	if objMVCC != nil {
-		dsize = objMVCC.EstimateMemSizeLocked()
-	}
 	asize := obj.appendMVCC.EstimateMemSizeLocked()
 	if !node.IsPersisted() {
-		asize += node.MustMNode().EstimateMemSize()
+		asize += node.MustMNode().EstimateMemSizeLocked()
 	}
-	return asize, dsize
+	return asize, 0
 }
 
 func (obj *aobject) GetRowsOnReplay() uint64 {
-	rows := uint64(obj.appendMVCC.GetTotalRow())
-	fileRows := uint64(obj.meta.GetLatestCommittedNodeLocked().
-		BaseNode.ObjectStats.Rows())
-	if rows > fileRows {
-		return rows
+	if obj.meta.Load().HasDropCommitted() {
+		return uint64(obj.meta.Load().
+			ObjectStats.Rows())
 	}
-	return fileRows
+	return uint64(obj.appendMVCC.GetTotalRow())
 }

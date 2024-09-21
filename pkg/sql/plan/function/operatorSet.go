@@ -35,7 +35,7 @@ var (
 		types.T_uuid,
 		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
 		types.T_decimal64, types.T_decimal128,
-		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json,
+		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json, types.T_datalink,
 	}
 )
 
@@ -141,65 +141,65 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	t := result.GetResultVector().GetType()
 	switch t.Oid {
 	case types.T_bit:
-		return generalCaseFn[uint64](parameters, result, proc, length)
+		return generalCaseFn[uint64](parameters, result, proc, length, selectList)
 	case types.T_int8:
-		return generalCaseFn[int8](parameters, result, proc, length)
+		return generalCaseFn[int8](parameters, result, proc, length, selectList)
 	case types.T_int16:
-		return generalCaseFn[int16](parameters, result, proc, length)
+		return generalCaseFn[int16](parameters, result, proc, length, selectList)
 	case types.T_int32:
-		return generalCaseFn[int32](parameters, result, proc, length)
+		return generalCaseFn[int32](parameters, result, proc, length, selectList)
 	case types.T_int64:
-		return generalCaseFn[int64](parameters, result, proc, length)
+		return generalCaseFn[int64](parameters, result, proc, length, selectList)
 	case types.T_uint8:
-		return generalCaseFn[uint8](parameters, result, proc, length)
+		return generalCaseFn[uint8](parameters, result, proc, length, selectList)
 	case types.T_uint16:
-		return generalCaseFn[uint16](parameters, result, proc, length)
+		return generalCaseFn[uint16](parameters, result, proc, length, selectList)
 	case types.T_uint32:
-		return generalCaseFn[uint32](parameters, result, proc, length)
+		return generalCaseFn[uint32](parameters, result, proc, length, selectList)
 	case types.T_uint64:
-		return generalCaseFn[uint64](parameters, result, proc, length)
+		return generalCaseFn[uint64](parameters, result, proc, length, selectList)
 	case types.T_float32:
-		return generalCaseFn[float32](parameters, result, proc, length)
+		return generalCaseFn[float32](parameters, result, proc, length, selectList)
 	case types.T_float64:
-		return generalCaseFn[float64](parameters, result, proc, length)
+		return generalCaseFn[float64](parameters, result, proc, length, selectList)
 	case types.T_date:
-		return generalCaseFn[types.Date](parameters, result, proc, length)
+		return generalCaseFn[types.Date](parameters, result, proc, length, selectList)
 	case types.T_time:
-		return generalCaseFn[types.Time](parameters, result, proc, length)
+		return generalCaseFn[types.Time](parameters, result, proc, length, selectList)
 	case types.T_datetime:
-		return generalCaseFn[types.Datetime](parameters, result, proc, length)
+		return generalCaseFn[types.Datetime](parameters, result, proc, length, selectList)
 	case types.T_timestamp:
-		return generalCaseFn[types.Timestamp](parameters, result, proc, length)
+		return generalCaseFn[types.Timestamp](parameters, result, proc, length, selectList)
 	case types.T_uuid:
-		return generalCaseFn[types.Uuid](parameters, result, proc, length)
+		return generalCaseFn[types.Uuid](parameters, result, proc, length, selectList)
 	case types.T_bool:
-		return generalCaseFn[bool](parameters, result, proc, length)
+		return generalCaseFn[bool](parameters, result, proc, length, selectList)
 	case types.T_decimal64:
-		return generalCaseFn[types.Decimal64](parameters, result, proc, length)
+		return generalCaseFn[types.Decimal64](parameters, result, proc, length, selectList)
 	case types.T_decimal128:
-		return generalCaseFn[types.Decimal128](parameters, result, proc, length)
+		return generalCaseFn[types.Decimal128](parameters, result, proc, length, selectList)
 	case types.T_enum:
-		return generalCaseFn[types.Enum](parameters, result, proc, length)
+		return generalCaseFn[types.Enum](parameters, result, proc, length, selectList)
 	case types.T_char:
-		return strCaseFn(parameters, result, proc, length)
+		return strCaseFn(parameters, result, proc, length, selectList)
 	case types.T_varchar:
-		return strCaseFn(parameters, result, proc, length)
+		return strCaseFn(parameters, result, proc, length, selectList)
 	case types.T_blob:
-		return strCaseFn(parameters, result, proc, length)
-	case types.T_text:
-		return strCaseFn(parameters, result, proc, length)
+		return strCaseFn(parameters, result, proc, length, selectList)
+	case types.T_text, types.T_datalink:
+		return strCaseFn(parameters, result, proc, length, selectList)
 	case types.T_json:
-		return strCaseFn(parameters, result, proc, length)
+		return strCaseFn(parameters, result, proc, length, selectList)
 	}
 	panic("unreached code")
 }
 
 func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	// case Xn then Yn else Z
 	xs := make([]vector.FunctionParameterWrapper[bool], 0, len(vecs)/2)
 	ys := make([]vector.FunctionParameterWrapper[T], 0, len(vecs)/2)
@@ -257,7 +257,7 @@ func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date
 	return nil
 }
 
-func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	// case Xn then Yn else Z
 	xs := make([]vector.FunctionParameterWrapper[bool], 0, len(vecs)/2)
 	ys := make([]vector.FunctionParameterWrapper[types.Varlena], 0, len(vecs)/2)
@@ -323,7 +323,7 @@ var (
 		types.T_bit,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json,
 		types.T_decimal64, types.T_decimal128,
-		types.T_timestamp, types.T_time,
+		types.T_timestamp, types.T_time, types.T_datalink,
 	}
 )
 
@@ -372,57 +372,57 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rett := result.GetResultVector().GetType()
 	switch rett.Oid {
 	case types.T_bit:
-		return generalIffFn[uint64](parameters, result, proc, length)
+		return generalIffFn[uint64](parameters, result, proc, length, selectList)
 	case types.T_int8:
-		return generalIffFn[int8](parameters, result, proc, length)
+		return generalIffFn[int8](parameters, result, proc, length, selectList)
 	case types.T_int16:
-		return generalIffFn[int16](parameters, result, proc, length)
+		return generalIffFn[int16](parameters, result, proc, length, selectList)
 	case types.T_int32:
-		return generalIffFn[int32](parameters, result, proc, length)
+		return generalIffFn[int32](parameters, result, proc, length, selectList)
 	case types.T_int64:
-		return generalIffFn[int64](parameters, result, proc, length)
+		return generalIffFn[int64](parameters, result, proc, length, selectList)
 	case types.T_uint8:
-		return generalIffFn[uint8](parameters, result, proc, length)
+		return generalIffFn[uint8](parameters, result, proc, length, selectList)
 	case types.T_uint16:
-		return generalIffFn[uint16](parameters, result, proc, length)
+		return generalIffFn[uint16](parameters, result, proc, length, selectList)
 	case types.T_uint32:
-		return generalIffFn[uint32](parameters, result, proc, length)
+		return generalIffFn[uint32](parameters, result, proc, length, selectList)
 	case types.T_uint64:
-		return generalIffFn[uint64](parameters, result, proc, length)
+		return generalIffFn[uint64](parameters, result, proc, length, selectList)
 	case types.T_float32:
-		return generalIffFn[float32](parameters, result, proc, length)
+		return generalIffFn[float32](parameters, result, proc, length, selectList)
 	case types.T_float64:
-		return generalIffFn[float64](parameters, result, proc, length)
+		return generalIffFn[float64](parameters, result, proc, length, selectList)
 	case types.T_uuid:
-		return generalIffFn[types.Uuid](parameters, result, proc, length)
+		return generalIffFn[types.Uuid](parameters, result, proc, length, selectList)
 	case types.T_bool:
-		return generalIffFn[bool](parameters, result, proc, length)
+		return generalIffFn[bool](parameters, result, proc, length, selectList)
 	case types.T_date:
-		return generalIffFn[types.Date](parameters, result, proc, length)
+		return generalIffFn[types.Date](parameters, result, proc, length, selectList)
 	case types.T_datetime:
-		return generalIffFn[types.Datetime](parameters, result, proc, length)
+		return generalIffFn[types.Datetime](parameters, result, proc, length, selectList)
 	case types.T_decimal64:
-		return generalIffFn[types.Decimal64](parameters, result, proc, length)
+		return generalIffFn[types.Decimal64](parameters, result, proc, length, selectList)
 	case types.T_decimal128:
-		return generalIffFn[types.Decimal128](parameters, result, proc, length)
+		return generalIffFn[types.Decimal128](parameters, result, proc, length, selectList)
 	case types.T_time:
-		return generalIffFn[types.Time](parameters, result, proc, length)
+		return generalIffFn[types.Time](parameters, result, proc, length, selectList)
 	case types.T_timestamp:
-		return generalIffFn[types.Timestamp](parameters, result, proc, length)
+		return generalIffFn[types.Timestamp](parameters, result, proc, length, selectList)
 	case types.T_enum:
-		return generalIffFn[types.Enum](parameters, result, proc, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
-		return strIffFn(parameters, result, proc, length)
+		return generalIffFn[types.Enum](parameters, result, proc, length, selectList)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink, types.T_json:
+		return strIffFn(parameters, result, proc, length, selectList)
 	}
 	panic("unreached code")
 }
 
 func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](vecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[T](vecs[2])
@@ -443,7 +443,7 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 	return nil
 }
 
-func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
 	p2 := vector.GenerateFunctionStrParameter(vecs[1])
 	p3 := vector.GenerateFunctionStrParameter(vecs[2])
@@ -464,7 +464,7 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
-func operatorUnaryPlus[T constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func operatorUnaryPlus[T constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[T](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -475,7 +475,7 @@ func operatorUnaryPlus[T constraints.Integer | constraints.Float | types.Decimal
 	return nil
 }
 
-func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[T](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -487,7 +487,7 @@ func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*
 	return nil
 }
 
-func operatorUnaryMinusDecimal64(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func operatorUnaryMinusDecimal64(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
 	rs := vector.MustFunctionResult[types.Decimal64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -505,7 +505,7 @@ func operatorUnaryMinusDecimal64(parameters []*vector.Vector, result vector.Func
 	return nil
 }
 
-func operatorUnaryMinusDecimal128(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func operatorUnaryMinusDecimal128(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
 	rs := vector.MustFunctionResult[types.Decimal128](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -532,7 +532,7 @@ func funcBitInversion[T constraints.Integer](x T) uint64 {
 	}
 }
 
-func operatorUnaryTilde[T constraints.Integer](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func operatorUnaryTilde[T constraints.Integer](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[uint64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -551,7 +551,7 @@ func operatorUnaryTilde[T constraints.Integer](parameters []*vector.Vector, resu
 	return nil
 }
 
-func operatorOpIs(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func operatorOpIs(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !parameters[1].IsConst() || parameters[1].IsConstNull() {
 		return moerr.NewInternalError(proc.Ctx, "second parameter of IS must be TRUE or FALSE")
 	}
@@ -578,7 +578,7 @@ func operatorOpIs(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
-func operatorOpIsNot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func operatorOpIsNot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !parameters[1].IsConst() || parameters[1].IsConstNull() {
 		return moerr.NewInternalError(proc.Ctx, "second parameter of IS NOT must be TRUE or FALSE")
 	}
@@ -605,7 +605,7 @@ func operatorOpIsNot(parameters []*vector.Vector, result vector.FunctionResultWr
 	return nil
 }
 
-func operatorOpIsNull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func operatorOpIsNull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[bool](result)
 
 	if parameters[0].IsConst() {
@@ -636,7 +636,7 @@ func operatorOpIsNull(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-func operatorOpIsNotNull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func operatorOpIsNotNull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[bool](result)
 
 	if parameters[0].IsConst() {
@@ -667,19 +667,19 @@ func operatorOpIsNotNull(parameters []*vector.Vector, result vector.FunctionResu
 	return nil
 }
 
-func operatorIsTrue(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func operatorIsTrue(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return funcIs(parameters, result, length, false, true)
 }
 
-func operatorIsFalse(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func operatorIsFalse(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return funcIs(parameters, result, length, false, false)
 }
 
-func operatorIsNotFalse(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func operatorIsNotFalse(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return funcIs(parameters, result, length, true, true)
 }
 
-func operatorIsNotTrue(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func operatorIsNotTrue(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return funcIs(parameters, result, length, true, false)
 }
 

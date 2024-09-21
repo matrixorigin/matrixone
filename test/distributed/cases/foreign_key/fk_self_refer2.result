@@ -8,7 +8,7 @@ constraint `c2` foreign key fk2(c) references t1(a)
 );
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT NULL,\n`c` INT DEFAULT NULL,\nPRIMARY KEY (`a`),\nCONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `c2` FOREIGN KEY (`c`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t1    CREATE TABLE `t1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  CONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT,\n  CONSTRAINT `c2` FOREIGN KEY (`c`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,2,3);
 Cannot add or update a child row: a foreign key constraint fails
 insert into t1 values (1,1,1);
@@ -53,7 +53,7 @@ constraint `c2` foreign key fk2(c) references t1(a)
 );
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\n`c` INT DEFAULT NULL,\nUNIQUE KEY `a` (`a`),\nCONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `c2` FOREIGN KEY (`c`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  UNIQUE KEY `a` (`a`),\n  CONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT,\n  CONSTRAINT `c2` FOREIGN KEY (`c`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (NULL,NULL,NULL);
 insert into t1 values (1,1,1);
 insert into t1 values (2,1,1);
@@ -111,7 +111,7 @@ constraint `c2` foreign key fk2(c) references t1(b)
 );
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT NULL,\n`c` INT DEFAULT NULL,\nPRIMARY KEY (`a`),\nUNIQUE KEY `b` (`b`),\nCONSTRAINT `c1` FOREIGN KEY (`c`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `c2` FOREIGN KEY (`c`) REFERENCES `t1` (`b`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t1    CREATE TABLE `t1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  UNIQUE KEY `b` (`b`),\n  CONSTRAINT `c1` FOREIGN KEY (`c`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT,\n  CONSTRAINT `c2` FOREIGN KEY (`c`) REFERENCES `t1` (`b`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,1,1);
 insert into t1 values (2,2,3);
 Cannot add or update a child row: a foreign key constraint fails

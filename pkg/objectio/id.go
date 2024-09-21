@@ -36,6 +36,11 @@ type Segmentid = types.Segmentid
 type Blockid = types.Blockid
 type Rowid = types.Rowid
 
+var NewObjectid = types.NewObjectid
+var NewBlockidWithObjectID = types.NewBlockidWithObjectID
+var NewRowid = types.NewRowid
+var NewRowIDWithObjectIDBlkNumAndRowID = types.NewRowIDWithObjectIDBlkNumAndRowID
+
 func NewSegmentid() *Segmentid {
 	id := types.Uuid(uuid.Must(uuid.NewV7()))
 	return &id
@@ -50,13 +55,6 @@ func NewBlockid(segid *Segmentid, fnum, blknum uint16) *Blockid {
 	return &id
 }
 
-func NewObjectid() *ObjectId {
-	sid := types.Uuid(uuid.Must(uuid.NewV7()))
-	var oid ObjectId
-	copy(oid[:types.UuidSize], sid[:])
-	return &oid
-}
-
 func NewObjectidWithSegmentIDAndNum(sid *Segmentid, num uint16) *ObjectId {
 	var oid ObjectId
 	copy(oid[:types.UuidSize], sid[:])
@@ -64,27 +62,16 @@ func NewObjectidWithSegmentIDAndNum(sid *Segmentid, num uint16) *ObjectId {
 	return &oid
 }
 
-func NewBlockidWithObjectID(segid *ObjectId, blknum uint16) *Blockid {
-	var bid Blockid
-	size := types.ObjectidSize
-	copy(bid[:size], segid[:])
-	copy(bid[size:size+2], types.EncodeUint16(&blknum))
-	return &bid
-}
-
-func NewRowid(blkid *Blockid, offset uint32) *types.Rowid {
-	var rowid types.Rowid
-	size := types.BlockidSize
-	copy(rowid[:size], blkid[:])
-	copy(rowid[size:size+4], types.EncodeUint32(&offset))
-	return &rowid
-}
-
 func BuildObjectBlockid(name ObjectName, sequence uint16) *Blockid {
 	var id Blockid
-	copy(id[:], name[0:NameStringOff])
-	copy(id[NameStringOff:], types.EncodeUint16(&sequence))
+	BuildObjectBlockidTo(name, sequence, id[:])
 	return &id
+
+}
+
+func BuildObjectBlockidTo(name ObjectName, sequence uint16, to []byte) {
+	copy(to, name[0:NameStringOff])
+	copy(to[NameStringOff:], types.EncodeUint16(&sequence))
 }
 
 func Str2Blockid(id string) *Blockid {

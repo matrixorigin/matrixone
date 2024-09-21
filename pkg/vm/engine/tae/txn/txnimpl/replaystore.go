@@ -95,7 +95,7 @@ func (store *replayTxnStore) applyRollback(txn txnif.AsyncTxn) (err error) {
 }
 
 func (store *replayTxnStore) prepareRollback(txn txnif.AsyncTxn) (err error) {
-	panic(moerr.NewInternalErrorNoCtx("cannot prepareRollback rollback replay txn: %s",
+	panic(moerr.NewInternalErrorNoCtxf("cannot prepareRollback rollback replay txn: %s",
 		txn.String()))
 }
 
@@ -104,7 +104,6 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 		logutil.Debug("", common.OperationField("replay-cmd"),
 			common.OperandField(txncmd.Desc()))
 	}
-	var err error
 	switch cmd := txncmd.(type) {
 	case *catalog.EntryCommand[*catalog.EmptyMVCCNode, *catalog.DBNode],
 		*catalog.EntryCommand[*catalog.TableMVCCNode, *catalog.TableNode],
@@ -117,9 +116,6 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 	case *updates.UpdateCmd:
 		store.replayDataCmds(cmd, store.Observer)
 	}
-	if err != nil {
-		panic(err)
-	}
 }
 
 func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.ReplayObserver) {
@@ -130,7 +126,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if err != nil {
 			panic(err)
 		}
-		blk, err := database.GetBlockEntryByID(id)
+		blk, err := database.GetObjectEntryByID(id, cmd.IsTombstone)
 		if err != nil {
 			panic(err)
 		}
@@ -158,7 +154,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if err != nil {
 			panic(err)
 		}
-		blk, err := database.GetBlockEntryByID(id)
+		blk, err := database.GetObjectEntryByID(id, cmd.IsTombstone)
 		if err != nil {
 			panic(err)
 		}
@@ -182,62 +178,29 @@ func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, observer wal
 	switch cmd.GetType() {
 	case updates.IOET_WALTxnCommand_AppendNode:
 		store.replayAppend(cmd, observer)
-	case updates.IOET_WALTxnCommand_DeleteNode, updates.IOET_WALTxnCommand_PersistedDeleteNode:
-		store.replayDelete(cmd, observer)
+		// case updates.IOET_WALTxnCommand_DeleteNode, updates.IOET_WALTxnCommand_PersistedDeleteNode:
+		// 	store.replayDelete(cmd, observer)
 	}
-}
-
-func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {
-	deleteNode := cmd.GetDeleteNode()
-	if deleteNode.Is1PC() {
-		if _, err := deleteNode.TxnMVCCNode.ApplyCommit(); err != nil {
-			panic(err)
-		}
-	}
-	id := deleteNode.GetID()
-	database, err := store.catalog.GetDatabaseByID(id.DbID)
-	if err != nil {
-		panic(err)
-	}
-	blk, err := database.GetBlockEntryByID(id)
-	if err != nil {
-		panic(err)
-	}
-	if !blk.IsActive() {
-		return
-	}
-	blkData := blk.GetObjectData()
-	_, blkOffset := id.BlockID.Offsets()
-	err = blkData.OnReplayDelete(blkOffset, deleteNode)
-	if err != nil {
-		panic(err)
-	}
-
 }
 
 func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {
 	appendNode := cmd.GetAppendNode()
-	if appendNode.Is1PC() {
-		if _, err := appendNode.TxnMVCCNode.ApplyCommit(); err != nil {
-			panic(err)
-		}
-	}
 	id := appendNode.GetID()
 	database, err := store.catalog.GetDatabaseByID(id.DbID)
 	if err != nil {
 		panic(err)
 	}
-	blk, err := database.GetBlockEntryByID(id)
+	obj, err := database.GetObjectEntryByID(id, cmd.GetAppendNode().IsTombstone())
 	if err != nil {
 		panic(err)
 	}
-	if !blk.IsActive() {
+	if !obj.IsActive() {
 		return
 	}
-	if blk.ObjectPersisted() {
+	if obj.ObjectPersisted() {
 		return
 	}
-	if err = blk.GetObjectData().OnReplayAppend(appendNode); err != nil {
+	if err = obj.GetObjectData().OnReplayAppend(appendNode); err != nil {
 		panic(err)
 	}
 }

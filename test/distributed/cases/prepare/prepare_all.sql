@@ -483,4 +483,5 @@ EXECUTE mo_stmt_id_1 USING @dbname1, @dbname2;
 DEALLOCATE PREPARE mo_stmt_id_1;
 DROP DATABASE mocloud_meta;
 
-
+# reset
+SET TIME_ZONE = "SYSTEM";

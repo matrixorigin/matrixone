@@ -17,96 +17,88 @@ package indexbuild
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "index_build"
+const opName = "index_build"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (indexBuild *IndexBuild) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": index build ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	if arg.RuntimeFilterSpec == nil {
+func (indexBuild *IndexBuild) OpType() vm.OpType {
+	return vm.IndexBuild
+}
+
+func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
+	if indexBuild.OpAnalyzer == nil {
+		indexBuild.OpAnalyzer = process.NewAnalyzer(indexBuild.GetIdx(), indexBuild.IsFirst, indexBuild.IsLast, "index build")
+	} else {
+		indexBuild.OpAnalyzer.Reset()
+	}
+
+	if indexBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in index build!")
 	}
-
-	arg.ctr = new(container)
-	if len(proc.Reg.MergeReceivers) > 1 {
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.isMerge = true
-	} else {
-		arg.ctr.InitReceiver(proc, false)
-	}
-
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
+	analyzer := indexBuild.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
 	result := vm.NewCallResult()
-	ctr := arg.ctr
+	ctr := &indexBuild.ctr
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
-			if err := ctr.build(arg, proc, anal, arg.GetIsFirst()); err != nil {
+			if err := ctr.build(indexBuild, proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = HandleRuntimeFilter
 
 		case HandleRuntimeFilter:
-			if err := ctr.handleRuntimeFilter(arg, proc); err != nil {
+			if err := ctr.handleRuntimeFilter(indexBuild, proc); err != nil {
 				return result, err
 			}
 			ctr.state = End
 		default:
-			if ctr.batch != nil {
-				proc.PutBatch(ctr.batch)
-				ctr.batch = nil
-			}
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var err error
-	var currentBatch *batch.Batch
+func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.Process, analyzer process.Analyzer) error {
 	for {
-		if ap.ctr.isMerge {
-			currentBatch, _, err = ctr.ReceiveFromAllRegs(anal)
-		} else {
-			currentBatch, _, err = ctr.ReceiveFromSingleReg(0, anal)
-		}
+		result, err := vm.ChildrenCall(indexBuild.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return err
 		}
-		if currentBatch == nil {
+		if result.Batch == nil {
 			break
 		}
-		if currentBatch.IsEmpty() {
-			proc.PutBatch(currentBatch)
+		if result.Batch.IsEmpty() {
 			continue
 		}
-		anal.Input(currentBatch, isFirst)
-		// anal.Alloc(int64(currentBatch.Size())) @todo we need to redesin annalyze memory size
-		ctr.batch, err = ctr.batch.AppendWithCopy(proc.Ctx, proc.Mp(), currentBatch)
+
+		analyzer.Alloc(int64(result.Batch.Size()))
+		ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(currentBatch)
-		if ctr.batch.RowCount() > int(ap.RuntimeFilterSpec.UpperLimit) {
+
+		// If read index table data exceeds the UpperLimit, abandon reading data from index table
+		if ctr.buf.RowCount() > int(indexBuild.RuntimeFilterSpec.UpperLimit) {
 			// for index build, can exit early
 			return nil
 		}
@@ -114,49 +106,49 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 	return nil
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	err := ctr.collectBuildBatches(ap, proc, anal, isFirst)
+func (ctr *container) build(ap *IndexBuild, proc *process.Process, anal process.Analyzer) error {
+	err := ctr.collectBuildBatches(ap, proc, anal)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
-	var runtimeFilter process.RuntimeFilterMessage
+func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process) error {
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
 	if ap.RuntimeFilterSpec.Expr == nil {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
-	} else if ctr.batch == nil || ctr.batch.RowCount() == 0 {
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+	} else if ctr.buf == nil || ctr.buf.RowCount() == 0 {
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	}
 
 	inFilterCardLimit := ap.RuntimeFilterSpec.UpperLimit
 
-	if ctr.batch.RowCount() > int(inFilterCardLimit) {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+	if ctr.buf.RowCount() > int(inFilterCardLimit) {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	} else {
-		if len(ctr.batch.Vecs) != 1 {
+		if len(ctr.buf.Vecs) != 1 {
 			panic("there must be only 1 vector in index build batch")
 		}
-		vec := ctr.batch.Vecs[0]
+		vec := ctr.buf.Vecs[0]
 		vec.InplaceSort()
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return err
 		}
 
-		runtimeFilter.Typ = process.RuntimeFilter_IN
+		runtimeFilter.Typ = message.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 	}
 	return nil
 }

@@ -384,3 +384,12 @@ func MockBatch(vecTypes []types.Type, rows int, uniqueIdx int, provider *MockDat
 	}
 	return bat
 }
+
+func MockBatchWithAttrsAndOffset(vecTypes []types.Type, attrs []string, rows int, offset int) (bat *Batch) {
+	bat = NewEmptyBatch()
+	for idx := range vecTypes {
+		vec := MockVector2(vecTypes[idx], rows, offset)
+		bat.AddVector(attrs[idx], vec)
+	}
+	return bat
+}

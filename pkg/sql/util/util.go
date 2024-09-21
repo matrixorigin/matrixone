@@ -16,7 +16,6 @@ package util
 
 import (
 	"fmt"
-	"go/constant"
 	"strconv"
 	"strings"
 
@@ -28,11 +27,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var (
+	//every account have these tables.
+	predefinedTables []string
+	specialTables    = map[string]struct{}{
+		catalog.MO_DATABASE: {},
+		catalog.MO_TABLES:   {},
+		catalog.MO_COLUMNS:  {},
+	}
+)
+
+func InitPredefinedTables(tables []string) {
+	predefinedTables = tables
+}
+
 func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	rbat := batch.NewWithSize(len(bat.Vecs))
 	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, srcVec := range bat.Vecs {
-		vec := proc.GetVector(*srcVec.GetType())
+		vec := vector.NewVec(*srcVec.GetType())
 		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
 			rbat.Clean(proc.Mp())
 			return nil, err
@@ -111,12 +124,9 @@ func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
 
-	datnameColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{catalog.SystemDBAttr_Name},
-	}
+	datnameColName := tree.NewUnresolvedColName(catalog.SystemDBAttr_Name)
 
-	mo_catalogConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_CATALOG), catalog.MO_CATALOG, false, tree.P_char)
+	mo_catalogConst := tree.NewNumVal(catalog.MO_CATALOG, catalog.MO_CATALOG, false, tree.P_char)
 	inValues := tree.NewTuple(tree.Exprs{mo_catalogConst})
 	// datname in ('mo_catalog')
 	inExpr := tree.NewComparisonExpr(tree.IN, datnameColName, inValues)
@@ -148,14 +158,11 @@ func BuildMoTablesFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
 
-	relnameColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{catalog.SystemRelAttr_Name},
-	}
+	relnameColName := tree.NewUnresolvedColName(catalog.SystemRelAttr_Name)
 
-	mo_databaseConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_DATABASE), catalog.MO_DATABASE, false, tree.P_char)
-	mo_tablesConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_TABLES), catalog.MO_TABLES, false, tree.P_char)
-	mo_columnsConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_COLUMNS), catalog.MO_COLUMNS, false, tree.P_char)
+	mo_databaseConst := tree.NewNumVal(catalog.MO_DATABASE, catalog.MO_DATABASE, false, tree.P_char)
+	mo_tablesConst := tree.NewNumVal(catalog.MO_TABLES, catalog.MO_TABLES, false, tree.P_char)
+	mo_columnsConst := tree.NewNumVal(catalog.MO_COLUMNS, catalog.MO_COLUMNS, false, tree.P_char)
 	inValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst})
 
 	// relname in ('mo_tables','mo_database','mo_columns')
@@ -185,63 +192,24 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
 
-	att_relnameColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{catalog.SystemColAttr_RelName},
-	}
+	att_relnameColName := tree.NewUnresolvedColName(catalog.SystemColAttr_RelName)
 
-	att_dblnameColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{catalog.SystemColAttr_DBName},
-	}
+	att_dblnameColName := tree.NewUnresolvedColName(catalog.SystemColAttr_DBName)
 
-	mo_catalogConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_CATALOG), catalog.MO_CATALOG, false, tree.P_char)
+	mo_catalogConst := tree.NewNumVal(catalog.MO_CATALOG, catalog.MO_CATALOG, false, tree.P_char)
 	inValues := tree.NewTuple(tree.Exprs{mo_catalogConst})
 	// datname in ('mo_catalog')
 	inExpr := tree.NewComparisonExpr(tree.IN, att_dblnameColName, inValues)
 
-	mo_userConst := tree.NewNumValWithType(constant.MakeString("mo_user"), "mo_user", false, tree.P_char)
-	mo_roleConst := tree.NewNumValWithType(constant.MakeString("mo_role"), "mo_role", false, tree.P_char)
-	mo_user_grantConst := tree.NewNumValWithType(constant.MakeString("mo_user_grant"), "mo_user_grant", false, tree.P_char)
-	mo_role_grantConst := tree.NewNumValWithType(constant.MakeString("mo_role_grant"), "mo_role_grant", false, tree.P_char)
-	mo_role_privsConst := tree.NewNumValWithType(constant.MakeString("mo_role_privs"), "mo_role_privs", false, tree.P_char)
-	mo_user_defined_functionConst := tree.NewNumValWithType(constant.MakeString("mo_user_defined_function"), "mo_user_defined_function", false, tree.P_char)
-	mo_mysql_compatibility_modeConst := tree.NewNumValWithType(constant.MakeString("mo_mysql_compatibility_mode"), "mo_mysql_compatibility_mode", false, tree.P_char)
-	mo_indexes := tree.NewNumValWithType(constant.MakeString("mo_indexes"), "mo_indexes", false, tree.P_char)
-	mo_table_partitions := tree.NewNumValWithType(constant.MakeString("mo_table_partitions"), "mo_table_partitions", false, tree.P_char)
-	mo_pubs := tree.NewNumValWithType(constant.MakeString("mo_pubs"), "mo_pubs", false, tree.P_char)
-	mo_stored_procedure := tree.NewNumValWithType(constant.MakeString("mo_stored_procedure"), "mo_stored_procedure", false, tree.P_char)
-	mo_stages := tree.NewNumValWithType(constant.MakeString("mo_stages"), "mo_stages", false, tree.P_char)
-	mo_snapshots := tree.NewNumValWithType(constant.MakeString("mo_snapshots"), "mo_snapshots", false, tree.P_char)
+	exprs := make([]tree.Expr, 0)
+	for _, table := range predefinedTables {
+		if _, ok := specialTables[table]; ok {
+			continue
+		}
+		exprs = append(exprs, tree.NewNumVal(table, table, false, tree.P_char))
+	}
 
-	mo_locks := tree.NewNumValWithType(constant.MakeString("mo_locks"), "mo_locks", false, tree.P_char)
-	mo_variables := tree.NewNumValWithType(constant.MakeString("mo_variables"), "mo_variables", false, tree.P_char)
-	mo_transactions := tree.NewNumValWithType(constant.MakeString("mo_transactions"), "mo_transactions", false, tree.P_char)
-	mo_cache := tree.NewNumValWithType(constant.MakeString("mo_cache"), "mo_cache", false, tree.P_char)
-	mo_sessions := tree.NewNumValWithType(constant.MakeString("mo_sessions"), "mo_sessions", false, tree.P_char)
-	mo_configurations := tree.NewNumValWithType(constant.MakeString("mo_configurations"), "mo_configurations", false, tree.P_char)
-
-	notInValues := tree.NewTuple(tree.Exprs{
-		mo_userConst,
-		mo_roleConst,
-		mo_user_grantConst,
-		mo_role_grantConst,
-		mo_role_privsConst,
-		mo_user_defined_functionConst,
-		mo_mysql_compatibility_modeConst,
-		mo_indexes,
-		mo_table_partitions,
-		mo_pubs,
-		mo_stored_procedure,
-		mo_stages,
-		mo_snapshots,
-		mo_locks,
-		mo_variables,
-		mo_transactions,
-		mo_cache,
-		mo_sessions,
-		mo_configurations,
-	})
+	notInValues := tree.NewTuple(exprs)
 
 	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
 
@@ -259,21 +227,15 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 
 // build equal ast expr: colName = 'xxx'
 func makeStringEqualAst(lColName, rValue string) tree.Expr {
-	relkindColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{lColName},
-	}
-	clusterConst := tree.NewNumValWithType(constant.MakeString(rValue), rValue, false, tree.P_char)
+	relkindColName := tree.NewUnresolvedColName(lColName)
+	clusterConst := tree.NewNumVal(rValue, rValue, false, tree.P_char)
 	return tree.NewComparisonExpr(tree.EQUAL, relkindColName, clusterConst)
 }
 
 // build ast expr: account_id = cur_accountId
 func makeAccountIdEqualAst(curAccountId uint64) tree.Expr {
-	accountIdColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{"account_id"},
-	}
-	curAccountIdConst := tree.NewNumValWithType(constant.MakeUint64(uint64(curAccountId)), strconv.Itoa(int(curAccountId)), false, tree.P_int64)
+	accountIdColName := tree.NewUnresolvedColName("account_id")
+	curAccountIdConst := tree.NewNumVal(curAccountId, strconv.Itoa(int(curAccountId)), false, tree.P_uint64)
 	return tree.NewComparisonExpr(tree.EQUAL, accountIdColName, curAccountIdConst)
 }
 

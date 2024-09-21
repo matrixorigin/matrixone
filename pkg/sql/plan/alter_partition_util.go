@@ -45,7 +45,7 @@ func AddTablePartitions(ctx CompilerContext, alterTable *plan.AlterTable, spec *
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Unsupported Add Partition")
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	bindContext := NewBindContext(builder, nil)
 	nodeID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,

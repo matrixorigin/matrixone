@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"go.uber.org/zap/zapcore"
@@ -46,41 +48,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-const (
-	VectorLimit = 32
+var (
+	NormalEndRegisterMessage = NewRegMsg(nil)
 )
 
-// Analyze analyzes information for operator
-type Analyze interface {
-	Stop()
-	ChildrenCallStop(time.Time)
-	Start()
-	Alloc(int64)
-	Input(*batch.Batch, bool)
-	Output(*batch.Batch, bool)
-	WaitStop(time.Time)
-	DiskIO(*batch.Batch)
-	S3IOByte(*batch.Batch)
-	S3IOInputCount(int)
-	S3IOOutputCount(int)
-	Network(*batch.Batch)
-	AddScanTime(t time.Time)
-	AddInsertTime(t time.Time)
+// RegisterMessage channel data
+// Err == nil means pipeline finish with error
+// Batch == nil means pipeline finish without error
+// Batch != nil means pipeline is running
+type RegisterMessage struct {
+	Batch *batch.Batch
+	Err   error
+}
+
+func NewRegMsg(bat *batch.Batch) *RegisterMessage {
+	return &RegisterMessage{
+		Batch: bat,
+	}
 }
 
 // WaitRegister channel
 type WaitRegister struct {
-	Ctx context.Context
-	Ch  chan *batch.Batch
+	// Ch2, data receiver's channel for receive-action-signal.
+	Ch2 chan PipelineSignal
+
+	// how many nil-batches this channel can receive, default 0 means every nil batch close channel
+	NilBatchCnt int
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
 type Register struct {
-	// Ss, temporarily stores the row number list in the execution of operators,
-	// and it can be reused in the future execution.
-	Ss [][]int64
-	// InputBatch, stores the result of the previous operator.
-	InputBatch *batch.Batch
 	// MergeReceivers, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
 	MergeReceivers []*WaitRegister
@@ -128,45 +125,6 @@ type SessionInfo struct {
 	SourceInMemScanBatch []*kafka.Message
 	LogLevel             zapcore.Level
 	SessionId            uuid.UUID
-}
-
-// AnalyzeInfo  analyze information for query
-type AnalyzeInfo struct {
-	// NodeId, index of query's node list
-	NodeId int32
-	// InputRows, number of rows accepted by node
-	InputRows int64
-	// OutputRows, number of rows output by node
-	OutputRows int64
-	// TimeConsumed, time taken by the node in milliseconds
-	TimeConsumed int64
-	// WaitTimeConsumed, time taken by the node waiting for channel in milliseconds
-	WaitTimeConsumed int64
-	// InputSize, data size accepted by node
-	InputSize int64
-	// OutputSize, data size output by node
-	OutputSize int64
-	// MemorySize, memory alloc by node
-	MemorySize int64
-	// DiskIO, data size read from disk
-	DiskIO int64
-	// S3IOByte, data size read from s3
-	S3IOByte int64
-	// S3IOInputCount, count for PUT, COPY, POST and LIST
-	S3IOInputCount int64
-	// S3IOOutputCount, count for GET, SELECT and other
-	S3IOOutputCount int64
-	// NetworkIO, message size send between CN node
-	NetworkIO int64
-	// ScanTime, scan cost time in external scan
-	ScanTime int64
-	// InsertTime, insert cost time in load flow
-	InsertTime int64
-
-	// time consumed by every single parallel
-	mu                     *sync.Mutex
-	TimeConsumedArrayMajor []int64
-	TimeConsumedArrayMinor []int64
 }
 
 type ExecStatus int
@@ -301,114 +259,119 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 	return sp.stmtId
 }
 
+type BaseProcess struct {
+	// sqlContext includes the client context and the query context.
+	sqlContext QueryBaseContext
+	// atRuntime indicates whether the process is running in runtime.
+	atRuntime bool
+
+	StmtProfile *StmtProfile
+	// Id, query id.
+	Id              string
+	Lim             Limitation
+	mp              *mpool.MPool
+	prepareBatch    *batch.Batch
+	prepareExprList any
+	valueScanBatch  map[[16]byte]*batch.Batch
+	// unix timestamp
+	UnixTime            int64
+	TxnClient           client.TxnClient
+	SessionInfo         SessionInfo
+	FileService         fileservice.FileService
+	LockService         lockservice.LockService
+	IncrService         incrservice.AutoIncrementService
+	LoadTag             bool
+	LastInsertID        *uint64
+	LoadLocalReader     *io.PipeReader
+	Aicm                *defines.AutoIncrCacheManager
+	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	prepareParams       *vector.Vector
+	QueryClient         qclient.QueryClient
+	Hakeeper            logservice.CNHAKeeperClient
+	UdfService          udf.Service
+	WaitPolicy          lock.WaitPolicy
+	messageBoard        *message.MessageBoard
+	logger              *log.MOLogger
+	TxnOperator         client.TxnOperator
+	CloneTxnOperator    client.TxnOperator
+}
+
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
 type Process struct {
-	StmtProfile *StmtProfile
-	// Id, query id.
-	Id  string
-	Reg Register
-	Lim Limitation
+	// BaseProcess is the common part of one process, and it's shared by all its children processes.
+	Base *BaseProcess
+	Reg  Register
 
-	vp              *vectorPool
-	mp              *mpool.MPool
-	prepareBatch    *batch.Batch
-	prepareExprList any
-
-	valueScanBatch map[[16]byte]*batch.Batch
-
-	// unix timestamp
-	UnixTime int64
-
-	TxnClient client.TxnClient
-
-	TxnOperator client.TxnOperator
-
-	AnalInfos []*AnalyzeInfo
-
-	SessionInfo SessionInfo
-
-	Ctx context.Context
-
+	// Ctx and Cancel are pipeline's context and cancel function.
+	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
+	Ctx    context.Context
 	Cancel context.CancelFunc
-
-	FileService fileservice.FileService
-	LockService lockservice.LockService
-	IncrService incrservice.AutoIncrementService
-
-	LoadTag bool
-
-	LastInsertID *uint64
-
-	LoadLocalReader *io.PipeReader
-
-	DispatchNotifyCh chan WrapCs
-
-	Aicm *defines.AutoIncrCacheManager
-
-	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	prepareParams       *vector.Vector
-
-	QueryClient qclient.QueryClient
-
-	Hakeeper logservice.CNHAKeeperClient
-
-	UdfService udf.Service
-
-	WaitPolicy lock.WaitPolicy
-
-	MessageBoard *MessageBoard
-
-	logger *log.MOLogger
-}
-
-type vectorPool struct {
-	sync.Mutex
-	vecs map[uint8][]*vector.Vector
-
-	// max vector count limit for each type in pool.
-	Limit int
 }
 
 type sqlHelper interface {
 	GetCompilerContext() any
-	ExecSql(string) ([]interface{}, error)
+	ExecSql(string) ([][]interface{}, error)
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 
+// WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
-	MsgId uint64
-	Uid   uuid.UUID
-	Cs    morpc.ClientSession
-	Err   chan error
+	sync.RWMutex
+	ReceiverDone bool
+	MsgId        uint64
+	Uid          uuid.UUID
+	Cs           morpc.ClientSession
+	Err          chan error
+}
+
+// RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
+//
+// remote run Server will use this channel to send information to dispatch operator.
+type RemotePipelineInformationChannel chan *WrapCs
+
+func (proc *Process) GetMessageBoard() *message.MessageBoard {
+	return proc.Base.messageBoard
+}
+
+func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
+	proc.Base.messageBoard = mb
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
-	proc.StmtProfile = sp
+	proc.Base.StmtProfile = sp
 }
 
 func (proc *Process) GetStmtProfile() *StmtProfile {
-	if proc.StmtProfile != nil {
-		return proc.StmtProfile
+	if proc.Base.StmtProfile != nil {
+		return proc.Base.StmtProfile
 	}
 	return &StmtProfile{}
 }
 
 func (proc *Process) InitSeq() {
-	proc.SessionInfo.SeqCurValues = make(map[uint64]string)
-	proc.SessionInfo.SeqLastValue = make([]string, 1)
-	proc.SessionInfo.SeqLastValue[0] = ""
-	proc.SessionInfo.SeqAddValues = make(map[uint64]string)
-	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
+	proc.Base.SessionInfo.SeqCurValues = make(map[uint64]string)
+	proc.Base.SessionInfo.SeqLastValue = make([]string, 1)
+	proc.Base.SessionInfo.SeqLastValue[0] = ""
+	proc.Base.SessionInfo.SeqAddValues = make(map[uint64]string)
+	proc.Base.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
+}
+
+func (proc *Process) SetMPool(mp *mpool.MPool) {
+	proc.Base.mp = mp
+}
+
+func (proc *Process) SetFileService(fs fileservice.FileService) {
+	proc.Base.FileService = fs
 }
 
 func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
-	proc.valueScanBatch[key] = batch
+	proc.Base.valueScanBatch[key] = batch
 }
 
 func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
-	bat, ok := proc.valueScanBatch[key]
+	bat, ok := proc.Base.valueScanBatch[key]
 	if ok {
 		bat.SetCnt(1000) // make sure this batch wouldn't be cleaned
 		return bat
@@ -418,77 +381,80 @@ func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
 }
 
 func (proc *Process) CleanValueScanBatchs() {
-	for k, bat := range proc.valueScanBatch {
-		bat.SetCnt(1)
-		bat.Clean(proc.Mp())
-		delete(proc.valueScanBatch, k)
-	}
-}
-
-func (proc *Process) GetValueScanBatchs() []*batch.Batch {
-	var bats []*batch.Batch
-
-	for k, bat := range proc.valueScanBatch {
+	mp := proc.Mp()
+	for k, bat := range proc.Base.valueScanBatch {
 		if bat != nil {
-			bats = append(bats, bat)
+			bat.SetCnt(1)
+			bat.Clean(mp)
 		}
-		delete(proc.valueScanBatch, k)
+		// todo: why not remake the map after all clean ?
+		delete(proc.Base.valueScanBatch, k)
 	}
-	return bats
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
-	if i < 0 || i >= proc.prepareParams.Length() {
-		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
+	if i < 0 || i >= proc.Base.prepareParams.Length() {
+		return nil, moerr.NewInternalErrorf(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
-	if proc.prepareParams.IsNull(uint64(i)) {
+	if proc.Base.prepareParams.IsNull(uint64(i)) {
 		return nil, nil
 	} else {
-		val := proc.prepareParams.GetRawBytesAt(i)
+		val := proc.Base.prepareParams.GetRawBytesAt(i)
 		return val, nil
 	}
 }
 
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
-	proc.resolveVariableFunc = f
+	proc.Base.resolveVariableFunc = f
 }
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-	return proc.resolveVariableFunc
+	return proc.Base.resolveVariableFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
-	if proc.LastInsertID != nil {
-		atomic.StoreUint64(proc.LastInsertID, num)
+	if proc.Base.LastInsertID != nil {
+		atomic.StoreUint64(proc.Base.LastInsertID, num)
 	}
 }
 
 func (proc *Process) GetSessionInfo() *SessionInfo {
-	return &proc.SessionInfo
+	return &proc.Base.SessionInfo
 }
 
 func (proc *Process) GetLastInsertID() uint64 {
-	if proc.LastInsertID != nil {
-		num := atomic.LoadUint64(proc.LastInsertID)
+	if proc.Base.LastInsertID != nil {
+		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
 	}
 	return 0
 }
 
 func (proc *Process) SetCacheForAutoCol(name string) {
-	aicm := proc.Aicm
+	aicm := proc.Base.Aicm
 	aicm.Mu.Lock()
 	defer aicm.Mu.Unlock()
 	aicm.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: 0, MaxNum: aicm.MaxSize, Step: 1}
 }
 
-type analyze struct {
-	parallelMajor        bool
-	parallelIdx          int
-	start                time.Time
-	wait                 time.Duration
-	analInfo             *AnalyzeInfo
-	childrenCallDuration time.Duration
+func (proc *Process) SetCloneTxnOperator(op client.TxnOperator) {
+	proc.Base.CloneTxnOperator = op
+}
+
+func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
+	return proc.Base.CloneTxnOperator
+}
+
+func (proc *Process) GetTxnOperator() client.TxnOperator {
+	return proc.Base.TxnOperator
+}
+
+func (proc *Process) GetBaseProcessRunningStatus() bool {
+	return proc.Base.atRuntime
+}
+
+func (proc *Process) SetBaseProcessRunningStatus(status bool) {
+	proc.Base.atRuntime = status
 }
 
 func (si *SessionInfo) GetUser() string {
@@ -526,46 +492,4 @@ func (si *SessionInfo) GetDatabase() string {
 
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
-}
-
-func (a *AnalyzeInfo) AddNewParallel(major bool) int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if major {
-		a.TimeConsumedArrayMajor = append(a.TimeConsumedArrayMajor, 0)
-		return len(a.TimeConsumedArrayMajor) - 1
-	} else {
-		a.TimeConsumedArrayMinor = append(a.TimeConsumedArrayMinor, 0)
-		return len(a.TimeConsumedArrayMinor) - 1
-	}
-}
-
-func (a *AnalyzeInfo) DeepCopyArray(pa *plan.AnalyzeInfo) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	pa.TimeConsumedArrayMajor = pa.TimeConsumedArrayMajor[:0]
-	pa.TimeConsumedArrayMajor = append(pa.TimeConsumedArrayMajor, a.TimeConsumedArrayMajor...)
-	pa.TimeConsumedArrayMinor = pa.TimeConsumedArrayMinor[:0]
-	pa.TimeConsumedArrayMinor = append(pa.TimeConsumedArrayMinor, a.TimeConsumedArrayMinor...)
-}
-
-func (a *AnalyzeInfo) MergeArray(pa *plan.AnalyzeInfo) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.TimeConsumedArrayMajor = append(a.TimeConsumedArrayMajor, pa.TimeConsumedArrayMajor...)
-	a.TimeConsumedArrayMinor = append(a.TimeConsumedArrayMinor, pa.TimeConsumedArrayMinor...)
-}
-
-func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(major bool, parallelIdx int, t int64) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if major {
-		if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArrayMajor) {
-			a.TimeConsumedArrayMajor[parallelIdx] += t
-		}
-	} else {
-		if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArrayMinor) {
-			a.TimeConsumedArrayMinor[parallelIdx] += t
-		}
-	}
 }

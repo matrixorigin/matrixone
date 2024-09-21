@@ -15,139 +15,88 @@
 package shufflebuild
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(ShuffleBuild)
 
 const (
-	BuildHashMap = iota
-	HandleRuntimeFilter
-	SendHashMap
-	SendBatch
-	End
+	ReceiveBatch = iota
+	BuildHashMap
+	SendJoinMap
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
-	state      int
-	shuffleIdx int32
-
-	hasNull            bool
-	isMerge            bool
-	multiSels          [][]int32
-	batches            []*batch.Batch
-	batchIdx           int
-	tmpBatch           *batch.Batch
-	inputBatchRowCount int
-
-	executor []colexec.ExpressionExecutor
-	vecs     [][]*vector.Vector
-
-	intHashMap *hashmap.IntHashMap
-	strHashMap *hashmap.StrHashMap
-	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
-
-	uniqueJoinKeys  []*vector.Vector
-	runtimeFilterIn bool
+	state          int
+	hashmapBuilder hashmap_util.HashmapBuilder
 }
 
-type Argument struct {
-	ctr *container
-	// need to generate a push-down filter expression
-	NeedExpr   bool
-	IsDup      bool
-	Typs       []types.Type
-	Conditions []*plan.Expr
-
+type ShuffleBuild struct {
+	ctr               container
 	HashOnPK          bool
-	NeedMergedBatch   bool
+	NeedBatches       bool
 	NeedAllocateSels  bool
+	Conditions        []*plan.Expr
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
+	JoinMapTag        int32
+	ShuffleIdx        int32
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (shuffleBuild *ShuffleBuild) GetOperatorBase() *vm.OperatorBase {
+	return &shuffleBuild.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[ShuffleBuild](
+		func() *ShuffleBuild {
+			return &ShuffleBuild{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *ShuffleBuild) {
+			*a = ShuffleBuild{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[ShuffleBuild]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (shuffleBuild ShuffleBuild) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *ShuffleBuild {
+	return reuse.Alloc[ShuffleBuild](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (shuffleBuild *ShuffleBuild) Release() {
+	if shuffleBuild != nil {
+		reuse.Free[ShuffleBuild](shuffleBuild, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
-	if ctr != nil {
-		ctr.cleanBatches(proc)
-		ctr.cleanEvalVectors()
-		ctr.cleanHashMap()
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		if ctr.isMerge {
-			ctr.FreeMergeTypeOperator(pipelineFailed)
-		} else {
-			ctr.FreeAllReg()
-		}
-		arg.ctr = nil
+func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	shuffleBuild.ctr.state = ReceiveBatch
+	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
+
+	if pipelineFailed || err != nil {
+		shuffleBuild.ctr.hashmapBuilder.FreeWithError(proc)
+	} else {
+		shuffleBuild.ctr.hashmapBuilder.Reset(proc)
 	}
 }
 
-func (ctr *container) cleanBatches(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
-	ctr.batches = nil
-}
+func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 
-func (ctr *container) cleanEvalVectors() {
-	for i := range ctr.executor {
-		if ctr.executor[i] != nil {
-			ctr.executor[i].Free()
-		}
-	}
-	ctr.executor = nil
-}
-
-func (ctr *container) cleanHashMap() {
-	if ctr.intHashMap != nil {
-		ctr.intHashMap.Free()
-		ctr.intHashMap = nil
-	}
-	if ctr.strHashMap != nil {
-		ctr.strHashMap.Free()
-		ctr.strHashMap = nil
+	if pipelineFailed || err != nil {
+		shuffleBuild.ctr.hashmapBuilder.FreeWithError(proc)
+	} else {
+		shuffleBuild.ctr.hashmapBuilder.Free(proc)
 	}
 }

@@ -14,6 +14,8 @@
 package api
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -29,8 +31,31 @@ var (
 		OpCode_OpGlobalCheckpoint: "GlobalCheckpoint",
 		OpCode_OpInterceptCommit:  "InterceptCommit",
 		OpCode_OpCommitMerge:      "CommitMerge",
+		OpCode_OpDiskDiskCleaner:  "DiskCleaner",
 	}
 )
+
+func MustMarshalTblExtra(info *SchemaExtra) []byte {
+	if info == nil {
+		return []byte{}
+	}
+	data, err := info.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+func MustUnmarshalTblExtra(data []byte) *SchemaExtra {
+	info := &SchemaExtra{}
+	if len(data) == 0 {
+		return info
+	}
+	if err := info.Unmarshal(data); err != nil {
+		panic(err)
+	}
+	return info
+}
 
 func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 	return &AlterTableReq{
@@ -73,8 +98,9 @@ func NewAddColumnReq(did, tid uint64, name string, typ *plan.Type, insertAt int3
 		Operation: &AlterTableReq_AddColumn{
 			&AlterTableAddColumn{
 				Column: &plan.ColDef{
-					Name: name,
-					Typ:  *typ,
+					Name:       strings.ToLower(name),
+					OriginName: name,
+					Typ:        *typ,
 					Default: &plan.Default{
 						NullAbility:  true,
 						Expr:         nil,
@@ -144,6 +170,14 @@ func (m *SyncLogTailResp) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+func (m *TNStringResponse) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *TNStringResponse) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 func (m *PrecommitWriteCmd) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }
@@ -158,4 +192,14 @@ func (m *MergeCommitEntry) MarshalBinary() ([]byte, error) {
 
 func (m *MergeCommitEntry) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
+}
+
+// To reduce memory consumption
+
+type TransferMaps []TransferMap
+type TransferMap map[uint32]TransferDestPos
+type TransferDestPos struct {
+	ObjIdx uint8
+	BlkIdx uint16
+	RowIdx uint32
 }

@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	hll "github.com/axiomhq/hyperloglog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -30,6 +31,47 @@ type approxCountFixedExec[T types.FixedSizeTExceptStrType] struct {
 	groups []*hll.Sketch
 }
 
+func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := &EncodedAgg{
+		Info:   d,
+		Result: r,
+		Groups: nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i], err = exec.groups[i].MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *approxCountFixedExec[T]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	err := exec.ret.unmarshal(result)
+	if err != nil {
+		return err
+	}
+	if len(groups) > 0 {
+		exec.groups = make([]*hll.Sketch, len(groups))
+		for i := range exec.groups {
+			exec.groups[i] = hll.New()
+			if err = exec.groups[i].UnmarshalBinary(groups[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 type approxCountVarExec struct {
 	singleAggInfo
 	singleAggExecExtraInformation
@@ -37,6 +79,47 @@ type approxCountVarExec struct {
 	ret aggFuncResult[uint64]
 
 	groups []*hll.Sketch
+}
+
+func (exec *approxCountVarExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := &EncodedAgg{
+		Info:   d,
+		Result: r,
+		Groups: nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i], err = exec.groups[i].MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *approxCountVarExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	err := exec.ret.unmarshal(result)
+	if err != nil {
+		return err
+	}
+	if len(groups) > 0 {
+		exec.groups = make([]*hll.Sketch, len(groups))
+		for i := range exec.groups {
+			exec.groups[i] = hll.New()
+			if err = exec.groups[i].UnmarshalBinary(groups[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func newApproxCountFixedExec[T types.FixedSizeTExceptStrType](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
@@ -126,7 +209,7 @@ func (exec *approxCountFixedExec[T]) Fill(groupIndex int, row int, vectors []*ve
 	if vectors[0].IsConst() {
 		row = 0
 	}
-	v := vector.MustFixedCol[T](vectors[0])[row]
+	v := vector.MustFixedColWithTypeCheck[T](vectors[0])[row]
 	exec.groups[groupIndex].Insert(types.EncodeFixed[T](v))
 	return nil
 }
@@ -136,7 +219,7 @@ func (exec *approxCountFixedExec[T]) BulkFill(groupIndex int, vectors []*vector.
 		return nil
 	}
 	if vectors[0].IsConst() {
-		v := vector.MustFixedCol[T](vectors[0])[0]
+		v := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
 		exec.groups[groupIndex].Insert(types.EncodeFixed[T](v))
 		return nil
 	}
@@ -162,7 +245,7 @@ func (exec *approxCountFixedExec[T]) BatchFill(offset int, groups []uint64, vect
 		return nil
 	}
 	if vectors[0].IsConst() {
-		v := vector.MustFixedCol[T](vectors[0])[0]
+		v := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
 		for _, group := range groups {
 			if group != GroupNotMatched {
 				exec.groups[group-1].Insert(types.EncodeFixed[T](v))
@@ -267,8 +350,7 @@ func (exec *approxCountVarExec) Fill(groupIndex int, row int, vectors []*vector.
 	if vectors[0].IsConst() {
 		row = 0
 	}
-	v := vector.MustBytesCol(vectors[0])[row]
-	exec.groups[groupIndex].Insert(v)
+	exec.groups[groupIndex].Insert(vectors[0].GetBytesAt(row))
 	return nil
 }
 
@@ -277,8 +359,7 @@ func (exec *approxCountVarExec) BulkFill(groupIndex int, vectors []*vector.Vecto
 		return nil
 	}
 	if vectors[0].IsConst() {
-		v := vector.MustBytesCol(vectors[0])[0]
-		exec.groups[groupIndex].Insert(v)
+		exec.groups[groupIndex].Insert(vectors[0].GetBytesAt(0))
 		return nil
 	}
 	exec.arg.prepare(vectors[0])
@@ -303,7 +384,7 @@ func (exec *approxCountVarExec) BatchFill(offset int, groups []uint64, vectors [
 		return nil
 	}
 	if vectors[0].IsConst() {
-		v := vector.MustBytesCol(vectors[0])[0]
+		v := vectors[0].GetBytesAt(0)
 		for _, group := range groups {
 			if group != GroupNotMatched {
 				exec.groups[group-1].Insert(v)

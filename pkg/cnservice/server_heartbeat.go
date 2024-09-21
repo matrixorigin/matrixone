@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"go.uber.org/zap"
 )
 
@@ -72,21 +73,23 @@ func (s *service) heartbeat(ctx context.Context) {
 	defer cancel()
 
 	hb := logservicepb.CNStoreHeartbeat{
-		UUID:               s.cfg.UUID,
-		ServiceAddress:     s.pipelineServiceServiceAddr(),
-		SQLAddress:         s.cfg.SQLAddress,
-		LockServiceAddress: s.lockServiceServiceAddr(),
-		Role:               s.metadata.Role,
-		TaskServiceCreated: s.GetTaskRunner() != nil,
-		QueryAddress:       s.queryServiceServiceAddr(),
-		InitWorkState:      s.cfg.InitWorkState,
-		ConfigData:         s.config.GetData(),
+		UUID:                s.cfg.UUID,
+		ServiceAddress:      s.pipelineServiceServiceAddr(),
+		SQLAddress:          s.cfg.SQLAddress,
+		LockServiceAddress:  s.lockServiceServiceAddr(),
+		ShardServiceAddress: s.shardServiceServiceAddr(),
+		Role:                s.metadata.Role,
+		TaskServiceCreated:  s.GetTaskRunner() != nil,
+		QueryAddress:        s.queryServiceServiceAddr(),
+		InitWorkState:       s.cfg.InitWorkState,
+		ConfigData:          s.config.GetData(),
 		Resource: logservicepb.Resource{
 			CPUTotal:     uint64(system.NumCPU()),
 			CPUAvailable: system.CPUAvailable(),
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
+		CommitID: version.CommitID,
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
@@ -119,6 +122,7 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 		if cmd.CreateTaskService != nil {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
+			s.createProxyUser(cmd.CreateTaskService)
 		} else if s.gossipNode.Created() && cmd.JoinGossipCluster != nil {
 			s.gossipNode.SetJoined()
 

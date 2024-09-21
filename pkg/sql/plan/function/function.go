@@ -111,7 +111,7 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 
 func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
 		return overload{}, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], nil
@@ -119,7 +119,7 @@ func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err err
 
 func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, error) {
 	fid, _ := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
 		return 0, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].layout, nil
@@ -127,7 +127,7 @@ func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, er
 
 func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
 		return overload{}, false
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], true
@@ -140,7 +140,7 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	}
 	f := allSupportedFunctions[r.fid]
 	if len(f.Overloads) == 0 || f.checkFn == nil {
-		return r, moerr.NewNYI(ctx, "should implement the function %s", name)
+		return r, moerr.NewNYIf(ctx, "should implement the function %s", name)
 	}
 
 	check := f.checkFn(f.Overloads, args)
@@ -188,7 +188,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		inputTypes[i] = *inputs[i].GetType()
 	}
 
-	result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, f.retType(inputTypes), mp)
+	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
 
 	fold := true
 	evaluateLength := length
@@ -208,7 +208,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		return nil, err
 	}
 	exec, execFree := f.GetExecuteMethod()
-	if err = exec(inputs, result, proc, evaluateLength); err != nil {
+	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
 		result.Free()
 		if execFree != nil {
 			// NOTE: execFree is only applicable for serial and serial_full.
@@ -309,7 +309,7 @@ func getFunctionIdByName(ctx context.Context, name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
 	}
-	return -1, moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+	return -1, moerr.NewNotSupportedf(ctx, "function or operator '%s'", name)
 }
 
 func getFunctionIdByNameWithoutErr(name string) (int32, bool) {
@@ -341,7 +341,8 @@ type FuncNew struct {
 
 type executeLogicOfOverload func(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
-	proc *process.Process, length int) error
+	proc *process.Process, length int,
+	selectList *FunctionSelectList) error
 
 // executeFreeOfOverload is used to free the resources allocated by the execution logic.
 // It is mainly used in SERIAL and SERIAL_FULL.
@@ -487,4 +488,31 @@ func newCheckResultWithCast(overloadId int, castType []types.Type) checkResult {
 		idx:       overloadId,
 		finalType: castType,
 	}
+}
+
+type FunctionSelectList struct {
+	AnyNull    bool
+	AllNull    bool
+	SelectList []bool
+}
+
+func (selectList *FunctionSelectList) ShouldEvalAllRow() bool {
+	if selectList == nil {
+		return true
+	}
+	return !selectList.AnyNull
+}
+
+func (selectList *FunctionSelectList) IgnoreAllRow() bool {
+	if selectList == nil {
+		return false
+	}
+	return selectList.AllNull
+}
+
+func (selectList *FunctionSelectList) Contains(row uint64) bool {
+	if selectList == nil {
+		return false
+	}
+	return !selectList.SelectList[row]
 }

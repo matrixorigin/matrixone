@@ -23,9 +23,7 @@ import (
 	"io"
 	"math"
 	"math/bits"
-	"os"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,31 +31,35 @@ import (
 	"time"
 
 	"github.com/tidwall/btree"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 )
 
 type TenantInfo struct {
@@ -89,6 +91,22 @@ func (ti *TenantInfo) String() string {
 	return fmt.Sprintf("{account %s%c%s%c%s -- %d%c%d%c%d}",
 		ti.Tenant, delimiter, ti.User, delimiter, ti.DefaultRole,
 		ti.TenantID, delimiter, ti.UserID, delimiter, ti.DefaultRoleID)
+}
+
+func (ti *TenantInfo) Copy() *TenantInfo {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return &TenantInfo{
+		Tenant:              ti.Tenant,
+		User:                ti.User,
+		DefaultRole:         ti.DefaultRole,
+		TenantID:            ti.TenantID,
+		UserID:              ti.UserID,
+		DefaultRoleID:       ti.DefaultRoleID,
+		useAllSecondaryRole: ti.useAllSecondaryRole,
+		delimiter:           ti.delimiter,
+		version:             ti.version,
+	}
 }
 
 func (ti *TenantInfo) GetTenant() string {
@@ -330,7 +348,7 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 	} else {
 		tenant := userInput[:p]
 		if len(tenant) == 0 {
-			return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid tenant name '%s'", tenant)
+			return &TenantInfo{}, moerr.NewInternalErrorf(ctx, "invalid tenant name '%s'", tenant)
 		}
 		userRole := userInput[p+1:]
 		p2 := strings.IndexByte(userRole, delimiter)
@@ -338,7 +356,7 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 			//tenant:user
 			user := userRole
 			if len(user) == 0 {
-				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
+				return &TenantInfo{}, moerr.NewInternalErrorf(ctx, "invalid user name '%s'", user)
 			}
 			return &TenantInfo{
 				Tenant:    tenant,
@@ -348,11 +366,11 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 		} else {
 			user := userRole[:p2]
 			if len(user) == 0 {
-				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
+				return &TenantInfo{}, moerr.NewInternalErrorf(ctx, "invalid user name '%s'", user)
 			}
 			role := userRole[p2+1:]
 			if len(role) == 0 {
-				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid role name '%s'", role)
+				return &TenantInfo{}, moerr.NewInternalErrorf(ctx, "invalid role name '%s'", role)
 			}
 			return &TenantInfo{
 				Tenant:      tenant,
@@ -539,10 +557,9 @@ const (
 
 	moCatalog = "mo_catalog"
 
-	SaveQueryResult     = "save_query_result"
-	QueryResultMaxsize  = "query_result_maxsize"
-	QueryResultTimeout  = "query_result_timeout"
-	LowerCaseTableNames = "lower_case_table_names"
+	SaveQueryResult    = "save_query_result"
+	QueryResultMaxsize = "query_result_maxsize"
+	QueryResultTimeout = "query_result_timeout"
 )
 
 type objectType int
@@ -878,12 +895,6 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 }
 
 var (
-	sysWantedDatabases = map[string]int8{
-		"mo_catalog":         0,
-		"information_schema": 0,
-		"system":             0,
-		"system_metrics":     0,
-	}
 	sysDatabases = map[string]int8{
 		"mo_catalog":         0,
 		"information_schema": 0,
@@ -911,17 +922,14 @@ var (
 		"mo_transactions":             0,
 		"mo_cache":                    0,
 		"mo_snapshots":                0,
-	}
-	configInitVariables = map[string]int8{
-		"save_query_result":      0,
-		"query_result_maxsize":   0,
-		"query_result_timeout":   0,
-		"lower_case_table_names": 0,
+		"mo_cdc_task":                 0,
+		"mo_cdc_watermark":            0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
 		catalog.MOUpgradeTable:       {},
 		catalog.MOUpgradeTenantTable: {},
+		catalog.MO_PITR:              {},
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
@@ -950,6 +958,12 @@ var (
 		"mo_cache":                    0,
 		"mo_foreign_keys":             0,
 		"mo_snapshots":                0,
+		"mo_subs":                     0,
+		"mo_shards":                   0,
+		"mo_shards_metadata":          0,
+		catalog.MO_RETENTION:          0,
+		"mo_cdc_task":                 0,
+		"mo_cdc_watermark":            0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -974,6 +988,8 @@ var (
 		MoCatalogMoMysqlCompatibilityModeDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
+		MoCatalogMoRetentionDDL,
+		MoCatalogMoSubsDDL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
 		MoCatalogMoSessionsDDL,
@@ -982,6 +998,8 @@ var (
 		MoCatalogMoVariablesDDL,
 		MoCatalogMoTransactionsDDL,
 		MoCatalogMoCacheDDL,
+		MoCatalogMoCdcTaskDDL,
+		MoCatalogMoCdcWatermarkDDL,
 	}
 
 	//drop tables for the tenant
@@ -1008,19 +1026,14 @@ var (
 	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
+	dropMoRetention                 = `drop table if exists mo_catalog.mo_retention;`
 
-	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
+	initMoMysqlCompatibilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
 		account_name,
 		dat_name,
 		variable_name,
 		variable_value, system_variables) values (%d, "%s", "%s", "%s", "%s", %v);`
-
-	initMoMysqlCompatbilityModeWithoutDataBaseFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
-		account_id,
-		account_name,
-		variable_name,
-		variable_value, system_variables) values (%d, "%s", "%s", "%s", %v);`
 
 	insertIntoMoStages = `insert into mo_catalog.mo_stages(
 		stage_name,
@@ -1156,21 +1169,21 @@ var (
 
 const (
 	//privilege verification
-	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s" order by account_id;`
+	checkTenantFormat = `select account_id,account_name,status,version,suspended_time,create_version from mo_catalog.mo_account where account_name = "%s" order by account_id;`
 
-	getTenantNameForMat = `select account_name from mo_catalog.mo_account where account_id = %d;`
+	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s" order by account_id;`
 
-	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s" order by account_id;;`
-
-	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s" order by account_id;;`
+	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s" order by account_id;`
 
 	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = default where account_name = "%s";`
 
-	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s" order by account_id;;`
+	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s" order by account_id;`
+
+	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
 
 	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
-	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s" order by user_id;;`
+	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s" order by user_id;`
 
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
@@ -1441,25 +1454,23 @@ const (
 	deleteStoredProcedureFormat = `delete from mo_catalog.mo_stored_procedure where proc_id = %d;`
 
 	// delete a tuple from mo_mysql_compatibility_mode when drop a database
-	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
+	deleteMysqlCompatibilityModeFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
 
 	getSystemVariableValueWithDatabaseFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s" and variable_name = "%s";`
 
-	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
+	getSystemVariablesWithAccountFormat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
-	getSystemVariableValueWithAccountFromat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and variable_name = '%s' and system_variables = true;`
+	getSystemVariableWithAccountFormat = `select variable_name from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true and variable_name = '%s';`
 
-	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s';`
+	insertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, "%s", "%s", "%s", %v);`
+
+	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s' and system_variables = true;`
 
 	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
 
 	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
 
 	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
-
-	checkStageStatusFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_status = "%s" order by stage_id;`
-
-	checkStageStatusWithStageNameFormat = `select url, stage_status from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
 
 	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s' order by stage_id;`
 
@@ -1471,16 +1482,12 @@ const (
 
 	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
 
-	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
-	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
-	getPubInfoFormat            = `select account_list,comment,database_name,database_id from mo_catalog.mo_pubs where pub_name = '%s';`
-	updatePubInfoFormat         = `update mo_catalog.mo_pubs set account_list = '%s',comment = '%s', database_name = '%s', database_id = %d, update_time = now() where pub_name = '%s';`
-	dropPubFormat               = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
-	getPubInfoForSubFormat      = `select database_name,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
 
 	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
+
+	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
 )
 
 var (
@@ -1501,6 +1508,7 @@ var (
 		"system_metrics":     0,
 		"mysql":              0,
 		"mo_task":            0,
+		"mo_debug":           0,
 	}
 
 	// the privileges that can not be granted or revoked
@@ -1512,18 +1520,19 @@ var (
 	}
 )
 
+func init() {
+	tables := make([]string, 0)
+	for tbl := range predefinedTables {
+		tables = append(tables, tbl)
+	}
+	util.InitPredefinedTables(tables)
+}
+
 func getSqlForAccountIdAndStatus(ctx context.Context, accName string, check bool) (string, error) {
 	if check && accountNameIsInvalid(accName) {
 		return "", moerr.NewInternalError(ctx, fmt.Sprintf("account name %s is invalid", accName))
 	}
 	return fmt.Sprintf(getAccountIdAndStatusFormat, accName), nil
-}
-
-func getSqlForPubInfoForSub(ctx context.Context, pubName string, check bool) (string, error) {
-	if check && nameIsInvalid(pubName) {
-		return "", moerr.NewInternalError(ctx, fmt.Sprintf("pub name %s is invalid", pubName))
-	}
-	return fmt.Sprintf(getPubInfoForSubFormat, pubName), nil
 }
 
 func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
@@ -1542,19 +1551,8 @@ func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
 	return fmt.Sprintf(checkStageFormat, stage), nil
 }
 
-func getSqlForCheckStageStatus(ctx context.Context, status string) string {
-	return fmt.Sprintf(checkStageStatusFormat, status)
-}
-
 func getSqlForCheckUdfWithDb(dbName string) string {
 	return fmt.Sprintf(checkUdfWithDb, dbName)
-}
-func getSqlForCheckStageStatusWithStageName(ctx context.Context, stage string) (string, error) {
-	err := inputNameIsInvalid(ctx, stage)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkStageStatusWithStageNameFormat, stage), nil
 }
 
 func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credentials, status, createdTime, comment string) (string, error) {
@@ -1583,10 +1581,6 @@ func getsqlForUpdateStageStatus(stageName, status string) string {
 
 func getsqlForUpdateStageComment(stageName, comment string) string {
 	return fmt.Sprintf(updateStageCommentFormat, comment, stageName)
-}
-
-func getSqlForGetAccountName(tenantId uint32) string {
-	return fmt.Sprintf(getTenantNameForMat, tenantId)
 }
 
 func getSqlForUpdateCommentsOfAccount(ctx context.Context, comment, account string) (string, error) {
@@ -1619,6 +1613,10 @@ func getSqlForDeleteAccountFromMoAccount(ctx context.Context, account string) (s
 		return "", err
 	}
 	return fmt.Sprintf(deleteAccountFromMoAccountFormat, account), nil
+}
+
+func getSqlForDeletePitrFromMoPitr(accountId uint64) string {
+	return fmt.Sprintf(deletePitrFromMoPitrFormat, accountId)
 }
 
 func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
@@ -1829,63 +1827,16 @@ func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
 	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
 }
 
-func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool, account_id uint64) (string, error) {
-	if checkNameValid {
-		err := inputNameIsInvalid(ctx, dbName)
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf(getDbIdAndTypFormat, dbName, account_id), nil
-}
-
-func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable bool, tableList, accountList string, owner, creator uint32, comment string, checkNameValid bool) (string, error) {
-	if checkNameValid {
-		err := inputNameIsInvalid(ctx, pubName, databaseName)
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf(insertIntoMoPubsFormat, pubName, databaseName, databaseId, allTable, tableList, accountList, owner, creator, comment), nil
-}
-
-func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
-	if checkNameValid {
-		err := inputNameIsInvalid(ctx, pubName)
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf(getPubInfoFormat, pubName), nil
-}
-
-func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountList string, comment string, dbName string, dbId uint64, checkNameValid bool) (string, error) {
-	if checkNameValid {
-		err := inputNameIsInvalid(ctx, pubName)
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf(updatePubInfoFormat, accountList, comment, dbName, dbId, pubName), nil
-}
-
-func getSqlForDropPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
-	if checkNameValid {
-		err := inputNameIsInvalid(ctx, pubName)
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf(dropPubFormat, pubName), nil
-}
-
 func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
-
 	err := inputNameIsInvalid(ctx, dbName)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(getDbPubCountFormat, dbName), nil
+}
+
+func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
+	return fmt.Sprintf(getTableColumnDefFormat, accountId, dbName, tableName), nil
 }
 
 func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {
@@ -1933,24 +1884,27 @@ func getSqlForDeleteUser(userId int64) []string {
 }
 
 func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
-	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, dtname)
+	return fmt.Sprintf(deleteMysqlCompatibilityModeFormat, dtname)
 }
 
 func getSqlForGetSystemVariableValueWithDatabase(dtname, variable_name string) string {
 	return fmt.Sprintf(getSystemVariableValueWithDatabaseFormat, dtname, variable_name)
 }
 
-func getSystemVariablesWithAccount(accountId uint64) string {
-	return fmt.Sprintf(getSystemVariablesWithAccountFromat, accountId)
+func getSqlForGetSystemVariablesWithAccount(accountId uint64) string {
+	return fmt.Sprintf(getSystemVariablesWithAccountFormat, accountId)
 }
 
-// getSqlForGetSystemVariableValueWithAccount will get sql for get variable value with specific account
-func getSqlForGetSystemVariableValueWithAccount(accountId uint64, varName string) string {
-	return fmt.Sprintf(getSystemVariableValueWithAccountFromat, accountId, varName)
+func getSqlForGetSysVarWithAccount(accountId uint64, varName string) string {
+	return fmt.Sprintf(getSystemVariableWithAccountFormat, accountId, varName)
 }
 
-// getSqlForUpdateSystemVariableValue returns a SQL query to update the value of a system variable for a given account.
-func getSqlForUpdateSystemVariableValue(varValue string, accountId uint64, varName string) string {
+func getSqlForInsertSysVarWithAccount(accountId uint64, accountName string, varName string, varValue string) string {
+	return fmt.Sprintf(insertSystemVariableWithAccountFormat, accountId, accountName, varName, varValue, true)
+}
+
+// getSqlForUpdateSysVarValue returns a SQL query to update the value of a system variable for a given account.
+func getSqlForUpdateSysVarValue(varValue string, accountId uint64, varName string) string {
 	return fmt.Sprintf(updateSystemVariableValueFormat, varValue, accountId, varName)
 }
 
@@ -2567,6 +2521,7 @@ func nameIsInvalid(name string) bool {
 	}
 	return strings.Contains(s, ":") || strings.Contains(s, "#")
 }
+
 func accountNameIsInvalid(name string) bool {
 	s := strings.TrimSpace(name)
 	if len(s) == 0 {
@@ -2593,7 +2548,7 @@ func accountNameIsInvalid(name string) bool {
 func normalizeName(ctx context.Context, name string) (string, error) {
 	s := strings.TrimSpace(name)
 	if nameIsInvalid(s) {
-		return "", moerr.NewInternalError(ctx, `the name "%s" is invalid`, name)
+		return "", moerr.NewInternalErrorf(ctx, `the name "%s" is invalid`, name)
 	}
 	return s, nil
 }
@@ -2601,10 +2556,10 @@ func normalizeName(ctx context.Context, name string) (string, error) {
 func normalizeNameOfAccount(ctx context.Context, ca *createAccount) error {
 	s := strings.TrimSpace(ca.Name)
 	if len(s) == 0 {
-		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
+		return moerr.NewInternalErrorf(ctx, `the name "%s" is invalid`, ca.Name)
 	}
 	if accountNameIsInvalid(s) {
-		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
+		return moerr.NewInternalErrorf(ctx, `the name "%s" is invalid`, ca.Name)
 	}
 	ca.Name = s
 	return nil
@@ -2665,6 +2620,7 @@ func finishTxn(ctx context.Context, bh BackgroundExec, err error) error {
 		}
 		return err
 	}
+
 	if err == nil {
 		//normal COMMIT the transaction
 		err = bh.Exec(ctx, "commit;")
@@ -2739,11 +2695,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	}
 
 	if !user.AuthExist {
-		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
+		return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
 	}
 
 	if user.IdentTyp != tree.AccountIdentifiedByPassword {
-		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
+		return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
 	}
 
 	//check the user exists or not
@@ -2761,7 +2717,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		// false : return an error
 		// true : return and  do nothing
 		if !au.IfExists {
-			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", userName, hostName)
+			return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", userName, hostName)
 		} else {
 			return err
 		}
@@ -2804,7 +2760,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	} else {
 		if currentUser != userName {
-			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
+			return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 		}
 		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
@@ -2842,7 +2798,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	var accountStatus string
 	account := ses.GetTenantInfo()
 	if !(account.IsSysTenant() && account.IsMoAdminRole()) {
-		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to alter the account",
+		return moerr.NewInternalErrorf(ctx, "tenant %s user %s role %s do not have the privilege to alter the account",
 			account.GetTenant(), account.GetUser(), account.GetDefaultRole())
 	}
 
@@ -2944,7 +2900,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			// false : return an error
 			// true : skip and do nothing
 			if !aa.IfExists {
-				return moerr.NewInternalError(ctx, "there is no account %s", aa.Name)
+				return moerr.NewInternalErrorf(ctx, "there is no account %s", aa.Name)
 			}
 		}
 
@@ -2971,7 +2927,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 				}
 
 				if !execResultArrayHasData(erArray) {
-					rtnErr = moerr.NewInternalError(accountCtx, "there is no user %s", aa.AdminName)
+					rtnErr = moerr.NewInternalErrorf(accountCtx, "there is no user %s", aa.AdminName)
 					return
 				}
 
@@ -3049,9 +3005,13 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	if accountExist {
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
 			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
-
+			logutil.Infof("[set suspend] set account id %d, version %d suspend", targetAccountId, version)
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
 				ses.Errorf(ctx, "post alter account suspend error: %s", err.Error())
+			}
+
+			if err = postProcessCdc(ctx, ses, aa.Name, targetAccountId, tree.AccountStatusSuspend.String()); err != nil {
+				ses.Errorf(ctx, "post pause cdc of alter accound suspend error: %s", err.Error())
 			}
 		}
 
@@ -3059,12 +3019,17 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			accountId2RoutineMap := ses.getRoutineManager().accountRoutine.deepCopyRoutineMap()
 			if rtMap, ok := accountId2RoutineMap[int64(targetAccountId)]; ok {
 				for rt := range rtMap {
+					logutil.Infof("[set restricted] set account id %d, connection id %d restricted", targetAccountId, rt.getConnectionID())
 					rt.setResricted(true)
 				}
 			}
 			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusRestricted.String())
 			if err != nil {
 				ses.Errorf(ctx, "post alter account restricted error: %s", err.Error())
+			}
+
+			if err = postProcessCdc(ctx, ses, aa.Name, targetAccountId, tree.AccountStatusRestricted.String()); err != nil {
+				ses.Errorf(ctx, "post pause cdc of alter accound restricted error: %s", err.Error())
 			}
 		}
 
@@ -3078,6 +3043,16 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusOpen.String())
 			if err != nil {
 				ses.Errorf(ctx, "post alter account not restricted error: %s", err.Error())
+			}
+
+		}
+
+		if aa.StatusOption.Exist &&
+			aa.StatusOption.Option == tree.AccountStatusOpen &&
+			(accountStatus == tree.AccountStatusRestricted.String() ||
+				accountStatus == tree.AccountStatusSuspend.String()) {
+			if err = postProcessCdc(ctx, ses, aa.Name, targetAccountId, tree.AccountStatusOpen.String()); err != nil {
+				ses.Errorf(ctx, "post resume cdc of alter accound not restricted or not suspend error: %s", err.Error())
 			}
 		}
 	}
@@ -3200,7 +3175,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 					return rtnErr
 				}
 			} else {
-				return moerr.NewInternalError(ctx, "there is no role %s", sr.Role.UserName)
+				return moerr.NewInternalErrorf(ctx, "there is no role %s", sr.Role.UserName)
 			}
 
 			//step2 : check the role has been granted to the user or not
@@ -3217,7 +3192,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 			}
 
 			if !execResultArrayHasData(erArray) {
-				return moerr.NewInternalError(ctx, "the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
+				return moerr.NewInternalErrorf(ctx, "the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
 			}
 			return rtnErr
 		}
@@ -3237,218 +3212,6 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 	}
 
 	return err
-}
-
-func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn TxnOperator) (*plan.SubscriptionMeta, error) {
-	dbMeta, err := getGlobalPu().StorageEngine.Database(ctx, dbName, txn)
-	if err != nil {
-		ses.Errorf(ctx, "Get Subscription database %s meta error: %s", dbName, err.Error())
-		return nil, moerr.NewNoDB(ctx)
-	}
-
-	if dbMeta.IsSubscription(ctx) {
-		if sub, err := checkSubscriptionValid(ctx, ses, dbMeta.GetCreateSql(ctx)); err != nil {
-			return nil, err
-		} else {
-			return sub, nil
-		}
-	}
-	return nil, nil
-}
-
-func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-	var (
-		sql, accStatus, accountList, databaseName string
-		erArray                                   []ExecResult
-		tenantInfo                                *TenantInfo
-		accId                                     int64
-		newCtx                                    context.Context
-		tenantName                                string
-	)
-
-	tenantInfo = ses.GetTenantInfo()
-	if tenantInfo != nil && accName == tenantInfo.GetTenant() {
-		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
-	}
-
-	newCtx = defines.AttachAccountId(ctx, catalog.System_Account)
-
-	//get pubAccountId from publication info
-	sql, err = getSqlForAccountIdAndStatus(newCtx, accName, true)
-	if err != nil {
-		return nil, err
-	}
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return nil, err
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(newCtx, sql)
-	if err != nil {
-		return nil, err
-	}
-
-	erArray, err = getResultSet(newCtx, bh)
-	if err != nil {
-		return nil, err
-	}
-
-	if !execResultArrayHasData(erArray) {
-		return nil, moerr.NewInternalError(newCtx, "there is no publication account %s", accName)
-	}
-	accId, err = erArray[0].GetInt64(newCtx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	accStatus, err = erArray[0].GetString(newCtx, 0, 1)
-	if err != nil {
-		return nil, err
-	}
-
-	if accStatus == tree.AccountStatusSuspend.String() {
-		return nil, moerr.NewInternalError(newCtx, "the account %s is suspended", accName)
-	}
-
-	//check the publication is already exist or not
-
-	newCtx = defines.AttachAccountId(ctx, uint32(accId))
-	sql, err = getSqlForPubInfoForSub(newCtx, pubName, true)
-	if err != nil {
-		return nil, err
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(newCtx, sql)
-	if err != nil {
-		return nil, err
-	}
-	if erArray, err = getResultSet(newCtx, bh); err != nil {
-		return nil, err
-	}
-	if !execResultArrayHasData(erArray) {
-		return nil, moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
-	}
-
-	databaseName, err = erArray[0].GetString(newCtx, 0, 0)
-
-	if err != nil {
-		return nil, err
-	}
-
-	accountList, err = erArray[0].GetString(newCtx, 0, 1)
-	if err != nil {
-		return nil, err
-	}
-
-	if tenantInfo == nil {
-		var tenantId uint32
-		tenantId, err = defines.GetAccountId(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		sql = getSqlForGetAccountName(tenantId)
-		bh.ClearExecResultSet()
-		newCtx = defines.AttachAccountId(ctx, catalog.System_Account)
-		err = bh.Exec(newCtx, sql)
-		if err != nil {
-			return nil, err
-		}
-		if erArray, err = getResultSet(newCtx, bh); err != nil {
-			return nil, err
-		}
-		if !execResultArrayHasData(erArray) {
-			return nil, moerr.NewInternalError(newCtx, "there is no account, account id %d ", tenantId)
-		}
-
-		tenantName, err = erArray[0].GetString(newCtx, 0, 0)
-		if err != nil {
-			return nil, err
-		}
-		if !canSub(tenantName, accountList) {
-			return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
-		}
-	} else if !canSub(tenantInfo.GetTenant(), accountList) {
-		ses.Error(ctx,
-			"checkSubscriptionValidCommon",
-			zap.String("subName", subName),
-			zap.String("accName", accName),
-			zap.String("pubName", pubName),
-			zap.String("databaseName", databaseName),
-			zap.String("accountList", accountList),
-			zap.String("tenant", tenantInfo.GetTenant()))
-		return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
-	}
-
-	subs = &plan.SubscriptionMeta{
-		Name:        pubName,
-		AccountId:   int32(accId),
-		DbName:      databaseName,
-		AccountName: accName,
-		SubName:     subName,
-	}
-
-	return subs, err
-}
-
-func checkSubscriptionValid(ctx context.Context, ses FeSession, createSql string) (*plan.SubscriptionMeta, error) {
-	var (
-		err                       error
-		accName, pubName, subName string
-	)
-	if subName, accName, pubName, err = getSubInfoFromSql(ctx, ses, createSql); err != nil {
-		return nil, err
-	}
-	return checkSubscriptionValidCommon(ctx, ses, subName, accName, pubName)
-}
-
-func isDbPublishing(ctx context.Context, dbName string, ses FeSession) (ok bool, err error) {
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-	var (
-		sql     string
-		erArray []ExecResult
-		count   int64
-	)
-
-	if _, isSysDb := sysDatabases[dbName]; isSysDb {
-		return false, err
-	}
-
-	sql, err = getSqlForDbPubCount(ctx, dbName)
-	if err != nil {
-		return false, err
-	}
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return false, err
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return false, err
-	}
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-	if !execResultArrayHasData(erArray) {
-		return false, moerr.NewInternalError(ctx, "there is no publication for database %s", dbName)
-	}
-	count, err = erArray[0].GetInt64(ctx, 0, 0)
-	if err != nil {
-		return false, err
-	}
-
-	return count > 0, err
 }
 
 func checkStageExistOrNot(ctx context.Context, bh BackgroundExec, stageName string) (bool, error) {
@@ -3521,14 +3284,14 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 
 	if stageExist {
 		if !cs.IfNotExists {
-			return moerr.NewInternalError(ctx, "the stage %s exists", cs.Name)
+			return moerr.NewInternalErrorf(ctx, "the stage %s exists", cs.Name)
 		} else {
 			// do nothing
 			return err
 		}
 	} else {
 		// format credentials and hash it
-		credentials = HashPassWord(formatCredentials(cs.Credentials))
+		credentials = formatCredentials(cs.Credentials)
 
 		if !cs.Status.Exist {
 			StageStatus = "disabled"
@@ -3538,6 +3301,11 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 
 		if cs.Comment.Exist {
 			comment = cs.Comment.Comment
+		}
+
+		if !(strings.HasPrefix(cs.Url, function.STAGE_PROTOCOL+"://") || strings.HasPrefix(cs.Url, function.S3_PROTOCOL+"://") ||
+			strings.HasPrefix(cs.Url, function.FILE_PROTOCOL+":///")) {
+			return moerr.NewBadConfig(ctx, "URL protocol only supports stage://, s3:// and file:///")
 		}
 
 		sql, err = getSqlForInsertIntoMoStages(ctx, string(cs.Name), cs.Url, credentials, StageStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
@@ -3557,87 +3325,23 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (err error) {
 	//var err error
 	var filePath string
-	var sql string
-	var erArray []ExecResult
-	var stageName string
-	var stageStatus string
-	var url string
 	if ep == nil {
-		return err
-	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
 		return err
 	}
 
 	// detect filepath contain stage or not
 	filePath = ep.FilePath
-	if !strings.Contains(filePath, ":") {
-		// the filepath is the target path
-		sql = getSqlForCheckStageStatus(ctx, "enabled")
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
+	if strings.HasPrefix(filePath, function.STAGE_PROTOCOL+"://") {
+		// stage:// URL
+		s, err := function.UrlToStageDef(filePath, ses.proc)
 		if err != nil {
 			return err
 		}
 
-		erArray, err = getResultSet(ctx, bh)
+		// s.ToPath() returns the fileservice filepath, i.e. s3,...:/path for S3 or /path for local file
+		ses.ep.userConfig.StageFilePath, _, err = s.ToPath()
 		if err != nil {
 			return err
-		}
-
-		// if have stage enabled
-		if execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
-		} else {
-			// use the filepath
-			return err
-		}
-	} else {
-		stageName = strings.Split(filePath, ":")[0]
-		// check the stage status
-		sql, err = getSqlForCheckStageStatusWithStageName(ctx, stageName)
-		if err != nil {
-			return err
-		}
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
-
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			return err
-		}
-		if execResultArrayHasData(erArray) {
-			stageStatus, err = erArray[0].GetString(ctx, 0, 1)
-			if err != nil {
-				return err
-			}
-
-			// is the stage staus is disabled
-			if stageStatus == tree.StageStatusDisabled.String() {
-				return moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
-			} else if stageStatus == tree.StageStatusEnabled.String() {
-				// replace the filepath using stage url
-				url, err = erArray[0].GetString(ctx, 0, 0)
-				if err != nil {
-					return err
-				}
-
-				filePath = strings.Replace(filePath, stageName+":", url, 1)
-				ses.ep.userConfig.StageFilePath = filePath
-			}
-		} else {
-			return moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
 		}
 	}
 	return err
@@ -3695,13 +3399,18 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 
 	if !stageExist {
 		if !as.IfNotExists {
-			return moerr.NewInternalError(ctx, "the stage %s not exists", as.Name)
+			return moerr.NewInternalErrorf(ctx, "the stage %s not exists", as.Name)
 		} else {
 			// do nothing
 			return err
 		}
 	} else {
 		if as.UrlOption.Exist {
+			if !(strings.HasPrefix(as.UrlOption.Url, function.STAGE_PROTOCOL+"://") ||
+				strings.HasPrefix(as.UrlOption.Url, function.S3_PROTOCOL+"://") ||
+				strings.HasPrefix(as.UrlOption.Url, function.FILE_PROTOCOL+":///")) {
+				return moerr.NewBadConfig(ctx, "URL protocol only supports stage://, s3:// and file:///")
+			}
 			sql = getsqlForUpdateStageUrl(string(as.Name), as.UrlOption.Url)
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -3710,7 +3419,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 		}
 
 		if as.CredentialsOption.Exist {
-			credentials = HashPassWord(formatCredentials(as.CredentialsOption))
+			credentials = formatCredentials(as.CredentialsOption)
 			sql = getsqlForUpdateStageCredentials(string(as.Name), credentials)
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -3766,7 +3475,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 
 	if !stageExist {
 		if !ds.IfNotExists {
-			return moerr.NewInternalError(ctx, "the stage %s not exists", ds.Name)
+			return moerr.NewInternalErrorf(ctx, "the stage %s not exists", ds.Name)
 		} else {
 			// do nothing
 			return err
@@ -3778,267 +3487,6 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 			return err
 		}
 	}
-	return err
-}
-
-func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-	const allTable = true
-	var (
-		sql         string
-		dbId        uint64
-		dbType      string
-		tableList   string
-		accountList string
-		tenantInfo  *TenantInfo
-	)
-
-	tenantInfo = ses.GetTenantInfo()
-
-	if !tenantInfo.IsAdminRole() {
-		return moerr.NewInternalError(ctx, "only admin can create publication")
-	}
-
-	if cp.AccountsSet == nil || cp.AccountsSet.All {
-		accountList = "all"
-	} else {
-		accts := make([]string, 0, len(cp.AccountsSet.SetAccounts))
-		for _, acct := range cp.AccountsSet.SetAccounts {
-			accName := string(acct)
-			if accountNameIsInvalid(accName) {
-				return moerr.NewInternalError(ctx, "invalid account name '%s'", accName)
-			}
-			accts = append(accts, accName)
-		}
-		sort.Strings(accts)
-		accountList = strings.Join(accts, ",")
-	}
-
-	pubDb := string(cp.Database)
-
-	if _, ok := sysDatabases[pubDb]; ok {
-		return moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", pubDb)
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-	bh.ClearExecResultSet()
-
-	if dbId, dbType, err = getDbIdAndType(ctx, bh, tenantInfo, pubDb); err != nil {
-		return err
-	}
-	if dbType != "" { //TODO: check the dat_type
-		return moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
-	}
-
-	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, dbId, allTable, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
-	if err != nil {
-		return err
-	}
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	return err
-}
-
-func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublication) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-	var (
-		allAccount     bool
-		accountList    string
-		accountListSep []string
-		comment        string
-		dbName         string
-		dbId           uint64
-		dbType         string
-		sql            string
-		erArray        []ExecResult
-		tenantInfo     *TenantInfo
-	)
-
-	tenantInfo = ses.GetTenantInfo()
-
-	if !tenantInfo.IsAdminRole() {
-		return moerr.NewInternalError(ctx, "only admin can alter publication")
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-	bh.ClearExecResultSet()
-
-	sql, err = getSqlForGetPubInfo(ctx, string(ap.Name), true)
-	if err != nil {
-		return err
-	}
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-	if !execResultArrayHasData(erArray) {
-		return moerr.NewInternalError(ctx, "publication '%s' does not exist", ap.Name)
-	}
-	bh.ClearExecResultSet()
-
-	// alter account
-	if accountList, err = erArray[0].GetString(ctx, 0, 0); err != nil {
-		return err
-	}
-	allAccount = accountList == "all"
-
-	if ap.AccountsSet != nil {
-		switch {
-		case ap.AccountsSet.All:
-			accountList = "all"
-		case len(ap.AccountsSet.SetAccounts) > 0:
-			/* do not check accountName if exists here */
-			accts := make([]string, 0, len(ap.AccountsSet.SetAccounts))
-			for _, acct := range ap.AccountsSet.SetAccounts {
-				s := string(acct)
-				if accountNameIsInvalid(s) {
-					return moerr.NewInternalError(ctx, "invalid account name '%s'", s)
-				}
-				accts = append(accts, s)
-			}
-			sort.Strings(accts)
-			accountList = strings.Join(accts, ",")
-		case len(ap.AccountsSet.DropAccounts) > 0:
-			if allAccount {
-				return moerr.NewInternalError(ctx, "cannot drop accounts from all account option")
-			}
-			accountListSep = strings.Split(accountList, ",")
-			for _, acct := range ap.AccountsSet.DropAccounts {
-				if accountNameIsInvalid(string(acct)) {
-					return moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
-				}
-				idx := sort.SearchStrings(accountListSep, string(acct))
-				if idx < len(accountListSep) && accountListSep[idx] == string(acct) {
-					accountListSep = append(accountListSep[:idx], accountListSep[idx+1:]...)
-				}
-			}
-			accountList = strings.Join(accountListSep, ",")
-		case len(ap.AccountsSet.AddAccounts) > 0:
-			if allAccount {
-				return moerr.NewInternalError(ctx, "cannot add account from all account option")
-			}
-			accountListSep = strings.Split(accountList, ",")
-			for _, acct := range ap.AccountsSet.AddAccounts {
-				if accountNameIsInvalid(string(acct)) {
-					return moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
-				}
-				idx := sort.SearchStrings(accountListSep, string(acct))
-				if idx == len(accountListSep) || accountListSep[idx] != string(acct) {
-					accountListSep = append(accountListSep[:idx], append([]string{string(acct)}, accountListSep[idx:]...)...)
-				}
-			}
-			accountList = strings.Join(accountListSep, ",")
-		}
-	}
-
-	// alter comment
-	if comment, err = erArray[0].GetString(ctx, 0, 1); err != nil {
-		return err
-	}
-
-	if ap.Comment != "" {
-		comment = ap.Comment
-	}
-
-	// alter db
-	if dbName, err = erArray[0].GetString(ctx, 0, 2); err != nil {
-		return err
-	}
-	if dbId, err = erArray[0].GetUint64(ctx, 0, 3); err != nil {
-		return err
-	}
-
-	if ap.DbName != "" {
-		dbName = ap.DbName
-		if _, ok := sysDatabases[dbName]; ok {
-			return moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", dbName)
-		}
-
-		if dbId, dbType, err = getDbIdAndType(ctx, bh, tenantInfo, dbName); err != nil {
-			return err
-		}
-		if dbType != "" { //TODO: check the dat_type
-			return moerr.NewInternalError(ctx, "database '%s' is not a user database", dbName)
-		}
-	}
-
-	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), accountList, comment, dbName, dbId, false)
-	if err != nil {
-		return err
-	}
-	return bh.Exec(ctx, sql)
-}
-
-func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublication) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-	bh.ClearExecResultSet()
-	var (
-		sql        string
-		erArray    []ExecResult
-		tenantInfo *TenantInfo
-	)
-
-	tenantInfo = ses.GetTenantInfo()
-
-	if !tenantInfo.IsAdminRole() {
-		return moerr.NewInternalError(ctx, "only admin can drop publication")
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-	sql, err = getSqlForGetPubInfo(ctx, string(dp.Name), true)
-	if err != nil {
-		return err
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-	if !execResultArrayHasData(erArray) {
-		return moerr.NewInternalError(ctx, "publication '%s' does not exist", dp.Name)
-	}
-
-	sql, err = getSqlForDropPubInfo(ctx, string(dp.Name), false)
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-
 	return err
 }
 
@@ -4054,8 +3502,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 
 	//set backgroundHandler's default schema
 	if handler, ok := bh.(*backExec); ok {
-		handler.backSes.
-			txnCompileCtx.dbName = catalog.MO_CATALOG
+		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
 	}
 
 	var sql, db, table string
@@ -4076,7 +3523,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 	}
 
 	if isSysTenant(da.Name) {
-		return moerr.NewInternalError(ctx, "can not delete the account %s", da.Name)
+		return moerr.NewInternalErrorf(ctx, "can not delete the account %s", da.Name)
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
@@ -4088,43 +3535,22 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 
+		_, nameInfoMap, rtnErr := getAccounts(ctx, bh)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		//check the account exists or not
-		sql, rtnErr = getSqlForCheckTenant(ctx, da.Name)
-		if rtnErr != nil {
-			return rtnErr
-		}
-		bh.ClearExecResultSet()
-		rtnErr = bh.Exec(ctx, sql)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
-		erArray, rtnErr = getResultSet(ctx, bh)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
-		if execResultArrayHasData(erArray) {
-			accountId, rtnErr = erArray[0].GetInt64(ctx, 0, 0)
-			if rtnErr != nil {
-				return rtnErr
-			}
-			version, rtnErr = erArray[0].GetUint64(ctx, 0, 3)
-			if rtnErr != nil {
-				return rtnErr
-			}
-		} else {
+		if _, ok := nameInfoMap[da.Name]; !ok {
 			//no such account
 			if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
-				rtnErr = moerr.NewInternalError(ctx, "there is no account %s", da.Name)
-				return
+				rtnErr = moerr.NewInternalErrorf(ctx, "there is no account %s", da.Name)
 			}
 			hasAccount = false
+			return
 		}
-
-		if !hasAccount {
-			return rtnErr
-		}
+		accountId = int64(nameInfoMap[da.Name].Id)
+		version = nameInfoMap[da.Name].Version
 
 		//drop tables of the tenant
 		//NOTE!!!: single DDL drop statement per single transaction
@@ -4143,6 +3569,17 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
 				return rtnErr
+			}
+		}
+
+		// unpublish all publications
+		pubInfos, rtnErr := getPubInfos(deleteCtx, bh, "")
+		if rtnErr != nil {
+			return
+		}
+		for _, pubInfo := range pubInfos {
+			if rtnErr = dropPublication(deleteCtx, bh, true, pubInfo.PubName); rtnErr != nil {
+				return
 			}
 		}
 
@@ -4192,6 +3629,27 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			}
 		}
 
+		// alter sub_account field in mo_pubs which contains accountName
+		subInfos, rtnErr := getSubInfosFromSub(deleteCtx, bh, "")
+		if rtnErr != nil {
+			return rtnErr
+		}
+		for _, subInfo := range subInfos {
+			pubAccInfo, ok := nameInfoMap[subInfo.PubAccountName]
+			if !ok {
+				continue
+			}
+
+			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, pubAccInfo.Id, subInfo.PubName, da.Name); rtnErr != nil {
+				return rtnErr
+			}
+		}
+
+		// delete records in mo_subs
+		if rtnErr = deleteMoSubsBySubAccountId(deleteCtx, bh); rtnErr != nil {
+			return rtnErr
+		}
+
 		// drop table mo_mysql_compatibility_mode
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
 		if rtnErr != nil {
@@ -4222,7 +3680,19 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 
+		rtnErr = bh.Exec(deleteCtx, dropMoRetention)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		// delete the pitr record in the mo_pitr created by the account which is dropped
+		sql = getSqlForDeletePitrFromMoPitr(uint64(accountId))
+		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -4272,16 +3742,26 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		return rtnErr
 	}
 
+	// disable foreign key checks
+	ctx = context.WithValue(ctx, defines.DisableFkCheck{}, true)
+
 	err = dropAccountFunc()
 	if err != nil {
 		return err
 	}
 
+	if !hasAccount {
+		return err
+	}
 	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
 
 	if err := postDropSuspendAccount(ctx, ses, da.Name, accountId, version); err != nil {
 		ses.Errorf(ctx, "post drop account error: %s", err.Error())
+	}
+
+	if err = postProcessCdc(ctx, ses, da.Name, uint64(accountId), "drop"); err != nil {
+		ses.Errorf(ctx, "post drop cdc of the accound error: %s", err.Error())
 	}
 
 	return err
@@ -4290,26 +3770,19 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 func postDropSuspendAccount(
 	ctx context.Context, ses *Session, accountName string, accountID int64, version uint64,
 ) (err error) {
+	if accountID == 0 {
+		return err
+	}
 	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
 	var nodes []string
-	currTenant := ses.GetTenantInfo().GetTenant()
-	currUser := ses.GetTenantInfo().User
-	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.Contain)
-	sysTenant := isSysTenant(currTenant)
-	if sysTenant {
-		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			})
-	} else {
-		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(clusterservice.NewSelectAll(),
+		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
+			return true
 		})
-	}
 
 	var retErr error
 	genRequest := func() *query.Request {
@@ -4335,6 +3808,47 @@ func postDropSuspendAccount(
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
+}
+
+func postProcessCdc(
+	ctx context.Context,
+	ses *Session,
+	targetAccountName string,
+	targetAccountID uint64,
+	targetAccountStatus string,
+) (err error) {
+	//drop or pause cdc
+	switch targetAccountStatus {
+	case "drop":
+		return runUpdateCdcTask(
+			ctx,
+			task.TaskStatus_CancelRequested,
+			targetAccountID,
+			"",
+			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+	case tree.AccountStatusSuspend.String(), tree.AccountStatusRestricted.String():
+		return runUpdateCdcTask(
+			ctx,
+			task.TaskStatus_PauseRequested,
+			targetAccountID,
+			"",
+			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+	case tree.AccountStatusOpen.String():
+		return runUpdateCdcTask(
+			ctx,
+			task.TaskStatus_ResumeRequested,
+			targetAccountID,
+			"",
+			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+	}
+
+	return
 }
 
 // doDropUser accomplishes the DropUser statement
@@ -4375,7 +3889,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 
 		if vr == nil {
 			if !du.IfExists { //when the "IF EXISTS" is set, just skip it.
-				return moerr.NewInternalError(ctx, "there is no user %s", user.Username)
+				return moerr.NewInternalErrorf(ctx, "there is no user %s", user.Username)
 			}
 		}
 
@@ -4406,7 +3920,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 		}
 
 		if execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "can not delete the user %s", user.Username)
+			return moerr.NewInternalErrorf(ctx, "can not delete the user %s", user.Username)
 		}
 
 		//step2 : delete mo_user
@@ -4459,7 +3973,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 
 		if vr == nil {
 			if !dr.IfExists { //when the "IF EXISTS" is set, just skip it.
-				return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
+				return moerr.NewInternalErrorf(ctx, "there is no role %s", role.UserName)
 			}
 		}
 
@@ -4474,7 +3988,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 		//NOTE: if the role is the admin role (moadmin,accountadmin) or public,
 		//the role can not be deleted.
 		if account.IsNameOfAdminRoles(vr.name) || isPublicRole(vr.name) {
-			return moerr.NewInternalError(ctx, "can not delete the role %s", vr.name)
+			return moerr.NewInternalErrorf(ctx, "can not delete the role %s", vr.name)
 		}
 
 		sqls := getSqlForDeleteRole(vr.id)
@@ -4513,6 +4027,14 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 		dbName = ses.GetDatabaseName()
 	} else {
 		dbName = string(df.Name.Name.SchemaName)
+	}
+
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
 	}
 
 	// authticate db exists
@@ -4576,32 +4098,26 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 					continue
 				}
 				handleArgMatch := func() (rtnErr error) {
-					//put it into the single transaction
-					rtnErr = bh.Exec(ctx, "begin;")
-					defer func() {
-						rtnErr = finishTxn(ctx, bh, rtnErr)
-						if rtnErr == nil {
-							u := &function.NonSqlUdfBody{}
-							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
-								rm(u.Body)
-							}
-						}
-					}()
-					if rtnErr != nil {
-						return rtnErr
-					}
-
 					sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
 					rtnErr = bh.Exec(ctx, sql)
 					if rtnErr != nil {
 						return rtnErr
 					}
+					u := &function.NonSqlUdfBody{}
+					if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
+						rm(u.Body)
+					}
+
 					return rtnErr
 				}
-				return handleArgMatch()
+				err = handleArgMatch()
+				if err != nil {
+					return err
+				}
 			}
 		}
+		return err
 	}
 	// no such function
 	return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
@@ -4622,6 +4138,14 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
 
 	// validate database name and signature (name + args)
 	bh.ClearExecResultSet()
@@ -4648,27 +4172,18 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 			}
 
 			handleArgMatch := func() (rtnErr error) {
-				//put it into the single transaction
-				rtnErr = bh.Exec(ctx, "begin;")
-				defer func() {
-					rtnErr = finishTxn(ctx, bh, rtnErr)
-					if rtnErr == nil {
-						u := &function.NonSqlUdfBody{}
-						if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
-							rm(u.Body)
-						}
-					}
-				}()
-				if rtnErr != nil {
-					return rtnErr
-				}
-
 				sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
 				rtnErr = bh.Exec(ctx, sql)
 				if rtnErr != nil {
 					return rtnErr
 				}
+
+				u := &function.NonSqlUdfBody{}
+				if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
+					rm(u.Body)
+				}
+
 				return rtnErr
 			}
 
@@ -4701,6 +4216,14 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 		dbName = string(dp.Name.Name.SchemaName)
 	}
 
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
 	// validate database name and signature (name + args)
 	bh.ClearExecResultSet()
 	checkDatabase = fmt.Sprintf(checkStoredProcedureArgs, string(dp.Name.Name.ObjectName), dbName)
@@ -4721,15 +4244,6 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 			return err
 		}
 		handleArgMatch := func() (rtnErr error) {
-			//put it into the single transaction
-			rtnErr = bh.Exec(ctx, "begin;")
-			defer func() {
-				rtnErr = finishTxn(ctx, bh, rtnErr)
-			}()
-			if rtnErr != nil {
-				return rtnErr
-			}
-
 			sql = fmt.Sprintf(deleteStoredProcedureFormat, procId)
 
 			rtnErr = bh.Exec(ctx, sql)
@@ -4782,7 +4296,7 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	for i, user := range rp.Roles {
 		//check Revoke privilege on xxx yyy from moadmin(accountadmin)
 		if account.IsNameOfAdminRoles(user.UserName) {
-			return moerr.NewInternalError(ctx, "the privilege can not be revoked from the role %s", user.UserName)
+			return moerr.NewInternalErrorf(ctx, "the privilege can not be revoked from the role %s", user.UserName)
 		}
 		sql, err = getSqlForRoleIdOfRole(ctx, user.UserName)
 		if err != nil {
@@ -4795,7 +4309,7 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 		verifiedRoles[i] = vr
 		if vr == nil {
 			if !rp.IfExists { //when the "IF EXISTS" is set, just skip it.
-				return moerr.NewInternalError(ctx, "there is no role %s", user.UserName)
+				return moerr.NewInternalErrorf(ctx, "there is no role %s", user.UserName)
 			}
 		}
 	}
@@ -4833,7 +4347,7 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 				continue
 			}
 			if privType == PrivilegeTypeConnect && isPublicRole(role.name) {
-				return moerr.NewInternalError(ctx, "the privilege %s can not be revoked from the role %s", privType, role.name)
+				return moerr.NewInternalErrorf(ctx, "the privilege %s can not be revoked from the role %s", privType, role.name)
 			}
 			sql = getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
 			bh.ClearExecResultSet()
@@ -4879,10 +4393,10 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 		return id, nil
 	}
 	if isDb {
-		return 0, moerr.NewInternalError(ctx, `there is no database "%s"`, dbName)
+		return 0, moerr.NewInternalErrorf(ctx, `there is no database "%s"`, dbName)
 	} else {
 		//TODO: check the database exists or not first
-		return 0, moerr.NewInternalError(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
+		return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 	}
 }
 
@@ -4897,7 +4411,7 @@ func convertAstObjectTypeToObjectType(ctx context.Context, ot tree.ObjectType) (
 	case tree.OBJECT_TYPE_ACCOUNT:
 		objType = objectTypeAccount
 	default:
-		return 0, moerr.NewInternalError(ctx, `the object type "%s" is unsupported`, ot.String())
+		return 0, moerr.NewInternalErrorf(ctx, `the object type "%s" is unsupported`, ot.String())
 	}
 	return objType, nil
 }
@@ -4942,7 +4456,7 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 				return 0, 0, err
 			}
 		default:
-			err = moerr.NewInternalError(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			err = moerr.NewInternalErrorf(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
 			return 0, 0, err
 		}
 	case tree.OBJECT_TYPE_DATABASE:
@@ -4969,7 +4483,7 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 				return 0, 0, err
 			}
 		default:
-			err = moerr.NewInternalError(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			err = moerr.NewInternalErrorf(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
 			return 0, 0, err
 		}
 	case tree.OBJECT_TYPE_ACCOUNT:
@@ -4978,11 +4492,11 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 			privLevel = privilegeLevelStar
 			objId = objectIDAll
 		default:
-			err = moerr.NewInternalError(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			err = moerr.NewInternalErrorf(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
 			return 0, 0, err
 		}
 	default:
-		err = moerr.NewInternalError(ctx, `the object type "%s" is unsupported`, ot.String())
+		err = moerr.NewInternalErrorf(ctx, `the object type "%s" is unsupported`, ot.String())
 		return 0, 0, err
 	}
 
@@ -4995,19 +4509,19 @@ func matchPrivilegeTypeWithObjectType(ctx context.Context, privType PrivilegeTyp
 	switch privType.Scope() {
 	case PrivilegeScopeSys, PrivilegeScopeAccount, PrivilegeScopeUser, PrivilegeScopeRole:
 		if objType != objectTypeAccount {
-			err = moerr.NewInternalError(ctx, `the privilege "%s" can only be granted to the object type "account"`, privType)
+			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "account"`, privType)
 		}
 	case PrivilegeScopeDatabase:
 		if objType != objectTypeDatabase {
-			err = moerr.NewInternalError(ctx, `the privilege "%s" can only be granted to the object type "database"`, privType)
+			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "database"`, privType)
 		}
 	case PrivilegeScopeTable:
 		if objType != objectTypeTable {
-			err = moerr.NewInternalError(ctx, `the privilege "%s" can only be granted to the object type "table"`, privType)
+			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "table"`, privType)
 		}
 	case PrivilegeScopeRoutine:
 		if objType != objectTypeFunction {
-			err = moerr.NewInternalError(ctx, `the privilege "%s" can only be granted to the object type "function"`, privType)
+			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "function"`, privType)
 		}
 	}
 	return err
@@ -5056,7 +4570,7 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 	for i, role := range gp.Roles {
 		//check Grant privilege on xxx yyy to moadmin(accountadmin)
 		if account != nil && account.IsNameOfAdminRoles(role.UserName) {
-			return moerr.NewInternalError(ctx, "the privilege can not be granted to the role %s", role.UserName)
+			return moerr.NewInternalErrorf(ctx, "the privilege can not be granted to the role %s", role.UserName)
 		}
 		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
 		if err != nil {
@@ -5081,7 +4595,7 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 				}
 			}
 		} else {
-			return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedRoles[i] = &verifiedRole{
 			typ:  roleType,
@@ -5103,7 +4617,7 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 			return err
 		}
 		if isBannedPrivilege(privType) {
-			return moerr.NewInternalError(ctx, "the privilege %s can not be granted", privType)
+			return moerr.NewInternalErrorf(ctx, "the privilege %s can not be granted", privType)
 		}
 		//check the match between the privilegeScope and the objectType
 		err = matchPrivilegeTypeWithObjectType(ctx, privType, objType)
@@ -5232,7 +4746,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 			verifiedToRoles[i] = vr
 			if vr == nil {
 				if !rr.IfExists { //when the "IF EXISTS" is set, just skip the check
-					return moerr.NewInternalError(ctx, "there is no role or user %s", user.Username)
+					return moerr.NewInternalErrorf(ctx, "there is no role or user %s", user.Username)
 				}
 			}
 		}
@@ -5250,7 +4764,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 			return err
 		}
 		if vr == nil {
-			return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedFromRoles[i] = vr
 	}
@@ -5266,18 +4780,18 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 				//check Revoke moadmin from root,dump,userX
 				//check Revoke accountadmin from root,dump,userX
 				//check Revoke moadmin(accountadmin) from roleX
-				return moerr.NewInternalError(ctx, "the role %s can not be revoked", from.name)
+				return moerr.NewInternalErrorf(ctx, "the role %s can not be revoked", from.name)
 			} else if isPublicRole(from.name) {
-				return moerr.NewInternalError(ctx, "the role %s can not be revoked", from.name)
+				return moerr.NewInternalErrorf(ctx, "the role %s can not be revoked", from.name)
 			}
 
 			if to.typ == roleType {
 				//check Revoke roleX from moadmin(accountadmin)
 				if account.IsNameOfAdminRoles(to.name) {
-					return moerr.NewInternalError(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
+					return moerr.NewInternalErrorf(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
 				} else if isPublicRole(to.name) {
 					//check Revoke roleX from public
-					return moerr.NewInternalError(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
+					return moerr.NewInternalErrorf(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
 				}
 			}
 
@@ -5309,25 +4823,25 @@ func verifySpecialRolesInGrant(ctx context.Context, account *TenantInfo, from, t
 			//check Grant moadmin to userX
 			//check Grant accountadmin to userX
 			if !to.userIsAdmin {
-				return moerr.NewInternalError(ctx, "the role %s can not be granted to non administration user %s", from.name, to.name)
+				return moerr.NewInternalErrorf(ctx, "the role %s can not be granted to non administration user %s", from.name, to.name)
 			}
 		} else {
 			//check Grant moadmin(accountadmin) to roleX
 			if !account.IsNameOfAdminRoles(to.name) {
-				return moerr.NewInternalError(ctx, "the role %s can not be granted to the other role %s", from.name, to.name)
+				return moerr.NewInternalErrorf(ctx, "the role %s can not be granted to the other role %s", from.name, to.name)
 			}
 		}
 	} else if isPublicRole(from.name) && to.typ == roleType {
-		return moerr.NewInternalError(ctx, "the role %s can not be granted to the other role %s", from.name, to.name)
+		return moerr.NewInternalErrorf(ctx, "the role %s can not be granted to the other role %s", from.name, to.name)
 	}
 
 	if to.typ == roleType {
 		//check Grant roleX to moadmin(accountadmin)
 		if account.IsNameOfAdminRoles(to.name) {
-			return moerr.NewInternalError(ctx, "the role %s can not be granted to the role %s", from.name, to.name)
+			return moerr.NewInternalErrorf(ctx, "the role %s can not be granted to the role %s", from.name, to.name)
 		} else if isPublicRole(to.name) {
 			//check Grant roleX to public
-			return moerr.NewInternalError(ctx, "the role %s can not be granted to the role %s", from.name, to.name)
+			return moerr.NewInternalErrorf(ctx, "the role %s can not be granted to the role %s", from.name, to.name)
 		}
 	}
 	return nil
@@ -5382,7 +4896,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 			return err
 		}
 		if vr == nil {
-			return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedFromRoles[i] = vr
 	}
@@ -5410,7 +4924,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 				return err
 			}
 			if vr == nil {
-				return moerr.NewInternalError(ctx, "there is no role or user %s", user.Username)
+				return moerr.NewInternalErrorf(ctx, "there is no role or user %s", user.Username)
 			}
 			verifiedToRoles[i] = vr
 
@@ -5745,6 +5259,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
+	case *tree.RenameTable:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeAlterTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
 	case *tree.CreateProcedure:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -5859,7 +5377,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
 		canExecInRestricted = true
-	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
+	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt, *tree.ExplainPhyPlan:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
@@ -5887,7 +5405,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ValuesStatement:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-	case *tree.ShowSnapShots:
+	case *tree.ShowSnapShots, *tree.ShowPitr:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
@@ -5896,6 +5414,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
 	case *tree.RestoreSnapShot:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
+	case *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr, *tree.RestorePitr:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
@@ -5922,6 +5444,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.SetTransaction:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.SetConnectionID:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.CreateStage, *tree.AlterStage, *tree.DropStage:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -5932,6 +5457,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.EmptyStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -6183,7 +5712,7 @@ func getSqlFromPrivilegeEntry(ctx context.Context, roleId int64, entry privilege
 		case privilegeLevelStarStar:
 			sql = getSqlForCheckRoleHasTableLevelForStarStar(roleId, entry.privilegeId)
 		default:
-			return "", moerr.NewInternalError(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
+			return "", moerr.NewInternalErrorf(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
 		}
 	} else if entry.objType == objectTypeDatabase {
 		switch entry.privilegeLevel {
@@ -6192,14 +5721,14 @@ func getSqlFromPrivilegeEntry(ctx context.Context, roleId int64, entry privilege
 		case privilegeLevelDatabase:
 			sql, err = getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx, roleId, entry.privilegeId, entry.databaseName)
 		default:
-			return "", moerr.NewInternalError(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
+			return "", moerr.NewInternalErrorf(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
 		}
 	} else if entry.objType == objectTypeAccount {
 		switch entry.privilegeLevel {
 		case privilegeLevelStar:
 			sql = getSqlForCheckRoleHasAccountLevelForStar(roleId, entry.privilegeId)
 		default:
-			return "false", moerr.NewInternalError(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
+			return "false", moerr.NewInternalErrorf(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
 		}
 	} else {
 		sql = getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
@@ -6212,7 +5741,7 @@ func getPrivilegeLevelsOfObjectType(ctx context.Context, objType objectType) ([]
 	if ret, ok := objectType2privilegeLevels[objType]; ok {
 		return ret, nil
 	}
-	return nil, moerr.NewInternalError(ctx, "do not support the object type %s", objType.String())
+	return nil, moerr.NewInternalErrorf(ctx, "do not support the object type %s", objType.String())
 }
 
 // getSqlForPrivilege generates the query sql for the privilege entry
@@ -6230,7 +5759,7 @@ func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry,
 		case privilegeLevelStarStar:
 			sql = getSqlForCheckRoleHasTableLevelForStarStar(roleId, entry.privilegeId)
 		default:
-			return "", moerr.NewInternalError(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
+			return "", moerr.NewInternalErrorf(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
 		}
 	case objectTypeDatabase:
 		switch pl {
@@ -6239,14 +5768,14 @@ func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry,
 		case privilegeLevelDatabase:
 			sql, err = getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx, roleId, entry.privilegeId, entry.databaseName)
 		default:
-			return "", moerr.NewInternalError(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
+			return "", moerr.NewInternalErrorf(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
 		}
 	case objectTypeAccount:
 		switch pl {
 		case privilegeLevelStar:
 			sql = getSqlForCheckRoleHasAccountLevelForStar(roleId, entry.privilegeId)
 		default:
-			return "false", moerr.NewInternalError(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
+			return "false", moerr.NewInternalErrorf(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
 		}
 	default:
 		sql = getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
@@ -6552,7 +6081,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId)
 			if err != nil {
-				return false, moerr.NewInternalError(ctx, "get inherited role id of the role id. error:%v", err)
+				return false, moerr.NewInternalErrorf(ctx, "get inherited role id of the role id. error:%v", err)
 			}
 
 			erArray, err = getResultSet(ctx, bh)
@@ -6680,7 +6209,7 @@ func determineUserCanGrantRolesToOthersInternal(ctx context.Context, bh Backgrou
 			return false, err
 		}
 		if vr == nil {
-			return false, moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
+			return false, moerr.NewInternalErrorf(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedFromRoles[i] = vr
 	}
@@ -7100,7 +6629,7 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
 			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseTable(ctx, int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName(), gp.Level.TabName)
 		default:
-			return "", moerr.NewInternalError(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
+			return "", moerr.NewInternalErrorf(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
 	case tree.OBJECT_TYPE_DATABASE:
 		switch gp.Level.Level {
@@ -7114,17 +6643,17 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
 			sql, err = getSqlForCheckWithGrantOptionForDatabaseDB(ctx, int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
 		default:
-			return "", moerr.NewInternalError(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
+			return "", moerr.NewInternalErrorf(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
 	case tree.OBJECT_TYPE_ACCOUNT:
 		switch gp.Level.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			sql = getSqlForCheckWithGrantOptionForAccountStar(int64(tenant.GetDefaultRoleID()), privType)
 		default:
-			return "", moerr.NewInternalError(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
+			return "", moerr.NewInternalErrorf(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
 	default:
-		return "", moerr.NewInternalError(ctx, "object type %v is unsupported", gp.ObjType)
+		return "", moerr.NewInternalErrorf(ctx, "object type %v is unsupported", gp.ObjType)
 	}
 	return sql, err
 }
@@ -7403,7 +6932,7 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		case tree.OBJECT_TYPE_TABLE:
 			privType = PrivilegeTypeTableAll
 		default:
-			return 0, moerr.NewInternalError(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
+			return 0, moerr.NewInternalErrorf(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
 		}
 	case tree.PRIVILEGE_TYPE_STATIC_OWNERSHIP:
 		switch ot {
@@ -7412,7 +6941,7 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		case tree.OBJECT_TYPE_TABLE:
 			privType = PrivilegeTypeTableOwnership
 		default:
-			return 0, moerr.NewInternalError(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
+			return 0, moerr.NewInternalErrorf(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
 		}
 	case tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES:
 		privType = PrivilegeTypeShowTables
@@ -7447,7 +6976,7 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 	case tree.PRIVILEGE_TYPE_STATIC_VALUES:
 		privType = PrivilegeTypeValues
 	default:
-		return 0, moerr.NewInternalError(ctx, "unsupported privilege type %s", priv.ToString())
+		return 0, moerr.NewInternalErrorf(ctx, "unsupported privilege type %s", priv.ToString())
 	}
 	return privType, nil
 }
@@ -7487,6 +7016,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsSysTenant(), nil
 		}
 
+		checkCdcTaskPrivilege := func() (bool, error) {
+			//only the moAdmin or accountAdmin can execute the Cdc statement
+			return tenant.IsAdminRole(), nil
+		}
+
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
@@ -7520,248 +7054,12 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsMoAdminRole(), nil
 		case *tree.BackupStart:
 			return checkBackUpStartPrivilege()
+		case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
+			return checkCdcTaskPrivilege()
 		}
 	}
 
 	return false, nil
-}
-
-// checkSysExistsOrNot checks the SYS tenant exists or not.
-func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec) (bool, error) {
-	var erArray []ExecResult
-	var err error
-	var tableNames []string
-	var tableName string
-
-	dbSql := "show databases;"
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, dbSql)
-	if err != nil {
-		return false, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-	if len(erArray) != 1 {
-		return false, moerr.NewInternalError(ctx, "it must have result set")
-	}
-
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		_, err = erArray[0].GetString(ctx, i, 0)
-		if err != nil {
-			return false, err
-		}
-	}
-
-	sql := "show tables from mo_catalog;"
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return false, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-	if len(erArray) != 1 {
-		return false, moerr.NewInternalError(ctx, "it must have result set")
-	}
-
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		tableName, err = erArray[0].GetString(ctx, i, 0)
-		if err != nil {
-			return false, err
-		}
-		tableNames = append(tableNames, tableName)
-	}
-
-	//if there is at least one catalog table, it denotes the sys tenant exists.
-	for _, name := range tableNames {
-		if _, ok := sysWantedTables[name]; ok {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
-// InitSysTenantOld initializes the tenant SYS before any tenants and accepting any requests
-// during the system is booting.
-// Deprecated: Use InitSysTenant instead
-func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, finalVersion string) (err error) {
-	var exists bool
-	var mp *mpool.MPool
-	pu := config.GetParameterUnit(ctx)
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-
-	ctx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
-
-	mp, err = mpool.NewMPool("init_system_tenant", 0, mpool.NoFixed)
-	if err != nil {
-		return err
-	}
-	defer mpool.DeleteMPool(mp)
-	//Note: it is special here. The connection ctx here is ctx also.
-	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	upstream := &Session{
-		feSessionImpl: feSessionImpl{
-			proto: &FakeProtocol{},
-		},
-
-		seqCurValues: make(map[uint64]string),
-		seqLastValue: new(string),
-	}
-	bh := NewBackgroundExec(ctx, upstream, mp)
-	defer bh.Close()
-
-	//USE the mo_catalog
-	err = bh.Exec(ctx, "use mo_catalog;")
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, createDbInformationSchemaSql)
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	exists, err = checkSysExistsOrNot(ctx, bh)
-	if err != nil {
-		return err
-	}
-
-	if !exists {
-		err = createTablesInMoCatalogOld(ctx, bh, tenant, pu, finalVersion)
-		if err != nil {
-			return err
-		}
-	}
-
-	return err
-}
-
-// createTablesInMoCatalogOld creates catalog tables in the database mo_catalog.
-// Deprecated: Use createTablesInMoCatalog instead
-func createTablesInMoCatalogOld(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, finalVersion string) error {
-	var err error
-	var initMoAccount string
-	var initDataSqls []string
-	if !tenant.IsSysTenant() {
-		return moerr.NewInternalError(ctx, "only sys tenant can execute the function")
-	}
-
-	addSqlIntoSet := func(sql string) {
-		initDataSqls = append(initDataSqls, sql)
-	}
-
-	//create tables for the tenant
-	for _, sql := range createSqls {
-		addSqlIntoSet(sql)
-	}
-
-	//initialize the default data of tables for the tenant
-	//step 1: add new tenant entry to the mo_account
-	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments, finalVersion)
-	addSqlIntoSet(initMoAccount)
-
-	//step 2:add new role entries to the mo_role
-
-	initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
-	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
-	addSqlIntoSet(initMoRole1)
-	addSqlIntoSet(initMoRole2)
-
-	//step 3:add new user entry to the mo_user
-
-	defaultPassword := rootPassword
-	if d := os.Getenv(defaultPasswordEnv); d != "" {
-		defaultPassword = d
-	}
-
-	//encryption the password
-	encryption := HashPassWord(defaultPassword)
-
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, encryption, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, encryption, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
-	addSqlIntoSet(initMoUser1)
-	addSqlIntoSet(initMoUser2)
-
-	//step4: add new entries to the mo_role_privs
-	//moadmin role
-	for _, t := range entriesOfMoAdminForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			moAdminRoleID, moAdminRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
-
-	//public role
-	for _, t := range entriesOfPublicForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			publicRoleID, publicRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
-
-	//step5: add new entries to the mo_user_grant
-
-	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	addSqlIntoSet(initMoUserGrant1)
-	addSqlIntoSet(initMoUserGrant2)
-	initMoUserGrant4 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	initMoUserGrant5 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	addSqlIntoSet(initMoUserGrant4)
-	addSqlIntoSet(initMoUserGrant5)
-
-	//setp6: add new entries to the mo_mysql_compatibility_mode
-	for _, variable := range gSysVarsDefs {
-		if _, ok := configInitVariables[variable.Name]; ok {
-			addsql := addInitSystemVariablesSql(sysAccountID, sysAccountName, variable.Name, pu)
-			if len(addsql) != 0 {
-				addSqlIntoSet(addsql)
-			}
-		} else {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
-			addSqlIntoSet(initMoMysqlCompatibilityMode)
-		}
-	}
-
-	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatibility_mode
-	for _, sql := range initDataSqls {
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
-	}
-	return err
 }
 
 func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName string) (bool, error) {
@@ -7840,8 +7138,12 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 	finalVersion := ses.rm.baseService.GetFinalVersion()
 
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
-		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
+		return moerr.NewInternalErrorf(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
 	}
+	start := time.Now()
+	defer func() {
+		v2.TotalCreateDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	//normalize the name
 	err = normalizeNameOfAccount(ctx, ca)
@@ -7883,6 +7185,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 			return rtnErr
 		}
 
+		start1 := time.Now()
 		//USE the mo_catalog
 		// MOVE into txn, make sure only create ONE txn.
 		rtnErr = bh.Exec(ctx, "use mo_catalog;")
@@ -7898,7 +7201,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 
 		if exists {
 			if !ca.IfNotExists { //do nothing
-				return moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
+				return moerr.NewInternalErrorf(ctx, "the tenant %s exists", ca.Name)
 			}
 			return rtnErr
 		} else {
@@ -7907,6 +7210,10 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 				return rtnErr
 			}
 		}
+
+		v2.Step1DurationHistogram.Observe(time.Since(start1).Seconds())
+
+		start2 := time.Now()
 
 		// create some tables and databases for new account
 		rtnErr = bh.Exec(newTenantCtx, createMoIndexesSql)
@@ -7943,6 +7250,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 			}
 		}
 
+		v2.Step2DurationHistogram.Observe(time.Since(start2).Seconds())
+
 		// create tables for new account
 		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, getGlobalPu())
 		if rtnErr != nil {
@@ -7959,16 +7268,15 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 		return rtnErr
 	}
 
-	err = createNewAccount()
-	if err != nil {
+	if err = createNewAccount(); err != nil {
 		return err
 	}
 
 	if !exists {
-		//just skip nonexistent pubs
-		_ = createSubscriptionDatabase(ctx, bh, newTenant, ses)
+		if err = createSubscription(ctx, bh, newTenant); err != nil {
+			return err
+		}
 	}
-
 	return err
 }
 
@@ -8040,7 +7348,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 			return nil, nil, err
 		}
 	} else {
-		return nil, nil, moerr.NewInternalError(ctx, "get the id of tenant %s failed", ca.Name)
+		return nil, nil, moerr.NewInternalErrorf(ctx, "get the id of tenant %s failed", ca.Name)
 	}
 
 	newUserId = int64(GetAdminUserId())
@@ -8059,21 +7367,45 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 }
 
 func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
+	start := time.Now()
+	defer func() {
+		v2.CreateTablesInMoCatalogDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	var err error
 	var initDataSqls []string
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
 	defer span.End()
+
+	isSysOnlyDb := func(sql string) bool {
+		// only the SYS tenant has the table mo_account/mo_subs
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
+			return true
+		}
+		return false
+	}
+
+	start1 := time.Now()
+
 	//create tables for the tenant
 	for _, sql := range createSqls {
-		//only the SYS tenant has the table mo_account
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
+		if isSysOnlyDb(sql) {
 			continue
 		}
-		err = bh.Exec(newTenantCtx, sql)
-		if err != nil {
+		if err = bh.Exec(newTenantCtx, sql); err != nil {
 			return err
 		}
 	}
+
+	v2.ExecDDL1DurationHistogram.Observe(time.Since(start1).Seconds())
 
 	//initialize the default data of tables for the tenant
 	addSqlIntoSet := func(sql string) {
@@ -8142,18 +7474,12 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 
-	//setp6: add new entries to the mo_mysql_compatibility_mode
-	for _, variable := range gSysVarsDefs {
-		if _, ok := configInitVariables[variable.Name]; ok {
-			addsql := addInitSystemVariablesSql(int(newTenant.GetTenantID()), newTenant.GetTenant(), variable.Name, pu)
-			if len(addsql) != 0 {
-				addSqlIntoSet(addsql)
-			}
-		} else {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, newTenant.GetTenantID(), newTenant.GetTenant(), variable.Name, getVariableValue(variable.Default), true)
-			addSqlIntoSet(initMoMysqlCompatibilityMode)
-		}
-	}
+	//step6: add new entries to the mo_mysql_compatibility_mode
+	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), SaveQueryResult, pu))
+	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), QueryResultMaxsize, pu))
+	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), QueryResultTimeout, pu))
+
+	start2 := time.Now()
 
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
 	for _, sql := range initDataSqls {
@@ -8163,11 +7489,17 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return err
 		}
 	}
+
+	v2.InitData1DurationHistogram.Observe(time.Since(start2).Seconds())
 	return nil
 }
 
 // createTablesInSystemOfGeneralTenant creates the database system and system_metrics as the external tables.
 func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) error {
+	start := time.Now()
+	defer func() {
+		v2.CreateTablesInSystemDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	ctx, span := trace.Debug(ctx, "createTablesInSystemOfGeneralTenant")
 	defer span.End()
 
@@ -8192,6 +7524,10 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
 func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
+	start := time.Now()
+	defer func() {
+		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	ctx, span := trace.Debug(ctx, "createTablesInInformationSchemaOfGeneralTenant")
 	defer span.End()
 	//with new tenant
@@ -8215,46 +7551,57 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	return err
 }
 
-// create subscription database
-func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo, ses *Session) error {
-	ctx, span := trace.Debug(ctx, "createSubscriptionDatabase")
-	defer span.End()
-
-	var err error
-	subscriptions := make([]string, 0)
-	//process the syspublications
-	syspublications_value, err := ses.GetGlobalVar(ctx, "syspublications")
+// createSubscription insert records into mo_subs of To-All-Publications
+func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) (err error) {
+	// get all accounts
+	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh)
 	if err != nil {
-		return err
+		return
 	}
 
-	if syspublications, ok := syspublications_value.(string); ok {
-		if len(syspublications) == 0 {
-			return err
-		}
-		subscriptions = strings.Split(syspublications, ",")
-	}
-	// if no subscriptions, return
-	if len(subscriptions) == 0 {
-		return err
-	}
-
-	//with new tenant
-	ctx = defines.AttachAccount(ctx, uint32(newTenant.GetTenantID()), uint32(newTenant.GetUserID()), uint32(newTenant.GetDefaultRoleID()))
-
-	createSubscriptionFormat := `create database %s from sys publication %s;`
-	sqls := make([]string, 0, len(subscriptions))
-	for _, subscription := range subscriptions {
-		sqls = append(sqls, fmt.Sprintf(createSubscriptionFormat, subscription, subscription))
-	}
-	for _, sql := range sqls {
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
+	// insert mo_subs records for new account
+	handleForAccount := func(accountId int32) (err error) {
+		newCtx := defines.AttachAccountId(ctx, uint32(accountId))
+		pubInfos, err := getPubInfosToAllAccounts(newCtx, bh)
 		if err != nil {
 			return err
 		}
+
+		for _, pubInfo := range pubInfos {
+			subInfo := &pubsub.SubInfo{
+				SubAccountId:   int32(newTenant.TenantID),
+				PubAccountName: accIdInfoMap[accountId].Name,
+				PubName:        pubInfo.PubName,
+				PubDbName:      pubInfo.DbName,
+				PubTables:      pubInfo.TablesStr,
+				PubComment:     pubInfo.Comment,
+				Status:         pubsub.SubStatusNormal,
+			}
+			if err = insertMoSubs(newCtx, bh, subInfo); err != nil {
+				return
+			}
+		}
+		return
 	}
-	return err
+
+	// create sub for sys' to-all-pub
+	if err = handleForAccount(int32(catalog.System_Account)); err != nil {
+		return err
+	}
+
+	// create sub for other privileged tenants' to-all-pub
+	pubAllAccounts := pubsub.SplitAccounts(getGlobalPu().SV.PubAllAccounts)
+	for _, accountName := range pubAllAccounts {
+		accountInfo, ok := accNameInfoMap[accountName]
+		if !ok {
+			continue
+		}
+
+		if err = handleForAccount(accountInfo.Id); err != nil {
+			return err
+		}
+	}
+	return
 }
 
 type createUser struct {
@@ -8325,7 +7672,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 			return err
 		}
 		if !execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "there is no role %s", cu.Role.UserName)
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", cu.Role.UserName)
 		}
 		newRoleId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
@@ -8404,7 +7751,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 				continue
 			}
 			if exists == 1 {
-				err = moerr.NewInternalError(ctx, "the user %s exists", user.Username)
+				err = moerr.NewInternalErrorf(ctx, "the user %s exists", user.Username)
 			} else if exists == 2 {
 				err = moerr.NewInternalError(ctx, "there is a role with the same name as the user")
 			}
@@ -8413,7 +7760,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 		}
 
 		if !user.AuthExist {
-			return moerr.NewInternalError(ctx, "the user %s misses the auth_option", user.Username)
+			return moerr.NewInternalErrorf(ctx, "the user %s misses the auth_option", user.Username)
 		}
 
 		if user.IdentTyp != tree.AccountIdentifiedByPassword {
@@ -8460,7 +7807,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 		}
 
 		if !execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "get the id of user %s failed", user.Username)
+			return moerr.NewInternalErrorf(ctx, "get the id of user %s failed", user.Username)
 		}
 		newUserId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
@@ -8557,11 +7904,11 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 				continue
 			}
 			if exists == 1 {
-				err = moerr.NewInternalError(ctx, "the role %s exists", r.UserName)
+				err = moerr.NewInternalErrorf(ctx, "the role %s exists", r.UserName)
 			} else if exists == 2 {
-				err = moerr.NewInternalError(ctx, "there is a user with the same name as the role %s", r.UserName)
+				err = moerr.NewInternalErrorf(ctx, "there is a user with the same name as the role %s", r.UserName)
 			} else if exists == 3 {
-				err = moerr.NewInternalError(ctx, "can not use the name %s. it is the name of the predefined role", r.UserName)
+				err = moerr.NewInternalErrorf(ctx, "can not use the name %s. it is the name of the predefined role", r.UserName)
 			}
 
 			return err
@@ -8872,8 +8219,13 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	var currentRole uint32
 	var err error
 
+	configVar := make(map[tree.DatabaseConfig]string, 0)
+	configVar[tree.MYSQL_COMPATIBILITY_MODE] = "version_compatibility"
+	configVar[tree.UNIQUE_CHECK_ON_AUTOINCR] = "unique_check_on_autoincr"
+
 	dbName := ad.DbName
 	updateConfig := ad.UpdateConfig
+	configTyp := ad.ConfigType
 	tenantInfo := ses.GetTenantInfo()
 	accountName = tenantInfo.GetTenant()
 	currentRole = tenantInfo.GetDefaultRoleID()
@@ -8908,7 +8260,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		}
 
 		if !execResultArrayHasData(erArray) {
-			rtnErr = moerr.NewInternalError(ctx, "there is no database %s to change config", dbName)
+			rtnErr = moerr.NewInternalErrorf(ctx, "there is no database %s to change config", dbName)
 			return
 		} else {
 			databaseOwner, rtnErr = erArray[0].GetInt64(ctx, 0, 1)
@@ -8923,15 +8275,38 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 			}
 		}
 
-		// step2: update the mo_mysql_compatibility_mode of that database
-		sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, "version_compatibility")
-		if rtnErr != nil {
-			return rtnErr
-		}
+		// step2: update the databaseConfig of that database
+		switch configTyp {
+		case tree.MYSQL_COMPATIBILITY_MODE:
+			sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, configVar[configTyp])
+			if rtnErr != nil {
+				return rtnErr
+			}
 
-		rtnErr = bh.Exec(ctx, sql)
-		if rtnErr != nil {
-			return rtnErr
+			rtnErr = bh.Exec(ctx, sql)
+		case tree.UNIQUE_CHECK_ON_AUTOINCR:
+			valueCheck := func(value string) error {
+				switch value {
+				case "None":
+				case "Check":
+				case "Error":
+				default:
+					return moerr.NewBadConfigf(ctx, "unique_check_on_autoincr %s", value)
+				}
+				return nil
+			}
+
+			if rtnErr = valueCheck(updateConfig); rtnErr != nil {
+				return rtnErr
+			}
+
+			sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, configVar[configTyp])
+			if rtnErr != nil {
+				return rtnErr
+			}
+			rtnErr = bh.Exec(ctx, sql)
+		default:
+			panic("unknown database config type")
 		}
 		return rtnErr
 	}
@@ -8939,14 +8314,6 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	err = updateConfigForDatabase()
 	if err != nil {
 		return err
-	}
-
-	// step3: update the session verison
-	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == dbName {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
-		if err != nil {
-			return err
-		}
 	}
 
 	return err
@@ -8986,7 +8353,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 		}
 
 		if !isExist {
-			return moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
+			return moerr.NewInternalErrorf(ctx, "there is no account %s to change config", accountName)
 		}
 
 		// step2: update the config
@@ -9006,14 +8373,6 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 		return err
 	}
 
-	// step3: update the session verison
-	if len(ses.GetDatabaseName()) != 0 {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
-		if err != nil {
-			return err
-		}
-	}
-
 	return err
 }
 
@@ -9023,8 +8382,12 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 	var accountName string
 	var dbName string
 	var err error
-	variableName := "version_compatibility"
-	variableValue := getVariableValue(ses.GetSysVar("version"))
+	variableName1 := "version_compatibility"
+	versionValue, _ := ses.GetSessionSysVar("version")
+	variableValue1 := getVariableValue(versionValue)
+
+	variableName2 := "unique_check_on_autoincr"
+	variableValue2 := "None"
 
 	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
 		dbName = string(createDatabaseStmt.Name)
@@ -9059,7 +8422,14 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 			}
 
 			//step 3: insert the record
-			sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountId, accountName, dbName, variableName, variableValue, false)
+			sql = fmt.Sprintf(initMoMysqlCompatibilityModeFormat, accountId, accountName, dbName, variableName1, variableValue1, false)
+
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
+
+			sql = fmt.Sprintf(initMoMysqlCompatibilityModeFormat, accountId, accountName, dbName, variableName2, variableValue2, false)
 
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
@@ -9072,6 +8442,10 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 			return err
 		}
 	}
+
+	ses.SetConfig(dbName, variableName1, variableValue1)
+	ses.SetConfig(dbName, variableName2, variableValue2)
+
 	return nil
 
 }
@@ -9112,6 +8486,8 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 			return err
 		}
 	}
+	ses.DeleteConfig(ctx, datname, "version_compatibility")
+	ses.DeleteConfig(ctx, datname, "unique_check_on_autoincr")
 	return nil
 }
 
@@ -9140,9 +8516,51 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 		return defaultConfig, err
 	}
 
+	// risky : this error is actually dropped to pass TestSession_Migrate
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
 		return defaultConfig, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		resultConfig, err = erArray[0].GetString(ctx, 0, 0)
+		if err != nil {
+			return defaultConfig, err
+		}
+	}
+
+	return resultConfig, err
+}
+
+func GetUniqueCheckOnAutoIncr(ctx context.Context, ses *Session, dbName string) (ret string, err error) {
+	var erArray []ExecResult
+	var sql string
+	var resultConfig string
+	defaultConfig := "None"
+	variableName := "unique_check_on_autoincr"
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return defaultConfig, err
+	}
+
+	sql = getSqlForGetSystemVariableValueWithDatabase(dbName, variableName)
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return defaultConfig, err
+	}
+
+	// risky : this error is actually dropped to pass TestSession_Migrate
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return defaultConfig, nil
 	}
 
 	if execResultArrayHasData(erArray) {
@@ -9224,7 +8642,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 		return nil, moerr.NewNoUDFNoCtx(string(call.Name.Name.ObjectName))
 	}
 
-	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1, 0)
+	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -9240,7 +8658,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	argsMap = make(map[string]tree.Expr) // map arg to param
 
 	// build argsAttr and argsMap
-	ses.Infof(ctx, "Interpret procedure call length:"+strconv.Itoa(len(argList)))
+	ses.Info(ctx, "Interpret procedure call length:"+strconv.Itoa(len(argList)))
 	i := 0
 	for curName, v := range argList {
 		argsAttr[curName] = v.InOutType
@@ -9365,112 +8783,39 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	return err
 }
 
-func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[string]interface{}, err error) {
-	var sql string
-	var erArray []ExecResult
-	var sysVars map[string]interface{}
-	var accountId uint32
-	var variableName, variableValue string
-	var val interface{}
-	tenantInfo := ses.GetTenantInfo()
-
-	sysVars = make(map[string]interface{})
+func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
+	accountId := uint64(ses.GetTenantInfo().TenantID)
+	accountName := ses.GetTenantName()
+	varName = strings.ToLower(varName)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin;")
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return
+	}
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
-	if err != nil {
-		return nil, err
-	}
 
-	accountId = tenantInfo.GetTenantID()
-	sql = getSystemVariablesWithAccount(uint64(accountId))
-
+	// check if var exists
+	sql := getSqlForGetSysVarWithAccount(accountId, varName)
 	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
 	}
 
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
+	var erArray []ExecResult
+	if erArray, err = getResultSet(ctx, bh); err != nil {
+		return
 	}
 
 	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			variableName, err = erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				return nil, err
-			}
-			variableValue, err = erArray[0].GetString(ctx, i, 1)
-			if err != nil {
-				return nil, err
-			}
-
-			if sv, ok := gSysVarsDefs[variableName]; ok {
-				val, err = sv.GetType().ConvertFromString(variableValue)
-				if err != nil {
-					ses.Error(ctx, err.Error(), zap.String("variable name:", variableName), zap.String("convert from variable value:", variableValue))
-					return nil, err
-				}
-				sysVars[variableName] = val
-			}
-		}
-	}
-
-	return sysVars, nil
-}
-
-func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) error {
-	var sql string
-	var accountId uint32
-	var err error
-	tenantInfo := ses.GetTenantInfo()
-
-	varName = strings.ToLower(varName)
-	if sv, ok := gSysVarsDefs[varName]; ok {
-		if sv.GetScope() == ScopeSession {
-			return moerr.NewInternalError(ctx, errorSystemVariableIsSession())
-		}
-		if !sv.GetDynamic() {
-			return moerr.NewInternalError(ctx, errorSystemVariableIsReadOnly())
-		}
-
-		setGlobalFunc := func() (rtnErr error) {
-			bh := ses.GetBackgroundExec(ctx)
-			defer bh.Close()
-
-			rtnErr = bh.Exec(ctx, "begin;")
-			defer func() {
-				rtnErr = finishTxn(ctx, bh, rtnErr)
-			}()
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			accountId = tenantInfo.GetTenantID()
-			sql = getSqlForUpdateSystemVariableValue(getVariableValue(varValue), uint64(accountId), varName)
-			if _, ok := sv.GetType().(SystemVariableBoolType); ok {
-				ses.Info(ctx, "set global bool type value", zap.String("variable name", varName), zap.String("variable value", getVariableValue(varValue)), zap.String("update sql", sql))
-			}
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return rtnErr
-			}
-			return rtnErr
-		}
-		err = setGlobalFunc()
-		if err != nil {
-			return err
-		}
-		return err
+		sql = getSqlForUpdateSysVarValue(getVariableValue(varValue), accountId, varName)
 	} else {
-		return moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
+		sql = getSqlForInsertSysVarWithAccount(accountId, accountName, varName, getVariableValue(varValue))
 	}
+	err = bh.Exec(ctx, sql)
+	return
 }
 
 func doCheckRole(ctx context.Context, ses *Session) error {
@@ -9494,29 +8839,20 @@ func isSuperUser(username string) bool {
 	return u == dumpName || u == rootName
 }
 
-func addInitSystemVariablesSql(accountId int, accountName, variable_name string, pu *config.ParameterUnit) string {
-	var initMoMysqlCompatibilityMode string
-
-	switch variable_name {
+func addInitSystemVariablesSql(accountId uint64, accountName, variableName string, pu *config.ParameterUnit) string {
+	switch variableName {
 	case SaveQueryResult:
+		var val = "off"
 		if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
-			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue(pu.SV.SaveQueryResult), true)
-
-		} else {
-			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue("off"), true)
+			val = "on"
 		}
-
+		return getSqlForInsertSysVarWithAccount(accountId, accountName, SaveQueryResult, val)
 	case QueryResultMaxsize:
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", getVariableValue(pu.SV.QueryResultMaxsize), true)
-
+		return getSqlForInsertSysVarWithAccount(accountId, accountName, QueryResultMaxsize, getVariableValue(pu.SV.QueryResultMaxsize))
 	case QueryResultTimeout:
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", getVariableValue(pu.SV.QueryResultTimeout), true)
-
-	case LowerCaseTableNames:
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", getVariableValue(pu.SV.LowerCaseTableNames), true)
+		return getSqlForInsertSysVarWithAccount(accountId, accountName, QueryResultTimeout, getVariableValue(pu.SV.QueryResultTimeout))
 	}
-
-	return initMoMysqlCompatibilityMode
+	return ""
 }
 
 // postAlterSessionStatus post alter all nodes session status which the tenant has been alter restricted or open.
@@ -9526,26 +8862,18 @@ func postAlterSessionStatus(
 	accountName string,
 	tenantId int64,
 	status string) error {
+	logutil.Infof("[set restricted] post set account id %d status : %s", tenantId, status)
 	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
-	currTenant := ses.GetTenantInfo().GetTenant()
-	currUser := ses.GetTenantInfo().GetUser()
+
 	var nodes []string
-	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.Contain)
-	sysTenant := isSysTenant(currTenant)
-	if sysTenant {
-		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			})
-	} else {
-		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(clusterservice.NewSelectAll(),
+		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
+			return true
 		})
-	}
 
 	var retErr, err error
 
@@ -9599,35 +8927,4 @@ func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (
 	}
 
 	return true, nil
-}
-
-func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantInfo, dbName string) (dbId uint64, dbType string, err error) {
-	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(tenantInfo.GetTenantID()))
-	if err != nil {
-		return
-	}
-	if bh.Exec(ctx, sql) != nil {
-		return
-	}
-	defer bh.ClearExecResultSet()
-
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return
-	}
-
-	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "database '%s' does not exist", dbName)
-		return
-	}
-
-	if dbId, err = erArray[0].GetUint64(ctx, 0, 0); err != nil {
-		return
-	}
-
-	if dbType, err = erArray[0].GetString(ctx, 0, 1); err != nil {
-		return
-	}
-
-	return
 }

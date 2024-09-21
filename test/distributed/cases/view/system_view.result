@@ -27,9 +27,3 @@ cn    6001
 select count(*) > 0  from mo_configurations() t where internal = 'advanced';
 count(*) > 0
 true
-select count(*) > 0 from mo_catalog.mo_variables;
-count(*) > 0
-true
-select variable_value from mo_catalog.mo_variables where variable_name = 'port' and account_name = 'sys';
-variable_value
-6001

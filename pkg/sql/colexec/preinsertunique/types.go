@@ -15,63 +15,74 @@
 package preinsertunique
 
 import (
-	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(PreInsertUnique)
 
-type Argument struct {
-	Ctx          context.Context
+type container struct {
+	buf *batch.Batch
+}
+type PreInsertUnique struct {
+	ctr          container
 	PreInsertCtx *plan.PreInsertUkCtx
 
 	packers util.PackerList
-	buf     *batch.Batch
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (preInsertUnique *PreInsertUnique) GetOperatorBase() *vm.OperatorBase {
+	return &preInsertUnique.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[PreInsertUnique](
+		func() *PreInsertUnique {
+			return &PreInsertUnique{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *PreInsertUnique) {
+			*a = PreInsertUnique{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[PreInsertUnique]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (preInsertUnique PreInsertUnique) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *PreInsertUnique {
+	return reuse.Alloc[PreInsertUnique](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (preInsertUnique *PreInsertUnique) Release() {
+	if preInsertUnique != nil {
+		reuse.Free[PreInsertUnique](preInsertUnique, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
+func (preInsertUnique *PreInsertUnique) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if preInsertUnique.ctr.buf != nil {
+		preInsertUnique.ctr.buf.CleanOnlyData()
 	}
-	arg.packers.Free()
+	if preInsertUnique.packers.PackerCount() > 10 {
+		preInsertUnique.packers.Free()
+	}
+}
+
+func (preInsertUnique *PreInsertUnique) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if preInsertUnique.ctr.buf != nil {
+		preInsertUnique.ctr.buf.Clean(proc.Mp())
+		preInsertUnique.ctr.buf = nil
+	}
+	preInsertUnique.packers.Free()
 }

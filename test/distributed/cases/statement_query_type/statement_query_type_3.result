@@ -13,14 +13,14 @@ create database statement_query_type;
 /* cloud_nonuser */ create table test_table(col1 int,col2 varchar);
 /* cloud_nonuser */ show create table test_table;
 Table    Create Table
-test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
 /* cloud_nonuser */ create view test_view as select * from test_table;
 /* cloud_nonuser */ show create database test_db;
 Database    Create Database
 test_db    CREATE DATABASE `test_db`
 /* cloud_nonuser */ show create table test_table;
 Table    Create Table
-test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
 /* cloud_nonuser */ show create view test_view;
 View    Create View    character_set_client    collation_connection
 test_view    /* cloud_nonuser */ create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci

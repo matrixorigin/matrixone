@@ -17,81 +17,87 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "dispatch"
+const opName = "dispatch"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (dispatch *Dispatch) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": dispatch")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	ctr := new(container)
-	arg.ctr = ctr
-	ctr.localRegsCnt = len(arg.LocalRegs)
-	ctr.remoteRegsCnt = len(arg.RemoteRegs)
-	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
+func (dispatch *Dispatch) Prepare(proc *process.Process) error {
+	if dispatch.OpAnalyzer == nil {
+		dispatch.OpAnalyzer = process.NewAnalyzer(dispatch.GetIdx(), dispatch.IsFirst, dispatch.IsLast, "dispatch")
+	} else {
+		dispatch.OpAnalyzer.Reset()
+	}
 
-	switch arg.FuncId {
+	ctr := new(container)
+	dispatch.ctr = ctr
+	ctr.localRegsCnt = len(dispatch.LocalRegs)
+	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
+	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
+	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), ctr.localRegsCnt)
+
+	switch dispatch.FuncId {
 	case SendToAllFunc:
 		if ctr.remoteRegsCnt == 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAllFunc should include RemoteRegs")
 		}
-		if len(arg.LocalRegs) == 0 {
+		if len(dispatch.LocalRegs) == 0 {
 			ctr.sendFunc = sendToAllRemoteFunc
 		} else {
 			ctr.sendFunc = sendToAllFunc
 		}
-		return arg.prepareRemote(proc)
+		return dispatch.prepareRemote(proc)
 
 	case ShuffleToAllFunc:
-		arg.ctr.sendFunc = shuffleToAllFunc
-		if arg.ctr.remoteRegsCnt > 0 {
-			if err := arg.prepareRemote(proc); err != nil {
+		dispatch.ctr.sendFunc = shuffleToAllFunc
+		if dispatch.ctr.remoteRegsCnt > 0 {
+			if err := dispatch.prepareRemote(proc); err != nil {
 				return err
 			}
 		} else {
-			arg.prepareLocal()
+			dispatch.prepareLocal()
 		}
-		arg.ctr.batchCnt = make([]int, ctr.aliveRegCnt)
-		arg.ctr.rowCnt = make([]int, ctr.aliveRegCnt)
+		dispatch.ctr.batchCnt = make([]int, ctr.aliveRegCnt)
+		dispatch.ctr.rowCnt = make([]int, ctr.aliveRegCnt)
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAnyFunc should include RemoteRegs")
 		}
-		if len(arg.LocalRegs) == 0 {
+		if len(dispatch.LocalRegs) == 0 {
 			ctr.sendFunc = sendToAnyRemoteFunc
 		} else {
 			ctr.sendFunc = sendToAnyFunc
 		}
-		return arg.prepareRemote(proc)
+		return dispatch.prepareRemote(proc)
 
 	case SendToAllLocalFunc:
 		if ctr.remoteRegsCnt != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAllLocalFunc should not send to remote")
 		}
 		ctr.sendFunc = sendToAllLocalFunc
-		arg.prepareLocal()
+		dispatch.prepareLocal()
 
 	case SendToAnyLocalFunc:
 		if ctr.remoteRegsCnt != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAnyLocalFunc should not send to remote")
 		}
-		arg.ctr.sendFunc = sendToAnyLocalFunc
-		arg.prepareLocal()
+		dispatch.ctr.sendFunc = sendToAnyLocalFunc
+		dispatch.prepareLocal()
 
 	default:
 		return moerr.NewInternalError(proc.Ctx, "wrong sendFunc id for dispatch")
@@ -100,83 +106,68 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func printShuffleResult(arg *Argument) {
-	if arg.ctr.batchCnt != nil && arg.ctr.rowCnt != nil {
-		logutil.Debugf("shuffle type %v,  dispatch result: batchcnt %v, rowcnt %v", arg.ShuffleType, arg.ctr.batchCnt, arg.ctr.rowCnt)
+func printShuffleResult(dispatch *Dispatch) {
+	if dispatch.ctr.batchCnt != nil && dispatch.ctr.rowCnt != nil {
+		maxNum := 0
+		minNum := 100000000
+		for i := range dispatch.ctr.batchCnt {
+			if dispatch.ctr.batchCnt[i] > maxNum {
+				maxNum = dispatch.ctr.batchCnt[i]
+			}
+			if dispatch.ctr.batchCnt[i] < minNum {
+				minNum = dispatch.ctr.batchCnt[i]
+			}
+		}
+		if maxNum > minNum*10 {
+			logutil.Warnf("shuffle imbalance!  type %v,  dispatch result: batchcnt %v, rowcnt %v", dispatch.ShuffleType, dispatch.ctr.batchCnt, dispatch.ctr.rowCnt)
+		}
 	}
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	ap := arg
+	analyzer := dispatch.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := arg.Children[0].Call(proc)
+	result, err := vm.ChildrenCall(dispatch.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
 
-	bat := result.Batch
-
+	whichToSend := result.Batch
 	if result.Batch == nil {
-		if ap.RecSink {
-			bat, err = makeEndBatch(proc)
-			if err != nil {
-				return result, err
-			}
-			defer func() {
-				if bat != nil {
-					proc.PutBatch(bat)
-				}
-			}()
-		} else {
-			printShuffleResult(ap)
-			result.Status = vm.ExecStop
-			return result, nil
-		}
+		result.Status = vm.ExecStop
+		printShuffleResult(dispatch)
+		return result, nil
 	}
 
-	if bat.Last() {
-		if !ap.ctr.hasData {
-			bat.SetEnd()
+	if whichToSend.Recursive == 1 {
+		if !dispatch.ctr.hasData {
+			result.Status = vm.ExecStop
+			whichToSend.SetEnd()
 		} else {
-			ap.ctr.hasData = false
+			dispatch.ctr.hasData = false
 		}
-	} else if bat.IsEmpty() {
-		result.Batch = batch.EmptyBatch
+	} else if whichToSend.IsEmpty() {
 		return result, nil
 	} else {
-		ap.ctr.hasData = true
+		dispatch.ctr.hasData = true
 	}
-	bat.AddCnt(1)
-	ok, err := ap.ctr.sendFunc(bat, ap, proc)
+
+	// sending.
+	ok, err := dispatch.ctr.sendFunc(whichToSend, dispatch, proc)
 	if ok {
 		result.Status = vm.ExecStop
-		return result, err
-	} else {
-		// result.Batch = nil
-		return result, err
 	}
+	return result, err
 }
 
-func makeEndBatch(proc *process.Process) (*batch.Batch, error) {
-	b := batch.NewWithSize(1)
-	b.Attrs = []string{
-		"recursive_col",
-	}
-	b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
-	err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
-	if err == nil {
-		batch.SetLength(b, 1)
-		b.SetEnd()
-	}
-	return b, err
-}
-
-func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
-	cnt := len(arg.RemoteRegs)
+func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {
+	cnt := len(dispatch.RemoteRegs)
 	for cnt > 0 {
 		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), waitNotifyTimeout)
 		select {
@@ -186,37 +177,38 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 
 		case <-proc.Ctx.Done():
 			timeoutCancel()
-			arg.ctr.prepared = true
+			dispatch.ctr.prepared = true
 			return true, nil
 
-		case csinfo := <-proc.DispatchNotifyCh:
+		case csinfo := <-dispatch.ctr.remoteInfo:
 			timeoutCancel()
-			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, csinfo)
+			dispatch.ctr.remoteReceivers = append(dispatch.ctr.remoteReceivers, csinfo)
 			cnt--
 		}
 	}
-	arg.ctr.prepared = true
+	dispatch.ctr.prepared = true
 	return false, nil
 }
 
-func (arg *Argument) prepareRemote(proc *process.Process) error {
-	arg.ctr.prepared = false
-	arg.ctr.isRemote = true
-	arg.ctr.remoteReceivers = make([]process.WrapCs, 0, arg.ctr.remoteRegsCnt)
-	arg.ctr.remoteToIdx = make(map[uuid.UUID]int)
-	for i, rr := range arg.RemoteRegs {
-		if arg.FuncId == ShuffleToAllFunc {
-			arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
+func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
+	dispatch.ctr.prepared = false
+	dispatch.ctr.isRemote = true
+	dispatch.ctr.remoteReceivers = make([]*process.WrapCs, 0, dispatch.ctr.remoteRegsCnt)
+	dispatch.ctr.remoteToIdx = make(map[uuid.UUID]int)
+	dispatch.ctr.remoteInfo = make(chan *process.WrapCs)
+	for i, rr := range dispatch.RemoteRegs {
+		if dispatch.FuncId == ShuffleToAllFunc {
+			dispatch.ctr.remoteToIdx[rr.Uuid] = dispatch.ShuffleRegIdxRemote[i]
 		}
-		if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc); err != nil {
+		if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (arg *Argument) prepareLocal() {
-	arg.ctr.prepared = true
-	arg.ctr.isRemote = false
-	arg.ctr.remoteReceivers = nil
+func (dispatch *Dispatch) prepareLocal() {
+	dispatch.ctr.prepared = true
+	dispatch.ctr.isRemote = false
+	dispatch.ctr.remoteReceivers = nil
 }

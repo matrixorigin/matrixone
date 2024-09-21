@@ -181,12 +181,13 @@ select * from test03.aff01{snapshot = 'sp04'};
 select * from test03.pri01{snapshot = 'sp04'};
 select count(*) from test03.aff01{snapshot = 'sp04'};
 
--- @bvt:issue#15971
 restore account acc01 from snapshot sp04;
+use test03;
 show create table aff01;
 show create table pri01;
 select count(*) from aff01;
--- @bvt:issue
+drop database test03;
+drop snapshot sp04;
 
 
 
@@ -271,13 +272,12 @@ drop snapshot snap01;
 
 
 -- restore null
--- @bvt:issue#15943
 drop snapshot if exists sp05;
 create snapshot sp05 for account acc01;
 create database db01;
 restore account acc01 FROM snapshot sp05;
 show databases;
--- @bvt:issue
+drop snapshot sp05;
 
 
 
@@ -440,7 +440,6 @@ show create table db03.tm1;
 show create table db03.ti2;
 show create table db03.tm2;
 
--- @bvt:issue#15971
 restore account acc01 from snapshot sp14;
 show databases;
 select * from db03.ti1;
@@ -451,7 +450,6 @@ show create table db03.ti1;
 show create table db03.tm1;
 show create table db03.ti2;
 show create table db03.tm2;
--- @bvt:issue
 
 -- @ignore:1
 show snapshots;
@@ -561,7 +559,6 @@ create snapshot sp15 for account acc01;
 restore account acc01 database db07 from snapshot sp15;
 restore account acc01 database db08 from snapshot sp15;
 
--- @bvt:issue#15943
 use db08;
 show tables;
 select * from index01;
@@ -570,7 +567,6 @@ use db07;
 show tables;
 show create table table01 {snapshot = 'sp14'};
 show create table table01;
--- @bvt:issue
 
 -- @ignore:1
 show snapshots;
@@ -604,11 +600,11 @@ create database db09;
 use db09;
 drop table if exists index01;
 create table index01(
-        col1 int not null,
-        col2 date not null,
-        col3 varchar(16) not null,
-        col4 int unsigned not null,
-        primary key (col1)
+                        col1 int not null,
+                        col2 date not null,
+                        col3 varchar(16) not null,
+                        col4 int unsigned not null,
+                        primary key (col1)
 );
 insert into index01 values(1, '1980-12-17','Abby', 21);
 insert into index01 values(2, '1981-02-20','Bob', 22);
@@ -753,8 +749,5 @@ drop snapshot sp19;
 -- @session
 
 drop account acc01;
-
-
-
-
-
+-- @ignore:1
+show snapshots;

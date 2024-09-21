@@ -17,12 +17,15 @@ package export
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,17 +36,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/ring"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
-	"go.uber.org/zap"
 )
 
-const defaultQueueSize = 1310720 // queue mem cost = 10MB
+// defaultRingBufferSize need 2^N value
+// OLD Case: defaultQueueSize default length for collect Channel (value = 1310720)
+// NEW Case:
+// 1. [consume] one goroutine collect items ~= 1s / 50us = 20_000
+// 2. [generate] statement_info << query qps
+// 3. [generate] rawlog qps ~= [1000, 3000]
+// 4. [generate] metric 1ps = 60s / 15s = 4
+const defaultRingBufferSize = 2 << 13
 
 const LoggerNameMOCollector = "MOCollector"
 
 const discardCollectTimeout = time.Millisecond
+const discardCollectRetry = time.Millisecond / 10
 
 // bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
 // work like:
@@ -56,7 +66,7 @@ type bufferHolder struct {
 	// name like a type
 	name string
 	// buffer is instance of batchpipe.ItemBuffer with its own elimination algorithm(like LRU, LFU)
-	buffer batchpipe.ItemBuffer[batchpipe.HasName, any]
+	buffer motrace.Buffer
 	// bufferPool
 	bufferPool *sync.Pool
 	bufferCnt  atomic.Int32
@@ -69,6 +79,8 @@ type bufferHolder struct {
 	impl motrace.PipeImpl
 	// trigger handle Reminder strategy
 	trigger *time.Timer
+
+	aggr table.Aggregator
 
 	mux sync.Mutex
 	// stopped mark
@@ -95,6 +107,7 @@ func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.P
 	b.mux.Lock()
 	defer b.mux.Unlock()
 	b.trigger = time.AfterFunc(time.Hour, func() {})
+	b.aggr = impl.NewAggregator(ctx, b.name)
 	return b
 }
 
@@ -112,15 +125,15 @@ func (b *bufferHolder) Start() {
 	})
 }
 
-func (b *bufferHolder) getBuffer() batchpipe.ItemBuffer[batchpipe.HasName, any] {
+func (b *bufferHolder) getBuffer() motrace.Buffer {
 	b.c.allocBuffer()
 	b.bufferCnt.Add(1)
-	buffer := b.bufferPool.Get().(batchpipe.ItemBuffer[batchpipe.HasName, any])
+	buffer := b.bufferPool.Get().(motrace.Buffer)
 	b.logStatus("new buffer")
 	return buffer
 }
 
-func (b *bufferHolder) putBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, any]) {
+func (b *bufferHolder) putBuffer(buffer motrace.Buffer) {
 	buffer.Reset()
 	b.bufferPool.Put(buffer)
 	b.bufferCnt.Add(-1)
@@ -138,7 +151,7 @@ func (b *bufferHolder) logStatus(msg string) {
 	}
 }
 
-func (b *bufferHolder) discardBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, any]) {
+func (b *bufferHolder) discardBuffer(buffer motrace.Buffer) {
 	b.discardCnt.Add(1)
 	b.putBuffer(buffer)
 }
@@ -153,6 +166,19 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 	if b.buffer == nil {
 		b.buffer = b.getBuffer()
 	}
+
+	if b.aggr != nil {
+		if i, ok := item.(table.Item); ok {
+			_, err := b.aggr.AddItem(i)
+			if err == nil {
+				// aggred, then return
+				i.Free()
+				b.mux.Unlock()
+				return
+			}
+		}
+	}
+
 	buf := b.buffer
 	buf.Add(item)
 	b.mux.Unlock()
@@ -166,7 +192,10 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 var _ generateReq = (*bufferGenerateReq)(nil)
 
 type bufferGenerateReq struct {
-	buffer batchpipe.ItemBuffer[batchpipe.HasName, any]
+	// itemName name of buffer's item
+	itemName string
+	// buffer keep content
+	buffer motrace.Buffer
 	// impl NewItemBatchHandler
 	b *bufferHolder
 }
@@ -181,6 +210,8 @@ func (r *bufferGenerateReq) handle(buf *bytes.Buffer) (exportReq, error) {
 }
 
 func (r *bufferGenerateReq) callback(err error) {}
+
+func (r *bufferGenerateReq) typ() string { return r.itemName }
 
 var _ exportReq = (*bufferExportReq)(nil)
 
@@ -210,9 +241,23 @@ func (b *bufferHolder) getGenerateReq() generateReq {
 	if b.buffer == nil || b.buffer.IsEmpty() {
 		return nil
 	}
+
+	// handle aggr
+	// fixme: handle now ? or run regular
+	if b.aggr != nil {
+		end := time.Now().Truncate(b.aggr.GetWindow())
+		results := b.aggr.PopResultsBeforeWindow(end)
+		for _, item := range results {
+			b.buffer.Add(item) // tips: Add() will free the {item} obj.
+		}
+	}
+	// END> handle aggr
+
 	req := &bufferGenerateReq{
 		buffer: b.buffer,
 		b:      b,
+		// impl generateReq.typ()
+		itemName: b.name,
 	}
 	b.buffer = nil
 	return req
@@ -245,7 +290,7 @@ type MOCollector struct {
 	// buffers maintain working buffer for each type
 	buffers map[string]*bufferHolder
 	// awakeCollect handle collect signal
-	awakeCollect chan batchpipe.HasName
+	awakeQueue *ring.RingBuffer[batchpipe.HasName]
 	// awakeGenerate handle generate signal
 	awakeGenerate chan generateReq
 	// awakeBatch handle export signal
@@ -278,12 +323,16 @@ type MOCollector struct {
 
 type MOCollectorOption func(*MOCollector)
 
-func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector {
+func NewMOCollector(
+	ctx context.Context,
+	service string,
+	opts ...MOCollectorOption,
+) *MOCollector {
 	c := &MOCollector{
 		ctx:            ctx,
-		logger:         morun.ProcessLevelRuntime().Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
+		logger:         morun.ServiceRuntime(service).Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
 		buffers:        make(map[string]*bufferHolder),
-		awakeCollect:   make(chan batchpipe.HasName, defaultQueueSize),
+		awakeQueue:     ring.NewRingBuffer[batchpipe.HasName](defaultRingBufferSize, ring.WithGoScheduleThreshold(1e5 /*~=1ms/10ns*/)),
 		awakeGenerate:  make(chan generateReq, 16),
 		awakeBatch:     make(chan exportReq),
 		stopCh:         make(chan struct{}),
@@ -400,28 +449,45 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 
 // Collect item in chan, if collector is stopped then return error
 func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error {
-	select {
-	case <-c.stopCh:
-		c.stopDrop.Add(1)
-		ctx = errutil.ContextWithNoReport(ctx, true)
-		return moerr.NewInternalError(ctx, "MOCollector stopped")
-	case c.awakeCollect <- item:
-		return nil
+	start := time.Now()
+	for {
+		select {
+		case <-c.stopCh:
+			c.stopDrop.Add(1)
+			ctx = errutil.ContextWithNoReport(ctx, true)
+			return moerr.NewInternalError(ctx, "MOCollector stopped")
+		default:
+			ok, _ := c.awakeQueue.Offer(item)
+			if ok {
+				v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
+				return nil
+			}
+			time.Sleep(time.Millisecond)
+			v2.GetTraceCollectorCollectHungCounter(item.GetName()).Inc()
+		}
 	}
 }
 
 // DiscardableCollect implements motrace.DiscardableCollector
 // cooperate with logutil.Discardable() field
 func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.HasName) error {
-	select {
-	case <-c.stopCh:
-		c.stopDrop.Add(1)
-		ctx = errutil.ContextWithNoReport(ctx, true)
-		return moerr.NewInternalError(ctx, "MOCollector stopped")
-	case c.awakeCollect <- item:
-		return nil
-	case <-time.After(discardCollectTimeout):
-		return nil
+	now := time.Now()
+	for {
+		select {
+		case <-c.stopCh:
+			c.stopDrop.Add(1)
+			ctx = errutil.ContextWithNoReport(ctx, true)
+			return moerr.NewInternalError(ctx, "MOCollector stopped")
+		default:
+			ok, _ := c.awakeQueue.Offer(item)
+			if ok {
+				return nil
+			} else if time.Since(now) > discardCollectTimeout {
+				v2.GetTraceCollectorDiscardItemCounter(item.GetName()).Inc()
+				return nil
+			}
+			time.Sleep(discardCollectRetry)
+		}
 	}
 }
 
@@ -476,15 +542,33 @@ func (c *MOCollector) releaseBuffer() {
 // doCollect handle all item accept work, send it to the corresponding buffer
 // goroutine worker
 func (c *MOCollector) doCollect(idx int) {
+	var startWait = time.Now()
 	defer c.stopWait.Done()
 	ctx, span := trace.Start(c.ctx, "MOCollector.doCollect")
 	defer span.End()
 	c.logger.Debug("doCollect %dth: start", zap.Int("idx", idx))
+
 loop:
 	for {
 		select {
-		case i := <-c.awakeCollect:
+		default:
+			i, got, err := c.awakeQueue.Pop()
+			if !got {
+				if errors.Is(err, ring.ErrDisposed) {
+					v2.TraceCollectorDisposedCounter.Inc()
+				}
+				if errors.Is(err, ring.ErrTimeout) {
+					v2.TraceCollectorTimeoutCounter.Inc()
+				}
+				if errors.Is(err, ring.ErrEmpty) {
+					v2.TraceCollectorEmptyCounter.Inc()
+				}
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			v2.GetTraceCollectorMOLoggerQueueLength().Set(float64(c.awakeQueue.Len()))
 			start := time.Now()
+			v2.TraceCollectorConsumeDelayDurationHistogram.Observe(start.Sub(startWait).Seconds())
 			c.mux.RLock()
 			if buf, has := c.buffers[i.GetName()]; !has {
 				c.logger.Debug("doCollect: init buffer", zap.Int("idx", idx), zap.String("item", i.GetName()))
@@ -506,7 +590,8 @@ loop:
 				buf.Add(i)
 				c.mux.RUnlock()
 			}
-			v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
+			v2.TraceCollectorConsumeDurationHistogram.Observe(time.Since(start).Seconds())
+			startWait = time.Now() // next Round
 		case <-c.stopCh:
 			break loop
 		}
@@ -517,6 +602,7 @@ loop:
 type generateReq interface {
 	handle(*bytes.Buffer) (exportReq, error)
 	callback(error)
+	typ() string
 }
 
 type exportReq interface {
@@ -583,6 +669,8 @@ loop:
 				case <-time.After(time.Second * 10):
 					c.logger.Info("awakeBatch: timeout after 10 seconds")
 					v2.TraceCollectorGenerateDiscardDurationHistogram.Observe(time.Since(start).Seconds())
+					// fixme: do csv output, should NO discard case
+					v2.GetTraceCollectorDiscardCounter(req.typ()).Inc()
 				}
 				end := time.Now()
 				v2.TraceCollectorGenerateDelayDurationHistogram.Observe(end.Sub(startDelay).Seconds())
@@ -633,7 +721,7 @@ loop:
 			fields := make([]zap.Field, 0, 16)
 			fields = append(fields, zap.Int32("MaxBufferCnt", c.maxBufferCnt))
 			fields = append(fields, zap.Int32("TotalBufferCnt", c.bufferTotal.Load()))
-			fields = append(fields, zap.Int("QueueLength", len(c.awakeCollect)))
+			fields = append(fields, zap.Int("QueueLength", int(c.awakeQueue.Len())))
 			for _, b := range c.buffers {
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sBufferCnt", b.name), b.bufferCnt.Load()))
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sDiscardCnt", b.name), b.discardCnt.Load()))
@@ -650,8 +738,8 @@ func (c *MOCollector) Stop(graceful bool) error {
 	var err error
 	var buf = new(bytes.Buffer)
 	c.stopOnce.Do(func() {
-		for len(c.awakeCollect) > 0 && graceful {
-			c.logger.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)))
+		for c.awakeQueue.Len() > 0 && graceful {
+			c.logger.Debug(fmt.Sprintf("doCollect left %d job", c.awakeQueue.Len()))
 			time.Sleep(250 * time.Millisecond)
 		}
 		c.mux.Lock()

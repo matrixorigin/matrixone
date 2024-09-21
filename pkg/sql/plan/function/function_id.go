@@ -220,6 +220,10 @@ const (
 	VAR_POP
 	VAR_SAMPLE
 
+	// Date and Time functions
+	LAST_DAY
+	MAKEDATE
+
 	DATE
 	TIME
 	DAY
@@ -247,6 +251,7 @@ const (
 	APPROX_COUNT_DISTINCT
 
 	LOAD_FILE
+	SAVE_FILE
 
 	//information functions
 	//Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
@@ -275,8 +280,15 @@ const (
 	TIMESTAMP
 	DATE_FORMAT
 	JSON_EXTRACT
+	JSON_EXTRACT_STRING
+	JSON_EXTRACT_FLOAT64
 	JSON_QUOTE
 	JSON_UNQUOTE
+	JSON_ROW
+	JQ
+	TRY_JQ
+	WASM
+	TRY_WASM
 	FORMAT
 	SLEEP
 	INSTR
@@ -304,6 +316,7 @@ const (
 
 	MO_SHOW_VISIBLE_BIN      // parse type/onUpdate/default []byte to visible string
 	MO_SHOW_VISIBLE_BIN_ENUM //  parse type/onUpdate/default []byte to visible string for enum
+	MO_SHOW_COL_QUNIQUE      // show column whether unique key
 
 	MO_TABLE_ROWS    // table rows
 	MO_TABLE_SIZE    // table size
@@ -316,6 +329,7 @@ const (
 	MO_ADMIN_NAME // get mo admin name of account
 	MO_CU
 	MO_CU_V1
+	MO_EXPLAIN_PHY
 
 	GIT_VERSION
 	BUILD_VERSION
@@ -338,6 +352,8 @@ const (
 
 	// be used: show snapshots
 	CAST_NANO_TO_TIMESTAMP
+	// be used: show pitr
+	CAST_RANGE_VALUE_UNIT
 
 	//Sequence function
 	NEXTVAL
@@ -354,6 +370,7 @@ const (
 	VECTOR_DIMS     //VECTOR DIMENSIONS
 	NORMALIZE_L2    //NORMALIZE L2
 	L2_DISTANCE     //L2_DISTANCE
+	L2_DISTANCE_SQ  //L2_DISTANCE_SQ
 	COSINE_DISTANCE //COSINE_DISTANCE
 	CLUSTER_CENTERS // CLUSTER_CENTERS
 	SUB_VECTOR      // SUB_VECTOR
@@ -567,7 +584,15 @@ var functionIdRegister = map[string]int32{
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
+	"json_extract_string":            JSON_EXTRACT_STRING,
+	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
 	"json_quote":                     JSON_QUOTE,
+	"json_unquote":                   JSON_UNQUOTE,
+	"json_row":                       JSON_ROW,
+	"jq":                             JQ,
+	"try_jq":                         TRY_JQ,
+	"wasm":                           WASM,
+	"try_wasm":                       TRY_WASM,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
 	"dense_rank":                     DENSE_RANK,
@@ -576,6 +601,7 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
+	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
 	"md5":                            MD5,
@@ -589,6 +615,8 @@ var functionIdRegister = map[string]int32{
 	"datediff":                       DATEDIFF,
 	"timestampdiff":                  TIMESTAMPDIFF,
 	"timediff":                       TIMEDIFF,
+	"last_day":                       LAST_DAY,
+	"makedate":                       MAKEDATE,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
@@ -602,6 +630,7 @@ var functionIdRegister = map[string]int32{
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
+	"mo_show_col_unique":             MO_SHOW_COL_QUNIQUE,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 	"format":                         FORMAT,
@@ -611,7 +640,6 @@ var functionIdRegister = map[string]int32{
 	"locate":                         LOCATE,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
-	"json_unquote":                   JSON_UNQUOTE,
 	"ascii":                          ASCII,
 	"replace":                        REPLACE,
 	"mo_table_rows":                  MO_TABLE_ROWS,
@@ -626,6 +654,7 @@ var functionIdRegister = map[string]int32{
 	"mo_admin_name":                  MO_ADMIN_NAME,
 	"mo_cu":                          MO_CU,
 	"mo_cu_v1":                       MO_CU_V1,
+	"mo_explain_phy":                 MO_EXPLAIN_PHY,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,
@@ -645,6 +674,7 @@ var functionIdRegister = map[string]int32{
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
 	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
+	"cast_range_value_unit":          CAST_RANGE_VALUE_UNIT,
 	"to_upper":                       UPPER,
 	"upper":                          UPPER,
 	"ucase":                          UPPER,
@@ -662,6 +692,7 @@ var functionIdRegister = map[string]int32{
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
 	"l2_distance":       L2_DISTANCE,
+	"l2_distance_sq":    L2_DISTANCE_SQ,
 	"cosine_distance":   COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,

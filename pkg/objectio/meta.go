@@ -159,8 +159,10 @@ const (
 	appendableLen      = 1
 	sortKeyOff         = appendableOff + appendableLen
 	sortKeyLen         = 2
-	headerDummyOff     = sortKeyOff + sortKeyLen
-	headerDummyLen     = 30
+	bloomFilterTypeOff = sortKeyOff + sortKeyLen
+	bloomFilterTypeLen = 1
+	headerDummyOff     = bloomFilterTypeOff + bloomFilterTypeLen
+	headerDummyLen     = 29
 	headerLen          = headerDummyOff + headerDummyLen
 )
 
@@ -277,6 +279,14 @@ func (bh BlockHeader) SetSortKey(idx uint16) {
 
 func (bh BlockHeader) SortKey() uint16 {
 	return types.DecodeUint16(bh[sortKeyOff : sortKeyOff+sortKeyLen])
+}
+
+func (bh BlockHeader) SetBloomFilterType(typ uint8) {
+	copy(bh[bloomFilterTypeOff:bloomFilterTypeOff+bloomFilterTypeLen], types.EncodeUint8(&typ))
+}
+
+func (bh BlockHeader) BloomFilterType() uint8 {
+	return types.DecodeUint8(bh[bloomFilterTypeOff : bloomFilterTypeOff+bloomFilterTypeLen])
 }
 
 func (bh BlockHeader) IsEmpty() bool {

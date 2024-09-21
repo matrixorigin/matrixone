@@ -17,14 +17,16 @@ package shuffle
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Shuffle)
 
-type Argument struct {
-	ctr                *container
+type Shuffle struct {
+	ctr                container
 	ShuffleColIdx      int32
 	ShuffleType        int32
 	AliveRegCnt        int32
@@ -32,58 +34,69 @@ type Argument struct {
 	ShuffleColMax      int64
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
-
+	RuntimeFilterSpec  *plan.RuntimeFilterSpec
+	msgReceiver        *message.MessageReceiver
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (shuffle *Shuffle) GetOperatorBase() *vm.OperatorBase {
+	return &shuffle.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Shuffle](
+		func() *Shuffle {
+			return &Shuffle{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Shuffle) {
+			*a = Shuffle{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Shuffle]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (shuffle Shuffle) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Shuffle {
+	return reuse.Alloc[Shuffle](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (shuffle *Shuffle) Release() {
+	if shuffle != nil {
+		reuse.Free[Shuffle](shuffle, nil)
 	}
 }
 
 type container struct {
-	ending        bool
-	sels          [][]int32
-	shufflePool   []*batch.Batch
-	sendPool      []*batch.Batch
-	lastSentBatch *batch.Batch
+	ending               bool
+	sels                 [][]int64
+	buf                  *batch.Batch
+	shufflePool          *ShufflePool
+	runtimeFilterHandled bool
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		for i := range arg.ctr.shufflePool {
-			if arg.ctr.shufflePool[i] != nil {
-				arg.ctr.shufflePool[i].Clean(proc.Mp())
-				arg.ctr.shufflePool[i] = nil
-			}
-		}
-		arg.ctr.sels = nil
-		arg.ctr = nil
+func (shuffle *Shuffle) SetShufflePool(sp *ShufflePool) {
+	shuffle.ctr.shufflePool = sp
+}
+
+func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if shuffle.RuntimeFilterSpec != nil {
+		shuffle.ctr.runtimeFilterHandled = false
 	}
+	if shuffle.ctr.buf != nil {
+		shuffle.ctr.buf.Clean(proc.Mp())
+	}
+	if shuffle.ctr.shufflePool != nil {
+		shuffle.ctr.shufflePool.Reset(proc.Mp())
+	}
+	shuffle.ctr.sels = nil
+	shuffle.ctr.ending = false
+}
+
+func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
+	shuffle.ctr.buf = nil
+	shuffle.ctr.shufflePool = nil
 }

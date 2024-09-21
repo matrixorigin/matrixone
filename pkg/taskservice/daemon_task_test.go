@@ -20,8 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
 type mockActiveRoutine struct {
@@ -50,6 +51,10 @@ func (r *mockActiveRoutine) Resume() error {
 
 func (r *mockActiveRoutine) Cancel() error {
 	r.cancelC <- struct{}{}
+	return nil
+}
+
+func (r *mockActiveRoutine) Restart() error {
 	return nil
 }
 
@@ -112,9 +117,9 @@ func TestRunDaemonTask(t *testing.T) {
 
 func (r *taskRunner) testRegisterExecutor(t *testing.T, code task.TaskCode, started *atomic.Bool) {
 	r.RegisterExecutor(code, func(ctx context.Context, task task.Task) error {
-		started.Store(true)
 		ar := newMockActiveRoutine()
 		assert.NoError(t, r.Attach(context.Background(), 1, ar))
+		started.Store(true)
 		for {
 			select {
 			case <-ar.cancelC:
@@ -201,6 +206,19 @@ func TestCancelDaemonTask(t *testing.T) {
 		waitStarted(&started, time.Second*5)
 
 		expectTaskStatus(t, store, dt, task.TaskStatus_CancelRequested, task.TaskStatus_Canceled)
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestRestartDaemonTask(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
+		mustAddTestDaemonTask(t, store, 1, dt)
+		var started atomic.Bool
+		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
+		waitStarted(&started, time.Second*5)
+
+		expectTaskStatus(t, store, dt, task.TaskStatus_RestartRequested, task.TaskStatus_Running)
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
 }

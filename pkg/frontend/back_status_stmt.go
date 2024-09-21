@@ -16,10 +16,22 @@ package frontend
 
 import (
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 func executeStatusStmtInBack(backSes *backSession,
 	execCtx *ExecCtx) (err error) {
+	execCtx.ses.EnterFPrint(FPStatusStmtInBack)
+	defer execCtx.ses.ExitFPrint(FPStatusStmtInBack)
+	fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+	setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
+
+	err = disttae.CheckTxnIsValid(fPrintTxnOp)
+	if err != nil {
+		return err
+	}
+
 	runBegin := time.Now()
 	if _, err = execCtx.runner.Run(0); err != nil {
 		return

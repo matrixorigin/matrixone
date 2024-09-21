@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -72,7 +73,7 @@ func (store *mockTxnStore) PrepareCommit() error {
 
 func (store *mockTxnStore) ApplyCommit() error {
 	for e := range store.entries {
-		err := e.ApplyCommit()
+		err := e.ApplyCommit(store.txn.GetID())
 		if err != nil {
 			return err
 		}
@@ -125,8 +126,7 @@ func newMockTableHandle(catalog *Catalog, txn txnif.AsyncTxn, entry *TableEntry)
 }
 
 func (it *mockObjIt) GetError() error          { return nil }
-func (it *mockObjIt) Valid() bool              { return false }
-func (it *mockObjIt) Next()                    {}
+func (it *mockObjIt) Next() bool               { return false }
 func (it *mockObjIt) Close() error             { return nil }
 func (it *mockObjIt) GetObject() handle.Object { return nil }
 
@@ -202,11 +202,11 @@ func (h *mockDBHandle) GetCreateSql() string {
 	return h.entry.GetCreateSql()
 }
 
-func (h *mockTableHandle) MakeObjectIt() (it handle.ObjectIt) {
+func (h *mockTableHandle) MakeObjectIt(bool) (it handle.ObjectIt) {
 	return new(mockObjIt)
 }
 
-func (h *mockTableHandle) MakeObjectItOnSnap() (it handle.ObjectIt) {
+func (h *mockTableHandle) MakeObjectItOnSnap(bool) (it handle.ObjectIt) {
 	return new(mockObjIt)
 }
 
@@ -229,7 +229,7 @@ func (txn *mockTxn) CreateDatabase(name, createSql, datTyp string) (handle.Datab
 	return h, nil
 }
 
-func (txn *mockTxn) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error) {
+func (txn *mockTxn) CreateDatabaseWithID(ctx context.Context, name, createSql, datTyp string, id uint64) (handle.Database, error) {
 	entry, err := txn.catalog.CreateDBEntryWithID(name, createSql, datTyp, id, txn)
 	if err != nil {
 		return nil, err

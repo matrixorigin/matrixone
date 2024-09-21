@@ -1,9 +1,9 @@
-select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type_part1" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 96;
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type_part1" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 100;
 statement    query_type    sql_source_type
 use system    Other    external_sql
 rollback    TCL    external_sql
 deallocate prepare s1    Other    external_sql
-execute s1 using @a // prepare s1 from select * from test_table where col1=? ; set @a=2    Other    external_sql
+execute s1 using @a // select * from test_table where col1=? ; set @a=2    Other    external_sql
 set @a=2    Other    external_sql
 prepare s1 from select * from test_table where col1=?    Other    external_sql
 drop database db2    DDL    external_sql
@@ -24,6 +24,8 @@ create database if not exists db1    DDL    external_sql
 create user user_name identified by '******'    DCL    external_sql
 create role test_role    DCL    external_sql
 create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    external_sql
+select * from unnest('{"a":1}') as f    DQL    external_sql
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    external_sql
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    external_sql
 show index from test_table    Other    external_sql
 show tables    Other    external_sql
@@ -70,6 +72,8 @@ create role test_role    DCL    external_sql
 create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    external_sql
 update test_table set col2='xxx' where col1=1    DML    external_sql
 insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    external_sql
+select * from unnest('{"a":1}') as f    DQL    external_sql
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    external_sql
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    external_sql
 show index from test_table    Other    external_sql
 show collation like 'utf8mb4_general_ci%'    Other    external_sql

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"math"
 	"math/bits"
 	"unsafe"
 
@@ -29,8 +30,11 @@ import (
 )
 
 const (
-	HashMapSizeForShuffle           = 160000
+	threshHoldForShuffleGroup       = 64000
+	threshHoldForRightJoinShuffle   = 8192
+	threshHoldForShuffleJoin        = 120000
 	threshHoldForHybirdShuffle      = 4000000
+	threshHoldForHashShuffle        = 8000000
 	MAXShuffleDOP                   = 64
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
@@ -308,9 +312,6 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < HashMapSizeForShuffle {
-		return
-	}
 	idx := 0
 	if !builder.IsEquiJoin(n) {
 		return
@@ -331,6 +332,19 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		}
 	}
 
+	if n.BuildOnLeft {
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
+			return
+		}
+	} else {
+		leftchild := builder.qry.Nodes[n.Children[0]]
+		rightchild := builder.qry.Nodes[n.Children[1]]
+		factor := math.Pow((leftchild.Stats.Outcnt / rightchild.Stats.Outcnt), 0.4)
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForShuffleJoin*factor {
+			return
+		}
+	}
+
 	//find the highest ndv
 	highestNDV := n.OnList[idx].Ndv
 	if highestNDV < ShuffleThreshHoldOfNDV {
@@ -338,15 +352,20 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	// get the column of left child
-	var expr *plan.Expr
+	var expr0, expr1 *plan.Expr
 	cond := n.OnList[idx]
 	switch condImpl := cond.Expr.(type) {
 	case *plan.Expr_F:
-		expr = condImpl.F.Args[0]
+		expr0 = condImpl.F.Args[0]
+		expr1 = condImpl.F.Args[1]
 	}
 
-	hashCol, typ := GetHashColumn(expr)
-	if hashCol == nil {
+	hashCol0, typ := GetHashColumn(expr0)
+	if hashCol0 == nil {
+		return
+	}
+	hashCol1, _ := GetHashColumn(expr1)
+	if hashCol1 == nil {
 		return
 	}
 	//for now ,only support integer and string type
@@ -354,7 +373,10 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
-		determinShuffleType(hashCol, n, builder)
+		determinShuffleType(hashCol0, n, builder)
+		if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && n.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
+			n.Stats.HashmapStats.Shuffle = false
+		}
 	}
 }
 
@@ -389,9 +411,11 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < HashMapSizeForShuffle {
+	factor := 1 / math.Pow((n.Stats.Outcnt/n.Stats.Selectivity/child.Stats.Outcnt), 0.8)
+	if n.Stats.HashmapStats.HashmapSize < threshHoldForShuffleGroup*factor {
 		return
 	}
+
 	//find the highest ndv
 	highestNDV := n.GroupBy[0].Ndv
 	idx := 0
@@ -415,6 +439,9 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
+		if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && n.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
+			n.Stats.HashmapStats.Shuffle = false
+		}
 	}
 
 	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
@@ -434,14 +461,15 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 					}
 				}
 			}
-			// shuffle group can not follow shuffle join, need to reshuffle
-			n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reshuffle
 		}
 	}
 
 }
 
-func GetShuffleDop() (dop int) {
+func GetShuffleDop(cpunum int) (dop int) {
+	if cpunum < MAXShuffleDOP {
+		return cpunum
+	}
 	return MAXShuffleDOP
 }
 
@@ -529,7 +557,7 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 		}
 		if node.Stats.HashmapStats.HashmapSize <= threshHoldForHybirdShuffle {
 			node.Stats.HashmapStats.Shuffle = false
-			if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
+			if parent.NodeType == plan.Node_AGG {
 				parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
 			}
 		}

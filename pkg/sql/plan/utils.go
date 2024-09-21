@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -563,8 +565,8 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 }
 
 func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
-	col1, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
-	col2, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
+	col1, _, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
+	col2, _, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
 	if col1 == nil || col2 == nil {
 		return false
 	}
@@ -583,10 +585,16 @@ func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
 	return false
 }
 
-func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string) {
+func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string, hasDynamicParam bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) == 0 {
 		return
+	}
+	for i := range fn.Args {
+		if containsDynamicParam(fn.Args[i]) {
+			hasDynamicParam = true
+			break
+		}
 	}
 
 	col = fn.Args[0].GetCol()
@@ -628,7 +636,7 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List:
 				return extractColRefInFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {
@@ -767,7 +775,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
-	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false)
+	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false, true)
 	if err != nil {
 		return false
 	}
@@ -855,7 +863,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	case *tree.ParenSelect:
 		*selects = append(*selects, leftStmt.Select)
 	default:
-		return moerr.NewParseError(ctx, "unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
+		return moerr.NewParseErrorf(ctx, "unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
 	}
 
 	// right is not UNION always
@@ -879,7 +887,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 
 		*selects = append(*selects, rightStmt.Select)
 	default:
-		return moerr.NewParseError(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
+		return moerr.NewParseErrorf(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
 	}
 
 	switch stmt.Type {
@@ -966,7 +974,7 @@ func GetColumnsByExpr(
 
 func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
-		e, err := ConstantFold(bat, expr, proc, false)
+		e, err := ConstantFold(bat, expr, proc, false, true)
 		if err != nil {
 			return false, err
 		}
@@ -984,14 +992,14 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 		}
 		defer executor.Free()
 
-		vec, err := executor.Eval(proc, []*batch.Batch{bat})
+		vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return false, err
 		}
 		if vec.GetType().Oid != types.T_bool {
 			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 		}
-		cols := vector.MustFixedCol[bool](vec)
+		cols := vector.MustFixedColWithTypeCheck[bool](vec)
 		for _, isNeed := range cols {
 			if isNeed {
 				return true, nil
@@ -1062,6 +1070,9 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 // todo: remove this in the future
 func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
 	if tableDef.Pkey != nil {
+		if colName == tableDef.Pkey.PkeyColName {
+			return 0
+		}
 		pkNames := tableDef.Pkey.Names
 		for i := range pkNames {
 			if pkNames[i] == colName {
@@ -1083,7 +1094,7 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsConst bool) ([]*plan.Expr, error) {
 	newExprs := DeepCopyExprList(exprs)
 	for i := range newExprs {
-		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst)
+		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst, true)
 		if err != nil {
 			return nil, err
 		}
@@ -1094,16 +1105,28 @@ func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsCo
 	return newExprs, nil
 }
 
-func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
+func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
+	if expr.Typ.Id == int32(types.T_interval) {
+		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+	}
+
 	// If it is Expr_List, perform constant folding on its elements
 	if elist := expr.GetList(); elist != nil {
 		exprList := elist.List
+		cannotFold := false
 		for i := range exprList {
-			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
+			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst, foldInExpr)
 			if err != nil {
 				return nil, err
 			}
 			exprList[i] = foldExpr
+			if foldExpr.GetLit() == nil {
+				cannotFold = true
+			}
+		}
+
+		if cannotFold || !foldInExpr {
+			return expr, nil
 		}
 
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -1139,17 +1162,23 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if err != nil {
 		return nil, err
 	}
-	if f.CannotFold() || f.IsRealTimeRelated() {
+	if f.CannotFold() {
+		return expr, nil
+	}
+	if f.IsRealTimeRelated() && !varAndParamIsConst {
 		return expr, nil
 	}
 	isVec := false
 	for i := range fn.Args {
-		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst)
+		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr)
 		if errFold != nil {
 			return nil, errFold
 		}
 		fn.Args[i] = foldExpr
 		isVec = isVec || foldExpr.GetVec() != nil
+	}
+	if f.IsAgg() || f.IsWin() {
+		return expr, nil
 	}
 	if !rule.IsConstant(expr, varAndParamIsConst) {
 		return expr, nil
@@ -1229,8 +1258,13 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
-	if constExpr == nil {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
+	if constExpr.GetP() != nil && columnT.IsNumeric() {
+		return true
+	}
+
+	lit := constExpr.GetLit()
+	if lit == nil {
 		return false
 	}
 
@@ -1239,11 +1273,11 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		return true
 	}
 	switch constT.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		switch columnT.Oid {
 		case types.T_char, types.T_varchar:
 			return constT.Width <= columnT.Width
-		case types.T_text:
+		case types.T_text, types.T_datalink:
 			return true
 		default:
 			return false
@@ -1264,7 +1298,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		}
 
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val, valOk := constExpr.Value.(*plan.Literal_I64Val)
+		val, valOk := lit.Value.(*plan.Literal_I64Val)
 		if !valOk {
 			return false
 		}
@@ -1301,7 +1335,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		}
 
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val_u, valOk := constExpr.Value.(*plan.Literal_U64Val)
+		val_u, valOk := lit.Value.(*plan.Literal_U64Val)
 		if !valOk {
 			return false
 		}
@@ -1356,18 +1390,18 @@ func InitInfileParam(param *tree.ExternParam) error {
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+				return moerr.NewBadConfigf(param.Ctx, "the jsondata '%s' is not supported", jsondata)
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
 		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
 		}
 	}
 	if len(param.Filepath) == 0 {
@@ -1409,19 +1443,19 @@ func InitS3Param(param *tree.ExternParam) error {
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+				return moerr.NewBadConfigf(param.Ctx, "the jsondata '%s' is not supported", jsondata)
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
 
 		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
 		}
 	}
 	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
@@ -1433,15 +1467,137 @@ func InitS3Param(param *tree.ExternParam) error {
 	return nil
 }
 
+func GetFilePathFromParam(param *tree.ExternParam) string {
+	fpath := param.Filepath
+	for i := 0; i < len(param.Option); i += 2 {
+		name := strings.ToLower(param.Option[i])
+		if name == "filepath" {
+			fpath = param.Option[i+1]
+			break
+		}
+	}
+
+	return fpath
+}
+
+func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
+
+	param.ScanType = tree.S3
+	param.S3Param = &tree.S3Parameter{}
+
+	if len(s.Url.RawQuery) > 0 {
+		return moerr.NewBadConfig(param.Ctx, "S3 URL Query does not support in ExternParam")
+	}
+
+	if s.Url.Scheme != function.S3_PROTOCOL {
+		return moerr.NewBadConfig(param.Ctx, "URL protocol is not S3")
+	}
+
+	bucket, prefix, _, err := function.ParseS3Url(s.Url)
+	if err != nil {
+		return err
+	}
+
+	var found bool
+	param.S3Param.Bucket = bucket
+	param.Filepath = prefix
+
+	// mandatory
+	param.S3Param.APIKey, found = s.GetCredentials(function.PARAMKEY_AWS_KEY_ID, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_KEY_ID)
+	}
+	param.S3Param.APISecret, found = s.GetCredentials(function.PARAMKEY_AWS_SECRET_KEY, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_SECRET_KEY)
+	}
+
+	param.S3Param.Region, found = s.GetCredentials(function.PARAMKEY_AWS_REGION, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_REGION)
+	}
+
+	param.S3Param.Endpoint, found = s.GetCredentials(function.PARAMKEY_ENDPOINT, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_ENDPOINT)
+	}
+
+	// optional
+	param.S3Param.Provider, _ = s.GetCredentials(function.PARAMKEY_PROVIDER, function.S3_PROVIDER_AMAZON)
+	param.CompressType, _ = s.GetCredentials(function.PARAMKEY_COMPRESSION, "auto")
+
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfigf(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+
+		default:
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+
+	return nil
+
+}
+
+func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) error {
+
+	fpath := GetFilePathFromParam(param)
+
+	if !strings.HasPrefix(fpath, function.STAGE_PROTOCOL+"://") {
+		return InitInfileParam(param)
+	}
+
+	s, err := function.UrlToStageDef(fpath, proc)
+	if err != nil {
+		return err
+	}
+
+	if len(s.Url.RawQuery) > 0 {
+		return moerr.NewBadConfig(param.Ctx, "Invalid URL: query not supported in ExternParam")
+	}
+
+	if s.Url.Scheme == function.S3_PROTOCOL {
+		return InitStageS3Param(param, s)
+	} else if s.Url.Scheme == function.FILE_PROTOCOL {
+
+		err := InitInfileParam(param)
+		if err != nil {
+			return err
+		}
+
+		param.Filepath = s.Url.Path
+
+	} else {
+		return moerr.NewBadConfigf(param.Ctx, "invalid URL: protocol %s not supported", s.Url.Scheme)
+	}
+
+	return nil
+}
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
 	if param.ScanType == tree.S3 {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
 		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
 			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
-		if strings.ToLower(param.S3Param.Provider) != "" && strings.ToLower(param.S3Param.Provider) != "minio" {
-			return nil, "", moerr.NewBadConfig(param.Ctx, "the provider only support 'minio' now")
-		}
 		if strings.ToLower(param.S3Param.Provider) == "minio" {
 			opts = append(opts, "is-minio=true")
 		}
@@ -1739,6 +1895,10 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // 	return expr
 // }
 
+func ExprType2Type(typ *plan.Type) types.Type {
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+}
+
 func FormatExprs(exprs []*plan.Expr) string {
 	var w bytes.Buffer
 	for _, expr := range exprs {
@@ -1772,19 +1932,27 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 		out.WriteString(fmt.Sprintf("%sExpr_P(%d)", prefix, t.P.Pos))
 	case *plan.Expr_T:
 		out.WriteString(fmt.Sprintf("%sExpr_T(%s)", prefix, t.T.String()))
+	case *plan.Expr_Vec:
+		out.WriteString(fmt.Sprintf("%sExpr_Vec(len=%d)", prefix, t.Vec.Len))
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
+	out.WriteString(fmt.Sprintf("%sExpr_Selectivity(%v)", prefix, expr.Selectivity))
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true
 	}
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
+	}
+
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
 	}
 
 	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
@@ -1905,18 +2073,18 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 		switch ast := p.(type) {
 		case *tree.NumVal:
 			if ast.ValType != tree.P_char {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "unsupport value '%s'", ast.String())
 			}
 		case *tree.ParamExpr:
 			if !isPrepareStmt {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "only prepare statement can use ? expr")
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "only prepare statement can use ? expr")
 			}
 			paramTypes = append(paramTypes, int32(types.T_varchar))
 			if ast.Offset != len(paramTypes) {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "offset not match")
 			}
 		default:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "unsupport value '%s'", ast.String())
 		}
 	}
 	return paramTypes, nil
@@ -2014,12 +2182,8 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 }
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
-	rightType := plan.Type{Id: int32(types.T_tuple)}
-	if matchPrefix {
-		rightType = left.Typ
-	}
 	rightArg := &plan.Expr{
-		Typ: rightType,
+		Typ: left.Typ,
 		Expr: &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
 				Len:  length,
@@ -2130,4 +2294,44 @@ func GetRowSizeFromTableDef(tableDef *TableDef, ignoreHiddenKey bool) float64 {
 		}
 	}
 	return float64(size)
+}
+
+type UnorderedSet[T ~string | ~int] map[T]int
+
+func (set UnorderedSet[T]) Insert(val T) {
+	set[val] = 0
+}
+
+func (set UnorderedSet[T]) Find(val T) bool {
+	if _, ok := set[val]; ok {
+		return ok
+	}
+	return false
+}
+
+// RemoveIf removes the elements that pred is true.
+func RemoveIf[T any](data []T, pred func(t T) bool) []T {
+	if len(data) == 0 {
+		return data
+	}
+	res := 0
+	for i := 0; i < len(data); i++ {
+		if !pred(data[i]) {
+			if res != i {
+				data[res] = data[i]
+			}
+			res++
+		}
+	}
+	return data[:res]
+}
+
+func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
+	if len(data) == 0 {
+		return false
+	}
+	if _, exists := data[val]; exists {
+		return true
+	}
+	return false
 }

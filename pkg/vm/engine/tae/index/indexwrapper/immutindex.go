@@ -49,6 +49,7 @@ func (idx ImmutIndex) BatchDedup(
 	keys containers.Vector,
 	keysZM index.ZM,
 	rt *dbutils.Runtime,
+	isTombstone bool,
 	blkID uint32,
 ) (sels *nulls.Bitmap, err error) {
 	var exist bool
@@ -82,7 +83,13 @@ func (idx ImmutIndex) BatchDedup(
 		buf = bf.GetBloomFilter(blkID)
 	}
 
-	bfIndex := index.NewEmptyBinaryFuseFilter()
+	var typ uint8
+	if isTombstone {
+		typ = index.HBF
+	} else {
+		typ = index.BF
+	}
+	bfIndex := index.NewEmptyBloomFilterWithType(typ)
 	if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
 		return
 	}
@@ -124,7 +131,7 @@ func (idx ImmutIndex) Dedup(
 		buf = bf.GetBloomFilter(blkID)
 	}
 
-	bfIndex := index.NewEmptyBinaryFuseFilter()
+	bfIndex := index.NewEmptyBloomFilter()
 	if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
 		return
 	}

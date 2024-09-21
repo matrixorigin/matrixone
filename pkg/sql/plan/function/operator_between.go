@@ -24,7 +24,7 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
@@ -75,10 +75,10 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		})
 	case types.T_Rowid:
 		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Rowid) bool {
-			return lhs.Le(rhs)
+			return lhs.LE(&rhs)
 		})
 
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return opBetweenBytes(parameters, rs, proc, length)
 	}
 
@@ -96,7 +96,7 @@ func opBetweenBool(
 	p2 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
 	lb, _ := p1.GetValue(0)
@@ -158,7 +158,7 @@ func opBetweenFixed[T constraints.Integer | constraints.Float](
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
 	lb, _ := p1.GetValue(0)
@@ -212,7 +212,7 @@ func opBetweenFixedWithFn[T types.FixedSizeTExceptStrType](
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
 	lb, _ := p1.GetValue(0)
@@ -265,7 +265,7 @@ func opBetweenBytes(
 	p2 := vector.GenerateFunctionStrParameter(parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
 	lb, _ := p1.GetStrValue(0)

@@ -20,15 +20,18 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/proxy"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -37,7 +40,6 @@ import (
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"go.uber.org/zap"
 )
 
 func (s *service) adjustSQLAddress() {
@@ -65,15 +67,23 @@ func (s *service) initTaskServiceHolder() {
 	defer s.task.Unlock()
 	if s.task.storageFactory == nil {
 		s.task.holder = taskservice.NewTaskServiceHolder(
-			runtime.ProcessLevelRuntime(),
-			util.AddressFunc(getClient))
+			runtime.ServiceRuntime(s.cfg.UUID),
+			util.AddressFunc(
+				s.cfg.UUID,
+				getClient,
+			),
+		)
 	} else {
 		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
-			runtime.ProcessLevelRuntime(),
-			util.AddressFunc(getClient),
+			runtime.ServiceRuntime(s.cfg.UUID),
+			util.AddressFunc(
+				s.cfg.UUID,
+				getClient,
+			),
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
-			})
+			},
+		)
 	}
 }
 
@@ -100,7 +110,12 @@ func (s *service) initSqlWriterFactory() {
 		client, _ := s.getHAKeeperClient()
 		return client
 	}
-	db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(getClient))
+	db_holder.SetSQLWriterDBAddressFunc(
+		util.AddressFunc(
+			s.cfg.UUID,
+			getClient,
+		),
+	)
 }
 
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
@@ -164,6 +179,10 @@ func (s *service) canClaimDaemonTask(taskAccount string) bool {
 	return false
 }
 
+func (s *service) createProxyUser(command *logservicepb.CreateTaskService) {
+	frontend.SetSpecialUser(proxy.SQLUsername, []byte(command.User.Password))
+}
+
 func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()
@@ -191,6 +210,12 @@ func (s *service) startTaskRunner() {
 			s.cfg.TaskRunner.HeartbeatInterval.Duration,
 			s.cfg.TaskRunner.HeartbeatTimeout.Duration,
 		),
+		taskservice.WithHaKeeperClient(
+			func() util.HAKeeperClient {
+				client, _ := s.getHAKeeperClient()
+				return client
+			}),
+		taskservice.WithCnUUID(s.cfg.UUID),
 	)
 
 	s.registerExecutorsLocked()
@@ -231,18 +256,8 @@ func (s *service) registerExecutorsLocked() {
 		return
 	}
 
-	pu := config.NewParameterUnit(
-		&s.cfg.Frontend,
-		nil,
-		nil,
-		nil)
-	pu.StorageEngine = s.storeEngine
-	pu.TxnClient = s._txnClient
-	s.cfg.Frontend.SetDefaultValues()
-	pu.FileService = s.fileService
-	pu.LockService = s.lockService
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor()
+		return frontend.NewInternalExecutor(s.cfg.UUID)
 	}
 
 	ts, ok := s.task.holder.Get()
@@ -251,11 +266,17 @@ func (s *service) registerExecutorsLocked() {
 	}
 
 	// init metric/log merge task executor
-	s.task.runner.RegisterExecutor(task.TaskCode_MetricLogMerge,
-		export.MergeTaskExecutorFactory(export.WithFileService(s.etlFS)))
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_MetricLogMerge,
+		export.MergeTaskExecutorFactory(
+			s.cfg.UUID,
+			export.WithFileService(s.etlFS),
+		),
+	)
 	// init metric task
-	s.task.runner.RegisterExecutor(task.TaskCode_MetricStorageUsage,
-		mometric.GetMetricStorageUsageExecutor(ieFactory))
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_MetricStorageUsage,
+		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
 	// streaming connector task
 	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
 		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
@@ -273,13 +294,88 @@ func (s *service) registerExecutorsLocked() {
 				stats := objectio.ObjectStats(b)
 				objs[i] = stats.ObjectName().String()
 			}
-			sql := fmt.Sprintf("select mo_ctl('DN', 'MERGEOBJECTS', '%s.%s:%s')",
-				mergeTask.DbName, mergeTask.TableName, strings.Join(objs, ","))
+			sql := fmt.Sprintf("select mo_ctl('CN', 'MERGEOBJECTS', 'o:%d.%d:%s')",
+				mergeTask.TblId, mergeTask.AccountId, strings.Join(objs, ","))
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
-			opts := executor.Options{}.WithAccountID(mergeTask.AccountId).WithWaitCommittedLogApplied()
+			opts := executor.Options{}.WithWaitCommittedLogApplied()
 			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
 			return err
 		},
 	)
+
+	s.task.runner.RegisterExecutor(task.TaskCode_Retention, func(ctx context.Context, task task.Task) error {
+		ctx1, cancel1 := context.WithTimeout(ctx, 10*time.Second)
+		result, err := s.sqlExecutor.Exec(ctx1, "select account_id from mo_catalog.mo_account;",
+			executor.Options{}.WithWaitCommittedLogApplied())
+		cancel1()
+		if err != nil {
+			return err
+		}
+		accounts := make([]int32, 0)
+		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			if len(cols) != 1 {
+				return false
+			}
+			for i := range cols[0].Length() {
+				accounts = append(accounts, vector.GetFixedAtNoTypeCheck[int32](cols[0], i))
+			}
+			return true
+		})
+
+		for _, accountID := range accounts {
+			ctx2, cancel2 := context.WithTimeout(ctx, 15*time.Second)
+			err = s.sqlExecutor.ExecTxn(ctx2, func(txn executor.TxnExecutor) error {
+				results, err := txn.Exec("select database_name, table_name, retention_deadline from mo_catalog.mo_retention", executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+
+				results.ReadRows(func(rows int, cols []*vector.Vector) bool {
+					if len(cols) != 3 {
+						return false
+					}
+
+					for i := range cols[0].Length() {
+						ddl := vector.GetFixedAtNoTypeCheck[uint64](cols[2], i)
+						if time.Unix(int64(ddl), 0).After(time.Now()) {
+							continue
+						}
+						dbName := cols[0].GetStringAt(i)
+						tableName := cols[1].GetStringAt(i)
+						_, err = txn.Exec(fmt.Sprintf(
+							"delete from mo_catalog.mo_retention where database_name='%s' and table_name='%s'",
+							dbName, tableName), executor.StatementOption{})
+						if err != nil {
+							return false
+						}
+						_, err = txn.Exec(fmt.Sprintf("drop table %s.%s", dbName, tableName), executor.StatementOption{})
+						if err != nil {
+							return false
+						}
+					}
+					return true
+				})
+				return nil
+			}, executor.Options{}.WithAccountID(uint32(accountID)).WithDisableTrace())
+			cancel2()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
+		frontend.RegisterCdcExecutor(
+			s.logger,
+			ts,
+			ieFactory,
+			s.task.runner.Attach,
+			s.cfg.UUID,
+			s.fileService,
+			s._txnClient,
+			s.storeEngine,
+			s.distributeTaeMp,
+		))
 }

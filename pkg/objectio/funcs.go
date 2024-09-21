@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
+
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,10 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
-
-func ReleaseIOEntry(entry *fileservice.IOEntry) {
-	entry.CachedData.Release()
-}
 
 func ReleaseIOVector(vector *fileservice.IOVector) {
 	vector.Release()
@@ -58,11 +57,17 @@ func ReadExtent(
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
+	if ioVec.Entries[0].CachedData == nil {
+		logutil.Errorf("ReadExtent: ioVec.Entries[0].CachedData is nil, name: %s, extent: %v",
+			name, extent.String())
+		util.EnableCoreDump()
+		util.CoreDump()
+	}
 	//TODO when to call ioVec.Release?
 	v := ioVec.Entries[0].CachedData.Bytes()
 	buf = make([]byte, len(v))
 	copy(buf, v)
-	ReleaseIOEntry(&ioVec.Entries[0])
+	ReleaseIOVector(ioVec)
 	return
 }
 
@@ -105,14 +110,7 @@ func ReadObjectMeta(
 	if v, err = ReadExtent(ctx, name, extent, policy, fs, constructorFactory); err != nil {
 		return
 	}
-
-	var obj any
-	obj, err = Decode(v)
-	if err != nil {
-		return
-	}
-
-	meta = obj.(ObjectMeta)
+	meta = MustObjectMeta(v)
 	return
 }
 
@@ -144,7 +142,7 @@ func ReadOneBlockWithMeta(
 ) (ioVec *fileservice.IOVector, err error) {
 	ioVec = &fileservice.IOVector{
 		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 0),
+		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
 	}
 
@@ -157,9 +155,9 @@ func ReadOneBlockWithMeta(
 			metaColCnt := blkmeta.GetMetaColumnCount()
 			// read appendable block file, the last columns is commits and abort
 			if seqnum == SEQNUM_COMMITTS {
-				seqnum = metaColCnt - 2
-			} else if seqnum == SEQNUM_ABORT {
 				seqnum = metaColCnt - 1
+			} else if seqnum == SEQNUM_ABORT {
+				panic("not support")
 			} else {
 				panic(fmt.Sprintf("bad path to read special column %d", seqnum))
 			}
@@ -220,7 +218,7 @@ func ReadOneBlockWithMeta(
 				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
 					return
 				}
-				cacheData := fileservice.DefaultCacheDataAllocator.Alloc(buf.Len())
+				cacheData := fileservice.DefaultCacheDataAllocator().AllocateCacheData(buf.Len())
 				copy(cacheData.Bytes(), buf.Bytes())
 				filledEntries[i].CachedData = cacheData
 			}
@@ -338,11 +336,17 @@ func ReadOneBlockAllColumns(
 	}
 
 	err = fs.Read(ctx, ioVec)
-	//TODO when to call ioVec.Release?
+	if err != nil {
+		return nil, err
+	}
+	defer ioVec.Release()
+
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
-		obj, err = Decode(ioVec.Entries[i].CachedData.Bytes())
+		// always copy to avoid memory leak
+		bs := slices.Clone(ioVec.Entries[i].CachedData.Bytes())
+		obj, err = Decode(bs)
 		if err != nil {
 			return nil, err
 		}

@@ -122,7 +122,7 @@ func startTNServiceCluster(
 			return err
 		}
 		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
-			return nil
+			return err
 		}
 	}
 	return nil
@@ -211,20 +211,34 @@ func startPythonUdfServiceCluster(
 	return nil
 }
 
-func waitHAKeeperReady(cfg logservice.HAKeeperClientConfig) (logservice.CNHAKeeperClient, error) {
-	// wait hakeeper ready
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
+func waitHAKeeperReady(
+	service string,
+	cfg logservice.HAKeeperClientConfig,
+) (logservice.CNHAKeeperClient, error) {
+	getClient := func() (logservice.CNHAKeeperClient, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		client, err := logservice.NewCNHAKeeperClient(ctx, service, cfg)
+		if err != nil {
+			logutil.Errorf("hakeeper not ready, err: %v", err)
+			return nil, err
+		}
+		return client, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 	for {
-		var err error
-		client, err := logservice.NewCNHAKeeperClient(ctx, cfg)
-		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) {
-			// not ready
-			logutil.Info("hakeeper not ready, retry")
+		select {
+		case <-ctx.Done():
+			return nil, moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout")
+		default:
+			client, err := getClient()
+			if err == nil {
+				return client, nil
+			}
 			time.Sleep(time.Second)
-			continue
 		}
-		return client, err
 	}
 }
 
@@ -283,10 +297,11 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 }
 
 func waitClusterCondition(
+	service string,
 	cfg logservice.HAKeeperClientConfig,
 	waitFunc func(logservice.CNHAKeeperClient) error,
 ) error {
-	client, err := waitHAKeeperReady(cfg)
+	client, err := waitHAKeeperReady(service, cfg)
 	if err != nil {
 		return err
 	}

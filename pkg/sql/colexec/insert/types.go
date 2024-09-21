@@ -15,8 +15,11 @@
 package insert
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -24,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Insert)
 
 // const (
 // 	Process = iota
@@ -36,91 +39,117 @@ type container struct {
 	s3Writer           *colexec.S3Writer
 	partitionS3Writers []*colexec.S3Writer // The array is aligned with the partition number array
 	buf                *batch.Batch
+	affectedRows       uint64
+
+	source           engine.Relation
+	partitionSources []engine.Relation // Align array index with the partition number
 }
 
-type Argument struct {
-	ctr          *container
-	affectedRows uint64
-	ToWriteS3    bool // mark if this insert's target is S3 or not.
-	InsertCtx    *InsertCtx
+type Insert struct {
+	ctr       container
+	ToWriteS3 bool // mark if this insert's target is S3 or not.
+	InsertCtx *InsertCtx
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (insert *Insert) GetOperatorBase() *vm.OperatorBase {
+	return &insert.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Insert](
+		func() *Insert {
+			return &Insert{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Insert) {
+			*a = Insert{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Insert]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (insert Insert) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Insert {
+	return reuse.Alloc[Insert](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (insert *Insert) Release() {
+	if insert != nil {
+		reuse.Free[Insert](insert, nil)
 	}
 }
 
 type InsertCtx struct {
 	// insert data into Rel.
-	Rel                   engine.Relation
+	Engine                engine.Engine
 	Ref                   *plan.ObjectRef
-	AddAffectedRows       bool
-	Attrs                 []string
-	PartitionTableIDs     []uint64          // Align array index with the partition number
-	PartitionTableNames   []string          // Align array index with the partition number
-	PartitionIndexInBatch int               // The array index position of the partition expression column
-	PartitionSources      []engine.Relation // Align array index with the partition number
+	AddAffectedRows       bool     // for hidden table, should not update affect Rows
+	Attrs                 []string // letter case: origin
+	PartitionTableIDs     []uint64 // Align array index with the partition number
+	PartitionTableNames   []string // Align array index with the partition number
+	PartitionIndexInBatch int      // The array index position of the partition expression column
 	TableDef              *plan.TableDef
+}
+
+func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	//@todo need add Reset method for s3Writer
+	if insert.ctr.s3Writer != nil {
+		insert.ctr.s3Writer.Free(proc.Mp())
+		insert.ctr.s3Writer = nil
+	}
+	if insert.ctr.partitionS3Writers != nil {
+		for _, writer := range insert.ctr.partitionS3Writers {
+			writer.Free(proc.Mp())
+		}
+		insert.ctr.partitionS3Writers = nil
+	}
+	insert.ctr.state = vm.Build
+
+	if insert.ctr.buf != nil {
+		insert.ctr.buf.CleanOnlyData()
+	}
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		if arg.ctr.s3Writer != nil {
-			arg.ctr.s3Writer.Free(proc)
-			arg.ctr.s3Writer = nil
-		}
+func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if insert.ctr.s3Writer != nil {
+		insert.ctr.s3Writer.Free(proc.Mp())
+		insert.ctr.s3Writer = nil
+	}
 
-		// Free the partition table S3writer object resources
-		if arg.ctr.partitionS3Writers != nil {
-			for _, writer := range arg.ctr.partitionS3Writers {
-				writer.Free(proc)
-			}
-			arg.ctr.partitionS3Writers = nil
+	// Free the partition table S3writer object resources
+	if insert.ctr.partitionS3Writers != nil {
+		for _, writer := range insert.ctr.partitionS3Writers {
+			writer.Free(proc.Mp())
 		}
+		insert.ctr.partitionS3Writers = nil
+	}
 
-		if arg.ctr.buf != nil {
-			arg.ctr.buf.Clean(proc.Mp())
-			arg.ctr.buf = nil
-		}
-
-		arg.ctr = nil
+	if insert.ctr.buf != nil {
+		insert.ctr.buf.Clean(proc.Mp())
+		insert.ctr.buf = nil
 	}
 }
 
-func (arg *Argument) AffectedRows() uint64 {
-	return arg.affectedRows
+func (insert *Insert) AffectedRows() uint64 {
+	return insert.ctr.affectedRows
 }
 
-func (arg *Argument) GetAffectedRows() *uint64 {
-	return &arg.affectedRows
+func (insert *Insert) GetAffectedRows() *uint64 {
+	return &insert.ctr.affectedRows
+}
+
+func (insert *Insert) initBufForS3() {
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	insert.ctr.buf = batch.NewWithSize(len(attrs))
+	insert.ctr.buf.SetAttributes(attrs)
+	insert.ctr.buf.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+	insert.ctr.buf.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	insert.ctr.buf.Vecs[2] = vector.NewVec(types.T_binary.ToType())
 }

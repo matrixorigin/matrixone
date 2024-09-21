@@ -31,43 +31,52 @@ import (
 )
 
 func TestHandleGetProtocolVersion(t *testing.T) {
-	var arguments struct {
-		proc    *process.Process
-		service serviceType
-	}
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			var arguments struct {
+				proc    *process.Process
+				service serviceType
+			}
 
-	trace.InitMOCtledSpan()
+			trace.InitMOCtledSpan()
 
-	id := uuid.New().String()
-	addr := "127.0.0.1:7777"
-	initRuntime([]string{id}, []string{addr})
-	qs, err := queryservice.NewQueryService(id, addr, morpc.Config{})
-	require.NoError(t, err)
-	qt, err := qclient.NewQueryClient(id, morpc.Config{})
-	require.NoError(t, err)
+			id := uuid.New().String()
+			runtime.SetupServiceBasedRuntime(id, rt)
 
-	arguments.proc = new(process.Process)
-	arguments.proc.QueryClient = qt
-	arguments.service = cn
+			addr := "127.0.0.1:7777"
+			initRuntime([]string{id}, []string{addr})
+			qs, err := queryservice.NewQueryService(id, addr, morpc.Config{})
+			require.NoError(t, err)
+			qt, err := qclient.NewQueryClient(id, morpc.Config{})
+			require.NoError(t, err)
 
-	err = qs.Start()
-	require.NoError(t, err)
+			arguments.proc = new(process.Process)
+			arguments.proc.Base = &process.BaseProcess{}
+			arguments.proc.Base.QueryClient = qt
+			arguments.service = cn
 
-	defer func() {
-		qs.Close()
-	}()
+			err = qs.Start()
+			require.NoError(t, err)
 
-	ret, err := handleGetProtocolVersion(arguments.proc, arguments.service, "", nil)
-	require.NoError(t, err)
-	require.Equal(t, ret, Result{
-		Method: GetProtocolVersionMethod,
-		Data:   fmt.Sprintf("%s:%d", id, defines.MORPCLatestVersion),
-	})
+			defer func() {
+				qs.Close()
+			}()
+
+			ret, err := handleGetProtocolVersion(arguments.proc, arguments.service, "", nil)
+			require.NoError(t, err)
+			require.Equal(t, ret, Result{
+				Method: GetProtocolVersionMethod,
+				Data:   fmt.Sprintf("%s:%d", id, defines.MORPCLatestVersion),
+			})
+		},
+	)
 }
 
 func TestHandleSetProtocolVersion(t *testing.T) {
 	trace.InitMOCtledSpan()
 	proc := new(process.Process)
+	proc.Base = &process.BaseProcess{}
 	id := uuid.New().String()
 	addr := "127.0.0.1:7777"
 	initRuntime([]string{id}, []string{addr})
@@ -76,7 +85,7 @@ func TestHandleSetProtocolVersion(t *testing.T) {
 	require.NoError(t, err)
 	qt, err := qclient.NewQueryClient(id, morpc.Config{})
 	require.NoError(t, err)
-	proc.QueryClient = qt
+	proc.Base.QueryClient = qt
 
 	cases := []struct {
 		service serviceType
@@ -119,7 +128,7 @@ func TestHandleSetProtocolVersion(t *testing.T) {
 }
 
 func requireVersionValue(t *testing.T, version int64) {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.MOProtocolVersion)
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.MOProtocolVersion)
 	require.True(t, ok)
 	require.EqualValues(t, version, v)
 }

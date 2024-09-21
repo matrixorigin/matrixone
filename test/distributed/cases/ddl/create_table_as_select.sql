@@ -1075,8 +1075,8 @@ col10 double
 insert into test01 values (1,2,3,4,5,6,7,8,10.2131,3824.34324);
 insert into test01 values (2,3,4,5,6,7,8,9,2131.3242343,-3824.34324);
 show create table test01;
-create publication publication01 database test;
--- @ignore:2,3
+create publication publication01 database test account all;
+-- @ignore:5,6
 show publications;
 drop table if exists test02;
 create table test02 as select * from test01;
@@ -1090,9 +1090,9 @@ create account acc0 admin_name 'root' identified by '111';
 drop table if exists sys_tbl_1;
 create table sys_tbl_1(a int primary key, b decimal, c char, d varchar(20) );
 insert into sys_tbl_1 values(1,2,'a','database'),(2,3,'b','test publication'),(3, 4, 'c','324243243');
-create publication sys_pub_1 database test;
+create publication sys_pub_1 database test account all;
 select * from sys_tbl_1;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- @session:id=2&user=acc0:root&password=111
@@ -1110,8 +1110,6 @@ drop account acc0;
 drop publication sys_pub_1;
 
 -- alias
-show variables like 'lower_case_table_names';
-set @@global.lower_case_table_names = 0;
 -- @session:id=24&user=sys:dump&password=111
 use test;
 drop table if exists alias01;
@@ -1336,4 +1334,24 @@ drop table t2;
 drop role role_r1;
 drop user role_u1;
 drop database db7;
-set @@global.lower_case_table_names = 1;
+
+
+-- issue 17822
+drop database if exists db8;
+create database db8;
+use db8;
+drop table if exists math01;
+create table math01 (col1 int default 0, col2 decimal, col3 float, col4 double not null);
+insert into math01 values (1, 7382.4324, 432453.3243, -2930.321323);
+insert into math01 values (-100, 3283.32324, 328932.0, -9392032);
+insert into math01 values (22813, -241, 932342.4324, -0.1);
+insert into math01 values (null, null, null, 10);
+
+drop table if exists agg01;
+create table agg01 as select avg(col1) as avgCol, sum(col2) as sumcol, count(col3) as countCol, max(col4) as maxCol, min(col4) as minCol from math01;
+show create table agg01;
+select * from agg01;
+
+drop table agg01;
+drop table math01;
+drop database db8;

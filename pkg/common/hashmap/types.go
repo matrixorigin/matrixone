@@ -15,10 +15,8 @@
 package hashmap
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
@@ -52,30 +50,21 @@ type HashMap interface {
 
 // Iterator allows users to do insert or find operations on hash tables in bulk.
 type Iterator interface {
+	// not safe for multi parallel!!!!
 	// Insert vecs[start, start+count) into hashmap
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1)
 	// zvs : if zvs[i] is 0 indicates the presence null, 1 indicates the absence of a null.
 	Insert(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64, err error)
 
+	// not safe for multi parallel!!!!
+	// Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
+	DetectDup(vecs []*vector.Vector, row int) (bool, error)
+
+	//safe for multi parallel
 	// Find vecs[start, start+count) in hashmap
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1, and 0 means not found.)
 	// zvs : if zvs[i] is 0 indicates the presence null, 1 indicates the absence of a null.
-	Find(start, count int, vecs []*vector.Vector, inBuckets []uint8) (vs []uint64, zvs []int64)
-}
-
-// JoinMap is used for join
-type JoinMap struct {
-	cnt       *int64
-	dupCnt    *int64
-	multiSels [][]int32
-	// push-down filter expression, possibly a bloomfilter
-	expr    *plan.Expr
-	shm     *StrHashMap
-	ihm     *IntHashMap
-	hasNull bool
-
-	isDup            bool
-	runtimeFilter_In bool
+	Find(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64)
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)
@@ -84,13 +73,6 @@ type JoinMap struct {
 type StrHashMap struct {
 	hasNull bool
 	rows    uint64
-	keys    [][]byte
-	values  []uint64
-	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
-	zValues       []int64
-	strHashStates [][3]uint64
-
-	m       *mpool.MPool
 	hashMap *hashtable.StringHashMap
 }
 
@@ -99,24 +81,24 @@ type StrHashMap struct {
 // sum of vectors' length equal to 8
 type IntHashMap struct {
 	hasNull bool
-
 	rows    uint64
+	hashMap *hashtable.Int64HashMap
+}
+
+type strHashmapIterator struct {
+	mp     *StrHashMap
+	keys   [][]byte
+	values []uint64
+	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
+	zValues       []int64
+	strHashStates [][3]uint64
+}
+
+type intHashMapIterator struct {
+	mp      *IntHashMap
 	keys    []uint64
 	keyOffs []uint32
 	values  []uint64
 	zValues []int64
 	hashes  []uint64
-
-	m       *mpool.MPool
-	hashMap *hashtable.Int64HashMap
-}
-
-type strHashmapIterator struct {
-	m  *mpool.MPool
-	mp *StrHashMap
-}
-
-type intHashMapIterator struct {
-	m  *mpool.MPool
-	mp *IntHashMap
 }

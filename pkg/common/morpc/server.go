@@ -199,7 +199,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		return err
 	}
 	request := value.(RPCMessage)
-	s.metrics.inputBytesCounter.Add(float64(request.Message.Size()))
+	s.metrics.inputBytesCounter.Add(float64(request.Message.ProtoSize()))
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),
@@ -280,7 +280,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 		responses := make([]*Future, 0, s.options.batchSendSize)
 		needClose := make([]*Future, 0, s.options.batchSendSize)
-		fetch := func() {
+		fetch := func() bool {
 			defer func() {
 				cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 			}()
@@ -299,10 +299,13 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					select {
 					case <-ctx.Done():
 						responses = nil
-						return
+						return true
 					case <-cs.ctx.Done():
 						responses = nil
-						return
+						return true
+					case <-cs.disconnectedC:
+						responses = nil
+						return true
 					case resp, ok := <-cs.c:
 						if ok {
 							responses = append(responses, resp)
@@ -311,117 +314,121 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 				} else {
 					select {
 					case <-ctx.Done():
-						return
+						return true
 					case <-cs.ctx.Done():
-						return
+						return true
+					case <-cs.disconnectedC:
+						return true
 					case resp, ok := <-cs.c:
 						if ok {
 							responses = append(responses, resp)
 						}
 					default:
-						return
+						return false
 					}
 				}
 			}
+			return false
 		}
 
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-cs.ctx.Done():
-				return
-			default:
-				fetch()
+			closed := fetch()
 
-				if len(responses) > 0 {
-					s.metrics.sendingBatchSizeGauge.Set(float64(len(responses)))
+			if len(responses) > 0 {
+				s.metrics.sendingBatchSizeGauge.Set(float64(len(responses)))
 
-					start := time.Now()
+				start := time.Now()
 
-					var fields []zap.Field
-					ce := s.logger.Check(zap.DebugLevel, "write responses")
-					if ce != nil {
-						fields = append(fields, zap.String("client", cs.conn.RemoteAddress()))
-					}
-
-					written := responses[:0]
-					timeout := time.Duration(0)
-					for _, f := range responses {
-						s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
-						if f.oneWay {
-							needClose = append(needClose, f)
-						}
-
-						if !s.options.filter(f.send.Message) {
-							f.messageSent(messageSkipped)
-							continue
-						}
-
-						if f.send.Timeout() {
-							f.messageSent(f.send.Ctx.Err())
-							continue
-						}
-
-						v, err := f.send.GetTimeoutFromContext()
-						if err != nil {
-							f.messageSent(err)
-							continue
-						}
-
-						timeout += v
-						// Record the information of some responses in advance, because after flush,
-						// these responses will be released, thus avoiding causing data race.
-						if ce != nil {
-							fields = append(fields, zap.Uint64("request-id",
-								f.send.Message.GetID()))
-							fields = append(fields, zap.String("response",
-								f.send.Message.DebugString()))
-						}
-						if err := cs.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
-							s.logger.Error("write response failed",
-								zap.Uint64("request-id", f.send.Message.GetID()),
-								zap.Error(err))
-							f.messageSent(err)
-							return
-						}
-						written = append(written, f)
-					}
-
-					if len(written) > 0 {
-						s.metrics.outputBytesCounter.Add(float64(cs.conn.OutBuf().Readable()))
-						err := cs.conn.Flush(timeout)
-						if err != nil {
-							if ce != nil {
-								fields = append(fields, zap.Error(err))
-							}
-							for _, f := range responses {
-								if s.options.filter(f.send.Message) {
-									id := f.getSendMessageID()
-									s.logger.Error("write response failed",
-										zap.Uint64("request-id", id),
-										zap.Error(err))
-									f.messageSent(err)
-								}
-							}
-						}
-						if ce != nil {
-							ce.Write(fields...)
-						}
-						if err != nil {
-							return
-						}
-					}
-
-					for _, f := range written {
-						f.messageSent(nil)
-					}
-					for _, f := range needClose {
-						f.Close()
-					}
-
-					s.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
+				var fields []zap.Field
+				ce := s.logger.Check(zap.DebugLevel, "write responses")
+				if ce != nil {
+					fields = append(fields, zap.String("client", cs.conn.RemoteAddress()))
 				}
+
+				written := responses[:0]
+				timeout := time.Duration(0)
+				for _, f := range responses {
+					s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
+					if f.oneWay {
+						needClose = append(needClose, f)
+					}
+
+					if !s.options.filter(f.send.Message) {
+						f.messageSent(messageSkipped)
+						continue
+					}
+
+					if f.send.Timeout() {
+						f.messageSent(f.send.Ctx.Err())
+						continue
+					}
+
+					v, err := f.send.GetTimeoutFromContext()
+					if err != nil {
+						f.messageSent(err)
+						continue
+					}
+
+					timeout += v
+					// Record the information of some responses in advance, because after flush,
+					// these responses will be released, thus avoiding causing data race.
+					if ce != nil {
+						fields = append(fields, zap.Uint64("request-id",
+							f.send.Message.GetID()))
+						fields = append(fields, zap.String("response",
+							f.send.Message.DebugString()))
+					}
+					conn := cs.conn.RawConn()
+					if _, ok := f.send.Message.(PayloadMessage); ok && conn != nil {
+						conn.SetWriteDeadline(time.Now().Add(v))
+					}
+					if err := cs.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
+						s.logger.Error("write response failed",
+							zap.Uint64("request-id", f.send.Message.GetID()),
+							zap.Error(err))
+						f.messageSent(err)
+						return
+					}
+					written = append(written, f)
+				}
+
+				if len(written) > 0 {
+					s.metrics.outputBytesCounter.Add(float64(cs.conn.OutBuf().Readable()))
+					err := cs.conn.Flush(timeout)
+					if err != nil {
+						if ce != nil {
+							fields = append(fields, zap.Error(err))
+						}
+						for _, f := range responses {
+							if s.options.filter(f.send.Message) {
+								id := f.getSendMessageID()
+								s.logger.Error("write response failed",
+									zap.Uint64("request-id", id),
+									zap.Error(err))
+								f.messageSent(err)
+							}
+						}
+					}
+					if ce != nil {
+						ce.Write(fields...)
+					}
+					if err != nil {
+						return
+					}
+				}
+
+				for _, f := range written {
+					f.messageSent(nil)
+				}
+				for _, f := range needClose {
+					f.Close()
+				}
+
+				s.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
+			}
+
+			if closed {
+				return
 			}
 		}
 	})
@@ -479,7 +486,7 @@ func (s *server) closeDisconnectedSession(ctx context.Context) {
 				id := key.(uint64)
 				rs, err := s.application.GetSession(id)
 				if err == nil && rs == nil {
-					s.closeClientSession(value.(*clientSession))
+					value.(*clientSession).disconnected()
 				}
 				return true
 			})
@@ -511,6 +518,7 @@ type clientSession struct {
 	ctx                   context.Context
 	checkTimeoutCacheOnce sync.Once
 	closedC               chan struct{}
+	disconnectedC         chan struct{}
 	mu                    struct {
 		sync.RWMutex
 		closed bool
@@ -527,6 +535,7 @@ func newClientSession(
 	cs := &clientSession{
 		metrics:                 metrics,
 		closedC:                 make(chan struct{}),
+		disconnectedC:           make(chan struct{}, 1),
 		codec:                   codec,
 		c:                       make(chan *Future, 1024),
 		receivedStreamSequences: make(map[uint64]uint32),
@@ -559,6 +568,17 @@ func (cs *clientSession) Close() error {
 	cs.mu.caches = nil
 	cs.cancelWrite()
 	return cs.conn.Close()
+}
+
+func (cs *clientSession) disconnected() {
+	select {
+	case cs.disconnectedC <- struct{}{}:
+	default:
+	}
+}
+
+func (cs *clientSession) SessionCtx() context.Context {
+	return cs.ctx
 }
 
 func (cs *clientSession) cleanSend() {

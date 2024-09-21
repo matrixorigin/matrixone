@@ -137,6 +137,10 @@ func (c *CounterSet) IterFields(fn IterFieldsFunc) error {
 	)
 }
 
+func (c *CounterSet) Reset() {
+	*c = CounterSet{}
+}
+
 func iterFields(v reflect.Value, path []string, fn IterFieldsFunc) error {
 
 	if v.Type() == statsCounterType {

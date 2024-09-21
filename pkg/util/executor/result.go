@@ -20,7 +20,7 @@ import (
 
 func (res Result) Close() {
 	for _, rows := range res.Batches {
-		rows.Clean(res.mp)
+		rows.Clean(res.Mp)
 	}
 }
 
@@ -37,7 +37,7 @@ func (res Result) ReadRows(apply func(rows int, cols []*vector.Vector) bool) {
 
 // GetFixedRows get fixed rows, int, float, etc.
 func GetFixedRows[T any](vec *vector.Vector) []T {
-	return vector.MustFixedCol[T](vec)
+	return vector.MustFixedColWithTypeCheck[T](vec)
 }
 
 // GetBytesRows get bytes rows, varchar, varbinary, text, json, etc.

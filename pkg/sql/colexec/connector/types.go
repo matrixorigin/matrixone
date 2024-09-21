@@ -15,59 +15,78 @@
 package connector
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Connector)
 
-// Argument pipe connector
-type Argument struct {
+// Connector pipe connector
+type Connector struct {
+	ctr container
+
 	Reg *process.WaitRegister
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+type container struct {
+	sp *pSpool.PipelineSpool
+}
+
+func (connector *Connector) GetOperatorBase() *vm.OperatorBase {
+	return &connector.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Connector](
+		func() *Connector {
+			return &Connector{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Connector) {
+			*a = Connector{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Connector]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (connector Connector) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func (connector *Connector) OpType() vm.OpType {
+	return vm.Connector
 }
 
-func (arg *Argument) WithReg(reg *process.WaitRegister) *Argument {
-	arg.Reg = reg
-	return arg
+func NewArgument() *Connector {
+	return reuse.Alloc[Connector](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (connector *Connector) WithReg(reg *process.WaitRegister) *Connector {
+	connector.Reg = reg
+	return connector
+}
+
+func (connector *Connector) Release() {
+	if connector != nil {
+		reuse.Free[Connector](connector, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	// told the next operator to stop if it is still running.
-	select {
-	case arg.Reg.Ch <- nil:
-	case <-arg.Reg.Ctx.Done():
+func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if connector.ctr.sp != nil {
+		_, _ = connector.ctr.sp.SendBatch(context.TODO(), pSpool.SendToAllLocal, nil, err)
+		connector.Reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(connector.ctr.sp, 0)
+
+		connector.ctr.sp.Close()
+		connector.ctr.sp = nil
+	} else {
+		connector.Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, proc.Mp())
 	}
+}
+
+func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {
 }

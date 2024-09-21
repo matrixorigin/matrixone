@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"go.uber.org/zap"
 	"math"
 	"sync"
@@ -47,7 +48,7 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
-	objStats          []ObjectStats
+	objStats          ObjectStats
 	sortKeySeqnum     uint16
 	appendable        bool
 	originSize        uint32
@@ -69,7 +70,16 @@ const (
 	WriterQueryResult
 	WriterGC
 	WriterETL
+	WriterTmp
 )
+
+// make it mutable in ut
+var ObjectSizeLimit = 3 * mpool.GB
+
+// SetObjectSizeLimit set ObjectSizeLimit to limit Bytes
+func SetObjectSizeLimit(limit int) {
+	ObjectSizeLimit = limit
+}
 
 func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.FileService) (*objectWriterV1, error) {
 	var name ObjectName
@@ -85,6 +95,8 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		name = BuildDiskCleanerName()
 	case WriterETL:
 		name = BuildETLName()
+	case WriterTmp:
+		name = BuildTmpName()
 	}
 	writer := &objectWriterV1{
 		seqnums:       NewSeqnums(nil),
@@ -120,8 +132,14 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	return writer, nil
 }
 
-func (w *objectWriterV1) GetObjectStats() []ObjectStats {
-	return w.objStats
+func (w *objectWriterV1) GetObjectStats(opts ...ObjectStatsOptions) (copied ObjectStats) {
+	copied = w.objStats
+
+	for _, opt := range opts {
+		opt(&copied)
+	}
+
+	return copied
 }
 
 func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) ObjectStats {
@@ -151,14 +169,18 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaT
 // if an object only has deletes, only the tombstone object stats valid.
 //
 // if an object has both inserts and deletes, both stats are valid.
-func (w *objectWriterV1) DescribeObject() ([]ObjectStats, error) {
-	stats := make([]ObjectStats, 2)
+func (w *objectWriterV1) DescribeObject() (ObjectStats, error) {
+	var stats ObjectStats
+
 	if len(w.blocks[SchemaData]) != 0 {
-		stats[SchemaData] = describeObjectHelper(w, w.colmeta, SchemaData)
+		stats = describeObjectHelper(w, w.colmeta, SchemaData)
 	}
 
 	if len(w.blocks[SchemaTombstone]) != 0 {
-		stats[SchemaTombstone] = describeObjectHelper(w, w.tombstonesColmeta, SchemaTombstone)
+		if !stats.IsZero() {
+			panic("schema data and schema tombstone should not all be valid at the same time")
+		}
+		stats = describeObjectHelper(w, w.tombstonesColmeta, SchemaTombstone)
 	}
 
 	return stats, nil
@@ -211,8 +233,9 @@ func (w *objectWriterV1) UpdateBlockZM(tye DataMetaType, blkIdx int, seqnum uint
 	w.blocks[tye][blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
 }
 
-func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
+func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte, typ uint8) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
+	w.blocks[SchemaData][blkIdx].meta.BlockHeader().SetBloomFilterType(typ)
 	return
 }
 
@@ -390,16 +413,25 @@ func (w *objectWriterV1) getMaxIndex(blocks []blockData) uint16 {
 	return uint16(maxIndex)
 }
 
-func (w *objectWriterV1) writerBlocks(blocks []blockData) {
+// writerBlocks writes blocks to object file
+// If the compressed data exceeds 3G,
+// an error of limited writing is returned
+func (w *objectWriterV1) writerBlocks(blocks []blockData) error {
 	maxIndex := w.getMaxIndex(blocks)
+	size := uint64(0)
 	for idx := uint16(0); idx < maxIndex; idx++ {
 		for _, block := range blocks {
 			if block.meta.BlockHeader().ColumnCount() <= idx {
 				continue
 			}
 			w.buffer.Write(block.data[idx])
+			size += uint64(len(block.data[idx]))
 		}
 	}
+	if size > uint64(ObjectSizeLimit) {
+		return moerr.NewErrTooLargeObjectSizeNoCtx(size)
+	}
+	return nil
 }
 
 func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error) {
@@ -471,8 +503,9 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 			metaHeader.SetDataMetaOffset(idxStart)
 			metaHeader.SetDataMetaCount(uint16(len(w.blocks[i])))
 		} else if i == int(SchemaTombstone) {
-			metaHeader.SetTombstoneMetaOffset(idxStart)
-			metaHeader.SetTombstoneMetaCount(uint16(len(w.blocks[SchemaTombstone])))
+			if len(w.blocks[i]) != 0 {
+				panic("invalid data meta type")
+			}
 		} else {
 			subMetachIndex.SetSchemaMeta(uint16(i-2), uint16(i-2), uint16(len(w.blocks[i])), idxStart)
 		}
@@ -498,7 +531,10 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 
 	// writer data
 	for i := range w.blocks {
-		w.writerBlocks(w.blocks[i])
+		err = w.writerBlocks(w.blocks[i])
+		if err != nil {
+			return nil, err
+		}
 	}
 	// writer bloom filter
 	for i := range bloomFilterDatas {
@@ -541,14 +577,15 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	return blockObjects, err
 }
 
-// Sync is for testing
 func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error {
 	var err error
 	w.buffer.SetDataOptions(items...)
 	defer func() {
 		if err != nil {
 			w.buffer = nil
-			logutil.Error("[DoneWithErr] Write Sync error", zap.Error(err))
+			logutil.Error("[DoneWithErr] Write Sync error",
+				zap.Error(err),
+				zap.String("file name", w.fileName))
 		}
 	}()
 	// if a compact task is rollbacked, it may leave a written file in fs
@@ -584,7 +621,7 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 }
 
 func (w *objectWriterV1) GetDataStats() ObjectStats {
-	return w.objStats[SchemaData]
+	return w.objStats
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {

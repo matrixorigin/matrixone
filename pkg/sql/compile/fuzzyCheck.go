@@ -91,6 +91,11 @@ func (f fuzzyCheck) TypeName() string {
 }
 
 func (f *fuzzyCheck) reset() {
+	f.condition = ""
+	f.cnt = 0
+}
+
+func (f *fuzzyCheck) clear() {
 	f.db = ""
 	f.tbl = ""
 	f.attr = ""
@@ -313,9 +318,9 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
 	}
 
-	res, err := c.runSqlWithResult(duplicateCheckSql)
+	res, err := c.runSqlWithResult(duplicateCheckSql, NoAccountId)
 	if err != nil {
-		c.proc.Errorf(c.ctx, "The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
+		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
 		return err
 	}
 	defer res.Close()
@@ -331,9 +336,9 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 				} else {
 					ds, e := strconv.Unquote(dupKey[0])
 					if e != nil {
-						err = moerr.NewDuplicateEntry(c.ctx, dupKey[0], f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, dupKey[0], f.attr)
 					} else {
-						err = moerr.NewDuplicateEntry(c.ctx, ds, f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, ds, f.attr)
 					}
 				}
 			} else {
@@ -348,7 +353,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 							scales[i] = 0
 						}
 					}
-					err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(scales), f.attr)
+					err = moerr.NewDuplicateEntry(c.proc.Ctx, t.ErrString(scales), f.attr)
 				}
 			}
 		}
@@ -406,7 +411,7 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 		return ss, nil
 
 	// string family but not include binary
-	case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary:
+	case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary, types.T_datalink:
 		for i, str := range ss {
 			ss[i] = strconv.Quote(str)
 		}
@@ -422,69 +427,69 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
-		flag := vector.GetFixedAt[bool](vec, rowIndex)
+		flag := vector.GetFixedAtNoTypeCheck[bool](vec, rowIndex)
 		if flag {
 			return "true", nil
 		}
 		return "false", nil
 	case types.T_bit:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint64](vec, rowIndex)), nil
 	case types.T_int8:
-		return fmt.Sprintf("%v", vector.GetFixedAt[int8](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[int8](vec, rowIndex)), nil
 	case types.T_int16:
-		return fmt.Sprintf("%v", vector.GetFixedAt[int16](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[int16](vec, rowIndex)), nil
 	case types.T_int32:
-		return fmt.Sprintf("%v", vector.GetFixedAt[int32](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[int32](vec, rowIndex)), nil
 	case types.T_int64:
-		return fmt.Sprintf("%v", vector.GetFixedAt[int64](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[int64](vec, rowIndex)), nil
 	case types.T_uint8:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint8](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint8](vec, rowIndex)), nil
 	case types.T_uint16:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint16](vec, rowIndex)), nil
 	case types.T_uint32:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint32](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint32](vec, rowIndex)), nil
 	case types.T_uint64:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint64](vec, rowIndex)), nil
 	case types.T_float32:
-		return fmt.Sprintf("%v", vector.GetFixedAt[float32](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[float32](vec, rowIndex)), nil
 	case types.T_float64:
-		return fmt.Sprintf("%v", vector.GetFixedAt[float64](vec, rowIndex)), nil
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[float64](vec, rowIndex)), nil
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return vec.GetStringAt(rowIndex), nil
 	case types.T_array_float32:
 		return types.ArrayToString[float32](vector.GetArrayAt[float32](vec, rowIndex)), nil
 	case types.T_array_float64:
 		return types.ArrayToString[float64](vector.GetArrayAt[float64](vec, rowIndex)), nil
 	case types.T_decimal64:
-		val := vector.GetFixedAt[types.Decimal64](vec, rowIndex)
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIndex)
 		return val.Format(vec.GetType().Scale), nil
 	case types.T_decimal128:
-		val := vector.GetFixedAt[types.Decimal128](vec, rowIndex)
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIndex)
 		return val.Format(vec.GetType().Scale), nil
 	case types.T_json:
 		val := vec.GetBytesAt(rowIndex)
 		byteJson := types.DecodeJson(val)
 		return byteJson.String(), nil
 	case types.T_uuid:
-		val := vector.GetFixedAt[types.Uuid](vec, rowIndex)
-		return val.ToString(), nil
+		val := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIndex)
+		return val.String(), nil
 	case types.T_date:
-		val := vector.GetFixedAt[types.Date](vec, rowIndex)
+		val := vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIndex)
 		return val.String(), nil
 	case types.T_time:
-		val := vector.GetFixedAt[types.Time](vec, rowIndex)
+		val := vector.GetFixedAtNoTypeCheck[types.Time](vec, rowIndex)
 		return val.String(), nil
 	case types.T_timestamp:
 		loc := time.Local
-		val := vector.GetFixedAt[types.Timestamp](vec, rowIndex)
+		val := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, rowIndex)
 		return val.String2(loc, vec.GetType().Scale), nil
 	case types.T_datetime:
-		val := vector.GetFixedAt[types.Datetime](vec, rowIndex)
+		val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIndex)
 		return val.String2(vec.GetType().Scale), nil
 	case types.T_enum:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint16](vec, rowIndex)), nil
 	default:
-		return "", moerr.NewInternalErrorNoCtx("fuzzy filter can not parse correct string for type id : %d", vec.GetType().Oid)
+		return "", moerr.NewInternalErrorNoCtxf("fuzzy filter can not parse correct string for type id : %d", vec.GetType().Oid)
 	}
 }
 

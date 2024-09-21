@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
 
 var (
@@ -96,6 +97,20 @@ func (s *taskScheduler) ScheduleMultiScopedTxnTask(
 	scopes []common.ID,
 	factory tasks.TxnTaskFactory) (task tasks.Task, err error) {
 	task = NewScheduledTxnTask(ctx, s.db, taskType, scopes, factory)
+	err = s.Schedule(task)
+	return
+}
+
+func (s *taskScheduler) ScheduleMultiScopedTxnTaskWithObserver(
+	ctx *tasks.Context,
+	taskType tasks.TaskType,
+	scopes []common.ID,
+	factory tasks.TxnTaskFactory,
+	observers ...base.Observer) (task tasks.Task, err error) {
+	task = NewScheduledTxnTask(ctx, s.db, taskType, scopes, factory)
+	for _, observer := range observers {
+		task.AddObserver(observer)
+	}
 	err = s.Schedule(task)
 	return
 }

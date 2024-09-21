@@ -49,17 +49,23 @@ func init() {
 	initProxyMetrics()
 	initFrontendMetrics()
 	initPipelineMetrics()
+	initLogServiceMetrics()
+	initShardingMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
+	registry.MustRegister(statsTriggerCounter)
+	registry.MustRegister(StatsUpdateBlockCounter)
 }
 
 func initMemMetrics() {
 	registry.MustRegister(memMPoolAllocatedSizeGauge)
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
+	registry.MustRegister(mallocCounter)
+	registry.MustRegister(mallocGauge)
 }
 
 func initTaskMetrics() {
@@ -72,7 +78,11 @@ func initTaskMetrics() {
 	registry.MustRegister(taskGeneratedStuffCounter)
 	registry.MustRegister(taskSelectivityCounter)
 
+	registry.MustRegister(transferPageHitHistogram)
+	registry.MustRegister(TransferPageRowHistogram)
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+	registry.MustRegister(transferDurationHistogram)
+	registry.MustRegister(transferShortDurationHistogram)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
@@ -83,13 +93,13 @@ func initFileServiceMetrics() {
 	registry.MustRegister(S3DNSResolveCounter)
 
 	registry.MustRegister(s3IOBytesHistogram)
-	registry.MustRegister(s3IODurationHistogram)
 	registry.MustRegister(s3ConnDurationHistogram)
 	registry.MustRegister(localIOBytesHistogram)
-	registry.MustRegister(localIODurationHistogram)
 
 	registry.MustRegister(ioMergerCounter)
 	registry.MustRegister(ioMergerDuration)
+	registry.MustRegister(fsReadWriteDuration)
+	registry.MustRegister(FSObjectStorageOperations)
 }
 
 func initLogtailMetrics() {
@@ -105,7 +115,9 @@ func initLogtailMetrics() {
 	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
 
-	registry.MustRegister(LogTailCollectDurationHistogram)
+	registry.MustRegister(LogTailPushCollectionDurationHistogram)
+	registry.MustRegister(LogTailPullCollectionPhase1DurationHistogram)
+	registry.MustRegister(LogTailPullCollectionPhase2DurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
 	registry.MustRegister(txnTNSideDurationHistogram)
 }
@@ -129,15 +141,21 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnTableRangeDurationHistogram)
 	registry.MustRegister(TxnCheckPKDupDurationHistogram)
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
-	registry.MustRegister(txnTableRangeSizeHistogram)
+	registry.MustRegister(txnTableRangeTotalHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
 	registry.MustRegister(TxnUnlockTableTotalHistogram)
 	registry.MustRegister(txnReaderDurationHistogram)
 
-	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
+	registry.MustRegister(txnTNDeduplicateDurationHistogram)
+
+	registry.MustRegister(TxnReaderScannedTotalTombstoneHistogram)
+	registry.MustRegister(TxnReaderEachBLKLoadedTombstoneHistogram)
+	registry.MustRegister(txnReaderTombstoneSelectivityHistogram)
+	registry.MustRegister(txnTransferDurationHistogram)
+	registry.MustRegister(TransferTombstonesCountHistogram)
 }
 
 func initRPCMetrics() {
@@ -160,11 +178,6 @@ func initRPCMetrics() {
 
 }
 
-func initTraceMetrics() {
-	registry.MustRegister(traceCollectorDurationHistogram)
-	registry.MustRegister(traceNegativeCUCounter)
-}
-
 func initProxyMetrics() {
 	registry.MustRegister(proxyConnectCounter)
 	registry.MustRegister(proxyDisconnectCounter)
@@ -180,12 +193,34 @@ func initFrontendMetrics() {
 	registry.MustRegister(acceptConnDurationHistogram)
 	registry.MustRegister(routineCounter)
 	registry.MustRegister(requestCounter)
+	registry.MustRegister(resolveDurationHistogram)
+	registry.MustRegister(createAccountDurationHistogram)
+	registry.MustRegister(pubSubDurationHistogram)
+	registry.MustRegister(sqlLengthHistogram)
 }
 
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
+	registry.MustRegister(pipelineStreamCounter)
+}
+
+func initLogServiceMetrics() {
+	registry.MustRegister(LogServiceAppendDurationHistogram)
+	registry.MustRegister(LogServiceAppendCounter)
+	registry.MustRegister(LogServiceAppendBytesHistogram)
+}
+
+func initShardingMetrics() {
+	registry.MustRegister(replicaOperatorCounter)
+	registry.MustRegister(replicaReadCounter)
+	registry.MustRegister(ReplicaCountGauge)
+	registry.MustRegister(ReplicaFreezeCNCountGauge)
 }
 
 func getDurationBuckets() []float64 {
 	return append(prometheus.ExponentialBuckets(0.00001, 2, 30), math.MaxFloat64)
+}
+
+func getShortDurationBuckets() []float64 {
+	return append(prometheus.ExponentialBuckets(0.0000001, 2, 30), math.MaxFloat64)
 }

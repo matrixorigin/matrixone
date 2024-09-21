@@ -27,57 +27,57 @@ import (
 )
 
 const maxBatchSizeToSend = 64 * mpool.MB
+const defaultCacheBatchSize = 16
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(MergeOrder)
 
 const (
 	receiving = iota
 	normalSending
 	pickUpSending
+	finish
 )
 
-type Argument struct {
-	ctr *container
+type MergeOrder struct {
+	ctr container
 
 	OrderBySpecs []*plan.OrderBySpec
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (mergeOrder *MergeOrder) GetOperatorBase() *vm.OperatorBase {
+	return &mergeOrder.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[MergeOrder](
+		func() *MergeOrder {
+			return &MergeOrder{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *MergeOrder) {
+			*a = MergeOrder{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[MergeOrder]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (mergeOrder MergeOrder) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *MergeOrder {
+	return reuse.Alloc[MergeOrder](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (mergeOrder *MergeOrder) Release() {
+	if mergeOrder != nil {
+		reuse.Free[MergeOrder](mergeOrder, nil)
 	}
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	// operator status
 	status int
 
@@ -94,35 +94,58 @@ type container struct {
 	buf *batch.Batch
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := arg.ctr; ctr != nil {
-		mp := proc.Mp()
-		for i := range ctr.batchList {
-			if ctr.batchList[i] != nil {
-				ctr.batchList[i].Clean(mp)
-			}
+func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	mergeOrder.cleanBatchAndCol(proc)
+	ctr := &mergeOrder.ctr
+	ctr.batchList = ctr.batchList[:0]
+	ctr.orderCols = ctr.orderCols[:0]
+	ctr.indexList = nil
+	ctr.status = receiving
+
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].ResetForNextQuery()
 		}
-		for i := range ctr.orderCols {
-			if ctr.orderCols[i] != nil {
-				for j := range ctr.orderCols[i] {
-					if ctr.orderCols[i][j] != nil {
-						ctr.orderCols[i][j].Free(mp)
-					}
+	}
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+}
+
+func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, err error) {
+	mergeOrder.cleanBatchAndCol(proc)
+	ctr := &mergeOrder.ctr
+	ctr.batchList = nil
+	ctr.orderCols = nil
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].Free()
+		}
+	}
+	ctr.executors = nil
+
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
+	}
+
+}
+
+func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
+	mp := proc.Mp()
+	ctr := &mergeOrder.ctr
+	for i := range ctr.batchList {
+		if ctr.batchList[i] != nil {
+			ctr.batchList[i].Clean(mp)
+		}
+	}
+	for i := range ctr.orderCols {
+		if ctr.orderCols[i] != nil {
+			for j := range ctr.orderCols[i] {
+				if ctr.orderCols[i][j] != nil {
+					ctr.orderCols[i][j].Free(mp)
 				}
 			}
 		}
-		for i := range ctr.executors {
-			if ctr.executors[i] != nil {
-				ctr.executors[i].Free()
-			}
-		}
-		ctr.executors = nil
-
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
-
-		arg.ctr = nil
 	}
 }

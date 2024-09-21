@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/spf13/cobra"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,8 +39,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/spf13/cobra"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type inspectContext struct {
@@ -96,6 +97,12 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	objPrune := &objectPruneArg{}
 	rootCmd.AddCommand(objPrune.PrepareCommand())
 
+	transfer := &transferArg{}
+	rootCmd.AddCommand(transfer.PrepareCommand())
+
+	inspect := &MoInspectArg{}
+	rootCmd.AddCommand(inspect.PrepareCommand())
+
 	return rootCmd
 }
 
@@ -116,8 +123,11 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("parse err: %v", err)))
 			return
 		}
-		ctx := cmd.Flag("ictx").Value.(*inspectContext)
-		logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
+		v := cmd.Flag("ictx")
+		if v != nil {
+			ctx := cmd.Flag("ictx").Value.(*inspectContext)
+			logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
+		}
 		err := t.Run()
 		if err != nil {
 			cmd.OutOrStdout().Write(
@@ -125,7 +135,7 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			)
 		} else {
 			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf("success. arg %v", t.String())),
+				[]byte(fmt.Sprintf("%v", t.String())),
 			)
 		}
 	}
@@ -182,7 +192,7 @@ func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 	file, _ := cmd.Flags().GetString("outfile")
 	if file != "" {
 		if f, err := os.Create(file); err != nil {
-			return moerr.NewInternalErrorNoCtx("open %s err: %v", file, err)
+			return moerr.NewInternalErrorNoCtxf("open %s err: %v", file, err)
 		} else {
 			c.outfile = f
 		}
@@ -193,7 +203,7 @@ func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *catalogArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked(false).Name)
 	}
 	f := "nil"
 	if c.outfile != nil {
@@ -257,7 +267,7 @@ func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 
 func (c *objStatArg) String() string {
 	if c.tbl != nil {
-		return fmt.Sprintf("%d-%s verbose %v", c.tbl.ID, c.tbl.GetLastestSchema().Name, c.verbose)
+		return fmt.Sprintf("%d-%s verbose %v", c.tbl.ID, c.tbl.GetLastestSchema(false).Name, c.verbose)
 	} else {
 		return fmt.Sprintf("list with top %d", c.topk)
 	}
@@ -266,8 +276,11 @@ func (c *objStatArg) String() string {
 func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
-		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl).(*merge.BasicPolicyConfig)
-		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end))
+		p := c.ctx.db.MergeScheduler.GetPolicy(c.tbl)
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end, false))
+		b.WriteByte('\n')
+		b.WriteByte('\n')
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end, true))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
 		c.ctx.resp.Payload = b.Bytes()
@@ -315,10 +328,11 @@ var TaskCache = &objsPruneTask{
 }
 
 type objectPruneArg struct {
-	ctx *inspectContext
-	tbl *catalog.TableEntry
-	ago time.Duration
-	ack int
+	ctx   *inspectContext
+	tbl   *catalog.TableEntry
+	ago   time.Duration
+	force bool // dedicated for prune_log
+	ack   int
 }
 
 func (c *objectPruneArg) PrepareCommand() *cobra.Command {
@@ -330,7 +344,8 @@ func (c *objectPruneArg) PrepareCommand() *cobra.Command {
 	objectPruneCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	objectPruneCmd.Flags().DurationP("duration", "d", 72*time.Hour, "prune objects older than duration")
 	objectPruneCmd.Flags().IntP("ack", "a", -1, "execute task by ack")
-
+	objectPruneCmd.Flags().BoolP("force", "f", false, "force to prune")
+	objectPruneCmd.Flags().MarkHidden("force")
 	return objectPruneCmd
 }
 
@@ -338,28 +353,42 @@ func (c *objectPruneArg) String() string {
 	if c.ack != -1 {
 		return fmt.Sprintf("prune: execute task: %d", c.ack)
 	} else {
-		return fmt.Sprintf("prune: table %v-%v, %v ago, cacheLen %v", c.tbl.ID, c.tbl.GetLastestSchema().Name, c.ago, TaskCache.Len())
+		return fmt.Sprintf("prune: table %v-%v, %v ago, cacheLen %v", c.tbl.ID, c.tbl.GetLastestSchema(false).Name, c.ago, TaskCache.Len())
 	}
 }
+
+const AllowPruneDuration = 24 * time.Hour
 
 func (c *objectPruneArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	address, _ := cmd.Flags().GetString("target")
 	c.ack, _ = cmd.Flags().GetInt("ack")
 	c.ago, _ = cmd.Flags().GetDuration("duration")
-	if c.ago < 24*time.Hour {
+	c.force, _ = cmd.Flags().GetBool("force")
+	if c.ago < AllowPruneDuration {
 		return moerr.NewInvalidInputNoCtx("pruning objects within 24h is not supported")
 	}
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
 	if err != nil {
 		return err
 	}
+	if c.ack == -1 && c.tbl == nil {
+		return moerr.NewInvalidInputNoCtx("need table target")
+	}
 	return nil
 }
 
 func (c *objectPruneArg) Run() error {
 	if c.ack != -1 {
-		if err := c.executePrune(); err != nil {
+		TaskCache.Lock()
+		task, ok := TaskCache.memos[c.ack]
+		delete(TaskCache.memos, c.ack)
+		TaskCache.Unlock()
+		if !ok {
+			c.ctx.resp.Payload = []byte("task not found")
+			return nil
+		}
+		if err := c.executePrune(task.objs); err != nil {
 			return err
 		}
 		return nil
@@ -378,7 +407,7 @@ func (c *objectPruneArg) Run() error {
 	TaskCache.Unlock()
 	entry := c.tbl
 
-	it := entry.MakeObjectIt(true)
+	it := entry.MakeDataObjectIt()
 	now := c.ctx.db.TxnMgr.Now()
 	var total, stale, selected int
 	var minR, maxR, totalR, minS, maxS, totalS int
@@ -386,28 +415,25 @@ func (c *objectPruneArg) Run() error {
 
 	selectedObjs := make([]*catalog.ObjectEntry, 0, 64)
 
-	for ; it.Valid(); it.Next() {
-		obj := it.Get().GetPayload()
+	for it.Next() {
+		obj := it.Item()
+		if obj.ObjectState != catalog.ObjectState_Create_ApplyCommit {
+			continue
+		}
 		if !obj.IsActive() || obj.IsAppendable() {
 			continue
 		}
 		total++
 
-		obj.RLock()
-		createTs := obj.GetCreatedAtLocked()
-		obj.RUnlock()
+		createTs := obj.GetCreatedAt()
 		if createTs.GreaterEq(&ago) {
 			continue
 		}
 		stale++
-		if c.tbl.TryGetTombstone(obj.ID) != nil || obj.GetObjectData().GetTotalChanges() > 0 { // has deletes
-			continue
-		}
 		selected++
 		selectedObjs = append(selectedObjs, obj)
-		stat := obj.GetObjectStats()
-		rw := int(stat.Rows())
-		sz := int(stat.OriginSize())
+		rw := int(obj.Rows())
+		sz := int(obj.OriginSize())
 		if minR == 0 || rw < minR {
 			minR = rw
 		}
@@ -423,6 +449,7 @@ func (c *objectPruneArg) Run() error {
 		}
 		totalS += sz
 	}
+	it.Release()
 
 	if selected == 0 {
 		c.ctx.resp.Payload = []byte(fmt.Sprintf(
@@ -431,46 +458,48 @@ func (c *objectPruneArg) Run() error {
 		))
 		return nil
 	}
-
-	TaskCache.Lock()
-	var id int
-	for {
-		id = rand.Intn(100)
-		if _, ok := TaskCache.memos[id]; ok {
-			continue
+	id := -1
+	if c.force {
+		if err := c.executePrune(selectedObjs); err != nil {
+			return err
 		}
-		TaskCache.memos[id] = pruneTask{
-			objs:     selectedObjs,
-			insertAt: time.Now(),
+	} else {
+		TaskCache.Lock()
+		for {
+			id = rand.Intn(100)
+			if _, ok := TaskCache.memos[id]; ok {
+				continue
+			}
+			TaskCache.memos[id] = pruneTask{
+				objs:     selectedObjs,
+				insertAt: time.Now(),
+			}
+			break
 		}
-		break
+		TaskCache.Unlock()
 	}
-	TaskCache.Unlock()
 
-	c.ctx.resp.Payload = []byte(fmt.Sprintf(
-		"total: %d, stale: %d, selected: %d, minR: %d, maxR: %d, avgR: %d, minS: %v, maxS: %v, avgS: %v, taskid: %d",
+	pad := ""
+	if len(c.ctx.resp.Payload) > 0 {
+		pad = "\n"
+	}
+	c.ctx.resp.Payload = append(c.ctx.resp.Payload, []byte(fmt.Sprintf(
+		"%vtotal: %d, stale: %d, selected: %d, minR: %d, maxR: %d, avgR: %d, minS: %v, maxS: %v, avgS: %v, taskid: %d",
+		pad,
 		total, stale, selected, minR, maxR, totalR/selected,
 		common.HumanReadableBytes(minS),
 		common.HumanReadableBytes(maxS),
 		common.HumanReadableBytes(totalS/selected),
 		id,
-	))
+	))...)
 
 	return nil
 }
 
-func (c *objectPruneArg) executePrune() error {
-	TaskCache.Lock()
-	task, ok := TaskCache.memos[c.ack]
-	delete(TaskCache.memos, c.ack)
-	TaskCache.Unlock()
-	if !ok {
-		c.ctx.resp.Payload = []byte("task not found")
-		return nil
-	}
+func (c *objectPruneArg) executePrune(objs []*catalog.ObjectEntry) error {
 	txn, _ := c.ctx.db.StartTxn(nil)
-	tid := task.objs[0].GetTable().ID
-	did := task.objs[0].GetTable().GetDB().ID
+	tid := objs[0].GetTable().ID
+	did := objs[0].GetTable().GetDB().ID
 	dbHdl, err := txn.GetDatabaseByID(uint64(did))
 	if err != nil {
 		return err
@@ -481,12 +510,12 @@ func (c *objectPruneArg) executePrune() error {
 	}
 	notfound := 0
 	w := &bytes.Buffer{}
-	for _, obj := range task.objs {
-		if err := tblHdl.SoftDeleteObject(&obj.ID); err != nil {
-			logutil.Errorf("objprune: del obj %s: %v", obj.ID.String(), err)
+	for _, obj := range objs {
+		if err := tblHdl.SoftDeleteObject(obj.ID(), obj.IsTombstone); err != nil {
+			logutil.Errorf("objprune: del obj %s: %v", obj.ID().String(), err)
 			return err
 		}
-		w.WriteString(obj.ID.String())
+		w.WriteString(obj.ID().String())
 		w.WriteRune(',')
 	}
 	if err := txn.Commit(context.Background()); err != nil {
@@ -494,7 +523,12 @@ func (c *objectPruneArg) executePrune() error {
 	}
 
 	logutil.Infof("objprune done: %v", w.String())
-	c.ctx.resp.Payload = []byte(fmt.Sprintf("prunes total: %d, notfound: %d", len(task.objs), notfound))
+	pad := ""
+	if len(c.ctx.resp.Payload) > 0 {
+		pad = "\n"
+	}
+	c.ctx.resp.Payload = append(c.ctx.resp.Payload,
+		[]byte(fmt.Sprintf("%vdone. prunes total: %d, notfound: %d", pad, len(objs), notfound))...)
 	return nil
 }
 
@@ -674,11 +708,11 @@ func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *infoArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked(false).Name)
 	}
 
 	if c.obj != nil {
-		t = fmt.Sprintf("%s o-%s b-%d", t, c.obj.ID.String(), c.blkn)
+		t = fmt.Sprintf("%s o-%s b-%d", t, c.obj.ID().String(), c.blkn)
 	}
 
 	return fmt.Sprintf("info: %v", t)
@@ -688,28 +722,19 @@ func (c *infoArg) Run() error {
 	b := &bytes.Buffer{}
 	if c.tbl != nil {
 		b.WriteString(fmt.Sprintf("last_merge: %v\n", c.tbl.Stats.GetLastMerge().String()))
-		b.WriteString(fmt.Sprintf("last_flush: %v\n", c.tbl.Stats.GetLastFlush().ToString()))
 	}
 	if c.obj != nil {
 		b.WriteRune('\n')
-		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.obj.GetObjectData().GetDeltaPersistedTS().ToString()))
+		// b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.obj.GetObjectData().GetDeltaPersistedTS().ToString()))
 		r, reason := c.obj.GetObjectData().PrepareCompactInfo()
-		rows, err := c.obj.GetObjectData().Rows()
-		if err != nil {
-			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID.String(), err)
-		}
-		dels := c.obj.GetObjectData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
-		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
 		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.obj.GetObjectData().PPString(c.verbose, 0, "", c.blkn)))
 
 		schema := c.obj.GetSchema()
 		if schema.HasSortKey() {
-			zm, err := c.obj.GetPKZoneMap(context.Background(), c.obj.GetObjectData().GetFs().Service)
+			zm := c.obj.SortKeyZoneMap()
 			var zmstr string
-			if err != nil {
-				zmstr = err.Error()
-			} else if c.verbose <= common.PPL1 {
+			if c.verbose <= common.PPL1 {
 				zmstr = zm.String()
 			} else if c.verbose == common.PPL2 {
 				zmstr = zm.StringForCompose()
@@ -731,6 +756,8 @@ type mergePolicyArg struct {
 	maxOsizeObject    int32
 	cnMinMergeSize    int32
 	hints             []api.MergeHint
+
+	disableDeltaLocMerge bool
 }
 
 func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
@@ -745,6 +772,7 @@ func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd.Flags().Int32P("maxOsizeObject", "o", common.DefaultMaxOsizeObjMB, "merged objects' osize should be near maxOsizeObject(MB)")
 	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merge task whose memory occupation exceeds minCNMergeSize(MB) will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
+	policyCmd.Flags().BoolP("disableDeltaLocMerge", "d", merge.DisableDeltaLocMerge.Load(), "enable merging based on delta location")
 	return policyCmd
 }
 
@@ -760,6 +788,7 @@ func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.maxOsizeObject, _ = cmd.Flags().GetInt32("maxOsizeObject")
 	c.minOsizeQualified, _ = cmd.Flags().GetInt32("minOsizeQualified")
 	c.cnMinMergeSize, _ = cmd.Flags().GetInt32("minCNMergeSize")
+	c.disableDeltaLocMerge, _ = cmd.Flags().GetBool("disableDeltaLocMerge")
 	if c.maxOsizeObject > 2048 || c.minOsizeQualified > 2048 {
 		return moerr.NewInvalidInputNoCtx("maxOsizeObject or minOsizeQualified should be less than 2048")
 	}
@@ -776,7 +805,7 @@ func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *mergePolicyArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked(false).Name)
 	}
 	return fmt.Sprintf(
 		"(%s) maxMergeObjN: %v, maxOsizeObj: %vMB, minOsizeQualified: %vMB, offloadToCnSize: %vMB, hints: %v",
@@ -789,6 +818,8 @@ func (c *mergePolicyArg) Run() error {
 	minosize := uint32(c.minOsizeQualified * common.Const1MBytes)
 	cnsize := uint64(c.cnMinMergeSize) * common.Const1MBytes
 
+	merge.DisableDeltaLocMerge.Store(c.disableDeltaLocMerge)
+
 	if c.tbl == nil {
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
 		common.RuntimeOsizeRowsQualified.Store(minosize)
@@ -796,19 +827,28 @@ func (c *mergePolicyArg) Run() error {
 		common.RuntimeMinCNMergeSize.Store(cnsize)
 		if c.maxMergeObjN == 0 && c.minOsizeQualified == 0 {
 			merge.StopMerge.Store(true)
+			c.ctx.resp.Payload = []byte("auto merge is disabled")
 		} else {
 			merge.StopMerge.Store(false)
+			c.ctx.resp.Payload = []byte("general setting has been refreshed")
 		}
 	} else {
-		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl, &merge.BasicPolicyConfig{
+		txn, err := c.ctx.db.StartTxn(nil)
+		if err != nil {
+			return err
+		}
+		err = c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
 			MergeMaxOneRun:    int(c.maxMergeObjN),
 			ObjectMinOsize:    minosize,
 			MaxOsizeMergedObj: maxosize,
 			MinCNMergeSize:    cnsize,
 			MergeHints:        c.hints,
 		})
+		if err != nil {
+			return err
+		}
+		c.ctx.resp.Payload = []byte("success")
 	}
-	c.ctx.resp.Payload = []byte("<empty>")
 	return nil
 }
 
@@ -842,7 +882,7 @@ func (c *RenameColArg) PrepareCommand() *cobra.Command {
 }
 
 func (c *RenameColArg) String() string {
-	return fmt.Sprintf("rename col: %v, %v,%v,%v", c.tbl.GetLastestSchemaLocked().Name, c.oldName, c.newName, c.seq)
+	return fmt.Sprintf("rename col: %v, %v,%v,%v", c.tbl.GetLastestSchemaLocked(false).Name, c.oldName, c.newName, c.seq)
 }
 
 func (c *RenameColArg) Run() (err error) {
@@ -856,7 +896,7 @@ func (c *RenameColArg) Run() (err error) {
 	if err != nil {
 		return err
 	}
-	tblHdl, err := dbHdl.GetRelationByName(c.tbl.GetLastestSchemaLocked().Name)
+	tblHdl, err := dbHdl.GetRelationByName(c.tbl.GetLastestSchemaLocked(false).Name)
 	if err != nil {
 		return err
 	}
@@ -927,7 +967,7 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEnt
 	}
 	bid := objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
 	objid := bid.Object()
-	oentry, err := tbl.GetObjectByID(objid)
+	oentry, err := tbl.GetObjectByID(objid, false)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1004,7 +1044,7 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 	}
 	o.tbl++
 
-	stat, _ := table.ObjectStats(common.PPL0, 0, -1)
+	stat, _ := table.ObjectStats(common.PPL0, 0, -1, false)
 	heap.Push(&o.candidates, mItem{objcnt: stat.ObjectCnt, did: table.GetDB().ID, tid: table.ID})
 	if o.candidates.Len() > o.topk {
 		heap.Pop(&o.candidates)
@@ -1075,7 +1115,7 @@ func parseStorageUsageDetail(expr string, ac *db.AccessInfo, db *db.DB) (
 // [pos1, pos2)
 func subString(src string, pos1, pos2 int) (string, error) {
 	if pos2 > len(src) {
-		return "", moerr.NewOutOfRangeNoCtx("", src, pos1, " to ", pos2)
+		return "", moerr.NewOutOfRangeNoCtxf("", src, pos1, " to ", pos2)
 	}
 
 	dst := make([]byte, pos2-pos1)
@@ -1188,9 +1228,9 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 	locations := make([]objectio.Location, 0)
 
 	for idx := range entries {
-		if entries[idx].GetVersion() < logtail.CheckpointVersion11 {
-			continue
-		}
+		// if entries[idx].GetVersion() < logtail.CheckpointVersion11 {
+		// 	continue
+		// }
 		versions = append(versions, entries[idx].GetVersion())
 		locations = append(locations, entries[idx].GetLocation())
 	}
@@ -1202,7 +1242,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 	var usageDelData [][]logtail.UsageData
 
 	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
-		ctx, locations, versions,
+		ctx, c.ctx.db.Runtime.SID(), locations, versions,
 		c.ctx.db.Runtime.Fs.Service, common.DebugAllocator); err != nil {
 		return err
 	}
@@ -1220,7 +1260,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 		if r == nil {
 			return h.GetName(), "deleted"
 		}
-		return h.GetName(), r.Schema().(*catalog.Schema).Name
+		return h.GetName(), r.Schema(false).(*catalog.Schema).Name
 	}
 
 	getAllDbAndTblNames := func(usages []logtail.UsageData) (dbs, tbls []string, maxDbLen, maxTblLen int) {
@@ -1359,5 +1399,45 @@ func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
 	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog, end)
 	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
 
+	return nil
+}
+
+type transferArg struct {
+	mem  int
+	disk int
+	show bool
+}
+
+func (c *transferArg) PrepareCommand() *cobra.Command {
+	transferCmd := &cobra.Command{
+		Use:   "transfer",
+		Short: "set transfer ttl",
+		Run:   RunFactory(c),
+	}
+	transferCmd.Flags().IntP("mem", "m", 5, "set transfer page memory ttl (s)")
+	transferCmd.Flags().IntP("disk", "d", 3, "set transfer page disk ttl (min)")
+	transferCmd.Flags().BoolP("show", "s", false, "show transfer ttl")
+
+	return transferCmd
+}
+
+func (c *transferArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.mem, _ = cmd.Flags().GetInt("mem")
+	c.disk, _ = cmd.Flags().GetInt("disk")
+	c.show, _ = cmd.Flags().GetBool("show")
+	return nil
+}
+
+func (c *transferArg) String() string {
+	return fmt.Sprintf("transfer page ttl, mem:%v, disk:%v", model.GetTTL(), model.GetDiskTTL())
+}
+
+func (c *transferArg) Run() error {
+	if c.show {
+		c.show = false
+		return nil
+	}
+	model.SetTTL(time.Duration(c.mem) * time.Second)
+	model.SetDiskTTL(time.Duration(c.disk) * time.Minute)
 	return nil
 }

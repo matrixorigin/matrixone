@@ -182,6 +182,12 @@ func init() {
 		func(a *AccountsSetOption) { a.reset() },
 		reuse.DefaultOptions[AccountsSetOption](), //.
 	) // WithEnableChecker()
+
+	reuse.CreatePool[RenameTable](
+		func() *RenameTable { return &RenameTable{} },
+		func(r *RenameTable) { r.reset() },
+		reuse.DefaultOptions[RenameTable](), //.
+	) // WithEnableChecker()
 }
 
 type AlterUser struct {
@@ -417,19 +423,28 @@ func (node *AlterView) reset() {
 	*node = AlterView{}
 }
 
+type DatabaseConfig int
+
+const (
+	MYSQL_COMPATIBILITY_MODE DatabaseConfig = iota
+	UNIQUE_CHECK_ON_AUTOINCR
+)
+
 type AlterDataBaseConfig struct {
 	statementImpl
 	AccountName    string
 	DbName         string
 	IsAccountLevel bool
+	ConfigType     DatabaseConfig
 	UpdateConfig   string
 }
 
-func NewAlterDataBaseConfig(accountName, dbName string, isAccountLevel bool, updateConfig string) *AlterDataBaseConfig {
+func NewAlterDataBaseConfig(accountName, dbName string, isAccountLevel bool, configType DatabaseConfig, updateConfig string) *AlterDataBaseConfig {
 	a := reuse.Alloc[AlterDataBaseConfig](nil)
 	a.AccountName = accountName
 	a.DbName = dbName
 	a.IsAccountLevel = isAccountLevel
+	a.ConfigType = configType
 	a.UpdateConfig = updateConfig
 	return a
 }
@@ -630,6 +645,47 @@ func (node *AlterTable) reset() {
 	}
 
 	*node = AlterTable{}
+}
+
+type RenameTable struct {
+	statementImpl
+	AlterTables []*AlterTable
+}
+
+func (node *RenameTable) Format(ctx *FmtCtx) {
+	ctx.WriteString("rename table ")
+	prefix := ""
+	for _, t := range node.AlterTables {
+		ctx.WriteString(prefix)
+		t.Table.Format(ctx)
+		ctx.WriteString(" ")
+		t.Options[0].Format(ctx)
+		prefix = ", "
+	}
+}
+
+func NewRenameTable(alters []*AlterTable) *RenameTable {
+	a := new(RenameTable)
+	a.AlterTables = alters
+	return a
+}
+
+func (node *RenameTable) GetStatementType() string { return "Rename Table" }
+func (node *RenameTable) GetQueryType() string     { return QueryTypeDDL }
+
+func (node RenameTable) TypeName() string { return "tree.RenameTableStmt" }
+
+func (node *RenameTable) reset() {
+	for _, t := range node.AlterTables {
+		t.reset()
+	}
+}
+
+func (node *RenameTable) Free() {
+	for _, t := range node.AlterTables {
+		t.Free()
+	}
+	reuse.Free[RenameTable](node, nil)
 }
 
 type AlterTableOptions = []AlterTableOption
@@ -938,15 +994,17 @@ type AlterPublication struct {
 	Name        Identifier
 	AccountsSet *AccountsSetOption
 	DbName      string
+	Table       TableNames
 	Comment     string
 }
 
-func NewAlterPublication(exist bool, name Identifier, accountsSet *AccountsSetOption, dbName, comment string) *AlterPublication {
+func NewAlterPublication(exist bool, name Identifier, accountsSet *AccountsSetOption, dbName string, table TableNames, comment string) *AlterPublication {
 	a := reuse.Alloc[AlterPublication](nil)
 	a.IfExists = exist
 	a.Name = name
 	a.AccountsSet = accountsSet
 	a.DbName = dbName
+	a.Table = table
 	a.Comment = comment
 	return a
 }
@@ -976,6 +1034,14 @@ func (node *AlterPublication) Format(ctx *FmtCtx) {
 				node.AccountsSet.DropAccounts.Format(ctx)
 			}
 		}
+	}
+	if node.DbName != "" {
+		ctx.WriteString(" database ")
+		ctx.WriteString(node.DbName)
+	}
+	if len(node.Table) > 0 {
+		ctx.WriteString(" table ")
+		node.Table.Format(ctx)
 	}
 	if node.Comment != "" {
 		ctx.WriteString(" comment ")
@@ -1176,7 +1242,7 @@ type AlterTableAlterColumnClause struct {
 	alterOptionImpl
 	Typ         AlterTableOptionType
 	ColumnName  *UnresolvedName
-	DefalutExpr *AttributeDefault
+	DefaultExpr *AttributeDefault
 	Visibility  VisibleType
 	OptionType  AlterColumnOptionType
 }
@@ -1185,7 +1251,7 @@ func NewAlterTableAlterColumnClause(typ AlterTableOptionType, columnName *Unreso
 	a := reuse.Alloc[AlterTableAlterColumnClause](nil)
 	a.Typ = typ
 	a.ColumnName = columnName
-	a.DefalutExpr = defalutExpr
+	a.DefaultExpr = defalutExpr
 	a.Visibility = visibility
 	a.OptionType = optionType
 	return a
@@ -1198,7 +1264,7 @@ func (node *AlterTableAlterColumnClause) Format(ctx *FmtCtx) {
 	node.ColumnName.Format(ctx)
 	if node.OptionType == AlterColumnOptionSetDefault {
 		ctx.WriteString(" set ")
-		node.DefalutExpr.Format(ctx)
+		node.DefaultExpr.Format(ctx)
 	} else if node.OptionType == AlterColumnOptionSetVisibility {
 		ctx.WriteString(" set")
 		switch node.Visibility {
@@ -1218,8 +1284,8 @@ func (node *AlterTableAlterColumnClause) reset() {
 	// if node.ColumnName != nil {
 	// node.ColumnName.Free()
 	// }
-	// if node.DefalutExpr != nil {
-	// node.DefalutExpr.Free()
+	// if node.DefaultExpr != nil {
+	// node.DefaultExpr.Free()
 	// }
 	*node = AlterTableAlterColumnClause{}
 }

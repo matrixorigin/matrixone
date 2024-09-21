@@ -207,3 +207,17 @@ drop table if exists indup_10;
 create table indup_10(a varchar(256), b int);
 insert into indup_10 (a, b) select  "matrixone " || " some space " || result, 1 from generate_series (1, 500000)g;
 drop table indup_10;
+
+CREATE TABLE `serial_numbers` (
+`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+`biz_type` BIGINT DEFAULT NULL,
+`namespace` VARCHAR(64) DEFAULT NULL,
+`sn` BIGINT DEFAULT NULL,
+PRIMARY KEY (`id`),
+UNIQUE KEY `unq_biz_ns` (`biz_type`,`namespace`));
+insert into `serial_numbers` (`biz_type`, `namespace`, `sn`) select result,result||"lijofw;ok",result from generate_series(1,100000) g;
+INSERT INTO `serial_numbers` (`biz_type`, `namespace`, `sn`) VALUES (4, '2024091117', 1) ON DUPLICATE KEY UPDATE `sn` = `sn` + 1;
+SELECT * FROM `serial_numbers` WHERE `biz_type` = 4 ;
+-- @bvt:issue#18710
+SELECT * FROM `serial_numbers` WHERE `biz_type` = 4 and `namespace` = '2024091117';
+-- @bvt:issue

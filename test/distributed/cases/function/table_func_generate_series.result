@@ -23,7 +23,7 @@ result
 3
 1
 select * from generate_series(1, 5, 0) g;
-invalid input: step size cannot equal zero
+invalid input: generate_series step cannot be zero
 select * from generate_series(1, 5, -1) g;
 result
 select * from generate_series(5, 1, 1) g;
@@ -49,7 +49,7 @@ result
 2147483649
 2147483647
 select * from generate_series(2147483647, 2147483649, 0) g;
-invalid input: step size cannot equal zero
+invalid input: generate_series step cannot be zero
 select * from generate_series(2147483647, 2147483649, -1) g;
 result
 select * from generate_series(2147483649, 2147483647, 1) g;
@@ -177,4 +177,19 @@ insert into t select result, repeat('foobarzoo', 600) t from generate_series(1, 
 select count(*) as ttl from t;
 ttl
 200000
+drop table t;
+create table t(a int, b int);
+explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf;
+TP QURERY PLAN
+Project
+  ->  CROSS APPLY
+        ->  Table Scan on table_func_generate_series.t
+        ->  Table Function on generate_series
+explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf where t.a > 1;
+TP QURERY PLAN
+Project
+  ->  CROSS APPLY
+        ->  Table Scan on table_func_generate_series.t
+              Filter Cond: (t.a > 1)
+        ->  Table Function on generate_series
 drop table t;

@@ -18,7 +18,9 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
@@ -31,32 +33,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func LoadPersistedColumnData(
-	ctx context.Context,
-	rt *dbutils.Runtime,
-	id *common.ID,
-	def *catalog.ColDef,
-	location objectio.Location,
-	mp *mpool.MPool,
-) (vec containers.Vector, err error) {
-	if def.IsPhyAddr() {
-		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
-	}
-	//Extend lifetime of vectors is without the function.
-	//need to copy. closeFunc will be nil.
-	vectors, _, err := blockio.LoadColumns2(
-		ctx, []uint16{uint16(def.SeqNum)},
-		[]types.Type{def.Type},
-		rt.Fs.Service,
-		location,
-		fileservice.Policy(0),
-		true,
-		rt.VectorPool.Transient)
-	if err != nil {
-		return
-	}
-	return vectors[0], nil
-}
+//func LoadPersistedColumnData(
+//	ctx context.Context,
+//	rt *dbutils.Runtime,
+//	id *common.ID,
+//	def *catalog.ColDef,
+//	location objectio.Location,
+//	mp *mpool.MPool,
+//) (vec containers.Vector, err error) {
+//	if def.IsPhyAddr() {
+//		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
+//	}
+//	//Extend lifetime of vectors is without the function.
+//	//need to copy. closeFunc will be nil.
+//	vectors, _, err := blockio.LoadColumns2(
+//		ctx, []uint16{uint16(def.SeqNum)},
+//		[]types.Type{def.Type},
+//		rt.Fs.Service,
+//		location,
+//		fileservice.Policy(0),
+//		true,
+//		rt.VectorPool.Transient)
+//	if err != nil {
+//		return
+//	}
+//	return vectors[0], nil
+//}
 
 func LoadPersistedColumnDatas(
 	ctx context.Context,
@@ -66,17 +68,24 @@ func LoadPersistedColumnDatas(
 	colIdxs []int,
 	location objectio.Location,
 	mp *mpool.MPool,
-) ([]containers.Vector, error) {
+	tsForAppendable *types.TS,
+) ([]containers.Vector, *nulls.Nulls, error) {
 	cols := make([]uint16, 0)
 	typs := make([]types.Type, 0)
 	vectors := make([]containers.Vector, len(colIdxs))
 	phyAddIdx := -1
+	var deletes *nulls.Nulls
 	for i, colIdx := range colIdxs {
+		if colIdx == catalog.COLIDX_COMMITS {
+			cols = append(cols, objectio.SEQNUM_COMMITTS)
+			typs = append(typs, catalog.CommitTSType)
+			continue
+		}
 		def := schema.ColDefs[colIdx]
 		if def.IsPhyAddr() {
 			vec, err := model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 			if err != nil {
-				return nil, err
+				return nil, deletes, err
 			}
 			phyAddIdx = i
 			vectors[phyAddIdx] = vec
@@ -86,11 +95,20 @@ func LoadPersistedColumnDatas(
 		typs = append(typs, def.Type)
 	}
 	if len(cols) == 0 {
-		return vectors, nil
+		return vectors, deletes, nil
 	}
+	if tsForAppendable != nil {
+		deletes = nulls.NewWithSize(1024)
+		cols = append(cols, objectio.SEQNUM_COMMITTS)
+		defer func() {
+			cols = cols[:len(cols)-1]
+		}()
+	}
+	var vecs []containers.Vector
+	var err error
 	//Extend lifetime of vectors is without the function.
 	//need to copy. closeFunc will be nil.
-	vecs, _, err := blockio.LoadColumns2(
+	vecs, _, err = blockio.LoadColumns2(
 		ctx, cols,
 		typs,
 		rt.Fs.Service,
@@ -99,7 +117,16 @@ func LoadPersistedColumnDatas(
 		true,
 		rt.VectorPool.Transient)
 	if err != nil {
-		return nil, err
+		return nil, deletes, err
+	}
+	if tsForAppendable != nil {
+		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[len(vecs)-1].GetDownstreamVector())
+		for i := 0; i < len(commits); i++ {
+			if commits[i].Greater(tsForAppendable) {
+				deletes.Add(uint64(i))
+			}
+		}
+		vecs = vecs[:len(vecs)-1]
 	}
 	for i, vec := range vecs {
 		idx := i
@@ -108,71 +135,8 @@ func LoadPersistedColumnDatas(
 		}
 		vectors[idx] = vec
 	}
-	return vectors, nil
+	return vectors, deletes, nil
 }
-
-func ReadPersistedBlockRow(location objectio.Location) int {
-	return int(location.Rows())
-}
-
-func LoadPersistedDeletes(
-	ctx context.Context,
-	pkName string,
-	fs *objectio.ObjectFS,
-	location objectio.Location,
-	mp *mpool.MPool,
-) (bat *containers.Batch, isPersistedByCN bool, release func(), err error) {
-	if isPersistedByCN, err = blockio.IsPersistedByCN(ctx, location, fs.Service); err != nil {
-		return
-	}
-	bat, release, err = LoadPersistedDeletesBySchema(ctx, pkName, fs, location, isPersistedByCN, mp)
-	return
-}
-
-func LoadPersistedDeletesBySchema(
-	ctx context.Context,
-	pkName string,
-	fs *objectio.ObjectFS,
-	location objectio.Location,
-	isPersistedByCN bool,
-	mp *mpool.MPool,
-) (bat *containers.Batch, release func(), err error) {
-	movbat, release, err := blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
-	if err != nil {
-		return
-	}
-	bat = containers.NewBatch()
-	if isPersistedByCN {
-		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrPKVal}
-		for i := 0; i < 2; i++ {
-			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i], mp))
-		}
-	} else {
-		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrPKVal, catalog.AttrAborted}
-		for i := 0; i < 4; i++ {
-			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i], mp))
-		}
-	}
-	return
-}
-
-// func MakeBFLoader(
-// 	meta *catalog.BlockEntry,
-// 	bf objectio.BloomFilter,
-// 	cache model.LRUCache,
-// 	fs fileservice.FileService,
-// ) indexwrapper.Loader {
-// 	return func(ctx context.Context) ([]byte, error) {
-// 		location := meta.GetMetaLoc()
-// 		var err error
-// 		if len(bf) == 0 {
-// 			if bf, err = LoadBF(ctx, location, cache, fs, false); err != nil {
-// 				return nil, err
-// 			}
-// 		}
-// 		return bf.GetBloomFilter(uint32(location.ID())), nil
-// 	}
-// }
 
 func MakeImmuIndex(
 	ctx context.Context,
@@ -180,12 +144,8 @@ func MakeImmuIndex(
 	bf objectio.BloomFilter,
 	rt *dbutils.Runtime,
 ) (idx indexwrapper.ImmutIndex, err error) {
-	stats, err := meta.MustGetObjectStats()
-	if err != nil {
-		return
-	}
 	idx = indexwrapper.NewImmutIndex(
-		stats.SortKeyZoneMap(), bf, stats.ObjectLocation(),
+		meta.SortKeyZoneMap(), bf, meta.ObjectLocation(),
 	)
 	return
 }

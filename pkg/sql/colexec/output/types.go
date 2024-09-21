@@ -21,58 +21,61 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Output)
 
-type Argument struct {
+type Output struct {
 	Data interface{}
 	Func func(*batch.Batch) error
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (output *Output) GetOperatorBase() *vm.OperatorBase {
+	return &output.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Output](
+		func() *Output {
+			return &Output{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Output) {
+			*a = Output{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Output]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (output Output) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Output {
+	return reuse.Alloc[Output](nil)
 }
 
-func (arg *Argument) WithData(data interface{}) *Argument {
-	arg.Data = data
-	return arg
+func (output *Output) WithData(data interface{}) *Output {
+	output.Data = data
+	return output
 }
 
-func (arg *Argument) WithFunc(Func func(*batch.Batch) error) *Argument {
-	arg.Func = Func
-	return arg
+func (output *Output) WithFunc(Func func(*batch.Batch) error) *Output {
+	output.Func = Func
+	return output
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (output *Output) Release() {
+	if output != nil {
+		reuse.Free[Output](output, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+func (output *Output) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if !pipelineFailed {
-		_ = arg.Func(nil)
+		_ = output.Func(nil)
 	}
+}
+
+func (output *Output) Free(proc *process.Process, pipelineFailed bool, err error) {
 }

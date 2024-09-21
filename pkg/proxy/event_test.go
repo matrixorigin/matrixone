@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"net"
 	"os"
 	"testing"
@@ -26,6 +27,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEventTypeDesc(t *testing.T) {
+	e1 := TypeKill
+	assert.Equal(t, "Kill", e1.String())
+	e1 = TypeSetVar
+	assert.Equal(t, "SetVar", e1.String())
+	e1 = TypeQuit
+	assert.Equal(t, "Quit", e1.String())
+	e1 = TypeUpgrade
+	assert.Equal(t, "Upgrade", e1.String())
+}
 
 func TestMakeEvent(t *testing.T) {
 	e, r := makeEvent(nil, nil)
@@ -102,9 +114,19 @@ func TestMakeEvent(t *testing.T) {
 			require.False(t, r)
 		}
 	})
+
+	t.Run("upgrade", func(t *testing.T) {
+		stmt := "upgrade account all"
+		e, r = makeEvent(makeSimplePacket(stmt), nil)
+		require.NotNil(t, e)
+		require.True(t, r)
+	})
 }
 
-func TestKillQueryEvent(t *testing.T) {
+func runEventTest(t *testing.T,
+	testFn func(connID uint32, client net.Conn, errC chan error),
+	checkFn func(res chan []byte, cn *CNServer, errC chan error, cc ClientConn),
+) {
 	defer leaktest.AfterTest(t)()
 
 	tp := newTestProxyHandler(t)
@@ -128,9 +150,17 @@ func TestKillQueryEvent(t *testing.T) {
 	}()
 
 	tu1 := newTunnel(tp.ctx, tp.logger, nil)
-	defer func() { _ = tu1.Close() }()
+	defer func() {
+		_, sc := tu1.getConns()
+		sc.Close()
+		_ = tu1.Close()
+	}()
 	tu2 := newTunnel(tp.ctx, tp.logger, nil)
-	defer func() { _ = tu2.Close() }()
+	defer func() {
+		_, sc := tu2.getConns()
+		sc.Close()
+		_ = tu2.Close()
+	}()
 
 	// Client2 will send "kill query 10", which will route to the server which
 	// has connection ID 10. In this case, the connection is server1.
@@ -174,7 +204,7 @@ func TestKillQueryEvent(t *testing.T) {
 	_, ret, err := tp.ru.Connect(cn1, testPacket, tu1)
 	require.NoError(t, err)
 	// get connection id from result.
-	connID := ret[6]
+	connID := uint32(ret[6])
 
 	// tunnel2 is on cn2, connection ID is 20.
 	_, _, err = tp.ru.Connect(cn2, testPacket, tu2)
@@ -237,36 +267,64 @@ func TestKillQueryEvent(t *testing.T) {
 	require.True(t, scp2.mu.started)
 	scp2.mu.Unlock()
 
-	// Client2 writes some MySQL packets.
-	sendEventCh := make(chan struct{}, 1)
-	errChan := make(chan error, 1)
-	go func() {
-		<-sendEventCh
-		// client2 send kill query 10, which is on server1.
-		if _, err := client2.Write(makeSimplePacket(fmt.Sprintf("kill query %d", connID))); err != nil {
-			errChan <- err
-			return
-		}
-	}()
+	errC := make(chan error, 1)
+	testFn(connID, client2, errC)
 
-	sendEventCh <- struct{}{}
 	barrierStart2 <- struct{}{}
 	barrierEnd2 <- struct{}{}
 
-	addr := string(<-res)
-	// This test case is mainly focus on if the query is route to the
-	// right cn server, but not the result of the query. So we just
-	// check the address which is handled is equal to cn1, but not cn2.
-	require.Equal(t, cn1.addr, addr)
+	checkFn(res, cn1, errC, cc2)
+}
 
-	select {
-	case err = <-errChan:
-		t.Fatalf("require no error, but got %v", err)
-	default:
-	}
+func TestKillEvent(t *testing.T) {
+	runEventTest(t,
+		func(connID uint32, client net.Conn, errC chan error) {
+			// client2 send kill query 10, which is on server1.
+			if _, err := client.Write(makeSimplePacket(fmt.Sprintf("kill query %d", connID))); err != nil {
+				errC <- err
+				return
+			}
+		},
+		func(res chan []byte, cn *CNServer, errC chan error, _ ClientConn) {
+			addr := string(<-res)
+			// This test case is mainly focus on if the query is route to the
+			// right cn server, but not the result of the query. So we just
+			// check the address which is handled is equal to cn1, but not cn2.
+			require.Equal(t, cn.addr, addr)
+
+			select {
+			case err := <-errC:
+				t.Fatalf("require no error, but got %v", err)
+			default:
+			}
+		},
+	)
 }
 
 func TestSetVarEvent(t *testing.T) {
+	runEventTest(t,
+		func(connID uint32, client net.Conn, errC chan error) {
+			if _, err := client.Write(makeSimplePacket("set session cn_label='account=acc1'")); err != nil {
+				errC <- err
+				return
+			}
+		},
+		func(res chan []byte, cn *CNServer, errC chan error, cc ClientConn) {
+			// wait for result
+			<-res
+			require.Equal(t, 1, len(cc.(*mockClientConn).redoStmts))
+
+			select {
+			case err := <-errC:
+				t.Fatalf("require no error, but got %v", err)
+			default:
+			}
+		},
+	)
+
+}
+
+func TestQuitEvent(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	temp := os.TempDir()
@@ -289,10 +347,18 @@ func TestSetVarEvent(t *testing.T) {
 		require.NoError(t, stopFn2())
 	}()
 
-	tu1 := newTunnel(tp.ctx, tp.logger, nil)
-	defer func() { _ = tu1.Close() }()
-	tu2 := newTunnel(tp.ctx, tp.logger, nil)
-	defer func() { _ = tu2.Close() }()
+	tu1 := newTunnel(tp.ctx, tp.logger, nil, withConnCacheEnabled(true))
+	defer func() {
+		_, sc := tu1.getConns()
+		sc.Close()
+		_ = tu1.Close()
+	}()
+	tu2 := newTunnel(tp.ctx, tp.logger, nil, withConnCacheEnabled(true))
+	defer func() {
+		_, sc := tu2.getConns()
+		sc.Close()
+		_ = tu2.Close()
+	}()
 
 	// Client2 will send "kill query 10", which will route to the server which
 	// has connection ID 10. In this case, the connection is server1.
@@ -397,38 +463,25 @@ func TestSetVarEvent(t *testing.T) {
 	scp2.mu.Unlock()
 
 	// Client2 writes some MySQL packets.
-	sendEventCh := make(chan struct{}, 1)
+	// sendEventCh := make(chan struct{}, 1)
 	errChan := make(chan error, 1)
-	go func() {
-		<-sendEventCh
-		if _, err := client2.Write(makeSimplePacket("set session cn_label='account=acc1'")); err != nil {
-			errChan <- err
-			return
-		}
-	}()
+	// <-sendEventCh
+	if _, err := client2.Write(makeQuitPacket()); err != nil {
+		errChan <- err
+		return
+	}
 
-	sendEventCh <- struct{}{}
+	// sendEventCh <- struct{}{}
 	barrierStart2 <- struct{}{}
 	barrierEnd2 <- struct{}{}
 
 	// wait for result
-	<-res
-	require.Equal(t, 1, len(cc2.(*mockClientConn).redoStmts))
+	r := string(<-res)
+	require.Equal(t, "ok", r)
 
 	select {
 	case err = <-errChan:
 		t.Fatalf("require no error, but got %v", err)
 	default:
 	}
-}
-
-func TestEventType_String(t *testing.T) {
-	e1 := baseEvent{}
-	require.Equal(t, "Unknown", e1.eventType().String())
-
-	e2 := killQueryEvent{}
-	require.Equal(t, "KillQuery", e2.eventType().String())
-
-	e3 := setVarEvent{}
-	require.Equal(t, "SetVar", e3.eventType().String())
 }

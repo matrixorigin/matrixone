@@ -15,6 +15,7 @@
 package mergesort
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sort"
@@ -22,6 +23,24 @@ import (
 )
 
 /// merge things
+
+func SortColumnsByIndex(
+	cols []*vector.Vector, sortIdx int, mp *mpool.MPool,
+) (err error) {
+	sortKey := cols[sortIdx]
+	sortedIdx := make([]int64, sortKey.Length())
+	for i := 0; i < len(sortedIdx); i++ {
+		sortedIdx[i] = int64(i)
+	}
+	sort.Sort(false, false, true, sortedIdx, sortKey)
+	for i := 0; i < len(cols); i++ {
+		err = cols[i].Shuffle(sortedIdx, mp)
+		if err != nil {
+			return
+		}
+	}
+	return
+}
 
 func SortBlockColumns(
 	cols []containers.Vector, pk int, pool *containers.VectorPool,
@@ -31,7 +50,7 @@ func SortBlockColumns(
 	for i := 0; i < len(sortedIdx); i++ {
 		sortedIdx[i] = int64(i)
 	}
-	sort.Sort(false, false, true, sortedIdx, pkCol.GetDownstreamVector(), nil)
+	sort.Sort(false, false, true, sortedIdx, pkCol.GetDownstreamVector())
 
 	for i := 0; i < len(cols); i++ {
 		err := cols[i].GetDownstreamVector().Shuffle(sortedIdx, pool.GetMPool())
@@ -42,59 +61,56 @@ func SortBlockColumns(
 	return sortedIdx, nil
 }
 
-func ReshapeBatches(
-	batches []*batch.Batch,
-	fromLayout, toLayout []uint32,
-	vpool DisposableVecPool) ([]*batch.Batch, func()) {
+func ReshapeBatches(batches []*containers.Batch, toLayout []uint32, vpool DisposableVecPool) ([]*batch.Batch, func(), []int, error) {
 	// just do reshape, keep sortedIdx nil
-	ret := make([]*batch.Batch, 0, len(toLayout))
-	rfs := make([]func(), 0, len(toLayout))
-	for _, layout := range toLayout {
-		bat, releaseF := getSimilarBatch(batches[0], int(layout), vpool)
-		bat.SetRowCount(int(layout))
-		ret = append(ret, bat)
-		rfs = append(rfs, releaseF)
-	}
+	ret := make([]*batch.Batch, len(toLayout))
+	rfs := make([]func(), len(toLayout))
 	releaseF := func() {
 		for _, rf := range rfs {
 			rf()
 		}
 	}
 
-	fromIdx := 0
-	fromOffset := 0
-	for i := 0; i < len(toLayout); i++ {
-		toOffset := 0
-		for toOffset < int(toLayout[i]) {
-			// find offset to fill a full block
-			fromLeft := int(fromLayout[fromIdx]) - fromOffset
-			if fromLeft == 0 {
-				fromIdx++
-				fromOffset = 0
-				fromLeft = int(fromLayout[fromIdx])
-			}
-			length := 0
-			if fromLeft < int(toLayout[i])-toOffset {
-				length = fromLeft
-			} else {
-				length = int(toLayout[i]) - toOffset
+	k := 0
+	accRowCnt := make([]int64, len(batches))
+
+	totalRowCnt := 0
+	for i, blk := range batches {
+		accRowCnt[i] = int64(totalRowCnt)
+		totalRowCnt += blk.Length()
+	}
+
+	mapping := make([]int, totalRowCnt)
+	for i := range mapping {
+		mapping[i] = -1
+	}
+
+	retIdx := 0
+	ret[0], rfs[0] = getSimilarBatch(containers.ToCNBatch(batches[0]), int(toLayout[retIdx]), vpool)
+	for batIdx, bat := range batches {
+		cnBat := containers.ToCNBatch(bat)
+		for row := 0; row < cnBat.RowCount(); row++ {
+			if bat.Deletes.Contains(uint64(row)) {
+				continue
 			}
 
-			for vecIdx, vec := range batches[fromIdx].Vecs {
-				window, err := vec.Window(fromOffset, fromOffset+length)
+			mapping[accRowCnt[batIdx]+int64(row)] = k
+			k++
+			for idx := range ret[retIdx].Vecs {
+				err := ret[retIdx].Vecs[idx].UnionOne(cnBat.Vecs[idx], int64(row), vpool.GetMPool())
 				if err != nil {
-					panic(err)
-				}
-				err = vector.GetUnionAllFunction(*vec.GetType(), vpool.GetMPool())(ret[i].Vecs[vecIdx], window)
-				if err != nil {
-					panic(err)
+					return nil, nil, nil, err
 				}
 			}
-
-			// update offset
-			fromOffset += length
-			toOffset += length
+			ret[retIdx].SetRowCount(ret[retIdx].RowCount() + 1)
+			if uint32(ret[retIdx].RowCount()) == toLayout[retIdx] {
+				if retIdx == len(toLayout)-1 {
+					return ret, releaseF, mapping, nil
+				}
+				retIdx++
+				ret[retIdx], rfs[retIdx] = getSimilarBatch(containers.ToCNBatch(batches[0]), int(toLayout[retIdx]), vpool)
+			}
 		}
 	}
-	return ret, releaseF
+	return ret, releaseF, mapping, nil
 }

@@ -1,0 +1,62 @@
+drop database if exists test;
+create database test;
+use test;
+
+create table t1(a int) with retention period 10 month;
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+test    t1    1750919325
+create table t2(a int) with retention period 1 second;
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+test    t1    1750919325
+test    t2    1724639327
+select sleep(2);
+sleep(2)
+0
+select mo_ctl('cn', 'task', ':retention');
+mo_ctl(cn, task, :retention)
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 1,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {}\n  }\n}\n
+select sleep(1);
+sleep(1)
+0
+show tables;
+Tables_in_test
+t1
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+test    t1    1750919325
+create account acc0 admin_name 'root' identified by '111';
+create database test;
+use test;
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+create table t1(a int) with retention period 10 month;
+create table t2(a int) with retention period 1 second;
+select sleep(2);
+sleep(2)
+0
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+test    t1    1751969233
+test    t2    1726049234
+drop table t1;
+select * from mo_catalog.mo_retention;
+database_name    table_name    retention_deadline
+test    t2    1726049234
+select mo_ctl('cn', 'task', ':retention');
+mo_ctl(cn, task, :retention)
+{\n  "method": "TASK",\n  "result": {\n    "RequestID": 1,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {}\n  }\n}\n
+select sleep(1);
+sleep(1)
+0
+use test;
+show tables;
+Tables_in_test
+drop account acc0;
+select mo_ctl('cn', 'task', 'retention:*/5 * * * * ?');
+mo_ctl(cn, task, retention:*/5 * * * * ?)
+{\n  "method": "TASK",\n  "result": "OK"\n}\n
+select mo_ctl('cn', 'task', 'retention:* */10 * * * * ?');
+mo_ctl(cn, task, retention:* */10 * * * * ?)
+{\n  "method": "TASK",\n  "result": "OK"\n}\n

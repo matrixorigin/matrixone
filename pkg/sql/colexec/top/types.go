@@ -15,7 +15,6 @@
 package top
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Top)
 
 type container struct {
 	n     int // result vector number
@@ -35,90 +34,111 @@ type container struct {
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
-	limit         int64
+	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
 
 	executorsForOrderColumn []colexec.ExpressionExecutor
 	desc                    bool
 	topValueZM              objectio.ZoneMap
 	bat                     *batch.Batch
+	buildBat                *batch.Batch //temp batch, do not need free or reset
 }
 
-type Argument struct {
+type Top struct {
 	Limit       *plan.Expr
 	TopValueTag int32
-	ctr         *container
+	ctr         container
 	Fs          []*plan.OrderBySpec
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (top *Top) GetOperatorBase() *vm.OperatorBase {
+	return &top.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool(
+		func() *Top {
+			return &Top{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Top) {
+			*a = Top{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Top]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (top Top) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Top {
+	return reuse.Alloc[Top](nil)
 }
 
-func (arg *Argument) WithLimit(limit *plan.Expr) *Argument {
-	arg.Limit = limit
-	return arg
+func (top *Top) WithLimit(limit *plan.Expr) *Top {
+	top.Limit = limit
+	return top
 }
 
-func (arg *Argument) WithFs(fs []*plan.OrderBySpec) *Argument {
-	arg.Fs = fs
-	return arg
+func (top *Top) WithFs(fs []*plan.OrderBySpec) *Top {
+	top.Fs = fs
+	return top
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (top *Top) Release() {
+	if top != nil {
+		reuse.Free(top, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-
-		for i := range ctr.executorsForOrderColumn {
-			if ctr.executorsForOrderColumn[i] != nil {
-				ctr.executorsForOrderColumn[i].Free()
-			}
-		}
-		ctr.executorsForOrderColumn = nil
-
-		if ctr.limitExecutor != nil {
-			ctr.limitExecutor.Free()
-			ctr.limitExecutor = nil
-		}
-		arg.ctr = nil
-	}
+func (top *Top) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	top.ctr.reset()
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (top *Top) Free(proc *process.Process, pipelineFailed bool, err error) {
+	top.ctr.free(proc)
+}
+
+func (ctr *container) reset() {
+
+	ctr.n = 0
+	ctr.state = 0
+	ctr.sels = nil
+	ctr.poses = nil
+	ctr.cmps = nil
+
+	ctr.limit = 0
+	if ctr.limitExecutor != nil {
+		ctr.limitExecutor.ResetForNextQuery()
+	}
+
+	for _, executor := range ctr.executorsForOrderColumn {
+		if executor != nil {
+			executor.ResetForNextQuery()
+		}
+	}
+	ctr.desc = false
+	ctr.topValueZM = nil
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+		ctr.bat.CleanOnlyData()
+	}
+
+}
+
+func (ctr *container) free(proc *process.Process) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+	}
+	for _, executor := range ctr.executorsForOrderColumn {
+		if executor != nil {
+			executor.Free()
+		}
+	}
+	if ctr.limitExecutor != nil {
+		ctr.limitExecutor.Free()
 	}
 }
 

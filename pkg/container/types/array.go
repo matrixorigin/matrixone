@@ -16,17 +16,18 @@ package types
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // NOTE: vecf32 and vecf64 in SQL is internally represented using T_array_float32 and T_array_float64.
 // array is used to avoid potential conflicts with the already existing vector class from vectorized execution engine.
 
 const (
-	MaxArrayDimension        = MaxVarcharLen
+	MaxArrayDimension        = 65535
 	DefaultArraysToStringSep = " "
 )
 
@@ -74,12 +75,12 @@ func StringToArray[T RealNumbers](str string) ([]T, error) {
 	input := strings.ReplaceAll(str, " ", "")
 
 	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) {
-		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
 	if len(input) == 2 {
 		// We don't handle empty vector like "[]"
-		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
 	// remove "[" and "]"
@@ -87,7 +88,7 @@ func StringToArray[T RealNumbers](str string) ([]T, error) {
 
 	numStrs := strings.Split(input, ",")
 	if len(numStrs) > MaxArrayDimension {
-		return nil, moerr.NewInternalErrorNoCtx("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
+		return nil, moerr.NewInternalErrorNoCtxf("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
 	}
 	result := make([]T, len(numStrs))
 

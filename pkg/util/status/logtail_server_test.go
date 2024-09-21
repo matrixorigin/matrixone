@@ -81,7 +81,7 @@ func TestFillLogtail(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	logtailer := mockLocktailer()
 	logtailServer, err := service.NewLogtailServer(
-		"", options.NewDefaultLogtailServerCfg(), logtailer, rt,
+		"", options.NewDefaultLogtailServerCfg(), logtailer, rt, nil,
 		service.WithServerCollectInterval(20*time.Millisecond),
 		service.WithServerSendTimeout(5*time.Second),
 		service.WithServerEnableChecksum(true),

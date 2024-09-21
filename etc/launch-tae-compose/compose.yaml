@@ -1,5 +1,3 @@
-version: '3.9'
-
 # docker compose extension fields
 # https://github.com/docker/compose/pull/5140
 # https://stackoverflow.com/questions/45805380/meaning-of-ampersand-in-docker-compose-yml-file

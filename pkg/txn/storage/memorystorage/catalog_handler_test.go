@@ -33,11 +33,14 @@ func TestCatalogHandler(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	catalog.SetupDefines("")
+
 	// new
 	clock := clock.NewHLCClock(func() int64 {
 		return time.Now().UnixNano()
 	}, math.MaxInt64)
 	catalogHandler, err := NewCatalogHandler(
+		"",
 		NewMemHandler(
 			mpool.MustNewZero(),
 			clock,
@@ -197,7 +200,7 @@ func TestCatalogHandler(t *testing.T) {
 		assert.Nil(t, err)
 		totalColumns := len(catalog.MoDatabaseSchema) +
 			len(catalog.MoTablesSchema) +
-			len(catalog.MoColumnsSchema)
+			len(catalog.MoColumnsSchema) - 4 /*3 hiden cpkey + hiden extra*/
 		assert.Equal(t, totalColumns, resp.Batch.RowCount())
 		assert.Equal(t, 2, len(resp.Batch.Attrs))
 	}

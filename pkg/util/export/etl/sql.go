@@ -19,10 +19,10 @@ import (
 	"sync"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
+
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-
-	_ "github.com/go-sql-driver/mysql"
 )
 
 const MAX_INSERT_TIME = 3 * time.Second
@@ -47,6 +47,8 @@ func NewSqlWriter(ctx context.Context, tbl *table.Table, csv *CSVWriter) *Defaul
 func (sw *DefaultSqlWriter) GetContent() string {
 	return ""
 }
+
+func (sw *DefaultSqlWriter) GetContentLength() int { return 0 }
 
 func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 	return nil

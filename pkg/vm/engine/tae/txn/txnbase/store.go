@@ -17,6 +17,7 @@ package txnbase
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -86,7 +87,7 @@ func (store *NoopTxnStore) GetRelationByID(dbId uint64, id uint64) (rel handle.R
 func (store *NoopTxnStore) CreateDatabase(name, creatSql, datTyp string) (db handle.Database, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
+func (store *NoopTxnStore) CreateDatabaseWithID(ctx context.Context, s1, s2, s3 string, id uint64) (db handle.Database, err error) {
 	return
 }
 func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)    { return }
@@ -98,11 +99,11 @@ func (store *NoopTxnStore) UnsafeGetRelation(dbId, id uint64) (rel handle.Relati
 func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)   { return }
 func (store *NoopTxnStore) GetDatabaseByID(id uint64) (db handle.Database, err error) { return }
 func (store *NoopTxnStore) DatabaseNames() (names []string)                           { return }
-func (store *NoopTxnStore) GetObject(id *common.ID) (obj handle.Object, err error) {
+func (store *NoopTxnStore) GetObject(id *common.ID, isTombstone bool) (obj handle.Object, err error) {
 	return
 }
 
-func (store *NoopTxnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (store *NoopTxnStore) CreateObject(dbId, tid uint64, isTombstone bool) (obj handle.Object, err error) {
 	return
 }
 func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool, _ *objectio.CreateObjOpt) (obj handle.Object, err error) {
@@ -111,11 +112,8 @@ func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool, _
 func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (err error) {
 	return
 }
-func (store *NoopTxnStore) UpdateDeltaLoc(id *common.ID, un objectio.Location) (err error) {
-	return
-}
-func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error)  { return }
-func (store *NoopTxnStore) SoftDeleteObject(id *common.ID) (err error) { return }
+func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error)                    { return }
+func (store *NoopTxnStore) SoftDeleteObject(isTombstone bool, id *common.ID) (err error) { return }
 func (store *NoopTxnStore) BatchDedup(
 	uint64, uint64, containers.Vector,
 ) (err error) {
@@ -129,21 +127,29 @@ func (store *NoopTxnStore) RangeDelete(
 ) (err error) {
 	return
 }
-func (store *NoopTxnStore) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+func (store *NoopTxnStore) DeleteByPhyAddrKeys(
+	id *common.ID,
+	rowIDVec, pkVec containers.Vector, dt handle.DeleteType,
+) (err error) {
 	return
 }
+
+func (store *NoopTxnStore) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
+	return
+}
+
 func (store *NoopTxnStore) GetByFilter(
 	context.Context, uint64, uint64, *handle.Filter,
 ) (id *common.ID, offset uint32, err error) {
 	return
 }
 func (store *NoopTxnStore) GetValue(
-	*common.ID, uint32, uint16,
+	*common.ID, uint32, uint16, bool,
 ) (v any, isNull bool, err error) {
 	return
 }
 
-func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
+func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readedObject, readedTombstone []*common.ID) (err error) {
 	return
 }
 func (store *NoopTxnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
@@ -162,15 +168,18 @@ func (store *NoopTxnStore) HasCatalogChanges() bool                      { retur
 func (store *NoopTxnStore) ObserveTxn(
 	visitDatabase func(db any),
 	visitTable func(tbl any),
-	rotateTable func(dbName, tblName string, dbid, tid uint64),
-	visitMetadata func(block any),
+	rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
 	visitObject func(any),
-	visitAppend func(bat any),
-	visitDelete func(ctx context.Context, deletes txnif.DeleteNode)) {
+	visitAppend func(bat any, isTombstone bool)) {
 }
 
 func (store *NoopTxnStore) GetTransactionType() txnif.TxnType {
 	return txnif.TxnType_Normal
 }
 
-func (store *NoopTxnStore) UpdateObjectStats(*common.ID, *objectio.ObjectStats) error { return nil }
+func (store *NoopTxnStore) UpdateObjectStats(*common.ID, *objectio.ObjectStats, bool) error {
+	return nil
+}
+func (store *NoopTxnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error {
+	return nil
+}

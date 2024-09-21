@@ -63,8 +63,8 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCou
 func (s *service) CheckAndUpgradeCluster(ctx context.Context) error {
 	s.adjustUpgrade()
 
-	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
-		getUpgradeLogger().Error("check upgrade failed", zap.Error(err))
+	if err := retryRun(ctx, s.logger, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
+		s.logger.Error("check upgrade failed", zap.Error(err))
 		return err
 	}
 	if err := s.stopper.RunTask(s.asyncUpgradeTask); err != nil {
@@ -103,7 +103,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 			currentCN := s.getFinalVersionHandle().Metadata()
 			if versions.Compare(currentCN.Version, version) < 0 {
 				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
-				return moerr.NewInvalidInputNoCtx("tenant version %s is greater than current cn version %s",
+				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
 					version, currentCN.Version)
 			}
 
@@ -184,7 +184,7 @@ func (s *service) CheckUpgradeAccount(ctx context.Context, accountName string) (
 			var err error
 			accountId, err = GetAccountIdByName(accountName, txn)
 			if err != nil {
-				getUpgradeLogger().Error("failed to get accountId by accountName when upgrade account",
+				s.logger.Error("failed to get accountId by accountName when upgrade account",
 					zap.Error(err))
 				return err
 			}
@@ -206,12 +206,12 @@ func GetAccountIdByName(accountName string, txn executor.TxnExecutor) (int32, er
 	// Check if the group account name exists
 	var accountId int32 = -1
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		accountId = vector.GetFixedAt[int32](cols[0], 0)
+		accountId = vector.GetFixedAtWithTypeCheck[int32](cols[0], 0)
 		return true
 	})
 
 	if accountId == -1 {
-		return -1, moerr.NewInvalidInputNoCtx("The input account name '%s' is invalid, please check input!", accountName)
+		return -1, moerr.NewInvalidInputNoCtxf("The input account name '%s' is invalid, please check input!", accountName)
 	}
 	return accountId, nil
 }
@@ -229,7 +229,7 @@ func (s *service) UpgradePreCheck(ctx context.Context) error {
 		func(txn executor.TxnExecutor) error {
 			created, err := versions.IsFrameworkTablesCreated(txn)
 			if err != nil {
-				getUpgradeLogger().Error("failed to check upgrade framework",
+				s.logger.Error("failed to check upgrade framework",
 					zap.Error(err))
 				return err
 			}
@@ -240,12 +240,12 @@ func (s *service) UpgradePreCheck(ctx context.Context) error {
 			final := s.getFinalVersionHandle().Metadata()
 			unReady, err := checkUpgradePerVersionUnready(txn, final)
 			if err != nil {
-				getUpgradeLogger().Error("failed to check task status in pgrade environment", zap.Error(err))
+				s.logger.Error("failed to check task status in pgrade environment", zap.Error(err))
 				return err
 			}
 
 			if unReady {
-				getUpgradeLogger().Info("There are unexecuted tenant upgrade tasks in upgrade environment, start asynchronous supplementary execution")
+				s.logger.Info("There are unexecuted tenant upgrade tasks in upgrade environment, start asynchronous supplementary execution")
 				s.adjustUpgrade()
 				if err := s.stopper.RunTask(s.asyncUpgradeTask); err != nil {
 					return err

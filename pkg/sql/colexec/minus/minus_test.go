@@ -15,12 +15,12 @@
 package minus
 
 import (
-	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -28,9 +28,8 @@ import (
 )
 
 type minusTestCase struct {
-	proc   *process.Process
-	arg    *Argument
-	cancel context.CancelFunc
+	proc *process.Process
+	arg  *Minus
 }
 
 func TestMinus(t *testing.T) {
@@ -42,42 +41,13 @@ func TestMinus(t *testing.T) {
 		{3, 4, 5}
 		{3, 4, 5}
 	*/
-	c := newMinusTestCase(
-		proc,
-		[]*batch.Batch{
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
-				}, nil),
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 4}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{5, 5}),
-				}, nil),
-		},
-		[]*batch.Batch{
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{2}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{3}),
-				}, nil),
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{4}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{5}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{6}),
-				}, nil),
-		},
-	)
+	var end vm.CallResult
+	c := newMinusTestCase(proc)
 
+	setProcForTest(proc, c.arg)
 	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt := 0
-	var end vm.CallResult
 	for {
 		end, err = c.arg.Call(c.proc)
 		if end.Status == vm.ExecStop {
@@ -91,49 +61,83 @@ func TestMinus(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, cnt) // 1 row
-	c.proc.Reg.MergeReceivers[0].Ch <- nil
-	c.proc.Reg.MergeReceivers[1].Ch <- nil
+
+	c.arg.Reset(c.proc, false, nil)
+
+	setProcForTest(proc, c.arg)
+	err = c.arg.Prepare(c.proc)
+	require.NoError(t, err)
+	cnt = 0
+	for {
+		end, err = c.arg.Call(c.proc)
+		if end.Status == vm.ExecStop {
+			break
+		}
+		require.NoError(t, err)
+		result := end.Batch
+		if result != nil && !result.IsEmpty() {
+			cnt += result.RowCount()
+			require.Equal(t, 3, len(result.Vecs))
+		}
+	}
+	require.Equal(t, 1, cnt) // 1 row
+
+	for _, child := range c.arg.Children {
+		child.Free(proc, false, nil)
+	}
 	c.arg.Free(c.proc, false, nil)
-	c.proc.FreeVectors()
+	c.proc.Free()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
-func newMinusTestCase(proc *process.Process, leftBatches, rightBatches []*batch.Batch) minusTestCase {
-	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	{
-		c := make(chan *batch.Batch, len(leftBatches)+5)
-		for i := range leftBatches {
-			c <- leftBatches[i]
-		}
-		c <- nil
-		proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  c,
-		}
-	}
-	{
-		c := make(chan *batch.Batch, len(rightBatches)+5)
-		for i := range rightBatches {
-			c <- rightBatches[i]
-		}
-		c <- nil
-		proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  c,
-		}
-	}
-	proc.Reg.MergeReceivers[0].Ch <- nil
-	proc.Reg.MergeReceivers[1].Ch <- nil
-	arg := new(Argument)
+func newMinusTestCase(proc *process.Process) minusTestCase {
+	arg := new(Minus)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 		Idx:     0,
 		IsFirst: false,
 		IsLast:  false,
 	}
 	return minusTestCase{
-		proc:   proc,
-		arg:    arg,
-		cancel: cancel,
+		proc: proc,
+		arg:  arg,
 	}
+}
+
+func setProcForTest(proc *process.Process, minus *Minus) {
+	for _, child := range minus.Children {
+		child.Free(proc, false, nil)
+	}
+	minus.Children = nil
+	leftBatches := []*batch.Batch{
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+			}, nil),
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 4}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{5, 5}),
+			}, nil),
+	}
+	rightBatches := []*batch.Batch{
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{2}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{3}),
+			}, nil),
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{4}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{5}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{6}),
+			}, nil),
+	}
+	leftChild := colexec.NewMockOperator().WithBatchs(leftBatches)
+	rightChild := colexec.NewMockOperator().WithBatchs(rightBatches)
+	minus.AppendChild(leftChild)
+	minus.AppendChild(rightChild)
 }

@@ -54,7 +54,7 @@ func NewTestTxnServiceWithAllocator(
 	sender rpc.TxnSender,
 	clock clock.Clock,
 	allocator lockservice.LockTableAllocator) TxnService {
-	return NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator(
+	return NewTestTxnServiceWithLogAndZombieAndLockTableAllocator(
 		t,
 		shard,
 		sender,
@@ -88,7 +88,7 @@ func NewTestTxnServiceWithLogAndZombie(
 	clock clock.Clock,
 	log logservice.Client,
 	zombie time.Duration) TxnService {
-	return NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator(
+	return NewTestTxnServiceWithLogAndZombieAndLockTableAllocator(
 		t,
 		shard,
 		sender,
@@ -99,26 +99,30 @@ func NewTestTxnServiceWithLogAndZombie(
 	)
 }
 
-// NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator is similar to NewTestTxnService, but with more args
-func NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator(
+// NewTestTxnServiceWithLogAndZombieAndLockTableAllocator is similar to NewTestTxnService, but with more args
+func NewTestTxnServiceWithLogAndZombieAndLockTableAllocator(
 	t *testing.T,
 	shard uint64,
 	sender rpc.TxnSender,
 	clock clock.Clock,
 	log logservice.Client,
 	zombie time.Duration,
-	allocator lockservice.LockTableAllocator) TxnService {
+	allocator lockservice.LockTableAllocator,
+) TxnService {
 	rt := runtime.NewRuntime(
 		metadata.ServiceType_TN,
 		"dn-uuid",
 		logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
 		runtime.WithClock(clock))
-	runtime.SetupProcessLevelRuntime(rt)
-	return NewTxnService(NewTestTNShard(shard),
+	runtime.SetupServiceBasedRuntime("dn-uuid", rt)
+	return NewTxnService(
+		"dn-uuid",
+		NewTestTNShard(shard),
 		NewTestTxnStorage(log, clock),
 		sender,
 		zombie,
-		allocator).(*service)
+		allocator,
+	).(*service)
 }
 
 // NewTestTxnStorage create a TxnStorage used to recovery tests

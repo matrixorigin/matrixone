@@ -28,18 +28,18 @@ func GetUpgradeVersions(
 	txn executor.TxnExecutor,
 	forUpdate bool,
 	mustHave bool) ([]VersionUpgrade, error) {
-	sql := fmt.Sprintf(`select 
+	sql := fmt.Sprintf(`select
 			id,
-			from_version, 
-			to_version, 
-			final_version, 
-			final_version_offset, 
-			state, 
+			from_version,
+			to_version,
+			final_version,
+			final_version_offset,
+			state,
 			upgrade_order,
 			upgrade_cluster,
 			upgrade_tenant,
 			total_tenant,
-			ready_tenant from %s 
+			ready_tenant from %s
 			where final_version = '%s' and final_version_offset = %d
 			order by upgrade_order asc`,
 		catalog.MOUpgradeTable,
@@ -63,18 +63,18 @@ func GetUpgradeVersionsByOrder(
 	finalVersion string,
 	order int32,
 	txn executor.TxnExecutor) ([]VersionUpgrade, error) {
-	sql := fmt.Sprintf(`select 
+	sql := fmt.Sprintf(`select
 			id,
-			from_version, 
-			to_version, 
-			final_version, 
-			final_version_offset, 
-			state, 
+			from_version,
+			to_version,
+			final_version,
+			final_version_offset,
+			state,
 			upgrade_order,
 			upgrade_cluster,
 			upgrade_tenant,
 			total_tenant,
-			ready_tenant from %s 
+			ready_tenant from %s
 			where final_version = '%s' and upgrade_order = %d`,
 		catalog.MOUpgradeTable,
 		finalVersion,
@@ -87,20 +87,20 @@ func GetUpgradeVersionsByOrder(
 }
 
 func GetUpgradingTenantVersion(txn executor.TxnExecutor) (VersionUpgrade, bool, error) {
-	sql := fmt.Sprintf(`select 
+	sql := fmt.Sprintf(`select
 			id,
-			from_version, 
-			to_version, 
-			final_version, 
-			final_version_offset, 
-			state, 
+			from_version,
+			to_version,
+			final_version,
+			final_version_offset,
+			state,
 			upgrade_order,
 			upgrade_cluster,
 			upgrade_tenant,
 			total_tenant,
 			ready_tenant
-			from %s 
-			where state = %d 
+			from %s
+			where state = %d
 			order by upgrade_order asc`,
 		catalog.MOUpgradeTable,
 		StateUpgradingTenant)
@@ -120,19 +120,19 @@ func GetUpgradingTenantVersion(txn executor.TxnExecutor) (VersionUpgrade, bool, 
 func GetUpgradeVersionForUpdateByID(
 	id uint64,
 	txn executor.TxnExecutor) (VersionUpgrade, error) {
-	sql := fmt.Sprintf(`select 
+	sql := fmt.Sprintf(`select
 			id,
-			from_version, 
-			to_version, 
-			final_version, 
-			final_version_offset, 
-			state, 
+			from_version,
+			to_version,
+			final_version,
+			final_version_offset,
+			state,
 			upgrade_order,
 			upgrade_cluster,
 			upgrade_tenant,
 			total_tenant,
 			ready_tenant
-			from %s 
+			from %s
 			where id = %d for update`,
 		catalog.MOUpgradeTable,
 		id)
@@ -202,17 +202,17 @@ func UpdateVersionUpgradeTasks(
 }
 
 func GetVersionUpgradeSQL(v VersionUpgrade) string {
-	return fmt.Sprintf(`insert into %s (from_version, 
-		to_version, 
-		final_version, 
-        final_version_offset, 
-		state, 
-		upgrade_cluster, 
-		upgrade_tenant, 
-		upgrade_order, 
-		total_tenant, 
-		ready_tenant, 
-		create_at, 
+	return fmt.Sprintf(`insert into %s (from_version,
+		to_version,
+		final_version,
+        final_version_offset,
+		state,
+		upgrade_cluster,
+		upgrade_tenant,
+		upgrade_order,
+		total_tenant,
+		ready_tenant,
+		create_at,
 		update_at) values ('%s', '%s', '%s', %d, %d, %d, %d, %d, %d, %d, current_timestamp(), current_timestamp())`,
 		catalog.MOUpgradeTable,
 		v.FromVersion,
@@ -240,17 +240,17 @@ func getVersionUpgradesBySQL(
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
 			value := VersionUpgrade{}
-			value.ID = vector.GetFixedAt[uint64](cols[0], i)
+			value.ID = vector.GetFixedAtWithTypeCheck[uint64](cols[0], i)
 			value.FromVersion = cols[1].GetStringAt(i)
 			value.ToVersion = cols[2].GetStringAt(i)
 			value.FinalVersion = cols[3].GetStringAt(i)
-			value.FinalVersionOffset = vector.GetFixedAt[uint32](cols[4], i)
-			value.State = vector.GetFixedAt[int32](cols[5], i)
-			value.UpgradeOrder = vector.GetFixedAt[int32](cols[6], i)
-			value.UpgradeCluster = vector.GetFixedAt[int32](cols[7], i)
-			value.UpgradeTenant = vector.GetFixedAt[int32](cols[8], i)
-			value.TotalTenant = vector.GetFixedAt[int32](cols[9], i)
-			value.ReadyTenant = vector.GetFixedAt[int32](cols[10], i)
+			value.FinalVersionOffset = vector.GetFixedAtWithTypeCheck[uint32](cols[4], i)
+			value.State = vector.GetFixedAtWithTypeCheck[int32](cols[5], i)
+			value.UpgradeOrder = vector.GetFixedAtWithTypeCheck[int32](cols[6], i)
+			value.UpgradeCluster = vector.GetFixedAtWithTypeCheck[int32](cols[7], i)
+			value.UpgradeTenant = vector.GetFixedAtWithTypeCheck[int32](cols[8], i)
+			value.TotalTenant = vector.GetFixedAtWithTypeCheck[int32](cols[9], i)
+			value.ReadyTenant = vector.GetFixedAtWithTypeCheck[int32](cols[10], i)
 			values = append(values, value)
 		}
 

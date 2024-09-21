@@ -58,7 +58,18 @@ func NewAliyunSDK(
 		return nil, err
 	}
 
-	opts := []oss.ClientOption{}
+	opts := []oss.ClientOption{
+		oss.HTTPClient(newHTTPClient(args)),
+		oss.Timeout(
+			int64(connectTimeout/time.Second),
+			int64(readWriteTimeout/time.Second),
+		),
+		oss.MaxConns(
+			maxIdleConns,
+			maxIdleConnsPerHost,
+			maxConnsPerHost,
+		),
+	}
 	if args.Region != "" {
 		opts = append(opts, oss.Region(args.Region))
 	}

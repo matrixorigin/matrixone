@@ -130,3 +130,47 @@ var (
 			Help:      "Size of the storage usage cache used",
 		})
 )
+
+var (
+	transferPageHitHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_page_hit_count",
+		Help:      "The total number of transfer hit counter.",
+	}, []string{"type"})
+
+	TransferPageTotalHitHistogram = transferPageHitHistogram.WithLabelValues("total")
+)
+
+var (
+	TransferPageRowHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_page_row",
+		Help:      "The total number of transfer row.",
+	})
+)
+
+var (
+	transferDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_duration",
+		Buckets:   getDurationBuckets(),
+	}, []string{"type"})
+
+	TransferDiskLatencyHistogram           = transferDurationHistogram.WithLabelValues("disk_latency")
+	TransferPageSinceBornDurationHistogram = transferDurationHistogram.WithLabelValues("page_since_born_duration")
+	TransferTableRunTTLDurationHistogram   = transferDurationHistogram.WithLabelValues("table_run_ttl_duration")
+	TransferPageFlushLatencyHistogram      = transferDurationHistogram.WithLabelValues("page_flush_latency")
+	TransferPageMergeLatencyHistogram      = transferDurationHistogram.WithLabelValues("page_merge_latency")
+
+	transferShortDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_short_duration",
+		Buckets:   getShortDurationBuckets(),
+	}, []string{"type"})
+
+	TransferMemLatencyHistogram = transferShortDurationHistogram.WithLabelValues("mem_latency")
+)

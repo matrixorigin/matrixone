@@ -19,136 +19,163 @@ import (
 	"container/heap"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-
-	"github.com/matrixorigin/matrixone/pkg/compare"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "top"
+const opName = "top"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (top *Top) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": top([")
-	for i, f := range arg.Fs {
+	for i, f := range top.Fs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("], %v)", arg.Limit))
+	fmt.Fprintf(buf, "], %v)", top.Limit)
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.Limit)
-	if err != nil {
-		return err
-	}
-	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
-	if err != nil {
-		return err
-	}
-	arg.ctr.limit = vector.MustFixedCol[int64](vec)[0]
-	if arg.ctr.limit > 1024 {
-		arg.ctr.sels = make([]int64, 0, 1024)
-	} else {
-		arg.ctr.sels = make([]int64, 0, arg.ctr.limit)
-	}
-	arg.ctr.poses = make([]int32, 0, len(arg.Fs))
+func (top *Top) OpType() vm.OpType {
+	return vm.Top
+}
 
-	ctr := arg.ctr
-	ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(arg.Fs))
-	for i := range ctr.executorsForOrderColumn {
-		ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, arg.Fs[i].Expr)
+func (top *Top) Prepare(proc *process.Process) (err error) {
+	if top.OpAnalyzer == nil {
+		top.OpAnalyzer = process.NewAnalyzer(top.GetIdx(), top.IsFirst, top.IsLast, "top")
+	} else {
+		top.OpAnalyzer.Reset()
+	}
+
+	// limit executor
+	if top.ctr.limitExecutor == nil {
+		top.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, top.Limit)
 		if err != nil {
 			return err
 		}
 	}
-	typ := arg.Fs[0].Expr.Typ
-	if arg.TopValueTag > 0 {
-		ctr.desc = arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0
-		ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
+	vec, err := top.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return err
 	}
+	top.ctr.limit = vector.MustFixedColWithTypeCheck[uint64](vec)[0]
+
+	if top.ctr.limit > 1024 {
+		top.ctr.sels = make([]int64, 0, 1024)
+	} else {
+		top.ctr.sels = make([]int64, 0, top.ctr.limit)
+	}
+	top.ctr.poses = make([]int32, 0, len(top.Fs))
+
+	if len(top.ctr.executorsForOrderColumn) != len(top.Fs) {
+		top.ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(top.Fs))
+		for i := range top.ctr.executorsForOrderColumn {
+			top.ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, top.Fs[i].Expr)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	typ := top.Fs[0].Expr.Typ
+	if top.TopValueTag > 0 {
+		top.ctr.desc = top.Fs[0].Flag&plan.OrderBySpec_DESC != 0
+		top.ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
+	}
+
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	ap := arg
-	ctr := ap.ctr
+	analyzer := top.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
-
-	if arg.ctr.limit == 0 {
+	if top.ctr.limit == 0 {
 		result := vm.NewCallResult()
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
-	if ctr.state == vm.Build {
+	if top.ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
+			result, err := vm.ChildrenCall(top.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
 			bat := result.Batch
+
 			if bat == nil {
-				ctr.state = vm.Eval
+				top.ctr.state = vm.Eval
 				break
 			}
 			if bat.IsEmpty() {
 				continue
 			}
-			err = ctr.build(ap, bat, proc, anal)
+
+			//because ctr.build will change input batch(append new Vector)
+			if top.ctr.buildBat == nil {
+				top.ctr.n = len(bat.Vecs)
+				top.ctr.buildBat = batch.NewWithSize(top.ctr.n)
+			} else {
+				top.ctr.buildBat.Vecs = top.ctr.buildBat.Vecs[:len(bat.Vecs)]
+			}
+			top.ctr.buildBat.Recursive = bat.Recursive
+			top.ctr.buildBat.Ro = bat.Ro
+			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
+			top.ctr.buildBat.Attrs = bat.Attrs
+			top.ctr.buildBat.Aggs = bat.Aggs
+			copy(top.ctr.buildBat.Vecs, bat.Vecs)
+			top.ctr.buildBat.SetRowCount(bat.RowCount())
+
+			err = top.ctr.build(top, top.ctr.buildBat, proc)
 			if err != nil {
 				return result, err
 			}
-			if arg.TopValueTag > 0 && arg.updateTopValueZM() {
-				proc.SendMessage(process.TopValueMessage{TopValueZM: arg.ctr.topValueZM, Tag: arg.TopValueTag})
+			if top.TopValueTag > 0 && top.updateTopValueZM() {
+				message.SendMessage(message.TopValueMessage{TopValueZM: top.ctr.topValueZM, Tag: top.TopValueTag}, proc.GetMessageBoard())
 			}
 		}
 	}
 
 	result := vm.NewCallResult()
-	if ctr.state == vm.Eval {
-		ctr.state = vm.End
-		if ctr.bat != nil {
-			err := ctr.eval(ctr.limit, proc, &result)
+	if top.ctr.state == vm.Eval {
+		top.ctr.state = vm.End
+		if top.ctr.bat != nil {
+			err := top.ctr.eval(top.ctr.limit, proc, &result)
 			if err != nil {
 				return result, err
 			}
 		}
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
-	if ctr.state == vm.End {
-		return result, nil
+	if top.ctr.state == vm.End {
+		return vm.CancelResult, nil
 	}
 
 	panic("bug")
 }
 
-func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Process, analyze process.Analyze) error {
-	ctr.n = len(bat.Vecs)
+func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process) error {
 	ctr.poses = ctr.poses[:0]
 	for i := range ap.Fs {
-		vec, err := ctr.executorsForOrderColumn[i].Eval(proc, []*batch.Batch{bat})
+		vec, err := ctr.executorsForOrderColumn[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
 		}
@@ -161,26 +188,25 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 			}
 		}
 		if aNewOrderColumn {
-			nv, err := vec.Dup(proc.Mp())
-			if err != nil {
-				return err
-			}
 			ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
-			bat.Vecs = append(bat.Vecs, nv)
-			analyze.Alloc(int64(nv.Size()))
+			bat.Vecs = append(bat.Vecs, vec)
 		}
 	}
-	if ctr.bat == nil {
+
+	if len(ctr.cmps) == 0 {
 		mp := make(map[int]int)
 		for i, pos := range ctr.poses {
 			mp[int(pos)] = i
 		}
-		ctr.bat = batch.NewWithSize(len(bat.Vecs))
-		for i, vec := range bat.Vecs {
-			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
+
+		if ctr.bat == nil {
+			ctr.bat = batch.NewWithSize(len(bat.Vecs))
+			for i, vec := range bat.Vecs {
+				ctr.bat.Vecs[i] = vector.NewVec(*vec.GetType())
+			}
 		}
-		ctr.cmps = make([]compare.Compare, len(bat.Vecs))
-		for i := range ctr.cmps {
+
+		for i := 0; i < len(bat.Vecs); i++ {
 			var desc, nullsLast bool
 			if pos, ok := mp[i]; ok {
 				desc = ap.Fs[pos].Flag&plan.OrderBySpec_DESC != 0
@@ -192,19 +218,24 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 					nullsLast = desc
 				}
 			}
-			ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
+			ctr.cmps = append(
+				ctr.cmps,
+				compare.New(*bat.Vecs[i].GetType(), desc, nullsLast),
+			)
 		}
+
 	}
+
 	err := ctr.processBatch(ap.ctr.limit, bat, proc)
 	return err
 }
 
-func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process.Process) error {
 	var start int64
 
 	length := int64(bat.RowCount())
-	if n := int64(len(ctr.sels)); n < limit {
-		start = limit - n
+	if n := uint64(len(ctr.sels)); n < limit {
+		start = int64(limit - n)
 		if start > length {
 			start = length
 		}
@@ -214,7 +245,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 					return err
 				}
 			}
-			ctr.sels = append(ctr.sels, n)
+			ctr.sels = append(ctr.sels, int64(n))
 			n++
 		}
 		ctr.bat.AddRowCount(int(start))
@@ -244,8 +275,8 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 	return nil
 }
 
-func (ctr *container) eval(limit int64, proc *process.Process, result *vm.CallResult) error {
-	if int64(len(ctr.sels)) < limit {
+func (ctr *container) eval(limit uint64, proc *process.Process, result *vm.CallResult) error {
+	if uint64(len(ctr.sels)) < limit {
 		ctr.sort()
 	}
 	for i, cmp := range ctr.cmps {
@@ -274,89 +305,91 @@ func (ctr *container) sort() {
 	heap.Init(ctr)
 }
 
-func (arg *Argument) updateTopValueZM() bool {
-	v, ok := arg.getTopValue()
+func (top *Top) updateTopValueZM() bool {
+	v, ok := top.getTopValue()
 	if !ok {
 		return false
 	}
-	zm := arg.ctr.topValueZM
+	zm := top.ctr.topValueZM
 	if !zm.IsInited() {
 		index.UpdateZM(zm, v)
 		return true
 	}
 	newZM := objectio.NewZM(zm.GetType(), zm.GetScale())
 	index.UpdateZM(newZM, v)
-	if arg.ctr.desc && newZM.CompareMax(zm) > 0 {
-		arg.ctr.topValueZM = newZM
+	if top.ctr.desc && newZM.CompareMax(zm) > 0 {
+		top.ctr.topValueZM = newZM
 		return true
 	}
-	if !arg.ctr.desc && newZM.CompareMin(zm) < 0 {
-		arg.ctr.topValueZM = newZM
+	if !top.ctr.desc && newZM.CompareMin(zm) < 0 {
+		top.ctr.topValueZM = newZM
 		return true
 	}
 	return false
 }
 
-func (arg *Argument) getTopValue() ([]byte, bool) {
-	ctr := arg.ctr
+func (top *Top) getTopValue() ([]byte, bool) {
 	// not enough items in the heap.
-	if int64(len(ctr.sels)) < arg.ctr.limit {
+	if uint64(len(top.ctr.sels)) < top.ctr.limit {
 		return nil, false
 	}
-	x := int(ctr.sels[0])
-	vec := ctr.cmps[ctr.poses[0]].Vector()
+	x := int(top.ctr.sels[0])
+	vec := top.ctr.cmps[top.ctr.poses[0]].Vector()
 	if vec.GetType().IsVarlen() {
 		return vec.GetBytesAt(x), true
 	}
 	switch vec.GetType().Oid {
 	case types.T_int8:
-		v := vector.GetFixedAt[int8](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int8](vec, x)
 		return types.EncodeInt8(&v), true
 	case types.T_int16:
-		v := vector.GetFixedAt[int16](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int16](vec, x)
 		return types.EncodeInt16(&v), true
 	case types.T_int32:
-		v := vector.GetFixedAt[int32](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int32](vec, x)
 		return types.EncodeInt32(&v), true
 	case types.T_int64:
-		v := vector.GetFixedAt[int64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int64](vec, x)
 		return types.EncodeInt64(&v), true
 	case types.T_uint8:
-		v := vector.GetFixedAt[uint8](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint8](vec, x)
 		return types.EncodeUint8(&v), true
 	case types.T_uint16:
-		v := vector.GetFixedAt[uint16](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint16](vec, x)
 		return types.EncodeUint16(&v), true
 	case types.T_uint32:
-		v := vector.GetFixedAt[uint32](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint32](vec, x)
 		return types.EncodeUint32(&v), true
 	case types.T_uint64:
-		v := vector.GetFixedAt[uint64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint64](vec, x)
 		return types.EncodeUint64(&v), true
 	case types.T_float32:
-		v := vector.GetFixedAt[float32](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[float32](vec, x)
 		return types.EncodeFloat32(&v), true
 	case types.T_float64:
-		v := vector.GetFixedAt[float64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[float64](vec, x)
 		return types.EncodeFloat64(&v), true
 	case types.T_date:
-		v := vector.GetFixedAt[types.Date](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Date](vec, x)
 		return types.EncodeDate(&v), true
 	case types.T_datetime:
-		v := vector.GetFixedAt[types.Datetime](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, x)
 		return types.EncodeDatetime(&v), true
 	case types.T_timestamp:
-		v := vector.GetFixedAt[types.Timestamp](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, x)
 		return types.EncodeTimestamp(&v), true
 	case types.T_time:
-		v := vector.GetFixedAt[types.Time](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Time](vec, x)
 		return types.EncodeTime(&v), true
 	case types.T_decimal64:
-		v := vector.GetFixedAt[types.Decimal64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, x)
 		return types.EncodeDecimal64(&v), true
 	case types.T_decimal128:
-		v := vector.GetFixedAt[types.Decimal128](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, x)
 		return types.EncodeDecimal128(&v), true
+	case types.T_enum:
+		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, x)
+		return types.EncodeEnum(&v), true
 	}
 	return nil, false
 }

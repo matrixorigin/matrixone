@@ -16,14 +16,14 @@ package plan
 
 import (
 	"encoding/json"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -31,7 +31,7 @@ import (
 
 func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
 	var err error
-	val, err := builder.compCtx.ResolveVariable("save_query_result", true, true)
+	val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
 	if err == nil {
 		if v, _ := val.(int8); v == 0 {
 			return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
@@ -50,6 +50,9 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		}
 		exprs = append(exprs, curExpr)
 	}
+	if exprs[0].GetP() != nil {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "invalid argument of result_scan")
+	}
 	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], plan.Type{
 		Id:          int32(types.T_uuid),
 		NotNullable: true,
@@ -63,29 +66,29 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	if err != nil {
 		return 0, err
 	}
-	uuid := vector.MustFixedCol[types.Uuid](vec)[0]
+	uuid := vector.MustFixedColWithTypeCheck[types.Uuid](vec)[0]
 	vec.Free(builder.compCtx.GetProcess().GetMPool())
 
 	// get cols
-	cols, path, err := builder.compCtx.GetQueryResultMeta(uuid.ToString())
+	cols, path, err := builder.compCtx.GetQueryResultMeta(uuid.String())
 	if err != nil {
 		return 0, err
 	}
-	logutil.Infof("buildResultScan : get save query result path is %s, uuid is %s", path, uuid.ToString())
+	logutil.Infof("buildResultScan : get save query result path is %s, uuid is %s", path, uuid.String())
 	if len(path) == 0 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "empty %s", "query result")
+		return 0, moerr.NewInvalidInputf(builder.GetContext(), "empty %s", "query result")
 	}
 	typs := make([]types.Type, len(cols))
 	for i, c := range cols {
 		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale)
 	}
-	builder.compCtx.GetProcess().SessionInfo.ResultColTypes = typs
+	builder.compCtx.GetProcess().GetSessionInfo().ResultColTypes = typs
 	name2ColIndex := map[string]int32{}
 	for i := 0; i < len(cols); i++ {
-		name2ColIndex[cols[i].Name] = int32(i)
+		name2ColIndex[strings.ToLower(cols[i].Name)] = int32(i)
 	}
 	tableDef := &plan.TableDef{
-		Name:          uuid.ToString(),
+		Name:          uuid.String(),
 		TableType:     "query_result",
 		Cols:          cols,
 		Name2ColIndex: name2ColIndex,

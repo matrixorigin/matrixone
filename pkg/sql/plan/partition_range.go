@@ -205,7 +205,7 @@ func (rpb *rangePartitionBuilder) buildAddPartition(ctx context.Context, partiti
 
 	//------------------------------------------------------------------------------------------------------------------
 	// Regenerate the syntax tree for the partition by clause
-	ast, err := mysql.ParseOne(ctx, "create table t1() "+partitionInfo.PartitionMsg, 1, 0)
+	ast, err := mysql.ParseOne(ctx, "create table t1() "+partitionInfo.PartitionMsg, 1)
 	if err != nil {
 		return err
 	}
@@ -285,7 +285,7 @@ func (rpb *rangePartitionBuilder) makePartitionSubTableDef(ctx context.Context, 
 	//there is no foreign key for the partition table
 	mainTableName := tableDef.Name
 	if !util.IsValidNameForPartitionTable(mainTableName) {
-		return moerr.NewInvalidInput(ctx, "invalid main table name %s", mainTableName)
+		return moerr.NewInvalidInputf(ctx, "invalid main table name %s", mainTableName)
 	}
 
 	// common properties
@@ -313,7 +313,7 @@ func (rpb *rangePartitionBuilder) makePartitionSubTableDef(ctx context.Context, 
 		part := alterAddPartition[i]
 		ok, partitionTableName := util.MakeNameOfPartitionTable(part.GetPartitionName(), mainTableName)
 		if !ok {
-			return moerr.NewInvalidInput(ctx, "invalid partition table name %s", partitionTableName)
+			return moerr.NewInvalidInputf(ctx, "invalid partition table name %s", partitionTableName)
 		}
 
 		// save the table name for a partition

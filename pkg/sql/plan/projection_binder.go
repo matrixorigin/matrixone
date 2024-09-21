@@ -280,7 +280,7 @@ func (b *ProjectionBinder) makeFrameConstValue(expr tree.Expr, typ *plan.Type) (
 		return nil, err
 	}
 	defer executor.Free()
-	vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +325,7 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 		return nil, err
 	}
 	defer executor.Free()
-	vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return nil, err
 	}

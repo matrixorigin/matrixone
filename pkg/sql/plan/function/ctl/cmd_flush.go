@@ -15,12 +15,14 @@
 package ctl
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -33,37 +35,48 @@ func handleFlush() handleFunc {
 			return nil, nil
 		},
 		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-			// parameter should be "DbName.TableName"
+			// parameter should be "DbName.TableName[.AccountId]" or "TableId"
 			parameters := strings.Split(parameter, ".")
-			txnOp := proc.TxnOperator
-			if proc.TxnOperator == nil {
+			if len(parameters) == 0 || len(parameters) > 3 {
+				return nil, moerr.NewInternalErrorNoCtx("handleFlush: expected \"TableId\" or \"DbName.TableName[.AccountId]\" ")
+			}
+			txnOp := proc.GetTxnOperator()
+			if txnOp == nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
-			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
+
+			if len(parameters) == 1 {
+				tblId, err := strconv.ParseUint(parameters[0], 10, 64)
+				if err != nil {
+					return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: table id parse fail")
+				}
+				payload, err := types.Encode(&db.FlushTable{TableID: tblId})
+				if err != nil {
+					return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
+				}
+				return payload, nil
+			}
+
+			ctx := proc.Ctx
+			if len(parameters) == 3 {
+				accId, err := strconv.ParseUint(parameters[2], 0, 32)
+				if err != nil {
+					return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: invalid account id")
+				}
+				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(accId))
+			}
+
+			database, err := proc.GetSessionInfo().StorageEngine.Database(ctx, parameters[0], txnOp)
 			if err != nil {
 				return nil, err
 			}
-			rel, err := database.Relation(proc.Ctx, parameters[1], nil)
+			rel, err := database.Relation(ctx, parameters[1], nil)
 			if err != nil {
 				return nil, err
 			}
-			dId := database.GetDatabaseId(proc.Ctx)
-			tableId := rel.GetTableID(proc.Ctx)
-			dbId, err := strconv.Atoi(dId)
+			payload, err := types.Encode(&db.FlushTable{TableID: rel.GetTableID(proc.Ctx)})
 			if err != nil {
-				return nil, err
-			}
-			payload, err := types.Encode(&db.FlushTable{
-				DatabaseID: uint64(dbId),
-				TableID:    tableId,
-				AccessInfo: db.AccessInfo{
-					AccountID: proc.SessionInfo.AccountId,
-					UserID:    proc.SessionInfo.UserId,
-					RoleID:    proc.SessionInfo.RoleId,
-				},
-			})
-			if err != nil {
-				return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
+				return nil, moerr.NewInternalError(ctx, "payload encode err")
 			}
 			return payload, nil
 		},

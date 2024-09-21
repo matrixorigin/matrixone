@@ -16,12 +16,13 @@ package compile
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -47,9 +48,9 @@ const (
 	Merge magicType = iota
 	Normal
 	Remote
-	Parallel
 	CreateDatabase
 	CreateTable
+	CreateView
 	CreateIndex
 	DropDatabase
 	DropTable
@@ -57,6 +58,7 @@ const (
 	TruncateTable
 	AlterView
 	AlterTable
+	RenameTable
 	MergeInsert
 	MergeDelete
 	CreateSequence
@@ -64,6 +66,51 @@ const (
 	AlterSequence
 	Replace
 )
+
+func (m magicType) String() string {
+	switch m {
+	case Merge:
+		return "Merge"
+	case Normal:
+		return "Normal"
+	case Remote:
+		return "Remote"
+	case CreateDatabase:
+		return "CreateDatabase"
+	case CreateTable:
+		return "CreateTable"
+	case CreateView:
+		return "CreateView"
+	case CreateIndex:
+		return "CreateIndex"
+	case DropDatabase:
+		return "DropDatabase"
+	case DropTable:
+		return "DropTable"
+	case DropIndex:
+		return "DropIndex"
+	case TruncateTable:
+		return "TruncateTable"
+	case AlterView:
+		return "AlterView"
+	case AlterTable:
+		return "AlterTable"
+	case MergeInsert:
+		return "MergeInsert"
+	case MergeDelete:
+		return "MergeDelete"
+	case CreateSequence:
+		return "CreateSequence"
+	case DropSequence:
+		return "DropSequence"
+	case AlterSequence:
+		return "AlterSequence"
+	case Replace:
+		return "Replace"
+	default:
+		return "Unknown"
+	}
+}
 
 // Source contains information of a relation which will be used in execution.
 type Source struct {
@@ -76,7 +123,7 @@ type Source struct {
 	PartitionRelationNames []string
 	Attributes             []string
 	R                      engine.Reader
-	Bat                    *batch.Batch
+	Rel                    engine.Relation
 	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
 	node                   *plan.Node
 	TableDef               *plan.TableDef
@@ -102,9 +149,6 @@ type Scope struct {
 	// 2 -  execution unit that requires remote call.
 	Magic magicType
 
-	// IsJoin means the pipeline is join
-	IsJoin bool
-
 	// IsEnd means the pipeline is end
 	IsEnd bool
 
@@ -121,20 +165,35 @@ type Scope struct {
 	PreScopes []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
+	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.
+	TxnOffset int
 	// Instructions contains command list of this scope.
-	Instructions vm.Instructions
+	// Instructions vm.Instructions
+	RootOp vm.Operator
 	// Proc contains the execution context.
 	Proc *process.Process
 
-	Reg *process.WaitRegister
-
 	RemoteReceivRegInfos []RemoteReceivRegInfo
-
-	BuildIdx   int
-	ShuffleCnt int
 
 	PartialResults     []any
 	PartialResultTypes []types.T
+}
+
+func canScopeOpRemote(rootOp vm.Operator) bool {
+	if rootOp == nil {
+		return true
+	}
+	if vm.CannotRemote(rootOp) {
+		return false
+	}
+	numChildren := rootOp.GetOperatorBase().NumChildren()
+	for idx := 0; idx < numChildren; idx++ {
+		res := canScopeOpRemote(rootOp.GetOperatorBase().GetChildren(idx))
+		if !res {
+			return false
+		}
+	}
+	return true
 }
 
 // canRemote checks whether the current scope can be executed remotely.
@@ -153,11 +212,11 @@ func (s *Scope) canRemote(c *Compile, checkAddr bool) bool {
 	// some operators cannot be remote.
 	// todo: it is not a good way to check the operator type here.
 	//  cannot generate this remote pipeline if the operator type is not supported.
-	for _, op := range s.Instructions {
-		if op.CannotRemote() {
-			return false
-		}
+
+	if !canScopeOpRemote(s.RootOp) {
+		return false
 	}
+
 	for _, pre := range s.PreScopes {
 		if !pre.canRemote(c, false) {
 			return false
@@ -178,53 +237,13 @@ type scopeContext struct {
 	regs     map[*process.WaitRegister]int32
 }
 
-// anaylze information
-type anaylze struct {
-	// curr is the current index of plan
-	curr      int
-	isFirst   bool
-	qry       *plan.Query
-	analInfos []*process.AnalyzeInfo
-}
-
-func (a *anaylze) S3IOInputCount(idx int, count int64) {
-	atomic.AddInt64(&a.analInfos[idx].S3IOInputCount, count)
-}
-
-func (a *anaylze) S3IOOutputCount(idx int, count int64) {
-	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
-}
-
-func (a *anaylze) Nodes() []*process.AnalyzeInfo {
-	return a.analInfos
-}
-
-func (a anaylze) TypeName() string {
-	return "compile.anaylze"
-}
-
-func newAnaylze() *anaylze {
-	return reuse.Alloc[anaylze](nil)
-}
-
-func (a *anaylze) release() {
-	// there are 3 situations to release analyzeInfo
-	// 1 is free analyzeInfo of Local CN when release analyze
-	// 2 is free analyzeInfo of remote CN before transfer back
-	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-	// this is situation 1
-	for i := range a.analInfos {
-		reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
-	}
-	reuse.Free[anaylze](a, nil)
-}
-
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scope []*Scope
+	scopes []*Scope
 
-	pn   *plan.Plan
-	info plan2.ExecInfo
+	pn *plan.Plan
+
+	execType plan2.ExecType
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
@@ -243,14 +262,19 @@ type Compile struct {
 	sql       string
 	originSQL string
 
-	anal *anaylze
+	// queryStatus is a structure to record query has done.
+	queryStatus queryDoneWaiter
+
+	anal *AnalyzeModule
 	// e db engine instance.
-	e   engine.Engine
-	ctx context.Context
+	e engine.Engine
+
 	// proc stores the execution context.
 	proc *process.Process
+	// TxnOffset read starting offset position within the transaction during the execute current statement
+	TxnOffset int
 
-	MessageBoard *process.MessageBoard
+	MessageBoard *message.MessageBoard
 
 	cnList engine.Nodes
 	// ast
@@ -261,14 +285,12 @@ type Compile struct {
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
 
-	lock *sync.RWMutex
-
 	isInternal bool
 
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 
-	buildPlanFunc func() (*plan2.Plan, error)
+	buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)
 	startAt       time.Time
 	// use for duplicate check
 	fuzzys []*fuzzyCheck
@@ -278,7 +300,7 @@ type Compile struct {
 	lockTables   map[uint64]*plan.LockTarget
 	disableRetry bool
 
-	lastAllocID int32
+	isPrepare bool
 }
 
 type RemoteReceivRegInfo struct {

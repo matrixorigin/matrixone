@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -61,14 +60,6 @@ func (e *MetadataMVCCNode) String() string {
 
 // for create drop in one txn
 func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
-	if !un.MetaLoc.IsEmpty() {
-		e.MetaLoc = un.MetaLoc
-	}
-	if !un.DeltaLoc.IsEmpty() {
-		e.DeltaLoc = un.DeltaLoc
-	}
-}
-func (e *MetadataMVCCNode) IdempotentUpdate(un *MetadataMVCCNode) {
 	if !un.MetaLoc.IsEmpty() {
 		e.MetaLoc = un.MetaLoc
 	}
@@ -136,9 +127,10 @@ func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
 }
 
 func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
-	return &ObjectMVCCNode{
+	obj := &ObjectMVCCNode{
 		ObjectStats: *e.ObjectStats.Clone(),
 	}
+	return obj
 }
 func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
@@ -146,23 +138,13 @@ func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	}
 }
 func (e *ObjectMVCCNode) String() string {
-	if e == nil || e.IsEmpty() {
-		return "empty"
+	if e == nil {
+		return "[OBJ(nil)]"
 	}
 	return e.ObjectStats.String()
 }
 func (e *ObjectMVCCNode) Update(vun *ObjectMVCCNode) {
 	e.ObjectStats = *vun.ObjectStats.Clone()
-}
-func (e *ObjectMVCCNode) IdempotentUpdate(vun *ObjectMVCCNode) {
-	if e.ObjectStats.IsZero() {
-		e.ObjectStats = *vun.ObjectStats.Clone()
-	} else {
-		if e.IsEmpty() && !vun.IsEmpty() {
-			e.ObjectStats = *vun.ObjectStats.Clone()
-
-		}
-	}
 }
 func (e *ObjectMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int
@@ -186,9 +168,6 @@ func (e *ObjectMVCCNode) IsEmpty() bool {
 }
 
 func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
-	if e == nil || e.IsEmpty() {
-		objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
-	}
 	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
 }
 
@@ -201,12 +180,13 @@ func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
 }
 
 type ObjectNode struct {
-	state    EntryState
 	IsLocal  bool   // this object is hold by a localobject
 	SortHint uint64 // sort object by create time, make iteration on object determined
-	sorted   bool   // deprecated
 
-	remainingRows common.FixedSampleIII[int]
+	// for tombstone
+	IsTombstone bool
+
+	forcePNode bool // not persisted, a flag to force ckp-replayed aobject to be created as a pnode
 }
 
 const (
@@ -214,11 +194,6 @@ const (
 )
 
 func (node *ObjectNode) ReadFrom(r io.Reader) (n int64, err error) {
-	_, err = r.Read(types.EncodeInt8((*int8)(&node.state)))
-	if err != nil {
-		return
-	}
-	n += 1
 	_, err = r.Read(types.EncodeBool(&node.IsLocal))
 	if err != nil {
 		return
@@ -229,7 +204,7 @@ func (node *ObjectNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 8
-	_, err = r.Read(types.EncodeBool(&node.sorted))
+	_, err = r.Read(types.EncodeBool(&node.IsTombstone))
 	if err != nil {
 		return
 	}
@@ -238,11 +213,6 @@ func (node *ObjectNode) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (node *ObjectNode) WriteTo(w io.Writer) (n int64, err error) {
-	_, err = w.Write(types.EncodeInt8((*int8)(&node.state)))
-	if err != nil {
-		return
-	}
-	n += 1
 	_, err = w.Write(types.EncodeBool(&node.IsLocal))
 	if err != nil {
 		return
@@ -253,19 +223,12 @@ func (node *ObjectNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 8
-	_, err = w.Write(types.EncodeBool(&node.sorted))
+	_, err = w.Write(types.EncodeBool(&node.IsTombstone))
 	if err != nil {
 		return
 	}
 	n += 1
 	return
-}
-func (node *ObjectNode) String() string {
-	sorted := "US"
-	if node.sorted {
-		sorted = "S"
-	}
-	return fmt.Sprintf("%s/%d", sorted, node.SortHint)
 }
 
 type BlockNode struct {

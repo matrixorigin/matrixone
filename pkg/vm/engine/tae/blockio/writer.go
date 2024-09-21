@@ -17,8 +17,6 @@ package blockio
 import (
 	"context"
 	"fmt"
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -27,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"math"
 )
 
 type BlockWriter struct {
@@ -34,10 +33,15 @@ type BlockWriter struct {
 	objMetaBuilder *ObjectColumnMetasBuilder
 	isSetPK        bool
 	pk             uint16
+	pkType         uint8
 	sortKeyIdx     uint16
 	nameStr        string
 	name           objectio.ObjectName
-	objectStats    []objectio.ObjectStats
+	prefix         []index.PrefixFn
+
+	// schema data
+	// schema tombstone
+	dataType objectio.DataMetaType
 }
 
 func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
@@ -68,10 +72,23 @@ func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName, sch
 	}, nil
 }
 
+func (w *BlockWriter) SetDataType(typ objectio.DataMetaType) {
+	w.dataType = typ
+}
+
 func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 	w.isSetPK = true
 	w.pk = idx
 	w.sortKeyIdx = idx
+	w.pkType = index.BF
+}
+
+func (w *BlockWriter) SetPrimaryKeyWithType(idx uint16, pkType uint8, prefix ...index.PrefixFn) {
+	w.isSetPK = true
+	w.pk = idx
+	w.sortKeyIdx = idx
+	w.pkType = pkType
+	w.prefix = prefix
 }
 
 func (w *BlockWriter) SetSortKey(idx uint16) {
@@ -82,8 +99,8 @@ func (w *BlockWriter) SetAppendable() {
 	w.writer.SetAppendable()
 }
 
-func (w *BlockWriter) GetObjectStats() []objectio.ObjectStats {
-	return w.objectStats
+func (w *BlockWriter) GetObjectStats(opts ...objectio.ObjectStatsOptions) objectio.ObjectStats {
+	return w.writer.GetObjectStats(opts...)
 }
 
 // WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew
@@ -104,9 +121,14 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if i == 0 {
 			w.objMetaBuilder.AddRowCnt(vec.Length())
 		}
-		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
-			continue
+
+		if w.dataType != objectio.SchemaTombstone {
+			// only skip SchemaData type
+			if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
+				continue
+			}
 		}
+
 		if w.isSetPK && w.pk == uint16(i) {
 			isPK = true
 		}
@@ -119,6 +141,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
 			return nil, err
 		}
+
 		index.SetZMSum(zm, columnData.GetDownstreamVector())
 		// Update column meta zonemap
 		w.writer.UpdateBlockZM(objectio.SchemaData, int(block.GetID()), seqnums[i], zm)
@@ -129,7 +152,23 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			continue
 		}
 		w.objMetaBuilder.AddPKData(columnData)
-		bf, err := index.NewBinaryFuseFilter(columnData)
+		var bf index.StaticFilter
+		if w.pkType == index.BF {
+			bf, err = index.NewBloomFilter(columnData)
+		} else if w.pkType == index.PBF {
+			if len(w.prefix) < 1 {
+				return nil, index.ErrPrefix
+			}
+			prefix := w.prefix[0]
+			bf, err = index.NewPrefixBloomFilter(columnData, prefix.Id, prefix.Fn)
+		} else if w.pkType == index.HBF {
+			if len(w.prefix) < 2 {
+				return nil, index.ErrPrefix
+			}
+			prefixL1 := w.prefix[0]
+			prefixL2 := w.prefix[1]
+			bf, err = index.NewHybridBloomFilter(columnData, prefixL1.Id, prefixL1.Fn, prefixL2.Id, prefixL2.Fn)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -138,29 +177,11 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			return nil, err
 		}
 
-		if err = w.writer.WriteBF(int(block.GetID()), seqnums[i], buf); err != nil {
+		if err = w.writer.WriteBF(int(block.GetID()), seqnums[i], buf, w.pkType); err != nil {
 			return nil, err
 		}
 	}
-	return block, nil
-}
 
-func (w *BlockWriter) WriteTombstoneBatch(batch *batch.Batch) (objectio.BlockObject, error) {
-	block, err := w.writer.WriteTombstone(batch)
-	if err != nil {
-		return nil, err
-	}
-	for i, vec := range batch.Vecs {
-		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
-		// Build ZM
-		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
-		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
-			return nil, err
-		}
-		index.SetZMSum(zm, columnData.GetDownstreamVector())
-		// Update column meta zonemap
-		w.writer.UpdateBlockZM(objectio.SchemaTombstone, 0, uint16(i), zm)
-	}
 	return block, nil
 }
 
@@ -182,8 +203,6 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 			common.OperandField("[Size=0]"), common.OperandField(w.writer.GetSeqnums()))
 		return blocks, objectio.Extent{}, err
 	}
-
-	w.objectStats = w.writer.GetObjectStats()
 
 	logutil.Debug("[WriteEnd]",
 		common.OperationField(w.String(blocks)),

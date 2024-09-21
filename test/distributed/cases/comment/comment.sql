@@ -96,3 +96,143 @@ col4 bool comment ''
 
 show create table t8;
 drop table t8;
+
+create database if not exists emis_issue;
+use emis_issue;
+drop table if exists `t_iot_equipment_inspection_stand`;
+CREATE TABLE `t_iot_equipment_inspection_stand` (
+  `id` bigint NOT NULL,
+  `tenant_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '租户ID',
+  `equipment_category_id` bigint NOT NULL COMMENT '设备分类ID',
+  `equipment_model_id` bigint NOT NULL,
+  `name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '点检项名称',
+  `category` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '检验分类：定性、定量、智能点检',
+  `inspection_content` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检内容',
+  `inspection_tool` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检工具',
+  `inspection_method` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检方法',
+  `judgment_criteria` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '判断标准',
+  `inspection_exceptions` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '异常描述[\\"表面有磨损\\",\\"表面有裂痕\\"]',
+  `major` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '点检专业',
+  `cycle_unit` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '执行周期,一次、年、季度、月、周、日、班次、小时',
+  `cycle_num` decimal(20,6) DEFAULT NULL COMMENT '周期间隔',
+  `remark` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '备注',
+  `create_org` bigint DEFAULT NULL COMMENT '创建组织',
+  `use_org` bigint DEFAULT NULL COMMENT '使用组织',
+  `create_time` datetime NOT NULL COMMENT '创建时间',
+  `create_user` bigint DEFAULT NULL COMMENT '创建人员',
+  `create_user_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `create_dept` bigint DEFAULT NULL COMMENT '创建部门',
+  `update_time` datetime DEFAULT NULL COMMENT '更新时间',
+  `update_user` bigint DEFAULT NULL COMMENT '更新人员',
+  `update_user_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `status` int DEFAULT NULL,
+  `is_deleted` int DEFAULT NULL COMMENT '是否已删除',
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci ROW_FORMAT=DYNAMIC COMMENT='设备点检标准表';
+show create table `t_iot_equipment_inspection_stand`;
+drop database emis_issue;
+
+create database if not exists emis_issue;
+use emis_issue;
+drop table if exists `t_iot_equipment_inspection_stand`;
+CREATE TABLE `t_iot_equipment_inspection_stand` (
+  `id` bigint NOT NULL,
+  `tenant_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '租户ID',
+  `equipment_category_id` bigint NOT NULL COMMENT '设备分类ID',
+  `equipment_model_id` bigint NOT NULL,
+  `name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '点检项名称',
+  `category` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '检验分类：定性、定量、智能点检',
+  `inspection_content` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检内容',
+  `inspection_tool` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检工具',
+  `inspection_method` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检方法',
+  `judgment_criteria` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '判断标准',
+  `inspection_exceptions` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '异常描述["表面有磨损","表面有裂痕"]',
+  `major` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '点检专业',
+  `cycle_unit` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '执行周期,一次、年、季度、月、周、日、班次、小时',
+  `cycle_num` decimal(20,6) DEFAULT NULL COMMENT '周期间隔',
+  `remark` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '备注',
+  `create_org` bigint DEFAULT NULL COMMENT '创建组织',
+  `use_org` bigint DEFAULT NULL COMMENT '使用组织',
+  `create_time` datetime NOT NULL COMMENT '创建时间',
+  `create_user` bigint DEFAULT NULL COMMENT '创建人员',
+  `create_user_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `create_dept` bigint DEFAULT NULL COMMENT '创建部门',
+  `update_time` datetime DEFAULT NULL COMMENT '更新时间',
+  `update_user` bigint DEFAULT NULL COMMENT '更新人员',
+  `update_user_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `status` int DEFAULT NULL,
+  `is_deleted` int DEFAULT NULL COMMENT '是否已删除',
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci ROW_FORMAT=DYNAMIC COMMENT='设备点检标准表';
+show create table `t_iot_equipment_inspection_stand`;
+drop database emis_issue;
+
+create database if not exists emis_issue;
+use emis_issue;
+drop table if exists `t_iot_equipment_inspection_stand`;
+CREATE TABLE `t_iot_equipment_inspection_stand` (
+  `id` bigint NOT NULL,
+  `tenant_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '租户ID',
+  `equipment_category_id` bigint NOT NULL COMMENT '设备分类ID',
+  `equipment_model_id` bigint NOT NULL,
+  `name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '点检项名称',
+  `category` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '检验分类：定性、定量、智能点检',
+  `inspection_content` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检内容',
+  `inspection_tool` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检工具',
+  `inspection_method` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检方法',
+  `judgment_criteria` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '判断标准',
+  `inspection_exceptions` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '异常描述[**"表面有磨损",**"表面有裂痕"]',
+  `major` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '点检专业',
+  `cycle_unit` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '执行周期,一次、年、季度、月、周、日、班次、小时',
+  `cycle_num` decimal(20,6) DEFAULT NULL COMMENT '周期间隔',
+  `remark` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '备注',
+  `create_org` bigint DEFAULT NULL COMMENT '创建组织',
+  `use_org` bigint DEFAULT NULL COMMENT '使用组织',
+  `create_time` datetime NOT NULL COMMENT '创建时间',
+  `create_user` bigint DEFAULT NULL COMMENT '创建人员',
+  `create_user_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `create_dept` bigint DEFAULT NULL COMMENT '创建部门',
+  `update_time` datetime DEFAULT NULL COMMENT '更新时间',
+  `update_user` bigint DEFAULT NULL COMMENT '更新人员',
+  `update_user_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `status` int DEFAULT NULL,
+  `is_deleted` int DEFAULT NULL COMMENT '是否已删除',
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci ROW_FORMAT=DYNAMIC COMMENT='设备点检标准表';
+show create table `t_iot_equipment_inspection_stand`;
+drop database emis_issue;
+
+create database if not exists emis_issue;
+use emis_issue;
+drop table if exists `t_iot_equipment_inspection_stand`;
+CREATE TABLE `t_iot_equipment_inspection_stand` (
+  `id` bigint NOT NULL,
+  `tenant_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '租户ID',
+  `equipment_category_id` bigint NOT NULL COMMENT '设备分类ID',
+  `equipment_model_id` bigint NOT NULL,
+  `name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '点检项名称',
+  `category` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '检验分类：定性、定量、智能点检',
+  `inspection_content` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检内容',
+  `inspection_tool` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检工具',
+  `inspection_method` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '点检方法',
+  `judgment_criteria` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '判断标准',
+  `inspection_exceptions` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '异常描述[\\"表面有磨损\\",\\"表面有裂痕\\"]',
+  `major` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '点检专业',
+  `cycle_unit` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '执行周期,一次、年、季度、月、周、日、班次、小时',
+  `cycle_num` decimal(20,6) DEFAULT NULL COMMENT '周期间隔',
+  `remark` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '备注',
+  `create_org` bigint DEFAULT NULL COMMENT '创建组织',
+  `use_org` bigint DEFAULT NULL COMMENT '使用组织',
+  `create_time` datetime NOT NULL COMMENT '创建时间',
+  `create_user` bigint DEFAULT NULL COMMENT '创建人员',
+  `create_user_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `create_dept` bigint DEFAULT NULL COMMENT '创建部门',
+  `update_time` datetime DEFAULT NULL COMMENT '更新时间',
+  `update_user` bigint DEFAULT NULL COMMENT '更新人员',
+  `update_user_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `status` int DEFAULT NULL,
+  `is_deleted` int DEFAULT NULL COMMENT '是否已删除',
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci ROW_FORMAT=DYNAMIC COMMENT='设备点检标准表';
+show create table `t_iot_equipment_inspection_stand`;
+drop database emis_issue;

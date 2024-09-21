@@ -73,37 +73,6 @@ show full tables from view_test3 {snapshot = 'syssn1'};
 Tables_in_view_test3    Table_type
 v5    VIEW
 v6    VIEW
-select * from view_test1.t1 {snapshot = 'syssn1'};
-a
-1
-2
-4
-select * from view_test1.v1 {snapshot = 'syssn1'};
-a
-1
-2
-4
-select * from view_test1.v2 {snapshot = 'syssn1'};
-a
-1
-2
-3
-select * from view_test2.v3 {snapshot = 'syssn1'};
-v1a    v2a
-1    1
-2    2
-select * from view_test2.v4 {snapshot = 'syssn1'};
-v1a    v2a
-1    1
-2    2
-select * from view_test3.v5 {snapshot = 'syssn1'};
-v1a    v2a
-1    1
-2    2
-select * from view_test3.v6 {snapshot = 'syssn1'};
-v1a    v2a
-1    1
-2    2
 drop database view_test1;
 drop database view_test2;
 drop database view_test3;
@@ -150,3 +119,5 @@ drop database view_test3;
 drop snapshot sn1;
 drop snapshot syssn1;
 drop account acc1;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

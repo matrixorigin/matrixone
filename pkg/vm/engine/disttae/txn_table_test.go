@@ -16,9 +16,10 @@ package disttae
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,20 +29,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func newTxnTableForTest(
-	mp *mpool.MPool,
-) *txnTable {
+func newTxnTableForTest() *txnTable {
 	engine := &Engine{
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
-				return types.NewPacker(mp)
+				return types.NewPacker()
 			},
 			func(packer *types.Packer) {
 				packer.Reset()
 			},
 			func(packer *types.Packer) {
-				packer.FreeMem()
+				packer.Close()
 			},
 		),
 	}
@@ -50,7 +49,7 @@ func newTxnTableForTest(
 		engine:   engine,
 		tnStores: []DNStore{tnStore},
 	}
-	c := client.NewTxnClient(nil, nil, nil)
+	c := client.NewTxnClient("", nil, nil, nil)
 	op, _ := c.New(context.Background(), timestamp.Timestamp{})
 	op.AddWorkspace(txn)
 
@@ -159,7 +158,7 @@ func makeBatchForTest(
 func BenchmarkTxnTableInsert(b *testing.B) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	table := newTxnTableForTest(mp)
+	table := newTxnTableForTest()
 	for i, max := int64(0), int64(b.N); i < max; i++ {
 		err := table.Write(
 			ctx,

@@ -17,8 +17,9 @@ package plan
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"golang.org/x/exp/constraints"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func DeepCopyExprList(list []*Expr) []*Expr {
@@ -198,6 +199,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
+		ReplaceCtx:      DeepCopyReplaceCtx(node.ReplaceCtx),
 		NotCacheable:    node.NotCacheable,
 		SourceStep:      node.SourceStep,
 		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
@@ -290,6 +292,26 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	return newNode
 }
 
+func DeepCopyReplaceCtx(oldCtx *plan.ReplaceCtx) *plan.ReplaceCtx {
+	if oldCtx == nil {
+		return nil
+	}
+	ctx := &plan.ReplaceCtx{
+		Ref:                       DeepCopyObjectRef(oldCtx.Ref),
+		AddAffectedRows:           oldCtx.AddAffectedRows,
+		IsClusterTable:            oldCtx.IsClusterTable,
+		TableDef:                  DeepCopyTableDef(oldCtx.TableDef, true),
+		DeleteCond:                oldCtx.DeleteCond,
+		PartitionTableIds:         make([]uint64, len(oldCtx.PartitionTableIds)),
+		PartitionTableNames:       make([]string, len(oldCtx.PartitionTableNames)),
+		PartitionIdx:              oldCtx.PartitionIdx,
+		RewriteFromOnDuplicateKey: oldCtx.RewriteFromOnDuplicateKey,
+	}
+	copy(ctx.PartitionTableIds, oldCtx.PartitionTableIds)
+	copy(ctx.PartitionTableNames, oldCtx.PartitionTableNames)
+	return ctx
+}
+
 func DeepCopyDefault(def *plan.Default) *plan.Default {
 	if def == nil {
 		return nil
@@ -320,20 +342,21 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		ColId:     col.ColId,
-		Name:      col.Name,
-		Alg:       col.Alg,
-		Typ:       col.Typ,
-		Default:   DeepCopyDefault(col.Default),
-		Primary:   col.Primary,
-		Pkidx:     col.Pkidx,
-		Comment:   col.Comment,
-		OnUpdate:  DeepCopyOnUpdate(col.OnUpdate),
-		ClusterBy: col.ClusterBy,
-		Hidden:    col.Hidden,
-		Seqnum:    col.Seqnum,
-		TblName:   col.TblName,
-		DbName:    col.DbName,
+		ColId:      col.ColId,
+		Name:       col.Name,
+		OriginName: col.OriginName,
+		Alg:        col.Alg,
+		Typ:        col.Typ,
+		Default:    DeepCopyDefault(col.Default),
+		Primary:    col.Primary,
+		Pkidx:      col.Pkidx,
+		Comment:    col.Comment,
+		OnUpdate:   DeepCopyOnUpdate(col.OnUpdate),
+		ClusterBy:  col.ClusterBy,
+		Hidden:     col.Hidden,
+		Seqnum:     col.Seqnum,
+		TblName:    col.TblName,
+		DbName:     col.DbName,
 	}
 }
 
@@ -670,14 +693,14 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 	case *plan.DataDefinition_AlterTable:
 		AlterTable := &plan.AlterTable{
-			Database:       df.AlterTable.Database,
-			TableDef:       DeepCopyTableDef(df.AlterTable.TableDef, true),
-			CopyTableDef:   DeepCopyTableDef(df.AlterTable.CopyTableDef, true),
-			IsClusterTable: df.AlterTable.IsClusterTable,
-			AlgorithmType:  df.AlterTable.AlgorithmType,
-			CreateTableSql: df.AlterTable.CreateTableSql,
-			InsertDataSql:  df.AlterTable.InsertDataSql,
-			Actions:        make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
+			Database:          df.AlterTable.Database,
+			TableDef:          DeepCopyTableDef(df.AlterTable.TableDef, true),
+			CopyTableDef:      DeepCopyTableDef(df.AlterTable.CopyTableDef, true),
+			IsClusterTable:    df.AlterTable.IsClusterTable,
+			AlgorithmType:     df.AlterTable.AlgorithmType,
+			CreateTmpTableSql: df.AlterTable.CreateTmpTableSql,
+			InsertTmpDataSql:  df.AlterTable.InsertTmpDataSql,
+			Actions:           make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
 		}
 		for i, action := range df.AlterTable.Actions {
 			switch act := action.Action.(type) {
@@ -821,6 +844,18 @@ func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
 	copy(def.Cols, fkey.Cols)
 	copy(def.ForeignCols, fkey.ForeignCols)
 	return def
+}
+
+func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSpec {
+	if rf == nil {
+		return nil
+	}
+	return &plan.RuntimeFilterSpec{
+		Tag:         rf.Tag,
+		MatchPrefix: rf.MatchPrefix,
+		UpperLimit:  rf.UpperLimit,
+		Expr:        DeepCopyExpr(rf.Expr),
+	}
 }
 
 func DeepCopyExpr(expr *Expr) *Expr {
@@ -1045,6 +1080,7 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 	}
 
 	return &plan.AnalyzeInfo{
+		InputBlocks:            analyzeinfo.GetInputBlocks(),
 		InputRows:              analyzeinfo.GetInputRows(),
 		OutputRows:             analyzeinfo.GetOutputRows(),
 		InputSize:              analyzeinfo.GetInputSize(),
@@ -1055,7 +1091,7 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		MemorySize:             analyzeinfo.GetMemorySize(),
 		WaitTimeConsumed:       analyzeinfo.GetWaitTimeConsumed(),
 		DiskIO:                 analyzeinfo.GetDiskIO(),
-		S3IOByte:               analyzeinfo.GetS3IOByte(),
+		ScanBytes:              analyzeinfo.GetScanBytes(),
 		S3IOInputCount:         analyzeinfo.GetS3IOInputCount(),
 		S3IOOutputCount:        analyzeinfo.GetS3IOOutputCount(),
 		NetworkIO:              analyzeinfo.GetNetworkIO(),

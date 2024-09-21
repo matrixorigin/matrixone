@@ -23,11 +23,19 @@ import (
 	"go.uber.org/zap"
 )
 
-func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, infos pb.LogState,
-	executing operator.ExecutingReplicas, user pb.TaskTableUser, currentTick uint64) (operators []*operator.Operator) {
+func Check(
+	service string,
+	alloc util.IDAllocator,
+	cfg hakeeper.Config,
+	cluster pb.ClusterInfo,
+	infos pb.LogState,
+	executing operator.ExecutingReplicas,
+	user pb.TaskTableUser,
+	currentTick uint64,
+) (operators []*operator.Operator) {
 	working, expired := parseLogStores(cfg, infos, currentTick)
 	for _, node := range expired {
-		runtime.ProcessLevelRuntime().Logger().Info("node is expired", zap.String("uuid", node))
+		runtime.ServiceRuntime(service).Logger().Info("node is expired", zap.String("uuid", node))
 	}
 	stats := parseLogShards(cluster, infos, expired)
 
@@ -43,7 +51,7 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 				return nil
 			}
 			if op, err := operator.CreateAddReplica(bestStore, infos.Shards[shardID], newReplicaID); err != nil {
-				runtime.ProcessLevelRuntime().Logger().Error("create add replica operator failed", zap.Error(err))
+				runtime.ServiceRuntime(service).Logger().Error("create add replica operator failed", zap.Error(err))
 				// may be no more stores, skip this shard
 				break
 			} else {
@@ -60,7 +68,7 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 			}
 			if op, err := operator.CreateRemoveReplica(toRemoveReplica.uuid,
 				infos.Shards[toRemoveReplica.shardID]); err != nil {
-				runtime.ProcessLevelRuntime().Logger().Error("create remove replica operator failed", zap.Error(err))
+				runtime.ServiceRuntime(service).Logger().Error("create remove replica operator failed", zap.Error(err))
 				// skip this replica
 				continue
 			} else {

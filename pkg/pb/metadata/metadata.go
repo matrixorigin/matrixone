@@ -73,6 +73,8 @@ func (m CNService) DebugString() string {
 	buf.WriteString(m.SQLAddress)
 	buf.WriteString(")/pipeline(")
 	buf.WriteString(m.PipelineServiceAddress)
+	buf.WriteString(")/shardservice(")
+	buf.WriteString(m.ShardServiceAddress)
 	buf.WriteString(")/lock(")
 	buf.WriteString(m.LockServiceAddress)
 	buf.WriteString(")/[")

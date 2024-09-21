@@ -31,9 +31,14 @@ type HAKeeperClient interface {
 	// GetClusterDetails queries the HAKeeper and return CN and TN nodes that are
 	// known to the HAKeeper.
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
+	// GetClusterState queries the cluster state
+	GetClusterState(ctx context.Context) (pb.CheckerState, error)
 }
 
-func AddressFunc(getClient func() HAKeeperClient) func(context.Context, bool) (string, error) {
+func AddressFunc(
+	service string,
+	getClient func() HAKeeperClient,
+) func(context.Context, bool) (string, error) {
 	return func(ctx context.Context, random bool) (string, error) {
 		if getClient == nil || getClient() == nil {
 			return "", moerr.NewNoHAKeeper(ctx)
@@ -41,7 +46,7 @@ func AddressFunc(getClient func() HAKeeperClient) func(context.Context, bool) (s
 		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 		selector := clusterservice.NewSelector().SelectByLabel(nil, clusterservice.EQ)
-		if s, exist := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.BackgroundCNSelector); exist {
+		if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(runtime.BackgroundCNSelector); exist {
 			selector = s.(clusterservice.Selector)
 		}
 		details, err := getClient().GetClusterDetails(ctx)

@@ -28,12 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Group)
 
 const (
 	H8 = iota
 	HStr
-	HIndex
 )
 
 type ExprEvalVector struct {
@@ -69,14 +68,25 @@ func (ev *ExprEvalVector) Free() {
 	}
 }
 
+func (ev *ExprEvalVector) ResetForNextQuery() {
+	for i := range ev.Executor {
+		if ev.Executor[i] != nil {
+			ev.Executor[i].ResetForNextQuery()
+		}
+	}
+}
+
 type container struct {
+	// if skipInitReusableMem is true, we will skip some initialization of reusable.
+	skipInitReusableMem bool
+
 	typ       int
+	state     vm.CtrState
 	inserted  []uint8
 	zInserted []uint8
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	// idx        *index.LowCardinalityIndex
 
 	aggVecs   []ExprEvalVector
 	groupVecs ExprEvalVector
@@ -86,30 +96,26 @@ type container struct {
 	groupVecsNullable bool
 
 	bat *batch.Batch
-
-	hasAggResult bool
-
-	state vm.CtrState
 }
 
-type Argument struct {
-	ctr          *container
-	IsShuffle    bool // is shuffle group
+type Group struct {
+	ctr          container
+	NeedEval     bool // need to projection the aggregate column
 	PreAllocSize uint64
-	NeedEval     bool         // need to projection the aggregate column
-	Exprs        []*plan.Expr // group Expressions
-	Types        []types.Type
-	Aggs         []aggexec.AggFuncExecExpression
+
+	Exprs []*plan.Expr // group Expressions
+	Aggs  []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (group *Group) GetOperatorBase() *vm.OperatorBase {
+	return &group.OperatorBase
 }
 
-func (arg *Argument) AnyDistinctAgg() bool {
-	for _, agg := range arg.Aggs {
+func (group *Group) AnyDistinctAgg() bool {
+	for _, agg := range group.Aggs {
 		if agg.IsDistinct() {
 			return true
 		}
@@ -118,57 +124,51 @@ func (arg *Argument) AnyDistinctAgg() bool {
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Group](
+		func() *Group {
+			return &Group{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Group) {
+			*a = Group{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Group]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (group Group) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Group {
+	return reuse.Alloc[Group](nil)
 }
 
-func (arg *Argument) WithExprs(exprs []*plan.Expr) *Argument {
-	arg.Exprs = exprs
-	return arg
+func (group *Group) WithExprs(exprs []*plan.Expr) *Group {
+	group.Exprs = exprs
+	return group
 }
 
-func (arg *Argument) WithTypes(types []types.Type) *Argument {
-	arg.Types = types
-	return arg
+func (group *Group) WithAggsNew(aggs []aggexec.AggFuncExecExpression) *Group {
+	group.Aggs = aggs
+	return group
 }
 
-func (arg *Argument) WithAggsNew(aggs []aggexec.AggFuncExecExpression) *Argument {
-	arg.Aggs = aggs
-	return arg
-}
-
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (group *Group) Release() {
+	if group != nil {
+		reuse.Free[Group](group, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanHashMap()
-		ctr.cleanAggVectors()
-		ctr.cleanGroupVectors()
-		arg.ctr = nil
-	}
+func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) {
+	mp := proc.Mp()
+	group.ctr.cleanBatch(mp)
+	group.ctr.cleanHashMap()
+	group.ctr.cleanAggVectors()
+	group.ctr.cleanGroupVectors()
+	group.ctr.skipInitReusableMem = false
+
+	group.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

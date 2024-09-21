@@ -41,6 +41,8 @@ enum OpCode {
     OpGlobalCheckpoint = 2009;
     OpInterceptCommit  = 2010;
     OpCommitMerge      = 2011;
+    OpDiskDiskCleaner   = 2012;
+    OpReader = 2013;
 }
 
 // TNPingRequest ping request
@@ -84,9 +86,13 @@ message Batch {
 };
 
 message TableID {
-    uint64 db_id        = 1;
-    uint64 tb_id        = 2;
-    uint64 partition_id = 3;
+    uint64 db_id          = 1;
+    uint64 tb_id          = 2;
+    uint64 partition_id   = 3;
+    uint32 acc_id         = 4;
+    string db_name        = 5;
+    string tb_name        = 6;
+    uint32 primary_seqnum = 7;
 }
 
 // CN pull the log tail of table from TN.
@@ -362,6 +368,8 @@ message SchemaExtra {
     uint32 max_osize_merged_obj = 7;
     repeated MergeHint hints = 8;
     uint64 min_cn_merge_size = 9;
+    uint32 block_max_rows = 10;
+    uint32 object_max_blocks = 11;
 }
 
 // Int64Map mainly used in unit test
@@ -392,7 +400,7 @@ message MergeCommitEntry {
     repeated bytes merged_objs = 5;
     repeated bytes created_objs = 6;
     BlkTransferBooking booking = 7;
-    bytes booking_loc = 8;
+    repeated string booking_loc = 8;
     string err = 9;
 }
 

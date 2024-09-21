@@ -35,26 +35,26 @@ func handleRemoveRemoteLockTable(
 	sender requestSender) (Result, error) {
 	infos := strings.Split(parameter, "-")
 	if len(infos) != 3 {
-		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
 	}
 
 	accountID, err := format.ParseStringUint32(infos[0])
 	if err != nil {
-		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
 	}
 
 	tableID, err := format.ParseStringUint64(infos[1])
 	if err != nil {
-		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
 	}
 
 	version, err := format.ParseStringUint64(infos[2])
 	if err != nil {
-		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
 	}
 
-	qt := proc.QueryClient
-	mc := clusterservice.GetMOCluster()
+	qt := proc.GetQueryClient()
+	mc := clusterservice.GetMOCluster(qt.ServiceID())
 	var addrs []string
 	mc.GetCNServiceWithoutWorkingState(
 		clusterservice.NewSelector(),
@@ -95,21 +95,21 @@ func handleGetLatestBind(
 	sender requestSender) (Result, error) {
 	infos := strings.Split(parameter, "-")
 	if len(infos) != 2 {
-		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s, use account_id + '-' + table_id", parameter)
 	}
 
 	accountID, err := format.ParseStringUint32(infos[0])
 	if err != nil {
-		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s, use account_id + '-' + table_id", parameter)
 	}
 
 	tableID, err := format.ParseStringUint64(infos[1])
 	if err != nil {
-		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s, use account_id + '-' + table_id", parameter)
 	}
 
-	qt := proc.QueryClient
-	mc := clusterservice.GetMOCluster()
+	qt := proc.GetQueryClient()
+	mc := clusterservice.GetMOCluster(qt.ServiceID())
 	var addr string
 	mc.GetTNService(
 		clusterservice.NewSelector(),

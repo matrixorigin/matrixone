@@ -16,12 +16,15 @@
 
 syntax = "proto3";
 package logservice;
+
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/logservice";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "metadata.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = false;
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 
 enum UpdateType {
   LeaseHolderIDUpdate = 0;
@@ -50,6 +53,8 @@ message CNStore {
   ConfigData ConfigData = 12;
   Resource Resource = 13 [(gogoproto.nullable) = false];
   int64 UpTime = 14;
+  string          ShardServiceAddress = 15;
+  string CommitID = 16;
 }
 
 message TNStore {
@@ -68,6 +73,7 @@ message TNStore {
   ConfigData ConfigData = 9;
   // QueryAddress is the address of the queryservice on tn
   string QueryAddress = 10;
+  string  ShardServiceAddress   = 11;
 }
 
 message LogStore {
@@ -128,6 +134,8 @@ message CNStoreHeartbeat {
   bool            GossipJoined       = 11;
   ConfigData      ConfigData         = 12;
   Resource        Resource           = 13 [(gogoproto.nullable) = false];
+  string  ShardServiceAddress   = 14;
+  string          CommitID           = 15;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -186,6 +194,7 @@ message TNStoreHeartbeat {
   ConfigData ConfigData = 8;
   // QueryAddress is the address of queryservice on tn
   string QueryAddress = 9;
+  string  ShardServiceAddress   = 10;
 };
 
 message RSMState {
@@ -498,6 +507,8 @@ message CNStoreInfo {
   ConfigData      ConfigData         = 13;
   Resource        Resource           = 14 [(gogoproto.nullable) = false];
   int64           UpTime             = 15;
+  string       ShardServiceAddress   = 16;
+  string          CommitID           = 17;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -523,6 +534,7 @@ message TNStoreInfo {
   ConfigData ConfigData = 8;
   // QueryAddress is the address of queryservice on tn
   string          QueryAddress       = 9;
+  string  ShardServiceAddress   = 10;
 }
 
 // TNState contains all TN details known to the HAKeeper.

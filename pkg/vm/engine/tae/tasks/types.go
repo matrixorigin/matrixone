@@ -34,7 +34,7 @@ type FuncT = func() error
 
 type TaskType uint16
 
-var taskIdAlloctor *common.IdAlloctor
+var taskIdAllocator *common.IdAllocator
 
 const (
 	NoopTask TaskType = iota
@@ -59,7 +59,7 @@ var taskNames = map[TaskType]string{
 func RegisterType(t TaskType, name string) {
 	_, ok := taskNames[t]
 	if ok {
-		panic(moerr.NewInternalErrorNoCtx("duplicate task type: %d, %s", t, name))
+		panic(moerr.NewInternalErrorNoCtxf("duplicate task type: %d, %s", t, name))
 	}
 	taskNames[t] = name
 }
@@ -69,13 +69,13 @@ func TaskName(t TaskType) string {
 }
 
 func init() {
-	taskIdAlloctor = common.NewIdAlloctor(1)
+	taskIdAllocator = common.NewIdAllocator(1)
 }
 
 type TxnTaskFactory = func(ctx *Context, txn txnif.AsyncTxn) (Task, error)
 
 func NextTaskId() uint64 {
-	return taskIdAlloctor.Alloc()
+	return taskIdAllocator.Alloc()
 }
 
 type Task interface {

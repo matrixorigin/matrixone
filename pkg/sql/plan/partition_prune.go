@@ -26,6 +26,10 @@ import (
 )
 
 func (builder *QueryBuilder) partitionPrune(nodeID int32) {
+	if builder.isPrepareStatement {
+		return
+	}
+
 	node := builder.qry.Nodes[nodeID]
 	for _, childID := range node.Children {
 		builder.partitionPrune(childID)
@@ -298,7 +302,7 @@ func (p *KeyHashPartitionPruner) getUsedPartition(cnfColEqVal map[string]*plan.E
 	if resVec.IsConstNull() {
 		return false, -1
 	} else {
-		return true, vector.MustFixedCol[int32](resVec)[0]
+		return true, vector.MustFixedColWithTypeCheck[int32](resVec)[0]
 	}
 }
 

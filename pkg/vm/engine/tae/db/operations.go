@@ -19,39 +19,18 @@ import (
 	fmt "fmt"
 	"time"
 
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 const (
 	OpPreCommit  = uint32(apipb.OpCode_OpPreCommit)
 	OpGetLogTail = uint32(apipb.OpCode_OpGetLogTail)
 )
-
-type Request interface {
-	CreateDatabaseReq |
-		DropDatabaseReq |
-		CreateRelationReq |
-		DropOrTruncateRelationReq |
-		UpdateConstraintReq |
-		WriteReq |
-		apipb.SyncLogTailReq
-}
-
-type Response interface {
-	CreateDatabaseResp |
-		DropDatabaseResp |
-		CreateRelationResp |
-		DropOrTruncateRelationResp |
-		UpdateConstraintResp |
-		WriteResp |
-		apipb.SyncLogTailResp
-}
 
 type RelationType uint8
 
@@ -66,15 +45,6 @@ type AccessInfo struct {
 	RoleID    uint32
 }
 
-type CreateDatabaseReq struct {
-	AccessInfo AccessInfo
-	Name       string
-	CreateSql  string
-	DatTyp     string
-	//Global unique, allocated by CN .
-	DatabaseId uint64
-}
-
 type FlushTable struct {
 	AccessInfo AccessInfo
 	DatabaseID uint64
@@ -86,6 +56,20 @@ func (m *FlushTable) MarshalBinary() ([]byte, error) {
 }
 
 func (m *FlushTable) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+type DiskCleaner struct {
+	Op    string
+	Key   string
+	Value string
+}
+
+func (m *DiskCleaner) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *DiskCleaner) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
@@ -147,60 +131,6 @@ func (m *FaultPoint) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
-type CreateDatabaseResp struct {
-	ID uint64
-}
-
-type DropDatabaseReq struct {
-	Name string
-	ID   uint64
-}
-
-type DropDatabaseResp struct {
-	ID uint64
-}
-
-type CreateRelationReq struct {
-	AccessInfo   AccessInfo
-	DatabaseID   uint64
-	DatabaseName string
-	Name         string
-	RelationId   uint64
-	Type         RelationType
-	Defs         []engine.TableDef
-}
-
-func (req *CreateRelationReq) String() string {
-	return fmt.Sprintf("%+v, %d-%s:%d-%s",
-		req.AccessInfo, req.DatabaseID, req.DatabaseName, req.RelationId, req.Name)
-}
-
-type UpdateConstraintReq struct {
-	TableId      uint64
-	TableName    string
-	DatabaseId   uint64
-	DatabaseName string
-	Constraint   []byte
-}
-
-type UpdateConstraintResp struct{}
-
-type CreateRelationResp struct {
-	ID uint64
-}
-
-type DropOrTruncateRelationReq struct {
-	IsDrop       bool
-	DatabaseID   uint64
-	DatabaseName string
-	Name         string
-	ID           uint64
-	NewId        uint64
-}
-
-type DropOrTruncateRelationResp struct {
-}
-
 type EntryType int32
 
 const (
@@ -236,18 +166,16 @@ type WriteReq struct {
 	PkCheck PKCheckType
 	//S3 object file name
 	FileName string
-	MetaLocs []string
+	// cn flushed data object stats
+	DataObjectStats []objectio.ObjectStats
 	//for delete on S3
-	DeltaLocs []string
+	TombstoneStats []objectio.ObjectStats
 	//tasks for loading primary keys or deleted row ids
 	Jobs []*tasks.Job
 	//loaded sorted primary keys or deleted row ids.
 	JobRes []*tasks.JobResult
 	//load context cancel function
 	Cancel context.CancelFunc
-}
-
-type WriteResp struct {
 }
 
 type InspectResp struct {
@@ -316,7 +244,7 @@ func (t *TraceSpan) UnmarshalBinary(data []byte) error {
 }
 
 type StorageUsageReq struct {
-	AccIds []int32
+	AccIds []int64
 }
 
 func (s *StorageUsageReq) MarshalBinary() ([]byte, error) {
@@ -358,17 +286,36 @@ type StorageUsageResp_V0 struct {
 	BlockEntries []*BlockMetaInfo
 }
 
-type StorageUsageResp struct {
+type StorageUsageResp_V1 struct {
 	Succeed bool
-	AccIds  []int32
+	AccIds  []int64
 	Sizes   []uint64
 	Magic   uint64
 }
 
-func (s *StorageUsageResp) MarshalBinary() ([]byte, error) {
+func (s *StorageUsageResp_V1) MarshalBinary() ([]byte, error) {
 	return s.Marshal()
 }
 
-func (s *StorageUsageResp) UnmarshalBinary(data []byte) error {
+func (s *StorageUsageResp_V1) UnmarshalBinary(data []byte) error {
+	return s.Unmarshal(data)
+}
+
+type StorageUsageResp_V2 struct {
+	Succeed bool
+	AccIds  []int64
+	Sizes   []uint64
+	Magic   uint64
+
+	ObjCnts []uint64
+	BlkCnts []uint64
+	RowCnts []uint64
+}
+
+func (s *StorageUsageResp_V2) MarshalBinary() ([]byte, error) {
+	return s.Marshal()
+}
+
+func (s *StorageUsageResp_V2) UnmarshalBinary(data []byte) error {
 	return s.Unmarshal(data)
 }

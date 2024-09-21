@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -29,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"github.com/matrixorigin/matrixone/pkg/util/protoc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -85,7 +86,7 @@ func TestRollback(t *testing.T) {
 func TestRollbackWithClosedTxn(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
-			return nil, moerr.NewTxnClosed(ctx, tc.txnID)
+			return nil, moerr.NewTxnClosed(ctx, tc.reset.txnID)
 		})
 
 		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
@@ -142,9 +143,10 @@ func TestCommitReadOnly(t *testing.T) {
 func TestCommitWithLockTables(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		r := runtime.DefaultRuntime()
-		runtime.SetupProcessLevelRuntime(r)
+		runtime.SetupServiceBasedRuntime("", r)
+		runtime.SetupServiceBasedRuntime("s1", r)
 
-		c := clusterservice.NewMOCluster(nil, time.Hour, clusterservice.WithDisableRefresh())
+		c := clusterservice.NewMOCluster("", nil, time.Hour, clusterservice.WithDisableRefresh())
 		defer c.Close()
 		r.SetGlobalVariables(runtime.ClusterService, c)
 
@@ -179,11 +181,11 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 			func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
 				s := ls[0]
 
-				_, err := s.Lock(ctx, tableID1, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
+				_, err := s.Lock(ctx, tableID1, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
 				assert.NoError(t, err)
-				_, err = s.Lock(ctx, tableID2, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
+				_, err = s.Lock(ctx, tableID2, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
 				assert.NoError(t, err)
-				_, err = s.Lock(ctx, tableID3, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
+				_, err = s.Lock(ctx, tableID3, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
 				assert.NoError(t, err)
 
 				ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
@@ -198,11 +200,11 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 				tc.lockService = s
 
 				// table 1 hold bind same as lockservice, commit failed, will removed
-				tc.AddLockTable(lock.LockTable{Table: tableID1, ServiceID: s.GetServiceID(), Version: 1})
+				tc.AddLockTable(lock.LockTable{Table: tableID1, ServiceID: s.GetServiceID(), Version: lta.GetVersion()})
 				// table 2 hold stale bind with lockservice, cannot remove bind in lockservice
 				tc.AddLockTable(lock.LockTable{Table: tableID2, ServiceID: s.GetServiceID(), Version: 0})
 				// table 3 is valid
-				tc.AddLockTable(lock.LockTable{Table: tableID3, ServiceID: s.GetServiceID(), Version: 1})
+				tc.AddLockTable(lock.LockTable{Table: tableID3, ServiceID: s.GetServiceID(), Version: lta.GetVersion()})
 
 				tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 				err = tc.Commit(ctx)
@@ -248,8 +250,8 @@ func TestMissingSenderWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(nil, nil, txn.TxnMeta{})
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	newTxnOperator("", nil, nil, txn.TxnMeta{})
 }
 
 func TestMissingTxnIDWillPanic(t *testing.T) {
@@ -259,8 +261,8 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{})
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	newTxnOperator("", nil, newTestTxnSender(), txn.TxnMeta{})
 }
 
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
@@ -270,8 +272,9 @@ func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	newTxnOperator(
+		"",
 		nil,
 		newTestTxnSender(),
 		txn.TxnMeta{ID: []byte{1}, SnapshotTS: timestamp.Timestamp{PhysicalTime: 1}},
@@ -414,15 +417,14 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		v, err := tc.Snapshot()
 		assert.NoError(t, err)
 
-		tc2, err := newTxnOperatorWithSnapshot(tc.sender, v)
-		assert.NoError(t, err)
+		tc2 := newTxnOperatorWithSnapshot(tc.logger, tc.sender, v)
 		assert.True(t, tc2.mu.txn.Mirror)
 
 		tc2.mu.txn.Mirror = false
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
-		assert.False(t, tc2.coordinator)
-		tc2.coordinator = true
-		assert.Equal(t, tc.options, tc2.options)
+		assert.False(t, tc2.opts.coordinator)
+		tc2.opts.coordinator = true
+		assert.Equal(t, tc.opts.options, tc2.opts.options)
 		assert.Equal(t, 1, len(tc2.mu.lockTables))
 	}, WithTxnReadyOnly(), WithTxnDisable1PCOpt())
 }
@@ -510,7 +512,7 @@ func TestWaitCommittedLogAppliedInRCMode(t *testing.T) {
 		time.Second,
 		func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
 			l := ls[0]
-			tw := NewTimestampWaiter()
+			tw := NewTimestampWaiter(util.GetLogger(""))
 			initTS := newTestTimestamp(1)
 			tw.NotifyLatestCommitTS(initTS)
 			runOperatorTestsWithOptions(
@@ -543,6 +545,109 @@ func TestWaitCommittedLogAppliedInRCMode(t *testing.T) {
 				WithLockService(l))
 		},
 		nil)
+}
+
+func TestCannotCommitRunningSQLTxn(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			defer func() {
+				if err := recover(); err != nil {
+					require.NotNil(t, err)
+				}
+			}()
+
+			tc.EnterRunSql()
+			_ = tc.Commit(ctx)
+		},
+	)
+}
+
+func TestCannotRollbackRunningSQLTxn(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			defer func() {
+				if err := recover(); err != nil {
+					require.NotNil(t, err)
+				}
+			}()
+
+			tc.EnterRunSql()
+			_ = tc.Rollback(ctx)
+		},
+	)
+}
+
+func TestEmptyLockSkipped(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			require.False(t, tc.LockSkipped(1, lock.LockMode_Exclusive))
+		},
+	)
+}
+
+func TestLockSkipped(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			require.True(t, tc.LockSkipped(1, lock.LockMode_Exclusive))
+			require.False(t, tc.LockSkipped(1, lock.LockMode_Shared))
+			require.False(t, tc.LockSkipped(2, lock.LockMode_Exclusive))
+		},
+		WithTxnSkipLock(
+			[]uint64{1},
+			[]lock.LockMode{lock.LockMode_Exclusive},
+		),
+	)
+}
+
+func TestHasLockTable(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			require.NoError(t, tc.AddLockTable(lock.LockTable{Table: 1}))
+			require.True(t, tc.HasLockTable(1))
+			require.False(t, tc.HasLockTable(2))
+		},
+	)
+}
+
+func TestBase(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			require.NotNil(t, tc.TxnRef())
+			require.Equal(t, tc.Txn().SnapshotTS, tc.SnapshotTS())
+			require.NotEqual(t, timestamp.Timestamp{}, tc.CreateTS())
+			require.Equal(t, txn.TxnStatus_Active, tc.Status())
+		},
+	)
 }
 
 func runOperatorTests(

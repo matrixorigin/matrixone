@@ -161,7 +161,7 @@ func TestReportZap_Discardable(t *testing.T) {
 	defer exportMux.Unlock()
 
 	// Setup a Runtime
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 
 	collector := newDummyCollectorCounter()
 	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithBatchProcessor(collector))
@@ -176,7 +176,7 @@ func TestReportZap_Discardable(t *testing.T) {
 	logutil.Info("discard log 1", logutil.Discardable())
 	require.Equal(t, int64(1), collector.discardCnt.Load())
 
-	logger := runtime.ProcessLevelRuntime().Logger().With(logutil.Discardable())
+	logger := runtime.ServiceRuntime("").Logger().With(logutil.Discardable())
 	logger.Info("discard log 2")
 	require.Equal(t, int64(2), collector.discardCnt.Load())
 	logger.Info("discard log 3")

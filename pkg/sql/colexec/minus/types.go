@@ -19,12 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Minus)
 
 const (
 	buildingHashMap = iota
@@ -32,45 +31,44 @@ const (
 	operatorEnd
 )
 
-type Argument struct {
-	ctr *container
+type Minus struct {
+	ctr container
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (minus *Minus) GetOperatorBase() *vm.OperatorBase {
+	return &minus.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Minus](
+		func() *Minus {
+			return &Minus{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Minus) {
+			*a = Minus{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Minus]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (minus Minus) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Minus {
+	return reuse.Alloc[Minus](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (minus *Minus) Release() {
+	if minus != nil {
+		reuse.Free[Minus](minus, nil)
 	}
 }
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// operator execution stage.
 	state int
@@ -82,14 +80,18 @@ type container struct {
 	bat *batch.Batch
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	mp := proc.Mp()
-	if arg.ctr != nil {
-		arg.ctr.cleanBatch(mp)
-		arg.ctr.cleanHashMap()
-		arg.ctr.FreeAllReg()
-		arg.ctr = nil
+func (minus *Minus) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	minus.ctr.state = buildingHashMap
+	if minus.ctr.bat != nil {
+		minus.ctr.bat.CleanOnlyData()
 	}
+	minus.ctr.cleanHashMap()
+}
+
+func (minus *Minus) Free(proc *process.Process, pipelineFailed bool, err error) {
+	mp := proc.Mp()
+	minus.ctr.cleanBatch(mp)
+	minus.ctr.cleanHashMap()
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

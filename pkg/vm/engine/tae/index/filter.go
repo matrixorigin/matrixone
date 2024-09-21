@@ -37,32 +37,37 @@ func DecodeBloomFilter(sf StaticFilter, data []byte) error {
 	return nil
 }
 
-func NewEmptyBinaryFuseFilter() StaticFilter {
-	return &binaryFuseFilter{}
+func NewEmptyBloomFilterWithType(t uint8) StaticFilter {
+	if t == BF {
+		return &bloomFilter{}
+	} else if t == PBF {
+		return &prefixBloomFilter{}
+	} else if t == HBF {
+		return &hybridFilter{}
+	} else {
+		return nil
+	}
 }
 
-type StaticFilter interface {
-	MayContainsKey(key []byte) (bool, error)
-	MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error)
-	MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool
-	Marshal() ([]byte, error)
-	Unmarshal(buf []byte) error
-	String() string
+type BloomFilter = bloomFilter
+
+func NewEmptyBloomFilter() StaticFilter {
+	return &bloomFilter{}
 }
 
 func hashV1(v []byte) uint64 {
 	return xxhash.Sum64(v)
 }
 
-type binaryFuseFilter struct {
+type bloomFilter struct {
 	xorfilter.BinaryFuse8
 }
 
-func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
-	return NewBinaryFuseFilterByVectors([]containers.Vector{data})
+func NewBloomFilter(data containers.Vector) (StaticFilter, error) {
+	return NewBloomFilter2([]containers.Vector{data})
 }
 
-func buildFuseFilter(hashes []uint64) (StaticFilter, error) {
+func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
 	var inner *xorfilter.BinaryFuse8
 	var err error
 	if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
@@ -75,12 +80,12 @@ func buildFuseFilter(hashes []uint64) (StaticFilter, error) {
 			}
 		}
 	}
-	sf := &binaryFuseFilter{}
+	sf := &bloomFilter{}
 	sf.BinaryFuse8 = *inner
 	return sf, nil
 }
 
-func NewBinaryFuseFilterByVectors(datas []containers.Vector) (StaticFilter, error) {
+func NewBloomFilter2(datas []containers.Vector) (StaticFilter, error) {
 	hashes := make([]uint64, 0)
 	op := func(v []byte, _ bool, _ int) error {
 		hash := hashV1(v)
@@ -96,12 +101,12 @@ func NewBinaryFuseFilterByVectors(datas []containers.Vector) (StaticFilter, erro
 	return buildFuseFilter(hashes)
 }
 
-func (filter *binaryFuseFilter) MayContainsKey(key []byte) (bool, error) {
+func (filter *bloomFilter) MayContainsKey(key []byte) (bool, error) {
 	hash := hashV1(key)
 	return filter.Contains(hash), nil
 }
 
-func (filter *binaryFuseFilter) MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool {
+func (filter *bloomFilter) MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool {
 	found := false
 	op := func(v []byte, _ bool, _ int) error {
 		hash := hashV1(v)
@@ -115,7 +120,7 @@ func (filter *binaryFuseFilter) MayContainsAny(keys *vector.Vector, lowerBound i
 	return found
 }
 
-func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error) {
+func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error) {
 	var positive *nulls.Bitmap
 
 	row := uint32(0)
@@ -137,10 +142,18 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool
 	return !positive.IsEmpty(), positive, nil
 }
 
-func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
+func (filter *bloomFilter) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
+	if err = filter.MarshalWithBuffer(&w); err != nil {
+		return
+	}
+	buf = w.Bytes()
+	return
+}
+
+func (filter *bloomFilter) MarshalWithBuffer(w *bytes.Buffer) (err error) {
 	if _, err = types.WriteValues(
-		&w,
+		w,
 		filter.Seed,
 		filter.SegmentLength,
 		filter.SegmentLengthMask,
@@ -148,14 +161,11 @@ func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
 		filter.SegmentCountLength); err != nil {
 		return
 	}
-	if _, err = w.Write(types.EncodeSlice(filter.Fingerprints)); err != nil {
-		return
-	}
-	buf = w.Bytes()
+	_, err = w.Write(types.EncodeSlice(filter.Fingerprints))
 	return
 }
 
-func (filter *binaryFuseFilter) Unmarshal(buf []byte) error {
+func (filter *bloomFilter) Unmarshal(buf []byte) error {
 	filter.Seed = types.DecodeFixed[uint64](buf[:8])
 	buf = buf[8:]
 	filter.SegmentLength = types.DecodeFixed[uint32](buf[:4])
@@ -170,8 +180,8 @@ func (filter *binaryFuseFilter) Unmarshal(buf []byte) error {
 	return nil
 }
 
-func (filter *binaryFuseFilter) String() string {
-	s := "<SF>\n"
+func (filter *bloomFilter) String() string {
+	s := "<BF>\n"
 	s += strconv.Itoa(int(filter.SegmentCount))
 	s += "\n"
 	s += strconv.Itoa(int(filter.SegmentCountLength))
@@ -182,6 +192,30 @@ func (filter *binaryFuseFilter) String() string {
 	s += "\n"
 	s += strconv.Itoa(len(filter.Fingerprints))
 	s += "\n"
-	s += "</SF>"
+	s += "</BF>"
 	return s
+}
+
+func (filter *bloomFilter) PrefixFnId(_ uint8) uint8 {
+	panic("not supported")
+}
+
+func (filter *bloomFilter) GetType() uint8 {
+	return BF
+}
+
+func (filter *bloomFilter) PrefixMayContainsKey(key []byte, prefixFnId uint8, level uint8) (bool, error) {
+	panic("not supported")
+}
+
+func (filter *bloomFilter) PrefixMayContainsAnyKeys(keys containers.Vector, prefixFnId uint8, level uint8) (bool, *nulls.Bitmap, error) {
+	panic("not supported")
+}
+
+func (filter *bloomFilter) PrefixMayContainsAny(keys *vector.Vector, lowerBound int, upperBound int, prefixFnId uint8, level uint8) bool {
+	panic("not supported")
+}
+
+func (filter *bloomFilter) MaxLevel() uint8 {
+	return 0
 }

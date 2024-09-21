@@ -54,7 +54,7 @@ Cannot change column 'deptno': used in a foreign key constraint 'c1' of table 'd
 alter table dept modify deptno int unsigned auto_increment;
 desc dept;
 Field    Type    Null    Key    Default    Extra    Comment
-deptno    INT UNSIGNED(32)    NO    PRI    null        
+deptno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
 dname    VARCHAR(15)    YES        null        部门名称
 loc    VARCHAR(50)    YES        null        部门所在位置
 select * from dept;
@@ -67,7 +67,7 @@ alter table dept modify deptno int unsigned auto_increment after dname;
 desc dept;
 Field    Type    Null    Key    Default    Extra    Comment
 dname    VARCHAR(15)    YES        null        部门名称
-deptno    INT UNSIGNED(32)    NO    PRI    null        
+deptno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
 loc    VARCHAR(50)    YES        null        部门所在位置
 select * from dept;
 dname    deptno    loc
@@ -147,7 +147,7 @@ alter table dept change deptno deptId int unsigned after dname;
 desc dept;
 Field    Type    Null    Key    Default    Extra    Comment
 dname    VARCHAR(15)    YES        null        部门名称
-deptid    INT UNSIGNED(32)    NO    PRI    null        
+deptId    INT UNSIGNED(32)    NO    PRI    null        
 loc    VARCHAR(50)    YES        null        部门所在位置
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
 internal error: Cannot add or update a child row: a foreign key constraint fails
@@ -296,25 +296,25 @@ INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 alter table dept ALTER COLUMN deptno SET DEFAULT 10;
 desc dept;
 Field    Type    Null    Key    Default    Extra    Comment
-deptno    INT UNSIGNED(32)    NO    PRI    null        部门编号
+deptno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    部门编号
 dname    VARCHAR(15)    YES        null        部门名称
 loc    VARCHAR(50)    YES        null        部门所在位置
 alter table dept ALTER COLUMN deptno SET INVISIBLE;
 desc dept;
 Field    Type    Null    Key    Default    Extra    Comment
-deptno    INT UNSIGNED(32)    NO    PRI    null        部门编号
+deptno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    部门编号
 dname    VARCHAR(15)    YES        null        部门名称
 loc    VARCHAR(50)    YES        null        部门所在位置
 alter table dept ALTER COLUMN deptno drop default;
 desc dept;
 Field    Type    Null    Key    Default    Extra    Comment
-deptno    INT UNSIGNED(32)    NO    PRI    null        部门编号
+deptno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    部门编号
 dname    VARCHAR(15)    YES        null        部门名称
 loc    VARCHAR(50)    YES        null        部门所在位置
 alter table dept rename column deptno to deptid;
 desc dept;
 Field    Type    Null    Key    Default    Extra    Comment
-deptid    INT UNSIGNED(32)    NO    PRI    null        部门编号
+deptid    INT UNSIGNED(32)    NO    PRI    null    auto_increment    部门编号
 dname    VARCHAR(15)    YES        null        部门名称
 loc    VARCHAR(50)    YES        null        部门所在位置
 select * from dept;

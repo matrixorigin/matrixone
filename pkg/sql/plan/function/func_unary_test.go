@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"testing"
@@ -35,20 +36,20 @@ import (
 type tcTemp struct {
 	typ    types.T
 	info   string
-	inputs []testutil.FunctionTestInput
-	expect testutil.FunctionTestResult
+	inputs []FunctionTestInput
+	expect FunctionTestResult
 }
 
 func initAbsTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test abs int64",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{-23, 9999999, -11, -99999, 9999999, -11, -99999, 9999999, -11, -99999, 9999999, -11, -99999},
 					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{23, 9999999, 11, 99999, 9999999, 11, 99999, 9999999, 11, 99999, 9999999, 11, 99999},
 				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
@@ -61,7 +62,7 @@ func TestAbs(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, AbsInt64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -74,7 +75,7 @@ func BenchmarkAbsInt64(b *testing.B) {
 
 	b.StartTimer()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, AbsInt64)
 		_ = fcTC.BenchMarkRun()
 	}
@@ -86,24 +87,24 @@ func initAbsArrayTestCase() []tcTemp {
 		{
 			info: "test abs float32 array",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(),
 					[][]float32{{-4, 9999999, -99999}, {0, -25, 49}},
 					[]bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{4, 9999999, 99999}, {0, 25, 49}},
 				[]bool{false, false}),
 		},
 		{
 			info: "test abs float64 array",
 			typ:  types.T_array_float64,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float64.ToType(),
 					[][]float64{{-4, 9999999, -99999}, {0, -25, 49}},
 					[]bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
 				[][]float64{{4, 9999999, 99999}, {0, 25, 49}},
 				[]bool{false, false}),
 		},
@@ -115,12 +116,12 @@ func TestAbsArray(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float32])
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float64])
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -132,8 +133,8 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 		{
 			info: "test normalize_l2 float32 array",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(),
 					[][]float32{
 						{},
 						{1, 2, 3, 4},
@@ -142,7 +143,7 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 						{1, 2, 3.6666666666666665, 4.666666666666666}},
 					[]bool{true, false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{
 					{},
 					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
@@ -155,8 +156,8 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 		{
 			info: "test normalize_l2 float64 array",
 			typ:  types.T_array_float64,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float64.ToType(),
 					[][]float64{
 						{},
 						{1, 2, 3, 4},
@@ -166,7 +167,7 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 					},
 					[]bool{true, false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
 				[][]float64{
 					{},
 					{0.18257418583505536, 0.3651483716701107, 0.5477225575051661, 0.7302967433402214},
@@ -184,12 +185,12 @@ func TestNormalizeL2Array(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float32])
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float64])
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -201,24 +202,24 @@ func initSummationArrayTestCase() []tcTemp {
 		{
 			info: "test summation float32 array",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(),
 					[][]float32{{1, 2, 3}, {4, 5, 6}},
 					[]bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{6, 15},
 				[]bool{false, false}),
 		},
 		{
 			info: "test summation float64 array",
 			typ:  types.T_array_float64,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float64.ToType(),
 					[][]float64{{1, 2, 3}, {4, 5, 6}},
 					[]bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{6, 15},
 				[]bool{false, false}),
 		},
@@ -230,12 +231,12 @@ func TestSummationArray(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float32])
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float64])
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -247,24 +248,24 @@ func initL1NormArrayTestCase() []tcTemp {
 		{
 			info: "test L1Norm float32 array",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(),
 					[][]float32{{1, 2, 3}, {4, 5, 6}},
 					[]bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{6, 15},
 				[]bool{false, false}),
 		},
 		{
 			info: "test L1Norm float64 array",
 			typ:  types.T_array_float64,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float64.ToType(),
 					[][]float64{{1, 2, 3}, {4, 5, 6}},
 					[]bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{6, 15},
 				[]bool{false, false}),
 		},
@@ -276,12 +277,12 @@ func TestL1NormArray(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float32])
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float64])
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -293,24 +294,24 @@ func initL2NormArrayTestCase() []tcTemp {
 		{
 			info: "test L2Norm float32 array",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(),
 					[][]float32{{1, 2, 3}, {4, 5, 6}},
 					[]bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{3.741657386773941, 8.774964387392123},
 				[]bool{false, false}),
 		},
 		{
 			info: "test L2Norm float64 array",
 			typ:  types.T_array_float64,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float64.ToType(),
 					[][]float64{{1, 2, 3}, {4, 5, 6}},
 					[]bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{3.741657386773941, 8.774964387392124},
 				[]bool{false, false}),
 		},
@@ -322,12 +323,12 @@ func TestL2NormArray(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float32])
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float64])
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -339,160 +340,160 @@ func initSubVectorTestCase() []tcTemp {
 		{
 			info: "2",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{1, 2, 3}},
 				[]bool{false}),
 		},
 		{
 			info: "2",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{2, 3}},
 				[]bool{false}),
 		},
 		{
 			info: "2",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{3}},
 				[]bool{false}),
 		},
 		{
 			info: "2",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{3}},
 				[]bool{false}),
 		},
 		{
 			info: "2",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{-2}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-2}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{2, 3}},
 				[]bool{false}),
 		},
 		{
 			info: "2",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{-3}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-3}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{1, 2, 3}},
 				[]bool{false}),
 		},
 		{
 			info: "2",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{}},
 				[]bool{false}),
 		},
 		{
 			info: "2",
 			typ:  types.T_array_float64,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
 				[][]float64{{1, 2, 3}},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{1}},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{1, 2}},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{1, 2, 3}},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{1, 2, 3}},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{-2}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-2}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{2, 3}},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_array_float32,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{-3}, []bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-3}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{{1, 2}},
 				[]bool{false}),
 		},
@@ -504,21 +505,21 @@ func TestSubVector(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
 			switch tc.info {
 			case "2":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float32])
+				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float32])
 			case "3":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float32])
+				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float32])
 			}
 		case types.T_array_float64:
 			switch tc.info {
 			case "2":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float64])
+				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float64])
 			case "3":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float64])
+				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float64])
 			}
 		}
 
@@ -531,12 +532,12 @@ func initAsciiStringTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test Ascii string",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"-23", "9999999", "-11"},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{45, 57, 45},
 				[]bool{false, false, false}),
 		},
@@ -549,7 +550,7 @@ func TestAsciiString(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, AsciiString)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -560,12 +561,12 @@ func initAsciiIntTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test Ascii Int",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{11},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{49},
 				[]bool{false}),
 		},
@@ -578,7 +579,7 @@ func TestAsciiInt(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, AsciiInt[int64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -589,12 +590,12 @@ func initAsciiUintTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test Ascii Int",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(),
 					[]uint64{11},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{49},
 				[]bool{false}),
 		},
@@ -607,7 +608,7 @@ func TestAsciiUint(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, AsciiUint[uint64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -618,12 +619,12 @@ func initBinTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test Bin Int",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint8.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint8.ToType(),
 					[]uint8{2, 4, 6, 8, 16, 32, 64, 128},
 					[]bool{false, false, false, false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"},
 				[]bool{false, false, false, false, false, false, false, false}),
 		},
@@ -636,7 +637,7 @@ func TestBin(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Bin[uint8])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -647,12 +648,12 @@ func initBinFloatTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test Bin Int",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_float32.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float32.ToType(),
 					[]float32{2.1111, 4.4261264, 6.1151275, 8.48484, 16.266, 32.3338787, 64.0000000, 128.26454},
 					[]bool{false, false, false, false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"},
 				[]bool{false, false, false, false, false, false, false, false}),
 		},
@@ -665,7 +666,7 @@ func TestBinFloat(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, BinFloat[float32])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -676,34 +677,34 @@ func initBitLengthFuncTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test BitLengthFunc",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{""},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{0},
 				[]bool{false}),
 		},
 		{
 			info: "test BitLengthFunc",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{""},
 					[]bool{true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{},
 				[]bool{true}),
 		},
 		{
 			info: "test BitLengthFunc",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"matrix", "origin", "=", "mo", " ", "\t", ""},
 					[]bool{false, false, false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{48, 48, 8, 16, 8, 8, 0},
 				[]bool{false, false, false, false, false, false, false}),
 		},
@@ -716,7 +717,7 @@ func TestBitLengthFunc(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, BitLengthFunc)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -727,12 +728,12 @@ func initCurrentDateTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test current date",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{types.Date(111)},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_date.ToType(), false,
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
 				[]types.Date{types.Date(111)},
 				[]bool{false}),
 		},
@@ -745,7 +746,7 @@ func TestCurrentDate(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, CurrentDate)
 		s, _ := fcTC.Run()
 		require.Equal(t, s, false)
@@ -756,12 +757,12 @@ func initDateToDateTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test date to date",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{types.Date(20040403), types.Date(20211003), types.Date(20200823)},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_date.ToType(), false,
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
 				[]types.Date{types.Date(20040403), types.Date(20211003), types.Date(20200823)},
 				[]bool{false, false, false}),
 		},
@@ -774,7 +775,7 @@ func TestDateToDate(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DateToDate)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -786,12 +787,12 @@ func initDatetimeToDateTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test datetime to date",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{t},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_date.ToType(), false,
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
 				[]types.Date{t.ToDate()},
 				[]bool{false}),
 		},
@@ -804,7 +805,7 @@ func TestDatetimeToDate(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DatetimeToDate)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -816,12 +817,12 @@ func initTimeToDateTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test datetime to date",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_time.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
 					[]types.Time{t},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_date.ToType(), false,
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
 				[]types.Date{t.ToDate()},
 				[]bool{false}),
 		},
@@ -834,7 +835,7 @@ func TestTimeToDate(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, TimeToDate)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -846,12 +847,12 @@ func initDateStringToDateTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test date string to date",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"2020-10-10"},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_date.ToType(), false,
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
 				[]types.Date{t.ToDate()},
 				[]bool{false}),
 		},
@@ -864,7 +865,7 @@ func TestDateStringToDate(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DateStringToDate)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -875,12 +876,12 @@ func initDateToDayTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test date to date",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{types.Date(20040403), types.Date(20211003), types.Date(20200823)},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{5, 6, 23},
 				[]bool{false, false, false}),
 		},
@@ -893,7 +894,7 @@ func TestDateToDay(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DateToDay)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -904,12 +905,12 @@ func initDatetimeToDayTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test date to date",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{types.Datetime(20040403), types.Datetime(20211003), types.Datetime(20200823)},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{1, 1, 1},
 				[]bool{false, false, false}),
 		},
@@ -922,7 +923,7 @@ func TestDatetimeToDay(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DatetimeToDay)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -933,12 +934,12 @@ func initDayOfYearTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test date of Year",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{types.Date(20040403), types.Date(20211003), types.Date(20200823)},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint16.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint16.ToType(), false,
 				[]uint16{278, 311, 358},
 				[]bool{false, false, false}),
 		},
@@ -951,7 +952,7 @@ func TestDayOfYear(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DayOfYear)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -962,12 +963,12 @@ func initEmptyTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test date of Year",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_char.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_char.ToType(),
 					[]string{"", "sdfsdf", ""},
 					[]bool{false, false, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
 				[]bool{true, false, false},
 				[]bool{false, false, true}),
 		},
@@ -980,7 +981,7 @@ func TestEmpty(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Empty)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -991,12 +992,12 @@ func initJsonQuoteTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test json quote",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"key:v", "sdfsdf", ""},
 					[]bool{false, false, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_json.ToType(), false,
+			expect: NewFunctionTestResult(types.T_json.ToType(), false,
 				[]string{"\f\u0005key:v", "\f\u0006sdfsdf", ""},
 				[]bool{false, false, true}),
 		},
@@ -1009,7 +1010,7 @@ func TestJsonQuote(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, JsonQuote)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -1020,12 +1021,12 @@ func initJsonUnquoteTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test json unquote",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{`"hello"`, `"world"`, `""`},
 					[]bool{false, false, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"hello", "world", ""},
 				[]bool{false, false, true}),
 		},
@@ -1038,7 +1039,7 @@ func TestJsonUnquote(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, JsonUnquote)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -1050,7 +1051,7 @@ func TestLoadFile(t *testing.T) {
 	proc := testutil.NewProc()
 	ctx := context.Background()
 	filepath := dir + "test"
-	fs, readPath, err := fileservice.GetForETL(ctx, proc.FileService, filepath)
+	fs, readPath, err := fileservice.GetForETL(ctx, proc.Base.FileService, filepath)
 	assert.Nil(t, err)
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: readPath,
@@ -1072,12 +1073,12 @@ func TestLoadFile(t *testing.T) {
 	testCases := []tcTemp{
 		{
 			info: "test load file",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{filepath},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"12345678"},
 				[]bool{false}),
 		},
@@ -1085,7 +1086,7 @@ func TestLoadFile(t *testing.T) {
 
 	// do the test work.
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, LoadFile)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -1096,12 +1097,12 @@ func initMoMemoryUsageTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test mo memory usage",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{""},
 					[]bool{true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{""},
 				[]bool{true}),
 		},
@@ -1114,7 +1115,7 @@ func TestMoMemoryUsage(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, MoMemUsage)
 		_, _ = fcTC.Run()
 		require.Error(t, moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
@@ -1127,7 +1128,7 @@ func TestMoEnableMemoryUsage(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, MoEnableMemUsageDetail)
 		_, _ = fcTC.Run()
 		require.Error(t, moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
@@ -1140,7 +1141,7 @@ func TestMoDisableMemoryUsage(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, MoDisableMemUsageDetail)
 		_, _ = fcTC.Run()
 		require.Error(t, moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
@@ -1151,12 +1152,12 @@ func initSpaceTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test space",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(),
 					[]uint64{1, 2, 3, 0},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{" ", "  ", "   ", ""},
 				[]bool{false, false, false}),
 		},
@@ -1169,7 +1170,7 @@ func TestSpace(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, SpaceNumber[uint64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -1185,60 +1186,60 @@ func initToTimeCase() []tcTemp {
 		{
 			info: "test to time",
 			typ:  types.T_date,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{d1.ToDate()},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_time.ToType(), false,
+			expect: NewFunctionTestResult(types.T_time.ToType(), false,
 				[]types.Time{types.TimeFromClock(false, 0, 0, 0, 0)},
 				[]bool{false}),
 		},
 		{
 			info: "test to time",
 			typ:  types.T_datetime,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d2},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_time.ToType(), false,
+			expect: NewFunctionTestResult(types.T_time.ToType(), false,
 				[]types.Time{types.TimeFromClock(false, 16, 22, 44, 0)},
 				[]bool{false}),
 		},
 		{
 			info: "test to time",
 			typ:  types.T_int64,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{20221212112233},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_time.ToType(), false,
+			expect: NewFunctionTestResult(types.T_time.ToType(), false,
 				[]types.Time{types.TimeFromClock(false, 2022121211, 22, 33, 0)},
 				[]bool{false}),
 		},
 		{
 			info: "test to time",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"2022-01-01 16:22:44.1235"},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_time.ToType(), false,
+			expect: NewFunctionTestResult(types.T_time.ToType(), false,
 				[]types.Time{types.TimeFromClock(false, 16, 22, 44, 123500)},
 				[]bool{false}),
 		},
 		//{
 		//	info: "test to time",
 		//	typ:  types.T_decimal128,
-		//	inputs: []testutil.FunctionTestInput{
-		//		testutil.NewFunctionTestInput(types.T_decimal128.ToType(),
+		//	inputs: []FunctionTestInput{
+		//		NewFunctionTestInput(types.T_decimal128.ToType(),
 		//			[]types.Decimal128{d3},
 		//			[]bool{false}),
 		//	},
-		//	expect: testutil.NewFunctionTestResult(types.T_time.ToType(), false,
+		//	expect: NewFunctionTestResult(types.T_time.ToType(), false,
 		//		[]types.Time{types.TimeFromClock(false, 2022121211, 22, 33, 444000)},
 		//		[]bool{false}),
 		//},
@@ -1251,22 +1252,22 @@ func TestToTime(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_date:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DateToTime)
 		case types.T_datetime:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DatetimeToTime)
 		case types.T_int64:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, Int64ToTime)
 		case types.T_varchar:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DateStringToTime)
 			//case types.T_decimal128:
-			//	fcTC = testutil.NewFunctionTestCase(proc,
+			//	fcTC = NewFunctionTestCase(proc,
 			//		tc.inputs, tc.expect, Decimal128ToTime)
 		}
 		s, info := fcTC.Run()
@@ -1282,36 +1283,36 @@ func initToTimestampCase() []tcTemp {
 		{
 			info: "test to timestamp",
 			typ:  types.T_date,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{d1.ToDate()},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_timestamp.ToType(), false,
+			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
 				[]types.Timestamp{types.FromClockZone(time.Local, 2022, 1, 1, 0, 0, 0, 0)},
 				[]bool{false}),
 		},
 		{
 			info: "test to timestamp",
 			typ:  types.T_datetime,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d2},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_timestamp.ToType(), false,
+			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
 				[]types.Timestamp{types.FromClockZone(time.Local, 2022, 1, 1, 0, 0, 0, 0)},
 				[]bool{false}),
 		},
 		{
 			info: "test to timestamp",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"2022-01-01"},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_timestamp.ToType(), false,
+			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
 				[]types.Timestamp{types.FromClockZone(time.Local, 2022, 1, 1, 0, 0, 0, 0)},
 				[]bool{false}),
 		},
@@ -1324,16 +1325,16 @@ func TestToTimeStamp(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_date:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DateToTimestamp)
 		case types.T_datetime:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DatetimeToTimestamp)
 		case types.T_varchar:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DateStringToTimestamp)
 		}
 		s, info := fcTC.Run()
@@ -1345,27 +1346,27 @@ func TestValues(t *testing.T) {
 	testCases := []tcTemp{
 		{
 			info: "values(col_int8)",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int8.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int8.ToType(),
 					[]int8{-23}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
 				[]int8{-23}, []bool{false}),
 		},
 		{
 			info: "values(col_uint8)",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint8.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint8.ToType(),
 					[]uint8{23, 24, 25}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{23, 24, 25}, []bool{false}),
 		},
 	}
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Values)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -1380,24 +1381,24 @@ func initHourTestCase() []tcTemp {
 		{
 			info: "test hour",
 			typ:  types.T_datetime,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d1},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{10},
 				[]bool{false}),
 		},
 		{
 			info: "test hour",
 			typ:  types.T_timestamp,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_timestamp.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(),
 					[]types.Timestamp{d2},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{1},
 				[]bool{false}),
 		},
@@ -1410,13 +1411,13 @@ func TestHour(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_datetime:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DatetimeToHour)
 		case types.T_timestamp:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, TimestampToHour)
 		}
 		s, info := fcTC.Run()
@@ -1432,24 +1433,24 @@ func initMinuteTestCase() []tcTemp {
 		{
 			info: "test hour",
 			typ:  types.T_datetime,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d1},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{20},
 				[]bool{false}),
 		},
 		{
 			info: "test hour",
 			typ:  types.T_timestamp,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_timestamp.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(),
 					[]types.Timestamp{d2},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{1},
 				[]bool{false}),
 		},
@@ -1462,13 +1463,13 @@ func TestMinute(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_datetime:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DatetimeToMinute)
 		case types.T_timestamp:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, TimestampToMinute)
 		}
 		s, info := fcTC.Run()
@@ -1484,24 +1485,24 @@ func initSecondTestCase() []tcTemp {
 		{
 			info: "test hour",
 			typ:  types.T_datetime,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d1},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{0},
 				[]bool{false}),
 		},
 		{
 			info: "test hour",
 			typ:  types.T_timestamp,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_timestamp.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(),
 					[]types.Timestamp{d2},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{8},
 				[]bool{false}),
 		},
@@ -1514,13 +1515,13 @@ func TestSecond(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_datetime:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DatetimeToSecond)
 		case types.T_timestamp:
-			fcTC = testutil.NewFunctionTestCase(proc,
+			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, TimestampToSecond)
 		}
 		s, info := fcTC.Run()
@@ -1533,12 +1534,12 @@ func initBinaryTestCase() []tcTemp {
 		{
 			info: "test hour",
 			typ:  types.T_datetime,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"hello"},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_binary.ToType(), false,
+			expect: NewFunctionTestResult(types.T_binary.ToType(), false,
 				[]string{"hello"},
 				[]bool{false}),
 		},
@@ -1551,7 +1552,7 @@ func TestBinary(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Binary)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -1562,34 +1563,34 @@ func initHexStringTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test hex string",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"a", "", "255", ""},
 					[]bool{false, false, false, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"61", "", "323535", ""},
 				[]bool{false, false, false, true}),
 		},
 		{
 			//TODO: Verify the multi-row case: original code:https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/hex_test.go#L58
 			info: "test hex string - multirow",
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{"Hello", "Gopher!"},
 				[]bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"48656c6c6f", "476f7068657221"},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"48656C6C6F", "476F7068657221"},
 				[]bool{false, false}),
 		},
 		{
 			info: "test encode - string to hex",
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{"", "abc", "a\nb", `a\nb`, "a\"b"},
 				[]bool{false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"", "616263", "610a62", "615c6e62", "612262"},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", "616263", "610A62", "615C6E62", "612262"},
 				[]bool{false, false, false, false, false}),
 		},
 	}
@@ -1600,7 +1601,7 @@ func TestHexString(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexString)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HexString)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -1610,20 +1611,20 @@ func initHexInt64TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test hex int64",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{255, 231323423423421, 0}, []bool{false, false, true}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{255, 231323423423421, 0}, []bool{false, false, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"FF", "D2632E7B3BBD", ""},
 				[]bool{false, false, true}),
 		},
 		{
 			//TODO: Verify the multi-row case. Original code: https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/hex_test.go#L116
 			info: "test hex int64 - multirow",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{123, 234, 345}, []bool{false, false, false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{123, 234, 345}, []bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"7B", "EA", "159"},
 				[]bool{false, false, false}),
 		},
@@ -1635,7 +1636,7 @@ func TestHexInt64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexInt64)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HexInt64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -1688,10 +1689,10 @@ func initHexArrayTestCase() []tcTemp {
 
 		testInputs = append(testInputs, tcTemp{
 			info: c.info,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), c.data, []bool{}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), c.data, []bool{}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_text.ToType(), false, c.wants, []bool{}),
+			expect: NewFunctionTestResult(types.T_text.ToType(), false, c.wants, []bool{}),
 		})
 	}
 
@@ -1699,10 +1700,10 @@ func initHexArrayTestCase() []tcTemp {
 
 		testInputs = append(testInputs, tcTemp{
 			info: c.info,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), c.data, []bool{}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float64.ToType(), c.data, []bool{}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_text.ToType(), false, c.wants, []bool{}),
+			expect: NewFunctionTestResult(types.T_text.ToType(), false, c.wants, []bool{}),
 		})
 	}
 
@@ -1715,7 +1716,7 @@ func TestHexArray(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexArray)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HexArray)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -1725,12 +1726,12 @@ func initMd5TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test encode - string to md5",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"", "abc", "abcd", "abc\b", "abc\"d", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 					[]bool{false, false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false,
 				[]string{
 					"d41d8cd98f00b204e9800998ecf8427e",
 					"900150983cd24fb0d6963f7d28e17f72",
@@ -1749,7 +1750,7 @@ func TestMd5(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Md5)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Md5)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -1759,30 +1760,30 @@ func initUnhexTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test unhex",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"616263", "610a62", "615c6e62", "612262", "e4bda0e5a5bd", "invalid", "", ""},
 					[]bool{false, false, false, false, false, false, false, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false,
 				[]string{"abc", "a\nb", `a\nb`, "a\"b", "你好", "", "", ""},
 				[]bool{false, false, false, false, false, true, false, true}),
 		},
 		{
 			info: "test encode - hex to blob",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"", "616263", "610a62", "615c6e62", "612262"},
 					[]bool{false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false,
 				[]string{"", "abc", "a\nb", `a\nb`, "a\"b"},
 				[]bool{false, false, false, false, false}),
 		},
 		{
 			info: "test encode -  hex to blob(array_float32)",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{
 						"7e98b23e9e10383b2f41133f",
 						"0363733ff13e0b3f7aa39d3e",
@@ -1791,7 +1792,7 @@ func initUnhexTestCase() []tcTemp {
 					},
 					[]bool{false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false, []string{
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, []string{
 				functionUtil.QuickBytesToStr(types.ArrayToBytes([]float32{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669})),
 				functionUtil.QuickBytesToStr(types.ArrayToBytes([]float32{0.95072953, 0.54392913, 0.30788785})),
 				functionUtil.QuickBytesToStr(types.ArrayToBytes([]float32{0.98972348, 0.61145728, 0.27879944})),
@@ -1800,12 +1801,12 @@ func initUnhexTestCase() []tcTemp {
 		},
 		{
 			info: "test encode - hex to blob(array_float64)",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{
 					"000000c00f53d63f000000c01302673f000000e02568e23f",
 				}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false, []string{
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, []string{
 				functionUtil.QuickBytesToStr(types.ArrayToBytes([]float64{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669})),
 			}, []bool{false}),
 		},
@@ -1817,7 +1818,7 @@ func TestUnhex(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Unhex)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Unhex)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -1842,10 +1843,10 @@ func initToBase64TestCase() []tcTemp {
 
 		testInputs = append(testInputs, tcTemp{
 			info: c.info,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(), c.data, []bool{}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), c.data, []bool{}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_text.ToType(), false, c.wants, []bool{}),
+			expect: NewFunctionTestResult(types.T_text.ToType(), false, c.wants, []bool{}),
 		})
 	}
 
@@ -1858,7 +1859,7 @@ func TestToBase64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, ToBase64)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, ToBase64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -1884,10 +1885,10 @@ func initFromBase64TestCase() []tcTemp {
 
 		testInputs = append(testInputs, tcTemp{
 			info: c.info,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(), c.data, []bool{}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), c.data, []bool{}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false, c.wants, []bool{}),
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, c.wants, []bool{}),
 		})
 	}
 
@@ -1900,7 +1901,7 @@ func TestFromBase64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, FromBase64)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, FromBase64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -1910,13 +1911,13 @@ func initBlobLengthTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test length blob",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_blob.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_blob.ToType(),
 					//TODO: verify: Passing String instead of []byte. Original Code: https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/length_test.go#L117
 					[]string{"12345678", ""},
 					[]bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{8, 0},
 				[]bool{false, false}),
 		},
@@ -1928,7 +1929,7 @@ func TestBlobLength(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Length)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Length)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -1939,20 +1940,20 @@ func initLengthTestCase() []tcTemp {
 		{
 			//TODO: verify if makevector can be represented like this. Original Code: https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/length_test.go#L51
 			info:   "test length varchar",
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"abcdefghijklm"}, []bool{false})},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"abcdefghijklm"}, []bool{false})},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
 		},
 		{
 			//TODO: verify if makevector can be represented like this. Original Code: https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/length_test.go#L58
 			info:   "test length char",
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_char.ToType(), []string{"abcdefghijklm"}, []bool{false})},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_char.ToType(), []string{"abcdefghijklm"}, []bool{false})},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
 		},
 		{
 			//TODO: Previously T_Text was not added. Original code: https://github.com/m-schen/matrixone/blob/d2f81f4b9d843ecb749fa0277332b4150e1fd87f/pkg/sql/plan/function/builtin/unary/length_test.go#L71
 			info:   "test length text",
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_text.ToType(), []string{"abcdefghijklm"}, []bool{false})},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{"abcdefghijklm"}, []bool{false})},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{13}, []bool{false}),
 		},
 	}
 }
@@ -1962,7 +1963,7 @@ func TestLength(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Length)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Length)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -1974,7 +1975,7 @@ func initLengthUTF8TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test lengthutf8",
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{
 					"abc",
 					"",
@@ -2035,7 +2036,7 @@ func initLengthUTF8TestCase() []tcTemp {
 					false,
 					false,
 				})},
-			expect: testutil.NewFunctionTestResult(types.T_uint64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
 				[]uint64{
 					3,
 					0,
@@ -2105,7 +2106,7 @@ func TestLengthUTF8(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, LengthUTF8)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, LengthUTF8)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2117,11 +2118,11 @@ func initLtrimTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test ltrim",
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{" 123", "  123", "123 ", " 8 ", " 8 a ", ""},
 				[]bool{false, false, false, false, false, true},
 			)},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"123", "123", "123 ", "8 ", "8 a ", ""},
 				[]bool{false, false, false, false, false, true},
 			),
@@ -2134,7 +2135,7 @@ func TestLtrim(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Ltrim)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Ltrim)
 
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -2147,7 +2148,7 @@ func initRtrimTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test rtrim",
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{
 					"barbar   ",
 					"MySQL",
@@ -2323,7 +2324,7 @@ func initRtrimTestCase() []tcTemp {
 					false,
 					false,
 				})},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{
 					"barbar",
 					"MySQL",
@@ -2508,7 +2509,7 @@ func TestRtrim(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Rtrim)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Rtrim)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2521,7 +2522,7 @@ func initReverseTestCase() []tcTemp {
 		{
 			//TODO: How to handle ScalarNulls. Original code: https://github.com/m-schen/matrixone/blob/6715c45c2f6e2b15808b10a21fafc17d03a8ae0b/pkg/sql/plan/function/builtin/unary/reverse_test.go#L75
 			info: "test reverse",
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{
 					"abc",
 					"abcd",
@@ -2560,7 +2561,7 @@ func initReverseTestCase() []tcTemp {
 					false,
 					false,
 				})},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{
 					"cba",
 					"dcba",
@@ -2608,7 +2609,7 @@ func TestReverse(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Reverse)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Reverse)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2625,12 +2626,12 @@ func initOctUint8TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test oct uint8",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint8.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint8.ToType(),
 					[]uint8{12, 99, 100, 255},
 					[]bool{false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+			expect: NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{e1, e2, e3, e4},
 				[]bool{false, false, false, false}),
 		},
@@ -2642,7 +2643,7 @@ func TestOctUint8(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint8])
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint8])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2660,12 +2661,12 @@ func initOctUint16TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test oct uint16",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint16.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint16.ToType(),
 					[]uint16{12, 99, 100, 255, 1024, 10000, 65535},
 					[]bool{false, false, false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+			expect: NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{e1, e2, e3, e4, e5, e6, e7},
 				[]bool{false, false, false, false, false, false, false}),
 		},
@@ -2677,7 +2678,7 @@ func TestOctUint16(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint16])
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint16])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2696,12 +2697,12 @@ func initOctUint32TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test oct uint32",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint32.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint32.ToType(),
 					[]uint32{12, 99, 100, 255, 1024, 10000, 65535, 4294967295},
 					[]bool{false, false, false, false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+			expect: NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{e1, e2, e3, e4, e5, e6, e7, e8},
 				[]bool{false, false, false, false, false, false, false, false}),
 		},
@@ -2713,7 +2714,7 @@ func TestOctUint32(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint32])
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint32])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2733,12 +2734,12 @@ func initOctUint64TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test oct uint64",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(),
 					[]uint64{12, 99, 100, 255, 1024, 10000, 65535, 4294967295, 18446744073709551615},
 					[]bool{false, false, false, false, false, false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+			expect: NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{e1, e2, e3, e4, e5, e6, e7, e8, e9},
 				[]bool{false, false, false, false, false, false, false, false, false}),
 		},
@@ -2750,7 +2751,7 @@ func TestOctUint64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint64])
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2764,12 +2765,12 @@ func initOctInt8TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test oct int8",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int8.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int8.ToType(),
 					[]int8{-128, -1, 127},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+			expect: NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{e1, e2, e3},
 				[]bool{false, false, false}),
 		},
@@ -2781,7 +2782,7 @@ func TestOctInt8(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int8])
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int8])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2793,12 +2794,12 @@ func initOctInt16TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test oct int16",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int16.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int16.ToType(),
 					[]int16{-32768},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+			expect: NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{e1},
 				[]bool{false}),
 		},
@@ -2810,7 +2811,7 @@ func TestOctInt16(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int16])
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int16])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2822,12 +2823,12 @@ func initOctInt32TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test oct int32",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int32.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int32.ToType(),
 					[]int32{-2147483648},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+			expect: NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{e1},
 				[]bool{false}),
 		},
@@ -2839,7 +2840,7 @@ func TestOctInt32(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int32])
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int32])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2851,12 +2852,12 @@ func initOctInt64TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test oct int64",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{-9223372036854775808},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+			expect: NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{e1},
 				[]bool{false}),
 		},
@@ -2868,12 +2869,172 @@ func TestOctInt64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int64])
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 	//TODO: I am excluding scalar testcase, as per our last discussion on WeCom: https://github.com/m-schen/matrixone/blob/0a48ec5488caff6fd918ad558ebe054eba745be8/pkg/sql/plan/function/builtin/unary/oct_test.go#L176
 	//TODO: Previous OctFloat didn't have testcase. Should we add new testcases?
+}
+
+func TestDecode(t *testing.T) {
+	testCases := initDecodeTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Decode)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initDecodeTestCase() []tcTemp {
+	regularCases := []struct {
+		info  string
+		data  []string
+		keys  []string
+		wants []string
+	}{
+		{
+			info: "test decode - simple text",
+			data: []string{
+				"",
+				"MatrixOne",
+				"MatrixOne",
+				"MatrixOne123",
+				"MatrixOne#%$%^",
+				"MatrixOne",
+				"分布式データベース",
+				"MatrixOne",
+				"MatrixOne数据库",
+			},
+			keys: []string{
+				"",
+				"1234567890123456",
+				"asdfjasfwefjfjkj",
+				"123456789012345678901234",
+				"*^%YTu1234567",
+				"",
+				"pass1234@#$%%^^&",
+				"密匙",
+				"数据库passwd12345667",
+			},
+			wants: []string{
+				"",
+				"973F9E44B6330489C7",
+				"BDE957D76C42800E16",
+				"928248DD2211D7DB886AD0FE",
+				"A5A0BE100EB06512E4422A51DC9C",
+				"549D65E48BD9A29CE9",
+				"D1D6913ED82E228022A08CD2DCB8869118819FECFE2008176625BB",
+				"6B406CBF644FCB9BCA",
+				"34B8B67B8C4EDF31009142BC6346E3C32B0C",
+			},
+		},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(regularCases))
+	for _, c := range regularCases {
+		realWants := make([]string, len(c.wants))
+		for i, want := range c.wants {
+			bytes, err := hex.DecodeString(want)
+			if err != nil {
+				fmt.Printf("decode string error: %v", err)
+			}
+
+			realWants[i] = string(bytes)
+		}
+		testInputs = append(testInputs, tcTemp{
+			info: c.info,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_blob.ToType(), c.data, []bool{}),
+				NewFunctionTestInput(types.T_varchar.ToType(), c.keys, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, realWants, []bool{}),
+		})
+	}
+
+	return testInputs
+}
+
+func TestEncode(t *testing.T) {
+	testCases := initEncodeTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Encode)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initEncodeTestCase() []tcTemp {
+	regularCases := []struct {
+		info  string
+		data  []string
+		keys  []string
+		wants []string
+	}{
+		{
+			info: "test encode - simple text",
+			data: []string{
+				"",
+				"MatrixOne",
+				"MatrixOne",
+				"MatrixOne123",
+				"MatrixOne#%$%^",
+				"MatrixOne",
+				"分布式データベース",
+				"MatrixOne",
+				"MatrixOne数据库",
+			},
+			keys: []string{
+				"",
+				"1234567890123456",
+				"asdfjasfwefjfjkj",
+				"123456789012345678901234",
+				"*^%YTu1234567",
+				"",
+				"pass1234@#$%%^^&",
+				"密匙",
+				"数据库passwd12345667",
+			},
+			wants: []string{
+				"",
+				"973F9E44B6330489C7",
+				"BDE957D76C42800E16",
+				"928248DD2211D7DB886AD0FE",
+				"A5A0BE100EB06512E4422A51DC9C",
+				"549D65E48BD9A29CE9",
+				"D1D6913ED82E228022A08CD2DCB8869118819FECFE2008176625BB",
+				"6B406CBF644FCB9BCA",
+				"34B8B67B8C4EDF31009142BC6346E3C32B0C",
+			},
+		},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(regularCases))
+	for _, c := range regularCases {
+		realWants := make([]string, len(c.wants))
+		for i, want := range c.wants {
+			bytes, err := hex.DecodeString(want)
+			if err != nil {
+				fmt.Printf("decode string error: %v", err)
+			}
+
+			realWants[i] = string(bytes)
+		}
+		testInputs = append(testInputs, tcTemp{
+			info: c.info,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), c.data, []bool{}),
+				NewFunctionTestInput(types.T_varchar.ToType(), c.keys, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, realWants, []bool{}),
+		})
+	}
+
+	return testInputs
 }
 
 // Month
@@ -2885,12 +3046,12 @@ func initDateToMonthTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test date to month",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{d1, d2, d3},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{4, 8, 1},
 				[]bool{false, false, false}),
 		},
@@ -2902,7 +3063,7 @@ func TestDateToMonth(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToMonth)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToMonth)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2915,12 +3076,12 @@ func initDateTimeToMonthTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test datetime to month",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d1, d2, d3},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{4, 8, 1},
 				[]bool{false, false, false}),
 		},
@@ -2932,7 +3093,7 @@ func TestDateTimeToMonth(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToMonth)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToMonth)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2942,12 +3103,12 @@ func initDateStringToMonthTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test datestring to month",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"2014-04-03", "2009-11-03", "2012-07-03", "2012-02-03 18:23:15"},
 					[]bool{false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{4, 11, 7, 2},
 				[]bool{false, false, false, false}),
 		},
@@ -2959,7 +3120,7 @@ func TestDateStringToMonth(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToMonth)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToMonth)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2975,12 +3136,12 @@ func initDateToYearTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test date to year",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{d1, d2, d3},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{2004, 2014, 2008},
 				[]bool{false, false, false}),
 		},
@@ -2992,7 +3153,7 @@ func TestDateToYear(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToYear)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToYear)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3005,12 +3166,12 @@ func initDateTimeToYearTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test datetime to year",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d1, d2, d3},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{2004, 1999, 2004},
 				[]bool{false, false, false}),
 		},
@@ -3022,7 +3183,7 @@ func TestDateTimeToYear(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToYear)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToYear)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3032,12 +3193,12 @@ func initDateStringToYearTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test datestring to year",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"2014-04-03", "2009-11-03", "2012-07-03", "2012-02-03 18:23:15"},
 					[]bool{false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{2014, 2009, 2012, 2012},
 				[]bool{false, false, false, false}),
 		},
@@ -3049,7 +3210,7 @@ func TestDateStringToYear(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToYear)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToYear)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3071,34 +3232,34 @@ func initDateToWeekTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test date to week - first and last week",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{d11, d12, d13, d14},
 					[]bool{false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{1, 1, 53, 53},
 				[]bool{false, false, false, false}),
 		},
 		{
 			info: "test date to week - normal",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{d21, d22, d23, d24},
 					[]bool{false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{7, 25, 39, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
 			info: "test date to week - null",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{d11},
 					[]bool{true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{0},
 				[]bool{true}),
 		},
@@ -3111,7 +3272,7 @@ func TestDateToWeek(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeek)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeek)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3130,34 +3291,34 @@ func initDateTimeToWeekTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test datetime to week - first and last week",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d11, d12, d13, d14},
 					[]bool{false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{1, 1, 53, 53},
 				[]bool{false, false, false, false}),
 		},
 		{
 			info: "test datetime to week - normal",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d21, d22, d23, d24},
 					[]bool{false, false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{7, 25, 39, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
 			info: "test datetime to week - null",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d11},
 					[]bool{true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{1},
 				[]bool{true}),
 		},
@@ -3169,7 +3330,7 @@ func TestDateTimeToWeek(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeek)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeek)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3185,12 +3346,12 @@ func initDateToWeekdayTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test date to weekday - first and last weekday",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_date.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{d11, d12, d13},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{5, 6, 6},
 				[]bool{false, false, false}),
 		},
@@ -3202,7 +3363,7 @@ func TestDateToWeekday(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeekday)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeekday)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3216,12 +3377,12 @@ func initDateTimeToWeekdayTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test datetime to weekday - first and last weekday",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
 					[]types.Datetime{d11, d12, d13},
 					[]bool{false, false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{5, 6, 6},
 				[]bool{false, false, false}),
 		},
@@ -3233,7 +3394,7 @@ func TestDateTimeToWeekday(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeekday)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeekday)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3244,8 +3405,8 @@ func initPiTestCase() []tcTemp {
 		{
 			info: "test pi",
 			//TODO: Validate if T_int8 is ok
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, []bool{false})},
-			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false, []float64{math.Pi}, []bool{false}),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, []bool{false})},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{math.Pi}, []bool{false}),
 		},
 	}
 }
@@ -3255,7 +3416,7 @@ func TestPi(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Pi)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Pi)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3266,8 +3427,8 @@ func initUTCTimestampTestCase() []tcTemp {
 		{
 			info: "test UTCTimestamp",
 			//TODO: Validate: Original Code: https://github.com/m-schen/matrixone/blob/9a29d4656c2c6be66885270a2a50664d3ba2a203/pkg/sql/plan/function/builtin/multi/utctimestamp_test.go#L24
-			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_int8.ToType(), []int8{}, []bool{})},
-			expect: testutil.NewFunctionTestResult(types.T_datetime.ToType(), false, []types.Datetime{}, []bool{}),
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_int8.ToType(), []int8{}, []bool{})},
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false, []types.Datetime{}, []bool{}),
 		},
 	}
 }
@@ -3277,7 +3438,7 @@ func TestUTCTimestamp(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, UTCTimestamp)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, UTCTimestamp)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3287,24 +3448,24 @@ func TestSleep(t *testing.T) {
 	testCases := []tcTemp{
 		{
 			info: "sleep uint64",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1}, []bool{false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1}, []bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, []bool{false}),
 		},
 		{
 			info: "sleep uint64 with null",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 0, 1}, []bool{false, true, true}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 0, 1}, []bool{false, true, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0, 0, 0}, []bool{false, true, true}),
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0, 0, 0}, []bool{false, true, true}),
 		},
 	}
 
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Sleep[uint64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -3313,29 +3474,29 @@ func TestSleep(t *testing.T) {
 	testCases2 := []tcTemp{
 		{
 			info: "sleep float64",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_float64.ToType(), []float64{0.1, 0.2}, []bool{false, false}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0.1, 0.2}, []bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, []bool{false, false}),
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, []bool{false, false}),
 		},
 		{
 			info: "sleep float64 with null",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_float64.ToType(), []float64{0.1, 0, 0.1}, []bool{false, true, true}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0.1, 0, 0.1}, []bool{false, true, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0, 0, 0}, []bool{false, true, true}),
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0, 0, 0}, []bool{false, true, true}),
 		},
 		{
 			info: "sleep float64 with null",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_float64.ToType(), []float64{0.1, -1.0, 0.1}, []bool{false, false, true}),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0.1, -1.0, 0.1}, []bool{false, false, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0, 0, 0}, []bool{false, true, true}),
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0, 0, 0}, []bool{false, true, true}),
 		},
 	}
 
 	for _, tc := range testCases2 {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Sleep[float64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -3346,57 +3507,57 @@ func initBitCastTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test Decode Int8",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
 					[]string{"a", "s", ""},
 					[]bool{false, false, true}),
-				testutil.NewFunctionTestInput(types.T_int8.ToType(),
+				NewFunctionTestInput(types.T_int8.ToType(),
 					[]int8{0},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int8.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
 				[]int8{97, 115, 0},
 				[]bool{false, false, true}),
 		},
 		{
 			info: "test Decode Int16",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
 					[]string{"as", "df", ""},
 					[]bool{false, false, true}),
-				testutil.NewFunctionTestInput(types.T_int16.ToType(),
+				NewFunctionTestInput(types.T_int16.ToType(),
 					[]int16{0},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int16.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int16.ToType(), false,
 				[]int16{29537, 26212, 0},
 				[]bool{false, false, true}),
 		},
 		{
 			info: "test Decode Int32",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
 					[]string{"asdf", "jkl;", ""},
 					[]bool{false, false, true}),
-				testutil.NewFunctionTestInput(types.T_int32.ToType(),
+				NewFunctionTestInput(types.T_int32.ToType(),
 					[]int32{0},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int32.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
 				[]int32{1717859169, 996961130, 0},
 				[]bool{false, false, true}),
 		},
 		{
 			info: "test Decode Int64",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
 					[]string{"asdfjkl;", ""},
 					[]bool{false, true}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{0},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{4281915450451063649, 0},
 				[]bool{false, true}),
 		},
@@ -3409,7 +3570,7 @@ func TestBitCast(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
+		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, BitCast)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -3420,12 +3581,12 @@ func initSHA1TestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test sha1",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abc", "", ""},
 					[]bool{false, false, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"a9993e364706816aba3e25717850c26c9cd0d89d", "da39a3ee5e6b4b0d3255bfef95601890afd80709", ""},
 				[]bool{false, false, true}),
 		},
@@ -3437,7 +3598,7 @@ func TestSHA1(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SHA1Func)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, SHA1Func)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

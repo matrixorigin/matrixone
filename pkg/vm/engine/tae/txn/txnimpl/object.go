@@ -18,6 +18,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -25,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -59,10 +62,12 @@ type txnObject struct {
 
 type ObjectIt struct {
 	sync.RWMutex
-	linkIt *common.GenericSortedDListIt[*catalog.ObjectEntry]
-	curr   *catalog.ObjectEntry
-	table  *txnTable
-	err    error
+	linkIt      btree.IterG[*catalog.ObjectEntry]
+	curr        *catalog.ObjectEntry
+	table       *txnTable
+	reverse     bool
+	firstCalled bool
+	err         error
 }
 
 type composedObjectIt struct {
@@ -70,132 +75,84 @@ type composedObjectIt struct {
 	uncommitted *catalog.ObjectEntry
 }
 
-func newObjectItOnSnap(table *txnTable) handle.ObjectIt {
+func newObjectItOnSnap(table *txnTable, isTombstone bool, reverse bool) handle.ObjectIt {
 	it := &ObjectIt{
-		linkIt: table.entry.MakeObjectIt(true),
-		table:  table,
-	}
-	var err error
-	var ok bool
-	for it.linkIt.Valid() {
-		curr := it.linkIt.Get().GetPayload()
-		curr.RLock()
-		ok, err = curr.IsVisibleWithLock(it.table.store.txn, curr.RWMutex)
-		if err != nil {
-			curr.RUnlock()
-			it.err = err
-			return it
-		}
-		if ok {
-			curr.RUnlock()
-			it.curr = curr
-			break
-		}
-		curr.RUnlock()
-		it.linkIt.Next()
+		linkIt:  table.entry.MakeObjectIt(isTombstone),
+		table:   table,
+		reverse: reverse,
 	}
 	return it
 }
 
-func newObjectIt(table *txnTable) handle.ObjectIt {
-	it := &ObjectIt{
-		linkIt: table.entry.MakeObjectIt(true),
-		table:  table,
-	}
-	var err error
-	var ok bool
-	for it.linkIt.Valid() {
-		curr := it.linkIt.Get().GetPayload()
-		curr.RLock()
-		ok, err = curr.IsVisibleWithLock(it.table.store.txn, curr.RWMutex)
-		if err != nil {
-			curr.RUnlock()
-			it.err = err
-			return it
-		}
-		if ok {
-			curr.RUnlock()
-			it.curr = curr
-			break
-		}
-		curr.RUnlock()
-		it.linkIt.Next()
-	}
-	if table.tableSpace != nil {
+func newObjectIt(table *txnTable, isTombstone bool) handle.ObjectIt {
+	it := newObjectItOnSnap(table, isTombstone, false)
+	if table.getBaseTable(isTombstone) != nil && table.getBaseTable(isTombstone).tableSpace != nil {
 		cit := &composedObjectIt{
-			ObjectIt:    it,
-			uncommitted: table.tableSpace.entry,
+			ObjectIt:    it.(*ObjectIt),
+			uncommitted: table.getBaseTable(isTombstone).tableSpace.entry,
 		}
 		return cit
 	}
 	return it
 }
 
-func (it *ObjectIt) Close() error { return nil }
-
-func (it *ObjectIt) GetError() error { return it.err }
-func (it *ObjectIt) Valid() bool {
-	if it.err != nil {
-		return false
-	}
-	return it.linkIt.Valid()
+func (it *ObjectIt) Close() error {
+	it.linkIt.Release()
+	return nil
 }
 
-func (it *ObjectIt) Next() {
-	var err error
+func (it *ObjectIt) GetError() error { return it.err }
+
+func (it *ObjectIt) Next() bool {
+	if it.reverse {
+		for {
+			var ok bool
+			if !it.firstCalled {
+				ok = it.linkIt.Last()
+				it.firstCalled = true
+			} else {
+				ok = it.linkIt.Prev()
+			}
+			if !ok {
+				return false
+			}
+			entry := it.linkIt.Item()
+			valid := entry.IsVisible(it.table.store.txn)
+			if valid {
+				it.curr = entry
+				return true
+			}
+		}
+	}
 	var valid bool
 	for {
-		it.linkIt.Next()
-		node := it.linkIt.Get()
-		if node == nil {
-			it.curr = nil
-			break
+		if !it.linkIt.Next() {
+			return false
 		}
-		entry := node.GetPayload()
-		entry.RLock()
-		valid, err = entry.IsVisibleWithLock(it.table.store.txn, entry.RWMutex)
-		entry.RUnlock()
-		if err != nil {
-			it.err = err
-			break
-		}
+		entry := it.linkIt.Item()
+		valid = entry.IsVisible(it.table.store.txn)
 		if valid {
 			it.curr = entry
-			break
+			return true
 		}
 	}
 }
 
 func (it *ObjectIt) GetObject() handle.Object {
-	if isSysTableId(it.table.GetID()) {
-		return newSysObject(it.table, it.curr)
-	}
 	return newObject(it.table, it.curr)
 }
 
 func (cit *composedObjectIt) GetObject() handle.Object {
-	if cit.uncommitted != nil {
-		return newObject(cit.table, cit.uncommitted)
-	}
 	return cit.ObjectIt.GetObject()
 }
 
-func (cit *composedObjectIt) Valid() bool {
-	if cit.err != nil {
-		return false
-	}
+func (cit *composedObjectIt) Next() bool {
 	if cit.uncommitted != nil {
+		cit.curr = cit.uncommitted
+		cit.uncommitted = nil
 		return true
 	}
-	return cit.ObjectIt.Valid()
-}
-
-func (cit *composedObjectIt) Next() {
-	if cit.uncommitted != nil {
-		cit.uncommitted = nil
-		return
-	}
-	cit.ObjectIt.Next()
+	return cit.ObjectIt.Next()
 }
 
 func newObject(table *txnTable, meta *catalog.ObjectEntry) *txnObject {
@@ -213,9 +170,6 @@ func (obj *txnObject) reset() {
 	obj.TxnObject.Reset()
 }
 func buildObject(table *txnTable, meta *catalog.ObjectEntry) handle.Object {
-	if isSysTableId(meta.GetTable().ID) {
-		return newSysObject(table, meta)
-	}
 	return newObject(table, meta)
 }
 func (obj *txnObject) Close() (err error) {
@@ -224,30 +178,9 @@ func (obj *txnObject) Close() (err error) {
 	// putObjectCnt.Add(1)
 	return
 }
-func (obj *txnObject) GetTotalChanges() int {
-	return obj.entry.GetObjectData().GetTotalChanges()
-}
-func (obj *txnObject) RangeDelete(blkID uint16, start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
-	schema := obj.table.GetLocalSchema()
-	pkDef := schema.GetPrimaryKey()
-	pkVec := makeWorkspaceVector(pkDef.Type)
-	defer pkVec.Close()
-	for row := start; row <= end; row++ {
-		pkVal, _, err := obj.entry.GetObjectData().GetValue(
-			obj.table.store.GetContext(), obj.Txn, schema, blkID, int(row), pkDef.Idx, mp,
-		)
-		if err != nil {
-			return err
-		}
-		pkVec.Append(pkVal, false)
-	}
-	id := obj.entry.AsCommonID()
-	id.SetBlockOffset(blkID)
-	return obj.Txn.GetStore().RangeDelete(id, start, end, pkVec, dt)
-}
 func (obj *txnObject) GetMeta() any           { return obj.entry }
 func (obj *txnObject) String() string         { return obj.entry.String() }
-func (obj *txnObject) GetID() *types.Objectid { return &obj.entry.ID }
+func (obj *txnObject) GetID() *types.Objectid { return obj.entry.ID() }
 func (obj *txnObject) BlkCnt() int            { return obj.entry.BlockCnt() }
 func (obj *txnObject) IsUncommitted() bool {
 	return obj.entry.IsLocal
@@ -255,32 +188,21 @@ func (obj *txnObject) IsUncommitted() bool {
 
 func (obj *txnObject) IsAppendable() bool { return obj.entry.IsAppendable() }
 
-func (obj *txnObject) SoftDeleteBlock(id types.Blockid) (err error) {
-	fp := obj.entry.AsCommonID()
-	fp.BlockID = id
-	return obj.Txn.GetStore().SoftDeleteBlock(fp)
-}
-
 func (obj *txnObject) GetRelation() (rel handle.Relation) {
 	return newRelation(obj.table)
 }
 
 func (obj *txnObject) UpdateStats(stats objectio.ObjectStats) error {
 	id := obj.entry.AsCommonID()
-	return obj.Txn.GetStore().UpdateObjectStats(id, &stats)
+	return obj.Txn.GetStore().UpdateObjectStats(id, &stats, obj.entry.IsTombstone)
 }
 
 func (obj *txnObject) Prefetch(idxes []int) error {
-	schema := obj.table.GetLocalSchema()
-	seqnums := make([]uint16, 0, len(idxes))
-	for _, idx := range idxes {
-		seqnums = append(seqnums, schema.ColDefs[idx].SeqNum)
-	}
 	if obj.IsUncommitted() {
-		return obj.table.tableSpace.Prefetch(obj.entry, seqnums)
+		return obj.table.dataTable.tableSpace.Prefetch(obj.entry)
 	}
 	for i := 0; i < obj.entry.BlockCnt(); i++ {
-		err := obj.entry.GetObjectData().Prefetch(seqnums, uint16(i))
+		err := obj.entry.GetObjectData().Prefetch(uint16(i))
 		if err != nil {
 			return err
 		}
@@ -290,57 +212,32 @@ func (obj *txnObject) Prefetch(idxes []int) error {
 
 func (obj *txnObject) Fingerprint() *common.ID { return obj.entry.AsCommonID() }
 
-func (obj *txnObject) GetByFilter(
-	ctx context.Context, filter *handle.Filter, mp *mpool.MPool,
-) (blkID uint16, offset uint32, err error) {
-	return obj.entry.GetObjectData().GetByFilter(ctx, obj.table.store.txn, filter, mp)
-}
-
-func (obj *txnObject) GetColumnDataById(
-	ctx context.Context, blkID uint16, colIdx int, mp *mpool.MPool,
-) (*containers.ColumnView, error) {
+func (obj *txnObject) Scan(
+	ctx context.Context,
+	bat **containers.Batch,
+	blkID uint16,
+	colIdxes []int,
+	mp *mpool.MPool,
+) (err error) {
 	if obj.entry.IsLocal {
-		return obj.table.tableSpace.GetColumnDataById(ctx, obj.entry, colIdx, mp)
+		obj.table.dataTable.tableSpace.Scan(ctx, bat, colIdxes, mp)
+		return
 	}
-	return obj.entry.GetObjectData().GetColumnDataById(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdx, mp)
+	return obj.entry.GetObjectData().Scan(ctx, bat, obj.Txn, obj.table.getSchema(obj.entry.IsTombstone), blkID, colIdxes, mp)
 }
 
-func (obj *txnObject) GetColumnDataByIds(
-	ctx context.Context, blkID uint16, colIdxes []int, mp *mpool.MPool,
-) (*containers.BlockView, error) {
+func (obj *txnObject) HybridScan(
+	ctx context.Context,
+	bat **containers.Batch,
+	blkOffset uint16,
+	colIdxs []int,
+	mp *mpool.MPool,
+) error {
 	if obj.entry.IsLocal {
-		return obj.table.tableSpace.GetColumnDataByIds(obj.entry, colIdxes, mp)
+		obj.table.dataTable.tableSpace.HybridScan(ctx, bat, colIdxs, mp)
+		return nil
 	}
-	return obj.entry.GetObjectData().GetColumnDataByIds(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdxes, mp)
-}
-
-func (obj *txnObject) GetColumnDataByName(
-	ctx context.Context, blkID uint16, attr string, mp *mpool.MPool,
-) (*containers.ColumnView, error) {
-	schema := obj.table.GetLocalSchema()
-	colIdx := schema.GetColIdx(attr)
-	if obj.entry.IsLocal {
-		return obj.table.tableSpace.GetColumnDataById(ctx, obj.entry, colIdx, mp)
-	}
-	return obj.entry.GetObjectData().GetColumnDataById(ctx, obj.Txn, schema, blkID, colIdx, mp)
-}
-
-func (obj *txnObject) GetColumnDataByNames(
-	ctx context.Context, blkID uint16, attrs []string, mp *mpool.MPool,
-) (*containers.BlockView, error) {
-	schema := obj.table.GetLocalSchema()
-	attrIds := make([]int, len(attrs))
-	for i, attr := range attrs {
-		attrIds[i] = schema.GetColIdx(attr)
-	}
-	if obj.entry.IsLocal {
-		return obj.table.tableSpace.GetColumnDataByIds(obj.entry, attrIds, mp)
-	}
-	return obj.entry.GetObjectData().GetColumnDataByIds(ctx, obj.Txn, schema, blkID, attrIds, mp)
-}
-
-func (obj *txnObject) UpdateDeltaLoc(blkID uint16, deltaLoc objectio.Location) error {
-	id := obj.entry.AsCommonID()
-	id.SetBlockOffset(blkID)
-	return obj.table.store.UpdateDeltaLoc(id, deltaLoc)
+	blkID := objectio.NewBlockidWithObjectID(obj.GetID(), blkOffset)
+	return tables.HybridScanByBlock(
+		ctx, obj.entry.GetTable(), obj.Txn, bat, obj.table.getSchema(obj.entry.IsTombstone), colIdxs, blkID, mp)
 }

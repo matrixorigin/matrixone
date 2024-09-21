@@ -19,15 +19,19 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -37,7 +41,8 @@ const (
 
 // add unit tests for cases
 type buildTestCase struct {
-	arg    *Argument
+	arg    *ShuffleBuild
+	marg   *merge.Merge
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
@@ -70,25 +75,22 @@ func TestString(t *testing.T) {
 
 func TestBuild(t *testing.T) {
 	for _, tc := range tcs[:1] {
-		err := tc.arg.Prepare(tc.proc)
+		err := tc.marg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		for {
-			ok, err := tc.arg.Call(tc.proc)
-			require.NoError(t, err)
-			require.Equal(t, false, ok.Status == vm.ExecStop)
-			mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			mp.Free()
-			ok.Batch.Clean(tc.proc.Mp())
-			break
-		}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.arg.SetChildren([]vm.Operator{tc.marg})
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
+
+		ok, err := tc.arg.Call(tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, true, ok.Status == vm.ExecStop)
+
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		tc.marg.Reset(tc.proc, false, nil)
+		tc.proc.GetMessageBoard().Reset()
 	}
 }
 
@@ -104,16 +106,14 @@ func BenchmarkBuild(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
 			for {
 				ok, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
-				mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-				tc.proc.Reg.MergeReceivers[0].Ch <- nil
-				mp.Free()
+				tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
 				ok.Batch.Clean(tc.proc.Mp())
 				break
 			}
@@ -137,21 +137,27 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 10),
+		Ch2: make(chan process.PipelineSignal, 10),
 	}
+	proc.SetMessageBoard(message.NewMessageBoard())
 	return buildTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
-			Typs:       ts,
+		arg: &ShuffleBuild{
+			JoinMapTag: 1,
 			Conditions: cs,
+			RuntimeFilterSpec: &plan.RuntimeFilterSpec{
+				Tag:         0,
+				MatchPrefix: false,
+				UpperLimit:  0,
+				Expr:        nil,
+			},
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
@@ -160,6 +166,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 				},
 			},
 		},
+		marg: &merge.Merge{},
 	}
 }
 

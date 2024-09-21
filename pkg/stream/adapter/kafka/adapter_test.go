@@ -390,54 +390,54 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 
 	switch col.GetType().Oid {
 	case types.T_bool:
-		return vector.GetFixedAt[bool](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[bool](col, int(row))
 	case types.T_int8:
-		return vector.GetFixedAt[int8](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[int8](col, int(row))
 	case types.T_int16:
-		return vector.GetFixedAt[int16](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[int16](col, int(row))
 	case types.T_int32:
-		return vector.GetFixedAt[int32](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[int32](col, int(row))
 	case types.T_int64:
-		return vector.GetFixedAt[int64](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[int64](col, int(row))
 	case types.T_uint8:
-		return vector.GetFixedAt[uint8](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[uint8](col, int(row))
 	case types.T_uint16:
-		return vector.GetFixedAt[uint16](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[uint16](col, int(row))
 	case types.T_uint32:
-		return vector.GetFixedAt[uint32](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[uint32](col, int(row))
 	case types.T_uint64:
-		return vector.GetFixedAt[uint64](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[uint64](col, int(row))
 	case types.T_decimal64:
-		return vector.GetFixedAt[types.Decimal64](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.Decimal64](col, int(row))
 	case types.T_decimal128:
-		return vector.GetFixedAt[types.Decimal128](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.Decimal128](col, int(row))
 	case types.T_uuid:
-		return vector.GetFixedAt[types.Uuid](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.Uuid](col, int(row))
 	case types.T_float32:
-		return vector.GetFixedAt[float32](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[float32](col, int(row))
 	case types.T_float64:
-		return vector.GetFixedAt[float64](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[float64](col, int(row))
 	case types.T_date:
-		return vector.GetFixedAt[types.Date](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.Date](col, int(row))
 	case types.T_time:
-		return vector.GetFixedAt[types.Time](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.Time](col, int(row))
 	case types.T_datetime:
-		return vector.GetFixedAt[types.Datetime](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.Datetime](col, int(row))
 	case types.T_timestamp:
-		return vector.GetFixedAt[types.Timestamp](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.Timestamp](col, int(row))
 	case types.T_enum:
-		return vector.GetFixedAt[types.Enum](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.Enum](col, int(row))
 	case types.T_TS:
-		return vector.GetFixedAt[types.TS](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.TS](col, int(row))
 	case types.T_Rowid:
-		return vector.GetFixedAt[types.Rowid](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.Rowid](col, int(row))
 	case types.T_Blockid:
-		return vector.GetFixedAt[types.Blockid](col, int(row))
+		return vector.GetFixedAtWithTypeCheck[types.Blockid](col, int(row))
 	case types.T_json:
-		return col.GetStringAt(int(row))
+		return col.UnsafeGetStringAt(int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64:
-		return col.GetStringAt(int(row))
+		return col.UnsafeGetStringAt(int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
 		panic(any("No Support"))

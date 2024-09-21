@@ -34,6 +34,10 @@ const (
 	StatusServer = "status-server"
 	// TxnTraceService txn trance service
 	TxnTraceService = "txn-trace-service"
+	// ShardService shard service
+	ShardService = "shard-service"
+	// ProcessCodecService process codec service
+	ProcessCodecService = "process-codec-service"
 
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"
@@ -50,6 +54,11 @@ const (
 
 	// BackgroundCNSelector is the labels of the CN handing the background requests, including mo-logger, task-service.
 	BackgroundCNSelector = "background-cn-selector"
+
+	PipelineClient = "pipeline-client"
+
+	// TestingContextKey is the key of context for testing
+	TestingContextKey = "testing-context"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service

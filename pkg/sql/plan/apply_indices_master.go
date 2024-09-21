@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -41,10 +40,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	for i, filterExp := range scanNode.FilterList {
 		// TODO: node should hold snapshot info and account info
 		//idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, timestamp.Timestamp{})
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, nil)
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
-		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, scanNode.ScanSnapshot, colDefs)
+		currIdxScanTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, scanNode.ScanSnapshot, colDefs)
 
 		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value1")) )
 		//    	INNER JOIN
@@ -56,8 +55,8 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: currIdxProjTag,
-					ColPos: 0, // __mo_index_pk_col
+					RelPos: currIdxScanTag,
+					ColPos: 1, // __mo_index_pk_col
 				},
 			},
 		}
@@ -103,7 +102,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: prevIndexPkCol.GetCol().RelPos, // last idxTbl (may be join) relPos
-					ColPos: 0,                              // idxTbl.pk
+					ColPos: 1,                              // idxTbl.pk
 				},
 			},
 		},
@@ -179,10 +178,10 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), inExprListLen, mp)
 
 		// c. (serial_full("0","value1"), serial_full("0","value2"), serial_full("0","value3"))
-		ps := types.NewPackerArray(inExprListLen, mp)
+		ps := types.NewPackerArray(inExprListLen)
 		defer func() {
 			for _, p := range ps {
-				p.FreeMem()
+				p.Close()
 			}
 		}()
 		function.SerialHelper(arg0AsColNameVec, nil, ps, true)
@@ -217,6 +216,10 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		panic("unsupported filter expression")
 	}
 
+	//NOTE: very important. You need to set ColName for the ColExpr to be pushed down to
+	// the Storage Engine layer. Otherwise, we will end up scanning all the rows.
+	builder.addNameByColRef(idxScanTag, idxTableDef)
+
 	scanId := builder.appendNode(&Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    idxTableDef,
@@ -227,25 +230,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		ScanSnapshot: scanSnapshot,
 	}, bindCtx)
 
-	// b. Project __mo_index_pk_col
-	projPkCol := &Expr{
-		Typ: makePlan2Type(&varcharType),
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: idxScanTag, //__mo_index_pk_col
-				ColPos: 1,
-			},
-		},
-	}
-	idxProjectTag := builder.genNewTag()
-	projectId := builder.appendNode(&Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{scanId},
-		ProjectList: []*Expr{projPkCol},
-		BindingTags: []int32{idxProjectTag},
-	}, bindCtx)
-
-	return idxProjectTag, projectId
+	return idxScanTag, scanId
 }
 
 func isKeyPresentInList(key string, list []string) bool {

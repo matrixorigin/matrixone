@@ -70,7 +70,7 @@ func pythonUdfRetType(parameters []types.Type) types.Type {
 // param parameters has two parts:
 //  1. parameters[0]: const vector udf
 //  2. parameters[1:]: data vectors
-func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// udf with context
 	u := &UdfWithContext{}
 	bytes, _ := vector.GenerateFunctionStrParameter(parameters[0]).GetStrValue(0)
@@ -111,7 +111,7 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 
 	// run
-	response, err := proc.UdfService.Run(proc.Ctx, request, reader)
+	response, err := proc.Base.UdfService.Run(proc.Ctx, request, reader)
 	if err != nil {
 		return err
 	}

@@ -15,6 +15,7 @@
 package partition
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,54 +26,53 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Partition)
 
 const (
 	receive = iota
 	eval
 )
 
-type Argument struct {
-	ctr *container
+type Partition struct {
+	ctr container
 
 	OrderBySpecs []*plan.OrderBySpec
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (partition *Partition) GetOperatorBase() *vm.OperatorBase {
+	return &partition.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Partition](
+		func() *Partition {
+			return &Partition{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Partition) {
+			*a = Partition{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Partition]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (partition Partition) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Partition {
+	return reuse.Alloc[Partition](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (partition *Partition) Release() {
+	if partition != nil {
+		reuse.Free[Partition](partition, nil)
 	}
 }
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// operator status
 	status int
@@ -80,6 +80,7 @@ type container struct {
 	// batchList is the data structure to store the all the received batches
 	batchList []*batch.Batch
 	orderCols [][]*vector.Vector
+	i         int
 	// indexList[i] = k means the number of rows before k in batchList[i] has been merged and send.
 	indexList []int64
 
@@ -90,37 +91,68 @@ type container struct {
 	buf *batch.Batch
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := arg.ctr; ctr != nil {
-		mp := proc.Mp()
+func (partition *Partition) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &partition.ctr
 
-		for i := range ctr.batchList {
-			if ctr.batchList[i] != nil {
-				ctr.batchList[i].Clean(mp)
-			}
+	ctr.resetExes()
+	ctr.resetParam()
+	ctr.freeVector(proc.Mp())
+	ctr.freeBatch(proc.Mp())
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+}
+
+func (partition *Partition) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &partition.ctr
+	ctr.freeExes()
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
+	}
+}
+
+func (ctr *container) freeBatch(mp *mpool.MPool) {
+	for _, bat := range ctr.batchList {
+		if bat != nil {
+			bat.Clean(mp)
 		}
-		for i := range ctr.orderCols {
-			if ctr.orderCols[i] != nil {
-				for j := range ctr.orderCols[i] {
-					if ctr.orderCols[i][j] != nil {
-						ctr.orderCols[i][j].Free(mp)
-					}
+	}
+	ctr.batchList = nil
+}
+
+func (ctr *container) freeVector(mp *mpool.MPool) {
+	for i := range ctr.orderCols {
+		if ctr.orderCols[i] != nil {
+			for j := range ctr.orderCols[i] {
+				if ctr.orderCols[i][j] != nil {
+					ctr.orderCols[i][j].Free(mp)
 				}
 			}
 		}
-		for i := range ctr.executors {
-			if ctr.executors[i] != nil {
-				ctr.executors[i].Free()
-			}
-		}
-
-		ctr.executors = nil
-
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
-
-		arg.ctr = nil
 	}
+	ctr.orderCols = nil
+}
+
+func (ctr *container) freeExes() {
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].Free()
+		}
+	}
+	ctr.executors = nil
+}
+
+func (ctr *container) resetExes() {
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].ResetForNextQuery()
+		}
+	}
+}
+
+func (ctr *container) resetParam() {
+	ctr.i = 0
+	ctr.indexList = nil
+	ctr.status = receive
 }

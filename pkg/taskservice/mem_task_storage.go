@@ -19,8 +19,9 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/mohae/deepcopy"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
 // used for testing
@@ -54,6 +55,10 @@ func NewMemTaskStorage() TaskStorage {
 }
 
 func (s *memTaskStorage) Close() error {
+	return nil
+}
+
+func (s *memTaskStorage) PingContext(ctx context.Context) error {
 	return nil
 }
 
@@ -371,4 +376,12 @@ func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) b
 		ok = cond.eval(task.LastHeartbeat.UnixNano())
 	}
 	return ok
+}
+
+func (s *memTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, f func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), condition ...Condition) (int, error) {
+	return 0, nil
+}
+
+func (s *memTaskStorage) AddCdcTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
+	return 0, nil
 }

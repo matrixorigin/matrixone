@@ -15,35 +15,30 @@
 package catalog
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"strings"
+
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
-	PhyAddrColumnName    = catalog.Row_ID
+	PhyAddrColumnName    = pkgcatalog.Row_ID
 	PhyAddrColumnComment = "Physical address"
-	SortKeyNamePrefx     = "_SORT_"
 
-	AttrRowID    = PhyAddrColumnName
-	AttrCommitTs = catalog.TableTailAttrCommitTs
-	AttrAborted  = catalog.TableTailAttrAborted
-	AttrPKVal    = catalog.TableTailAttrPKVal
+	AttrRowID    = pkgcatalog.TableTailAttrDeleteRowID
+	AttrCommitTs = pkgcatalog.TableTailAttrCommitTs
+	AttrAborted  = pkgcatalog.TableTailAttrAborted
+	AttrPKVal    = pkgcatalog.TableTailAttrPKVal
 
 	TenantSysID = uint32(0)
 )
 
 var SystemDBSchema *Schema
 var SystemTableSchema *Schema
-var SystemTableSchema_V1 *Schema
 var SystemColumnSchema *Schema
-var SystemColumnSchema_V1 *Schema
-
-var SystemObject_DB_ID types.Uuid
-var SystemObject_Table_ID types.Uuid
-var SystemObject_Columns_ID types.Uuid
-var SystemBlock_DB_ID types.Blockid
-var SystemBlock_Table_ID types.Blockid
-var SystemBlock_Columns_ID types.Blockid
 
 const (
 	ModelSchemaName   = "_ModelSchema"
@@ -59,92 +54,179 @@ const (
 
 func init() {
 
-	SystemObject_DB_ID = types.Uuid{101}
-	SystemObject_Table_ID = types.Uuid{102}
-	SystemObject_Columns_ID = types.Uuid{103}
-	SystemBlock_DB_ID = types.Blockid{101}
-	SystemBlock_Table_ID = types.Blockid{102}
-	SystemBlock_Columns_ID = types.Blockid{103}
-
 	var err error
 
-	SystemDBSchema = NewEmptySchema(catalog.MO_DATABASE)
-	for i, colname := range catalog.MoDatabaseSchema {
-		if i == 0 {
-			if err = SystemDBSchema.AppendPKCol(colname, catalog.MoDatabaseTypes[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err = SystemDBSchema.AppendCol(colname, catalog.MoDatabaseTypes[i]); err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err = SystemDBSchema.Finalize(true); err != nil {
+	defs := pkgcatalog.NewDefines()
+	SystemDBSchema, err = DefsToSchema(pkgcatalog.MO_DATABASE, defs.MoDatabaseTableDefs)
+	if err != nil {
 		panic(err)
 	}
 
-	SystemTableSchema = NewEmptySchema(catalog.MO_TABLES)
-	for i, colname := range catalog.MoTablesSchema {
-		if i == 0 {
-			if err = SystemTableSchema.AppendPKCol(colname, catalog.MoTablesTypes[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err = SystemTableSchema.AppendCol(colname, catalog.MoTablesTypes[i]); err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err = SystemTableSchema.Finalize(true); err != nil {
+	SystemTableSchema, err = DefsToSchema(pkgcatalog.MO_TABLES, defs.MoTablesTableDefs)
+	if err != nil {
 		panic(err)
 	}
 
-	SystemTableSchema_V1 = NewEmptySchema(catalog.MO_TABLES + "_v1")
-	for i, colname := range catalog.MoTablesSchema_V1 {
-		if i == 0 {
-			if err = SystemTableSchema_V1.AppendPKCol(colname, catalog.MoTablesTypes_V1[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err = SystemTableSchema_V1.AppendCol(colname, catalog.MoTablesTypes_V1[i]); err != nil {
-				panic(err)
+	SystemColumnSchema, err = DefsToSchema(pkgcatalog.MO_COLUMNS, defs.MoColumnsTableDefs)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err error) {
+	schema = NewEmptySchema(name)
+	schema.CatalogVersion = pkgcatalog.CatalogVersion_Curr
+	var pkeyColName string
+	for _, def := range defs {
+		switch defVal := def.(type) {
+		case *engine.ConstraintDef:
+			primaryKeyDef := defVal.GetPrimaryKeyDef()
+			if primaryKeyDef != nil {
+				pkeyColName = primaryKeyDef.Pkey.PkeyColName
+				break
 			}
 		}
 	}
-	if err = SystemTableSchema_V1.Finalize(true); err != nil {
-		panic(err)
+	for _, def := range defs {
+		switch defVal := def.(type) {
+		case *engine.AttributeDef:
+			if strings.EqualFold(pkeyColName, defVal.Attr.Name) {
+				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, true); err != nil {
+					return
+				}
+			} else if defVal.Attr.ClusterBy {
+				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, false); err != nil {
+					return
+				}
+			} else {
+				if err = schema.AppendColWithAttribute(defVal.Attr); err != nil {
+					return
+				}
+			}
+
+		case *engine.PropertiesDef:
+			for _, property := range defVal.Properties {
+				switch strings.ToLower(property.Key) {
+				case pkgcatalog.SystemRelAttr_Comment:
+					schema.Comment = property.Value
+				case pkgcatalog.SystemRelAttr_Kind:
+					schema.Relkind = property.Value
+				case pkgcatalog.SystemRelAttr_CreateSQL:
+					schema.Createsql = property.Value
+				case pkgcatalog.PropSchemaExtra:
+					schema.Extra = api.MustUnmarshalTblExtra([]byte(property.Value))
+				default:
+				}
+			}
+
+		case *engine.PartitionDef:
+			schema.Partitioned = defVal.Partitioned
+			schema.Partition = defVal.Partition
+		case *engine.ViewDef:
+			schema.View = defVal.View
+		case *engine.CommentDef:
+			schema.Comment = defVal.Comment
+		case *engine.ConstraintDef:
+			schema.Constraint, err = defVal.MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+		default:
+			// We will not deal with other cases for the time being
+		}
+	}
+	if err = schema.Finalize(false); err != nil {
+		return
+	}
+	return
+}
+
+func SchemaToDefs(schema *Schema) (defs []engine.TableDef, err error) {
+	if schema.Comment != "" {
+		commentDef := new(engine.CommentDef)
+		commentDef.Comment = schema.Comment
+		defs = append(defs, commentDef)
 	}
 
-	SystemColumnSchema = NewEmptySchema(catalog.MO_COLUMNS)
-	for i, colname := range catalog.MoColumnsSchema {
-		if i == 0 {
-			if err = SystemColumnSchema.AppendPKCol(colname, catalog.MoColumnsTypes[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err = SystemColumnSchema.AppendCol(colname, catalog.MoColumnsTypes[i]); err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err = SystemColumnSchema.Finalize(true); err != nil {
-		panic(err)
+	if schema.Partitioned > 0 || schema.Partition != "" {
+		partitionDef := new(engine.PartitionDef)
+		partitionDef.Partitioned = schema.Partitioned
+		partitionDef.Partition = schema.Partition
+		defs = append(defs, partitionDef)
 	}
 
-	SystemColumnSchema_V1 = NewEmptySchema(catalog.MO_COLUMNS)
-	for i, colname := range catalog.MoColumnsSchema_V1 {
-		if i == 0 {
-			if err = SystemColumnSchema_V1.AppendPKCol(colname, catalog.MoColumnsTypes_V1[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err = SystemColumnSchema_V1.AppendCol(colname, catalog.MoColumnsTypes_V1[i]); err != nil {
-				panic(err)
-			}
+	if schema.View != "" {
+		viewDef := new(engine.ViewDef)
+		viewDef.View = schema.View
+		defs = append(defs, viewDef)
+	}
+
+	if len(schema.Constraint) > 0 {
+		c := new(engine.ConstraintDef)
+		if err := c.UnmarshalBinary(schema.Constraint); err != nil {
+			return nil, err
+		}
+		defs = append(defs, c)
+	}
+
+	for _, col := range schema.ColDefs {
+		if col.IsPhyAddr() {
+			continue
+		}
+		attr, err := AttrFromColDef(col)
+		if err != nil {
+			return nil, err
+		}
+		defs = append(defs, &engine.AttributeDef{Attr: *attr})
+	}
+	pro := new(engine.PropertiesDef)
+	pro.Properties = append(pro.Properties, engine.Property{
+		Key:   pkgcatalog.SystemRelAttr_Kind,
+		Value: string(schema.Relkind),
+	})
+	if schema.Createsql != "" {
+		pro.Properties = append(pro.Properties, engine.Property{
+			Key:   pkgcatalog.SystemRelAttr_CreateSQL,
+			Value: schema.Createsql,
+		})
+	}
+	pro.Properties = append(pro.Properties, engine.Property{
+		Key:   pkgcatalog.PropSchemaExtra,
+		Value: string(api.MustMarshalTblExtra(schema.Extra)),
+	})
+	defs = append(defs, pro)
+
+	return
+}
+
+func AttrFromColDef(col *ColDef) (attrs *engine.Attribute, err error) {
+	var defaultVal *plan.Default
+	if len(col.Default) > 0 {
+		defaultVal = &plan.Default{}
+		if err := types.Decode(col.Default, defaultVal); err != nil {
+			return nil, err
 		}
 	}
-	if err = SystemColumnSchema_V1.Finalize(true); err != nil {
-		panic(err)
+
+	var onUpdate *plan.OnUpdate
+	if len(col.OnUpdate) > 0 {
+		onUpdate = new(plan.OnUpdate)
+		if err := types.Decode(col.OnUpdate, onUpdate); err != nil {
+			return nil, err
+		}
 	}
+
+	attr := &engine.Attribute{
+		Name:          col.Name,
+		Type:          col.Type,
+		Primary:       col.IsPrimary(),
+		IsHidden:      col.IsHidden(),
+		IsRowId:       col.IsPhyAddr(),
+		Comment:       col.Comment,
+		Default:       defaultVal,
+		OnUpdate:      onUpdate,
+		AutoIncrement: col.IsAutoIncrement(),
+		ClusterBy:     col.IsClusterBy(),
+	}
+	return attr, nil
 }

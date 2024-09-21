@@ -18,54 +18,62 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/vm"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge"
+const opName = "merge"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (merge *Merge) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": union all ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, true)
+func (merge *Merge) OpType() vm.OpType {
+	return vm.Merge
+}
+
+func (merge *Merge) Prepare(proc *process.Process) error {
+	if merge.OpAnalyzer == nil {
+		merge.OpAnalyzer = process.NewAnalyzer(merge.GetIdx(), merge.IsFirst, merge.IsLast, "merge")
+	} else {
+		merge.OpAnalyzer.Reset()
+	}
+
+	if merge.Partial {
+		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
+	} else {
+		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers)
+	}
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
-	var end bool
-	result := vm.NewCallResult()
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
-	}
+	analyzer := merge.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
+	var info error
+	result := vm.NewCallResult()
 	for {
-		arg.buf, end, _ = arg.ctr.ReceiveFromAllRegs(anal)
-		if end {
+		result.Batch, info = merge.ctr.receiver.GetNextBatch(analyzer)
+		if info != nil {
+			return vm.CancelResult, info
+		}
+
+		if result.Batch == nil {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-
-		if arg.buf.Last() && arg.SinkScan {
-			proc.PutBatch(arg.buf)
+		if merge.SinkScan && result.Batch.Last() {
 			continue
 		}
 		break
 	}
 
-	anal.Input(arg.buf, arg.GetIsFirst())
-	anal.Output(arg.buf, arg.GetIsLast())
-	result.Batch = arg.buf
+	analyzer.Output(result.Batch)
 	return result, nil
 }

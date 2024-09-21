@@ -17,10 +17,9 @@ package plan
 import (
 	"context"
 	"fmt"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
-	"go/constant"
 	"strings"
 
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -110,9 +109,9 @@ func (p *partitionExprChecker) extractColumns(ctx context.Context, _ *plan.Table
 		return nil
 	}
 
-	colInfo := findColumnByName(columnNameExpr.Parts[0], p.tableInfo)
+	colInfo := findColumnByName(columnNameExpr.ColName(), p.tableInfo)
 	if colInfo == nil {
-		return moerr.NewBadFieldError(ctx, columnNameExpr.Parts[0], "partition function")
+		return moerr.NewBadFieldError(ctx, columnNameExpr.ColNameOrigin(), "partition function")
 	}
 
 	p.columns = append(p.columns, colInfo)
@@ -239,7 +238,7 @@ func checkColumnsPartitionType(ctx context.Context, tbInfo *TableDef, pi *plan.P
 			// When partitioning by [LINEAR] KEY, it is possible to use columns of any valid MySQL data type other than TEXT or BLOB
 			// as partitioning keys, because MySQL's internal key-hashing functions produce the correct data type from these types.
 			// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-limitations.html
-			if t == types.T_blob || t == types.T_text || t == types.T_json {
+			if t == types.T_blob || t == types.T_text || t == types.T_json || t == types.T_datalink {
 				return moerr.NewBlobFieldInPartFunc(ctx)
 			}
 		} else {
@@ -252,7 +251,7 @@ func checkColumnsPartitionType(ctx context.Context, tbInfo *TableDef, pi *plan.P
 			//	TEXT and BLOB columns are not supported as partitioning columns.
 			// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-columns.html
 			if t == types.T_float32 || t == types.T_float64 || t == types.T_decimal64 || t == types.T_decimal128 ||
-				t == types.T_timestamp || t == types.T_blob || t == types.T_text || t == types.T_json || t == types.T_enum {
+				t == types.T_timestamp || t == types.T_blob || t == types.T_text || t == types.T_json || t == types.T_enum || t == types.T_datalink {
 				return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, colName)
 			}
 		}
@@ -360,20 +359,20 @@ func getPrimaryKeyAndUniqueKey(defs tree.TableDefs) (primaryKeys []*tree.Unresol
 // This method is used to generate partition ast for key partition and hash partition
 // For example: abs (hash_value (col3))% 4
 func genPartitionAst(exprs tree.Exprs, partNum int64) tree.Expr {
-	hashFuncName := tree.SetUnresolvedName(strings.ToLower("hash_value"))
+	hashFuncName := tree.NewUnresolvedColName("hash_value")
 	hashfuncExpr := &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(hashFuncName),
 		Exprs: exprs,
 	}
 
-	absFuncName := tree.SetUnresolvedName(strings.ToLower("abs"))
+	absFuncName := tree.NewUnresolvedColName("abs")
 	absFuncExpr := &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(absFuncName),
 		Exprs: tree.Exprs{hashfuncExpr},
 	}
 
 	numstr := fmt.Sprintf("%v", partNum)
-	divExpr := tree.NewNumValWithType(constant.MakeInt64(partNum), numstr, false, tree.P_int64)
+	divExpr := tree.NewNumVal(partNum, numstr, false, tree.P_int64)
 	modOpExpr := tree.NewBinaryExpr(tree.MOD, absFuncExpr, divExpr)
 	return modOpExpr
 }
@@ -453,14 +452,14 @@ func buildListColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*tr
 
 		when := &tree.When{
 			Cond: conditionExpr,
-			Val:  tree.NewNumValWithType(constant.MakeInt64(int64(i)), fmt.Sprintf("%v", i), false, tree.P_int64),
+			Val:  tree.NewNumVal(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
 		}
 		whens[i] = when
 	}
 	caseWhenExpr := &tree.CaseExpr{
 		Expr:  nil,
 		Whens: whens,
-		Else:  tree.NewNumValWithType(constant.MakeInt64(int64(-1)), fmt.Sprintf("%v", -1), false, tree.P_int64),
+		Else:  tree.NewNumVal(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
 	}
 	return caseWhenExpr, nil
 }
@@ -483,7 +482,7 @@ func buildRangeCaseWhenExpr(pexpr tree.Expr, defs []*tree.Partition) (*tree.Case
 
 		var conditionExpr tree.Expr
 		if _, ok := valueExpr.(*tree.MaxValue); ok {
-			conditionExpr = tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
+			conditionExpr = tree.NewNumVal(true, "true", false, tree.P_bool)
 		} else {
 			LessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, pexpr, valueExpr)
 			conditionExpr = LessThanExpr
@@ -491,7 +490,7 @@ func buildRangeCaseWhenExpr(pexpr tree.Expr, defs []*tree.Partition) (*tree.Case
 
 		when := &tree.When{
 			Cond: conditionExpr,
-			Val:  tree.NewNumValWithType(constant.MakeInt64(int64(i)), fmt.Sprintf("%v", i), false, tree.P_int64),
+			Val:  tree.NewNumVal(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
 		}
 		whens[i] = when
 	}
@@ -499,7 +498,7 @@ func buildRangeCaseWhenExpr(pexpr tree.Expr, defs []*tree.Partition) (*tree.Case
 	caseWhenExpr := &tree.CaseExpr{
 		Expr:  nil,
 		Whens: whens,
-		Else:  tree.NewNumValWithType(constant.MakeInt64(int64(-1)), fmt.Sprintf("%v", -1), false, tree.P_int64),
+		Else:  tree.NewNumVal(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
 	}
 	return caseWhenExpr, nil
 }
@@ -520,7 +519,7 @@ func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*t
 			valueExpr := valuesLessThan.ValueList[j]
 			if j == len(valuesLessThan.ValueList)-1 {
 				if _, ok := valueExpr.(*tree.MaxValue); ok {
-					trueExpr := tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
+					trueExpr := tree.NewNumVal(true, "true", false, tree.P_bool)
 					tempExpr = trueExpr
 				} else {
 					lessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, columnsExpr[j], valueExpr)
@@ -530,7 +529,7 @@ func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*t
 			} else {
 				var firstExpr tree.Expr
 				if _, ok := valueExpr.(*tree.MaxValue); ok {
-					trueExpr := tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
+					trueExpr := tree.NewNumVal(true, "true", false, tree.P_bool)
 					firstExpr = trueExpr
 				} else {
 					lessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, columnsExpr[j], valueExpr)
@@ -539,7 +538,7 @@ func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*t
 
 				var middleExpr tree.Expr
 				if _, ok := valueExpr.(*tree.MaxValue); ok {
-					trueExpr := tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
+					trueExpr := tree.NewNumVal(true, "true", false, tree.P_bool)
 					middleExpr = trueExpr
 				} else {
 					equalExpr := tree.NewComparisonExpr(tree.EQUAL, columnsExpr[j], valueExpr)
@@ -552,14 +551,14 @@ func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*t
 
 		when := &tree.When{
 			Cond: tempExpr,
-			Val:  tree.NewNumValWithType(constant.MakeInt64(int64(i)), fmt.Sprintf("%v", i), false, tree.P_int64),
+			Val:  tree.NewNumVal(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
 		}
 		whens[i] = when
 	}
 	caseWhenExpr := &tree.CaseExpr{
 		Expr:  nil,
 		Whens: whens,
-		Else:  tree.NewNumValWithType(constant.MakeInt64(int64(-1)), fmt.Sprintf("%v", -1), false, tree.P_int64),
+		Else:  tree.NewNumVal(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
 	}
 	return caseWhenExpr, nil
 }
@@ -580,14 +579,14 @@ func buildListCaseWhenExpr(listExpr tree.Expr, defs []*tree.Partition) (*tree.Ca
 
 		when := &tree.When{
 			Cond: inExpr,
-			Val:  tree.NewNumValWithType(constant.MakeInt64(int64(i)), fmt.Sprintf("%v", i), false, tree.P_int64),
+			Val:  tree.NewNumVal(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
 		}
 		whens[i] = when
 	}
 	caseWhenExpr := &tree.CaseExpr{
 		Expr:  nil,
 		Whens: whens,
-		Else:  tree.NewNumValWithType(constant.MakeInt64(int64(-1)), fmt.Sprintf("%v", -1), false, tree.P_int64),
+		Else:  tree.NewNumVal(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
 	}
 	return caseWhenExpr, nil
 }

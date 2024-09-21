@@ -43,7 +43,7 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 		var n bool
 		var v T
 
-		vs := vector.MustFixedCol[T](vec)
+		vs := vector.MustFixedColWithTypeCheck[T](vec)
 		nsp := vec.GetNulls()
 		if nsp.Any() {
 			for i, sel := range sels {
@@ -97,25 +97,25 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 		var n bool
 		var v []byte
 
-		vs := vector.MustBytesCol(vec)
+		vs, area := vector.MustVarlenaRawData(vec)
 		nsp := vec.GetNulls()
 		if nsp.Any() {
 			for i, sel := range sels {
-				w := vs[sel]
+				w := vs[sel].GetByteSlice(area)
 				isNull := nulls.Contains(nsp, uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else if n && isNull {
 					diffs[i] = false
 				} else {
-					diffs[i] = diffs[i] || !(bytes.Equal(v, vs[sel]))
+					diffs[i] = diffs[i] || !(bytes.Equal(v, w))
 				}
 				n = isNull
 				v = w
 			}
 		} else {
 			for i, sel := range sels {
-				w := vs[sel]
+				w := vs[sel].GetByteSlice(area)
 				diffs[i] = diffs[i] || !(bytes.Equal(v, w))
 				v = w
 			}
@@ -174,7 +174,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 	case types.T_decimal128:
 		return genericPartition[types.Decimal128](sels, diffs, partitions, vec)
 	case types.T_char, types.T_varchar, types.T_json, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return bytesPartition(sels, diffs, partitions, vec)
 		//Used by ORDER_BY SQL clause.
 		//Byte partition logic doesn't use byte.Compare or Str.

@@ -32,6 +32,7 @@ func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 	tree = model.NewTree()
 	op := func(row RowT) (moveOn bool) {
 		if memo := row.GetMemo(); memo.HasAnyTableDataChanges() {
+			row.GetTxnState(true)
 			tree.Merge(memo.GetDirty())
 		}
 		count++
@@ -83,7 +84,15 @@ func (r *Reader) GetDirtyByTable(
 		}
 		return true
 	}
-	r.table.ForeachRowInBetween(r.from, r.to, nil, op)
+	skipFn := func(blk BlockT) bool {
+		summary := blk.summary.Load()
+		if summary == nil {
+			return false
+		}
+		_, exist := summary.tids[id]
+		return !exist
+	}
+	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op)
 	return
 }
 

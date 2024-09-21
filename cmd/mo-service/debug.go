@@ -15,6 +15,9 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -26,12 +29,20 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/felixge/fgprof"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
+	"go.uber.org/zap"
 )
 
 var (
@@ -39,6 +50,7 @@ var (
 	allocsProfilePathFlag = flag.String("allocs-profile", "", "write allocs profile to the specified file")
 	heapProfilePathFlag   = flag.String("heap-profile", "", "write heap profile to the specified file")
 	httpListenAddr        = flag.String("debug-http", "", "http server listen address")
+	profileInterval       = flag.Duration("profile-interval", 0, "profile interval")
 	statusServer          = status.NewServer()
 )
 
@@ -372,4 +384,79 @@ func _formatBytes(n int64, unitIndex int) string {
 		str = fmt.Sprintf(" %d%s", rem, units[unitIndex])
 	}
 	return _formatBytes(next, unitIndex+1) + str
+}
+
+// saveProfilesLoop save profiles again and again until the
+// mo is terminated.
+func saveProfilesLoop(sigs chan os.Signal) {
+	if *profileInterval == 0 {
+		return
+	}
+
+	if *profileInterval < time.Second*10 {
+		*profileInterval = time.Second * 10
+	}
+
+	quit := false
+	tk := time.NewTicker(*profileInterval)
+	logutil.GetGlobalLogger().Info("save profiles loop started", zap.Duration("profile-interval", *profileInterval))
+	for {
+		select {
+		case <-tk.C:
+			logutil.GetGlobalLogger().Info("save profiles start")
+			saveProfiles()
+			logutil.GetGlobalLogger().Info("save profiles end")
+		case <-sigs:
+			quit = true
+		}
+		if quit {
+			break
+		}
+	}
+}
+
+func saveProfiles() {
+	//dump heap profile before stopping services
+	saveProfile(profile.HEAP)
+	//dump goroutine before stopping services
+	saveProfile(profile.GOROUTINE)
+	// dump malloc profile
+	saveMallocProfile()
+}
+
+func saveProfile(typ string) string {
+	name, _ := uuid.NewV7()
+	profilePath := catalog.BuildProfilePath(globalServiceType, globalNodeId, typ, name.String()) + ".gz"
+	logutil.GetGlobalLogger().Info("save profiles ", zap.String("path", profilePath))
+	cnservice.SaveProfile(profilePath, typ, globalEtlFS)
+	return profilePath
+}
+
+func saveMallocProfile() {
+	buf := bytes.Buffer{}
+	w := gzip.NewWriter(&buf)
+	if err := malloc.WriteProfileData(w); err != nil {
+		logutil.GetGlobalLogger().Error("failed to write malloc profile", zap.Error(err))
+		return
+	}
+	if err := w.Close(); err != nil {
+		return
+	}
+	name, _ := uuid.NewV7()
+	profilePath := catalog.BuildProfilePath(globalServiceType, globalNodeId, "malloc", name.String()) + ".gz"
+	writeVec := fileservice.IOVector{
+		FilePath: profilePath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Data:   buf.Bytes(),
+				Size:   int64(len(buf.Bytes())),
+			},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
+	defer cancel()
+	if err := globalEtlFS.Write(ctx, writeVec); err != nil {
+		logutil.GetGlobalLogger().Error("failed to save malloc profile", zap.Error(err))
+	}
 }

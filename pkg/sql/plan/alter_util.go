@@ -15,9 +15,9 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -25,7 +25,7 @@ import (
 func checkDropColumnWithPrimaryKey(colName string, pkey *plan.PrimaryKeyDef, ctx CompilerContext) error {
 	for _, column := range pkey.Names {
 		if column == colName {
-			return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with primary key covered now", colName)
+			return moerr.NewInvalidInputf(ctx.GetContext(), "can't drop column %s with primary key covered now", colName)
 		}
 	}
 	return nil
@@ -37,7 +37,7 @@ func checkDropColumnWithIndex(colName string, indexes []*plan.IndexDef, ctx Comp
 			for _, column := range indexInfo.Parts {
 				column = catalog.ResolveAlias(column)
 				if column == colName {
-					return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with index covered now", colName)
+					return moerr.NewInvalidInputf(ctx.GetContext(), "can't drop column %s with index covered now", colName)
 				}
 			}
 		}
@@ -72,7 +72,7 @@ func checkIsDroppableColumn(tableDef *TableDef, colName string, ctx CompilerCont
 	// Check whether dropped column has existed.
 	col := FindColumn(tableDef.Cols, colName)
 	if col == nil {
-		return moerr.NewInvalidInput(ctx.GetContext(), "can't DROP '%-.192s'; check that column/key exists", colName)
+		return moerr.NewInvalidInputf(ctx.GetContext(), "can't DROP '%-.192s'; check that column/key exists", colName)
 	}
 
 	var colCnt int
@@ -82,7 +82,7 @@ func checkIsDroppableColumn(tableDef *TableDef, colName string, ctx CompilerCont
 		}
 	}
 	if colCnt == 1 {
-		return moerr.NewInvalidInput(ctx.GetContext(), "can't drop only column %s in table %s", colName, tableDef.Name)
+		return moerr.NewInvalidInputf(ctx.GetContext(), "can't drop only column %s in table %s", colName, tableDef.Name)
 	}
 
 	// We don not support drop auto_incr col
@@ -124,7 +124,7 @@ func checkIsAddableColumn(tableDef *TableDef, colName string, colType *plan.Type
 	// Check whether added column has existed.
 	col := FindColumn(tableDef.Cols, colName)
 	if col != nil {
-		return moerr.NewInvalidInput(ctx.GetContext(), "can't add '%-.192s'; check that column/key exists", colName)
+		return moerr.NewInvalidInputf(ctx.GetContext(), "can't add '%-.192s'; check that column/key exists", colName)
 	}
 
 	// We don not support add auto_incr col
@@ -156,6 +156,16 @@ func checkIsAddableColumn(tableDef *TableDef, colName string, colType *plan.Type
 func FindColumn(cols []*ColDef, name string) *ColDef {
 	for _, col := range cols {
 		if strings.EqualFold(col.Name, name) {
+			return col
+		}
+	}
+	return nil
+}
+
+// FindColumnByOriginName finds column in cols by origin name.
+func FindColumnByOriginName(cols []*ColDef, originName string) *ColDef {
+	for _, col := range cols {
+		if col.GetOriginCaseName() == originName {
 			return col
 		}
 	}

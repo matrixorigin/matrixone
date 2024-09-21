@@ -183,8 +183,8 @@ func TestVectorZM(t *testing.T) {
 	require.Equal(t, 2, vec.Length())
 	require.False(t, vec.IsConst())
 	require.False(t, vec.GetNulls().Any())
-	require.Equal(t, uint32(12), vector.GetFixedAt[uint32](vec, 0))
-	require.Equal(t, uint32(22), vector.GetFixedAt[uint32](vec, 1))
+	require.Equal(t, uint32(12), vector.GetFixedAtWithTypeCheck[uint32](vec, 0))
+	require.Equal(t, uint32(22), vector.GetFixedAtWithTypeCheck[uint32](vec, 1))
 
 	zm2 := VectorToZM(vec, nil)
 	require.Equal(t, zm, zm2)
@@ -225,6 +225,7 @@ func TestVectorZM(t *testing.T) {
 	vec.Free(m)
 
 	zm = NewZM(types.T_uint16, 0)
+	vec = vector.NewVecFromReuse()
 	vec, err = ZMToVector(zm, vec, m)
 
 	require.NoError(t, err)
@@ -274,7 +275,7 @@ func TestZMNull(t *testing.T) {
 }
 
 func TestZmStringCompose(t *testing.T) {
-	packer := types.NewPacker(mpool.MustNewNoFixed("TestZmCompose"))
+	packer := types.NewPacker()
 	packer.EncodeStringType([]byte("0123456789.0123456789.0123456789."))
 	packer.EncodeInt32(42)
 

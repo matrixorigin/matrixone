@@ -15,6 +15,9 @@
 package bytejson
 
 import (
+	"encoding/json"
+	"errors"
+	"io"
 	"strconv"
 	"testing"
 
@@ -66,6 +69,7 @@ func TestNumber(t *testing.T) {
 	j = []string{
 		"1.7976931348623157e+308",
 		"-1.7976931348623157e+308",
+		"1.797693134862315708145274237317043567981e+308",
 		"4.940656458412465441765687928682213723651e-324",
 		"0.112131431",
 		"1.13353411",
@@ -89,10 +93,28 @@ func TestObject(t *testing.T) {
 	}
 	for _, x := range j {
 		bj, err := ParseFromString(x)
-		require.Nil(t, err)
+		require.NoError(t, err)
 		require.JSONEq(t, x, bj.String())
 	}
+	t.Run("last win", func(t *testing.T) {
+		s := `{"x": 17, "x": "red", "x": [3, 5, 7]}`
+		bj, err := ParseFromString(s)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"x":[3,5,7]}`, bj.String())
+	})
+	t.Run("sort key", func(t *testing.T) {
+		s := `{"c":1,"a":2,"b":3}`
+		bj, err := ParseFromString(s)
+		require.NoError(t, err)
+		require.Equal(t, `{"a": 2, "b": 3, "c": 1}`, bj.String())
+	})
+	t.Run("unexpected EOF", func(t *testing.T) {
+		s := `{"c":1,"a":2,"b":3`
+		_, err := ParseNodeString(s)
+		require.True(t, errors.Is(err, io.ErrUnexpectedEOF))
+	})
 }
+
 func TestArray(t *testing.T) {
 	j := []string{
 		`[`,
@@ -187,8 +209,14 @@ func TestQuery(t *testing.T) {
 		require.Nil(t, err)
 		out := bj.Query([]*Path{&path})
 		require.JSONEq(t, kase.outStr, out.String())
+
+		if path.IsSimple() {
+			out2 := bj.QuerySimple([]*Path{&path})
+			require.JSONEq(t, kase.outStr, out2.String())
+		}
 	}
 }
+
 func TestUnnest(t *testing.T) {
 	kases := []struct {
 		jsonStr   string
@@ -512,5 +540,86 @@ func TestByteJson_Unquote(t *testing.T) {
 		out, err := bj.Unquote()
 		require.Nil(t, err)
 		require.Equal(t, kase.outStr, out)
+	}
+}
+
+func BenchmarkParseJsonByteFromString(b *testing.B) {
+	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
+	for i := 0; i < b.N; i++ {
+		ParseJsonByteFromString(s)
+	}
+}
+
+func FuzzParseJsonByteFromString(f *testing.F) {
+	f.Add(`{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`)
+	f.Add("0A00")
+	f.Add("1E1000")
+	f.Add("{\"\":")
+	f.Add("{\"\":0}")
+	f.Add("null")
+	f.Add("true")
+	f.Add("false")
+	f.Add("\"\xec\"")
+	f.Add("\"\\ud800\\ud800\\udC00\"")
+	f.Add("[]0")
+	f.Add("")
+	f.Add("\n")
+	f.Add("0000")
+	f.Add(":")
+	f.Add("[0[],")
+	f.Add("[]0")
+	f.Add("{\"\"}")
+	f.Add("{0:0}")
+	f.Fuzz(func(t *testing.T, s string) {
+		valid := true
+		var v any
+		err := json.Unmarshal([]byte(s), &v)
+		if err != nil {
+			valid = false
+		}
+		data, err := ParseJsonByteFromString(s)
+		if valid {
+			require.NoError(t, err)
+
+			var bj ByteJson
+			bj.Unmarshal(data)
+
+			require.JSONEq(t, s, bj.String())
+			return
+		}
+		require.NotNil(t, err)
+	})
+}
+
+func TestNormalizeToIntString(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "0", want: "0"},
+		{input: "0.0", want: "0"},
+		{input: "-0", want: "0"},
+		{input: "-0.0", want: "0"},
+		{input: "-1.0e0", want: "-1"},
+		{input: "1.0e-000", want: "1"},
+		{input: "1.00000", want: "1"},
+		{input: "1.0000000001"},
+		{input: "0e0", want: "0"},
+		{input: "1E1", want: "10"},
+		{input: "-100.00e-02", want: "-1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			part, ok := ParseNumberParts([]byte(tc.input))
+			require.True(t, ok)
+
+			got, ok := NormalizeToIntString(part)
+			if tc.want != "" {
+				require.True(t, ok)
+				require.Equal(t, tc.want, got)
+			} else {
+				require.False(t, ok)
+			}
+		})
 	}
 }

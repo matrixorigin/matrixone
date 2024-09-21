@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
@@ -46,6 +45,7 @@ type fetchParams struct {
 }
 
 func NewObjectReader(
+	sid string,
 	service fileservice.FileService,
 	key objectio.Location,
 	opts ...objectio.ReaderOptionFunc,
@@ -68,11 +68,15 @@ func NewObjectReader(
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    pipeline,
+		aio:    MustGetPipeline(sid),
 	}, nil
 }
 
-func NewFileReader(service fileservice.FileService, name string) (*BlockReader, error) {
+func NewFileReader(
+	sid string,
+	service fileservice.FileService,
+	name string,
+) (*BlockReader, error) {
 	reader, err := objectio.NewObjectReaderWithStr(
 		name,
 		service,
@@ -82,7 +86,7 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    pipeline,
+		aio:    MustGetPipeline(sid),
 	}, nil
 }
 
@@ -340,53 +344,28 @@ func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 	return r.reader
 }
 
-// The caller has merged the block information that needs to be prefetched
-func PrefetchWithMerged(params PrefetchParams) error {
-	return pipeline.Prefetch(params)
-}
-
-func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
+func Prefetch(
+	sid string,
+	service fileservice.FileService,
+	key objectio.Location,
+) error {
 	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
-	params.AddBlock(idxes, ids)
-	return pipeline.Prefetch(params)
+	params.typ = PrefetchFileType
+	return MustGetPipeline(sid).Prefetch(params)
 }
 
-func PrefetchTombstone(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
+func PrefetchMeta(
+	sid string,
+	service fileservice.FileService,
+	key objectio.Location,
+) error {
 	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
-	params.AddBlockWithType(idxes, ids, uint16(objectio.SchemaTombstone))
-	return pipeline.Prefetch(params)
-}
-
-func PrefetchMeta(service fileservice.FileService, key objectio.Location) error {
-	params, err := BuildPrefetchParams(service, key)
-	if err != nil {
-		return err
-	}
-	return pipeline.Prefetch(params)
-}
-
-func PrefetchFile(service fileservice.FileService, name string) error {
-	reader, err := NewFileReader(service, name)
-	if err != nil {
-		return err
-	}
-	bs, err := reader.LoadAllBlocks(context.Background(), common.DefaultAllocator)
-	if err != nil {
-		return err
-	}
-	params := buildPrefetchParamsByReader(reader)
-	for i := range bs {
-		idxes := make([]uint16, bs[i].GetColumnCount())
-		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
-			idxes[a] = a
-		}
-		params.AddBlock(idxes, []uint16{bs[i].GetID()})
-	}
-	return PrefetchWithMerged(params)
+	params.typ = PrefetchMetaType
+	return MustGetPipeline(sid).Prefetch(params)
 }

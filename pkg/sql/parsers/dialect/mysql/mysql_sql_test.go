@@ -44,7 +44,7 @@ func TestDebug(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), debugSQL.input, 1, 0)
+	ast, err := ParseOne(context.TODO(), debugSQL.input, 1)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -70,7 +70,7 @@ func TestOriginSQL(t *testing.T) {
 	if orginSQL.output == "" {
 		orginSQL.output = orginSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), orginSQL.input, 0, 1)
+	ast, err := ParseOne(context.TODO(), orginSQL.input, 0)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", orginSQL.input, err)
 		return
@@ -86,6 +86,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select period from t1",
+		output: "select period from t1",
+	}, {
 		input:  "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name='admin' identified by '123456';",
 		output: "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name 'admin' identified by '******'",
 	}, {
@@ -194,6 +197,9 @@ var (
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
 	}, {
+		input:  "create table t2(a int, b datalink);",
+		output: "create table t2 (a int, b datalink)",
+	}, {
 		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
 		output: "select * from (select * from (select 1, 2, 3)) as t1",
 	}, {
@@ -228,10 +234,10 @@ var (
 		output: "select id, cid, status, ip, streams from camera where (cid_type = ?)",
 	}, {
 		input:  "CREATE  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
-		output: "create view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
+		output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 	}, {
 		input:  "ALTER  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
-		output: "alter view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
+		output: "alter view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 	}, {
 		input: "select time from t1 as value",
 	}, {
@@ -276,7 +282,7 @@ var (
 		input: "select password from t1",
 	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
-		output: "create table t1 (a datetime on update current_timestamp(1))",
+		output: "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
 	}, {
 		input:  `create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT="asdf"`,
 		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = 'asdf'",
@@ -330,6 +336,24 @@ var (
 		}, {
 			input:  "explain (analyze true,verbose false,format json) select * from emp",
 			output: "explain (analyze true,verbose false,format json) select * from emp",
+		}, {
+			input:  "explain phyplan select * from emp where sal > 3000",
+			output: "explain (phyplan) select * from emp where sal > 3000",
+		}, {
+			input:  "explain phyplan verbose select * from emp",
+			output: "explain (phyplan,verbose) select * from emp",
+		}, {
+			input:  "explain phyplan analyze select * from emp",
+			output: "explain (phyplan,analyze) select * from emp",
+		}, {
+			input:  "explain (phyplan true,verbose false) select * from emp",
+			output: "explain (phyplan true,verbose false) select * from emp",
+		}, {
+			input:  "explain (phyplan true,verbose false,format json) select * from emp",
+			output: "explain (phyplan true,verbose false,format json) select * from emp",
+		}, {
+			input:  "explain (phyplan true,analyze true,verbose true) select * from emp",
+			output: "explain (phyplan true,analyze true,verbose true) select * from emp",
 		}, {
 			input:  "with t11 as (select * from t1) update t11 join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
 			output: "with t11 as (select * from t1) update t11 inner join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
@@ -441,7 +465,7 @@ var (
 			output: "set timestamp = default",
 		}, {
 			input:  "SET timestamp=UNIX_TIMESTAMP('2011-07-31 10:00:00')",
-			output: "set timestamp = unix_timestamp(2011-07-31 10:00:00)",
+			output: "set timestamp = UNIX_TIMESTAMP(2011-07-31 10:00:00)",
 		}, {
 			input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
 			output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
@@ -453,7 +477,7 @@ var (
 			output: "select rpad(hello, -18446744073709551616, 1)",
 		}, {
 			input:  "SELECT CONCAT_WS(1471290948102948112341241204312904-23412412-4141, \"a\", \"b\")",
-			output: "select concat_ws(1471290948102948112341241204312904 - 23412412 - 4141, a, b)",
+			output: "select CONCAT_WS(1471290948102948112341241204312904 - 23412412 - 4141, a, b)",
 		}, {
 			input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION ( SELECT 1 UNION SELECT 1 ) );",
 			output: "select * from t1 where a = any (select 1 union (select 1 union select 1))",
@@ -519,31 +543,34 @@ var (
 			output: "select false is not false",
 		}, {
 			input:  "SELECT FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999);",
-			output: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999)",
+			output: "select FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999)",
 		}, {
 			input:  "SELECT FROM_UNIXTIME(2147483647) AS c1, FROM_UNIXTIME(2147483648) AS c2, FROM_UNIXTIME(2147483647.9999999) AS c3, FROM_UNIXTIME(32536771199) AS c4,FROM_UNIXTIME(32536771199.9999999) AS c5;",
-			output: "select from_unixtime(2147483647) as c1, from_unixtime(2147483648) as c2, from_unixtime(2147483647.9999999) as c3, from_unixtime(32536771199) as c4, from_unixtime(32536771199.9999999) as c5",
+			output: "select FROM_UNIXTIME(2147483647) as c1, FROM_UNIXTIME(2147483648) as c2, FROM_UNIXTIME(2147483647.9999999) as c3, FROM_UNIXTIME(32536771199) as c4, FROM_UNIXTIME(32536771199.9999999) as c5",
 		}, {
 			input:  "select date_add(\"1997-12-31 23:59:59\",INTERVAL -100000 YEAR);",
-			output: "select date_add(1997-12-31 23:59:59, interval(-100000, year))",
+			output: "select date_add(1997-12-31 23:59:59, INTERVAL(-100000, year))",
 		}, {
 			input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
-			output: "select adddate(date(2021-01-01), interval(1, day))",
+			output: "select ADDDATE(DATE(2021-01-01), INTERVAL(1, day))",
 		}, {
 			input:  "select '2007-01-01' + interval a day from t1;",
 			output: "select 2007-01-01 + interval(a, day) from t1",
 		}, {
 			input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
-			output: "select cast(coalesce(t0.c0, -1) as unsigned) is true from t0",
+			output: "select cast(COALESCE(t0.c0, -1) as unsigned) is true from t0",
 		}, {
 			input:  "select Fld1, variance(Fld2) as q from t1 group by Fld1 having q is not null;",
-			output: "select fld1, variance(fld2) as q from t1 group by fld1 having q is not null",
+			output: "select Fld1, variance(Fld2) as q from t1 group by Fld1 having q is not null",
 		}, {
 			input:  "select variance(-99999999999999999.99999);",
 			output: "select variance(-99999999999999999.99999)",
 		}, {
 			input:  "select Fld1, std(Fld2) from t1 group by Fld1 having variance(Fld2) is not null",
-			output: "select fld1, std(fld2) from t1 group by fld1 having variance(fld2) is not null",
+			output: "select Fld1, std(Fld2) from t1 group by Fld1 having variance(Fld2) is not null",
+		}, {
+			input:  "select Fld1, std(Fld2) from t1 group by Fld1 with rollup having variance(Fld2) is not null",
+			output: "select Fld1, std(Fld2) from t1 group by Fld1 with rollup having variance(Fld2) is not null",
 		}, {
 			input:  "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1<=>b.f1 as eq from t1 a, t1 b;",
 			output: "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1 <=> b.f1 as eq from t1 as a cross join t1 as b",
@@ -557,10 +584,10 @@ var (
 			input: "select cast(variance(ff) as decimal(10, 3)) from t2",
 		}, {
 			input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
-			output: "select group_concat(distinct 2, ,) from t1",
+			output: "select GROUP_CONCAT(distinct 2, ,) from t1",
 		}, {
 			input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
-			output: "select group_concat(distinct a, ,order by a) from t1",
+			output: "select GROUP_CONCAT(distinct a, ,order by a) from t1",
 		}, {
 			input: "select variance(2) from t1",
 		}, {
@@ -589,13 +616,13 @@ var (
 			output: "select sum(all a), count(all a), avg(all a), std(all a), variance(all a), bit_or(all a), bit_and(all a), min(all a), max(all a), min(all c), max(all c) from t",
 		}, {
 			input:  "insert into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-			output: "insert into t1 values (date_add(null, interval(1, day)))",
+			output: "insert into t1 values (date_add(null, INTERVAL(1, day)))",
 		}, {
 			input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-			output: "replace into t1 values (date_add(null, interval(1, day)))",
+			output: "replace into t1 values (date_add(null, INTERVAL(1, day)))",
 		}, {
 			input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
-			output: "select date_add(2022-02-28 23:59:59.9999, interval(1, second)) as 1 second later",
+			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL(1, second)) as 1 second later",
 		}, {
 			input:  "SELECT sum(a) as 'hello' from t1;",
 			output: "select sum(a) as hello from t1",
@@ -604,7 +631,7 @@ var (
 			output: "select stream from t1",
 		}, {
 			input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
-			output: "select date_add(2017-06-15, interval(-10, month))",
+			output: "select DATE_ADD(2017-06-15, INTERVAL(-10, month))",
 		}, {
 			input:  "create table t1 (a varchar)",
 			output: "create table t1 (a varchar)",
@@ -631,7 +658,7 @@ var (
 			output: "select md.datname as Database from tt as md",
 		}, {
 			input:  "select * from t where a = `Hello`",
-			output: "select * from t where a = hello",
+			output: "select * from t where a = Hello",
 		}, {
 			input:  "CREATE VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
 			output: "create view v as select * from t where t.id = f(t.name)",
@@ -671,7 +698,7 @@ var (
 			output: "select extract(year, l_shipdate) as l_year from t",
 		}, {
 			input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
-			output: "select * from r inner join s on r.uid = s.uid where l_shipdate <= date(1998-12-01) - interval(112, day)",
+			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - interval(112, day)",
 		}, {
 			input: "create table deci_table (a decimal(10, 5))",
 		}, {
@@ -691,7 +718,7 @@ var (
 			input: "select substring(name, 5, 3) from t1",
 		}, {
 			input:  "select * from R join S on R.uid = S.uid",
-			output: "select * from r inner join s on r.uid = s.uid",
+			output: "select * from r inner join s on R.uid = S.uid",
 		}, {
 			input:  "create table t (a int, b char, key idx1 type zonemap (a, b))",
 			output: "create table t (a int, b char, index idx1 using zonemap (a, b))",
@@ -730,7 +757,7 @@ var (
 			output: "insert into t1 (f1) values (-1)",
 		}, {
 			input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=VALUES(a)+VALUES(b), b=VALUES(a)+VALUES(c);",
-			output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = values(a) + values(b), b = values(a) + values(c)",
+			output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = VALUES(a) + VALUES(b), b = VALUES(a) + VALUES(c)",
 		}, {
 			input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2, b=3;",
 			output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2, b = 3",
@@ -815,7 +842,7 @@ var (
 			input: "replace into t2 values (-3, 2)",
 		}, {
 			input:  "select spID,userID,score from t1 where spID>(userID-1);",
-			output: "select spid, userid, score from t1 where spid > (userid - 1)",
+			output: "select spID, userID, score from t1 where spID > (userID - 1)",
 		}, {
 			input:  "CREATE TABLE t2(product VARCHAR(32),country_id INTEGER NOT NULL,year INTEGER,profit INTEGER)",
 			output: "create table t2 (product varchar(32), country_id integer not null, year integer, profit integer)",
@@ -827,7 +854,7 @@ var (
 			input: "create table numtable (a tinyint unsigned, b smallint unsigned, c int unsigned, d bigint unsigned)",
 		}, {
 			input:  "SELECT userID as user, MAX(score) as max FROM t1 GROUP BY userID order by user",
-			output: "select userid as user, max(score) as max from t1 group by userid order by user",
+			output: "select userID as user, MAX(score) as max from t1 group by userID order by user",
 		}, {
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
 			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
@@ -885,7 +912,7 @@ var (
 			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true ",
+			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true' strict 'true';",
 			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
@@ -940,35 +967,35 @@ var (
 			output: "show tables from test01 where tables_in_test01 like %t2%",
 		}, {
 			input:  "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score",
-			output: "select userid, max(score) as max_score from t1 where concat(userid < 2, userid > 3) group by userid order by max_score",
+			output: "select userID, MAX(score) as max_score from t1 where concat(userID < 2, userID > 3) group by userID order by max_score",
 		}, {
 			input: "select c1, -c2 from t2 order by -c1 desc",
 		}, {
 			input:  "select * from t1 where spID>2 AND userID <2 || userID >=2 OR userID < 2 limit 3",
-			output: "select * from t1 where concat(spid > 2 and userid < 2, userid >= 2) or userid < 2 limit 3",
+			output: "select * from t1 where concat(spID > 2 and userID < 2, userID >= 2) or userID < 2 limit 3",
 		}, {
 			input:  "select * from t10 where (b='ba' or b='cb') and (c='dc' or c='ed');",
 			output: "select * from t10 where (b = ba or b = cb) and (c = dc or c = ed)",
 		}, {
 			input:  "select CAST(userID AS DOUBLE) cast_double, CAST(userID AS FLOAT(3)) cast_float , CAST(userID AS REAL) cast_real, CAST(userID AS SIGNED) cast_signed, CAST(userID AS UNSIGNED) cast_unsigned from t1 limit 2",
-			output: "select cast(userid as double) as cast_double, cast(userid as float(3)) as cast_float, cast(userid as real) as cast_real, cast(userid as signed) as cast_signed, cast(userid as unsigned) as cast_unsigned from t1 limit 2",
+			output: "select cast(userID as double) as cast_double, cast(userID as float(3)) as cast_float, cast(userID as real) as cast_real, cast(userID as signed) as cast_signed, cast(userID as unsigned) as cast_unsigned from t1 limit 2",
 		}, {
 			input: "select distinct name as name1 from t1",
 		}, {
 			input:  "select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t1",
-			output: "select userid, userid div 2 as user_dir, userid % 2 as user_percent, userid % 2 as user_mod from t1",
+			output: "select userID, userID div 2 as user_dir, userID % 2 as user_percent, userID % 2 as user_mod from t1",
 		}, {
 			input:  "select sum(score) as sum from t1 where spID=6 group by score order by sum desc",
-			output: "select sum(score) as sum from t1 where spid = 6 group by score order by sum desc",
+			output: "select sum(score) as sum from t1 where spID = 6 group by score order by sum desc",
 		}, {
 			input:  "select userID,count(score) from t1 where userID>2 group by userID having count(score)>1",
-			output: "select userid, count(score) from t1 where userid > 2 group by userid having count(score) > 1",
+			output: "select userID, count(score) from t1 where userID > 2 group by userID having count(score) > 1",
 		}, {
 			input:  "SELECT product, SUM(profit),AVG(profit) FROM t2 where product<>'TV' GROUP BY product order by product asc",
-			output: "select product, sum(profit), avg(profit) from t2 where product != TV group by product order by product asc",
+			output: "select product, SUM(profit), AVG(profit) from t2 where product != TV group by product order by product asc",
 		}, {
 			input:  "SELECT product, SUM(profit),AVG(profit) FROM t2 where product='Phone' GROUP BY product order by product asc",
-			output: "select product, sum(profit), avg(profit) from t2 where product = Phone group by product order by product asc",
+			output: "select product, SUM(profit), AVG(profit) from t2 where product = Phone group by product order by product asc",
 		}, {
 			input:  "select sum(col_1d),count(col_1d),avg(col_1d),min(col_1d),max(col_1d) from tbl1 group by col_1e",
 			output: "select sum(col_1d), count(col_1d), avg(col_1d), min(col_1d), max(col_1d) from tbl1 group by col_1e",
@@ -1068,7 +1095,7 @@ var (
 			input: "select sysdate(), curtime from t",
 		}, {
 			input:  "select current_time(), current_timestamp, lacalTIMe(89), utc_time() from t",
-			output: "select current_time(), current_timestamp(), lacaltime(89), utc_time() from t",
+			output: "select current_time(), current_timestamp(), lacalTIMe(89), utc_time() from t",
 		}, {
 			input:  "select current_user(), current_role(), current_date, utc_date from t",
 			output: "select current_user(), current_role(), current_date(), utc_date() from t",
@@ -1177,11 +1204,11 @@ var (
 		},
 		{
 			input:  `CREATE TABLE tp10 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));`,
-			output: `create table tp10 (col1 int, col2 char(5), col3 datetime) partition by hash (year(col3))`,
+			output: `create table tp10 (col1 int, col2 char(5), col3 datetime) partition by hash (YEAR(col3))`,
 		},
 		{
 			input:  `CREATE TABLE tp11 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6`,
-			output: `create table tp11 (col1 int, col2 char(5), col3 date) partition by linear hash (year(col3)) partitions 6`,
+			output: `create table tp11 (col1 int, col2 char(5), col3 date) partition by linear hash (YEAR(col3)) partitions 6`,
 		},
 		{
 			input:  `CREATE TABLE tp12 (col1 INT NOT NULL, col2 DATE NOT NULL, col3 INT NOT NULL, col4 INT NOT NULL, PRIMARY KEY (col1, col2)) PARTITION BY HASH(col1) PARTITIONS 4`,
@@ -1203,7 +1230,7 @@ var (
 					PARTITION p2 VALUES LESS THAN (2001),
 					PARTITION p3 VALUES LESS THAN MAXVALUE
 				);`,
-			output: `create table tp13 (id int not null, fname varchar(30), lname varchar(30), hired date not null default 1970-01-01, separated date not null default 9999-12-31, job_code int, store_id int) partition by range(year(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))`,
+			output: `create table tp13 (id int not null, fname varchar(30), lname varchar(30), hired date not null default 1970-01-01, separated date not null default 9999-12-31, job_code int, store_id int) partition by range(YEAR(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))`,
 		},
 		{
 			input: `CREATE TABLE tp14 (
@@ -1871,7 +1898,7 @@ var (
 			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
 		}, {
 			input:  `DO SLEEP(5)`,
-			output: `do sleep(5)`,
+			output: `do SLEEP(5)`,
 		}, {
 			input:  `DECLARE a, b INT`,
 			output: `declare a b int default null`,
@@ -2394,11 +2421,23 @@ var (
 			output: "alter table titles partition by range(to_days(from_date)) (partition p01 values less than (to_days(1985-12-31)), partition p02 values less than (to_days(1986-12-31)), partition p03 values less than (to_days(1987-12-31)))",
 		},
 		{
+			input:  "Alter table nation rename to nations",
+			output: "alter table nation rename to nations",
+		},
+		{
+			input:  "Rename table nation to nations",
+			output: "rename table nation rename to nations",
+		},
+		{
+			input:  "rename table rename_table_01 to rename01,rename_table_02 to rename02,rename_table_03 to rename03,rename_table_04 to rename04,rename_table_05 to rename05",
+			output: "rename table rename_table_01 rename to rename01, rename_table_02 rename to rename02, rename_table_03 rename to rename03, rename_table_04 rename to rename04, rename_table_05 rename to rename05",
+		},
+		{
 			input:  "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'p1 comment', partition p2 values less than maxvalue comment 'p3 comment')",
 			output: "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment = 'p1 comment', partition p2 values less than (MAXVALUE) comment = 'p3 comment')",
 		},
 		{
-			input: "create publication pub1 database db1",
+			input: "create publication pub1 database db1 account all",
 		},
 		{
 			input: "create publication pub1 database db1 account acc0",
@@ -2410,22 +2449,26 @@ var (
 			input: "create publication pub1 database db1 account acc0, acc1, acc2 comment 'test'",
 		},
 		{
-			input: "create publication pub1 database db1 comment 'test'",
+			input: "create publication pub1 database db1 account all comment 'test'",
 		},
 		{
-			input: "create publication pub1 table t1",
+			input: "create publication pub1 database db1 table t1 account all",
 		},
 		{
-			input: "create publication pub1 table t1 account acc0",
+			input: "create publication pub1 database db1 table t1 account acc0",
 		},
 		{
-			input: "create publication pub1 table t1 account acc0, acc1",
+			input: "create publication pub1 database db1 table t1 account acc0, acc1",
 		},
 		{
-			input: "create publication pub1 table t1 account acc0, acc1, acc2 comment 'test'",
+			input: "create publication pub1 database db1 table t1 account acc0, acc1, acc2 comment 'test'",
 		},
 		{
-			input: "create publication pub1 table t1 comment 'test'",
+			input: "create publication pub1 database db1 table t1 account all comment 'test'",
+		},
+		{
+			input:  "create publication pub1 database db1 table t1,t2 account all comment 'test'",
+			output: "create publication pub1 database db1 table t1, t2 account all comment 'test'",
 		},
 		{
 			input:  "CREATE STAGE my_ext_stage URL='s3://load/files/'",
@@ -2493,6 +2536,13 @@ var (
 			input: "alter publication pub1 account add acc0",
 		},
 		{
+			input: "alter publication pub1 account add acc0 database db1",
+		},
+		{
+			input:  "alter publication pub1 account acc0 database db1 table t1,t2",
+			output: "alter publication pub1 account acc0 database db1 table t1, t2",
+		},
+		{
 			input: "restore cluster from snapshot snapshot_01",
 		},
 		{
@@ -2507,6 +2557,33 @@ var (
 		{
 			input:  "restore account account_01 from snapshot snapshot_01 to account account_02",
 			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
+		},
+		{
+			input: `create cdc test_create_task 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0',};`,
+		},
+		{
+			input: `show cdc all;`,
+		},
+		{
+			input: `show cdc task t1;`,
+		},
+		{
+			input: `drop cdc all;`,
+		},
+		{
+			input: `drop cdc task t1;`,
+		},
+		{
+			input: `pause cdc all;`,
+		},
+		{
+			input: `pause cdc task t1;`,
+		},
+		{
+			input: `resume cdc task t1;`,
+		},
+		{
+			input: `resume cdc task t1 'restart';`,
 		},
 		{
 			input: "alter publication pub1 account add acc0, acc1",
@@ -2593,7 +2670,7 @@ var (
 		},
 		{
 			input:  "select BINARY 124",
-			output: "select binary(124)",
+			output: "select BINARY(124)",
 		},
 		{
 			input:  "set transaction isolation level read committed;",
@@ -2808,17 +2885,17 @@ var (
 			output: `backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} backuptype incremental backupts xxxxx-xxxxx`,
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `pga0010` AS select distinct `a`.`FACDIV` AS `FACDIV`,`a`.`BLDCD` AS `BLDCD`,`a`.`PRDCD` AS `PRDCD`,`a`.`PRDNAM` AS `PRDNAM`,`a`.`PRDLNG` AS `PRDLNG`,`a`.`PRDWID` AS `PRDWID`,`a`.`PRDGAG` AS `PRDGAG`,`a`.`AREA` AS `AREA`,`a`.`GLZTYP` AS `GLZTYP`,`a`.`TECTYP` AS `TECTYP`,`a`.`PRDCATE` AS `PRDCATE`,`a`.`PRCCD` AS `PRCCD`,`a`.`PRCDSC` AS `PRCDSC`,`a`.`GLSSTR` AS `GLSSTR`,`a`.`REMARK` AS `REMARK`,`a`.`USEYN` AS `USEYN`,`a`.`ISMES` AS `ISMES` from (select 'N' AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCDFATHER` AS `BLDCD`,substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'Y') and (`skim`.`bga0010`.`USEYN` = 'Y') and (not(substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) in (select `skim`.`bga0010`.`PRDCD` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y')))))) union all select `skim`.`bga0010`.`ISMES` AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCD` AS `BLDCD`,`skim`.`bga0010`.`PRDCD` AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y'))) `a` order by `a`.`BLDCD` */;",
-			output: "create view pga0010 as select distinct a.facdiv as FACDIV, a.bldcd as BLDCD, a.prdcd as PRDCD, a.prdnam as PRDNAM, a.prdlng as PRDLNG, a.prdwid as PRDWID, a.prdgag as PRDGAG, a.area as AREA, a.glztyp as GLZTYP, a.tectyp as TECTYP, a.prdcate as PRDCATE, a.prccd as PRCCD, a.prcdsc as PRCDSC, a.glsstr as GLSSTR, a.remark as REMARK, a.useyn as USEYN, a.ismes as ISMES from (select N as ISMES, skim.bga0010.useyn as USEYN, skim.bga0010.facdiv as FACDIV, skim.bga0010.bldcdfather as BLDCD, substring_index(skim.bga0010.prdcd, -, 1) as PRDCD, skim.bga0010.prdnam as PRDNAM, skim.bga0010.prdlng as PRDLNG, skim.bga0010.prdwid as PRDWID, skim.bga0010.prdgag as PRDGAG, skim.bga0010.area as AREA, skim.bga0010.glztyp as GLZTYP, skim.bga0010.tectyp as TECTYP, skim.bga0010.prdcate as PRDCATE, skim.bga0010.matcst as MATCST, skim.bga0010.prccd as PRCCD, skim.bga0010.prcdsc as PRCDSC, skim.bga0010.glsstr as GLSSTR, skim.bga0010.remark as REMARK from skim.bga0010 where ((skim.bga0010.ismes = Y) and (skim.bga0010.useyn = Y) and (not (substring_index(skim.bga0010.prdcd, -, 1) in (select skim.bga0010.prdcd from skim.bga0010 where ((skim.bga0010.ismes = N) and (skim.bga0010.useyn = Y)))))) union all select skim.bga0010.ismes as ISMES, skim.bga0010.useyn as USEYN, skim.bga0010.facdiv as FACDIV, skim.bga0010.bldcd as BLDCD, skim.bga0010.prdcd as PRDCD, skim.bga0010.prdnam as PRDNAM, skim.bga0010.prdlng as PRDLNG, skim.bga0010.prdwid as PRDWID, skim.bga0010.prdgag as PRDGAG, skim.bga0010.area as AREA, skim.bga0010.glztyp as GLZTYP, skim.bga0010.tectyp as TECTYP, skim.bga0010.prdcate as PRDCATE, skim.bga0010.matcst as MATCST, skim.bga0010.prccd as PRCCD, skim.bga0010.prcdsc as PRCDSC, skim.bga0010.glsstr as GLSSTR, skim.bga0010.remark as REMARK from skim.bga0010 where ((skim.bga0010.ismes = N) and (skim.bga0010.useyn = Y))) as a order by a.bldcd",
+			output: "create view pga0010 as select distinct a.FACDIV as FACDIV, a.BLDCD as BLDCD, a.PRDCD as PRDCD, a.PRDNAM as PRDNAM, a.PRDLNG as PRDLNG, a.PRDWID as PRDWID, a.PRDGAG as PRDGAG, a.AREA as AREA, a.GLZTYP as GLZTYP, a.TECTYP as TECTYP, a.PRDCATE as PRDCATE, a.PRCCD as PRCCD, a.PRCDSC as PRCDSC, a.GLSSTR as GLSSTR, a.REMARK as REMARK, a.USEYN as USEYN, a.ISMES as ISMES from (select N as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCDFATHER as BLDCD, substring_index(skim.bga0010.PRDCD, -, 1) as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = Y) and (skim.bga0010.USEYN = Y) and (not (substring_index(skim.bga0010.PRDCD, -, 1) in (select skim.bga0010.PRDCD from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y)))))) union all select skim.bga0010.ISMES as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCD as BLDCD, skim.bga0010.PRDCD as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y))) as a order by a.BLDCD",
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `sale_employee` AS select `ct`.`ENTID` AS `ORGANIZATION_ID`,`cu`.`SYSUSERID` AS `SALE_EMPLOYEE_ID`,`cu`.`SYSUSERID` AS `EMPLOYEE_ID`,`cu`.`ACTIVED` AS `ISUSEABLE`,`cu`.`CREATOR` AS `CREATED_BY`,`cu`.`CREATETIME` AS `CREATION_DATE`,`cu`.`UPDATOR` AS `LAST_UPDATED_BY`,`cu`.`UPDATETIME` AS `LAST_UPDATE_DATE`,'' AS `ATTRIBUTE11`,'' AS `ATTRIBUTE21`,'' AS `ATTRIBUTE31`,0 AS `ATTRIBUTE41`,0 AS `ATTRIBUTE51`,0 AS `AREA_ID` from (`kaf_cpcuser` `cu` join `kaf_cpcent` `ct`) where (`cu`.`ISSALEEMPLOYEE` = 2) */;",
-			output: "create view sale_employee as select ct.entid as ORGANIZATION_ID, cu.sysuserid as SALE_EMPLOYEE_ID, cu.sysuserid as EMPLOYEE_ID, cu.actived as ISUSEABLE, cu.creator as CREATED_BY, cu.createtime as CREATION_DATE, cu.updator as LAST_UPDATED_BY, cu.updatetime as LAST_UPDATE_DATE,  as ATTRIBUTE11,  as ATTRIBUTE21,  as ATTRIBUTE31, 0 as ATTRIBUTE41, 0 as ATTRIBUTE51, 0 as AREA_ID from kaf_cpcuser as cu inner join kaf_cpcent as ct where (cu.issaleemployee = 2)",
+			output: "create view sale_employee as select ct.ENTID as ORGANIZATION_ID, cu.SYSUSERID as SALE_EMPLOYEE_ID, cu.SYSUSERID as EMPLOYEE_ID, cu.ACTIVED as ISUSEABLE, cu.CREATOR as CREATED_BY, cu.CREATETIME as CREATION_DATE, cu.UPDATOR as LAST_UPDATED_BY, cu.UPDATETIME as LAST_UPDATE_DATE,  as ATTRIBUTE11,  as ATTRIBUTE21,  as ATTRIBUTE31, 0 as ATTRIBUTE41, 0 as ATTRIBUTE51, 0 as AREA_ID from kaf_cpcuser as cu inner join kaf_cpcent as ct where (cu.ISSALEEMPLOYEE = 2)",
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `xab0100` AS (select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) */;",
-			output: "create view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
+			output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 		},
 		{
 			input:  "CREATE TABLE `ecbase_push_log` (`id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',`create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间') ENGINE=InnoDB AUTO_INCREMENT=654 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='推送记录表'/*!50500 PARTITION BY RANGE  COLUMNS(create_time)(PARTITION p20240115 VALUES LESS THAN ('2024-01-15 00:00:00') ENGINE = InnoDB,PARTITION p20240116 VALUES LESS THAN ('2024-01-16 00:00:00') ENGINE = InnoDB,PARTITION p20240117 VALUES LESS THAN ('2024-01-17 00:00:00') ENGINE = InnoDB,PARTITION p20240118 VALUES LESS THAN ('2024-01-18 00:00:00') ENGINE = InnoDB,PARTITION p20240119 VALUES LESS THAN ('2024-01-19 00:00:00') ENGINE = InnoDB,PARTITION p20240120 VALUES LESS THAN ('2024-01-20 00:00:00') ENGINE = InnoDB,PARTITION p20240121 VALUES LESS THAN ('2024-01-21 00:00:00') ENGINE = InnoDB,PARTITION p20240122 VALUES LESS THAN ('2024-01-22 00:00:00') ENGINE = InnoDB,PARTITION p20240123 VALUES LESS THAN ('2024-01-23 00:00:00') ENGINE = InnoDB,PARTITION p20240124 VALUES LESS THAN ('2024-01-24 00:00:00') ENGINE = InnoDB,PARTITION p20240125 VALUES LESS THAN ('2024-01-25 00:00:00') ENGINE = InnoDB) */;",
-			output: "create table ecbase_push_log (id bigint not null auto_increment comment 主键, create_time datetime not null default current_timestamp() comment 创建时间) engine = innodb auto_increment = 654 charset = utf8mb4 Collate = utf8mb4_general_ci comment = '推送记录表' partition by range columns (create_time) (partition p20240115 values less than (2024-01-15 00:00:00) engine = innodb, partition p20240116 values less than (2024-01-16 00:00:00) engine = innodb, partition p20240117 values less than (2024-01-17 00:00:00) engine = innodb, partition p20240118 values less than (2024-01-18 00:00:00) engine = innodb, partition p20240119 values less than (2024-01-19 00:00:00) engine = innodb, partition p20240120 values less than (2024-01-20 00:00:00) engine = innodb, partition p20240121 values less than (2024-01-21 00:00:00) engine = innodb, partition p20240122 values less than (2024-01-22 00:00:00) engine = innodb, partition p20240123 values less than (2024-01-23 00:00:00) engine = innodb, partition p20240124 values less than (2024-01-24 00:00:00) engine = innodb, partition p20240125 values less than (2024-01-25 00:00:00) engine = innodb)",
+			output: "create table ecbase_push_log (id bigint not null auto_increment comment 主键, create_time datetime not null default CURRENT_TIMESTAMP() comment 创建时间) engine = innodb auto_increment = 654 charset = utf8mb4 Collate = utf8mb4_general_ci comment = '推送记录表' partition by range columns (create_time) (partition p20240115 values less than (2024-01-15 00:00:00) engine = innodb, partition p20240116 values less than (2024-01-16 00:00:00) engine = innodb, partition p20240117 values less than (2024-01-17 00:00:00) engine = innodb, partition p20240118 values less than (2024-01-18 00:00:00) engine = innodb, partition p20240119 values less than (2024-01-19 00:00:00) engine = innodb, partition p20240120 values less than (2024-01-20 00:00:00) engine = innodb, partition p20240121 values less than (2024-01-21 00:00:00) engine = innodb, partition p20240122 values less than (2024-01-22 00:00:00) engine = innodb, partition p20240123 values less than (2024-01-23 00:00:00) engine = innodb, partition p20240124 values less than (2024-01-24 00:00:00) engine = innodb, partition p20240125 values less than (2024-01-25 00:00:00) engine = innodb)",
 		},
 		{
 			input:  "show connectors",
@@ -2884,6 +2961,101 @@ var (
 			input:  "explain analyze verbose force execute st",
 			output: "explain (analyze,verbose) execute st",
 		},
+		{
+			input:  "create pitr `pitr1` for cluster range 1 'd'",
+			output: "create pitr pitr1 for cluster range 1  d",
+		},
+		{
+			input:  "create pitr `pitr2` for account acc01 range 1 'd'",
+			output: "create pitr pitr2 for account acc01 range 1  d",
+		},
+		{
+			input:  "create pitr `pitr3` range 1 'h'",
+			output: "create pitr pitr3 for self account range 1  h",
+		},
+		{
+			input:  "create pitr `pitr4` for database db01 range 1 'h'",
+			output: "create pitr pitr4 for database db01 range 1  h",
+		},
+		{
+			input:  "create pitr `pitr5` for database db01 table t01 range 1 'h'",
+			output: "create pitr pitr5 for database db01 table t01 range 1  h",
+		},
+		{
+			input: "show pitr",
+		},
+		{
+			input:  "drop pitr `pitr1`",
+			output: "drop pitr pitr1",
+		},
+		{
+			input:  "drop pitr if exists `pitr2`",
+			output: "drop pitr if exists pitr2",
+		},
+		{
+			input:  "alter pitr `pitr3` range 2 'h'",
+			output: "alter pitr pitr3 range 2  h",
+		},
+		{
+			input:  "alter pitr if exists `pitr01` range 2 'h'",
+			output: "alter pitr if exists pitr01 range 2  h",
+		},
+		{
+			input:  "restore from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore self account from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore database db01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore database db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore account acc01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00' acc02",
+			output: "restore account acc01 from pitr pitr01 timestamp = 2021-01-01 00:00:00 from account acc02",
+		},
+		{
+			input:  "restore cluster from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore cluster from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "show create table t1 {snapshot = 'sp01'}",
+			output: "show create table t1 {snapshot = sp01}",
+		},
+		{
+			input:  "show create view test_view {snapshot = 'sp01'}",
+			output: "show create view test_view {snapshot = sp01}",
+		},
+		{
+			input:  "show create database db01 {snapshot = 'sp01'}",
+			output: "show create database db01 {snapshot = sp01}",
+		},
+		{
+			input:  "show tables {snapshot = 'sp01'}",
+			output: "show tables {snapshot = sp01}",
+		},
+		{
+			input:  "show databases {snapshot = 'sp01'}",
+			output: "show databases {snapshot = sp01}",
+		},
+		{
+			input:  "create table t1 (a int) with retention period 1 day",
+			output: "create table t1 (a int) with retention period 1 day",
+		},
+		{
+			input:  "create table t1 (a int) with retention period 10 week",
+			output: "create table t1 (a int) with retention period 10 week",
+		},
+		{
+			input:  "create table t1 (a int) with retention period 3 second",
+			output: "create table t1 (a int) with retention period 3 second",
+		},
 	}
 )
 
@@ -2893,7 +3065,7 @@ func TestValid(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(ctx, tcase.input, 1, 0)
+		ast, err := ParseOne(ctx, tcase.input, 1)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -2933,7 +3105,7 @@ func TestSQLStringFmt(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(ctx, tcase.input, 1, 0)
+		ast, err := ParseOne(ctx, tcase.input, 1)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -3000,7 +3172,7 @@ var (
 					END IF;
 					SET s = CONCAT(n, ' ', s, ' ', m, '.');
 				END`,
-		output: "begin if n = m then set s = equals; else if n > m then set s = greater; else set s = less; end if; set s = concat(is , s,  than); end if; set s = concat(n,  , s,  , m, .); end",
+		output: "begin if n = m then set s = equals; else if n > m then set s = greater; else set s = less; end if; set s = CONCAT(is , s,  than); end if; set s = CONCAT(n,  , s,  , m, .); end",
 	}, {
 		input: `BEGIN					
 					label1: LOOP
@@ -3038,7 +3210,7 @@ func TestMulti(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		asts, err := Parse(ctx, tcase.input, 1, 0)
+		asts, err := Parse(ctx, tcase.input, 1)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -3092,13 +3264,16 @@ var (
 		{
 			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
 		},
+		{
+			input: "create table t (a int) with retention period 2 days",
+		},
 	}
 )
 
 func TestFaultTolerance(t *testing.T) {
 	ctx := context.TODO()
 	for _, tcase := range invalidSQL {
-		_, err := ParseOne(ctx, tcase.input, 1, 0)
+		_, err := ParseOne(ctx, tcase.input, 1)
 		if err == nil {
 			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
 			continue

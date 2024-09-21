@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 func NewSetVarBinder(builder *QueryBuilder, ctx *BindContext) *SetBinder {
@@ -47,11 +46,11 @@ func (s *SetBinder) BindExpr(expr tree.Expr, i int32, b bool) (*plan.Expr, error
 		//supported function
 		funcRef, ok := exprImpl.Func.FunctionReference.(*tree.UnresolvedName)
 		if !ok {
-			return nil, moerr.NewNYI(s.GetContext(), "invalid function expr '%v'", exprImpl)
+			return nil, moerr.NewNYIf(s.GetContext(), "invalid function expr '%v'", exprImpl)
 		}
-		funcName := strings.ToLower(funcRef.Parts[0])
+		funcName := funcRef.ColName()
 		if _, ok := funcNeedsTxn[funcName]; ok {
-			return nil, moerr.NewInvalidInput(s.GetContext(), "function %s is not allowed in the set expression", funcName)
+			return nil, moerr.NewInvalidInputf(s.GetContext(), "function %s is not allowed in the set expression", funcRef.ColNameOrigin())
 		}
 	}
 	return s.baseBindExpr(expr, i, b)
@@ -74,5 +73,5 @@ func (s *SetBinder) BindSubquery(subquery *tree.Subquery, b bool) (*plan.Expr, e
 }
 
 func (s *SetBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput(s.GetContext(), "cannot bind time window functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputf(s.GetContext(), "cannot bind time window functions '%s'", funcName)
 }

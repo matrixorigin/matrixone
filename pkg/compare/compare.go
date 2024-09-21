@@ -15,8 +15,6 @@
 package compare
 
 import (
-	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -141,7 +139,7 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 		}
 		return newCompare(genericAscCompare[types.Enum], genericCopy[types.Enum], nullsLast)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_json, types.T_text, types.T_datalink:
 		return &strCompare{
 			desc:        desc,
 			nullsLast:   nullsLast,
@@ -181,15 +179,16 @@ func uuidAscCompare(x, y types.Uuid) int {
 	return x.Compare(y)
 }
 
+// PXU FIXME Done
 func txntsAscCompare(x, y types.TS) int {
-	return bytes.Compare(x[:], y[:])
+	return x.Compare(&y)
 }
 func rowidAscCompare(x, y types.Rowid) int {
-	return bytes.Compare(x[:], y[:])
+	return x.Compare(&y)
 }
 
 func blockidAscCompare(x, y types.Blockid) int {
-	return bytes.Compare(x[:], y[:])
+	return x.Compare(&y)
 }
 
 func genericAscCompare[T types.OrderedT](x, y T) int {
@@ -224,14 +223,15 @@ func uuidDescCompare(x, y types.Uuid) int {
 }
 
 func txntsDescCompare(x, y types.TS) int {
-	return bytes.Compare(y[:], x[:])
+	// PXU FIXME Done
+	return y.Compare(&x)
 }
 func rowidDescCompare(x, y types.Rowid) int {
-	return bytes.Compare(y[:], x[:])
+	return y.Compare(&x)
 }
 
 func blockidDescCompare(x, y types.Blockid) int {
-	return bytes.Compare(y[:], x[:])
+	return y.Compare(&x)
 }
 
 func genericDescCompare[T types.OrderedT](x, y T) int {

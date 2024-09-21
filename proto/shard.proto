@@ -1,0 +1,303 @@
+// Copyright 2021-2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+package shard; 
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/shard";
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "timestamp.proto";
+import "pipeline.proto";
+import "plan.proto";
+
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+option (gogoproto.goproto_enum_prefix_all) = true;
+ 
+// Policy shard policy for a table.
+enum Policy {
+    // None no sharding for the current table. 
+    None      = 0;
+    // Partition the user-defined way of sharding data for a partitioned table.
+    //
+    // The number of Shards is determined when the table is created. It does not 
+    // change with the number of CN nodes in the MO cluster.
+    //
+    // The number of shards is only changed when the user changes the table definition
+    // by using alter table.
+    //
+    // len(Shards) == len(Partitions).
+    Partition = 1;
+    // Hash auto-sharding data in a way that is based on primary key hash.
+    //
+    // In this mode, the number of shards of the table changes with the number of 
+    // nodes of CN in the mo cluster. len(shards) >= len(CN nodes).
+    Hash      = 2;
+}
+
+// OpType operator type.
+enum OpType {
+    AddReplica    = 0;
+    DeleteReplica = 1;
+    DeleteAll     = 2;
+    CreateTable   = 3;
+}
+
+enum CNState {
+    Up      = 0;
+    Pause   = 1;
+    Down    = 2;
+}
+
+enum ReplicaState {
+    Allocating = 0;
+    Allocated  = 1;
+    Running    = 2;
+    Moving     = 3;
+    Tombstone  = 4;
+}
+
+
+// ShardsMetadata table shards metadata. When a Table is created, metadata for the 
+// corresponding shards is created and serialized and stored in MO_TABLES. 
+message ShardsMetadata {
+    Policy          Policy           = 1;
+    uint32          ShardsCount      = 2;
+    uint32          Version          = 3;
+    uint64          AccountID        = 4;
+    uint32          MaxReplicaCount  = 5;
+    repeated uint64 ShardIDs         = 6;
+}
+
+// TableShard when ShardsMetadata are created, the Shards corresponding to a table 
+// are determined, and each Shard is assigned a corresponding CN node to handle requests
+// for that Shard.
+//
+// When the Table's shards count changed, the corresponding Version field increments itself. 
+// This makes it easy to found expired information.
+message TableShard {
+    uint64                TableID   = 1;
+    uint64                ShardID   = 2;
+    Policy                Policy    = 3;
+    // Version increment when shards count changed
+    uint32                Version   = 4;
+    repeated ShardReplica Replicas  = 5 [(gogoproto.nullable) = false];
+}
+
+// ShardReplica a tableShard will have multiple replicas, the data of these replicas is exactly 
+// the same, each replica is a ShardReplica. ShardReplica can run on any available CN node.
+//
+// The binding relationship between CN and ShardReplica changes dynamically during the runtime, 
+// and presumably if the corresponding CN goes offline, or if a new CN comes online and causes 
+// an imbalance between ShardReplica and CN, then the binding relationship will be readjusted.
+//
+// The number of replicas is used to extend the read performance.
+message ShardReplica {
+    uint64       ReplicaID = 1;
+    ReplicaState State     = 2;
+    string       CN        = 3;
+    // Version increment when the cn changed
+    uint64       Version   = 4;
+}
+
+// Method sharding operations
+enum Method {
+    Heartbeat     = 0;
+    CreateShards  = 1;
+    DeleteShards  = 2;
+    GetShards     = 3;
+    ShardRead     = 4;
+    PauseCN       = 5;
+    GetCNReplicas = 6;
+}
+
+message Request {
+  uint64                     RequestID           = 1;
+  Method                     RPCMethod           = 2;
+  CreateShardsRequest        CreateShards        = 3 [(gogoproto.nullable) = false];
+  DeleteShardsRequest        DeleteShards        = 4 [(gogoproto.nullable) = false];
+  HeartbeatRequest           Heartbeat           = 5 [(gogoproto.nullable) = false];
+  GetShardsRequest           GetShards           = 6 [(gogoproto.nullable) = false];
+  ShardReadRequest           ShardRead           = 7 [(gogoproto.nullable) = false];
+  PauseCNRequest             PauseCN             = 8 [(gogoproto.nullable) = false];
+  GetCNReplicasRequest       GetCNReplicas       = 9 [(gogoproto.nullable) = false];
+}
+
+message Response {
+    uint64                     RequestID            = 1;
+    Method                     RPCMethod            = 2;
+    // Error we use this field to send moerr from service to another cn. Set with 
+    // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
+    bytes                      Error                = 3;
+    CreateShardsResponse       CreateShards         = 4 [(gogoproto.nullable) = false];
+    DeleteShardsResponse       DeleteShards         = 5 [(gogoproto.nullable) = false];
+    HeartbeatResponse          Heartbeat            = 6 [(gogoproto.nullable) = false];
+    GetShardsResponse          GetShards            = 7 [(gogoproto.nullable) = false];
+    ShardReadResponse          ShardRead            = 8 [(gogoproto.nullable) = false];
+    PauseCNResponse            PauseCN              = 9 [(gogoproto.nullable) = false];
+    GetCNReplicasResponse      GetCNReplicas        = 10 [(gogoproto.nullable) = false];
+}
+
+// Operator is a description of a command that needs to be sent down to CN for execution.
+// The command needs to be executed within a specified time frame. If the timeout is
+// exceeded, the command is automatically terminated and the ShardBalancer recalculates
+// to use the another CN to execute the command.
+message Operator {
+    OpType         Type           = 1;
+    TableShard     TableShard     = 2 [(gogoproto.nullable) = false];
+    ShardReplica   Replica        = 3 [(gogoproto.nullable) = false];
+    uint64         TableID        = 4;
+}
+
+message CreateShardsRequest {
+    uint64          ID               = 1;
+    ShardsMetadata  Metadata         = 2 [(gogoproto.nullable) = false];
+}
+
+message CreateShardsResponse {
+}
+
+message DeleteShardsRequest {
+    uint64          ID               = 1;
+}
+
+message DeleteShardsResponse {
+}
+
+message HeartbeatRequest {
+    string              CN     = 1;
+    repeated TableShard Shards = 2 [(gogoproto.nullable) = false];
+}
+
+message HeartbeatResponse {
+    repeated Operator Operators = 1 [(gogoproto.nullable) = false];
+}
+
+message GetShardsRequest {
+    uint64          ID               = 1;
+    ShardsMetadata  Metadata         = 2 [(gogoproto.nullable) = false];
+}
+
+message GetShardsResponse {
+    repeated TableShard Shards  = 1 [(gogoproto.nullable) = false];
+}
+
+message ShardReadRequest {
+    TableShard           Shard      = 1 [(gogoproto.nullable) = false];
+    string               CN         = 2;
+    uint32               Method     = 3;
+    ReadParam            Param      = 4 [(gogoproto.nullable) = false];
+    timestamp.Timestamp  ReadAt     = 5 [(gogoproto.nullable) = false];
+}
+
+message ShardReadResponse {
+    bytes      Payload  = 1;
+}
+
+message PauseCNRequest {
+    string          ID               = 1;
+}
+
+message PauseCNResponse {
+}
+
+message GetCNReplicasRequest {
+    string          ID               = 1;
+}
+
+message GetCNReplicasResponse {
+    repeated ShardReplica  Replicas = 1 [(gogoproto.nullable) = false];
+}
+
+message ReadParam {
+    pipeline.ProcessInfo           Process                       = 1 [(gogoproto.nullable) = false];
+    TxnTable                       TxnTable                      = 2 [(gogoproto.nullable) = false];
+    StatsParam                     StatsParam                    = 3 [(gogoproto.nullable) = false];
+    SizeParam                      SizeParam                     = 4 [(gogoproto.nullable) = false];
+    RangesParam                    RangesParam                   = 5 [(gogoproto.nullable) = false];
+    GetColumMetadataScanInfoParam  GetColumMetadataScanInfoParam = 6 [(gogoproto.nullable) = false];
+    MergeObjectsParam              MergeObjectsParam             = 7 [(gogoproto.nullable) = false];
+    KeyParam                       KeyParam                      = 8 [(gogoproto.nullable) = false];
+    ReaderBuildParam               ReaderBuildParam                   = 9 [(gogoproto.nullable) = false];
+    PrimaryKeysMayBeModifiedParam   PrimaryKeysMayBeModifiedParam  = 10 [(gogoproto.nullable) = false];
+    ReadNextParam                  ReadNextParam                 = 11 [(gogoproto.nullable) = false];
+    ReadCloseParam                 ReadCloseParam                = 12 [(gogoproto.nullable) = false];
+    CollectTombstonesParam         CollectTombstonesParam        = 13 [(gogoproto.nullable) = false];
+}
+
+message TxnTable {
+    uint64 AccountID    = 1;
+    uint64 DatabaseID   = 2;
+    string DatabaseName = 3;
+    string TableName    = 4;
+}
+
+message StatsParam {
+    bool sync = 1;
+}
+
+message SizeParam {
+    string columnName = 1;
+}
+
+message RangesParam {
+    repeated plan.Expr Exprs = 1;
+    bytes UncommittedObjects = 2;
+}
+
+message CollectTombstonesParam {
+    uint64 collectPolicy = 1;
+}
+
+message GetColumMetadataScanInfoParam {
+    string columnName = 1;
+}
+
+message KeyParam {
+    bytes Key = 1;
+}
+
+message ReaderBuildParam {
+    bytes relData = 1;
+    plan.Expr expr = 2;
+    int32 tombstoneApplyPolicy = 3;
+}
+
+message ReaderBuildResult {
+    bytes uuid = 1;
+}
+
+message ReadNextParam {
+    bytes uuid = 1;
+    repeated string columns = 2;
+}
+
+message ReadNextResult {
+    bytes result = 1;
+}
+
+message ReadCloseParam {
+    bytes uuid = 1;
+}
+
+message PrimaryKeysMayBeModifiedParam {
+    bytes from      = 1;
+    bytes to        = 2;
+    bytes keyVector = 3;
+}
+
+message MergeObjectsParam {
+    repeated bytes objstats  = 1;
+    uint32 targetObjSize     = 3;
+}

@@ -16,6 +16,7 @@ package versions
 
 import (
 	"fmt"
+
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -73,6 +74,7 @@ const (
 	MODIFY_COLUMN
 	RENAME_COLUMN
 	ALTER_COLUMN_DEFAULT
+	MODIFY_TABLE_COMMENT
 	ADD_INDEX
 	DROP_INDEX
 	ALTER_INDEX_VISIBLE
@@ -130,7 +132,7 @@ type UpgradeEntry struct {
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
 	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {
-		getLogger().Error("execute upgrade entry check error", zap.Error(err), zap.String("upgrade entry", u.String()))
+		getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry check error", zap.Error(err), zap.String("upgrade entry", u.String()))
 		return err
 	}
 
@@ -141,6 +143,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		if u.PreSql != "" {
 			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId))
 			if err != nil {
+				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
 			}
 			res.Close()
@@ -149,7 +152,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		// 2. Second, Execute upgrade sql
 		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId))
 		if err != nil {
-			getLogger().Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err
 		}
 		res.Close()
@@ -158,6 +161,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		if u.PostSql != "" {
 			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId))
 			if err != nil {
+				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
 			}
 			res.Close()
@@ -198,33 +202,33 @@ func CheckTableColumn(txn executor.TxnExecutor,
 		Name:    columnName,
 	}
 
-	sql := fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE, 
-       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE, 
-       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH, 
-       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION, 
-       internal_numeric_scale(atttyp) AS NUMERIC_SCALE, 
-       internal_datetime_scale(atttyp) AS DATETIME_PRECISION, 
-       attnum AS ORDINAL_POSITION, 
-       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT, 
-       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA, 
-       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns 
-            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%' 
-            AND attname != '__mo_rowid' 
+	sql := fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE,
+       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE,
+       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,
+       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,
+       internal_numeric_scale(atttyp) AS NUMERIC_SCALE,
+       internal_datetime_scale(atttyp) AS DATETIME_PRECISION,
+       attnum AS ORDINAL_POSITION,
+       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT,
+       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
+       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
+            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%'
+            AND attname != '__mo_rowid'
             AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
 
 	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE, 
-       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE, 
-       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH, 
-       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION, 
-       internal_numeric_scale(atttyp) AS NUMERIC_SCALE, 
-       internal_datetime_scale(atttyp) AS DATETIME_PRECISION, 
-       attnum AS ORDINAL_POSITION, 
-       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT, 
-       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA, 
-       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns 
-            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%' 
-            AND attname != '__mo_rowid' AND account_id = 0 
+		sql = fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE,
+       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE,
+       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,
+       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,
+       internal_numeric_scale(atttyp) AS NUMERIC_SCALE,
+       internal_datetime_scale(atttyp) AS DATETIME_PRECISION,
+       attnum AS ORDINAL_POSITION,
+       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT,
+       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
+       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
+            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%'
+            AND attname != '__mo_rowid' AND account_id = 0
             AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
 	}
 
@@ -237,11 +241,11 @@ func CheckTableColumn(txn executor.TxnExecutor,
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		data_type := cols[0].GetStringAt(0)
 		is_nullable := cols[1].GetStringAt(0)
-		character_length := vector.GetFixedAt[int64](cols[2], 0)
-		numeric_precision := vector.GetFixedAt[int64](cols[3], 0)
-		numeric_scale := vector.GetFixedAt[int64](cols[4], 0)
-		datetime_precision := vector.GetFixedAt[int64](cols[5], 0)
-		ordinal_position := vector.GetFixedAt[int32](cols[6], 0)
+		character_length := vector.GetFixedAtWithTypeCheck[int64](cols[2], 0)
+		numeric_precision := vector.GetFixedAtWithTypeCheck[int64](cols[3], 0)
+		numeric_scale := vector.GetFixedAtWithTypeCheck[int64](cols[4], 0)
+		datetime_precision := vector.GetFixedAtWithTypeCheck[int64](cols[5], 0)
+		ordinal_position := vector.GetFixedAtWithTypeCheck[int32](cols[6], 0)
 		column_default := cols[7].GetStringAt(0)
 		extra := cols[8].GetStringAt(0)
 		column_comment := cols[9].GetStringAt(0)
@@ -299,12 +303,12 @@ func CheckTableDefinition(txn executor.TxnExecutor, accountId uint32, schema str
 		return false, moerr.NewInternalErrorNoCtx("schema name or table name is empty")
 	}
 
-	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl 
-                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition' 
+	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
+                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
                               AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl 
-                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition' 
+		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
+                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
                                   AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	}
 
@@ -321,6 +325,39 @@ func CheckTableDefinition(txn executor.TxnExecutor, accountId uint32, schema str
 	})
 
 	return loaded, nil
+}
+
+// CheckTableComment is used to check if the specified table definition exists in the specified database. If it exists,
+// return true; otherwise, return false.
+func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, string, error) {
+	if schema == "" || tableName == "" {
+		return false, "", moerr.NewInternalErrorNoCtx("schema name or table name is empty")
+	}
+
+	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
+                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                              AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
+	if accountId == catalog.System_Account {
+		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
+                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                                  AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
+	}
+
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	if err != nil {
+		return false, "", err
+	}
+	defer res.Close()
+
+	loaded := false
+	comment := ""
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		loaded = true
+		comment = cols[3].GetStringAt(0)
+		return false
+	})
+
+	return loaded, comment, nil
 }
 
 // CheckDatabaseDefinition This function is used to check if the database definition exists.

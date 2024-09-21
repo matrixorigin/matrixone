@@ -16,13 +16,15 @@ package dashboard
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
+	"github.com/K-Phoen/grabana/timeseries"
 )
 
 func (c *DashboardCreator) initTxnDashboard() error {
-	folder, err := c.createFolder(moFolderName)
+	folder, err := c.createFolder(c.folderName)
 	if err != nil {
 		return err
 	}
@@ -38,18 +40,19 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnLockWaitersRow(),
 			c.initTxnStatementDurationRow(),
 			c.initTxnStatementsCountRow(),
-			c.initTxnTableRangesRow(),
 			c.initTxnCheckPKDupRow(),
 			c.initTxnReaderDurationRow(),
 			c.initTxnMpoolRow(),
 			c.initTxnOnPrepareWALRow(),
 			c.initTxnBeforeCommitRow(),
-			c.initTxnDequeuePreparedRow(),
-			c.initTxnRangesLoadedObjectMetaRow(),
-			c.initFastRangesRow(),
-			c.initRangesRow(),
+			c.initTxnTNDeduplicateDurationRow(),
+			c.initTxnTableRangesRow(),
+			c.initTxnRangesSelectivityRow(),
+			c.initTxnTombstoneRow(),
+			c.initTxnRangesCountRow(),
 			c.initTxnShowAccountsRow(),
 			c.initCNCommittedObjectQuantityRow(),
+			c.initTombstoneTransferRow(),
 		)...)
 	if err != nil {
 		return err
@@ -75,59 +78,9 @@ func (c *DashboardCreator) initCNCommittedObjectQuantityRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initRangesRow() dashboard.Option {
-	return dashboard.Row(
-		"Txn Ranges Selectivity",
-		c.getHistogram(
-			"ranges block selectivity",
-			c.getMetricWithFilter("mo_txn_ranges_selectivity_percentage_bucket", `type="block_selectivity"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			6,
-			axis.Unit(""),
-			axis.Min(0)),
-
-		c.getHistogram(
-			"ranges result len",
-			c.getMetricWithFilter("mo_txn_ranges_duration_size_bucket", `type="ranges_len"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			6,
-			axis.Unit(""),
-			axis.Min(0)),
-	)
-}
-
-func (c *DashboardCreator) initFastRangesRow() dashboard.Option {
-	return dashboard.Row(
-		"Txn Fast Ranges Selectivity",
-		c.getHistogram(
-			"fast ranges block selectivity",
-			c.getMetricWithFilter("mo_txn_ranges_selectivity_percentage_bucket", `type="fast_block_selectivity"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			4,
-			axis.Unit(""),
-			axis.Min(0)),
-
-		c.getHistogram(
-			"fast ranges zone map selectivity",
-			c.getMetricWithFilter("mo_txn_ranges_selectivity_percentage_bucket", `type="fast_zm_selectivity"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			4,
-			axis.Unit(""),
-			axis.Min(0)),
-
-		c.getHistogram(
-			"fast ranges result len",
-			c.getMetricWithFilter("mo_txn_ranges_duration_size_bucket", `type="fast_ranges_len"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			4,
-			axis.Unit(""),
-			axis.Min(0)),
-	)
-}
-
 func (c *DashboardCreator) initTxnTableRangesRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn table ranges",
+		"Txn Table Ranges Duration",
 		c.getHistogram(
 			"Txn table ranges duration",
 			c.getMetricWithFilter(`mo_txn_ranges_duration_seconds_bucket`, ``),
@@ -135,6 +88,76 @@ func (c *DashboardCreator) initTxnTableRangesRow() dashboard.Option {
 			12,
 			axis.Unit("s"),
 			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initTxnTombstoneRow() dashboard.Option {
+	rows := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_txn_reader_scanned_total_tombstone_bucket`, ``),
+			c.getMetricWithFilter(`mo_txn_reader_each_blk_loaded_bucket`, ``),
+			c.getMetricWithFilter(`mo_txn_reader_tombstone_selectivity_bucket`, `type="zm_selectivity"`),
+			c.getMetricWithFilter(`mo_txn_reader_tombstone_selectivity_bucket`, `type="bl_selectivity"`),
+		},
+		[]string{
+			"total_scanned_each_read",
+			"total_loaded_each_read",
+			"zm_selectivity_on_obj",
+			"bl_selectivity_on_blk",
+		},
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		[]float32{3, 3, 3, 3},
+		axis.Min(0))
+
+	return dashboard.Row(
+		"Tombstone Overview",
+		rows...,
+	)
+}
+
+func (c *DashboardCreator) initTxnRangesSelectivityRow() dashboard.Option {
+	return dashboard.Row(
+		"Ranges Selectivity",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="slow_path_block_selectivity"`),
+				c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_block_selectivity"`),
+				c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_obj_sort_key_zm_selectivity"`),
+				c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_obj_column_zm_selectivity"`),
+				c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_blk_column_zm_selectivity"`),
+			},
+			[]string{
+				"slow_path_block_selectivity",
+				"fast_path_block_selectivity",
+				"fast_path_obj_sort_key_zm_selectivity",
+				"fast_path_obj_column_zm_selectivity",
+				"fast_path_blk_column_zm_selectivity",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initTxnRangesCountRow() dashboard.Option {
+	return dashboard.Row(
+		"Ranges Count",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="slow_path_selected_block_cnt"`),
+				c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="fast_path_selected_block_cnt"`),
+				c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="fast_path_load_obj_cnt"`),
+				c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="slow_path_load_obj_cnt"`),
+			},
+			[]string{
+				"slow_path_selected_block_cnt",
+				"fast_path_selected_block_cnt",
+				"fast_path_load_obj_cnt",
+				"slow_path_load_obj_cnt",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Min(0))...,
 	)
 }
 
@@ -297,16 +320,22 @@ func (c *DashboardCreator) initTxnOnPrepareWALRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initTxnDequeuePreparedRow() dashboard.Option {
+func (c *DashboardCreator) initTxnTNDeduplicateDurationRow() dashboard.Option {
 	return dashboard.Row(
-		"txn dequeue prepared duration",
-		c.getHistogram(
-			"txn dequeue prepared duration",
-			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="dequeue_prepared"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
+		"Txn TN Deduplication Duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter("mo_txn_tn_deduplicate_duration_seconds_bucket", `type="append_deduplicate"`),
+				c.getMetricWithFilter("mo_txn_tn_deduplicate_duration_seconds_bucket", `type="prePrepare_deduplicate"`),
+			},
+			[]string{
+				"append_deduplicate",
+				"prePrepare_deduplicate",
+			},
+			[]float64{0.80, 0.90, 0.95, 0.99},
+			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
-			axis.Min(0)),
+			axis.Min(0))...,
 	)
 }
 
@@ -400,17 +429,6 @@ func (c *DashboardCreator) initTxnStatementsCountRow() dashboard.Option {
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
-	)
-}
-
-func (c *DashboardCreator) initTxnRangesLoadedObjectMetaRow() dashboard.Option {
-	return dashboard.Row(
-		"Txn Ranges Loaded Object Meta",
-		c.withGraph(
-			"Txn Ranges Loaded Object Meta",
-			12,
-			`sum(increase(`+c.getMetricWithFilter("mo_txn_ranges_loaded_object_meta_total", "")+`[$interval])) by (`+c.by+`, type)`,
-			"{{ "+c.by+"-type }}"),
 	)
 }
 
@@ -521,5 +539,35 @@ func (c *DashboardCreator) initTxnReaderDurationRow() dashboard.Option {
 			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
 			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initTombstoneTransferRow() dashboard.Option {
+	return dashboard.Row(
+		"Tombstone transfer duration",
+		c.getTimeSeries(
+			"Transfer tombstones count",
+			[]string{fmt.Sprintf(
+				"sum by (%s) (increase(%s[$interval]))",
+				c.by,
+				c.getMetricWithFilter(`mo_txn_transfer_tombstones_count_sum`, ""),
+			)},
+			[]string{"count"},
+			timeseries.Span(4),
+		),
+		c.getPercentHist(
+			"Transfer tombstone duration",
+			c.getMetricWithFilter(`mo_txn_transfer_duration_bucket`, `type="tombstones"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
+		c.getPercentHist(
+			"Batch transfer tombstone duration",
+			c.getMetricWithFilter(`mo_txn_transfer_duration_bucket`, `type="batch"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
 	)
 }

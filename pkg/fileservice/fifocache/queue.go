@@ -84,6 +84,8 @@ func (p *Queue[T]) dequeue() (ret T, ok bool) {
 	}
 
 	ret = p.tail.values[p.tail.begin]
+	var zero T
+	p.tail.values[p.tail.begin] = zero
 	p.tail.begin++
 	ok = true
 	return

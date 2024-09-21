@@ -59,7 +59,7 @@ func (txn *txnImpl) CreateDatabaseWithCtx(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	return txn.Store.CreateDatabaseWithID(name, createSql, datTyp, id)
+	return txn.Store.CreateDatabaseWithID(ctx, name, createSql, datTyp, id)
 }
 
 func (txn *txnImpl) DropDatabase(name string) (db handle.Database, err error) {
@@ -112,8 +112,8 @@ func (txn *txnImpl) DatabaseNames() (names []string) {
 	return txn.Store.DatabaseNames()
 }
 
-func (txn *txnImpl) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
-	return txn.Store.LogTxnEntry(dbId, tableId, entry, readed)
+func (txn *txnImpl) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readedObject, readedTombstone []*common.ID) (err error) {
+	return txn.Store.LogTxnEntry(dbId, tableId, entry, readedObject, readedTombstone)
 }
 
 func (txn *txnImpl) LogTxnState(sync bool) (logEntry entry.Entry, err error) {

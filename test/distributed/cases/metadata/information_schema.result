@@ -18,4 +18,37 @@ information_schema.REFERENTIAL_CONSTRAINTS.CONSTRAINT_SCHEMA in ('plat_content')
 order by information_schema.KEY_COLUMN_USAGE.CONSTRAINT_SCHEMA asc,
 information_schema.KEY_COLUMN_USAGE.CONSTRAINT_NAME asc,
 information_schema.KEY_COLUMN_USAGE.ORDINAL_POSITION asc;
-constraint_schema    constraint_name    table_name    referenced_table_name    unique_constraint_name    unique_constraint_schema    column_name
+CONSTRAINT_SCHEMA    CONSTRAINT_NAME    TABLE_NAME    REFERENCED_TABLE_NAME    UNIQUE_CONSTRAINT_NAME    UNIQUE_CONSTRAINT_SCHEMA    COLUMN_NAME
+select table_catalog, table_schema, table_name, table_type, engine
+from information_schema.tables
+where table_schema = 'mo_catalog' and table_type = 'BASE TABLE'
+order by table_name;
+table_catalog    table_schema    table_name    table_type    engine
+def    mo_catalog    mo_account    BASE TABLE    Tae
+def    mo_catalog    mo_cdc_task    BASE TABLE    Tae
+def    mo_catalog    mo_cdc_watermark    BASE TABLE    Tae
+def    mo_catalog    mo_columns    BASE TABLE    Tae
+def    mo_catalog    mo_database    BASE TABLE    Tae
+def    mo_catalog    mo_foreign_keys    BASE TABLE    Tae
+def    mo_catalog    mo_indexes    BASE TABLE    Tae
+def    mo_catalog    mo_mysql_compatibility_mode    BASE TABLE    Tae
+def    mo_catalog    mo_pitr    BASE TABLE    Tae
+def    mo_catalog    mo_pubs    BASE TABLE    Tae
+def    mo_catalog    mo_retention    BASE TABLE    Tae
+def    mo_catalog    mo_role    BASE TABLE    Tae
+def    mo_catalog    mo_role_grant    BASE TABLE    Tae
+def    mo_catalog    mo_role_privs    BASE TABLE    Tae
+def    mo_catalog    mo_shards    BASE TABLE    Tae
+def    mo_catalog    mo_shards_metadata    BASE TABLE    Tae
+def    mo_catalog    mo_snapshots    BASE TABLE    Tae
+def    mo_catalog    mo_stages    BASE TABLE    Tae
+def    mo_catalog    mo_stored_procedure    BASE TABLE    Tae
+def    mo_catalog    mo_subs    BASE TABLE    Tae
+def    mo_catalog    mo_table_partitions    BASE TABLE    Tae
+def    mo_catalog    mo_tables    BASE TABLE    Tae
+def    mo_catalog    mo_upgrade    BASE TABLE    Tae
+def    mo_catalog    mo_upgrade_tenant    BASE TABLE    Tae
+def    mo_catalog    mo_user    BASE TABLE    Tae
+def    mo_catalog    mo_user_defined_function    BASE TABLE    Tae
+def    mo_catalog    mo_user_grant    BASE TABLE    Tae
+def    mo_catalog    mo_version    BASE TABLE    Tae

@@ -50,7 +50,7 @@ func (exec *singleWindowExec) PreAllocateGroups(more int) error {
 }
 
 func (exec *singleWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	value := vector.MustFixedCol[int64](vectors[0])[row]
+	value := vector.MustFixedColWithTypeCheck[int64](vectors[0])[row]
 	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)
 	return nil
 }
@@ -63,10 +63,9 @@ func (exec *singleWindowExec) marshal() ([]byte, error) {
 	}
 
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_single_window,
-		Info:     d,
-		Result:   r,
-		Groups:   nil,
+		Info:   d,
+		Result: r,
+		Groups: nil,
 	}
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))

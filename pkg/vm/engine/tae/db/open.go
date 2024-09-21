@@ -17,6 +17,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"path"
 	"sync/atomic"
 	"time"
@@ -31,9 +32,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -93,16 +95,23 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		// TODO:fileservice needs to be passed in as a parameter
 		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
 	}
+	if opts.LocalFs == nil {
+		opts.LocalFs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
+	}
 
 	db = &DB{
 		Dir:          dirname,
 		Opts:         opts,
 		Closed:       new(atomic.Value),
-		usageMemo:    logtail.NewTNUsageMemo(),
+		usageMemo:    logtail.NewTNUsageMemo(nil),
 		CNMergeSched: merge.NewTaskServiceGetter(opts.TaskServiceGetter),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
-	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
+	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
+	transferTable, e := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
+	if e != nil {
+		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", e))
+	}
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
@@ -114,6 +123,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
 		dbutils.WithRuntimeObjectFS(fs),
+		dbutils.WithRuntimeLocalFS(localFs),
 		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 		dbutils.WithRuntimeScheduler(scheduler),
@@ -123,9 +133,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
+	catalog.DefaultTableDataFactory = dataFactory.MakeTableFactory()
 	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo); err != nil {
 		return
 	}
+	db.usageMemo.C = db.Catalog
 
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(
@@ -164,8 +176,30 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
-	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
+	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
+	if err = ckpReplayer.ReadCkpFiles(); err != nil {
+		panic(err)
+	}
+
+	// 1. replay three tables objectlist
+	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist()
 	if err != nil {
+		panic(err)
+	}
+
+	var txn txnif.AsyncTxn
+	{
+		// create a txn manually
+		txnIdAlloc := common.NewTxnIDAllocator()
+		store := txnStoreFactory()
+		txn = txnFactory(db.TxnMgr, store, txnIdAlloc.Alloc(), checkpointed, types.TS{})
+		store.BindTxn(txn)
+	}
+	// 2. replay all table Entries
+	ckpReplayer.ReplayCatalog(txn)
+
+	// 3. replay other tables' objectlist
+	if err = ckpReplayer.ReplayObjectlist(); err != nil {
 		panic(err)
 	}
 	logutil.Info("open-tae", common.OperationField("replay"),
@@ -186,8 +220,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	db.MergeHandle = newMergeTaskBuilder(db)
-	scanner.RegisterOp(db.MergeHandle)
+	db.MergeScheduler = merge.NewScheduler(db.Runtime, db.CNMergeSched)
+	scanner.RegisterOp(db.MergeScheduler)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
 
@@ -196,14 +230,15 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	cleaner := gc2.NewCheckpointCleaner(opts.Ctx, fs, db.BGCheckpointRunner, opts.GCCfg.DisableGC)
+	cleaner := gc2.NewCheckpointCleaner(opts.Ctx, opts.SID, fs, db.BGCheckpointRunner, opts.GCCfg.DisableGC)
+	cleaner.SetCheckGC(opts.GCCfg.CheckGC)
 	cleaner.AddChecker(
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
 			endTS := checkpoint.GetEnd()
 			return !endTS.GreaterEq(&ts)
-		})
+		}, gc2.CheckerKeyTTL)
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
 	// Init gc manager at last
@@ -211,11 +246,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	cronJobs := []func(*gc.Manager){
 		gc.WithCronJob(
 			"clean-transfer-table",
-			opts.CheckpointCfg.FlushInterval,
+			opts.CheckpointCfg.TransferInterval,
 			func(_ context.Context) (err error) {
 				db.Runtime.PrintVectorPoolUsage()
 				db.Runtime.TransferDelsMap.Prune(opts.TransferTableTTL)
-				transferTable.RunTTL(time.Now())
+				transferTable.RunTTL()
 				return
 			}),
 
@@ -266,7 +301,16 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				}
 				return nil
 			},
-		)}
+		),
+		gc.WithCronJob(
+			"prune-lockmerge",
+			options.DefaultLockMergePruneInterval,
+			func(ctx context.Context) error {
+				db.Runtime.LockMergeService.Prune()
+				return nil
+			},
+		),
+	}
 	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
 		cronJobs = append(cronJobs,
 			gc.WithCronJob(
@@ -284,7 +328,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	go TaeMetricsTask(ctx)
 
 	// For debug or test
-	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
+	//fmt.Println(db.Catalog.SimplePPString(common.PPL3))
 	return
 }
 

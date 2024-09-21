@@ -20,9 +20,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
 type TaskHandler interface {
@@ -89,13 +91,13 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 		return err
 	}
 	if len(tasks) != 1 {
-		return moerr.NewInternalError(ctx, "count of tasks is wrong %d", len(tasks))
+		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
 	}
 
 	tk := tasks[0]
 	// We cannot resume a task which is not on local runner.
 	if !strings.EqualFold(tk.TaskRunner, t.runner.runnerID) {
-		return moerr.NewInternalError(ctx, "the task is not on local runner, prev runner %s, "+
+		return moerr.NewInternalErrorf(ctx, "the task is not on local runner, prev runner %s, "+
 			"local runner %s", tk.TaskRunner, t.runner.runnerID)
 	}
 
@@ -110,10 +112,57 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 
 	ar := t.task.activeRoutine.Load()
 	if ar == nil || *ar == nil {
-		return moerr.NewInternalError(ctx, "cannot handle resume operation, "+
+		return moerr.NewInternalErrorf(ctx, "cannot handle resume operation, "+
 			"active routine not set for task %d", t.task.task.ID)
 	}
 	return (*ar).Resume()
+}
+
+type restartTask struct {
+	runner *taskRunner
+	task   *daemonTask
+}
+
+func newRestartTask(r *taskRunner, t *daemonTask) *restartTask {
+	return &restartTask{
+		runner: r,
+		task:   t,
+	}
+}
+
+func (t *restartTask) Handle(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
+	if err != nil {
+		return err
+	}
+	if len(tasks) != 1 {
+		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
+	}
+
+	tk := tasks[0]
+	// We cannot resume a task which is not on local runner.
+	if !strings.EqualFold(tk.TaskRunner, t.runner.runnerID) {
+		return moerr.NewInternalErrorf(ctx, "the task is not on local runner, prev runner %s, "+
+			"local runner %s", tk.TaskRunner, t.runner.runnerID)
+	}
+
+	tk.TaskStatus = task.TaskStatus_Running
+	nowTime := time.Now()
+	tk.LastRun = nowTime
+	tk.LastHeartbeat = nowTime
+	_, err = t.runner.service.UpdateDaemonTask(ctx, []task.DaemonTask{tk})
+	if err != nil {
+		return err
+	}
+
+	ar := t.task.activeRoutine.Load()
+	if ar == nil || *ar == nil {
+		return moerr.NewInternalErrorf(ctx, "cannot handle restart operation, "+
+			"active routine not set for task %d", t.task.task.ID)
+	}
+	return (*ar).Restart()
 }
 
 type pauseTask struct {
@@ -136,7 +185,7 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 		return err
 	}
 	if len(tasks) != 1 {
-		return moerr.NewInternalError(ctx, "count of tasks is wrong %d", len(tasks))
+		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
 	}
 
 	tk := tasks[0]
@@ -149,7 +198,7 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 	if t.runner.exists(tk.ID) {
 		ar := t.task.activeRoutine.Load()
 		if ar == nil || *ar == nil {
-			return moerr.NewInternalError(ctx, "cannot handle pause operation, "+
+			return moerr.NewInternalErrorf(ctx, "cannot handle pause operation, "+
 				"active routine not set for task %d", t.task.task.ID)
 		}
 		if err := (*ar).Pause(); err != nil {
@@ -179,7 +228,7 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 		return err
 	}
 	if len(tasks) != 1 {
-		return moerr.NewInternalError(ctx, "count of tasks is wrong %d", len(tasks))
+		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
 	}
 
 	tk := tasks[0]
@@ -192,7 +241,7 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 	if t.runner.exists(tk.ID) {
 		ar := t.task.activeRoutine.Load()
 		if ar == nil || *ar == nil {
-			return moerr.NewInternalError(ctx, "cannot handle cancel operation, "+
+			return moerr.NewInternalErrorf(ctx, "cannot handle cancel operation, "+
 				"active routine not set for task %d", t.task.task.ID)
 		}
 		return (*ar).Cancel()
@@ -209,6 +258,8 @@ type ActiveRoutine interface {
 	Pause() error
 	// Cancel cancels the go routine of the daemon task.
 	Cancel() error
+	// Restart restart the go routine of the daemon task.
+	Restart() error
 }
 
 type daemonTask struct {
@@ -291,6 +342,14 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 			r.newStartTask(t)
 		}
 	}
+	for _, t := range r.restartTasks(ctx) {
+		dt, ok := r.daemonTasks.m[t.ID]
+		if ok {
+			r.enqueue(newRestartTask(r, dt))
+		} else {
+			r.newStartTask(t)
+		}
+	}
 	for _, t := range r.pauseTasks(ctx) {
 		dt, ok := r.daemonTasks.m[t.ID]
 		if ok {
@@ -356,12 +415,38 @@ func (r *taskRunner) mergeTasks(tasksSlice ...[]task.DaemonTask) []task.DaemonTa
 // - status: task.TaskStatus_Created
 // - status: task.TaskStatus_Running AND last-heartbeat: timeout
 func (r *taskRunner) startTasks(ctx context.Context) []task.DaemonTask {
+	labels := NewCnLabels(r.cnUUID)
+	if r.getClient != nil {
+		hakeeperClient := r.getClient()
+		// account -> cn map. in all c
+		if hakeeperClient != nil {
+			ctx2, cancel := context.WithTimeout(ctx, time.Second*5)
+			defer cancel()
+			state, err := hakeeperClient.GetClusterState(ctx2)
+			if err != nil {
+				r.logger.Error("failed to get cluster state", zap.Error(err))
+			} else {
+				var ok bool
+				var labelList metadata.LabelList
+				//cn -> cnStoreInfo
+				for cn, cnInfo := range state.CNState.Stores {
+					//account -> account list
+					if labelList, ok = cnInfo.Labels["account"]; ok {
+						//account list
+						labels.Add(cn, labelList.GetLabels())
+					}
+				}
+			}
+		}
+	}
+
 	return r.mergeTasks(
 		r.queryDaemonTasks(ctx,
 			WithTaskStatusCond(task.TaskStatus_Created),
+			WithLabels(IN, labels),
 		),
 		r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_Running, task.TaskStatus_ResumeRequested),
+			WithTaskStatusCond(task.TaskStatus_Running),
 			WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
 		),
 	)
@@ -375,6 +460,19 @@ func (r *taskRunner) resumeTasks(ctx context.Context) []task.DaemonTask {
 	return r.mergeTasks(
 		r.queryDaemonTasks(ctx,
 			WithTaskStatusCond(task.TaskStatus_ResumeRequested),
+			WithTaskRunnerCond(EQ, r.runnerID),
+		),
+	)
+}
+
+// restartTasks gets the tasks that need to restart.
+// - status equals to task.TaskStatus_RestartRequested and runner equals to local
+func (r *taskRunner) restartTasks(ctx context.Context) []task.DaemonTask {
+	// We only resume the tasks that already running on this runner. For the tasks that
+	// run on other runners and heartbeat timeout, startTasks() will handle them.
+	return r.mergeTasks(
+		r.queryDaemonTasks(ctx,
+			WithTaskStatusCond(task.TaskStatus_RestartRequested),
 			WithTaskRunnerCond(EQ, r.runnerID),
 		),
 	)

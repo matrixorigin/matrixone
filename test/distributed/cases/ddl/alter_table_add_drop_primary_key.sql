@@ -324,3 +324,14 @@ commit;
 select * from table01;
 select col1 from table01;
 drop table table01;
+
+drop table if exists t1;
+create table t1(a int primary key, b int);
+insert into t1 select result ,result from generate_series(1, 20000000) g;
+alter table t1 drop primary key;
+begin;
+create table t2(a int, b int);
+insert into t2 select a,b from t1;
+select count(*) from t2;
+drop table t2;
+commit;

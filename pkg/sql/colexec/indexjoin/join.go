@@ -23,71 +23,91 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "index"
+const opName = "index"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (indexJoin *IndexJoin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": index join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
+func (indexJoin *IndexJoin) OpType() vm.OpType {
+	return vm.IndexJoin
+}
+
+func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
+	if indexJoin.OpAnalyzer == nil {
+		indexJoin.OpAnalyzer = process.NewAnalyzer(indexJoin.GetIdx(), indexJoin.IsFirst, indexJoin.IsLast, "index join")
+	} else {
+		indexJoin.OpAnalyzer.Reset()
+	}
+
+	if indexJoin.ProjectList != nil {
+		err = indexJoin.PrepareProjection(proc)
+	}
+	if indexJoin.ctr.buf == nil {
+		indexJoin.ctr.buf = batch.NewWithSize(len(indexJoin.Result))
+	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
-	ap := arg
-	ctr := ap.ctr
+	analyzer := indexJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	ap := indexJoin
+	ctr := &ap.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 
 		case Probe:
-			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			// TODO: `indexjoin` operator originally did not have input statistics, which needs to be verified later
+			result, err = vm.ChildrenCall(indexJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
+			bat := result.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
-			if arg.buf != nil {
-				proc.PutBatch(arg.buf)
-				arg.buf = nil
-			}
-			arg.buf = batch.NewWithSize(len(ap.Result))
+			indexJoin.ctr.buf.CleanOnlyData()
 			for i, pos := range ap.Result {
 				srcVec := bat.Vecs[pos]
-				vec := proc.GetVector(*srcVec.GetType())
-				if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
-					vec.Free(proc.Mp())
+				if ctr.buf.Vecs[i] == nil {
+					ctr.buf.Vecs[i] = vector.NewVec(*srcVec.GetType())
+				}
+				if err = vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(ctr.buf.Vecs[i], srcVec); err != nil {
 					return result, err
 				}
-				arg.buf.SetVector(int32(i), vec)
 			}
-			arg.buf.AddRowCount(bat.RowCount())
-			proc.PutBatch(bat)
-			result.Batch = arg.buf
-			anal.Output(arg.buf, arg.GetIsLast())
+			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
+			result.Batch = indexJoin.ctr.buf
+			if indexJoin.ProjectList != nil {
+				var err error
+				result.Batch, err = indexJoin.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

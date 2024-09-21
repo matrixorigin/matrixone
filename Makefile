@@ -137,11 +137,11 @@ musl:
 	$(info [Build binary(musl)])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
-# build mo-debug tool
-.PHONY: mo-debug
-mo-debug: config cgo
-	$(info [Build mo-debug tool])
-	$(CGO_OPTS) go build -o mo-debug ./cmd/mo-debug
+# build mo-tool
+.PHONY: mo-tool
+mo-tool: config cgo
+	$(info [Build mo-tool tool])
+	$(CGO_OPTS) go build -o mo-tool ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -195,7 +195,7 @@ ci-clean:
 # docker compose bvt test
 ###############################################################################
 
-COMPOSE_LAUNCH := "launch-multi-cn"
+COMPOSE_LAUNCH := "launch"
 
 .PHONY: compose
 compose:
@@ -204,8 +204,11 @@ compose:
 .PHONY: compose-clean
 compose-clean:
 	@docker compose -f etc/launch-tae-compose/compose.yaml --profile $(COMPOSE_LAUNCH) down --remove-orphans
-	@docker volume rm launch-tae-compose_minio_storage
+	@docker volume rm -f launch-tae-compose_minio_storage
 	@docker image prune -f
+	@cd $(ROOT_DIR) && rm -rf docker-compose-log && rm -rf test/distributed/resources/json/export*
+	@cd $(ROOT_DIR) && rm -rf test/distributed/resources/into_outfile/*.csv
+	@cd $(ROOT_DIR) && rm -rf test/distributed/resources/into_outfile_2/*.csv
 
 ###############################################################################
 # clean
@@ -232,7 +235,7 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.55.2
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.60.2
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 

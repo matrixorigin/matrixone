@@ -20,23 +20,26 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"go.uber.org/zap"
 )
 
 // GetMOCluster get mo cluster from process level runtime
-func GetMOCluster() MOCluster {
+func GetMOCluster(
+	service string,
+) MOCluster {
 	timeout := time.Second * 10
 	now := time.Now()
 	for {
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ClusterService)
+		v, ok := runtime.ServiceRuntime(service).GetGlobalVariables(runtime.ClusterService)
 		if !ok {
 			if time.Since(now) > timeout {
-				panic("no mocluster service")
+				panic("no mocluster service " + service)
 			}
 			time.Sleep(time.Second)
 			continue
@@ -70,12 +73,14 @@ func WithDisableRefresh() Option {
 type cluster struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
+	mu              sync.Mutex
 	client          ClusterClient
 	refreshInterval time.Duration
 	forceRefreshC   chan struct{}
 	readyOnce       sync.Once
 	readyC          chan struct{}
 	services        atomic.Pointer[services]
+	regexpCache     *regexpCache
 	options         struct {
 		disableRefresh bool
 	}
@@ -87,10 +92,11 @@ type cluster struct {
 //
 // TODO(fagongzi): extend hakeeper to support event-driven original message changes
 func NewMOCluster(
+	service string,
 	client ClusterClient,
 	refreshInterval time.Duration,
 	opts ...Option) MOCluster {
-	logger := runtime.ProcessLevelRuntime().Logger().Named("mo-cluster")
+	logger := runtime.ServiceRuntime(service).Logger().Named("mo-cluster")
 	c := &cluster{
 		logger:          logger,
 		stopper:         stopper.NewStopper("mo-cluster", stopper.WithLogger(logger.RawLogger())),
@@ -98,6 +104,7 @@ func NewMOCluster(
 		forceRefreshC:   make(chan struct{}, 1),
 		readyC:          make(chan struct{}),
 		refreshInterval: refreshInterval,
+		regexpCache:     newRegexCache(cacheTTL),
 	}
 
 	c.services.Store(&services{})
@@ -114,12 +121,33 @@ func NewMOCluster(
 			close(c.readyC)
 		})
 	}
+	if err := c.stopper.RunTask(c.regexpCacheGC); err != nil {
+		c.logger.Error("failed to start regex cache gc task", zap.Error(err))
+	}
 	return c
+}
+
+func (c *cluster) regexpCacheGC(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour * 5)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if c.regexpCache != nil {
+				c.regexpCache.gc()
+				c.logger.Info("regex cache gc")
+			}
+		}
+	}
 }
 
 func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService) bool) {
 	c.waitReady()
-
+	if selector.regexpCache == nil && c.regexpCache != nil {
+		selector.regexpCache = c.regexpCache
+	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
 		// If the all field is false, the work state of CN service MUST be
@@ -141,6 +169,9 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(metadata.CNService) bool) {
 	c.waitReady()
 
+	if selector.regexpCache == nil && c.regexpCache != nil {
+		selector.regexpCache = c.regexpCache
+	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
 		if selector.filterCN(cn) {
@@ -153,7 +184,9 @@ func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(
 
 func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService) bool) {
 	c.waitReady()
-
+	if selector.regexpCache == nil && c.regexpCache != nil {
+		selector.regexpCache = c.regexpCache
+	}
 	s := c.services.Load()
 	for _, tn := range s.tn {
 		if selector.filterTN(tn) {
@@ -242,6 +275,17 @@ func (c *cluster) AddCN(s metadata.CNService) {
 	c.services.Store(new)
 }
 
+func (c *cluster) UpdateCN(s metadata.CNService) {
+	new := c.copyServices()
+	for i := range new.cn {
+		if new.cn[i].ServiceID == s.ServiceID {
+			new.cn[i] = s
+			break
+		}
+	}
+	c.services.Store(new)
+}
+
 func (c *cluster) waitReady() {
 	<-c.readyC
 }
@@ -269,6 +313,11 @@ func (c *cluster) refreshTask(ctx context.Context) {
 func (c *cluster) refresh() {
 	defer c.logger.LogAction("refresh from hakeeper",
 		log.DefaultLogOptions().WithLevel(zap.DebugLevel))()
+
+	// There is data race as ForceRefresh and refreshTask may call this function
+	// at the same time, which will cause inconsistent CN services.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.refreshInterval)
 	defer cancel()
@@ -321,9 +370,15 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		PipelineServiceAddress: cn.ServiceAddress,
 		SQLAddress:             cn.SQLAddress,
 		LockServiceAddress:     cn.LockServiceAddress,
+		ShardServiceAddress:    cn.ShardServiceAddress,
 		WorkState:              cn.WorkState,
 		Labels:                 cn.Labels,
 		QueryAddress:           cn.QueryAddress,
+		CommitID:               cn.CommitID,
+		// why set this cfg, cc https://github.com/matrixorigin/matrixone/issues/16537
+		// should be used in getCNList
+		CPUTotal: cn.Resource.CPUTotal,
+		MemTotal: cn.Resource.MemTotal,
 	}
 }
 
@@ -334,6 +389,7 @@ func newTNService(tn logpb.TNStore) metadata.TNService {
 		LogTailServiceAddress: tn.LogtailServerAddress,
 		LockServiceAddress:    tn.LockServiceAddress,
 		QueryAddress:          tn.QueryAddress,
+		ShardServiceAddress:   tn.ShardServiceAddress,
 	}
 	v.Shards = make([]metadata.TNShard, 0, len(tn.Shards))
 	for _, s := range tn.Shards {

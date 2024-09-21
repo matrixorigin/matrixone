@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -37,6 +38,7 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -54,12 +56,20 @@ func TestBackupData(t *testing.T) {
 	defer opts.Fs.Close()
 
 	schema := catalog.MockSchemaAll(13, 3)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
 	db.BindSchema(schema)
-	testutil.CreateRelation(t, db.DB, "db", schema, true)
+	{
+		txn, err := db.DB.StartTxn(nil)
+		require.NoError(t, err)
+		dbH, err := testutil.CreateDatabase2(ctx, txn, "db")
+		require.NoError(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, dbH, schema)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctx))
+	}
 
-	totalRows := uint64(schema.BlockMaxRows * 30)
+	totalRows := uint64(schema.Extra.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
 	bats := bat.Split(100)
@@ -82,7 +92,6 @@ func TestBackupData(t *testing.T) {
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
-	db.ForceLongCheckpoint()
 
 	dir := path.Join(db.Dir, "/local")
 	c := fileservice.Config{
@@ -123,7 +132,7 @@ func TestBackupData(t *testing.T) {
 	for _, location := range files {
 		locations = append(locations, location)
 	}
-	err = execBackup(ctx, db.Opts.Fs, service, locations, 1, types.TS{}, "full")
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full")
 	assert.Nil(t, err)
 	db.Opts.Fs = service
 	db.Restart(ctx)
@@ -628,7 +637,12 @@ func TestBackup(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.wantErr(t, Backup(tt.args.ctx, tt.args.bs, tt.args.cfg), tt.args.cfg, fmt.Sprintf("Backup(%v, %v, %v)", tt.args.ctx, tt.args.bs, tt.args.cfg))
+			runtime.RunTest(
+				"",
+				func(rt runtime.Runtime) {
+					tt.wantErr(t, Backup(tt.args.ctx, "", tt.args.bs, tt.args.cfg), tt.args.cfg, fmt.Sprintf("Backup(%v, %v, %v)", tt.args.ctx, tt.args.bs, tt.args.cfg))
+				},
+			)
 		})
 	}
 }

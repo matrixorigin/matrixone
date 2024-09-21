@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"container/list"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -24,39 +25,39 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-
-	"github.com/stretchr/testify/assert"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
 	cvey "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/stretchr/testify/require"
 )
 
 func init() {
-	testutil.SetupAutoIncrService()
+	testutil.SetupAutoIncrService("")
 }
 
 func Test_PathExists(t *testing.T) {
@@ -440,7 +441,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ec.ses = ses
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -480,7 +481,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ec.ses = ses
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -499,6 +500,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 
 func TestGetExprValue(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+	catalog.SetupDefines("")
 	cvey.Convey("", t, func() {
 		type args struct {
 			sql     string
@@ -603,8 +605,11 @@ func TestGetExprValue(t *testing.T) {
 		binary.LittleEndian.PutUint64(id, 1)
 		ranges.Append(id)
 
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(&ranges, nil).AnyTimes()
-		table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
+		relData := &memoryengine.MemRelationData{
+			Shards: ranges,
+		}
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
@@ -635,6 +640,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -644,7 +650,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
+		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		ses.SetDatabaseName("db")
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
@@ -655,7 +661,7 @@ func TestGetExprValue(t *testing.T) {
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
 			fmt.Println("++++>", kase.sql)
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -745,6 +751,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -754,7 +761,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
+		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
 		assert.Nil(t, err)
@@ -762,7 +769,7 @@ func TestGetExprValue(t *testing.T) {
 		ec.reqCtx = ctx
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -909,8 +916,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 	setGlobalPu(pu)
-	ses1 := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true,
-		nil)
+	ses1 := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
 	ses1.SetUserDefinedVar("var3", "val3", "set var3 = val3")
@@ -929,9 +935,9 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	defer mpool.DeleteMPool(mp)
 
-	testProc := process.New(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
+	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
 
-	params1 := testProc.GetVector(types.T_text.ToType())
+	params1 := vector.NewVec(types.T_text.ToType())
 	for i := 0; i < 3; i++ {
 		err = vector.AppendBytes(params1, []byte{}, false, testProc.GetMPool())
 		assert.NoError(t, err)
@@ -1146,7 +1152,7 @@ func TestUserInput_getSqlSourceType(t *testing.T) {
 
 func TestTopsort(t *testing.T) {
 	cvey.Convey("create graph", t, func() {
-		g := topsort{next: make(map[string][]string)}
+		g := toposort{next: make(map[string][]string)}
 		g.addVertex("0")
 		g.addVertex("1")
 		g.addVertex("2")
@@ -1159,8 +1165,8 @@ func TestTopsort(t *testing.T) {
 		g.addEdge("3", "4")
 		g.addEdge("3", "5")
 
-		ans, ok := g.sort()
-		cvey.So(ok, cvey.ShouldBeTrue)
+		ans, err := g.sort()
+		cvey.So(err, cvey.ShouldBeNil)
 
 		sort.StringSlice(ans[:2]).Sort()
 		cvey.So(ans[:2], cvey.ShouldResemble, []string{"0", "1"})
@@ -1171,18 +1177,18 @@ func TestTopsort(t *testing.T) {
 	})
 
 	cvey.Convey("create graph", t, func() {
-		g := topsort{next: make(map[string][]string)}
+		g := toposort{next: make(map[string][]string)}
 		g.addVertex("0")
 		g.addVertex("1")
 		g.addVertex("2")
 
 		// can be in any order
-		_, ok := g.sort()
-		cvey.So(ok, cvey.ShouldBeTrue)
+		_, err := g.sort()
+		cvey.So(err, cvey.ShouldBeNil)
 	})
 
 	cvey.Convey("create graph", t, func() {
-		g := topsort{next: make(map[string][]string)}
+		g := toposort{next: make(map[string][]string)}
 		g.addVertex("0")
 		g.addVertex("1")
 		g.addVertex("2")
@@ -1191,7 +1197,437 @@ func TestTopsort(t *testing.T) {
 		g.addEdge("2", "0")
 
 		// has a cycle
-		_, ok := g.sort()
-		cvey.So(ok, cvey.ShouldBeFalse)
+		_, err := g.sort()
+		cvey.So(err, cvey.ShouldNotBeNil)
+	})
+}
+
+func Test_convertRowsIntoBatch(t *testing.T) {
+	colMysqlTyps := []defines.MysqlType{
+		defines.MYSQL_TYPE_VAR_STRING,
+		defines.MYSQL_TYPE_LONG,
+		defines.MYSQL_TYPE_LONGLONG,
+		defines.MYSQL_TYPE_DOUBLE,
+		defines.MYSQL_TYPE_FLOAT,
+		defines.MYSQL_TYPE_DATE,
+		defines.MYSQL_TYPE_TIME,
+		defines.MYSQL_TYPE_DATETIME,
+		defines.MYSQL_TYPE_TIMESTAMP,
+	}
+	colNames := make([]string, len(colMysqlTyps))
+	mrs := &MysqlResultSet{}
+	cnt := 5
+	for colIdx, mysqlTyp := range colMysqlTyps {
+		col := new(MysqlColumn)
+		col.SetColumnType(mysqlTyp)
+		col.SetName(colNames[colIdx])
+		mrs.AddColumn(col)
+	}
+
+	for i := 0; i < cnt; i++ {
+		row := make([]any, len(mrs.Columns))
+		mrs.AddRow(row)
+		for j := 0; j < len(mrs.Columns); j++ {
+			switch mrs.Columns[j].ColumnType() {
+			case defines.MYSQL_TYPE_VARCHAR:
+				row[j] = "def"
+			case defines.MYSQL_TYPE_VAR_STRING:
+				row[j] = "abc"
+			case defines.MYSQL_TYPE_SHORT:
+				row[j] = int32(math.MaxInt16)
+			case defines.MYSQL_TYPE_LONG:
+				row[j] = int32(math.MaxInt32)
+			case defines.MYSQL_TYPE_LONGLONG:
+				row[j] = int64(math.MaxInt64)
+			case defines.MYSQL_TYPE_DOUBLE:
+				row[j] = float64(math.MaxFloat64)
+			case defines.MYSQL_TYPE_FLOAT:
+				row[j] = float32(math.MaxFloat32)
+			case defines.MYSQL_TYPE_DATE:
+				row[j] = types.Date(0)
+			case defines.MYSQL_TYPE_TIME:
+				row[j] = types.Time(0)
+			case defines.MYSQL_TYPE_DATETIME:
+				row[j] = types.Datetime(0)
+			case defines.MYSQL_TYPE_TIMESTAMP:
+				row[j] = types.Timestamp(0)
+			case defines.MYSQL_TYPE_ENUM:
+				row[j] = types.Enum(1)
+			default:
+				assert.True(t, false)
+			}
+		}
+	}
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	assert.Equal(t, len(mrs.Columns), len(pColDefs.ResultCols))
+	assert.NotNil(t, data)
+	assert.Equal(t, len(data.Vecs), len(mrs.Columns))
+
+	ses := &Session{}
+	ses.SetTimeZone(time.UTC)
+	for i := 0; i < cnt; i++ {
+		row := make([]any, len(data.Vecs))
+		for j := 0; j < len(data.Vecs); j++ {
+			err = extractRowFromVector(context.TODO(), ses, data.Vecs[j], j, row, i)
+			assert.NoError(t, err)
+			switch data.Vecs[j].GetType().Oid {
+			case types.T_varchar:
+				row[j] = string(row[j].([]uint8))
+			case types.T_date:
+				assert.Equal(t, mrs.Data[i][j].(types.Date), row[j])
+				continue
+			case types.T_time:
+				assert.Equal(t, mrs.Data[i][j].(types.Time).String(), row[j])
+				continue
+			case types.T_datetime:
+				assert.Equal(t, mrs.Data[i][j].(types.Datetime).String(), row[j])
+				continue
+			case types.T_timestamp:
+				assert.Equal(t, mrs.Data[i][j].(types.Timestamp).String2(time.UTC, 0), row[j])
+				continue
+			case types.T_enum:
+				assert.Equal(t, mrs.Data[i][j].(types.Enum), row[j])
+				continue
+			}
+			assert.Equal(t, mrs.Data[i][j], row[j])
+		}
+
+	}
+}
+
+func Test_issue3482(t *testing.T) {
+	s := issue3482SqlPrefix + " "
+	ui := UserInput{sql: s}
+	assert.True(t, ui.isIssue3482Sql())
+}
+
+func Test_xxx(t *testing.T) {
+	list.New()
+}
+
+func Test_isLegal(t *testing.T) {
+	type args struct {
+		name string
+	}
+	trueNames := []string{
+		"abc",
+		"0b",
+		"0b0a1fg",
+		"123",
+		"b'00011011'",
+		"b\\\\a9''", //b\\a9''
+		"\\0",       //\0
+		"\\\\'",     //\\'
+		"\\Z",       //\Z
+		"/000/",
+	}
+
+	type kase struct {
+		name string
+		args args
+		want bool
+	}
+
+	tests := []kase{}
+	for i, name := range trueNames {
+		tests = append(tests, kase{
+			name: fmt.Sprintf("t%d", i),
+			args: args{
+				name: name,
+			},
+			want: true,
+		})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, accountNameIsLegal(tt.args.name), "accountNameIsLegal(%v)", tt.args.name)
+			assert.Equalf(t, tt.want, dbNameIsLegal(tt.args.name), "dbNameIsLegal(%v)", tt.args.name)
+			assert.Equalf(t, tt.want, tableNameIsLegal(tt.args.name), "tableNameIsLegal(%v)", tt.args.name)
+		})
+	}
+}
+
+func Test_parser(t *testing.T) {
+	sql := "select db_name, table_name, constraint_name, column_name, refer_column_name, on_delete, on_update from `mo_catalog`.`mo_foreign_keys` where refer_db_name = `test` and refer_table_name = `b'00011011'`  and (db_name != `test` or db_name = `test` and table_name != `b'00011011'`) order by db_name, table_name, constraint_name;"
+	x, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	assert.NoError(t, err)
+	fmt.Println(x)
+
+}
+
+func Test_replaceStr(t *testing.T) {
+	type args struct {
+		s     string
+		start int
+		end   int
+		s2    string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "t1",
+			args: args{
+				s:     "mysql://root:111@127.0.0.1:6001",
+				start: 13,
+				end:   16,
+				s2:    "******",
+			},
+			want: "mysql://root:******@127.0.0.1:6001",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, replaceStr(tt.args.s, tt.args.start, tt.args.end, tt.args.s2), "replaceStr(%v, %v, %v, %v)", tt.args.s, tt.args.start, tt.args.end, tt.args.s2)
+		})
+	}
+}
+
+func Test_islegal(t *testing.T) {
+	assert.False(t, isLegal("", []string{}))
+	assert.False(t, isLegal("abc", []string{}))
+}
+
+func Test_accountNameIsLegal(t *testing.T) {
+	assert.False(t, accountNameIsLegal(",."))
+	assert.False(t, dbNameIsLegal(",."))
+	assert.False(t, tableNameIsLegal(",."))
+}
+
+func Test_compUriInfo(t *testing.T) {
+	ret, _ := compositedUriInfo("", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefix", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:65536", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:4", "prefix")
+	assert.True(t, ret)
+}
+
+func Test_replaceStr2(t *testing.T) {
+	assert.Equal(t, replaceStr("", 1, 0, "a"), "")
+	assert.Equal(t, replaceStr("abc", 0, 4, "a"), "abc")
+}
+
+func Test_uriHasPrefix(t *testing.T) {
+	assert.False(t, uriHasPrefix("ab", "abc"))
+}
+
+func Test_extractUriInfo(t *testing.T) {
+	_, _, err := extractUriInfo(context.Background(), "abc", "t")
+	assert.Error(t, err)
+}
+
+func Test_BuildTableDefFromMoColumns(t *testing.T) {
+	convey.Convey("BuildTableDefFromMoColumns fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+		rm, err := NewRoutineManager(ctx)
+		assert.Nil(t, err)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
+		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
+
+		// process.
+		ses.proc = testutil.NewProc()
+		ses.proc.Base.TxnOperator = txnOperator
+
+		sql, err := getTableColumnDefSql(uint64(tenant.TenantID), "db1", "t1")
+		assert.Nil(t, err)
+
+		mrs := newMrsForPasswordOfUser([][]interface{}{{}})
+		bh.sql2result[sql] = mrs
+
+		_, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func Test_getTableColumnDefSql(t *testing.T) {
+	tests := []struct {
+		name      string
+		accountId uint64
+		dbName    string
+		tableName string
+		want      string
+		wantErr   bool
+	}{
+		{
+			name:      "1",
+			accountId: 1,
+			dbName:    "db1",
+			tableName: "tbl1",
+			want:      fmt.Sprintf(getTableColumnDefFormat, 1, "db1", "tbl1"),
+			wantErr:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getTableColumnDefSql(tt.accountId, tt.dbName, tt.tableName)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getTableColumnDefSql() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("getTableColumnDefSql() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_extractTableDefColumns(t *testing.T) {
+
+	// name type error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+			typ := new(types.Type)
+			typByte, _ := typ.Marshal()
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				def,
+				typByte,
+				uint64(1),
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
+
+	// typ error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				"id",
+				def,
+				uint64(1),
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
+
+	// colId error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+			typ := new(types.Type)
+			typByte, _ := typ.Marshal()
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				"id",
+				typByte,
+				def,
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
+
+	// default error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+			typ := new(types.Type)
+			typByte, _ := typ.Marshal()
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				"id",
+				typByte,
+				uint64(1),
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
 	})
 }

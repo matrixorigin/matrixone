@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -34,7 +34,7 @@ const (
 
 // add unit tests for cases
 type outputTestCase struct {
-	arg   *Argument
+	arg   *Output
 	types []types.Type
 	proc  *process.Process
 }
@@ -50,11 +50,11 @@ func sqlOutput(_ *batch.Batch) error {
 func init() {
 	tcs = []outputTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
+			arg: &Output{
 				Data: nil,
 				Func: sqlOutput,
 				OperatorBase: vm.OperatorBase{
@@ -87,7 +87,6 @@ func TestOutput(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-
 		bats := []*batch.Batch{
 			newBatch(tc.types, tc.proc, Rows),
 			newBatch(tc.types, tc.proc, Rows),
@@ -96,9 +95,19 @@ func TestOutput(t *testing.T) {
 		resetChildren(tc.arg, bats)
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		resetChildren(tc.arg, bats)
+		_, err = tc.arg.Call(tc.proc)
+		require.NoError(t, err)
+		tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -108,11 +117,8 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
-	arg.SetChildren(
-		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
-		})
+func resetChildren(arg *Output, bats []*batch.Batch) {
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 }

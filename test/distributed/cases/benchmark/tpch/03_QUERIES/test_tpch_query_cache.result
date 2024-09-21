@@ -1,5 +1,5 @@
 use tpch;
-set global save_query_result = on;
+set save_query_result = on;
 /* save_result */select
 l_returnflag,
 l_linestatus,
@@ -1093,4 +1093,4 @@ cntrycode    numcust    totacctbal
 19    2    17120.35
 20    1    9091.82
 26    1    7354.23
-set global save_query_result = off;
+set save_query_result = off;

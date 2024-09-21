@@ -1,0 +1,63 @@
+select wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_hello', 'world');
+wasm(https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm, mowasm_hello, world)
+Hello world!
+select wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_add', '[3, 5]');
+wasm(https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm, mowasm_add, [3, 5])
+8
+select wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/notexist.wasm', 'mowasm_add', '[3, 5]');
+failed to fetch Wasm data from URL
+select try_wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/notexist.wasm', 'mowasm_add', '[3, 5]');
+failed to fetch Wasm data from URL
+select wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_add2', '[3, 5]');
+Unknown function: mowasm_add2
+select try_wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_add2', '[3, 5]');
+try_wasm(https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm, mowasm_add2, [3, 5])
+null
+select wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_add', '[1, 3, 5]');
+add takes two float arguments
+select try_wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_add', '[1, 3, 5]');
+try_wasm(https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm, mowasm_add, [1, 3, 5])
+null
+create table wasmt(id int, fn varchar(255), arg varchar(255));
+insert into wasmt values
+(1, 'mowasm_hello', '[1, 2]'),
+(2, 'mowasm_add', '[1, 2]'),
+(3, 'mowasm_hello', '[1, 2]'),
+(4, 'mowasm_add', '[1, 2]'),
+(5, 'mowasm_hello', '[1, 2]'),
+(6, 'mowasm_add', '[1, 2]'),
+(7, 'mowasm_hello', '[1, 2]'),
+(8, 'mowasm_add', '[1, 2]'),
+(9, 'mowasm_hello', '[1, 2]'),
+(10, 'mowasm_add', '[1, 2]')
+;
+select count(*) from wasmt;
+count(*)
+10
+select id, wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', fn, arg)
+from wasmt;
+id    wasm(https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm, fn, arg)
+1    Hello [1, 2]!
+2    3
+3    Hello [1, 2]!
+4    3
+5    Hello [1, 2]!
+6    3
+7    Hello [1, 2]!
+8    3
+9    Hello [1, 2]!
+10    3
+select id, try_wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', fn, arg)
+from wasmt;
+id    try_wasm(https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm, fn, arg)
+1    Hello [1, 2]!
+2    3
+3    Hello [1, 2]!
+4    3
+5    Hello [1, 2]!
+6    3
+7    Hello [1, 2]!
+8    3
+9    Hello [1, 2]!
+10    3
+drop table wasmt;

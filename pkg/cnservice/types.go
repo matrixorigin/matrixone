@@ -22,10 +22,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -41,8 +45,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
@@ -52,7 +58,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"go.uber.org/zap"
 )
 
 var (
@@ -75,6 +80,9 @@ type Service interface {
 	GetTaskService() (taskservice.TaskService, bool)
 	GetSQLExecutor() executor.SQLExecutor
 	GetBootstrapService() bootstrap.Service
+	GetTimestampWaiter() client.TimestampWaiter
+	GetEngine() engine.Engine
+	GetClock() clock.Clock
 }
 
 type EngineType string
@@ -177,6 +185,9 @@ type Config struct {
 	// LockService lockservice
 	LockService lockservice.Config `toml:"lockservice"`
 
+	// ShardService shard service config
+	ShardService shardservice.Config `toml:"shardservice"`
+
 	// Txn txn config
 	Txn struct {
 		// Isolation txn isolation. SI or RC
@@ -241,6 +252,7 @@ type Config struct {
 			Dir           string        `toml:"dir"`
 			Enable        bool          `toml:"enable"`
 			Tables        []uint64      `toml:"tables"`
+			LoadToMO      bool          `toml:"load-to-mo"`
 		} `toml:"trace"`
 	} `toml:"txn"`
 
@@ -265,9 +277,9 @@ type Config struct {
 
 	PythonUdfClient pythonservice.ClientConfig `toml:"python-udf-client"`
 
-	// LogtailUpdateStatsThreshold is the number that logtail entries received
-	// to trigger stats updating.
-	LogtailUpdateStatsThreshold int `toml:"logtail-update-stats-threshold"`
+	// LogtailUpdateWorkerFactor is the times of CPU number of this node
+	// to start update workers.
+	LogtailUpdateWorkerFactor int `toml:"logtail-update-worker-factor"`
 
 	// Whether to automatically upgrade when system startup
 	AutomaticUpgrade       bool `toml:"auto-upgrade"`
@@ -389,9 +401,9 @@ func (c *Config) Validate() error {
 
 	// pessimistic mode implies primary key check
 	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
-		config.CNPrimaryCheck = true
+		config.CNPrimaryCheck.Store(true)
 	} else {
-		config.CNPrimaryCheck = false
+		config.CNPrimaryCheck.Store(false)
 	}
 
 	if c.LargestEntryLimit > 0 {
@@ -400,12 +412,12 @@ func (c *Config) Validate() error {
 
 	if c.MaxPreparedStmtCount > 0 {
 		if c.MaxPreparedStmtCount > maxForMaxPreparedStmtCount {
-			frontend.MaxPrepareNumberInOneSession = maxForMaxPreparedStmtCount
+			frontend.MaxPrepareNumberInOneSession.Store(uint32(maxForMaxPreparedStmtCount))
 		} else {
-			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
+			frontend.MaxPrepareNumberInOneSession.Store(uint32(c.MaxPreparedStmtCount))
 		}
 	} else {
-		frontend.MaxPrepareNumberInOneSession = 100000
+		frontend.MaxPrepareNumberInOneSession.Store(100000)
 	}
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
@@ -415,13 +427,19 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.LogtailUpdateWorkerFactor == 0 {
+		c.LogtailUpdateWorkerFactor = 4
+	}
+
 	if !metadata.ValidStateString(c.InitWorkState) {
 		c.InitWorkState = metadata.WorkState_Working.String()
 	}
 
 	// TODO: remove this if rc is stable
-	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
-		c.Txn.EnableCheckRCInvalidError)
+	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
+		moruntime.EnableCheckInvalidRCErrors,
+		c.Txn.EnableCheckRCInvalidError,
+	)
 	return nil
 }
 
@@ -530,9 +548,9 @@ func (c *Config) SetDefaultValue() {
 		c.Txn.MaxActive = runtime.NumCPU() * 4
 	}
 	c.Txn.NormalStateNoWait = false
-	c.LockService.ServiceID = "temp"
-	c.LockService.Validate()
 	c.LockService.ServiceID = c.UUID
+
+	c.ShardService.ServiceID = c.UUID
 
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
@@ -572,6 +590,13 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 	return s.cfg.LockService
 }
 
+func (s *service) getShardServiceConfig() shardservice.Config {
+	s.cfg.ShardService.ServiceID = s.cfg.UUID
+	s.cfg.ShardService.RPC = s.cfg.RPC
+	s.cfg.ShardService.ListenAddress = s.shardServiceListenAddr()
+	return s.cfg.ShardService
+}
+
 type service struct {
 	metadata       metadata.CNStore
 	cfg            *Config
@@ -592,7 +617,7 @@ type service struct {
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc
-	mo                     *frontend.MOServer
+	mo                     frontend.Server
 	initHakeeperClientOnce sync.Once
 	_hakeeperClient        logservice.CNHAKeeperClient
 	hakeeperConnected      chan struct{}
@@ -602,12 +627,14 @@ type service struct {
 	_txnClient             client.TxnClient
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
+	distributeTaeMp        *mpool.MPool
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService
 	fileService            fileservice.FileService
 	pu                     *config.ParameterUnit
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
+	shardService           shardservice.ShardService
 	sqlExecutor            executor.SQLExecutor
 	sessionMgr             *queryservice.SessionManager
 	// queryService is used to handle query request from other CN service.
@@ -617,6 +644,7 @@ type service struct {
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
 	bootstrapService bootstrap.Service
+	incrservice      incrservice.AutoIncrementService
 
 	stopper *stopper.Stopper
 	aicm    *defines.AutoIncrCacheManager
@@ -642,6 +670,7 @@ type service struct {
 		// counter recording the total number of running pipelines,
 		// details are not recorded for simplicity as suggested by @nnsgmsone
 		counter atomic.Int64
+		client  cnclient.PipelineClient
 	}
 }
 

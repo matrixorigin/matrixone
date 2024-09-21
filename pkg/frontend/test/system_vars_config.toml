@@ -61,3 +61,6 @@
 
 #	Comment:	default is 300MB. The max entries bytes for the write batch in the cube.
 	cubeMaxEntriesBytes = 314572800
+
+#    Comment:	default is 1MB. Export data to csv file default flush size.
+	exportDataDefaultFlushSize = 1

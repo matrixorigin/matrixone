@@ -38,6 +38,10 @@ func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
 	return err
 }
 
+func (e *EntireEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return e.Engine.LatestLogtailAppliedTime()
+}
+
 func (e *EntireEngine) Delete(ctx context.Context, databaseName string, op client.TxnOperator) error {
 	return e.Engine.Delete(ctx, databaseName, op)
 }
@@ -71,9 +75,15 @@ func (e *EntireEngine) Hints() Hints {
 	return e.Engine.Hints()
 }
 
-func (e *EntireEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]Reader, error) {
-	return e.Engine.NewBlockReader(ctx, num, ts, expr, ranges, tblDef, proc)
+func (e *EntireEngine) BuildBlockReaders(
+	ctx context.Context,
+	proc any,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData RelData,
+	num int) ([]Reader, error) {
+	return e.Engine.BuildBlockReaders(ctx, proc, ts, expr, def, relData, num)
 }
 
 func (e *EntireEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
@@ -98,4 +108,12 @@ func (e *EntireEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) 
 
 func (e *EntireEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.Engine.Stats(ctx, key, sync)
+}
+
+func (e *EntireEngine) GetMessageCenter() any {
+	return e.Engine.GetMessageCenter()
+}
+
+func (e *EntireEngine) GetService() string {
+	return e.Engine.GetService()
 }

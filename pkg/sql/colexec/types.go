@@ -15,9 +15,10 @@
 package colexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"reflect"
+	"context"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -42,18 +43,59 @@ type ReceiveInfo struct {
 	Uuid     uuid.UUID
 }
 
-// Server used to support cn2s3 directly, for more info, refer to docs about it
 type Server struct {
-	sync.Mutex
-
 	hakeeper      logservice.CNHAKeeperClient
 	uuidCsChanMap UuidProcMap
 	//txn's local segments.
 	cnSegmentMap CnSegmentMap
+
+	receivedRunningPipeline RunningPipelineMapForRemoteNode
+}
+
+// RunningPipelineMapForRemoteNode
+// is a map to record which pipeline was built for a remote node.
+// these pipelines will send data to a remote node,
+// we record them for a better control for their lives.
+type RunningPipelineMapForRemoteNode struct {
+	sync.Mutex
+
+	fromRpcClientToRelatedPipeline map[rpcClientItem]runningPipelineInfo
+}
+
+type rpcClientItem struct {
+	// connection.
+	tcp morpc.ClientSession
+
+	// stream id.
+	id uint64
+}
+
+type runningPipelineInfo struct {
+	alreadyDone bool
+	queryCancel context.CancelFunc
+
+	isDispatch bool
+	receiver   *process.WrapCs
+}
+
+func (info *runningPipelineInfo) cancelPipeline() {
+	// If this was a pipeline responsible for distributing data, we cannot end this
+	// because we are just one of the receivers.
+	if info.isDispatch {
+		info.receiver.Lock()
+		info.receiver.ReceiverDone = true
+		info.receiver.Unlock()
+
+	} else {
+		if info.queryCancel != nil {
+			info.queryCancel()
+		}
+	}
 }
 
 type uuidProcMapItem struct {
 	proc *process.Process
+	ch   process.RemotePipelineInformationChannel
 }
 
 type UuidProcMap struct {
@@ -68,21 +110,6 @@ type CnSegmentMap struct {
 	// 1.mp[segmentName] = 1 => txnWorkSpace
 	// 2.mp[segmentName] = 2 => Cn Blcok
 	mp map[objectio.Segmentid]int32
-}
-
-// ReceiverOperator need to receive batch from proc.Reg.MergeReceivers
-type ReceiverOperator struct {
-	proc *process.Process
-
-	// parameter for Merge-Type receiver.
-	// Merge-Type specifys the operator receive batch from all
-	// regs or single reg.
-	//
-	// Merge/MergeGroup/MergeLimit ... are Merge-Type
-	// while Join/Intersect/Minus ... are not
-	aliveMergeReceiver int
-	chs                []chan *batch.Batch
-	receiverListener   []reflect.SelectCase
 }
 
 const (

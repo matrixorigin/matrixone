@@ -24,6 +24,8 @@ import (
 
 	"github.com/elastic/gosigar"
 	"github.com/elastic/gosigar/cgroup"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -32,9 +34,9 @@ var (
 	// pid is the process ID.
 	pid int
 	// cpuNum is the total number of CPU of this node.
-	cpuNum int
+	cpuNum atomic.Int32
 	// memoryTotal is the total memory of this node.
-	memoryTotal uint64
+	memoryTotal atomic.Uint64
 	// cpuUsage is the CPU statistics updated every second.
 	cpuUsage atomic.Uint64
 )
@@ -46,18 +48,18 @@ func InContainer() bool {
 
 // NumCPU return the total number of CPU of this node.
 func NumCPU() int {
-	return cpuNum
+	return int(cpuNum.Load())
 }
 
 // CPUAvailable returns the available cpu of this node.
 func CPUAvailable() float64 {
 	usage := math.Float64frombits(cpuUsage.Load())
-	return math.Round((1 - usage) * float64(cpuNum))
+	return math.Round((1 - usage) * float64(cpuNum.Load()))
 }
 
 // MemoryTotal returns the total size of memory of this node.
 func MemoryTotal() uint64 {
-	return memoryTotal
+	return memoryTotal.Load()
 }
 
 // MemoryAvailable returns the available size of memory of this node.
@@ -68,7 +70,7 @@ func MemoryAvailable() uint64 {
 			logutil.Errorf("failed to get memory usage: %v", err)
 			return 0
 		}
-		return memoryTotal - uint64(used)
+		return memoryTotal.Load() - uint64(used)
 	}
 	s := gosigar.ConcreteSigar{}
 	mem, err := s.GetMem()
@@ -123,7 +125,7 @@ func runWithContainer(stopper *stopper.Stopper) {
 				if prevStats != nil {
 					work := stats.Stats.UserNanos + stats.Stats.SystemNanos -
 						(prevStats.Stats.UserNanos + prevStats.Stats.SystemNanos)
-					total := uint64(cpuNum) * uint64(time.Second)
+					total := uint64(cpuNum.Load()) * uint64(time.Second)
 					if total != 0 {
 						usage := float64(work) / float64(total)
 						cpuUsage.Store(math.Float64bits(usage))
@@ -138,6 +140,9 @@ func runWithContainer(stopper *stopper.Stopper) {
 	}); err != nil {
 		logutil.Errorf("failed to start system runner: %v", err)
 	}
+
+	// do watch cpu.max and memory.max to upgrade resource.
+	runWatchCgroupConfig(stopper)
 }
 
 func runWithoutContainer(stopper *stopper.Stopper) {
@@ -171,35 +176,70 @@ func Run(stopper *stopper.Stopper) {
 	} else {
 		runWithoutContainer(stopper)
 	}
+	runSystemMonitor(stopper)
 }
 
-func init() {
-	pid = os.Getpid()
+func runSystemMonitor(stopper *stopper.Stopper) {
+	err := stopper.RunTask(
+		func(ctx context.Context) {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+
+			last := time.Now()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					interval := time.Since(last)
+					if interval > time.Second*2 {
+						logutil.Info("system is busy",
+							zap.String("expect", "1s"),
+							zap.Duration("actual", interval))
+					}
+					last = time.Now()
+				}
+			}
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+}
+
+// refreshQuotaConfig get CPU/Mem config from dev. If run in container, get it from the cgroup config.
+// Tips: Currently, the callings are serial in two places: 1) init; 2) runWatchCgroupConfig
+func refreshQuotaConfig() {
 	if InContainer() {
 		cpu, err := cgroup.GetCPUStats(pid)
 		if err != nil {
 			logutil.Errorf("failed to get cgroup cpu stats: %v", err)
 		} else {
 			if cpu.CFS.PeriodMicros != 0 && cpu.CFS.QuotaMicros != 0 {
-				cpuNum = int(cpu.CFS.QuotaMicros / cpu.CFS.PeriodMicros)
+				cpuNum.Store(int32(cpu.CFS.QuotaMicros / cpu.CFS.PeriodMicros))
 			} else {
-				cpuNum = runtime.NumCPU()
+				cpuNum.Store(int32(runtime.NumCPU()))
 			}
 		}
 		limit, err := cgroup.GetMemLimit(pid)
 		if err != nil {
 			logutil.Errorf("failed to get cgroup mem limit: %v", err)
 		} else {
-			memoryTotal = uint64(limit)
+			memoryTotal.Store(uint64(limit))
 		}
 	} else {
-		cpuNum = runtime.NumCPU()
+		cpuNum.Store(int32(runtime.NumCPU()))
 		s := gosigar.ConcreteSigar{}
 		mem, err := s.GetMem()
 		if err != nil {
 			logutil.Errorf("failed to get memory stats: %v", err)
 		} else {
-			memoryTotal = mem.Total
+			memoryTotal.Store(mem.Total)
 		}
 	}
+}
+
+func init() {
+	pid = os.Getpid()
+	refreshQuotaConfig()
 }

@@ -17,13 +17,12 @@ package mergecte
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(MergeCTE)
 
 const (
 	sendInitial   = 0
@@ -32,57 +31,70 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-	nodeCnt    int32
+	buf        *batch.Batch
+	bats       []*batch.Batch
 	curNodeCnt int32
 	status     int32
+	last       bool
+	freeBats   []*batch.Batch
+	i          int
 }
 
-type Argument struct {
-	ctr *container
-	buf *batch.Batch
+type MergeCTE struct {
+	ctr container
+
+	NodeCnt int
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (mergeCTE *MergeCTE) GetOperatorBase() *vm.OperatorBase {
+	return &mergeCTE.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[MergeCTE](
+		func() *MergeCTE {
+			return &MergeCTE{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *MergeCTE) {
+			*a = MergeCTE{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[MergeCTE]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (mergeCTE MergeCTE) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *MergeCTE {
+	return reuse.Alloc[MergeCTE](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (mergeCTE *MergeCTE) WithNodeCnt(nodeCnt int) *MergeCTE {
+	mergeCTE.NodeCnt = nodeCnt
+	return mergeCTE
+}
+
+func (mergeCTE *MergeCTE) Release() {
+	if mergeCTE != nil {
+		reuse.Free[MergeCTE](mergeCTE, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-		arg.ctr = nil
-	}
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
+func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
+	mergeCTE.ctr.status = sendInitial
+	mergeCTE.ctr.i = 0
+	mergeCTE.ctr.last = false
+}
+
+func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
+	for _, bat := range mergeCTE.ctr.freeBats {
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
 	}
 }

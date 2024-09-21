@@ -16,13 +16,17 @@ package logservicedriver
 
 import (
 	"context"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	// "time"
 )
 
 // driver lsn -> entry lsn
 func (d *LogServiceDriver) Truncate(lsn uint64) error {
+	logutil.Info("TRACE-WAL-TRUNCATE", zap.Uint64(" driver start truncate", lsn))
 	if lsn > d.truncating.Load() {
 		d.truncating.Store(lsn)
 	}
@@ -43,19 +47,33 @@ func (d *LogServiceDriver) onTruncate(items ...any) {
 }
 
 func (d *LogServiceDriver) doTruncate() {
+	t0 := time.Now()
 	target := d.truncating.Load()
 	lastServiceLsn := d.truncatedLogserviceLsn
 	lsn := lastServiceLsn
 	//TODO use valid lsn
 	next := d.getNextValidLogserviceLsn(lsn)
+	loopCount := 0
 	for d.isToTruncate(next, target) {
+		loopCount++
 		lsn = next
 		next = d.getNextValidLogserviceLsn(lsn)
 		if next <= lsn {
 			break
 		}
 	}
+	d.addrMu.RLock()
+	min := d.validLsn.Minimum()
+	max := d.validLsn.Maximum()
+	d.addrMu.RUnlock()
+	logutil.Info("TRACE-WAL-TRUNCATE-Get LogService lsn",
+		zap.Int("loop count", loopCount),
+		zap.Uint64("driver lsn", target),
+		zap.Uint64("min", min),
+		zap.Uint64("max", max),
+		zap.String("duration", time.Since(t0).String()))
 	if lsn == lastServiceLsn {
+		logutil.Info("LogService Driver: retrun because logservice is small")
 		return
 	}
 	d.truncateLogservice(lsn)
@@ -64,6 +82,8 @@ func (d *LogServiceDriver) doTruncate() {
 }
 
 func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
+	logutil.Info("TRACE-WAL-TRUNCATE-Start Truncate", zap.Uint64("lsn", lsn))
+	t0 := time.Now()
 	client, err := d.clientPool.Get()
 	if err == ErrClientPoolClosed {
 		return
@@ -75,19 +95,34 @@ func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.TruncateDuration)
 	err = client.c.Truncate(ctx, lsn)
 	cancel()
+	if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
+		truncatedLsn := d.getLogserviceTruncate()
+		if truncatedLsn == lsn {
+			err = nil
+		}
+	}
 	if err != nil {
 		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
-			logutil.Infof("LogService Driver: retry truncate, err is %v", err)
+			logutil.Infof("LogService Driver: retry truncate, lsn %d err is %v", lsn, err)
 			ctx, cancel := context.WithTimeout(context.Background(), d.config.TruncateDuration)
 			err = client.c.Truncate(ctx, lsn)
 			cancel()
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
+				truncatedLsn := d.getLogserviceTruncate()
+				if truncatedLsn == lsn {
+					err = nil
+				}
+			}
 			return err == nil
 		})
 		if err != nil {
 			panic(err)
 		}
 	}
-	logutil.Infof("LogService Driver: Truncate %d", lsn)
+	logutil.Info("TRACE-WAL-TRUNCATE-Truncate successfully",
+		zap.Uint64("lsn", lsn),
+		zap.String("duration",
+			time.Since(t0).String()))
 }
 func (d *LogServiceDriver) getLogserviceTruncate() (lsn uint64) {
 	client, err := d.clientPool.Get()
@@ -113,6 +148,6 @@ func (d *LogServiceDriver) getLogserviceTruncate() (lsn uint64) {
 			panic(err)
 		}
 	}
-	logutil.Infof("Logservice Driver: Get Truncate %d", lsn)
+	logutil.Infof("TRACE-WAL-TRUNCATE-Get Truncate %d", lsn)
 	return
 }

@@ -100,7 +100,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		return vectorAtFixed[types.Uuid](vec, i)
 
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
@@ -129,7 +129,7 @@ func vectorAtFixed[T any](vec *vector.Vector, i int) (value Nullable) {
 		return
 	}
 
-	slice := vector.MustFixedCol[T](vec)
+	slice := vector.MustFixedColNoTypeCheck[T](vec)
 	if len(slice) != vec.Length() {
 		panic(fmt.Sprintf(
 			"bad vector length, expected %d, got %d",

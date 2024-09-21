@@ -31,12 +31,12 @@ func AddUpgradeTenantTask(
 	toAccountID int32,
 	txn executor.TxnExecutor) error {
 	sql := fmt.Sprintf(`insert into %s (
-			upgrade_id, 
-			target_version, 
-			from_account_id, 
-			to_account_id, 
-			ready, 
-			create_at, 
+			upgrade_id,
+			target_version,
+			from_account_id,
+			to_account_id,
+			ready,
+			create_at,
 			update_at) values (%d, '%s', %d, %d, %d, current_timestamp(), current_timestamp())`,
 		catalog.MOUpgradeTenantTable,
 		upgradeID,
@@ -56,7 +56,7 @@ func UpdateUpgradeTenantTaskState(
 	taskID uint64,
 	state int32,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf("update %s set ready = %d where id = %d",
+	sql := fmt.Sprintf("update %s set ready = %d, update_at = current_timestamp() where id = %d",
 		catalog.MOUpgradeTenantTable,
 		state,
 		taskID)
@@ -88,9 +88,9 @@ func GetUpgradeTenantTasks(
 		from := int32(-1)
 		to := int32(-1)
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			taskID = vector.GetFixedAt[uint64](cols[0], 0)
-			from = vector.GetFixedAt[int32](cols[1], 0)
-			to = vector.GetFixedAt[int32](cols[2], 0)
+			taskID = vector.GetFixedAtWithTypeCheck[uint64](cols[0], 0)
+			from = vector.GetFixedAtWithTypeCheck[int32](cols[1], 0)
+			to = vector.GetFixedAtWithTypeCheck[int32](cols[2], 0)
 			return true
 		})
 		res.Close()
@@ -110,7 +110,7 @@ func GetUpgradeTenantTasks(
 		}
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
-				tenants = append(tenants, vector.GetFixedAt[int32](cols[0], i))
+				tenants = append(tenants, vector.GetFixedAtWithTypeCheck[int32](cols[0], i))
 				versions = append(versions, cols[1].GetStringAt(i))
 			}
 			return true

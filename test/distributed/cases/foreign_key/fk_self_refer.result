@@ -8,7 +8,7 @@ Tables_in_fk_self_refer
 t1
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT NULL,\nPRIMARY KEY (`a`),\nCONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t1    CREATE TABLE `t1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  CONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,1);
 insert into t1 values (2,1);
 insert into t1 values (3,2);
@@ -59,7 +59,7 @@ Tables_in_fk_self_refer
 t1
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `a` (`a`),\nCONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  UNIQUE KEY `a` (`a`),\n  CONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,1);
 insert into t1 values (2,1);
 insert into t1 values (3,2);

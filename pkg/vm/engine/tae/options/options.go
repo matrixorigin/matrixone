@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -131,14 +132,18 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.TransferTableTTL == time.Duration(0) {
-		o.TransferTableTTL = time.Second * 90
+		o.TransferTableTTL = time.Second * 60
 	}
 
 	if o.StorageCfg == nil {
 		o.StorageCfg = &StorageCfg{
-			BlockMaxRows:    DefaultBlockMaxRows,
+			BlockMaxRows:    objectio.BlockMaxRows,
 			ObjectMaxBlocks: DefaultBlocksPerObject,
 		}
+	}
+
+	if o.BulkTomestoneTxnThreshold == 0 {
+		o.BulkTomestoneTxnThreshold = DefaultBulkTomestoneTxnThreshold
 	}
 
 	if o.CheckpointCfg == nil {
@@ -149,6 +154,9 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	if o.CheckpointCfg.FlushInterval <= 0 {
 		o.CheckpointCfg.FlushInterval = DefaultCheckpointFlushInterval
+	}
+	if o.CheckpointCfg.TransferInterval <= 0 {
+		o.CheckpointCfg.TransferInterval = DefaultCheckpointTransferInterval
 	}
 	if o.CheckpointCfg.IncrementalInterval <= 0 {
 		o.CheckpointCfg.IncrementalInterval = DefaultCheckpointIncremetalInterval

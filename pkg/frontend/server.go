@@ -16,19 +16,22 @@ package frontend
 
 import (
 	"context"
+	"crypto/tls"
+	"fmt"
 	"io"
-	"strings"
+	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 
-	"github.com/fagongzi/goetty/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // RelationName counter for the new connection
@@ -41,13 +44,26 @@ var ConnIDAllocKey = "____server_conn_id"
 type MOServer struct {
 	addr        string
 	uaddr       string
-	app         goetty.NetApplication
 	rm          *RoutineManager
 	readTimeout time.Duration
+	handler     func(*Conn, []byte) error
+	mu          sync.RWMutex
+	wg          sync.WaitGroup
+	running     bool
+
+	pu        *config.ParameterUnit
+	listeners []net.Listener
+}
+
+// Server interface is for mock MOServer
+type Server interface {
+	GetRoutineManager() *RoutineManager
+	Start() error
+	Stop() error
 }
 
 // BaseService is an interface which indicates that the instance is
-// the base CN service and should implements the following methods.
+// the base CN service and should implement the following methods.
 type BaseService interface {
 	// ID returns the ID of the service.
 	ID() string
@@ -69,11 +85,252 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
-	return mo.app.Start()
+	mo.running = true
+	mo.startListener()
+	setMoServerStarted(true)
+	return nil
 }
 
 func (mo *MOServer) Stop() error {
-	return mo.app.Stop()
+	mo.mu.Lock()
+	if !mo.running {
+		mo.mu.Unlock()
+		return nil
+	}
+	mo.running = false
+	mo.mu.Unlock()
+
+	var errors []error
+	for _, listener := range mo.listeners {
+		if err := listener.Close(); err != nil {
+			errors = append(errors, err)
+		}
+	}
+	if len(errors) > 0 {
+		return errors[0]
+	}
+
+	logutil.Debug("application listener closed")
+	mo.wg.Wait()
+
+	for s := range mo.rm.clients {
+		if err := s.Close(); err != nil {
+			return err
+		}
+	}
+	logutil.Debug("application stopped")
+	return nil
+}
+
+func (mo *MOServer) IsRunning() bool {
+	mo.mu.RLock()
+	defer mo.mu.RUnlock()
+	return mo.running
+}
+
+func (mo *MOServer) startListener() {
+	logutil.Debug("mo server accept loop started")
+	defer func() {
+		logutil.Debug("mo server accept loop stopped")
+	}()
+
+	for _, listener := range mo.listeners {
+		mo.wg.Add(1)
+		go mo.startAccept(listener)
+	}
+}
+
+func (mo *MOServer) startAccept(listener net.Listener) {
+	defer mo.wg.Done()
+
+	var tempDelay time.Duration
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				if tempDelay == 0 {
+					tempDelay = 5 * time.Millisecond
+				} else {
+					tempDelay *= 2
+				}
+				if max := 1 * time.Second; tempDelay > max {
+					tempDelay = max
+				}
+				time.Sleep(tempDelay)
+				continue
+			}
+			return
+		}
+		tempDelay = 0
+
+		go mo.handleConn(conn)
+
+	}
+}
+func (mo *MOServer) handleConn(conn net.Conn) {
+	var rs *Conn
+	var err error
+	defer func() {
+		if rs != nil {
+			err = rs.Close()
+			if err != nil {
+				logutil.Error("Handle conn error", zap.Error(err))
+				return
+			}
+		}
+	}()
+
+	rs, err = NewIOSession(conn, mo.pu)
+	if err != nil {
+		logutil.Error("NewIOSession error", zap.Error(err))
+		return
+	}
+	err = mo.rm.Created(rs)
+	if err != nil {
+		logutil.Error("Create routine error", zap.Error(err))
+		return
+	}
+	err = mo.handshake(rs)
+	if err != nil {
+		logutil.Error("HandShake error", zap.Error(err))
+		return
+	}
+	mo.handleLoop(rs)
+}
+
+func (mo *MOServer) handleLoop(rs *Conn) {
+	if err := mo.handleMessage(rs); err != nil {
+		logutil.Error("handle session failed", zap.Error(err))
+	}
+}
+
+func (mo *MOServer) handshake(rs *Conn) error {
+	var err error
+	var isTlsHeader bool
+	rm := mo.rm
+	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
+
+	tempCtx, tempCancel := context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	defer tempCancel()
+
+	routine := rm.getRoutine(rs)
+	if routine == nil {
+		logutil.Error(
+			"Failed to handshake with server, routine does not exist...",
+			zap.Error(err))
+		return err
+	}
+
+	protocol := routine.getProtocol()
+
+	ses := routine.getSession()
+	ts := ses.timestampMap
+
+	ts[TSEstablishStart] = time.Now()
+	ses.Debugf(tempCtx, "HANDLE HANDSHAKE")
+
+	err = protocol.WriteHandshake()
+
+	if err != nil {
+		logutil.Error(
+			"Failed to handshake with server, quitting routine...",
+			zap.Error(err))
+		routine.killConnection(true)
+		return err
+	}
+
+	ses.Debugf(rm.getCtx(), "have sent handshake packet to connection %s", rs.RemoteAddress())
+
+	for !protocol.GetBool(ESTABLISHED) {
+		var payload []byte
+		payload, err = rs.Read()
+		if err != nil {
+			return err
+		}
+
+		if protocol.GetU32(CAPABILITY)&CLIENT_SSL != 0 && !protocol.GetBool(TLS_ESTABLISHED) {
+			ses.Debugf(tempCtx, "setup ssl")
+			isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
+			if err != nil {
+				ses.Error(tempCtx,
+					"An error occurred",
+					zap.Error(err))
+				return err
+			}
+			if isTlsHeader {
+				ts[TSUpgradeTLSStart] = time.Now()
+				ses.Debugf(tempCtx, "upgrade to TLS")
+				// do upgradeTls
+				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
+				ses.Debugf(tempCtx, "get TLS conn ok")
+				tlsCtx, cancelFun := context.WithTimeout(tempCtx, 20*time.Second)
+				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
+					ses.Error(tempCtx,
+						"Error occurred before cancel()",
+						zap.Error(err))
+					cancelFun()
+					ses.Error(tempCtx,
+						"Error occurred after cancel()",
+						zap.Error(err))
+					return err
+				}
+				cancelFun()
+				ses.Debugf(tempCtx, "TLS handshake ok")
+				rs.UseConn(tlsConn)
+				ses.Debugf(tempCtx, "TLS handshake finished")
+
+				// tls upgradeOk
+				protocol.SetBool(TLS_ESTABLISHED, true)
+				ts[TSUpgradeTLSEnd] = time.Now()
+				v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
+			} else {
+				// client don't ask server to upgrade TLS
+				if err := protocol.Authenticate(tempCtx); err != nil {
+					return err
+				}
+				protocol.SetBool(TLS_ESTABLISHED, true)
+				protocol.SetBool(ESTABLISHED, true)
+			}
+		} else {
+			ses.Debugf(tempCtx, "handleHandshake")
+			_, err = protocol.HandleHandshake(tempCtx, payload)
+			if err != nil {
+				ses.Error(tempCtx,
+					"Error occurred",
+					zap.Error(err))
+				return err
+			}
+			if err = protocol.Authenticate(tempCtx); err != nil {
+				return err
+			}
+			protocol.SetBool(ESTABLISHED, true)
+		}
+		ts[TSEstablishEnd] = time.Now()
+		v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
+		ses.Info(ctx, fmt.Sprintf("mo accept connection, time cost of Created: %s, Establish: %s, UpgradeTLS: %s, Authenticate: %s, SendErrPacket: %s, SendOKPacket: %s, CheckTenant: %s, CheckUser: %s, CheckRole: %s, CheckDbName: %s, InitGlobalSysVar: %s",
+			ts[TSCreatedEnd].Sub(ts[TSCreatedStart]).String(),
+			ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).String(),
+			ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).String(),
+			ts[TSAuthenticateEnd].Sub(ts[TSAuthenticateStart]).String(),
+			ts[TSSendErrPacketEnd].Sub(ts[TSSendErrPacketStart]).String(),
+			ts[TSSendOKPacketEnd].Sub(ts[TSSendOKPacketStart]).String(),
+			ts[TSCheckTenantEnd].Sub(ts[TSCheckTenantStart]).String(),
+			ts[TSCheckUserEnd].Sub(ts[TSCheckUserStart]).String(),
+			ts[TSCheckRoleEnd].Sub(ts[TSCheckRoleStart]).String(),
+			ts[TSCheckDbNameEnd].Sub(ts[TSCheckDbNameStart]).String(),
+			ts[TSInitGlobalSysVarEnd].Sub(ts[TSInitGlobalSysVarStart]).String()))
+
+		dbName := protocol.GetStr(DBNAME)
+		if dbName != "" {
+			ses.SetDatabaseName(dbName)
+		}
+		rm.sessionManager.AddSession(ses)
+	}
+
+	return nil
 }
 
 func nextConnectionID() uint32 {
@@ -83,13 +340,27 @@ func nextConnectionID() uint32 {
 var globalRtMgr atomic.Value
 var globalPu atomic.Value
 var globalAicm atomic.Value
+var moServerStarted atomic.Bool
+var globalSessionAlloc atomic.Value
+
+func getGlobalSessionAlloc() *SessionAllocator {
+	return globalSessionAlloc.Load().(*SessionAllocator)
+}
+
+func setGlobalSessionAlloc(s *SessionAllocator) {
+	globalSessionAlloc.Store(s)
+}
 
 func setGlobalRtMgr(rtMgr *RoutineManager) {
 	globalRtMgr.Store(rtMgr)
 }
 
 func getGlobalRtMgr() *RoutineManager {
-	return globalRtMgr.Load().(*RoutineManager)
+	v := globalRtMgr.Load()
+	if v != nil {
+		return v.(*RoutineManager)
+	}
+	return nil
 }
 
 func setGlobalPu(pu *config.ParameterUnit) {
@@ -111,6 +382,14 @@ func getGlobalAic() *defines.AutoIncrCacheManager {
 	return nil
 }
 
+func MoServerIsStarted() bool {
+	return moServerStarted.Load()
+}
+
+func setMoServerStarted(b bool) {
+	moServerStarted.Store(b)
+}
+
 func NewMOServer(
 	ctx context.Context,
 	addr string,
@@ -120,7 +399,7 @@ func NewMOServer(
 ) *MOServer {
 	setGlobalPu(pu)
 	setGlobalAicm(aicm)
-	codec := NewSqlCodec()
+	setGlobalSessionAlloc(NewSessionAllocator(pu))
 	rm, err := NewRoutineManager(ctx)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
@@ -131,47 +410,34 @@ func NewMOServer(
 		rm.setSessionMgr(baseService.SessionMgr())
 	}
 	// TODO asyncFlushBatch
-	addresses := []string{addr}
 	unixAddr := pu.SV.GetUnixSocketAddress()
-	if unixAddr != "" {
-		addresses = append(addresses, "unix://"+unixAddr)
-	}
 	mo := &MOServer{
 		addr:        addr,
 		uaddr:       pu.SV.UnixSocketAddress,
 		rm:          rm,
 		readTimeout: pu.SV.SessionTimeout.Duration,
+		pu:          pu,
+		handler:     rm.Handler,
 	}
-	app, err := goetty.NewApplicationWithListenAddress(
-		addresses,
-		rm.Handler,
-		goetty.WithAppLogger(logutil.GetGlobalLogger()),
-		goetty.WithAppHandleSessionFunc(mo.handleMessage),
-		goetty.WithAppSessionOptions(
-			goetty.WithSessionCodec(codec),
-			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
-			goetty.WithSessionRWBUfferSize(DefaultRpcBufferSize, DefaultRpcBufferSize),
-			goetty.WithSessionAllocator(NewSessionAllocator(pu))),
-		goetty.WithAppSessionAware(rm),
-		//when the readTimeout expires the goetty will close the tcp connection.
-		goetty.WithReadTimeout(pu.SV.SessionTimeout.Duration))
+	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	err = initVarByConfig(ctx, pu)
-	if err != nil {
-		logutil.Panicf("start server failed with %+v", err)
+	mo.listeners = append(mo.listeners, listenerTcp)
+	if unixAddr != "" {
+		listenerUnix, err := net.Listen("unix", unixAddr)
+		if err != nil {
+			logutil.Panicf("start server failed with %+v", err)
+		}
+		mo.listeners = append(mo.listeners, listenerUnix)
 	}
-	mo.app = app
 	return mo
 }
 
 // handleMessage receives the message from the client and executes it
-func (mo *MOServer) handleMessage(rs goetty.IOSession) error {
-	received := uint64(0)
-	option := goetty.ReadOptions{Timeout: mo.readTimeout}
+func (mo *MOServer) handleMessage(rs *Conn) error {
 	for {
-		msg, err := rs.Read(option)
+		err := mo.handleRequest(rs)
 		if err != nil {
 			if err == io.EOF {
 				return nil
@@ -181,43 +447,35 @@ func (mo *MOServer) handleMessage(rs goetty.IOSession) error {
 				zap.Error(err))
 			return err
 		}
-
-		received++
-
-		err = mo.rm.Handler(rs, msg, received)
-		if err != nil {
-			if skipClientQuit(err.Error()) {
-				return nil
-			} else {
-				logutil.Error("session handle failed, close this session", zap.Error(err))
-			}
-			return err
-		}
 	}
 }
 
-func initVarByConfig(ctx context.Context, pu *config.ParameterUnit) error {
+func (mo *MOServer) handleRequest(rs *Conn) error {
+	var msg []byte
 	var err error
-	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
-		err = GSysVariables.SetGlobalSysVar(ctx, "save_query_result", pu.SV.SaveQueryResult)
-		if err != nil {
+	if !mo.IsRunning() {
+		return io.EOF
+	}
+
+	msg, err = rs.Read()
+	if err != nil {
+		if err == io.EOF {
 			return err
 		}
-	}
 
-	err = GSysVariables.SetGlobalSysVar(ctx, "query_result_maxsize", pu.SV.QueryResultMaxsize)
-	if err != nil {
+		logutil.Error("session read failed",
+			zap.Error(err))
 		return err
 	}
 
-	err = GSysVariables.SetGlobalSysVar(ctx, "query_result_timeout", pu.SV.QueryResultTimeout)
+	err = mo.rm.Handler(rs, msg)
 	if err != nil {
+		if skipClientQuit(err.Error()) {
+			return nil
+		} else {
+			logutil.Error("session handle failed, close this session", zap.Error(err))
+		}
 		return err
 	}
-
-	err = GSysVariables.SetGlobalSysVar(ctx, "lower_case_table_names", pu.SV.LowerCaseTableNames)
-	if err != nil {
-		return err
-	}
-	return err
+	return nil
 }

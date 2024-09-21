@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"go/constant"
 	"math"
 	"strconv"
 	"strings"
@@ -59,7 +58,7 @@ func BinaryToInt(b string) (uint64, error) {
 
 func ScoreBinaryToInt(s string) (uint64, error) {
 	if len(s) > 8 {
-		return 0, moerr.NewInvalidInputNoCtx("s is too long, len(s) =  %v", len(s))
+		return 0, moerr.NewInvalidInputNoCtxf("s is too long, len(s) =  %v", len(s))
 	}
 
 	v := uint64(0)
@@ -126,87 +125,87 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_bit:
 		width := int(vec.GetType().Width)
 		v, err := strconv.ParseUint(val, 0, width)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", width), "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", width), "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_int8:
 		v, err := strconv.ParseInt(val, 0, 8)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "int8", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, int8(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, int8(v))
 	case types.T_int16:
 		v, err := strconv.ParseInt(val, 0, 16)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "int16", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, int16(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, int16(v))
 	case types.T_int32:
 		v, err := strconv.ParseInt(val, 0, 32)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "int32", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, int32(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, int32(v))
 	case types.T_int64:
 		v, err := strconv.ParseInt(val, 0, 64)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "int64", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, int64(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, int64(v))
 	case types.T_uint8:
 		v, err := strconv.ParseUint(val, 0, 8)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, uint8(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, uint8(v))
 	case types.T_uint16:
 		v, err := strconv.ParseUint(val, 0, 16)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, uint16(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, uint16(v))
 	case types.T_uint32:
 		v, err := strconv.ParseUint(val, 0, 32)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, uint32(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, uint32(v))
 	case types.T_uint64:
 		v, err := strconv.ParseUint(val, 0, 64)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, uint64(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, uint64(v))
 	case types.T_float32:
 		v, err := strconv.ParseFloat(val, 32)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "float32", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, float32(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, float32(v))
 	case types.T_float64:
 		v, err := strconv.ParseFloat(val, 64)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "float64", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "float64", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, float64(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, float64(v))
 	case types.T_decimal64:
 		v, err := types.ParseDecimal64(val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_decimal128:
 		v, err := types.ParseDecimal128(val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text:
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
 	case types.T_array_float32:
 		v, err := types.StringToArrayToBytes[float32](val)
@@ -221,37 +220,41 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		}
 		return vector.SetBytesAt(vec, row, v, proc.Mp())
 	case types.T_json:
-		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
+		val, err := function.ConvertJsonBytes([]byte(val))
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, val, proc.Mp())
 	case types.T_time:
 		v, err := types.ParseTime(val, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_datetime:
 		v, err := types.ParseDatetime(val, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_timestamp:
 		v, err := types.ParseTimestamp(time.Local, val, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_date:
 		v, err := types.ParseDateCast(val)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_enum:
 		v, err := strconv.ParseUint(val, 0, 16)
 		if err != nil {
-			return moerr.NewOutOfRange(ctx, "enum", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "enum", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, types.Enum(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, types.Enum(v))
 	default:
 		panic(fmt.Sprintf("unsupported type %v", vec.GetType().Oid))
 	}
@@ -287,7 +290,7 @@ func SetInsertValue(proc *process.Process, numVal *tree.NumVal, vec *vector.Vect
 		return setInsertValueDecimal64(proc, numVal, vec)
 	case types.T_decimal128:
 		return setInsertValueDecimal128(proc, numVal, vec)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text,
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:
 		return setInsertValueString(proc, numVal, vec)
 	case types.T_json:
@@ -325,16 +328,16 @@ func setInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, vec *ve
 		err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = appendIntegerTimeStamp(val)
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = appendIntegerTimeStamp(int64(val))
 
@@ -346,13 +349,13 @@ func setInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, vec *ve
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendIntegerTimeStamp(int64(val))
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		if len(s) == 0 {
 			err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
 		} else {
@@ -360,7 +363,7 @@ func setInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, vec *ve
 			var val types.Timestamp
 			zone := time.Local
 			if proc != nil {
-				zone = proc.SessionInfo.TimeZone
+				zone = proc.GetSessionInfo().TimeZone
 			}
 			val, err = types.ParseTimestamp(zone, s, typ.Scale)
 			if err != nil {
@@ -371,7 +374,7 @@ func setInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, vec *ve
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendIntegerTimeStamp(int64(val))
@@ -407,7 +410,7 @@ func setInsertValueDateTime(proc *process.Process, numVal *tree.NumVal, vec *vec
 		canInsert = false
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		if len(s) == 0 {
 			err = vector.AppendFixed[types.Datetime](vec, 0, true, proc.GetMPool())
 		} else {
@@ -440,7 +443,7 @@ func setInsertValueTime(proc *process.Process, numVal *tree.NumVal, vec *vector.
 	appendIntegerTime := func(val int64) error {
 		typ := vec.GetType()
 		if val < types.MinInputIntTime || val > types.MaxInputIntTime {
-			return moerr.NewOutOfRange(proc.Ctx, "time", "value %d", val)
+			return moerr.NewOutOfRangef(proc.Ctx, "time", "value %d", val)
 		}
 		result, err := types.ParseInt64ToTime(val, typ.Scale)
 		if err != nil {
@@ -454,16 +457,16 @@ func setInsertValueTime(proc *process.Process, numVal *tree.NumVal, vec *vector.
 		err = vector.AppendFixed[types.Time](vec, 0, true, proc.GetMPool())
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = appendIntegerTime(val)
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = appendIntegerTime(int64(val))
 
@@ -475,13 +478,13 @@ func setInsertValueTime(proc *process.Process, numVal *tree.NumVal, vec *vector.
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendIntegerTime(int64(val))
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		if len(s) == 0 {
 			err = vector.AppendFixed[types.Time](vec, 0, true, proc.GetMPool())
 		} else {
@@ -496,7 +499,7 @@ func setInsertValueTime(proc *process.Process, numVal *tree.NumVal, vec *vector.
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendIntegerTime(int64(val))
@@ -533,7 +536,7 @@ func setInsertValueDate(proc *process.Process, numVal *tree.NumVal, vec *vector.
 		canInsert = false
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		var val types.Date
 		if len(s) == 0 {
 			err = vector.AppendFixed[types.Date](vec, 0, true, proc.GetMPool())
@@ -582,7 +585,7 @@ func setInsertValueUuid(proc *process.Process, numVal *tree.NumVal, vec *vector.
 		canInsert = false
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		var val types.Uuid
 		val, err = types.ParseUuid(s)
 		if err != nil {
@@ -611,20 +614,20 @@ func setInsertValueBool(proc *process.Process, numVal *tree.NumVal, vec *vector.
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 
 	case tree.P_bool:
-		val := constant.BoolVal(numVal.Value)
+		val := numVal.Bool()
 		err = vector.AppendFixed[bool](vec, val, false, proc.Mp())
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = vector.AppendFixed[bool](vec, val == 1, false, proc.Mp())
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = vector.AppendFixed[bool](vec, val == 1, false, proc.Mp())
 
@@ -639,7 +642,7 @@ func setInsertValueBool(proc *process.Process, numVal *tree.NumVal, vec *vector.
 	case tree.P_bit:
 		canInsert = false
 	case tree.P_char:
-		originStr := numVal.OrigString()
+		originStr := numVal.String()
 		if len(originStr) == 4 && strings.ToLower(originStr) == "true" {
 			err = vector.AppendFixed[bool](vec, true, false, proc.Mp())
 		} else {
@@ -660,11 +663,18 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 	checkStrLen := func(s string) ([]byte, error) {
 		typ := vec.GetType()
 		destLen := int(typ.Width)
-		if typ.Oid != types.T_text && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
+		if typ.Oid != types.T_text && typ.Oid != types.T_datalink && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
 			if utf8.RuneCountInString(s) > destLen {
 				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 		}
+		if typ.Oid.IsDatalink() {
+			_, _, err2 := function.ParseDatalink(s, proc)
+			if err2 != nil {
+				return nil, err2
+			}
+		}
+
 		var v []byte
 		if typ.Oid.IsArrayRelate() {
 			// Assuming that input s is of type "[1,2,3]"
@@ -694,7 +704,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 
 				v = types.ArrayToBytes[float64](_v)
 			default:
-				return nil, moerr.NewInternalErrorNoCtx("%s is not supported array type", typ.String())
+				return nil, moerr.NewInternalErrorNoCtxf("%s is not supported array type", typ.String())
 
 			}
 
@@ -717,7 +727,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 
 	case tree.P_bool:
 		var s string
-		if constant.BoolVal(numVal.Value) {
+		if numVal.Bool() {
 			s = "1"
 		} else {
 			s = "0"
@@ -730,7 +740,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 		err = vector.AppendBytes(vec, val, false, proc.Mp())
 
 	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64:
-		s := numVal.OrigString()
+		s := numVal.String()
 		var val []byte
 		val, err = checkStrLen(s)
 		if err != nil {
@@ -739,7 +749,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 		err = vector.AppendBytes(vec, val, false, proc.Mp())
 
 	case tree.P_hexnum:
-		s := numVal.OrigString()[2:]
+		s := numVal.String()[2:]
 		var val []byte
 		if val, err = hex.DecodeString(s); err != nil {
 			return
@@ -747,7 +757,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 		err = vector.AppendBytes(vec, val, false, proc.Mp())
 
 	case tree.P_bit:
-		s := numVal.OrigString()[2:]
+		s := numVal.String()[2:]
 		var val []byte
 		if val, err = DecodeBinaryString(s); err != nil {
 			return
@@ -770,7 +780,7 @@ func setInsertValueJSON(proc *process.Process, numVal *tree.NumVal, vec *vector.
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 	default:
 		var json bytejson.ByteJson
-		originStr := numVal.OrigString()
+		originStr := numVal.String()
 		json, err = types.ParseStringToByteJson(originStr)
 		if err != nil {
 			return false, err
@@ -796,7 +806,7 @@ func checkOverFlow[T1, T2 constraints.Integer | constraints.Float](ctx context.C
 			max_value = math.Pow10(int(typ.Width-typ.Scale)) - 1
 		}
 		if float64(val) < -max_value || float64(val) > max_value {
-			return moerr.NewOutOfRange(ctx, "float", "value '%v'", val)
+			return moerr.NewOutOfRangef(ctx, "float", "value '%v'", val)
 		}
 	} else {
 		return function.OverflowForNumericToNumeric[T1, T2](ctx, []T1{val}, n)
@@ -811,7 +821,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 
 	case tree.P_bool:
-		val := constant.BoolVal(numVal.Value)
+		val := numVal.Bool()
 		if val {
 			err = vector.AppendFixed(vec, T(1), false, proc.Mp())
 		} else {
@@ -820,9 +830,9 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		vec.GetType()
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = checkOverFlow[int64, T](proc.Ctx, vec.GetType(), val, vec.GetNulls())
 		if err != nil {
@@ -831,9 +841,9 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		err = vector.AppendFixed(vec, T(val), false, proc.Mp())
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = checkOverFlow[uint64, T](proc.Ctx, vec.GetType(), val, vec.GetNulls())
 		if err != nil {
@@ -842,7 +852,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		err = vector.AppendFixed(vec, T(val), false, proc.Mp())
 
 	case tree.P_float64:
-		val, ok := constant.Float64Val(numVal.Value)
+		val, ok := numVal.Float64()
 		if canInsert = ok; canInsert {
 			var v T
 			if err = checkOverFlow[float64, T](proc.Ctx, vec.GetType(), val,
@@ -852,7 +862,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 			if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
 				v = T(val)
 			} else {
-				v, err = floatNumToFixFloat[T](val, numVal.OrigString(), vec.GetType())
+				v, err = floatNumToFixFloat[T](val, numVal.String(), vec.GetType())
 				if err != nil {
 					return false, err
 				}
@@ -864,7 +874,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		if err = checkOverFlow[uint64, T](proc.Ctx, vec.GetType(), val, vec.GetNulls()); err != nil {
@@ -874,7 +884,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		if err = checkOverFlow[uint64, T](proc.Ctx, vec.GetType(), val, vec.GetNulls()); err != nil {
@@ -912,33 +922,33 @@ func setInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, vec *ve
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = appendWithUnSigned(uint64(val))
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = appendWithUnSigned(uint64(val))
 
 	case tree.P_decimal, tree.P_char, tree.P_float64:
-		originStr := numVal.OrigString()
+		originStr := numVal.String()
 		err = appendWithStr(originStr)
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendWithUnSigned(val)
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendWithUnSigned(val)
@@ -974,33 +984,33 @@ func setInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, vec *v
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = appendWithUnSigned(uint64(val))
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = appendWithUnSigned(uint64(val))
 
 	case tree.P_decimal, tree.P_char, tree.P_float64:
-		originStr := numVal.OrigString()
+		originStr := numVal.String()
 		err = appendWithStr(originStr)
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendWithUnSigned(val)
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendWithUnSigned(val)
@@ -1025,9 +1035,9 @@ func floatNumToFixFloat[T constraints.Float | constraints.Integer](
 	v := math.Floor(from) + tmp
 	if v < -max_value || v > max_value {
 		if originStr == "" {
-			return 0, moerr.NewOutOfRange(context.TODO(), "float", "value '%v'", from)
+			return 0, moerr.NewOutOfRangef(context.TODO(), "float", "value '%v'", from)
 		} else {
-			return 0, moerr.NewOutOfRange(context.TODO(), "float", "value '%s'", originStr)
+			return 0, moerr.NewOutOfRangef(context.TODO(), "float", "value '%s'", originStr)
 		}
 	}
 	return T(v), nil
@@ -1044,13 +1054,13 @@ func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.V
 
 	case tree.P_bool:
 		var val uint64
-		if constant.BoolVal(numVal.Value) {
+		if numVal.Bool() {
 			val = 1
 		}
 		err = vector.AppendFixed(vec, val, false, proc.Mp())
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		if len(s) > 8 {
 			err = moerr.NewInvalidInput(proc.Ctx, "data too long")
 			return
@@ -1061,76 +1071,76 @@ func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.V
 			val = (val << 8) | uint64(s[i])
 		}
 		if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
 			return
 		}
 		err = vector.AppendFixed(vec, val, false, proc.Mp())
 
 	case tree.P_float64:
 		var val float64
-		if val, ok = constant.Float64Val(numVal.Value); !ok {
-			err = moerr.NewInvalidInput(proc.Ctx, "invalid float value '%s'", numVal.Value.String())
+		if val, ok = numVal.Float64(); !ok {
+			err = moerr.NewInvalidInputf(proc.Ctx, "invalid float value '%s'", numVal.String())
 			return
 		} else if val < 0 {
-			err = moerr.NewInvalidInput(proc.Ctx, "unsupported negative value %v", val)
+			err = moerr.NewInvalidInputf(proc.Ctx, "unsupported negative value %v", val)
 			return
 		} else if uint64(math.Round(val)) > uint64(1<<width-1) {
-			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
 			return
 		}
 		err = vector.AppendFixed(vec, uint64(math.Round(val)), false, proc.Mp())
 
 	case tree.P_int64:
 		var val int64
-		if val, ok = constant.Int64Val(numVal.Value); !ok {
-			err = moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+		if val, ok = numVal.Int64(); !ok {
+			err = moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 			return
 		} else if val < 0 {
-			err = moerr.NewInvalidInput(proc.Ctx, "unsupported negative value %d", val)
+			err = moerr.NewInvalidInputf(proc.Ctx, "unsupported negative value %d", val)
 			return
 		} else if uint64(val) > uint64(1<<width-1) {
-			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
 			return
 		}
 		err = vector.AppendFixed(vec, uint64(val), false, proc.Mp())
 
 	case tree.P_uint64:
 		var val uint64
-		if val, ok = constant.Uint64Val(numVal.Value); !ok {
-			err = moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+		if val, ok = numVal.Uint64(); !ok {
+			err = moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 			return
 		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
 			return
 		}
 		err = vector.AppendFixed(vec, val, false, proc.Mp())
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return
 		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
 			return
 		}
 		err = vector.AppendFixed(vec, val, false, proc.Mp())
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return
 		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
 			return
 		}
 		err = vector.AppendFixed(vec, val, false, proc.Mp())
 
 	case tree.P_ScoreBinary:
 		var val uint64
-		if val, err = ScoreBinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = ScoreBinaryToInt(numVal.String()); err != nil {
 			return
 		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
 			return
 		}
 		err = vector.AppendFixed(vec, val, false, proc.Mp())

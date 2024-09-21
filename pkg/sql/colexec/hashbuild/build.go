@@ -16,384 +16,150 @@ package hashbuild
 
 import (
 	"bytes"
-	"runtime"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "hash_build"
+const opName = "hash_build"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (hashBuild *HashBuild) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": hash build ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	if len(proc.Reg.MergeReceivers) > 1 {
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.isMerge = true
+func (hashBuild *HashBuild) OpType() vm.OpType {
+	return vm.HashBuild
+}
+
+func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
+	if hashBuild.OpAnalyzer == nil {
+		hashBuild.OpAnalyzer = process.NewAnalyzer(hashBuild.GetIdx(), hashBuild.IsFirst, hashBuild.IsLast, "hash build")
 	} else {
-		arg.ctr.InitReceiver(proc, false)
+		hashBuild.OpAnalyzer.Reset()
 	}
 
-	if arg.NeedHashMap {
-		arg.ctr.vecs = make([][]*vector.Vector, 0)
-		ctr := arg.ctr
-		ctr.executor = make([]colexec.ExpressionExecutor, len(arg.Conditions))
-		ctr.keyWidth = 0
-		for i, expr := range arg.Conditions {
-			typ := expr.Typ
-			width := types.T(typ.Id).TypeLen()
-			// todo : for varlena type, always go strhashmap
-			if types.T(typ.Id).FixedLength() < 0 {
-				width = 128
-			}
-			ctr.keyWidth += width
-			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, arg.Conditions[i])
-			if err != nil {
-				return err
-			}
-		}
-
-		if ctr.keyWidth <= 8 {
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
-				return err
-			}
-		} else {
-			if ctr.strHashMap, err = hashmap.NewStrMap(false, proc.Mp()); err != nil {
-				return err
-			}
-		}
+	if hashBuild.NeedHashMap {
+		return hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, proc)
 	}
-
-	arg.ctr.batches = make([]*batch.Batch, 0)
-
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := hashBuild.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	result := vm.NewCallResult()
-	ap := arg
-	ctr := ap.ctr
+	ap := hashBuild
+	ctr := &ap.ctr
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(ap, proc, anal, arg.GetIsFirst()); err != nil {
-				ctr.cleanHashMap()
+			if err := ctr.build(ap, proc, analyzer); err != nil {
+				analyzer.Output(result.Batch)
 				return result, err
 			}
-			if ap.ctr.intHashMap != nil {
-				anal.Alloc(ap.ctr.intHashMap.Size())
-			} else if ap.ctr.strHashMap != nil {
-				anal.Alloc(ap.ctr.strHashMap.Size())
-			}
+			analyzer.Alloc(ctr.hashmapBuilder.GetSize())
 			ctr.state = HandleRuntimeFilter
 
 		case HandleRuntimeFilter:
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
+				analyzer.Output(result.Batch)
 				return result, err
 			}
-			ctr.state = SendHashMap
+			ctr.state = SendJoinMap
 
-		case SendHashMap:
-			result.Batch = batch.NewWithSize(0)
-
-			if ctr.inputBatchRowCount > 0 {
-				var jm *hashmap.JoinMap
-				if ap.NeedHashMap {
-					if ctr.keyWidth <= 8 {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
-					} else {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
-					}
-					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-					result.Batch.AuxData = jm
+		case SendJoinMap:
+			var jm *message.JoinMap
+			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
+				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
+				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				if ap.NeedBatches {
+					jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				}
-				ctr.intHashMap = nil
-				ctr.strHashMap = nil
-				ctr.multiSels = nil
-			} else {
-				ctr.cleanHashMap()
+				jm.IncRef(ap.JoinMapRefCnt)
 			}
+			if ap.JoinMapTag <= 0 {
+				panic("wrong joinmap message tag!")
+			}
+			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
 
-			// this is just a dummy batch to indicate that the batch is must not empty.
-			// we should make sure this batch can be sent to the next join operator in other pipelines.
-			if result.Batch.IsEmpty() && ap.NeedHashMap {
-				result.Batch.AddRowCount(1)
-			}
-
-			ctr.state = SendBatch
-			return result, nil
-		case SendBatch:
-			if ctr.batchIdx >= len(ctr.batches) {
-				ctr.state = End
-			} else {
-				result.Batch = ctr.batches[ctr.batchIdx]
-				ctr.batchIdx++
-			}
-			return result, nil
-		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-// make sure src is not empty
-func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) error {
-	var err error
-	if src.RowCount() == colexec.DefaultBatchSize {
-		ctr.batches = append(ctr.batches, src)
-		return nil
-	} else {
-		offset := 0
-		appendRows := 0
-		length := src.RowCount()
-		for offset < length {
-			ctr.tmpBatch, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.tmpBatch, src, offset)
-			if err != nil {
-				return err
-			}
-			if ctr.tmpBatch.RowCount() == colexec.DefaultBatchSize {
-				ctr.batches = append(ctr.batches, ctr.tmpBatch)
-				ctr.tmpBatch = nil
-			}
-			offset += appendRows
-		}
-		proc.PutBatch(src)
-	}
-	return nil
-}
-
-func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var err error
-	var currentBatch *batch.Batch
+func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
 	for {
-		if ap.ctr.isMerge {
-			currentBatch, _, err = ctr.ReceiveFromAllRegs(anal)
-		} else {
-			currentBatch, _, err = ctr.ReceiveFromSingleReg(0, anal)
-		}
+		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return err
 		}
-		if currentBatch == nil {
+		if result.Batch == nil {
 			break
 		}
-		if currentBatch.IsEmpty() {
-			proc.PutBatch(currentBatch)
+		if result.Batch.IsEmpty() {
 			continue
 		}
-		anal.Input(currentBatch, isFirst)
-		anal.Alloc(int64(currentBatch.Size()))
-		ctr.inputBatchRowCount += currentBatch.RowCount()
-		err = ctr.mergeIntoBatches(currentBatch, proc)
+
+		analyzer.Alloc(int64(result.Batch.Size()))
+		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
+		err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)
 		if err != nil {
 			return err
 		}
-	}
-	if ctr.tmpBatch != nil && ctr.tmpBatch.RowCount() > 0 {
-		ctr.batches = append(ctr.batches, ctr.tmpBatch)
-		ctr.tmpBatch = nil
 	}
 	return nil
 }
 
-func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
-	if len(ctr.batches) == 0 || !ap.NeedHashMap {
-		return nil
-	}
-	var err error
-	if err = ctr.evalJoinCondition(proc); err != nil {
-		return err
-	}
-
-	var itr hashmap.Iterator
-	if ctr.keyWidth <= 8 {
-		itr = ctr.intHashMap.NewIterator()
-	} else {
-		itr = ctr.strHashMap.NewIterator()
-	}
-
-	if ap.HashOnPK {
-		// if hash on primary key, prealloc hashmap size to the count of batch
-		if ctr.keyWidth <= 8 {
-			err = ctr.intHashMap.PreAlloc(uint64(ctr.inputBatchRowCount), proc.Mp())
-		} else {
-			err = ctr.strHashMap.PreAlloc(uint64(ctr.inputBatchRowCount), proc.Mp())
-		}
-		if err != nil {
-			return err
-		}
-	} else {
-		if ap.NeedAllocateSels {
-			ctr.multiSels = make([][]int32, ctr.inputBatchRowCount)
-		}
-	}
-
-	var (
-		cardinality uint64
-		sels        []int32
-	)
-
-	for i := 0; i < ctr.inputBatchRowCount; i += hashmap.UnitLimit {
-		if i%(hashmap.UnitLimit*32) == 0 {
-			runtime.Gosched()
-		}
-		n := ctr.inputBatchRowCount - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-
-		// if not hash on primary key, estimate the hashmap size after 8192 rows
-		//preAlloc to improve performance and reduce memory reAlloc
-		if !ap.HashOnPK && ctr.inputBatchRowCount > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
-			if ctr.keyWidth <= 8 {
-				groupCount := ctr.intHashMap.GroupCount()
-				rate := float64(groupCount) / float64(i)
-				hashmapCount := uint64(float64(ctr.inputBatchRowCount) * rate)
-				if hashmapCount > groupCount {
-					err = ctr.intHashMap.PreAlloc(hashmapCount-groupCount, proc.Mp())
-				}
-			} else {
-				groupCount := ctr.strHashMap.GroupCount()
-				rate := float64(groupCount) / float64(i)
-				hashmapCount := uint64(float64(ctr.inputBatchRowCount) * rate)
-				if hashmapCount > groupCount {
-					err = ctr.strHashMap.PreAlloc(hashmapCount-groupCount, proc.Mp())
-				}
-			}
-			if err != nil {
-				return err
-			}
-		}
-
-		vecIdx1 := i / colexec.DefaultBatchSize
-		vecIdx2 := i % colexec.DefaultBatchSize
-		vals, zvals, err := itr.Insert(vecIdx2, n, ctr.vecs[vecIdx1])
-		if err != nil {
-			return err
-		}
-		for k, v := range vals[:n] {
-			if zvals[k] == 0 {
-				ctr.hasNull = true
-				continue
-			}
-			if v == 0 {
-				continue
-			}
-			ai := int64(v) - 1
-
-			if !ap.HashOnPK && ap.NeedAllocateSels {
-				if ctr.multiSels[ai] == nil {
-					ctr.multiSels[ai] = make([]int32, 0)
-				}
-				ctr.multiSels[ai] = append(ctr.multiSels[ai], int32(i+k))
-			}
-		}
-
-		if ap.RuntimeFilterSpec != nil {
-			if len(ap.ctr.uniqueJoinKeys) == 0 {
-				ap.ctr.uniqueJoinKeys = make([]*vector.Vector, len(ctr.executor))
-				for j, vec := range ctr.vecs[vecIdx1] {
-					ap.ctr.uniqueJoinKeys[j] = proc.GetVector(*vec.GetType())
-				}
-			}
-
-			if ap.HashOnPK {
-				for j, vec := range ctr.vecs[vecIdx1] {
-					err = ap.ctr.uniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
-					if err != nil {
-						return err
-					}
-				}
-			} else {
-				if sels == nil {
-					sels = make([]int32, hashmap.UnitLimit)
-				}
-
-				sels = sels[:0]
-				for j, v := range vals[:n] {
-					if v > cardinality {
-						sels = append(sels, int32(i+j))
-						cardinality = v
-					}
-				}
-
-				for j, vec := range ctr.vecs[vecIdx1] {
-					for _, sel := range sels {
-						_, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-						err = ap.ctr.uniqueJoinKeys[j].UnionOne(vec, int64(idx2), proc.Mp())
-						if err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	err := ctr.collectBuildBatches(ap, proc, anal, isFirst)
+func (ctr *container) build(ap *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
+	err := ctr.collectBuildBatches(ap, proc, analyzer)
 	if err != nil {
 		return err
 	}
-	err = ctr.buildHashmap(ap, proc)
+	if ap.NeedHashMap {
+		err = ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, ap.RuntimeFilterSpec, proc)
+	}
 	if err != nil {
 		return err
 	}
-	if !ap.NeedMergedBatch {
+	if !ap.NeedBatches {
 		// if do not need merged batch, free it now to save memory
-		for i := range ctr.batches {
-			proc.PutBatch(ctr.batches[i])
-		}
-		ctr.batches = nil
+		ctr.hashmapBuilder.Batches.Clean(proc.Mp())
 	}
 	return nil
 }
 
-func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
+func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) error {
 	if ap.RuntimeFilterSpec == nil {
 		return nil
 	}
 
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
 	if ap.RuntimeFilterSpec.Expr == nil {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
-	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+	} else if ctr.hashmapBuilder.InputBatchRowCount == 0 || len(ctr.hashmapBuilder.UniqueJoinKeys) == 0 || ctr.hashmapBuilder.UniqueJoinKeys[0].Length() == 0 {
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	}
 
-	var hashmapCount uint64
-	if ctr.keyWidth <= 8 {
-		hashmapCount = ctr.intHashMap.GroupCount()
-	} else {
-		hashmapCount = ctr.strHashMap.GroupCount()
-	}
+	hashmapCount := ctr.hashmapBuilder.GetGroupCount()
 
 	inFilterCardLimit := ap.RuntimeFilterSpec.UpperLimit
 	//inFilterCardLimit := plan.GetInFilterCardLimit()
@@ -403,33 +169,32 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	//	bloomFilterCardLimit = v.(int64)
 	//}
 
-	vec := ctr.uniqueJoinKeys[0]
+	vec := ctr.hashmapBuilder.UniqueJoinKeys[0]
 
 	defer func() {
 		vec.Free(proc.Mp())
-		ctr.uniqueJoinKeys = nil
+		ctr.hashmapBuilder.UniqueJoinKeys = nil
 	}()
 
 	if hashmapCount > uint64(inFilterCardLimit) {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	} else {
 		// Composite primary key
 		if ap.RuntimeFilterSpec.Expr.GetF() != nil {
-			bat := batch.NewWithSize(len(ctr.uniqueJoinKeys))
+			bat := batch.NewWithSize(len(ctr.hashmapBuilder.UniqueJoinKeys))
 			bat.SetRowCount(vec.Length())
-			copy(bat.Vecs, ctr.uniqueJoinKeys)
+			copy(bat.Vecs, ctr.hashmapBuilder.UniqueJoinKeys)
 
 			newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSpec.Expr, []*batch.Batch{bat})
 			if err != nil {
 				return err
 			}
 
-			for i := range ctr.uniqueJoinKeys {
-				ctr.uniqueJoinKeys[i].Free(proc.Mp())
+			for i := range ctr.hashmapBuilder.UniqueJoinKeys {
+				ctr.hashmapBuilder.UniqueJoinKeys[i].Free(proc.Mp())
 			}
-
 			vec = newVec
 		}
 
@@ -439,26 +204,11 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			return err
 		}
 
-		runtimeFilter.Typ = process.RuntimeFilter_IN
+		runtimeFilter.Typ = message.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		ctr.runtimeFilterIn = true
-	}
-	return nil
-}
-
-func (ctr *container) evalJoinCondition(proc *process.Process) error {
-	for idx1 := range ctr.batches {
-		tmpVes := make([]*vector.Vector, len(ctr.executor))
-		ctr.vecs = append(ctr.vecs, tmpVes)
-		for idx2 := range ctr.executor {
-			vec, err := ctr.executor[idx2].Eval(proc, []*batch.Batch{ctr.batches[idx1]})
-			if err != nil {
-				return err
-			}
-			ctr.vecs[idx1][idx2] = vec
-		}
 	}
 	return nil
 }

@@ -26,6 +26,10 @@ import "statsinfo.proto";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
+
 enum CmdMethod {
   // Query is the common query command.
   Query = 0;
@@ -72,6 +76,22 @@ enum CmdMethod {
   MigrateConnFrom = 20;
   // MigrateConnTo migrate the session info to the new cn node.
   MigrateConnTo = 21;
+
+  // ReloadAutoIncrementCache is the method to reload auto increment cache.
+  ReloadAutoIncrementCache = 22;
+
+  CtlReader = 23;
+  // GetReplicaCount get the replica count on specified cn node.
+  GetReplicaCount = 24;
+  // ResetSession resets the session information in routine to make
+  // sure that the session could be reused by other connections.
+  ResetSession = 25;
+  // GOMAXPROCS get/set the golang runtime.GOMAXPROCS()
+  GOMAXPROCS = 26;
+  GOMEMLIMIT = 27;
+  // FileServiceCache handle mem/disk cache query and reset action.
+  FileServiceCache = 28;
+  FileServiceCacheEvict = 29;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -154,6 +174,7 @@ message GetPipelineInfoResponse {
   int64 Count = 1;
 }
 
+
 // Request is the query request.
 message Request {
   // RequestID is the request ID.
@@ -196,6 +217,15 @@ message Request {
   GetPipelineInfoRequest GetPipelineInfoRequest = 22;
   MigrateConnFromRequest MigrateConnFromRequest = 23;
   MigrateConnToRequest MigrateConnToRequest = 24;
+  ReloadAutoIncrementCacheRequest ReloadAutoIncrementCache = 25;
+  CtlReaderRequest CtlReaderRequest = 26;
+  GetReplicaCountRequest GetReplicaCount = 27 [ (gogoproto.nullable) = false ];
+  // ResetSessionRequest is the request that resets the session information.
+  ResetSessionRequest ResetSessionRequest = 28;
+  GoMaxProcsRequest GoMaxProcsRequest = 29 [ (gogoproto.nullable) = false ];
+  GoMemLimitRequest GoMemLimitRequest = 30 [ (gogoproto.nullable) = false ];
+  FileServiceCacheRequest FileServiceCacheRequest = 31 [ (gogoproto.nullable) = false ];
+  FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 32 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -245,6 +275,15 @@ message Response {
   GetPipelineInfoResponse GetPipelineInfoResponse = 22;
   MigrateConnFromResponse MigrateConnFromResponse = 23;
   MigrateConnToResponse MigrateConnToResponse = 24;
+  ReloadAutoIncrementCacheResponse ReloadAutoIncrementCache = 25;
+  CtlReaderResponse CtlReaderResponse = 26;
+  GetReplicaCountResponse GetReplicaCount = 27 [ (gogoproto.nullable) = false ];
+  // ResetSessionResponse is the response of ResetSessionRequest.
+  ResetSessionResponse ResetSessionResponse = 28;
+  GoMaxProcsResponse GoMaxProcsResponse = 29  [ (gogoproto.nullable) = false ];
+  GoMemLimitResponse GoMemLimitResponse = 30  [ (gogoproto.nullable) = false ];
+  FileServiceCacheResponse FileServiceCacheResponse = 31 [ (gogoproto.nullable) = false ];
+  FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 32 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -270,6 +309,16 @@ message KillConnRequest {
 // KillConnResponse is the response to the kill connection request.
 message KillConnResponse {
   bool Success = 1;
+}
+
+message CtlReaderRequest {
+  string Cmd = 1;
+  string Cfg = 2;
+  bytes Extra = 3;
+}
+
+message CtlReaderResponse {
+  string Resp = 1;
 }
 
 message TraceSpanRequest {
@@ -449,4 +498,92 @@ message MigrateConnToRequest {
 
 message MigrateConnToResponse {
   bool Success = 1;
+}
+
+
+
+// ReloadAutoIncrementCacheRequest reload auto increment cache request
+message ReloadAutoIncrementCacheRequest {
+  uint64 TableID = 1;
+}
+
+// ReloadAutoIncrementCacheResponse reload auto increment cache response
+message ReloadAutoIncrementCacheResponse {
+}
+
+message GetReplicaCountRequest {
+  string CN = 1;
+}
+
+message GetReplicaCountResponse {
+  int64 Count = 1;
+}
+
+// ResetSessionRequest is the request to reset session before
+// proxy cache the connection.
+message ResetSessionRequest {
+  uint32 ConnID = 1;
+}
+
+// ResetSessionResponse is the response which contains the password
+// of the user on the session.
+message ResetSessionResponse {
+  bool Success = 1;
+  // AuthString is the authentication string which is encrypted.
+  bytes AuthString = 2;
+}
+
+
+// GoMaxProcsRequest is request to get/set the proc runtime.GOMAXPROCS()
+// If MaxProcs is 0, then return current value of runtime.GOMAXPROCS(0),
+// Otherwise, do the set op runtime.GOMAXPROCS({MaxProcs})
+message GoMaxProcsRequest {
+  int32 MaxProcs = 1;
+}
+
+// GoMaxProcsResponse is the response of calling runtime.GOMAXPROCS(req.MaxProcs)
+// The MaxProcs is current value, or previous value.
+// Same meaning as calling runtime.GOMAXPROCS(req.MaxProcs).
+message GoMaxProcsResponse {
+  int32 MaxProcs = 1;
+}
+
+message GoMemLimitRequest {
+  int64 MemLimitBytes = 1;
+}
+
+// GoMemLimitResponse is the response of calling runtime/debug.SetMemoryLimit(req.MemLimitBytes)
+// The MemLimitBytes is previous value.
+// Same meaning as calling runtime/debug.SetMemoryLimit(req.MemLimitBytes).
+message GoMemLimitResponse {
+  int64 MemLimitBytes = 1;
+}
+
+enum FileServiceCacheType {
+  Memory = 0;
+  Disk = 1;
+}
+
+// FileServiceCacheRequest handle cache getter and setter request.
+// If @Size is zero, do the getter action, otherwise do the setter action.
+message FileServiceCacheRequest {
+  FileServiceCacheType Type = 1;
+  int64 CacheSize = 2;
+}
+
+// FileServiceCacheResponse
+message FileServiceCacheResponse {
+  int64 CacheSize = 1;
+  int64 CacheCapacity = 2;
+  string Message = 3;
+}
+
+message FileServiceCacheEvictRequest {
+  FileServiceCacheType Type = 1;
+}
+
+message FileServiceCacheEvictResponse {
+  int64 CacheSize = 1;
+  int64 CacheCapacity = 2;
+  string Message = 3;
 }

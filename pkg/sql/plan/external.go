@@ -97,7 +97,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 
 	fileListTmp := make([]string, 0)
 	fileSizeTmp := make([]int64, 0)
-	bs := vector.MustFixedCol[bool](vec)
+	bs := vector.MustFixedColWithTypeCheck[bool](vec)
 	for i := 0; i < len(bs); i++ {
 		if bs[i] {
 			fileListTmp = append(fileListTmp, fileList[i])
@@ -176,7 +176,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(node.TableDef.Createsql), param)
-	if err != nil || param.Local || param.ScanType == tree.S3 {
+	if err != nil || param.Local {
 		return DefaultHugeStats()
 	}
 
@@ -185,12 +185,12 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 			return DefaultHugeStats()
 		}
 	} else {
-		if err = InitInfileParam(param); err != nil {
+		if err = InitInfileOrStageParam(param, builder.compCtx.GetProcess()); err != nil {
 			return DefaultHugeStats()
 		}
 	}
 
-	param.FileService = builder.compCtx.GetProcess().FileService
+	param.FileService = builder.compCtx.GetProcess().GetFileService()
 	param.Ctx = builder.compCtx.GetProcess().Ctx
 	_, spanReadDir := trace.Start(param.Ctx, "ReCalcNodeStats.ReadDir")
 	fileList, fileSize, err := ReadDir(param)
@@ -209,6 +209,11 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 	var cost float64
 	for i := range fileSize {
 		cost += float64(fileSize[i])
+	}
+
+	//special handle for query result
+	if strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
+		return DefaultStats()
 	}
 
 	//read one line

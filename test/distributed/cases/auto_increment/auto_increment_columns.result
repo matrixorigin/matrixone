@@ -5,7 +5,7 @@ b varchar(10)
 );
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` BIGINT NOT NULL AUTO_INCREMENT,\n`b` VARCHAR(10) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+t1    CREATE TABLE `t1` (\n  `a` bigint NOT NULL AUTO_INCREMENT,\n  `b` varchar(10) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 insert into t1(b) values ('bbb');
 insert into t1 values (1, 'ccc');
 Duplicate entry '1' for key 'a'
@@ -356,7 +356,7 @@ e bigint auto_increment
 );
 show create table t6;
 Table    Create Table
-t6    CREATE TABLE `t6` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` BIGINT NOT NULL AUTO_INCREMENT,\n`c` INT NOT NULL AUTO_INCREMENT,\n`d` INT NOT NULL AUTO_INCREMENT,\n`e` BIGINT NOT NULL AUTO_INCREMENT,\nPRIMARY KEY (`a`)\n)
+t6    CREATE TABLE `t6` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` bigint NOT NULL AUTO_INCREMENT,\n  `c` int NOT NULL AUTO_INCREMENT,\n  `d` int NOT NULL AUTO_INCREMENT,\n  `e` bigint NOT NULL AUTO_INCREMENT,\n  PRIMARY KEY (`a`)\n)
 insert into t6 values (),(),(),();
 select * from t6 order by a;
 a    b    c    d    e
@@ -583,19 +583,9 @@ b bigint auto_increment,
 c varchar(25)
 );
 load data infile '$resources/auto_increment_columns/auto_increment_1.csv' into table t11 fields terminated by ',';
+invalid input: the data of row 4 contained is not equal to input columns
 select * from t11 order by a;
 a    b    c
-1    1    '你好'
-2    3    'hello'
-4    4    'world'
-5    5    '
-6    6    'N'
-7    7    '
-8    8    '###'
-9    9
-10    10
-100    100    '100'
-101    101
 drop table t11;
 drop table if exists t12;
 create table t12(
@@ -604,19 +594,9 @@ b bigint auto_increment,
 c varchar(25)
 );
 load data infile '$resources/auto_increment_columns/auto_increment_2.csv' into table t12 fields terminated by ',';
+invalid input: the data of row 4 contained is not equal to input columns
 select * from t12 order by a;
 a    b    c
-0    0    '0'
-1    1    '你好'
-2    3    'hello'
-4    4    'world'
-5    5    '
-6    100    'aa'
-10    101    'bb'
-11    102    'cc'
-1000    103    '1000'
-1001    104
-1002    105
 drop table t12;
 drop table if exists t13;
 create table t13(
@@ -644,7 +624,7 @@ invalid input: invalid default value for 'a'
 create table t1(a int, b int default(10), c int auto_increment);
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT (10),\n`c` INT NOT NULL AUTO_INCREMENT\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT (10),\n  `c` int NOT NULL AUTO_INCREMENT\n)
 drop table t1;
 
 create table t1(a tinyint auto_increment);

@@ -19,11 +19,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	log "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/stretchr/testify/assert"
 )
 
 type testHAKeeperClient struct {
@@ -49,13 +50,17 @@ func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (log.Cluster
 	return c.value, nil
 }
 
+func (c *testHAKeeperClient) GetClusterState(ctx context.Context) (log.CheckerState, error) {
+	return log.CheckerState{}, nil
+}
+
 func TestAddressFunc(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 	t.Run("no client", func(t *testing.T) {
 		getClient := func() HAKeeperClient {
 			return nil
 		}
-		fn := AddressFunc(getClient)
+		fn := AddressFunc("", getClient)
 		ctx := context.Background()
 		cn, err := fn(ctx, true)
 		assert.Error(t, err)
@@ -66,7 +71,7 @@ func TestAddressFunc(t *testing.T) {
 		getClient := func() HAKeeperClient {
 			return &testHAKeeperClient{}
 		}
-		fn := AddressFunc(getClient)
+		fn := AddressFunc("", getClient)
 		ctx := context.Background()
 		cn, err := fn(ctx, true)
 		assert.Error(t, err)
@@ -80,7 +85,7 @@ func TestAddressFunc(t *testing.T) {
 		getClient := func() HAKeeperClient {
 			return client
 		}
-		fn := AddressFunc(getClient)
+		fn := AddressFunc("", getClient)
 		ctx := context.Background()
 		cn, err := fn(ctx, false) // set false to return the last one.
 		assert.NoError(t, err)
@@ -96,7 +101,7 @@ func TestAddressFunc(t *testing.T) {
 		getClient := func() HAKeeperClient {
 			return client
 		}
-		fn := AddressFunc(getClient)
+		fn := AddressFunc("", getClient)
 		ctx := context.Background()
 		_, err := fn(ctx, true)
 		assert.NoError(t, err)

@@ -15,10 +15,18 @@
 package mergesort
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 const nullFirst = true
+
+type dataFetcher[T any] interface {
+	mustToCol(*vector.Vector, uint32)
+	at(i, j uint32) T
+	length(i uint32) int
+}
 
 type heapElem[T any] struct {
 	data   T
@@ -53,3 +61,25 @@ func (x *heapSlice[T]) Less(i, j int) bool {
 }
 func (x *heapSlice[T]) Swap(i, j int) { x.s[i], x.s[j] = x.s[j], x.s[i] }
 func (x *heapSlice[T]) Len() int      { return len(x.s) }
+
+type mergeStats struct {
+	totalRowCnt, rowSize, targetObjSize uint32
+	blkPerObj                           uint16
+
+	blkRowCnt, objRowCnt, objBlkCnt int
+	mergedRowCnt, objCnt            int
+}
+
+func (s *mergeStats) needNewObject() bool {
+	if s.targetObjSize == 0 {
+		if s.blkPerObj == 0 {
+			return s.objBlkCnt == int(options.DefaultBlocksPerObject)
+		}
+		return s.objBlkCnt == int(s.blkPerObj)
+	}
+
+	if uint32(s.objRowCnt)*s.rowSize > s.targetObjSize {
+		return (s.totalRowCnt-uint32(s.mergedRowCnt))*s.rowSize > s.targetObjSize
+	}
+	return false
+}

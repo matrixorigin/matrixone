@@ -17,6 +17,8 @@ package dbutils
 import (
 	"bytes"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"go.uber.org/zap"
 )
 
 type RuntimeOption func(*Runtime)
@@ -48,6 +51,12 @@ func WithRuntimeObjectFS(fs *objectio.ObjectFS) RuntimeOption {
 	}
 }
 
+func WithRuntimeLocalFS(fs *objectio.ObjectFS) RuntimeOption {
+	return func(r *Runtime) {
+		r.LocalFs = fs
+	}
+}
+
 func WithRuntimeTransferTable(tt *model.HashPageTable) RuntimeOption {
 	return func(r *Runtime) {
 		r.TransferTable = tt
@@ -66,6 +75,84 @@ func WithRuntimeOptions(opts *options.Options) RuntimeOption {
 	}
 }
 
+type lockedTableInfo struct {
+	lockedAt   time.Time // user txn lock time
+	lockStatus int       // 0 no lock. above 1 user txn lock count
+}
+
+type LockMergeService struct {
+	rwlock sync.RWMutex
+	locked map[uint64]*lockedTableInfo // map table id to lockedTableInfo
+}
+
+func NewLockMergeService() *LockMergeService {
+	return &LockMergeService{
+		locked: make(map[uint64]*lockedTableInfo),
+	}
+}
+
+func (l *LockMergeService) IsLockedByUser(id uint64) (isLocked bool) {
+	l.rwlock.RLock()
+	defer l.rwlock.RUnlock()
+	info, existed := l.locked[id]
+	return existed && info.lockStatus > 0
+}
+
+func (l *LockMergeService) LockFromUser(id uint64) {
+	l.rwlock.Lock()
+	defer l.rwlock.Unlock()
+	if info, ok := l.locked[id]; ok {
+		info.lockStatus++
+	} else {
+		l.locked[id] = &lockedTableInfo{
+			lockStatus: 1,
+			lockedAt:   time.Now(),
+		}
+	}
+}
+
+func (l *LockMergeService) UnlockFromUser(id uint64) {
+	l.rwlock.Lock()
+	defer l.rwlock.Unlock()
+	if info, ok := l.locked[id]; ok {
+		if info.lockStatus <= 0 {
+			panic("bad lock status")
+		}
+		info.lockStatus--
+	} else {
+		panic("Before UnlockFromUser, call LockFromUser")
+	}
+}
+
+func (l *LockMergeService) Prune() {
+	l.rwlock.RLock()
+	pruned := make([]uint64, 0)
+	for id, info := range l.locked {
+		if !info.lockedAt.IsZero() && time.Since(info.lockedAt) > time.Minute*10 {
+			if info.lockStatus == 0 {
+				pruned = append(pruned, id)
+			} else {
+				logutil.Warn(
+					"LockMerge abnormally stale",
+					zap.Uint64("tableId", id),
+					zap.Duration("ago", time.Since(info.lockedAt)),
+					zap.Int("lockStatus", info.lockStatus),
+				)
+			}
+		}
+	}
+	l.rwlock.RUnlock()
+
+	if len(pruned) > 0 {
+		logutil.Info("LockMerge prune", zap.Int("count", len(pruned)))
+		l.rwlock.Lock()
+		defer l.rwlock.Unlock()
+		for _, id := range pruned {
+			delete(l.locked, id)
+		}
+	}
+}
+
 type Runtime struct {
 	Now        func() types.TS
 	VectorPool struct {
@@ -73,11 +160,14 @@ type Runtime struct {
 		Transient *containers.VectorPool
 	}
 
-	Fs *objectio.ObjectFS
+	Fs      *objectio.ObjectFS
+	LocalFs *objectio.ObjectFS
 
 	TransferTable   *model.HashPageTable
 	TransferDelsMap *model.TransDelsForBlks
 	Scheduler       tasks.TaskScheduler
+
+	LockMergeService *LockMergeService
 
 	Options *options.Options
 
@@ -89,6 +179,7 @@ type Runtime struct {
 func NewRuntime(opts ...RuntimeOption) *Runtime {
 	r := new(Runtime)
 	r.TransferDelsMap = model.NewTransDelsForBlks()
+	r.LockMergeService = NewLockMergeService()
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -103,6 +194,13 @@ func (r *Runtime) fillDefaults() {
 	if r.VectorPool.Transient == nil {
 		r.VectorPool.Transient = MakeDefaultTransientPool("trasient-vector-pool")
 	}
+}
+
+func (r *Runtime) SID() string {
+	if r == nil {
+		return ""
+	}
+	return r.Options.SID
 }
 
 func (r *Runtime) PrintVectorPoolUsage() {

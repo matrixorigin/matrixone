@@ -21,10 +21,7 @@ import (
 	"strings"
 	"time"
 
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,7 +47,7 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 		dbName = ses.GetDatabaseName()
 	}
 	tableName := string(st.Table.Name())
-	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
+	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil)
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
@@ -59,7 +56,7 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 		switch opt := option.(type) {
 		case *tree.CreateSourceWithOption:
 			key := string(opt.Key)
-			val := opt.Val.(*tree.NumVal).OrigString()
+			val := opt.Val.(*tree.NumVal).String()
 			options[key] = val
 		}
 	}
@@ -108,7 +105,7 @@ func handleCreateConnector(ctx context.Context, ses *Session, st *tree.CreateCon
 	}
 	dbName := string(st.TableName.Schema())
 	tableName := string(st.TableName.Name())
-	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
+	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil)
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
@@ -400,7 +397,7 @@ func showConnectors(ctx context.Context, ses FeSession) error {
 		row[11] = t.Details.Error
 		mrs.AddRow(row)
 	}
-	return nil
+	return trySaveQueryResult(ctx, ses.(*Session), mrs)
 }
 
 func optionString(options map[string]string) string {

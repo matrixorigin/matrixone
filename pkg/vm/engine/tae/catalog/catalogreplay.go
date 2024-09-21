@@ -14,22 +14,25 @@
 package catalog
 
 import (
+	"context"
+	"fmt"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-
-	"go.uber.org/zap"
 )
 
-//#region Replay related
+const (
+	Backup_Object_Offset uint16 = 1000
+)
+
+//#region Replay WAL related
 
 func (catalog *Catalog) ReplayCmd(
 	txncmd txnif.TxnCmd,
@@ -50,26 +53,21 @@ func (catalog *Catalog) ReplayCmd(
 	case IOET_WALTxnCommand_Object:
 		cmd := txncmd.(*EntryCommand[*ObjectMVCCNode, *ObjectNode])
 		catalog.onReplayUpdateObject(cmd, dataFactory, observer)
-	case IOET_WALTxnCommand_Block:
-		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *BlockNode])
-		catalog.onReplayUpdateBlock(cmd, dataFactory, observer)
-	case IOET_WALTxnCommand_Segment:
-		// segment is deprecated
-		return
+	// case IOET_WALTxnCommand_Block:
+	// 	cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *BlockNode])
+	// 	catalog.onReplayUpdateBlock(cmd, dataFactory, observer)
+	// case IOET_WALTxnCommand_Segment:
+	// 	// segment is deprecated
+	// 	return
 	default:
 		panic("unsupport")
 	}
 }
 
-func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode, *DBNode], observer wal.ReplayObserver) {
+func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode, *DBNode], _ wal.ReplayObserver) {
 	catalog.OnReplayDBID(cmd.ID.DbID)
 	var err error
 	un := cmd.mvccNode
-	if un.Is1PC() {
-		if err := un.ApplyCommit(); err != nil {
-			panic(err)
-		}
-	}
 
 	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
@@ -77,8 +75,11 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 		db.ID = cmd.ID.DbID
 		db.catalog = catalog
 		db.DBNode = cmd.node
-		db.Insert(un)
-		err = catalog.AddEntryLocked(db, un.GetTxn(), false)
+		db.InsertLocked(un)
+		// After replaying checkpoint, all entries' commit-ts were forced to be endts of the last checkpoint,
+		// so the start-ts of a txn from WAL can be smaller than the committs of the last checkpoint.
+		// To prevent AddEntryLocked from issusing a w-w conflict error, set the skipDedup arg true
+		err = catalog.AddEntryLocked(db, un.GetTxn(), true)
 		if err != nil {
 			panic(err)
 		}
@@ -87,30 +88,188 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 
 	dbun := db.SearchNodeLocked(un)
 	if dbun == nil {
-		db.Insert(un)
+		db.InsertLocked(un)
 	} else {
 		return
 		// panic(fmt.Sprintf("logic err: duplicate node %v and %v", dbun.String(), un.String()))
 	}
 }
 
-func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containers.Batch) {
-	for i := 0; i < ins.Length(); i++ {
-		dbid := ins.GetVectorByName(pkgcatalog.SystemDBAttr_ID).Get(i).(uint64)
-		name := string(ins.GetVectorByName(pkgcatalog.SystemDBAttr_Name).Get(i).([]byte))
-		txnNode := txnbase.ReadTuple(insTxn, i)
-		tenantID := ins.GetVectorByName(pkgcatalog.SystemDBAttr_AccID).Get(i).(uint32)
-		userID := ins.GetVectorByName(pkgcatalog.SystemDBAttr_Creator).Get(i).(uint32)
-		roleID := ins.GetVectorByName(pkgcatalog.SystemDBAttr_Owner).Get(i).(uint32)
-		createAt := ins.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).Get(i).(types.Timestamp)
-		createSql := string(ins.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).Get(i).([]byte))
-		datType := string(ins.GetVectorByName(pkgcatalog.SystemDBAttr_Type).Get(i).([]byte))
-		catalog.onReplayCreateDB(dbid, name, txnNode, tenantID, userID, roleID, createAt, createSql, datType)
+func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *TableNode], dataFactory DataFactory, _ wal.ReplayObserver) {
+	catalog.OnReplayTableID(cmd.ID.TableID)
+	// prepareTS := cmd.GetTs()
+	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+	// 	if observer != nil {
+	// 		observer.OnStaleIndex(idx)
+	// 	}
+	// 	return
+	// }
+	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
+	if err != nil {
+		panic(err)
 	}
-	for i := 0; i < del.Length(); i++ {
-		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
-		txnNode := txnbase.ReadTuple(delTxn, i)
-		catalog.onReplayDeleteDB(dbid, txnNode)
+	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
+
+	un := cmd.mvccNode
+	if err != nil {
+		tbl = NewReplayTableEntry()
+		tbl.ID = cmd.ID.TableID
+		tbl.db = db
+		tbl.tableData = dataFactory.MakeTableFactory()(tbl)
+		tbl.TableNode = cmd.node
+		tbl.TableNode.schema.Store(un.BaseNode.Schema)
+		tbl.InsertLocked(un)
+		err = db.AddEntryLocked(tbl, un.GetTxn(), true)
+		if err != nil {
+			logutil.Warn(catalog.SimplePPString(common.PPL3))
+			panic(err)
+		}
+		return
+	}
+	tblun := tbl.SearchNodeLocked(un)
+	if tblun == nil {
+		tbl.InsertLocked(un) //TODO isvalid
+		if tbl.isColumnChangedInSchema() {
+			tbl.FreezeAppend()
+		}
+		schema := un.BaseNode.Schema
+		tbl.TableNode.schema.Store(schema)
+		// alter table rename
+		if schema.Extra.OldName != "" && un.DeletedAt.IsEmpty() {
+			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
+			if err != nil {
+				logutil.Warn(schema.String())
+				panic(err)
+			}
+		}
+	}
+}
+
+func (catalog *Catalog) onReplayUpdateObject(
+	cmd *EntryCommand[*ObjectMVCCNode, *ObjectNode],
+	dataFactory DataFactory,
+	_ wal.ReplayObserver) {
+	catalog.OnReplayObjectID(cmd.node.SortHint)
+
+	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
+	if err != nil {
+		// a db is dropped before checkpoint end
+		// and its tables are flushed after the checkpoint end,
+		// it is normal to for WAL to miss the db
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return
+		}
+		panic(err)
+	}
+	rel, err := db.GetTableEntryByID(cmd.ID.TableID)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return
+		}
+		panic(err)
+	}
+	var obj *ObjectEntry
+	if cmd.mvccNode.CreatedAt.Equal(&txnif.UncommitTS) {
+		obj = NewReplayObjectEntry()
+		obj.table = rel
+		obj.ObjectNode = *cmd.node
+		obj.SortHint = catalog.NextObject()
+		obj.EntryMVCCNode = *cmd.mvccNode.EntryMVCCNode
+		obj.CreateNode = *cmd.mvccNode.TxnMVCCNode
+		cmd.mvccNode.TxnMVCCNode = &obj.CreateNode
+		cmd.mvccNode.EntryMVCCNode = &obj.EntryMVCCNode
+		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
+		obj.ObjectState = ObjectState_Create_ApplyCommit
+		rel.AddEntryLocked(obj)
+	}
+	if cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS) {
+		obj, err = rel.GetObjectByID(cmd.ID.ObjectID(), cmd.node.IsTombstone)
+		if err != nil {
+			panic(fmt.Sprintf("obj %v not existed, table:\n%v", cmd.ID.String(), rel.StringWithLevel(3)))
+		}
+		obj.EntryMVCCNode = *cmd.mvccNode.EntryMVCCNode
+		obj.DeleteNode = *cmd.mvccNode.TxnMVCCNode
+		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
+		cmd.mvccNode.TxnMVCCNode = &obj.DeleteNode
+		cmd.mvccNode.EntryMVCCNode = &obj.EntryMVCCNode
+		obj.ObjectState = ObjectState_Delete_ApplyCommit
+	}
+
+	if obj.objData == nil {
+		obj.objData = dataFactory.MakeObjectFactory()(obj)
+	} else {
+		deleteAt := obj.GetDeleteAt()
+		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
+			obj.objData.TryUpgrade()
+		}
+	}
+}
+
+//#endregion
+
+//#region Replay Checkpoint related
+
+func (catalog *Catalog) RelayFromSysTableObjects(
+	ctx context.Context,
+	readTxn txnif.AsyncTxn,
+	dataFactory DataFactory,
+	readFunc func(context.Context, *TableEntry, txnif.AsyncTxn) *containers.Batch,
+	sortFunc func([]containers.Vector, int) error) {
+	db, err := catalog.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	if err != nil {
+		panic(err)
+	}
+	dbTbl, err := db.GetTableEntryByID(pkgcatalog.MO_DATABASE_ID)
+	if err != nil {
+		panic(err)
+	}
+	tableTbl, err := db.GetTableEntryByID(pkgcatalog.MO_TABLES_ID)
+	if err != nil {
+		panic(err)
+	}
+	columnTbl, err := db.GetTableEntryByID(pkgcatalog.MO_COLUMNS_ID)
+	if err != nil {
+		panic(err)
+	}
+	txnNode := &txnbase.TxnMVCCNode{
+		Start:   readTxn.GetStartTS(),
+		Prepare: readTxn.GetStartTS(),
+		End:     readTxn.GetStartTS(),
+	}
+
+	// replay database catalog
+	if dbBatch := readFunc(ctx, dbTbl, readTxn); dbBatch != nil {
+		defer dbBatch.Close()
+		catalog.ReplayMODatabase(ctx, txnNode, dbBatch)
+	}
+
+	// replay table catalog
+	if tableBatch := readFunc(ctx, tableTbl, readTxn); tableBatch != nil {
+		if err := sortFunc(tableBatch.Vecs, 0); err != nil {
+			panic(err)
+		}
+		defer tableBatch.Close()
+		columnBatch := readFunc(ctx, columnTbl, readTxn)
+		if err := sortFunc(columnBatch.Vecs, 0); err != nil {
+			panic(err)
+		}
+		defer columnBatch.Close()
+		catalog.ReplayMOTables(ctx, txnNode, dataFactory, tableBatch, columnBatch)
+	}
+	// logutil.Info(catalog.SimplePPString(common.PPL3))
+}
+
+func (catalog *Catalog) ReplayMODatabase(ctx context.Context, txnNode *txnbase.TxnMVCCNode, bat *containers.Batch) {
+	for i := 0; i < bat.Length(); i++ {
+		dbid := bat.GetVectorByName(pkgcatalog.SystemDBAttr_ID).Get(i).(uint64)
+		name := string(bat.GetVectorByName(pkgcatalog.SystemDBAttr_Name).Get(i).([]byte))
+		tenantID := bat.GetVectorByName(pkgcatalog.SystemDBAttr_AccID).Get(i).(uint32)
+		userID := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Creator).Get(i).(uint32)
+		roleID := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Owner).Get(i).(uint32)
+		createAt := bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).Get(i).(types.Timestamp)
+		createSql := string(bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).Get(i).([]byte))
+		datType := string(bat.GetVectorByName(pkgcatalog.SystemDBAttr_Type).Get(i).([]byte))
+		catalog.onReplayCreateDB(dbid, name, txnNode, tenantID, userID, roleID, createAt, createSql, datType)
 	}
 }
 
@@ -122,7 +281,7 @@ func (catalog *Catalog) onReplayCreateDB(
 	if db != nil {
 		dbCreatedAt := db.GetCreatedAtLocked()
 		if !dbCreatedAt.Equal(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s",
+			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s",
 				txnNode.End.ToString(), dbCreatedAt.ToString()))
 		}
 		return
@@ -148,125 +307,37 @@ func (catalog *Catalog) onReplayCreateDB(
 		},
 		TxnMVCCNode: txnNode,
 	}
-	db.Insert(un)
-}
-func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNode) {
-	catalog.OnReplayDBID(dbid)
-	db, err := catalog.GetDatabaseByID(dbid)
-	if err != nil {
-		logutil.Info("delete %d", zap.Uint64("dbid", dbid), zap.String("catalog pp", catalog.SimplePPString(common.PPL3)))
-		panic(err)
-	}
-	dbDeleteAt := db.GetDeleteAtLocked()
-	if !dbDeleteAt.IsEmpty() {
-		if !dbDeleteAt.Equal(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
-		}
-		return
-	}
-	prev := db.MVCCChain.GetLatestNodeLocked()
-	un := &MVCCNode[*EmptyMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: db.GetCreatedAtLocked(),
-			DeletedAt: txnNode.End,
-		},
-		TxnMVCCNode: txnNode,
-		BaseNode:    prev.BaseNode.CloneAll(),
-	}
-	db.Insert(un)
-}
-func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *TableNode], dataFactory DataFactory, observer wal.ReplayObserver) {
-	catalog.OnReplayTableID(cmd.ID.TableID)
-	// prepareTS := cmd.GetTs()
-	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-	// 	if observer != nil {
-	// 		observer.OnStaleIndex(idx)
-	// 	}
-	// 	return
-	// }
-	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
-	if err != nil {
-		panic(err)
-	}
-	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
-
-	un := cmd.mvccNode
-	if un.Is1PC() {
-		if err := un.ApplyCommit(); err != nil {
-			panic(err)
-		}
-	}
-
-	if err != nil {
-		tbl = NewReplayTableEntry()
-		tbl.ID = cmd.ID.TableID
-		tbl.db = db
-		tbl.tableData = dataFactory.MakeTableFactory()(tbl)
-		tbl.TableNode = cmd.node
-		tbl.TableNode.schema.Store(un.BaseNode.Schema)
-		tbl.Insert(un)
-		err = db.AddEntryLocked(tbl, un.GetTxn(), true)
-		if err != nil {
-			logutil.Warn(catalog.SimplePPString(common.PPL3))
-			panic(err)
-		}
-		return
-	}
-	tblun := tbl.SearchNodeLocked(un)
-	if tblun == nil {
-		tbl.Insert(un) //TODO isvalid
-		if tbl.isColumnChangedInSchema() {
-			tbl.FreezeAppend()
-		}
-		schema := un.BaseNode.Schema
-		tbl.TableNode.schema.Store(schema)
-		// alter table rename
-		if schema.Extra.OldName != "" && un.DeletedAt.IsEmpty() {
-			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
-			if err != nil {
-				logutil.Warn(schema.String())
-				panic(err)
-			}
-		}
-	}
-
+	db.InsertLocked(un)
 }
 
-func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *containers.Batch, dataFactory DataFactory) {
+func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.TxnMVCCNode, dataF DataFactory, tblBat, colBat *containers.Batch) {
 	schemaOffset := 0
-	for i := 0; i < ins.Length(); i++ {
-		tid := ins.GetVectorByName(pkgcatalog.SystemRelAttr_ID).Get(i).(uint64)
-		dbid := ins.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).Get(i).(uint64)
-		name := string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte))
+	for i := 0; i < tblBat.Length(); i++ {
+		tid := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ID).Get(i).(uint64)
+		dbid := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).Get(i).(uint64)
+		name := string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte))
 		schema := NewEmptySchema(name)
-		schemaOffset = schema.ReadFromBatch(insCol, schemaOffset, tid)
-		schema.Comment = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte))
-		schema.Version = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Get(i).(uint32)
-		schema.CatalogVersion = ins.GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion).Get(i).(uint32)
-		schema.Partitioned = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partitioned).Get(i).(int8)
-		schema.Partition = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte))
-		schema.Relkind = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte))
-		schema.Createsql = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).Get(i).([]byte))
-		schema.View = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).Get(i).([]byte))
-		schema.Constraint = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).Get(i).([]byte)
+		schemaOffset = schema.ReadFromBatch(colBat, schemaOffset, tid)
+		schema.Comment = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte))
+		schema.Version = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Get(i).(uint32)
+		schema.CatalogVersion = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion).Get(i).(uint32)
+		schema.Partitioned = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partitioned).Get(i).(int8)
+		schema.Partition = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte))
+		schema.Relkind = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte))
+		schema.Createsql = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).Get(i).([]byte))
+		schema.View = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).Get(i).([]byte))
+		schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).Get(i).([]byte)
 		schema.AcInfo = accessInfo{}
-		schema.AcInfo.RoleID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Owner).Get(i).(uint32)
-		schema.AcInfo.UserID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Creator).Get(i).(uint32)
-		schema.AcInfo.CreateAt = ins.GetVectorByName(pkgcatalog.SystemRelAttr_CreateAt).Get(i).(types.Timestamp)
-		schema.AcInfo.TenantID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).Get(i).(uint32)
-		schema.BlockMaxRows = insTxn.GetVectorByName(SnapshotAttr_BlockMaxRow).Get(i).(uint32)
-		schema.ObjectMaxBlocks = insTxn.GetVectorByName(SnapshotAttr_ObjectMaxBlock).Get(i).(uint16)
-		extra := insTxn.GetVectorByName(SnapshotAttr_SchemaExtra).Get(i).([]byte)
+		schema.AcInfo.RoleID = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Owner).Get(i).(uint32)
+		schema.AcInfo.UserID = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Creator).Get(i).(uint32)
+		schema.AcInfo.CreateAt = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateAt).Get(i).(types.Timestamp)
+		schema.AcInfo.TenantID = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).Get(i).(uint32)
+		extra := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).Get(i).([]byte)
 		schema.MustRestoreExtra(extra)
-		schema.Finalize(true)
-		txnNode := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataFactory)
-	}
-	for i := 0; i < del.Length(); i++ {
-		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
-		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-		txnNode := txnbase.ReadTuple(delTxn, i)
-		catalog.onReplayDeleteTable(dbid, tid, txnNode)
+		if err := schema.Finalize(true); err != nil {
+			panic(err)
+		}
+		catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataF)
 	}
 }
 
@@ -274,14 +345,13 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	catalog.OnReplayTableID(tid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAtLocked()
 		if tblCreatedAt.Greater(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		// alter table
 		un := &MVCCNode[*TableMVCCNode]{
@@ -293,7 +363,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 				Schema: schema,
 			},
 		}
-		tbl.Insert(un)
+		tbl.InsertLocked(un)
 		if tbl.isColumnChangedInSchema() {
 			tbl.FreezeAppend()
 		}
@@ -325,103 +395,21 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 			Schema: schema,
 		},
 	}
-	tbl.Insert(un)
-}
-func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.TxnMVCCNode) {
-	catalog.OnReplayTableID(tid)
-	db, err := catalog.GetDatabaseByID(dbid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	tbl, err := db.GetTableEntryByID(tid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	tableDeleteAt := tbl.GetDeleteAtLocked()
-	if !tableDeleteAt.IsEmpty() {
-		if !tableDeleteAt.Equal(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
-		}
-		return
-	}
-	prev := tbl.MVCCChain.GetLatestCommittedNodeLocked()
-	un := &MVCCNode[*TableMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: prev.CreatedAt,
-			DeletedAt: txnNode.End,
-		},
-		TxnMVCCNode: txnNode,
-		BaseNode:    prev.BaseNode.CloneAll(),
-	}
-	tbl.Insert(un)
-
-}
-func (catalog *Catalog) onReplayUpdateObject(
-	cmd *EntryCommand[*ObjectMVCCNode, *ObjectNode],
-	dataFactory DataFactory,
-	observer wal.ReplayObserver) {
-	catalog.OnReplayObjectID(cmd.node.SortHint)
-
-	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
-	if err != nil {
-		panic(err)
-	}
-	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
-	if err != nil {
-		logutil.Debugf("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
-		logutil.Info(catalog.SimplePPString(3))
-		panic(err)
-	}
-	obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
-	un := cmd.mvccNode
-	if un.Is1PC() {
-		if err := un.ApplyCommit(); err != nil {
-			panic(err)
-		}
-	}
-	if err != nil {
-		obj = NewReplayObjectEntry()
-		obj.ID = *cmd.ID.ObjectID()
-		obj.table = tbl
-		obj.Insert(un)
-		obj.ObjectNode = cmd.node
-		tbl.AddEntryLocked(obj)
-	} else {
-		node := obj.SearchNodeLocked(un)
-		if node == nil {
-			obj.Insert(un)
-		} else {
-			node.BaseNode.Update(un.BaseNode)
-		}
-	}
-	if obj.objData == nil {
-		obj.objData = dataFactory.MakeObjectFactory()(obj)
-	} else {
-		deleteAt := obj.GetDeleteAtLocked()
-		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
-			obj.objData.TryUpgrade()
-			obj.objData.UpgradeAllDeleteChain()
-		}
-	}
+	tbl.InsertLocked(un)
 }
 
-func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch, dataFactory DataFactory) {
-	dbidVec := objectInfo.GetVectorByName(SnapshotAttr_DBID)
-	for i := 0; i < dbidVec.Length(); i++ {
-		dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
+func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch, isTombstone bool, dataFactory DataFactory, forSys bool) {
+	for i := 0; i < objectInfo.Length(); i++ {
 		tid := objectInfo.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+		if forSys != pkgcatalog.IsSystemTable(tid) {
+			continue
+		}
+		dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		objectNode := ReadObjectInfoTuple(objectInfo, i)
 		sid := objectNode.ObjectName().ObjectId()
 		txnNode := txnbase.ReadTuple(objectInfo, i)
 		entryNode := ReadEntryNodeTuple(objectInfo, i)
-		state := objectInfo.GetVectorByName(ObjectAttr_State).Get(i).(bool)
-		entryState := ES_Appendable
-		if !state {
-			entryState = ES_NotAppendable
-		}
-		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, entryState, dataFactory)
+		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, isTombstone, dataFactory)
 	}
 }
 
@@ -431,256 +419,94 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	objNode *ObjectMVCCNode,
 	entryNode *EntryMVCCNode,
 	txnNode *txnbase.TxnMVCCNode,
-	state EntryState,
+	isTombstone bool,
 	dataFactory DataFactory,
 ) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
+		// As replaying only the catalog view at the end time of lastest checkpoint
+		// it is normal fot deleted db or table to be missed
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return
+		}
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	rel, err := db.GetTableEntryByID(tbid)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return
+		}
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	obj, _ := rel.GetObjectByID(objid)
-	if obj == nil {
-		obj = NewReplayObjectEntry()
-		obj.ID = *objid
-		obj.table = rel
-		obj.ObjectNode = &ObjectNode{
-			state:    state,
-			sorted:   state == ES_NotAppendable,
-			SortHint: catalog.NextObject(),
+	newObject := func() *ObjectEntry {
+		object := NewReplayObjectEntry()
+		object.table = rel
+		object.ObjectNode = ObjectNode{
+			SortHint:    catalog.NextObject(),
+			IsTombstone: isTombstone,
 		}
+		object.EntryMVCCNode = *entryNode
+		object.ObjectMVCCNode = *objNode
+		object.CreateNode = *txnNode
+		object.ObjectState = ObjectState_Create_ApplyCommit
+		object.forcePNode = true // any object replayed from checkpoint is forced to be created
+		return object
+	}
+	var obj *ObjectEntry
+	if entryNode.CreatedAt.Equal(&txnNode.End) {
+		obj = newObject()
 		rel.AddEntryLocked(obj)
 	}
-	un := &MVCCNode[*ObjectMVCCNode]{
-		EntryMVCCNode: entryNode,
-		BaseNode:      objNode,
-		TxnMVCCNode:   txnNode,
-	}
-	node := obj.SearchNodeLocked(un)
-	if node == nil {
-		obj.Insert(un)
-	} else {
-		node.BaseNode.Update(un.BaseNode)
-	}
-	if obj.objData == nil {
-		obj.objData = dataFactory.MakeObjectFactory()(obj)
-	} else {
-		deleteAt := obj.GetDeleteAtLocked()
-		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
-			obj.objData.TryUpgrade()
-			obj.objData.UpgradeAllDeleteChain()
+	if entryNode.DeletedAt.Equal(&txnNode.End) {
+		obj, err = rel.GetObjectByID(objid, isTombstone)
+		if err != nil {
+			panic(fmt.Sprintf("obj %v(%v), [%v %v %v] not existed, table:\n%v", objid.String(),
+				entryNode.String(), isTombstone, objNode.String(),
+				txnNode.String(), rel.StringWithLevel(3)))
 		}
+		obj.EntryMVCCNode = *entryNode
+		obj.ObjectMVCCNode = *objNode
+		obj.DeleteNode = *txnNode
+		obj.ObjectState = ObjectState_Delete_ApplyCommit
 	}
-}
-
-// Before ckp version 10 and IOET_WALTxnCommand_Object, object info doesn't exist.
-// Replay Object by block.
-// Original Size, Compressed Size and Block Number is skipped.
-func (catalog *Catalog) replayObjectByBlock(
-	tbl *TableEntry,
-	blkID types.Blockid,
-	state EntryState,
-	start, end types.TS,
-	metaLocation objectio.Location,
-	needApplyCommit bool,
-	create, delete bool,
-	txn txnif.TxnReader,
-	dataFactory DataFactory) {
-	ObjectID := blkID.Object()
-	obj, _ := tbl.GetObjectByID(ObjectID)
-	// create
-	if create {
-		if obj == nil {
-			obj = NewObjectEntryByMetaLocation(
-				tbl,
-				ObjectID,
-				start, end, state, metaLocation, dataFactory.MakeObjectFactory())
-			tbl.AddEntryLocked(obj)
-		}
-	}
-	// delete
-	if delete {
-		node := obj.SearchNodeLocked(
-			&MVCCNode[*ObjectMVCCNode]{
-				TxnMVCCNode: &txnbase.TxnMVCCNode{
-					Start: start,
-				},
-			},
-		)
-		if node == nil {
-			node = obj.GetLatestNodeLocked().CloneData()
-			node.Start = start
-			node.Prepare = end
-			node.End = end
-			if node.BaseNode.IsEmpty() {
-				node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation, ObjectID)
+	if !entryNode.CreatedAt.Equal(&txnNode.End) && !entryNode.DeletedAt.Equal(&txnNode.End) {
+		// In back up, aobj is replaced with naobj and its DeleteAt is removed.
+		// Before back up, txnNode.End equals DeleteAt of naobj.
+		// After back up, DeleteAt is empty.
+		if objid.Offset() == Backup_Object_Offset && entryNode.DeletedAt.IsEmpty() {
+			obj = newObject()
+			rel.AddEntryLocked(obj)
+			logutil.Warnf("obj %v, tbl %v-%d delete %v, create %v, end %v",
+				objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
+				entryNode.DeletedAt.ToString(), txnNode.End.ToString())
+		} else {
+			if !entryNode.DeletedAt.IsEmpty() {
+				panic(fmt.Sprintf("logic error: obj %v, tbl %v-%d create %v, delete %v, end %v",
+					objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
+					entryNode.DeletedAt.ToString(), txnNode.End.ToString()))
 			}
-			obj.Insert(node)
-			node.DeletedAt = end
 		}
 	}
-	_, blkOffset := blkID.Offsets()
-	obj.tryUpdateBlockCnt(int(blkOffset) + 1)
+	if obj == nil {
+		obj, err = rel.GetObjectByID(objid, isTombstone)
+		if err != nil {
+			panic(fmt.Sprintf("obj %v(%v), [%v %v %v] not existed, table:\n%v", objid.String(),
+				entryNode.String(), isTombstone, objNode.String(),
+				txnNode.String(), rel.StringWithLevel(3)))
+		}
+	}
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
-		deleteAt := obj.GetDeleteAtLocked()
+		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
-			obj.objData.UpgradeAllDeleteChain()
 		}
-	}
-}
-func (catalog *Catalog) onReplayUpdateBlock(
-	cmd *EntryCommand[*MetadataMVCCNode, *BlockNode],
-	dataFactory DataFactory,
-	observer wal.ReplayObserver) {
-	// catalog.OnReplayBlockID(cmd.ID.BlockID)
-	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
-	if err != nil {
-		panic(err)
-	}
-	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
-	if err != nil {
-		panic(err)
-	}
-	catalog.replayObjectByBlock(
-		tbl,
-		cmd.ID.BlockID,
-		cmd.node.state,
-		cmd.mvccNode.Start,
-		cmd.mvccNode.Prepare,
-		cmd.mvccNode.BaseNode.MetaLoc,
-		true,
-		cmd.mvccNode.CreatedAt.Equal(&txnif.UncommitTS),
-		cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS),
-		cmd.mvccNode.Txn,
-		dataFactory)
-	if !cmd.mvccNode.BaseNode.DeltaLoc.IsEmpty() {
-		obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
-		if err != nil {
-			panic(err)
-		}
-		tombstone := tbl.GetOrCreateTombstone(obj, dataFactory.MakeTombstoneFactory())
-		_, blkOffset := cmd.ID.BlockID.Offsets()
-		tombstone.ReplayDeltaLoc(cmd.mvccNode, blkOffset)
 	}
 }
 
-func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch, dataFactory DataFactory) {
-	for i := 0; i < ins.Length(); i++ {
-		dbid := insTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
-		tid := insTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-		appendable := ins.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Get(i).(bool)
-		state := ES_NotAppendable
-		if appendable {
-			state = ES_Appendable
-		}
-		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(types.Blockid)
-		sid := blkID.Object()
-		metaLoc := ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte)
-		deltaLoc := ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte)
-		txnNode := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateBlock(dbid, tid, sid, &blkID, state, metaLoc, deltaLoc, txnNode, dataFactory)
-	}
-	for i := 0; i < del.Length(); i++ {
-		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
-		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-		rid := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
-		blkID := rid.BorrowBlockID()
-		sid := rid.BorrowObjectID()
-		un := txnbase.ReadTuple(delTxn, i)
-		metaLoc := delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte)
-		deltaLoc := delTxn.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte)
-		catalog.onReplayDeleteBlock(dbid, tid, sid, blkID, metaLoc, deltaLoc, un)
-	}
-}
-func (catalog *Catalog) onReplayCreateBlock(
-	dbid, tid uint64,
-	objid *types.Objectid,
-	blkid *types.Blockid,
-	state EntryState,
-	metaloc, deltaloc objectio.Location,
-	txnNode *txnbase.TxnMVCCNode,
-	dataFactory DataFactory) {
-	// catalog.OnReplayBlockID(blkid)
-	db, err := catalog.GetDatabaseByID(dbid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	rel, err := db.GetTableEntryByID(tid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	catalog.replayObjectByBlock(
-		rel,
-		*blkid,
-		state,
-		txnNode.Start,
-		txnNode.End,
-		metaloc,
-		false,
-		true,
-		false,
-		nil,
-		dataFactory)
-	if !deltaloc.IsEmpty() {
-		obj, err := rel.GetObjectByID(objid)
-		if err != nil {
-			panic(err)
-		}
-		tombstone := rel.GetOrCreateTombstone(obj, dataFactory.MakeTombstoneFactory())
-		_, blkOffset := blkid.Offsets()
-		mvccNode := &MVCCNode[*MetadataMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{},
-			TxnMVCCNode:   txnNode,
-			BaseNode: &MetadataMVCCNode{
-				DeltaLoc: deltaloc,
-			},
-		}
-		tombstone.ReplayDeltaLoc(mvccNode, blkOffset)
-	}
-}
-
-func (catalog *Catalog) onReplayDeleteBlock(
-	dbid, tid uint64,
-	objid *types.Objectid,
-	blkid *types.Blockid,
-	metaloc,
-	deltaloc objectio.Location,
-	txnNode *txnbase.TxnMVCCNode,
-) {
-	// catalog.OnReplayBlockID(blkid)
-	db, err := catalog.GetDatabaseByID(dbid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	rel, err := db.GetTableEntryByID(tid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	catalog.replayObjectByBlock(
-		rel,
-		*blkid,
-		ES_Appendable, // state is not used when delete
-		txnNode.Start,
-		txnNode.End,
-		metaloc,
-		false,
-		false,
-		true,
-		nil,
-		nil)
-}
 func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)
 	tableProcessor := new(LoopProcessor)
@@ -691,8 +517,11 @@ func (catalog *Catalog) ReplayTableRows() {
 		rows += be.GetObjectData().GetRowsOnReplay()
 		return nil
 	}
-	tableProcessor.TombstoneFn = func(t data.Tombstone) error {
-		rows -= uint64(t.GetDeleteCnt())
+	tableProcessor.TombstoneFn = func(be *ObjectEntry) error {
+		if !be.IsActive() {
+			return nil
+		}
+		rows -= be.GetObjectData().GetRowsOnReplay()
 		return nil
 	}
 	processor := new(LoopProcessor)

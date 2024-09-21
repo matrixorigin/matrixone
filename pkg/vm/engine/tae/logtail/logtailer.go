@@ -16,16 +16,12 @@ package logtail
 
 import (
 	"context"
-	"math"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"go.uber.org/zap"
 )
 
 // Logtailer provides logtail for the specified table.
@@ -112,140 +108,7 @@ func (l *LogtailerImpl) RegisterCallback(cb func(from, to timestamp.Timestamp, c
 func (l *LogtailerImpl) RangeLogtail(
 	ctx context.Context, from, to timestamp.Timestamp,
 ) ([]logtail.TableLogtail, []func(), error) {
-	start := types.BuildTS(from.PhysicalTime, from.LogicalTime)
-	end := types.BuildTS(to.PhysicalTime, to.LogicalTime)
-
-	ckpLoc, checkpointed, err := l.ckpClient.CollectCheckpointsInRange(ctx, start, end)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if checkpointed.GreaterEq(&end) {
-		return []logtail.TableLogtail{{
-			CkpLocation: ckpLoc,
-			Ts:          &to,
-			Table:       &api.TableID{DbId: math.MaxUint64, TbId: math.MaxUint64},
-		}}, nil, nil
-	} else if ckpLoc != "" {
-		start = checkpointed.Next()
-	}
-
-	reader := l.mgr.GetReader(start, end)
-	resps := make([]logtail.TableLogtail, 0, 8)
-
-	closeCBs := make([]func(), 0)
-	// collect resp for the three system tables
-	if reader.HasCatalogChanges() {
-		for _, scope := range []Scope{ScopeDatabases, ScopeTables, ScopeColumns} {
-			resp, closeCB, err := l.getCatalogRespBuilder(scope, reader, ckpLoc).build()
-			if err != nil {
-				for _, cb := range closeCBs {
-					if cb != nil {
-						cb()
-					}
-				}
-				return nil, nil, err
-			}
-			closeCBs = append(closeCBs, closeCB)
-			resps = append(resps, resp)
-		}
-	}
-
-	// collect resp for every dirty normal table
-	dirties, _ := reader.GetDirty()
-	for _, table := range dirties.Tables {
-		did, tid := table.DbID, table.ID
-		resp, closeCB, err := l.getTableRespBuilder(did, tid, reader, ckpLoc).build()
-		if err != nil {
-			for _, cb := range closeCBs {
-				if cb != nil {
-					cb()
-				}
-			}
-			return resps, nil, err
-		}
-		closeCBs = append(closeCBs, closeCB)
-		resps = append(resps, resp)
-	}
-	return resps, closeCBs, nil
-}
-
-func (l *LogtailerImpl) getTableRespBuilder(did, tid uint64, reader *Reader, ckpLoc string) *tableRespBuilder {
-	return &tableRespBuilder{
-		did:    did,
-		tid:    tid,
-		scope:  ScopeUserTables,
-		reader: reader,
-		c:      l.c,
-	}
-}
-
-func (l *LogtailerImpl) getCatalogRespBuilder(scope Scope, reader *Reader, ckpLoc string) *tableRespBuilder {
-	b := &tableRespBuilder{
-		did:    pkgcatalog.MO_CATALOG_ID,
-		scope:  scope,
-		reader: reader,
-		c:      l.c,
-	}
-	switch scope {
-	case ScopeDatabases:
-		b.tid = pkgcatalog.MO_DATABASE_ID
-	case ScopeTables:
-		b.tid = pkgcatalog.MO_TABLES_ID
-	case ScopeColumns:
-		b.tid = pkgcatalog.MO_COLUMNS_ID
-	}
-	return b
-}
-
-type tableRespBuilder struct {
-	ctx      context.Context
-	did, tid uint64
-	ckpLoc   string
-	scope    Scope
-	reader   *Reader
-	c        *catalog.Catalog
-}
-
-func (b *tableRespBuilder) build() (logtail.TableLogtail, func(), error) {
-	resp, closeCB, err := b.collect()
-	if err != nil {
-		return logtail.TableLogtail{}, closeCB, err
-	}
-	ret := logtail.TableLogtail{}
-	ret.CkpLocation = resp.CkpLocation
-	to := b.reader.to.ToTimestamp()
-	ret.Ts = &to
-	ret.Table = &api.TableID{DbId: b.did, TbId: b.tid}
-	ret.Commands = nonPointerEntryList(resp.Commands)
-	return ret, closeCB, nil
-}
-
-func (b *tableRespBuilder) collect() (api.SyncLogTailResp, func(), error) {
-	var builder RespBuilder
-	if b.scope == ScopeUserTables {
-		dbEntry, err := b.c.GetDatabaseByID(b.did)
-		if err != nil {
-			logutil.Info("[Logtail] not found", zap.Any("db_id", b.did))
-			return api.SyncLogTailResp{}, nil, nil
-		}
-		tableEntry, err := dbEntry.GetTableEntryByID(b.tid)
-		if err != nil {
-			logutil.Info("[Logtail] not found", zap.Any("t_id", b.tid))
-			return api.SyncLogTailResp{}, nil, nil
-		}
-		builder = NewTableLogtailRespBuilder(b.ctx, b.ckpLoc, b.reader.from, b.reader.to, tableEntry)
-	} else {
-		builder = NewCatalogLogtailRespBuilder(b.ctx, b.scope, b.ckpLoc, b.reader.from, b.reader.to)
-	}
-	op := NewBoundTableOperator(b.c, b.reader, b.scope, b.did, b.tid, builder)
-	err := op.Run()
-	if err != nil {
-		return api.SyncLogTailResp{}, builder.Close, err
-	}
-
-	resp, err := builder.BuildResp()
-	return resp, builder.Close, err
+	return nil, nil, moerr.NewNYI(ctx, "RangeLogtail is deprecated")
 }
 
 // TODO: remvove this after push mode is stable

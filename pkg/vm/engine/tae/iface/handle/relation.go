@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -31,20 +32,18 @@ type Relation interface {
 	ID() uint64
 	String() string
 	SimplePPString(common.PPLevel) string
-	GetCardinality(attr string) int64
-	Schema() any
+	Schema(bool) any
 	AlterTable(ctx context.Context, req *apipb.AlterTableReq) error
-	MakeObjectIt() ObjectIt
-	MakeObjectItOnSnap() ObjectIt
+	MakeObjectIt(bool) ObjectIt
+	MakeObjectItOnSnap(bool) ObjectIt
 
 	DeleteByPhyAddrKey(key any) error
 	GetValueByPhyAddrKey(key any, col int) (any, bool, error)
-	DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector) error
+	DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector, dt DeleteType) error
 	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
-	TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
-	Update(id *common.ID, row uint32, col uint16, v any, isNull bool) error
+	TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error)
 	GetByFilter(ctx context.Context, filter *Filter) (id *common.ID, offset uint32, err error)
-	GetValue(id *common.ID, row uint32, col uint16) (any, bool, error)
+	GetValue(id *common.ID, row uint32, col uint16, skipCheckDelete bool) (any, bool, error)
 	GetValueByFilter(ctx context.Context, filter *Filter, col int) (any, bool, error)
 	UpdateByFilter(ctx context.Context, filter *Filter, col uint16, v any, isNull bool) error
 	DeleteByFilter(ctx context.Context, filter *Filter) error
@@ -55,9 +54,10 @@ type Relation interface {
 
 	GetMeta() any
 	CreateObject(bool) (Object, error)
-	CreateNonAppendableObject(is1PC bool, opt *objectio.CreateObjOpt) (Object, error)
-	GetObject(id *types.Objectid) (Object, error)
-	SoftDeleteObject(id *types.Objectid) (err error)
+	CreateNonAppendableObject(isTombstone bool, opt *objectio.CreateObjOpt) (Object, error)
+	GetObject(id *types.Objectid, isTombstone bool) (Object, error)
+	SoftDeleteObject(id *types.Objectid, isTombstone bool) (err error)
+	FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls, deleteStartOffset uint64) error
 
 	GetDB() (Database, error)
 }

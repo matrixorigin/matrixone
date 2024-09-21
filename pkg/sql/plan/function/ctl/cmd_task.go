@@ -16,6 +16,7 @@ package ctl
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -33,9 +34,11 @@ var (
 	disableTask = "disable"
 	enableTask  = "enable"
 	getUser     = "getuser"
+	retention   = "retention"
 
 	taskMap = map[string]int32{
 		"storageusage": int32(taskpb.TaskCode_MetricStorageUsage),
+		"retention":    int32(taskpb.TaskCode_Retention),
 	}
 )
 
@@ -43,11 +46,15 @@ var (
 // parameter format:
 // 1. enable
 // 2. disable
-// 3. [uuid:]taskId
-func handleTask(proc *process.Process,
+// 3. getuser
+// 4. retention:CronExpr
+// 5. uuid:taskId
+func handleTask(
+	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (Result, error) {
+	sender requestSender,
+) (Result, error) {
 	parameter = strings.ToLower(parameter)
 	switch parameter {
 	case disableTask:
@@ -64,7 +71,7 @@ func handleTask(proc *process.Process,
 		}, nil
 	case getUser:
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		state, err := proc.Hakeeper.GetClusterState(ctx)
+		state, err := proc.GetHaKeeper().GetClusterState(ctx)
 		cancel()
 		if err != nil {
 			return Result{Method: TaskMethod, Data: "failed to get cluster state"}, err
@@ -74,11 +81,30 @@ func handleTask(proc *process.Process,
 	default:
 	}
 
-	target, taskCode, err := checkRunTaskParameter(parameter)
+	args := strings.Split(strings.TrimSpace(parameter), ":")
+	if args[0] == retention {
+		if len(args) != 2 {
+			return Result{Method: TaskMethod, Data: "retention task cron expr not specified"}, nil
+		}
+		_, err := proc.GetSessionInfo().SqlHelper.ExecSql(
+			fmt.Sprintf(
+				"update mo_task.sys_cron_task set cron_expr='%s' where task_metadata_id='retention'",
+				args[1]),
+		)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{
+			Method: TaskMethod,
+			Data:   "OK",
+		}, nil
+	}
+
+	target, taskCode, err := checkRunTaskParameter(args)
 	if err != nil {
 		return Result{}, err
 	}
-	resp, err := transferTaskToCN(proc.QueryClient, target, taskCode)
+	resp, err := transferTaskToCN(proc.GetQueryClient(), target, taskCode)
 	if err != nil {
 		return Result{}, err
 	}
@@ -88,22 +114,28 @@ func handleTask(proc *process.Process,
 	}, nil
 }
 
-func checkRunTaskParameter(param string) (string, int32, error) {
+func checkRunTaskParameter(args []string) (string, int32, error) {
 	// uuid:taskId
-	args := strings.Split(param, ":")
 	if len(args) != 2 {
 		return "", 0, moerr.NewInternalErrorNoCtx("cmd invalid, expected uuid:task")
 	}
 	taskCode, ok := taskMap[args[1]]
 	if !ok {
-		return "", 0, moerr.NewInternalErrorNoCtx("cmd invalid, task %s not found", args[1])
+		return "", 0, moerr.NewInternalErrorNoCtxf("cmd invalid, task %s not found", args[1])
 	}
 	return args[0], taskCode, nil
 }
 
 func transferTaskToCN(qc qclient.QueryClient, target string, taskCode int32) (resp *querypb.Response, err error) {
-	clusterservice.GetMOCluster().GetCNService(
-		clusterservice.NewServiceIDSelector(target),
+	var selector clusterservice.Selector
+	if target == "" {
+		selector = clusterservice.NewSelectAll()
+	} else {
+		selector = clusterservice.NewServiceIDSelector(target)
+	}
+
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(
+		selector,
 		func(cn metadata.CNService) bool {
 			req := qc.NewRequest(querypb.CmdMethod_RunTask)
 			req.RunTask = &querypb.RunTaskRequest{TaskCode: taskCode}
@@ -111,7 +143,7 @@ func transferTaskToCN(qc qclient.QueryClient, target string, taskCode int32) (re
 			defer cancel()
 
 			resp, err = qc.SendMessage(ctx, cn.QueryAddress, req)
-			return true
+			return false
 		})
 	return
 }

@@ -217,7 +217,7 @@ KEY `org_no` (`org_no`)
 );
 show create table t_code_rule;
 Table    Create Table
-t_code_rule    CREATE TABLE `t_code_rule` (\n`code_id` BIGINT NOT NULL,\n`code_no` VARCHAR(50) NOT NULL,\n`org_no` VARCHAR(50) NOT NULL,\n`org_name` VARCHAR(50) NOT NULL,\n`ancestors` VARCHAR(255) NOT NULL,\n`code_rule_no` VARCHAR(50) NOT NULL,\n`code_rule_name` VARCHAR(50) NOT NULL,\n`code_name` VARCHAR(50) NOT NULL,\n`code_type` INT DEFAULT NULL,\n`split` VARCHAR(50) DEFAULT null,\n`remark` VARCHAR(255) DEFAULT NULL,\n`create_time` DATETIME NOT NULL,\n`create_user` VARCHAR(50) DEFAULT null,\n`last_update_time` DATETIME DEFAULT null,\n`last_update_user` VARCHAR(50) DEFAULT null,\n`is_system_code` VARCHAR(20) DEFAULT 'N',\nPRIMARY KEY (`code_id`),\nUNIQUE KEY `code_type` (`code_type`),\nKEY `code_no` (`code_no`),\nKEY `code_rule_no` (`code_rule_no`),\nKEY `org_no` (`org_no`)\n)
+t_code_rule    CREATE TABLE `t_code_rule` (\n  `code_id` bigint NOT NULL,\n  `code_no` varchar(50) NOT NULL,\n  `org_no` varchar(50) NOT NULL,\n  `org_name` varchar(50) NOT NULL,\n  `ancestors` varchar(255) NOT NULL,\n  `code_rule_no` varchar(50) NOT NULL,\n  `code_rule_name` varchar(50) NOT NULL,\n  `code_name` varchar(50) NOT NULL,\n  `code_type` int DEFAULT NULL,\n  `split` varchar(50) DEFAULT NULL,\n  `remark` varchar(255) DEFAULT NULL,\n  `create_time` datetime NOT NULL,\n  `create_user` varchar(50) DEFAULT NULL,\n  `last_update_time` datetime DEFAULT NULL,\n  `last_update_user` varchar(50) DEFAULT NULL,\n  `is_system_code` varchar(20) NOT NULL DEFAULT 'N',\n  PRIMARY KEY (`code_id`),\n  UNIQUE KEY `code_type` (`code_type`),\n  KEY `code_no` (`code_no`),\n  KEY `code_rule_no` (`code_rule_no`),\n  KEY `org_no` (`org_no`)\n)
 load data infile  '$resources/load_data/unique_index_file.csv' into table t_code_rule  fields terminated by ',';
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 code_id    code_type    code_no    code_rule_no    org_no
@@ -559,7 +559,7 @@ col1    col2    col3    col4
 4    null    null    13
 show create table create_index_18;
 Table    Create Table
-create_index_18    CREATE TABLE `create_index_18` (\n`col1` BIGINT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `m5_index` (`col4`)\n)
+create_index_18    CREATE TABLE `create_index_18` (\n  `col1` bigint NOT NULL AUTO_INCREMENT,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` varchar(50) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `m5_index` (`col4`)\n)
 drop index m3_index on create_index_18;
 internal error: not found index: m3_index
 drop index m4_index on create_index_18;
@@ -674,7 +674,7 @@ insert into create_secondary_01 values (1,'13456789872',20.23,'5678'),(2,'138734
 create index varchar_second_index on create_secondary_01(col4) comment 'create varchar index';
 show create table create_secondary_01;
 Table    Create Table
-create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nKEY `varchar_second_index` (`col4`) COMMENT 'create varchar index'\n)
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n  `col1` bigint NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` float DEFAULT NULL,\n  `col4` varchar(50) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `col2` (`col2`),\n  KEY `varchar_second_index` (`col4`) COMMENT 'create varchar index'\n)
 insert into create_secondary_01 values (4,'13456789899',20.23,'5678'),(5,'13873458255',100.00,'23');
 select * from create_secondary_01;
 col1    col2    col3    col4
@@ -686,7 +686,7 @@ col1    col2    col3    col4
 drop index varchar_second_index on create_secondary_01;
 show create table create_secondary_01;
 Table    Create Table
-create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`)\n)
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n  `col1` bigint NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` float DEFAULT NULL,\n  `col4` varchar(50) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `col2` (`col2`)\n)
 create table create_secondary_02 (col1 bigint,col2 char(25),col3 float,col4 char(50));
 create index char_second_index on create_secondary_02(col2);
 insert into create_secondary_02 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
@@ -730,7 +730,7 @@ create index int_unsigned_index on create_secondary_07(col1);
 insert into create_secondary_07 values (1,2,20.23,56),(1,4,100.00,90);
 show create table create_secondary_07;
 Table    Create Table
-create_secondary_07    CREATE TABLE `create_secondary_07` (\n`col1` INT UNSIGNED DEFAULT NULL,\n`col2` INT NOT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` INT UNSIGNED DEFAULT NULL,\nPRIMARY KEY (`col2`),\nKEY `int_unsigned_index` (`col1`)\n)
+create_secondary_07    CREATE TABLE `create_secondary_07` (\n  `col1` int unsigned DEFAULT NULL,\n  `col2` int NOT NULL,\n  `col3` float DEFAULT NULL,\n  `col4` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`col2`),\n  KEY `int_unsigned_index` (`col1`)\n)
 select * from create_secondary_07;
 col1    col2    col3    col4
 1    2    20.23    56
@@ -806,19 +806,19 @@ col1    col2    col3    col4    col5
 3    null    100.0    23    99
 show create table create_secondary_01;
 Table    Create Table
-create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\n`col5` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nKEY `secondary_key` (`col4`,`col5`)\n)
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n  `col1` bigint NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` float DEFAULT NULL,\n  `col4` varchar(50) DEFAULT NULL,\n  `col5` int DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `col2` (`col2`),\n  KEY `secondary_key` (`col4`,`col5`)\n)
 drop index secondary_key on create_secondary_01;
 truncate table create_secondary_01;
 show create table create_secondary_01;
 Table    Create Table
-create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\n`col5` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`)\n)
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n  `col1` bigint NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` float DEFAULT NULL,\n  `col4` varchar(50) DEFAULT NULL,\n  `col5` int DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `col2` (`col2`)\n)
 drop table create_secondary_01;
 create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50),col5 int);
 create index secondary_key1 on create_secondary_01(col1);
 create index secondary_key2 on create_secondary_01(col1,col2);
 show create table create_secondary_01;
 Table    Create Table
-create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\n`col5` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nKEY `secondary_key1` (`col1`),\nKEY `secondary_key2` (`col1`,`col2`)\n)
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n  `col1` bigint NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` float DEFAULT NULL,\n  `col4` varchar(50) DEFAULT NULL,\n  `col5` int DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `col2` (`col2`),\n  KEY `secondary_key1` (`col1`),\n  KEY `secondary_key2` (`col1`,`col2`)\n)
 drop index secondary_key1 on create_secondary_01;
 drop index secondary_key2 on create_secondary_01;
 create index secondary_key1 on create_secondary_01(col4,col5);
@@ -833,4 +833,4 @@ create index secondary_key1 on create_secondary_01(col1);
 duplicate key name 'secondary_key1'
 show create table create_secondary_01;
 Table    Create Table
-create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\n`col5` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nUNIQUE KEY `secondary_key1` (`col1`)\n)
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n  `col1` bigint NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` float DEFAULT NULL,\n  `col4` varchar(50) DEFAULT NULL,\n  `col5` int DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `col2` (`col2`),\n  UNIQUE KEY `secondary_key1` (`col1`)\n)

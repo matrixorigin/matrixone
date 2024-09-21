@@ -26,11 +26,11 @@ import (
 
 // writeInitialHandshake sends the initial handshake to client.
 func (c *clientConn) writeInitialHandshake() error {
-	// TODO(volgariver6): serverVersion is not correct when the config of
-	// ParameterUnit.SV.MoVersion is not empty.
 	return c.mysqlProto.WritePacket(c.mysqlProto.MakeHandshakePayload())
 }
 
+// handleHandshakeResp receives login information from client and saves it
+// in proxy end.
 func (c *clientConn) handleHandshakeResp() error {
 	// The proxy reads login request from client.
 	pack, err := c.readPacket()
@@ -63,6 +63,11 @@ func (c *clientConn) handleHandshakeResp() error {
 
 	li := &c.clientInfo.labelInfo
 	c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, li.Labels)
+
+	c.clientInfo.hash, err = c.clientInfo.getHash()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -77,9 +82,10 @@ func (c *clientConn) upgradeToTLS() error {
 	ctx, cancel := context.WithTimeout(context.Background(), c.tlsConnectTimeout)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		return moerr.NewInternalError(ctx, "TSL handshake error: %v", err)
+		return moerr.NewInternalErrorf(ctx, "TSL handshake error: %v", err)
 	}
 	c.conn.UseConn(tlsConn)
+	c.mysqlProto.UseConn(tlsConn)
 	return nil
 }
 

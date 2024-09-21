@@ -19,13 +19,14 @@ import (
 	"fmt"
 	"sync"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"go.uber.org/zap"
 )
 
 var (
@@ -39,7 +40,6 @@ type taskServiceHolder struct {
 	mu                         struct {
 		sync.RWMutex
 		closed  bool
-		store   TaskStorage
 		service TaskService
 	}
 }
@@ -49,7 +49,7 @@ func NewTaskServiceHolder(
 	rt runtime.Runtime,
 	addressFactory func(context.Context, bool) (string, error)) TaskServiceHolder {
 	return NewTaskServiceHolderWithTaskStorageFactorySelector(rt, addressFactory, func(username, password, database string) TaskStorageFactory {
-		return NewMySQLBasedTaskStorageFactory(username, password, database)
+		return newMySQLBasedTaskStorageFactory(username, password, database)
 	})
 }
 
@@ -77,7 +77,7 @@ func (h *taskServiceHolder) Close() error {
 		return nil
 	}
 	h.mu.closed = true
-	if h.mu.store == nil {
+	if h.mu.service == nil {
 		return nil
 	}
 	return h.mu.service.Close()
@@ -103,7 +103,6 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 		h.taskStorageFactorySelector(command.User.Username,
 			command.User.Password,
 			command.TaskDatabase))
-	h.mu.store = store
 	h.mu.service = NewTaskService(h.rt, store)
 	return nil
 }
@@ -170,6 +169,15 @@ func (s *refreshableTaskStorage) Close() error {
 	return err
 }
 
+func (s *refreshableTaskStorage) PingContext(ctx context.Context) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.store == nil {
+		return nil
+	}
+	return s.mu.store.PingContext(ctx)
+}
+
 func (s *refreshableTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.AsyncTask) (int, error) {
 	var v int
 	var err error
@@ -177,7 +185,7 @@ func (s *refreshableTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.AddAsyncTask(ctx, tasks...)
 	}
 	s.mu.RUnlock()
@@ -194,7 +202,7 @@ func (s *refreshableTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []ta
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.UpdateAsyncTask(ctx, tasks, conditions...)
 	}
 	s.mu.RUnlock()
@@ -211,7 +219,7 @@ func (s *refreshableTaskStorage) DeleteAsyncTask(ctx context.Context, conditions
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.DeleteAsyncTask(ctx, conditions...)
 	}
 	s.mu.RUnlock()
@@ -228,7 +236,7 @@ func (s *refreshableTaskStorage) QueryAsyncTask(ctx context.Context, conditions 
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.QueryAsyncTask(ctx, conditions...)
 	}
 	s.mu.RUnlock()
@@ -245,7 +253,7 @@ func (s *refreshableTaskStorage) AddCronTask(ctx context.Context, tasks ...task.
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.AddCronTask(ctx, tasks...)
 	}
 	s.mu.RUnlock()
@@ -262,7 +270,7 @@ func (s *refreshableTaskStorage) QueryCronTask(ctx context.Context, c ...Conditi
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.QueryCronTask(ctx, c...)
 	}
 	s.mu.RUnlock()
@@ -279,7 +287,7 @@ func (s *refreshableTaskStorage) UpdateCronTask(ctx context.Context, cronTask ta
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.UpdateCronTask(ctx, cronTask, task)
 	}
 	s.mu.RUnlock()
@@ -296,7 +304,7 @@ func (s *refreshableTaskStorage) AddDaemonTask(ctx context.Context, tasks ...tas
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.AddDaemonTask(ctx, tasks...)
 	}
 	s.mu.RUnlock()
@@ -313,7 +321,7 @@ func (s *refreshableTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []t
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.UpdateDaemonTask(ctx, tasks, conditions...)
 	}
 	s.mu.RUnlock()
@@ -330,7 +338,7 @@ func (s *refreshableTaskStorage) DeleteDaemonTask(ctx context.Context, condition
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.DeleteDaemonTask(ctx, conditions...)
 	}
 	s.mu.RUnlock()
@@ -347,7 +355,7 @@ func (s *refreshableTaskStorage) QueryDaemonTask(ctx context.Context, conditions
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.QueryDaemonTask(ctx, conditions...)
 	}
 	s.mu.RUnlock()
@@ -364,7 +372,7 @@ func (s *refreshableTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks 
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
-	} else {
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.HeartbeatDaemonTask(ctx, tasks)
 	}
 	s.mu.RUnlock()
@@ -372,6 +380,50 @@ func (s *refreshableTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks 
 		s.maybeRefresh(lastAddress)
 	}
 	return v, err
+}
+
+func (s *refreshableTaskStorage) AddCdcTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
+	v, lastAddress, err := s.AddCdcTaskSub(ctx, dt, callback)
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) AddCdcTaskSub(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, string, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.AddCdcTask(ctx, dt, callback)
+	}
+	return v, lastAddress, err
+}
+
+func (s *refreshableTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, callback func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), conditions ...Condition) (int, error) {
+	v, lastAddress, err := s.UpdateCdcTaskSub(ctx, targetStatus, callback, conditions...)
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) UpdateCdcTaskSub(ctx context.Context, targetStatus task.TaskStatus, callback func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), conditions ...Condition) (int, string, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.UpdateCdcTask(ctx, targetStatus, callback, conditions...)
+	}
+	return v, lastAddress, err
 }
 
 func (s *refreshableTaskStorage) maybeRefresh(lastAddress string) bool {
@@ -444,26 +496,21 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 }
 
 type mysqlBasedStorageFactory struct {
-	username string
-	password string
-	database string
+	dsnTemplate string
 }
 
-// NewMySQLBasedTaskStorageFactory creates a mysql based task storage factory using the special username, password and database
-func NewMySQLBasedTaskStorageFactory(username, password, database string) TaskStorageFactory {
+// newMySQLBasedTaskStorageFactory creates a mysql based task storage factory using the special username, password and database
+func newMySQLBasedTaskStorageFactory(username, password, database string) TaskStorageFactory {
 	return &mysqlBasedStorageFactory{
-		username: username,
-		password: password,
-		database: database,
+		dsnTemplate: fmt.Sprintf("%s:%s@tcp(%s)/%s?readTimeout=15s&writeTimeout=15s&timeout=15s&parseTime=true&loc=Local&disable_txn_trace=1",
+			username,
+			password,
+			"%s", database),
 	}
 }
 
 func (f *mysqlBasedStorageFactory) Create(address string) (TaskStorage, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=15s&writeTimeout=15s&timeout=15s&parseTime=true&loc=Local",
-		f.username,
-		f.password,
-		address)
-	return NewMysqlTaskStorage(dsn, f.database)
+	return newMysqlTaskStorage(fmt.Sprintf(f.dsnTemplate, address))
 }
 
 type fixedTaskStorageFactory struct {

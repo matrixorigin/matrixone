@@ -23,8 +23,9 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/fagongzi/goetty/v2/codec/length"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
@@ -86,10 +87,10 @@ func WithCodecMaxBodySize(size int) CodecOption {
 }
 
 // WithCodecEnableCompress enable compress body and payload
-func WithCodecEnableCompress(pool *mpool.MPool) CodecOption {
+func WithCodecEnableCompress(allocator malloc.Allocator) CodecOption {
 	return func(c *messageCodec) {
 		c.bc.compressEnabled = true
-		c.bc.pool = pool
+		c.bc.allocator = allocator
 	}
 }
 
@@ -110,8 +111,14 @@ type messageCodec struct {
 //  3. Message body
 //     3.1. message body, required.
 //     3.2. payload, optional. Set if has paylad flag.
-func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Codec {
+func NewMessageCodec(
+	sid string,
+	messageFactory func() Message,
+	options ...CodecOption,
+) Codec {
 	bc := &baseCodec{
+		sid:            sid,
+		logger:         getLogger(sid).Named("morpc"),
 		messageFactory: messageFactory,
 		maxBodySize:    defaultMaxBodyMessageSize,
 	}
@@ -137,9 +144,9 @@ func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer
 }
 
 func (c *messageCodec) Valid(msg Message) error {
-	n := msg.Size()
+	n := msg.ProtoSize()
 	if n >= c.bc.maxBodySize {
-		return moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
+		return moerr.NewInternalErrorNoCtxf("message body %d is too large, max is %d",
 			n,
 			c.bc.maxBodySize)
 	}
@@ -151,7 +158,9 @@ func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {
 }
 
 type baseCodec struct {
-	pool            *mpool.MPool
+	sid             string
+	logger          *log.MOLogger
+	allocator       malloc.Allocator
 	checksumEnabled bool
 	compressEnabled bool
 	payloadBufSize  int
@@ -200,7 +209,7 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) error {
 	msg, ok := data.(RPCMessage)
 	if !ok {
-		return moerr.NewInternalErrorNoCtx("not support %T %+v", data, data)
+		return moerr.NewInternalErrorNoCtxf("not support %T %+v", data, data)
 	}
 
 	startWriteOffset := out.GetWriteOffset()
@@ -244,12 +253,12 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 		compressedPayloadData = payloadData
 
 		if c.compressEnabled && len(payloadData) > 0 {
-			v, err := c.compress(payloadData)
+			v, dec, err := c.compress(payloadData)
 			if err != nil {
 				discardWritten()
 				return err
 			}
-			defer c.pool.Free(v)
+			defer dec.Deallocate(malloc.NoHints)
 			compressedPayloadData = v
 		}
 
@@ -302,42 +311,38 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	return nil
 }
 
-func (c *baseCodec) compress(src []byte) ([]byte, error) {
+func (c *baseCodec) compress(src []byte) ([]byte, malloc.Deallocator, error) {
 	n := lz4.CompressBlockBound(len(src))
-	dst, err := c.pool.Alloc(n)
+	dst, dec, err := c.allocator.Allocate(uint64(n), malloc.NoHints)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	dst, err = c.compressTo(src, dst)
 	if err != nil {
-		c.pool.Free(dst)
-		return nil, err
+		dec.Deallocate(malloc.NoHints)
+		return nil, nil, err
 	}
-	return dst, nil
+	return dst, dec, nil
 }
 
-func (c *baseCodec) uncompress(src []byte) ([]byte, error) {
+func (c *baseCodec) uncompress(src []byte) ([]byte, malloc.Deallocator, error) {
 	// The lz4 library requires a []byte with a large enough dst when
 	// decompressing, otherwise it will return an ErrInvalidSourceShortBuffer, we
 	// can't confirm how large a dst we need to give initially, so when we encounter
 	// an ErrInvalidSourceShortBuffer, we expand the size and retry.
 	n := len(src) * 2
 	for {
-		dst, err := c.pool.Alloc(n)
+		dst, dec, err := c.allocator.Allocate(uint64(n), malloc.NoHints)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		// the following line of code needs to free dst if it returns an error, but dst
-		// has been reassigned
-		old := dst
 		dst, err = uncompress(src, dst)
 		if err == nil {
-			return dst, nil
+			return dst, dec, nil
 		}
-
-		c.pool.Free(old)
+		dec.Deallocate(malloc.NoHints)
 		if err != lz4.ErrInvalidSourceShortBuffer {
-			return nil, err
+			return nil, nil, err
 		}
 		n *= 2
 	}
@@ -415,7 +420,7 @@ func (c *baseCodec) readCustomHeaders(flag byte, msg *RPCMessage, data []byte, o
 func (c *baseCodec) writeBody(
 	out *buf.ByteBuf,
 	msg Message) ([]byte, error) {
-	size := msg.Size()
+	size := msg.ProtoSize()
 	if size == 0 {
 		return nil, nil
 	}
@@ -428,22 +433,21 @@ func (c *baseCodec) writeBody(
 		return data, nil
 	}
 
-	// we use mpool to compress body, then write the dst into the buffer
-	origin, err := c.pool.Alloc(size)
+	origin, dec, err := c.allocator.Allocate(uint64(size), malloc.NoHints)
 	if err != nil {
 		return nil, err
 	}
-	defer c.pool.Free(origin)
-	if _, err := msg.MarshalTo(origin); err != nil {
+	defer dec.Deallocate(malloc.NoHints)
+	if _, err = msg.MarshalTo(origin); err != nil {
 		return nil, err
 	}
 
 	n := c.compressBound(len(origin))
-	dst, err := c.pool.Alloc(n)
+	dst, dec, err := c.allocator.Allocate(uint64(n), malloc.NoHints)
 	if err != nil {
 		return nil, err
 	}
-	defer c.pool.Free(dst)
+	defer dec.Deallocate(malloc.NoHints)
 
 	dst, err = compress(origin, dst)
 	if err != nil {
@@ -468,12 +472,12 @@ func (c *baseCodec) readMessage(
 
 	// invalid body packet
 	if offset >= len(data)-payloadSize {
-		getLogger().Warn("invalid body packet",
+		c.logger.Warn("invalid body packet",
 			zap.Int("offset", offset),
 			zap.Int("len", len(data)),
 			zap.Int("payloadSize", payloadSize),
 			zap.String("data-hex", hex.EncodeToString(data)))
-		return moerr.NewInvalidInputNoCtx("invalid body packet, offset %d, len %d, payload size %d",
+		return moerr.NewInvalidInputNoCtxf("invalid body packet, offset %d, len %d, payload size %d",
 			offset, len(data), payloadSize)
 	}
 
@@ -486,15 +490,15 @@ func (c *baseCodec) readMessage(
 	}
 
 	if flag&flagCompressEnabled != 0 {
-		dstBody, err := c.uncompress(body)
+		dstBody, dec, err := c.uncompress(body)
 		if err != nil {
 			return err
 		}
-		defer c.pool.Free(dstBody)
+		defer dec.Deallocate(malloc.NoHints)
 		body = dstBody
 
 		if payloadSize > 0 {
-			dstPayload, err := c.uncompress(payload)
+			dstPayload, dec, err := c.uncompress(payload)
 			if err != nil {
 				return err
 			}
@@ -502,7 +506,7 @@ func (c *baseCodec) readMessage(
 			// modules.
 			// TODO: We currently use copy to avoid memory leaks in mpool, but this introduces
 			// a memory allocation overhead that will need to be optimized away.
-			defer c.pool.Free(dstPayload)
+			defer dec.Deallocate(malloc.NoHints)
 			payload = clone(dstPayload)
 		}
 	}
@@ -646,7 +650,7 @@ func validChecksum(body, payload []byte, expectChecksum uint64) error {
 	}
 	actulChecksum := checksum.Sum64()
 	if actulChecksum != expectChecksum {
-		return moerr.NewInternalErrorNoCtx("checksum mismatch, expect %d, got %d",
+		return moerr.NewInternalErrorNoCtxf("checksum mismatch, expect %d, got %d",
 			expectChecksum,
 			actulChecksum)
 	}
