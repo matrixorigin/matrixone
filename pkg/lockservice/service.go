@@ -326,12 +326,12 @@ func (s *service) canLockOnServiceStatus(
 	if opts.Sharding == pb.Sharding_ByRow {
 		tableID = ShardingByRow(rows[0])
 	}
+	if s.activeTxnHolder.hasActiveTxn(txnID) {
+		return true
+	}
 	if !s.validGroupTable(opts.Group, tableID) {
 		logCanLockOnService(s.logger, s.serviceID)
 		return false
-	}
-	if s.activeTxnHolder.hasActiveTxn(txnID) {
-		return true
 	}
 	if s.activeTxnHolder.empty() {
 		return false
