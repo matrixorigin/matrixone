@@ -22,13 +22,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
 var _ policy = (*objOverlapPolicy)(nil)
 
 type objOverlapPolicy struct {
-	objects []*catalog.ObjectEntry
+	objects     []*catalog.ObjectEntry
+	objectsSize int
 
 	overlappingObjsSet [][]*catalog.ObjectEntry
 }
@@ -47,33 +49,37 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	if obj.OriginSize() < config.ObjectMinOsize {
 		return false
 	}
-	if !obj.GetSortKeyZonemap().IsInited() {
+	if !obj.SortKeyZoneMap().IsInited() {
+		return false
+	}
+	if m.objectsSize > 10*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
 		return false
 	}
 	m.objects = append(m.objects, obj)
+	m.objectsSize += int(obj.OriginSize())
 	return true
 }
 
-func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
 	if len(m.objects) < 2 {
-		return nil, TaskHostDN
+		return nil
 	}
-	if cpu > 90 {
-		return nil, TaskHostDN
+	if cpu > 95 {
+		return nil
 	}
 	objs, taskHostKind := m.reviseDataObjs(config)
 	objs = controlMem(objs, mem)
 	if len(objs) > 1 {
-		return objs, taskHostKind
+		return []reviseResult{{objs, taskHostKind}}
 	}
-	return nil, TaskHostDN
+	return nil
 }
 
 func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
-	t := m.objects[0].GetSortKeyZonemap().GetType()
+	t := m.objects[0].SortKeyZoneMap().GetType()
 	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
-		zmA := a.GetSortKeyZonemap()
-		zmB := b.GetSortKeyZonemap()
+		zmA := a.SortKeyZoneMap()
+		zmB := b.SortKeyZoneMap()
 		if c := zmA.CompareMin(zmB); c != 0 {
 			return c
 		}
@@ -86,7 +92,7 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 			continue
 		}
 
-		if compute.CompareGeneric(set.maxValue, obj.GetSortKeyZonemap().GetMin(), t) > 0 {
+		if compute.CompareGeneric(set.maxValue, obj.SortKeyZoneMap().GetMin(), t) > 0 {
 			// zm is overlapped
 			set.add(t, obj)
 			continue
@@ -126,12 +132,13 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 	if len(objs) > config.MergeMaxOneRun {
 		objs = objs[:config.MergeMaxOneRun]
 	}
-	return objs, TaskHostCN
+	return objs, TaskHostDN
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry) {
 	m.objects = m.objects[:0]
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
+	m.objectsSize = 0
 }
 
 type entrySet struct {
@@ -148,8 +155,8 @@ func (s *entrySet) reset(t types.T) {
 
 func (s *entrySet) add(t types.T, obj *catalog.ObjectEntry) {
 	s.entries = append(s.entries, obj)
-	s.size += obj.GetOriginSize()
-	zmMax := obj.GetSortKeyZonemap().GetMax()
+	s.size += int(obj.OriginSize())
+	zmMax := obj.SortKeyZoneMap().GetMax()
 	if compute.CompareGeneric(s.maxValue, zmMax, t) < 0 {
 		s.maxValue = zmMax
 	}

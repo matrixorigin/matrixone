@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"container/list"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -25,6 +26,8 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
 	cvey "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +40,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1298,4 +1303,331 @@ func Test_issue3482(t *testing.T) {
 	s := issue3482SqlPrefix + " "
 	ui := UserInput{sql: s}
 	assert.True(t, ui.isIssue3482Sql())
+}
+
+func Test_xxx(t *testing.T) {
+	list.New()
+}
+
+func Test_isLegal(t *testing.T) {
+	type args struct {
+		name string
+	}
+	trueNames := []string{
+		"abc",
+		"0b",
+		"0b0a1fg",
+		"123",
+		"b'00011011'",
+		"b\\\\a9''", //b\\a9''
+		"\\0",       //\0
+		"\\\\'",     //\\'
+		"\\Z",       //\Z
+		"/000/",
+	}
+
+	type kase struct {
+		name string
+		args args
+		want bool
+	}
+
+	tests := []kase{}
+	for i, name := range trueNames {
+		tests = append(tests, kase{
+			name: fmt.Sprintf("t%d", i),
+			args: args{
+				name: name,
+			},
+			want: true,
+		})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, accountNameIsLegal(tt.args.name), "accountNameIsLegal(%v)", tt.args.name)
+			assert.Equalf(t, tt.want, dbNameIsLegal(tt.args.name), "dbNameIsLegal(%v)", tt.args.name)
+			assert.Equalf(t, tt.want, tableNameIsLegal(tt.args.name), "tableNameIsLegal(%v)", tt.args.name)
+		})
+	}
+}
+
+func Test_parser(t *testing.T) {
+	sql := "select db_name, table_name, constraint_name, column_name, refer_column_name, on_delete, on_update from `mo_catalog`.`mo_foreign_keys` where refer_db_name = `test` and refer_table_name = `b'00011011'`  and (db_name != `test` or db_name = `test` and table_name != `b'00011011'`) order by db_name, table_name, constraint_name;"
+	x, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	assert.NoError(t, err)
+	fmt.Println(x)
+
+}
+
+func Test_replaceStr(t *testing.T) {
+	type args struct {
+		s     string
+		start int
+		end   int
+		s2    string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "t1",
+			args: args{
+				s:     "mysql://root:111@127.0.0.1:6001",
+				start: 13,
+				end:   16,
+				s2:    "******",
+			},
+			want: "mysql://root:******@127.0.0.1:6001",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, replaceStr(tt.args.s, tt.args.start, tt.args.end, tt.args.s2), "replaceStr(%v, %v, %v, %v)", tt.args.s, tt.args.start, tt.args.end, tt.args.s2)
+		})
+	}
+}
+
+func Test_islegal(t *testing.T) {
+	assert.False(t, isLegal("", []string{}))
+	assert.False(t, isLegal("abc", []string{}))
+}
+
+func Test_accountNameIsLegal(t *testing.T) {
+	assert.False(t, accountNameIsLegal(",."))
+	assert.False(t, dbNameIsLegal(",."))
+	assert.False(t, tableNameIsLegal(",."))
+}
+
+func Test_compUriInfo(t *testing.T) {
+	ret, _ := compositedUriInfo("", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefix", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:65536", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:4", "prefix")
+	assert.True(t, ret)
+}
+
+func Test_replaceStr2(t *testing.T) {
+	assert.Equal(t, replaceStr("", 1, 0, "a"), "")
+	assert.Equal(t, replaceStr("abc", 0, 4, "a"), "abc")
+}
+
+func Test_uriHasPrefix(t *testing.T) {
+	assert.False(t, uriHasPrefix("ab", "abc"))
+}
+
+func Test_extractUriInfo(t *testing.T) {
+	_, _, err := extractUriInfo(context.Background(), "abc", "t")
+	assert.Error(t, err)
+}
+
+func Test_BuildTableDefFromMoColumns(t *testing.T) {
+	convey.Convey("BuildTableDefFromMoColumns fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+		rm, err := NewRoutineManager(ctx)
+		assert.Nil(t, err)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
+		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
+
+		// process.
+		ses.proc = testutil.NewProc()
+		ses.proc.Base.TxnOperator = txnOperator
+
+		sql, err := getTableColumnDefSql(uint64(tenant.TenantID), "db1", "t1")
+		assert.Nil(t, err)
+
+		mrs := newMrsForPasswordOfUser([][]interface{}{{}})
+		bh.sql2result[sql] = mrs
+
+		_, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func Test_getTableColumnDefSql(t *testing.T) {
+	tests := []struct {
+		name      string
+		accountId uint64
+		dbName    string
+		tableName string
+		want      string
+		wantErr   bool
+	}{
+		{
+			name:      "1",
+			accountId: 1,
+			dbName:    "db1",
+			tableName: "tbl1",
+			want:      fmt.Sprintf(getTableColumnDefFormat, 1, "db1", "tbl1"),
+			wantErr:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getTableColumnDefSql(tt.accountId, tt.dbName, tt.tableName)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getTableColumnDefSql() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("getTableColumnDefSql() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_extractTableDefColumns(t *testing.T) {
+
+	// name type error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+			typ := new(types.Type)
+			typByte, _ := typ.Marshal()
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				def,
+				typByte,
+				uint64(1),
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
+
+	// typ error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				"id",
+				def,
+				uint64(1),
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
+
+	// colId error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+			typ := new(types.Type)
+			typByte, _ := typ.Marshal()
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				"id",
+				typByte,
+				def,
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
+
+	// default error
+	convey.Convey("extractTableDefColumns fail", t, func() {
+
+		var newTestExecResult = func() ExecResult {
+			typ := new(types.Type)
+			typByte, _ := typ.Marshal()
+
+			def := new(plan2.Default)
+
+			result := newMrsForPasswordOfUser([][]interface{}{{
+				"id",
+				typByte,
+				uint64(1),
+				uint8(1),
+				def.String(),
+				uint8(0),
+				uint8(0),
+				uint8(0),
+			}})
+			return result
+		}
+
+		ctx := context.Background()
+		er := newTestExecResult()
+		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
+		assert.NotNil(t, err)
+	})
 }

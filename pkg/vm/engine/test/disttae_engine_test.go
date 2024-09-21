@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -46,8 +48,8 @@ import (
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_InsertRows(t *testing.T) {
@@ -252,7 +254,8 @@ func TestLogtailBasic(t *testing.T) {
 
 	schema := catalog2.MockSchemaAll(2, -1)
 	schema.Name = "test"
-	schema.Comment = "rows:10;blks=1"
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 1
 	// craete 2 db and 2 tables
 	txnop := p.StartCNTxn()
 	p.CreateDBAndTable(txnop, "todrop", schema)

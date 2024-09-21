@@ -32,11 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var gTaskID atomic.Uint64
@@ -47,20 +45,15 @@ type cnMergeTask struct {
 	// txn
 	snapshot types.TS // start ts, fixed
 	ds       engine.DataSource
-	proc     *process.Process
+	mp       *mpool.MPool
 
 	// schema
-	version     uint32       // version
-	colseqnums  []uint16     // no rowid column
-	coltypes    []types.Type // no rowid column
-	colattrs    []string     // no rowid column
-	sortkeyPos  int          // (composite) primary key, cluster by etc. -1 meas no sort key
+	colattrs    []string // no rowid column
+	sortkeyPos  int      // (composite) primary key, cluster by etc. -1 meas no sort key
 	sortkeyIsPK bool
 
-	doTransfer bool
-
 	// targets
-	targets []logtailreplay.ObjectInfo
+	targets []objectio.ObjectStats
 
 	// commit things
 	commitEntry  *api.MergeCommitEntry
@@ -81,55 +74,55 @@ func newCNMergeTask(
 	snapshot types.TS,
 	sortkeyPos int,
 	sortkeyIsPK bool,
-	targets []logtailreplay.ObjectInfo,
+	targets []objectio.ObjectStats,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
-	relData := NewEmptyBlockListRelationData()
-	relData.AppendBlockInfo(objectio.EmptyBlockInfo)
-	source, err := tbl.buildLocalDataSource(ctx, 0, relData, engine.Policy_CheckAll)
+	relData := NewBlockListRelationData(1)
+	source, err := tbl.buildLocalDataSource(
+		ctx,
+		0,
+		relData,
+		engine.Policy_CheckAll,
+		engine.GeneralLocalDataSource)
 	if err != nil {
 		return nil, err
 	}
 
-	proc := tbl.proc.Load()
 	attrs := make([]string, 0, len(tbl.seqnums))
-	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
+	for i := range len(tbl.tableDef.Cols) - 1 {
 		attrs = append(attrs, tbl.tableDef.Cols[i].Name)
 	}
+
+	proc := tbl.proc.Load()
 	fs := proc.Base.FileService
 
 	blkCnts := make([]int, len(targets))
 	blkIters := make([]*StatsBlkIter, len(targets))
-	for i, objInfo := range targets {
-		blkCnts[i] = int(objInfo.BlkCnt())
+	for i, objStats := range targets {
+		blkCnts[i] = int(objStats.BlkCnt())
 
-		loc := objInfo.ObjectLocation()
+		loc := objStats.ObjectLocation()
 		meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
 		if err != nil {
 			return nil, err
 		}
 
-		blkIters[i] = NewStatsBlkIter(&objInfo.ObjectStats, meta.MustDataMeta())
+		blkIters[i] = NewStatsBlkIter(&objStats, meta.MustDataMeta())
 	}
 	return &cnMergeTask{
-		taskId:      gTaskID.Add(1),
-		host:        tbl,
-		snapshot:    snapshot,
-		ds:          source,
-		proc:        proc,
-		version:     tbl.version,
-		colseqnums:  tbl.seqnums,
-		coltypes:    tbl.typs,
-		colattrs:    attrs,
-		sortkeyPos:  sortkeyPos,
-		sortkeyIsPK: sortkeyIsPK,
-		targets:     targets,
-		fs:          fs,
-		blkCnts:     blkCnts,
-		blkIters:    blkIters,
-
+		taskId:        gTaskID.Add(1),
+		host:          tbl,
+		snapshot:      snapshot,
+		ds:            source,
+		mp:            proc.GetMPool(),
+		colattrs:      attrs,
+		sortkeyPos:    sortkeyPos,
+		sortkeyIsPK:   sortkeyIsPK,
+		targets:       targets,
+		fs:            fs,
+		blkCnts:       blkCnts,
+		blkIters:      blkIters,
 		targetObjSize: targetObjSize,
-		doTransfer:    !strings.Contains(tbl.comment, catalog.MO_COMMENT_NO_DEL_HINT),
 	}, nil
 }
 
@@ -138,7 +131,7 @@ func (t *cnMergeTask) Name() string {
 }
 
 func (t *cnMergeTask) DoTransfer() bool {
-	return t.doTransfer
+	return !strings.Contains(t.host.comment, catalog.MO_COMMENT_NO_DEL_HINT)
 }
 func (t *cnMergeTask) GetObjectCnt() int {
 	return len(t.targets)
@@ -172,7 +165,7 @@ func (t *cnMergeTask) GetTargetObjSize() uint32 {
 
 func (t *cnMergeTask) GetSortKeyType() types.Type {
 	if t.sortkeyPos >= 0 {
-		return t.coltypes[t.sortkeyPos]
+		return t.host.typs[t.sortkeyPos]
 	}
 	return types.Type{}
 }
@@ -183,7 +176,7 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.
 		blk := iter.Entry()
 		// update delta location
 		obj := t.targets[objIdx]
-		blk.SetFlagByObjStats(&obj.ObjectStats)
+		blk.SetFlagByObjStats(&obj)
 		return t.readblock(ctx, &blk)
 	}
 	return nil, nil, nil, mergesort.ErrNoMoreBlocks
@@ -210,11 +203,11 @@ func (t *cnMergeTask) GetTransferMaps() api.TransferMaps {
 // impl DisposableVecPool
 func (t *cnMergeTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
 	v := vector.NewVec(*typ)
-	return v, func() { v.Free(t.proc.GetMPool()) }
+	return v, func() { v.Free(t.mp) }
 }
 
 func (t *cnMergeTask) GetMPool() *mpool.MPool {
-	return t.proc.GetMPool()
+	return t.mp
 }
 
 func (t *cnMergeTask) HostHintName() string { return "CN" }
@@ -242,7 +235,7 @@ func (t *cnMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 	commitEntry.TableName = t.host.tableName
 	commitEntry.StartTs = t.snapshot.ToTimestamp()
 	for _, o := range t.targets {
-		commitEntry.MergedObjs = append(commitEntry.MergedObjs, o.ObjectStats.Clone().Marshal())
+		commitEntry.MergedObjs = append(commitEntry.MergedObjs, o.Clone().Marshal())
 	}
 	t.commitEntry = commitEntry
 	// leave mapping to ReadMergeAndWrite
@@ -250,15 +243,15 @@ func (t *cnMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 }
 
 func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
-	return mergesort.GetNewWriter(t.fs, t.version, t.colseqnums, t.sortkeyPos, t.sortkeyIsPK, false) // TODO obj.isTombstone
+	return mergesort.GetNewWriter(t.fs, t.host.version, t.host.seqnums, t.sortkeyPos, t.sortkeyIsPK, false) // TODO obj.isTombstone
 }
 
 // readblock reads block data. there is no rowid column, no ablk
 func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
 	// read data
 	bat, dels, release, err = blockio.BlockDataReadNoCopy(
-		ctx, info, t.ds, t.colseqnums, t.coltypes,
-		t.snapshot, fileservice.Policy(0), t.proc.GetMPool(), t.fs)
+		ctx, info, t.ds, t.host.seqnums, t.host.typs,
+		t.snapshot, fileservice.Policy(0), t.mp, t.fs)
 	if err != nil {
 		logutil.Infof("read block data failed: %v", err.Error())
 		return

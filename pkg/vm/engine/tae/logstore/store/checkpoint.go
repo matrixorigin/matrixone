@@ -15,13 +15,42 @@
 package store
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"go.uber.org/zap"
 )
 
-func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry entry.Entry, err error) {
+func BuildFilesEntry(files []string) (entry.Entry, error) {
+	vec := containers.NewVector(types.T_char.ToType())
+	for _, file := range files {
+		vec.Append([]byte(file), false)
+	}
+	defer vec.Close()
+	buf, err := vec.GetDownstreamVector().MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	filesEntry := entry.GetBase()
+	if err = filesEntry.SetPayload(buf); err != nil {
+		return nil, err
+	}
+	info := &entry.Info{
+		Group: GroupFiles,
+	}
+	filesEntry.SetType(entry.IOET_WALEntry_Checkpoint)
+	filesEntry.SetInfo(info)
+	return filesEntry, nil
+}
+
+func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64, files ...string) (ckpEntry entry.Entry, err error) {
+	logutil.Info("TRACE-WAL-TRUNCATE-RangeCheckpoint", zap.Uint32("group", gid), zap.Uint64("lsn", end))
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
 	drentry, _, err := w.doAppend(GroupCKP, ckpEntry)
 	if err == sm.ErrClose {
@@ -29,6 +58,17 @@ func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry ent
 	}
 	if err != nil {
 		panic(err)
+	}
+	if len(files) > 0 {
+		var fileEntry entry.Entry
+		fileEntry, err = BuildFilesEntry(files)
+		if err != nil {
+			return
+		}
+		_, _, err = w.doAppend(GroupFiles, fileEntry)
+		if err != nil {
+			return
+		}
 	}
 	_, err = w.checkpointQueue.Enqueue(drentry)
 	if err != nil {
@@ -58,6 +98,9 @@ func (w *StoreImpl) onLogCKPInfoQueue(items ...any) {
 		if err != nil {
 			panic(err)
 		}
+		logutil.Info("TRACE-WAL-TRUNCATE-CKP-Entry",
+			zap.Uint32("group", e.Info.Checkpoints[0].Group),
+			zap.Uint64("lsn", e.Info.Checkpoints[0].Ranges.GetMax()))
 		w.logCheckpointInfo(e.Info)
 	}
 	w.onCheckpoint()
@@ -69,6 +112,7 @@ func (w *StoreImpl) onCheckpoint() {
 }
 
 func (w *StoreImpl) ckpCkp() {
+	t0 := time.Now()
 	e := w.makeInternalCheckpointEntry()
 	driverEntry, _, err := w.doAppend(GroupInternal, e)
 	if err == sm.ErrClose {
@@ -77,6 +121,8 @@ func (w *StoreImpl) ckpCkp() {
 	if err != nil {
 		panic(err)
 	}
+	logutil.Info("TRACE-WAL-TRUNCATE-Internal-Entry",
+		zap.String("duration", time.Since(t0).String()))
 	w.truncatingQueue.Enqueue(driverEntry)
 	err = e.WaitDone()
 	if err != nil {
@@ -86,6 +132,7 @@ func (w *StoreImpl) ckpCkp() {
 }
 
 func (w *StoreImpl) onTruncatingQueue(items ...any) {
+	t0 := time.Now()
 	for _, item := range items {
 		e := item.(*driverEntry.Entry)
 		err := e.WaitDone()
@@ -94,7 +141,14 @@ func (w *StoreImpl) onTruncatingQueue(items ...any) {
 		}
 		w.logCheckpointInfo(e.Info)
 	}
+	tTruncateEntry := time.Since(t0)
+	t0 = time.Now()
 	gid, driverLsn := w.getDriverCheckpointed()
+	tGetDriverEntry := time.Since(t0)
+	logutil.Info("TRACE-WAL-TRUNCATE",
+		zap.String("wait truncating entry takes", tTruncateEntry.String()),
+		zap.String("get driver lsn takes", tGetDriverEntry.String()),
+		zap.Uint64("driver lsn", driverLsn))
 	if gid == 0 {
 		return
 	}
@@ -107,13 +161,15 @@ func (w *StoreImpl) onTruncatingQueue(items ...any) {
 
 func (w *StoreImpl) onTruncateQueue(items ...any) {
 	lsn := w.driverCheckpointing.Load()
-	if lsn != w.driverCheckpointed {
+	if lsn != w.driverCheckpointed.Load() {
 		err := w.driver.Truncate(lsn)
 		for err != nil {
 			lsn = w.driverCheckpointing.Load()
 			err = w.driver.Truncate(lsn)
 		}
+		t := time.Now()
 		w.gcWalDriverLsnMap(lsn)
-		w.driverCheckpointed = lsn
+		logutil.Info("TRACE-WAL-TRUNCATE-GC-Store", zap.String("duration", time.Since(t).String()))
+		w.driverCheckpointed.Store(lsn)
 	}
 }

@@ -337,6 +337,24 @@ var (
 			input:  "explain (analyze true,verbose false,format json) select * from emp",
 			output: "explain (analyze true,verbose false,format json) select * from emp",
 		}, {
+			input:  "explain phyplan select * from emp where sal > 3000",
+			output: "explain (phyplan) select * from emp where sal > 3000",
+		}, {
+			input:  "explain phyplan verbose select * from emp",
+			output: "explain (phyplan,verbose) select * from emp",
+		}, {
+			input:  "explain phyplan analyze select * from emp",
+			output: "explain (phyplan,analyze) select * from emp",
+		}, {
+			input:  "explain (phyplan true,verbose false) select * from emp",
+			output: "explain (phyplan true,verbose false) select * from emp",
+		}, {
+			input:  "explain (phyplan true,verbose false,format json) select * from emp",
+			output: "explain (phyplan true,verbose false,format json) select * from emp",
+		}, {
+			input:  "explain (phyplan true,analyze true,verbose true) select * from emp",
+			output: "explain (phyplan true,analyze true,verbose true) select * from emp",
+		}, {
 			input:  "with t11 as (select * from t1) update t11 join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
 			output: "with t11 as (select * from t1) update t11 inner join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
 		}, {
@@ -2541,31 +2559,31 @@ var (
 			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
 		},
 		{
-			input: `create cdc 'test_create_task' 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0',};`,
+			input: `create cdc test_create_task 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0',};`,
 		},
 		{
-			input: `show cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+			input: `show cdc all;`,
 		},
 		{
-			input: `show cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `show cdc task t1;`,
 		},
 		{
-			input: `drop cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+			input: `drop cdc all;`,
 		},
 		{
-			input: `drop cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `drop cdc task t1;`,
 		},
 		{
-			input: `pause cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+			input: `pause cdc all;`,
 		},
 		{
-			input: `pause cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `pause cdc task t1;`,
 		},
 		{
-			input: `resume cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `resume cdc task t1;`,
 		},
 		{
-			input: `resume cdc 'mysql://dump:111@127.0.0.1:6001' task 't1' 'restart';`,
+			input: `resume cdc task t1 'restart';`,
 		},
 		{
 			input: "alter publication pub1 account add acc0, acc1",

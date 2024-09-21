@@ -79,6 +79,7 @@ message Dispatch {
   int32 shuffle_type=6;
   bool  is_sink = 7;
   bool  rec_sink = 8;
+  bool  rec_cte = 9;
 }
 
 message Merge {
@@ -127,6 +128,15 @@ message Insert{
   int32 partition_idx = 8;
   bool is_end         = 9;
   plan.TableDef table_def = 10;
+}
+
+message MultiUpdate {
+  uint64 affected_rows = 1;
+  bool ToWriteS3 = 2;
+  uint32 IBucket = 3;
+  uint32 NBucket = 4;
+  map<string,int32> SegmentMap = 5;
+  repeated plan.UpdateCtx update_ctx = 6;
 }
 
 message Array{

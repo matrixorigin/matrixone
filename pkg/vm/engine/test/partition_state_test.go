@@ -22,10 +22,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -39,9 +43,6 @@ import (
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
-	"github.com/panjf2000/ants/v2"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_Append(t *testing.T) {
@@ -66,8 +67,8 @@ func Test_Append(t *testing.T) {
 
 	schema := catalog.MockSchema(3, 2)
 	schema.Name = tableName
-	schema.BlockMaxRows = 10000
-	batchRows := schema.BlockMaxRows * 2 / 5
+	schema.Extra.BlockMaxRows = 10000
+	batchRows := schema.Extra.BlockMaxRows * 2 / 5
 	cnt := uint32(20)
 	bat := catalog.MockBatch(schema, int(batchRows*cnt))
 	defer bat.Close()
@@ -115,7 +116,7 @@ func Test_Append(t *testing.T) {
 	wg.Wait()
 
 	t.Logf("Append takes: %s", time.Since(now))
-	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.BlockMaxRows + 1
+	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.Extra.BlockMaxRows + 1
 	expectObjCnt := expectBlkCnt
 
 	{
@@ -197,8 +198,8 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 			schema := catalog.MockSchemaAll(3, 2)
 			schema.Name = tableName
 			schema.Comment = "rows:20;blks:2"
-			schema.BlockMaxRows = 20
-			schema.ObjectMaxBlocks = 2
+			schema.Extra.BlockMaxRows = 20
+			schema.Extra.ObjectMaxBlocks = 2
 			taeEngine.BindSchema(schema)
 
 			rowsCnt := 40
@@ -304,8 +305,8 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
 	schema.Comment = "rows:20;blks:2"
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
 	taeEngine.BindSchema(schema)
 
 	rowsCnt := 40
@@ -369,7 +370,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		require.Nil(t, err)
 
 		// delete two rows on the 2nd blk
-		blkId.BlockID = *objectio.BuildObjectBlockid(iter.GetObject().GetMeta().(*catalog.ObjectEntry).ObjectName(), 1)
+		blkId.BlockID = iter.GetObject().GetMeta().(*catalog.ObjectEntry).ConstructBlockId(uint16(1))
 		err = rel.RangeDelete(blkId, 0, 1, handle.DT_Normal)
 		assert.Nil(t, err)
 
@@ -423,8 +424,8 @@ func Test_EmptyObjectStats(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
 	schema.Comment = "rows:20;blks:2"
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
 	taeEngine.BindSchema(schema)
 
 	rowsCnt := 40
@@ -528,8 +529,8 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
 	schema.Comment = "rows:20;blks:2"
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
 	taeEngine.BindSchema(schema)
 
 	rowsCnt := 40
@@ -619,8 +620,8 @@ func Test_Bug_DupEntryWhenGCInMemTombstones(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
 	schema.Comment = "rows:20;blks:2"
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
 
 	txnop := p.StartCNTxn()
 	_, _ = p.CreateDBAndTable(txnop, databaseName, schema)

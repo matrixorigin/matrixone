@@ -142,6 +142,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Fuzzy Filter for duplicate key"
 	case plan.Node_LOCK_OP:
 		pname = "Lock"
+	case plan.Node_APPLY:
+		pname = "CROSS APPLY"
+	//case plan.Node_MULTI_UPDATE:
+	//	pname = "Multi Update"
 	default:
 		panic("error node type")
 	}
@@ -709,7 +713,7 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		}
 
 		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
-			buf.WriteString(" shuffle: REUSE ")
+			buf.WriteString(" shuffle: REUSE")
 		}
 	}
 	return buf.String(), nil

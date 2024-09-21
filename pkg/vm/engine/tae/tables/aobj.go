@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -49,7 +50,7 @@ func newAObject(
 ) *aobject {
 	obj := &aobject{}
 	obj.baseObject = newBaseObject(obj, meta, rt)
-	if obj.meta.Load().HasDropCommitted() {
+	if meta.IsForcePNode() || obj.meta.Load().HasDropCommitted() {
 		pnode := newPersistedNode(obj.baseObject)
 		node := NewNode(pnode)
 		node.Ref()
@@ -82,7 +83,7 @@ func (obj *aobject) IsAppendable() bool {
 		return false
 	}
 	rows, _ := node.Rows()
-	return rows < obj.meta.Load().GetSchema().BlockMaxRows
+	return rows < obj.meta.Load().GetSchema().Extra.BlockMaxRows
 }
 
 func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
@@ -255,10 +256,10 @@ func (obj *aobject) GetMaxRowByTS(ts types.TS) (uint32, error) {
 			return 0, err
 		}
 		defer vec.Close()
-		for i := uint32(0); i < uint32(vec.Length()); i++ {
-			commitTS := vec.Get(int(i)).(types.TS)
-			if commitTS.Greater(&ts) {
-				return i, nil
+		tsVec := vector.MustFixedColNoTypeCheck[types.TS](vec.GetDownstreamVector())
+		for i := range tsVec {
+			if tsVec[i].Greater(&ts) {
+				return uint32(i), nil
 			}
 		}
 		return uint32(vec.Length()), nil

@@ -35,6 +35,7 @@ import (
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -175,8 +176,30 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
-	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
+	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
+	if err = ckpReplayer.ReadCkpFiles(); err != nil {
+		panic(err)
+	}
+
+	// 1. replay three tables objectlist
+	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist()
 	if err != nil {
+		panic(err)
+	}
+
+	var txn txnif.AsyncTxn
+	{
+		// create a txn manually
+		txnIdAlloc := common.NewTxnIDAllocator()
+		store := txnStoreFactory()
+		txn = txnFactory(db.TxnMgr, store, txnIdAlloc.Alloc(), checkpointed, types.TS{})
+		store.BindTxn(txn)
+	}
+	// 2. replay all table Entries
+	ckpReplayer.ReplayCatalog(txn)
+
+	// 3. replay other tables' objectlist
+	if err = ckpReplayer.ReplayObjectlist(); err != nil {
 		panic(err)
 	}
 	logutil.Info("open-tae", common.OperationField("replay"),
@@ -278,7 +301,16 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				}
 				return nil
 			},
-		)}
+		),
+		gc.WithCronJob(
+			"prune-lockmerge",
+			options.DefaultLockMergePruneInterval,
+			func(ctx context.Context) error {
+				db.Runtime.LockMergeService.Prune()
+				return nil
+			},
+		),
+	}
 	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
 		cronJobs = append(cronJobs,
 			gc.WithCronJob(

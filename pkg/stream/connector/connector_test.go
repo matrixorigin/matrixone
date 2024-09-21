@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -54,6 +55,10 @@ type internalExecResult struct {
 	affectedRows uint64
 	resultSet    *MysqlResultSet
 	err          error
+}
+
+func (res *internalExecResult) GetUint64(ctx context.Context, u uint64, u2 uint64) (uint64, error) {
+	return 0, nil
 }
 
 func (res *internalExecResult) Error() error {

@@ -91,8 +91,10 @@ func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16, bool) (v any, isNul
 func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, isNull bool, err error) {
 	return
 }
-func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                                   { return }
-func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector, containers.Vector) (err error) { return }
+func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error) { return }
+func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector, containers.Vector, handle.DeleteType) (err error) {
+	return
+}
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
 	return
 }
@@ -117,7 +119,7 @@ func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (
 	return
 }
 func (rel *TxnRelation) AlterTable(context.Context, *apipb.AlterTableReq) (err error) { return }
-func (rel *TxnRelation) FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls) error {
+func (rel *TxnRelation) FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls, deleteStartOffset uint64) error {
 	return nil
 }
 func (obj *TxnObject) Reset() {

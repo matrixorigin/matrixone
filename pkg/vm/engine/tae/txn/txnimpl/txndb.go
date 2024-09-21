@@ -154,6 +154,20 @@ func (db *txnDB) RangeDelete(
 	return table.RangeDelete(id, start, end, pkVec, dt)
 }
 
+func (db *txnDB) DeleteByPhyAddrKeys(
+	id *common.ID, rowIDVec containers.Vector,
+	pkVec containers.Vector, dt handle.DeleteType,
+) (err error) {
+	table, err := db.getOrSetTable(id.TableID)
+	if err != nil {
+		return err
+	}
+	if table.IsDeleted() {
+		return moerr.NewNotFoundNoCtx()
+	}
+	return table.DeleteByPhyAddrKeys(rowIDVec, pkVec, dt)
+}
+
 func (db *txnDB) TryDeleteByStats(
 	id *common.ID,
 	stats objectio.ObjectStats,
@@ -570,10 +584,10 @@ func (db *txnDB) CleanUp() {
 	}
 }
 
-func (db *txnDB) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls) error {
+func (db *txnDB) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return err
 	}
-	return table.FillInWorkspaceDeletes(id.BlockID, deletes)
+	return table.FillInWorkspaceDeletes(id.BlockID, deletes, deleteStartOffset)
 }
