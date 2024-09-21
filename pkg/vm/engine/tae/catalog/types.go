@@ -60,8 +60,8 @@ var (
 func GetTombstoneSchema(objectSchema *Schema) *Schema {
 	pkType := objectSchema.GetPrimaryKey().GetType()
 	schema := NewEmptySchema("tombstone")
-	schema.BlockMaxRows = objectSchema.BlockMaxRows
-	schema.ObjectMaxBlocks = objectSchema.ObjectMaxBlocks
+	schema.Extra.BlockMaxRows = objectSchema.Extra.BlockMaxRows
+	schema.Extra.ObjectMaxBlocks = objectSchema.Extra.ObjectMaxBlocks
 	colTypes := []types.Type{
 		types.T_Rowid.ToType(),
 		pkType,
