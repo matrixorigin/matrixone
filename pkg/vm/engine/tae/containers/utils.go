@@ -57,6 +57,10 @@ func NewOneSchemaBatchBuffer(
 	}
 }
 
+func (bb *OneSchemaBatchBuffer) Len() int {
+	return len(bb.buffer)
+}
+
 func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
 	if len(attrs) != len(bb.attrs) || len(types) != len(bb.typs) {
 		panic(fmt.Sprintf("the length of attrs or types not match: bb.attrs=%v, bb.types=%v, attrs=%v, types=%v",

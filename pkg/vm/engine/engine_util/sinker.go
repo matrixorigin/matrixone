@@ -16,6 +16,7 @@ package engine_util
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -281,6 +282,42 @@ func NewSinker(
 	return sinker
 }
 
+type stats struct {
+	Name               string
+	HighWatermarkCnt   uint64
+	HighWatermarkBytes uint64
+	CurrentCnt         uint64
+	CurrentBytes       uint64
+}
+
+func (s *stats) String() string {
+	return fmt.Sprintf("%s, high cnt: %d, current cnt: %d, hight bytes: %d, current bytes: %d",
+		s.Name, s.HighWatermarkCnt, s.CurrentCnt, s.HighWatermarkBytes, s.CurrentBytes)
+}
+
+func (s *stats) updateCount(n int) {
+	if n > 0 {
+		s.CurrentCnt += uint64(n)
+	} else if n < 0 {
+		s.CurrentCnt -= uint64(-n)
+	}
+
+	if s.CurrentCnt > s.HighWatermarkCnt {
+		s.HighWatermarkCnt = s.CurrentCnt
+	}
+}
+
+func (s *stats) updateBytes(n int) {
+	if n > 0 {
+		s.CurrentBytes += uint64(n)
+	} else if n < 0 {
+		s.CurrentBytes -= uint64(-n)
+	}
+	if s.CurrentBytes > s.HighWatermarkBytes {
+		s.HighWatermarkBytes = s.CurrentBytes
+	}
+}
+
 type Sinker struct {
 	schema struct {
 		attrs      []string
@@ -298,6 +335,7 @@ type Sinker struct {
 		factory  FileSinkerFactory
 	}
 	staged struct {
+		inMemStats          stats
 		inMemory            []*batch.Batch
 		persisted           []objectio.ObjectStats
 		inMemorySize        int
@@ -309,8 +347,9 @@ type Sinker struct {
 	}
 
 	buf struct {
-		isOwner bool
-		buffers *containers.OneSchemaBatchBuffer
+		isOwner  bool
+		bufStats stats
+		buffers  *containers.OneSchemaBatchBuffer
 	}
 
 	mp *mpool.MPool
@@ -321,6 +360,10 @@ func (sinker *Sinker) fillDefaults() {
 	if sinker.staged.memorySizeThreshold == 0 {
 		sinker.staged.memorySizeThreshold = DefaultInMemoryStagedSize
 	}
+
+	sinker.staged.inMemStats.Name = "staged inmem stats"
+	sinker.buf.bufStats.Name = "buffer stats"
+
 	if sinker.buf.buffers == nil {
 		sinker.buf.isOwner = true
 		sinker.buf.buffers = containers.NewOneSchemaBatchBuffer(
@@ -336,20 +379,41 @@ func (sinker *Sinker) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 }
 
 func (sinker *Sinker) fetchBuffer() *batch.Batch {
-	return sinker.buf.buffers.Fetch()
+	x := sinker.buf.buffers.Len()
+	bat := sinker.buf.buffers.Fetch()
+	y := sinker.buf.buffers.Len()
+
+	if x < y {
+		sinker.buf.bufStats.updateCount(-1)
+		sinker.buf.bufStats.updateBytes(-bat.Size())
+	}
+
+	return bat
 }
 
-func (sinker *Sinker) putbackBuffer(bat *batch.Batch) {
+func (sinker *Sinker) putBackBuffer(bat *batch.Batch) {
+	x := sinker.buf.buffers.Len()
 	sinker.buf.buffers.Putback(bat, sinker.mp)
+	y := sinker.buf.buffers.Len()
+
+	if x > y {
+		sinker.buf.bufStats.updateCount(1)
+		sinker.buf.bufStats.updateBytes(bat.Size())
+	}
 }
 
 func (sinker *Sinker) popStaged() *batch.Batch {
 	if len(sinker.staged.inMemory) == 0 {
 		return nil
 	}
+
 	ret := sinker.staged.inMemory[len(sinker.staged.inMemory)-1]
 	sinker.staged.inMemory = sinker.staged.inMemory[:len(sinker.staged.inMemory)-1]
 	sinker.staged.inMemorySize -= ret.Size()
+
+	sinker.staged.inMemStats.updateCount(-1)
+	sinker.staged.inMemStats.updateBytes(-ret.Size())
+
 	return ret
 }
 
@@ -357,6 +421,10 @@ func (sinker *Sinker) popStaged() *batch.Batch {
 func (sinker *Sinker) pushStaged(
 	ctx context.Context, bat *batch.Batch,
 ) error {
+
+	sinker.staged.inMemStats.updateCount(1)
+	sinker.staged.inMemStats.updateBytes(bat.Size())
+
 	sinker.staged.inMemory = append(sinker.staged.inMemory, bat)
 	sinker.staged.inMemorySize += bat.Size()
 	if sinker.staged.inMemorySize >= sinker.staged.memorySizeThreshold {
@@ -372,7 +440,7 @@ func (sinker *Sinker) clearInMemoryStaged() {
 
 func (sinker *Sinker) cleanupInMemoryStaged() {
 	for i, bat := range sinker.staged.inMemory {
-		sinker.putbackBuffer(bat)
+		sinker.putBackBuffer(bat)
 		sinker.staged.inMemory[i] = nil
 	}
 	sinker.staged.inMemory = sinker.staged.inMemory[:0]
@@ -407,7 +475,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 		oneSorted := sinker.fetchBuffer()
 		_, err := oneSorted.AppendWithCopy(ctx, sinker.mp, data)
 		if err != nil {
-			sinker.putbackBuffer(oneSorted)
+			sinker.putBackBuffer(oneSorted)
 			return err
 		}
 		sorted = append(sorted, oneSorted)
@@ -416,7 +484,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 
 	defer func() {
 		for i, bat := range sorted {
-			sinker.putbackBuffer(bat)
+			sinker.putBackBuffer(bat)
 			sorted[i] = nil
 		}
 		sorted = sorted[:0]
@@ -427,7 +495,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	// 1. merge sort
 	if sinker.schema.sortKeyIdx != -1 {
 		buffer := sinker.fetchBuffer() // note the lifecycle of buffer
-		defer sinker.putbackBuffer(buffer)
+		defer sinker.putBackBuffer(buffer)
 		if err := colexec.MergeSortBatches(
 			sinker.staged.inMemory,
 			sinker.schema.sortKeyIdx,
@@ -485,7 +553,7 @@ func (sinker *Sinker) Write(
 	var curr *batch.Batch
 	defer func() {
 		if err != nil && curr != nil {
-			sinker.putbackBuffer(curr)
+			sinker.putBackBuffer(curr)
 		}
 	}()
 

@@ -16,6 +16,7 @@ package engine_util
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -149,6 +150,9 @@ func TestNewSinker2(t *testing.T) {
 
 	require.Equal(t, 8192*10*100, rows)
 	require.NoError(t, sinker.Close())
+
+	fmt.Println(sinker.staged.inMemStats.String())
+	fmt.Println(sinker.buf.bufStats.String())
 
 	require.Equal(t, 0, int(proc.Mp().CurrNB()))
 }
