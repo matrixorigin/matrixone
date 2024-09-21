@@ -26,12 +26,14 @@ type PeakInuseTracker struct {
 type peakInuseInfo struct {
 	Data      peakInuseData
 	Snapshots struct {
-		Malloc peakInuseData
+		Malloc  peakInuseData
+		Session peakInuseData
 	}
 }
 
 type peakInuseData struct {
-	Malloc peakInuseValue
+	Malloc  peakInuseValue
+	Session peakInuseValue
 }
 
 type peakInuseValue struct {
@@ -57,6 +59,25 @@ func (p *PeakInuseTracker) UpdateMalloc(n uint64) {
 		newData.Data.Malloc.Value = n
 		newData.Data.Malloc.Time = time.Now()
 		newData.Snapshots.Malloc = newData.Data
+		// update
+		if p.ptr.CompareAndSwap(ptr, &newData) {
+			return
+		}
+	}
+}
+
+func (p *PeakInuseTracker) UpdateSession(n uint64) {
+	for {
+		// read
+		ptr := p.ptr.Load()
+		if n <= ptr.Data.Session.Value {
+			return
+		}
+		// copy
+		newData := *ptr
+		newData.Data.Session.Value = n
+		newData.Data.Session.Time = time.Now()
+		newData.Snapshots.Session = newData.Data
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
