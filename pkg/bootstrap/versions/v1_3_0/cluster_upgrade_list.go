@@ -34,6 +34,9 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_drop_idx_task_executor,
 	upg_drop_idx_task_epoch,
 	upg_drop_task_metadata_id,
+	upg_mo_cdc_task,
+	upg_mo_cdc_watermark,
+	upg_mo_data_key,
 }
 
 var needUpgradePubSub = false
@@ -164,5 +167,35 @@ var upgradeSharding = versions.UpgradeEntry{
 			catalog.MO_CATALOG,
 			catalog.MOShards,
 		)
+	},
+}
+
+var upg_mo_cdc_task = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_CDC_TASK,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoCdcTaskDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_CDC_TASK)
+	},
+}
+
+var upg_mo_cdc_watermark = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_CDC_WATERMARK,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoCdcWatermarkDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_CDC_WATERMARK)
+	},
+}
+
+var upg_mo_data_key = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_DATA_KEY,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoDataKeyDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_DATA_KEY)
 	},
 }

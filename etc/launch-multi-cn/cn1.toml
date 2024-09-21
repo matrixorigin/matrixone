@@ -42,3 +42,4 @@ type = "distributed-tae"
 
 [cn.frontend]
 port = 16001
+key-encryption-key = "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y"
