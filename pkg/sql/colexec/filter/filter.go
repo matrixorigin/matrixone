@@ -52,8 +52,8 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 		filter.ctr.runExecutor = make([]colexec.ExpressionExecutor, 0, len(filter.ctr.appendExecutor)+len(filter.ctr.executors))
 	}
 	filter.ctr.runExecutor = filter.ctr.runExecutor[:0]
-	filter.ctr.runExecutor = append(filter.ctr.runExecutor, filter.ctr.executors...)
 	filter.ctr.runExecutor = append(filter.ctr.runExecutor, filter.ctr.appendExecutor...)
+	filter.ctr.runExecutor = append(filter.ctr.runExecutor, filter.ctr.executors...)
 
 	return err
 }

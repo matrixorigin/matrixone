@@ -82,9 +82,6 @@ func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err erro
 	filter.ctr.resetExecutor()
 	filter.ctr.cleanAppendExecutor()
 	filter.ctr.runExecutor = filter.ctr.runExecutor[:0]
-	if filter.ctr.buf != nil {
-		filter.ctr.buf.CleanOnlyData()
-	}
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
