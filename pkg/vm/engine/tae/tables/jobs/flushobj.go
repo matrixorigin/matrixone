@@ -110,7 +110,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	if task.meta.IsTombstone {
 		writer.SetDataType(objectio.SchemaTombstone)
 		writer.SetPrimaryKeyWithType(
-			uint16(catalog.TombstonePrimaryKeyIdx),
+			uint16(objectio.TombstonePrimaryKeyIdx),
 			index.HBF,
 			index.ObjectPrefixFn,
 			index.BlockPrefixFn,
