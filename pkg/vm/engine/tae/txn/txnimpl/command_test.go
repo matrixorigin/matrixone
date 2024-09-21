@@ -136,8 +136,6 @@ func TestAppendCmd_Compatibility(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(3, 2)
-	schema.BlockMaxRows = 10000
-	schema.ObjectMaxBlocks = 10
 
 	txn, _ := mgr.StartTxn(nil)
 	db, err := txn.CreateDatabase("db", "", "")
