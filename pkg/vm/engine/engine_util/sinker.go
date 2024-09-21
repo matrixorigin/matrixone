@@ -64,7 +64,8 @@ func WithMemorySizeThreshold(size int) SinkerOption {
 
 func WithBuffer(buffer *containers.OneSchemaBatchBuffer) SinkerOption {
 	return func(sinker *Sinker) {
-		sinker.buffers = buffer
+		sinker.buf.isOwner = false
+		sinker.buf.buffers = buffer
 	}
 }
 
@@ -277,17 +278,23 @@ type Sinker struct {
 		persisted []objectio.ObjectStats
 		tail      []*batch.Batch
 	}
-	buffers *containers.OneSchemaBatchBuffer
-	mp      *mpool.MPool
-	fs      fileservice.FileService
+
+	buf struct {
+		isOwner bool
+		buffers *containers.OneSchemaBatchBuffer
+	}
+
+	mp *mpool.MPool
+	fs fileservice.FileService
 }
 
 func (sinker *Sinker) fillDefaults() {
 	if sinker.staged.memorySizeThreshold == 0 {
 		sinker.staged.memorySizeThreshold = DefaultInMemoryStagedSize
 	}
-	if sinker.buffers == nil {
-		sinker.buffers = containers.NewOneSchemaBatchBuffer(
+	if sinker.buf.buffers == nil {
+		sinker.buf.isOwner = true
+		sinker.buf.buffers = containers.NewOneSchemaBatchBuffer(
 			sinker.config.bufferSizeCap,
 			sinker.schema.attrs,
 			sinker.schema.attrTypes,
@@ -296,11 +303,11 @@ func (sinker *Sinker) fillDefaults() {
 }
 
 func (sinker *Sinker) fetchBuffer() *batch.Batch {
-	return sinker.buffers.Fetch()
+	return sinker.buf.buffers.Fetch()
 }
 
 func (sinker *Sinker) putbackBuffer(bat *batch.Batch) {
-	sinker.buffers.Putback(bat, sinker.mp)
+	sinker.buf.buffers.Putback(bat, sinker.mp)
 }
 
 func (sinker *Sinker) popStaged() *batch.Batch {
@@ -520,14 +527,18 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 	// 	return err
 	// }
 	// sinker.results = append(sinker.results, newPersied...)
-	return nil
+	//return nil
 }
 
 func (sinker *Sinker) Close() error {
 	sinker.cleanupInMemoryStaged()
-	if sinker.buffers != nil {
-		sinker.buffers.Close(sinker.mp)
-		sinker.buffers = nil
+	if sinker.buf.buffers != nil {
+		if sinker.buf.isOwner {
+			// it's not safe to free a shared buffer
+			sinker.buf.buffers.Close(sinker.mp)
+		}
+
+		sinker.buf.buffers = nil
 	}
 	for i := range sinker.result.tail {
 		if sinker.result.tail[i] != nil {

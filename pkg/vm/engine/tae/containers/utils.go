@@ -59,7 +59,8 @@ func NewOneSchemaBatchBuffer(
 
 func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
 	if len(attrs) != len(bb.attrs) || len(types) != len(bb.typs) {
-		panic(fmt.Sprintf("attrs or types not match"))
+		panic(fmt.Sprintf("the length of attrs or types not match: bb.attrs=%v, bb.types=%v, attrs=%v, types=%v",
+			bb.attrs, bb.typs, attrs, types))
 	}
 	for i, attr := range attrs {
 		if attr != bb.attrs[i] || types[i] != bb.typs[i] {
@@ -1100,7 +1101,7 @@ func DedupSortedBatches(
 				last = uniqueKey.GetRawBytesAt(j)
 			} else {
 				curr = uniqueKey.GetRawBytesAt(j)
-				if bytes.Compare(curr, last) == 0 {
+				if bytes.Equal(curr, last) {
 					sels = append(sels, int64(j))
 				} else {
 					last = curr
