@@ -24,11 +24,10 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBasicCluster(t *testing.T) {
