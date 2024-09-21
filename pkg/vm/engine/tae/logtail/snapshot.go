@@ -1171,10 +1171,13 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 		idxes[i] = uint16(i)
 	}
 	for id, block := range bs {
+		var mobat *batch.Batch
+		var release func()
 		if id == int(AObjectDelIdx) {
-			idxes = []uint16{0}
+			mobat, release, err = reader.LoadColumns(ctx, []uint16{0}, nil, block.GetID(), common.DebugAllocator)
+		} else {
+			mobat, release, err = reader.LoadColumns(ctx, idxes, nil, block.GetID(), common.DebugAllocator)
 		}
-		mobat, release, err := reader.LoadColumns(ctx, idxes, nil, block.GetID(), common.DebugAllocator)
 		if err != nil {
 			return err
 		}
