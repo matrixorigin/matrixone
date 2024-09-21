@@ -26,10 +26,9 @@ import (
 var _ vm.Operator = new(Filter)
 
 type Filter struct {
-	ctr     container
-	E       *plan.Expr
-	exeExpr *plan.Expr
-	IsEnd   bool
+	ctr   container
+	E     *plan.Expr
+	IsEnd bool
 
 	vm.OperatorBase
 }
@@ -68,28 +67,30 @@ func (filter *Filter) Release() {
 type container struct {
 	buf       *batch.Batch
 	executors []colexec.ExpressionExecutor
+
+	appendExecutor []colexec.ExpressionExecutor
+	runExecutor    []colexec.ExpressionExecutor
 }
 
-func (filter *Filter) SetExeExpr(proc *process.Process, e *plan.Expr) (err error) {
-	if len(filter.ctr.executors) == 0 {
-		filter.ctr.cleanExecutor()
-	}
-	filter.exeExpr = e
-	filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
+func (filter *Filter) SetExeExpr(proc *process.Process, exes []*plan.Expr) (err error) {
+	filter.ctr.cleanAppendExecutor()
+	filter.ctr.appendExecutor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, exes)
 	return
 }
 
-func (filter *Filter) GetExeExpr() *plan.Expr {
-	return filter.exeExpr
-}
-
 func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	filter.ctr.resetExecutor() //todo need fix performance issue for executor mem reuse
-	filter.exeExpr = nil
+	filter.ctr.resetExecutor()
+	filter.ctr.cleanAppendExecutor()
+	filter.ctr.runExecutor = filter.ctr.runExecutor[:0]
+	if filter.ctr.buf != nil {
+		filter.ctr.buf.CleanOnlyData()
+	}
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
 	filter.ctr.cleanExecutor()
+	filter.ctr.cleanAppendExecutor()
+	filter.ctr.runExecutor = nil
 	if filter.ctr.buf != nil {
 		filter.ctr.buf.Clean(proc.Mp())
 	}
@@ -102,6 +103,15 @@ func (ctr *container) cleanExecutor() {
 		}
 	}
 	ctr.executors = nil
+}
+
+func (ctr *container) cleanAppendExecutor() {
+	for i := range ctr.appendExecutor {
+		if ctr.appendExecutor[i] != nil {
+			ctr.appendExecutor[i].Free()
+		}
+	}
+	ctr.appendExecutor = nil
 }
 
 func (ctr *container) resetExecutor() {

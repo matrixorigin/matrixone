@@ -540,10 +540,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if !ok {
 			panic("missing instruction for runtime filter!")
 		}
-		if arg.E != nil {
-			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(arg.E))
-		}
-		arg.SetExeExpr(s.Proc, colexec.RewriteFilterExprList(appendNotPkFilter))
+		arg.SetExeExpr(s.Proc, appendNotPkFilter)
 	}
 
 	// reset datasource

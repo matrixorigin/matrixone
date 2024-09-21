@@ -45,29 +45,16 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 		filter.OpAnalyzer.Reset()
 	}
 
-	if filter.exeExpr == nil && filter.E == nil {
-		return nil
+	if len(filter.ctr.executors) == 0 && filter.E != nil {
+		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
 	}
-
-	// var filterExpr *plan.Expr
-	// if filter.exeExpr == nil {
-	// 	filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.E), proc, true, true)
-	// } else {
-	// 	filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.exeExpr), proc, true, true)
-	// }
-	// if err != nil {
-	// 	return err
-	// }
-	// filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
-	// return err
-
-	if len(filter.ctr.executors) == 0 {
-		if filter.exeExpr == nil {
-			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
-		} else {
-			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.exeExpr}))
-		}
+	if filter.ctr.runExecutor == nil {
+		filter.ctr.runExecutor = make([]colexec.ExpressionExecutor, 0, len(filter.ctr.appendExecutor)+len(filter.ctr.executors))
 	}
+	filter.ctr.runExecutor = filter.ctr.runExecutor[:0]
+	filter.ctr.runExecutor = append(filter.ctr.runExecutor, filter.ctr.executors...)
+	filter.ctr.runExecutor = append(filter.ctr.runExecutor, filter.ctr.appendExecutor...)
+
 	return err
 }
 
@@ -85,18 +72,18 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, err
 	}
 
-	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.executors) == 0 {
+	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.runExecutor) == 0 {
 		return inputResult, nil
 	}
 
 	filterBat := inputResult.Batch
 	var sels []int64
-	for i := range filter.ctr.executors {
+	for i := range filter.ctr.runExecutor {
 		if filterBat.IsEmpty() {
 			break
 		}
 
-		vec, err := filter.ctr.executors[i].Eval(proc, []*batch.Batch{filterBat}, nil)
+		vec, err := filter.ctr.runExecutor[i].Eval(proc, []*batch.Batch{filterBat}, nil)
 		if err != nil {
 			return vm.CancelResult, err
 		}
