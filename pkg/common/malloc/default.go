@@ -78,7 +78,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 		allocator = NewInuseTrackingAllocator(
 			allocator,
 			func(inuse uint64) {
-				GlobalPeakInuseTracker.Update("/malloc/all", inuse)
+				GlobalPeakInuseTracker.UpdateMalloc(inuse)
 			},
 		)
 	}()

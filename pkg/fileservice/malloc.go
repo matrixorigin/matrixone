@@ -51,7 +51,7 @@ var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
 	allocator = malloc.NewInuseTrackingAllocator(
 		allocator,
 		func(inuse uint64) {
-			malloc.GlobalPeakInuseTracker.Update("/malloc/memory-cache", inuse)
+			malloc.GlobalPeakInuseTracker.UpdateMemoryCache(inuse)
 		},
 	)
 	// decorate
@@ -73,7 +73,7 @@ var ioAllocator = sync.OnceValue(func() malloc.Allocator {
 	allocator = malloc.NewInuseTrackingAllocator(
 		allocator,
 		func(inuse uint64) {
-			malloc.GlobalPeakInuseTracker.Update("/malloc/io", inuse)
+			malloc.GlobalPeakInuseTracker.UpdateIO(inuse)
 		},
 	)
 	// decorate
