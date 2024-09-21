@@ -119,7 +119,7 @@ func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (
 	return
 }
 func (rel *TxnRelation) AlterTable(context.Context, *apipb.AlterTableReq) (err error) { return }
-func (rel *TxnRelation) FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls) error {
+func (rel *TxnRelation) FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls, deleteStartOffset uint64) error {
 	return nil
 }
 func (obj *TxnObject) Reset() {
