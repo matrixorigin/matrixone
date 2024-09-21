@@ -33,6 +33,8 @@ type peakInuseData struct {
 	MemoryCache peakInuseValue
 	Hashmap     peakInuseValue
 	GoMetrics   map[string]peakInuseValue
+	RSS         peakInuseValue
+	VMS         peakInuseValue
 }
 
 type peakInuseValue struct {
@@ -163,6 +165,42 @@ func (p *PeakInuseTracker) UpdateGoMetrics(sample metrics.Sample) {
 			Value: sample.Value.Uint64(),
 			Time:  time.Now(),
 		}
+		// update
+		if p.ptr.CompareAndSwap(ptr, newData) {
+			return
+		}
+	}
+}
+
+func (p *PeakInuseTracker) UpdateRSS(n uint64) {
+	for {
+		// read
+		ptr := p.ptr.Load()
+		if n <= ptr.RSS.Value {
+			return
+		}
+		// copy
+		newData := ptr.Copy()
+		newData.RSS.Value = n
+		newData.RSS.Time = time.Now()
+		// update
+		if p.ptr.CompareAndSwap(ptr, newData) {
+			return
+		}
+	}
+}
+
+func (p *PeakInuseTracker) UpdateVMS(n uint64) {
+	for {
+		// read
+		ptr := p.ptr.Load()
+		if n <= ptr.VMS.Value {
+			return
+		}
+		// copy
+		newData := ptr.Copy()
+		newData.VMS.Value = n
+		newData.VMS.Time = time.Now()
 		// update
 		if p.ptr.CompareAndSwap(ptr, newData) {
 			return

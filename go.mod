@@ -66,6 +66,7 @@ require (
 	github.com/samber/lo v1.38.1
 	github.com/segmentio/encoding v0.4.0
 	github.com/shirou/gopsutil/v3 v3.23.12
+	github.com/shirou/gopsutil/v4 v4.24.8
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/spf13/cobra v1.8.0
 	github.com/spkg/bom v1.0.0
@@ -79,7 +80,7 @@ require (
 	go.uber.org/zap v1.24.0
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d
 	golang.org/x/sync v0.8.0
-	golang.org/x/sys v0.21.0
+	golang.org/x/sys v0.24.0
 	gonum.org/v1/gonum v0.14.0
 	google.golang.org/grpc v1.62.1
 	google.golang.org/protobuf v1.34.2
@@ -186,7 +187,7 @@ require (
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
-	github.com/yusufpapurcu/wmi v1.2.3 // indirect
+	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/mod v0.17.0 // indirect

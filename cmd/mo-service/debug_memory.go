@@ -20,7 +20,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/shirou/gopsutil/v4/process"
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 )
 
 func init() {
@@ -33,6 +35,9 @@ func init() {
 
 	// collect peak runtime/metrics
 	go startCollectGoRuntimeMetrics()
+
+	// collect peak process memory
+	go startCollectProcessMemory()
 }
 
 func startCollectGoRuntimeMetrics() {
@@ -70,10 +75,27 @@ func startCollectGoRuntimeMetrics() {
 		},
 	}
 
-	for range time.NewTicker(time.Millisecond * 100).C {
+	for range time.NewTicker(time.Millisecond * 101).C {
 		metrics.Read(samples)
 		for _, sample := range samples {
 			malloc.GlobalPeakInuseTracker.UpdateGoMetrics(sample)
 		}
+	}
+
+}
+
+func startCollectProcessMemory() {
+	proc, err := process.NewProcess(int32(unix.Getpid()))
+	if err != nil {
+		panic(err)
+	}
+	for range time.NewTicker(time.Millisecond * 103).C {
+		stat, err := proc.MemoryInfo()
+		if err != nil {
+			logutil.Error("process MemoryInfo", zap.Error(err))
+			continue
+		}
+		malloc.GlobalPeakInuseTracker.UpdateRSS(stat.RSS)
+		malloc.GlobalPeakInuseTracker.UpdateVMS(stat.VMS)
 	}
 }
