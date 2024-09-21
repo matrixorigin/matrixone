@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"encoding/json"
 	"sync/atomic"
 	"time"
 )
@@ -24,7 +25,7 @@ type PeakInuseTracker struct {
 }
 
 type peakInuseInfo struct {
-	Data      peakInuseData
+	Peak      peakInuseData
 	Snapshots struct {
 		Malloc      peakInuseData
 		Session     peakInuseData
@@ -47,24 +48,30 @@ type peakInuseValue struct {
 	Time  time.Time
 }
 
-var GlobalPeakInuseTracker = func() *PeakInuseTracker {
+func NewPeakInuseTracker() *PeakInuseTracker {
 	ret := new(PeakInuseTracker)
 	ret.ptr.Store(&peakInuseInfo{})
 	return ret
-}()
+}
+
+func (p *PeakInuseTracker) MarshalJSON() ([]byte, error) {
+	return json.Marshal(*p.ptr.Load())
+}
+
+var GlobalPeakInuseTracker = NewPeakInuseTracker()
 
 func (p *PeakInuseTracker) UpdateMalloc(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Data.Malloc.Value {
+		if n <= ptr.Peak.Malloc.Value {
 			return
 		}
 		// copy
 		newData := *ptr
-		newData.Data.Malloc.Value = n
-		newData.Data.Malloc.Time = time.Now()
-		newData.Snapshots.Malloc = newData.Data
+		newData.Peak.Malloc.Value = n
+		newData.Peak.Malloc.Time = time.Now()
+		newData.Snapshots.Malloc = newData.Peak
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
@@ -76,14 +83,14 @@ func (p *PeakInuseTracker) UpdateSession(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Data.Session.Value {
+		if n <= ptr.Peak.Session.Value {
 			return
 		}
 		// copy
 		newData := *ptr
-		newData.Data.Session.Value = n
-		newData.Data.Session.Time = time.Now()
-		newData.Snapshots.Session = newData.Data
+		newData.Peak.Session.Value = n
+		newData.Peak.Session.Time = time.Now()
+		newData.Snapshots.Session = newData.Peak
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
@@ -95,14 +102,14 @@ func (p *PeakInuseTracker) UpdateIO(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Data.IO.Value {
+		if n <= ptr.Peak.IO.Value {
 			return
 		}
 		// copy
 		newData := *ptr
-		newData.Data.IO.Value = n
-		newData.Data.IO.Time = time.Now()
-		newData.Snapshots.IO = newData.Data
+		newData.Peak.IO.Value = n
+		newData.Peak.IO.Time = time.Now()
+		newData.Snapshots.IO = newData.Peak
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
@@ -114,14 +121,14 @@ func (p *PeakInuseTracker) UpdateMemoryCache(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Data.MemoryCache.Value {
+		if n <= ptr.Peak.MemoryCache.Value {
 			return
 		}
 		// copy
 		newData := *ptr
-		newData.Data.MemoryCache.Value = n
-		newData.Data.MemoryCache.Time = time.Now()
-		newData.Snapshots.MemoryCache = newData.Data
+		newData.Peak.MemoryCache.Value = n
+		newData.Peak.MemoryCache.Time = time.Now()
+		newData.Snapshots.MemoryCache = newData.Peak
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
@@ -133,14 +140,14 @@ func (p *PeakInuseTracker) UpdateHashmap(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Data.Hashmap.Value {
+		if n <= ptr.Peak.Hashmap.Value {
 			return
 		}
 		// copy
 		newData := *ptr
-		newData.Data.Hashmap.Value = n
-		newData.Data.Hashmap.Time = time.Now()
-		newData.Snapshots.Hashmap = newData.Data
+		newData.Peak.Hashmap.Value = n
+		newData.Peak.Hashmap.Time = time.Now()
+		newData.Snapshots.Hashmap = newData.Peak
 		// update
 		if p.ptr.CompareAndSwap(ptr, &newData) {
 			return
