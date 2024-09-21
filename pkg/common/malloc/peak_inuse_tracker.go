@@ -27,14 +27,15 @@ type PeakInuseTracker struct {
 }
 
 type peakInuseData struct {
-	Malloc      peakInuseValue
-	Session     peakInuseValue
-	IO          peakInuseValue
-	MemoryCache peakInuseValue
-	Hashmap     peakInuseValue
-	GoMetrics   map[string]peakInuseValue
-	RSS         peakInuseValue
-	VMS         peakInuseValue
+	Malloc         peakInuseValue
+	Session        peakInuseValue
+	IO             peakInuseValue
+	MemoryCache    peakInuseValue
+	Hashmap        peakInuseValue
+	GoMetrics      map[string]peakInuseValue
+	RSS            peakInuseValue
+	VMS            peakInuseValue
+	EstimatedGoRSS peakInuseValue
 }
 
 type peakInuseValue struct {
@@ -201,6 +202,24 @@ func (p *PeakInuseTracker) UpdateVMS(n uint64) {
 		newData := ptr.Copy()
 		newData.VMS.Value = n
 		newData.VMS.Time = time.Now()
+		// update
+		if p.ptr.CompareAndSwap(ptr, newData) {
+			return
+		}
+	}
+}
+
+func (p *PeakInuseTracker) UpdateEstimatedGoRSS(n uint64) {
+	for {
+		// read
+		ptr := p.ptr.Load()
+		if n <= ptr.EstimatedGoRSS.Value {
+			return
+		}
+		// copy
+		newData := ptr.Copy()
+		newData.EstimatedGoRSS.Value = n
+		newData.EstimatedGoRSS.Time = time.Now()
 		// update
 		if p.ptr.CompareAndSwap(ptr, newData) {
 			return

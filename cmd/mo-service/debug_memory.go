@@ -77,9 +77,16 @@ func startCollectGoRuntimeMetrics() {
 
 	for range time.NewTicker(time.Millisecond * 101).C {
 		metrics.Read(samples)
+		var mapped, released uint64
 		for _, sample := range samples {
 			malloc.GlobalPeakInuseTracker.UpdateGoMetrics(sample)
+			if sample.Name == "/memory/classes/total:bytes" {
+				mapped = sample.Value.Uint64()
+			} else if sample.Name == "/memory/classes/heap/released:bytes" {
+				released = sample.Value.Uint64()
+			}
 		}
+		malloc.GlobalPeakInuseTracker.UpdateEstimatedGoRSS(mapped - released)
 	}
 
 }
