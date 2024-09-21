@@ -455,13 +455,20 @@ func (sinker *Sinker) Write(
 			sinker.putbackBuffer(curr)
 		}
 	}()
+
 	offset := 0
 	left := data.RowCount()
 	for left > 0 {
 		curr = sinker.popStaged()
 		if curr == nil {
 			curr = sinker.fetchBuffer()
+		} else if curr.RowCount() == objectio.BlockMaxRows {
+			if err = sinker.pushStaged(ctx, curr); err != nil {
+				return
+			}
+			curr = sinker.fetchBuffer()
 		}
+
 		toAdd := objectio.BlockMaxRows
 		if data.RowCount() < toAdd {
 			toAdd = data.RowCount()
@@ -511,9 +518,15 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 		sinker.result.tail = sinker.staged.inMemory
 		sinker.clearInMemoryStaged()
 	}
+
+	defer func() {
+		sinker.staged.persisted = sinker.staged.persisted[:0]
+	}()
+
 	// if there is only one file, it is sorted an deduped
 	if len(sinker.staged.persisted) == 1 {
 		sinker.result.persisted = append(sinker.result.persisted, sinker.staged.persisted[0])
+		return nil
 	}
 
 	if !sinker.config.allMergeSorted && !sinker.config.dedupAll {

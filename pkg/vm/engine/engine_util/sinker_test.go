@@ -40,6 +40,8 @@ func TestNewSinker(t *testing.T) {
 		seqnums[i] = schema.GetSeqnum(schema.Attrs()[i])
 	}
 
+	buffer := containers.NewOneSchemaBatchBuffer(mpool.GB, schema.Attrs(), schema.Types())
+
 	factory := NewFSinkerImplFactory(
 		seqnums,
 		schema.GetPrimaryKey().Idx,
@@ -60,17 +62,89 @@ func TestNewSinker(t *testing.T) {
 		WithAllMergeSorted(),
 		WithDedupAll(),
 		WithTailSizeCap(1),
-		WithBuffer(containers.NewOneSchemaBatchBuffer(mpool.GB, schema.Attrs(), schema.Types())),
+		WithBuffer(buffer),
 	)
 
-	bat := catalog.MockBatch(schema, 1000)
-	err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
-	assert.Nil(t, err)
+	for i := 0; i < 1000; i++ {
+		bat := catalog.MockBatch(schema, 1000)
+		err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
+		assert.Nil(t, err)
 
-	require.Equal(t, 1, len(sinker.staged.persisted))
-	require.Equal(t, 1000, int(sinker.staged.persisted[0].Rows()))
+		err = sinker.Sync(context.Background())
+		assert.Nil(t, err)
+
+		require.Equal(t, 0, len(sinker.staged.inMemory))
+		require.Equal(t, 0, len(sinker.staged.persisted))
+
+		rows := 0
+		for j := 0; j < len(sinker.result.persisted); j++ {
+			rows += int(sinker.result.persisted[j].Rows())
+		}
+
+		for j := 0; j < len(sinker.result.tail); j++ {
+			rows += int(sinker.result.tail[j].RowCount())
+		}
+
+		require.Equal(t, 1000*(i+1), rows)
+	}
 
 	require.NoError(t, sinker.Close())
+	buffer.Close(proc.Mp())
 
+	require.Equal(t, 0, int(proc.Mp().CurrNB()))
+}
+
+func TestNewSinker2(t *testing.T) {
+	proc := testutil.NewProc()
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	schema := catalog.MockSchema(3, 2)
+	seqnums := make([]uint16, len(schema.Attrs()))
+	for i := range schema.Attrs() {
+		seqnums[i] = schema.GetSeqnum(schema.Attrs()[i])
+	}
+
+	factory := NewFSinkerImplFactory(
+		seqnums,
+		schema.GetPrimaryKey().Idx,
+		true,
+		false,
+		schema.Version,
+	)
+
+	sinker := NewSinker(
+		schema.GetPrimaryKey().Idx,
+		schema.Attrs(),
+		schema.Types(),
+		factory,
+		proc.Mp(),
+		fs,
+	)
+
+	for i := 0; i < 100; i++ {
+		bat := catalog.MockBatch(schema, 8192*10)
+		err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
+		assert.Nil(t, err)
+
+		err = sinker.Sync(context.Background())
+		assert.Nil(t, err)
+
+		require.Equal(t, 0, len(sinker.staged.inMemory))
+
+		rows := 0
+		for j := 0; j < len(sinker.result.persisted); j++ {
+			rows += int(sinker.result.persisted[j].Rows())
+		}
+
+		for j := 0; j < len(sinker.result.tail); j++ {
+			rows += int(sinker.result.tail[j].RowCount())
+		}
+
+		require.Equal(t, 8192*10*(i+1), rows)
+	}
+
+	require.NoError(t, sinker.Close())
 	require.Equal(t, 0, int(proc.Mp().CurrNB()))
 }
