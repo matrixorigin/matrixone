@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -6832,8 +6833,30 @@ func TestPitrMeta(t *testing.T) {
 	defer tae.Close()
 	db := tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
+	pitrSchema := catalog.NewEmptySchema("mo_pitr")
 
-	pitrSchema := catalog.MockPitrSchema()
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
+	pitrSchema.AppendCol("col0", types.T_varchar.ToType())
+	pitrSchema.AppendCol("col1", types.T_varchar.ToType())
+	pitrSchema.AppendCol("col2", types.T_uint64.ToType())
+	pitrSchema.AppendCol("col3", types.T_uint64.ToType())
+	pitrSchema.AppendCol("col4", types.T_uint64.ToType())
+	pitrSchema.AppendCol("col5", types.T_varchar.ToType())
+	pitrSchema.AppendCol("col6", types.T_uint64.ToType())
+	pitrSchema.AppendCol("col7", types.T_varchar.ToType())
+	pitrSchema.AppendCol("col8", types.T_varchar.ToType())
+	pitrSchema.AppendCol("col9", types.T_varchar.ToType())
+	pitrSchema.AppendCol("col10", types.T_uint64.ToType())
+	pitrSchema.AppendCol("col11", types.T_uint8.ToType())
+	pitrSchema.AppendCol("col12", types.T_varchar.ToType())
+	pitrSchema.Constraint, _ = constraintDef.MarshalBinary()
+	pitrSchema.AppendFakePKCol()
+	pitrSchema.ColDefs[len(pitrSchema.ColDefs)-1].NullAbility = true
+
+	_ = pitrSchema.Finalize(false)
 	pitrSchema.Extra.BlockMaxRows = 2
 	pitrSchema.Extra.ObjectMaxBlocks = 2
 	schema1 := catalog.MockSchemaAll(13, 2)
@@ -6854,30 +6877,6 @@ func TestPitrMeta(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
-	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
-	defer bat.Close()
-	bats := bat.Split(bat.Length())
-
-	pool, err := ants.NewPool(20)
-	assert.Nil(t, err)
-	defer pool.Release()
-	var wg sync.WaitGroup
-
-	for _, data1 := range bats {
-		wg.Add(1)
-		err = pool.Submit(testutil.AppendClosure(t, data1, schema1.Name, db, &wg))
-		assert.Nil(t, err)
-	}
-	wg.Wait()
-	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
-	})
-	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
-		return
-	}
-	tae.Restart(ctx)
-	db = tae.DB
-	db.DiskCleaner.GetCleaner().DisableGCForTest()
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	attrs := []string{"col0", "col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8", "col9", "col10", "col11", "col12"}
 	vecTypes := []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(),
@@ -6927,6 +6926,21 @@ func TestPitrMeta(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn1.Commit(context.Background()))
 	}
+	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
+
+	pool, err := ants.NewPool(20)
+	assert.Nil(t, err)
+	defer pool.Release()
+	var wg sync.WaitGroup
+
+	for _, data1 := range bats {
+		wg.Add(1)
+		err = pool.Submit(testutil.AppendClosure(t, data1, schema1.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -6935,18 +6949,8 @@ func TestPitrMeta(t *testing.T) {
 	}
 	db.DiskCleaner.GetCleaner().EnableGCForTest()
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-	err = db.DiskCleaner.GetCleaner().CheckGC()
-	assert.Nil(t, err)
-	testutils.WaitExpect(5000, func() bool {
-		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
-	})
-	testutils.WaitExpect(10000, func() bool {
-		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
-	})
 	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
-	db.DiskCleaner.GetCleaner().EnableGCForTest()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	testutils.WaitExpect(3000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 			return false
@@ -6976,6 +6980,8 @@ func TestPitrMeta(t *testing.T) {
 		}
 	}
 
+	err = db.DiskCleaner.GetCleaner().CheckGC()
+	assert.Nil(t, err)
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
 	db = tae.DB
