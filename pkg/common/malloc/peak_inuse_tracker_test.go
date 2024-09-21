@@ -16,6 +16,7 @@ package malloc
 
 import (
 	"encoding/json"
+	"runtime/metrics"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -36,6 +37,15 @@ func TestPeakInuseTrackerMarshal(t *testing.T) {
 	tracker.UpdateIO(1)
 	tracker.UpdateMemoryCache(1)
 	tracker.UpdateHashmap(1)
+	samples := []metrics.Sample{
+		{
+			Name: "/memory/classes/total:bytes",
+		},
+	}
+	metrics.Read(samples)
+	for _, sample := range samples {
+		tracker.UpdateGoMetrics(sample)
+	}
 
 	// log
 	logutil.Info("peak inuse memory", zap.Any("info", tracker))

@@ -16,6 +16,8 @@ package malloc
 
 import (
 	"encoding/json"
+	"maps"
+	"runtime/metrics"
 	"sync/atomic"
 	"time"
 )
@@ -30,6 +32,7 @@ type peakInuseData struct {
 	IO          peakInuseValue
 	MemoryCache peakInuseValue
 	Hashmap     peakInuseValue
+	GoMetrics   map[string]peakInuseValue
 }
 
 type peakInuseValue struct {
@@ -39,8 +42,16 @@ type peakInuseValue struct {
 
 func NewPeakInuseTracker() *PeakInuseTracker {
 	ret := new(PeakInuseTracker)
-	ret.ptr.Store(&peakInuseData{})
+	ret.ptr.Store(&peakInuseData{
+		GoMetrics: make(map[string]peakInuseValue),
+	})
 	return ret
+}
+
+func (p *peakInuseData) Copy() *peakInuseData {
+	ret := *p
+	ret.GoMetrics = maps.Clone(p.GoMetrics)
+	return &ret
 }
 
 func (p *PeakInuseTracker) MarshalJSON() ([]byte, error) {
@@ -57,11 +68,11 @@ func (p *PeakInuseTracker) UpdateMalloc(n uint64) {
 			return
 		}
 		// copy
-		newData := *ptr
+		newData := ptr.Copy()
 		newData.Malloc.Value = n
 		newData.Malloc.Time = time.Now()
 		// update
-		if p.ptr.CompareAndSwap(ptr, &newData) {
+		if p.ptr.CompareAndSwap(ptr, newData) {
 			return
 		}
 	}
@@ -75,11 +86,11 @@ func (p *PeakInuseTracker) UpdateSession(n uint64) {
 			return
 		}
 		// copy
-		newData := *ptr
+		newData := ptr.Copy()
 		newData.Session.Value = n
 		newData.Session.Time = time.Now()
 		// update
-		if p.ptr.CompareAndSwap(ptr, &newData) {
+		if p.ptr.CompareAndSwap(ptr, newData) {
 			return
 		}
 	}
@@ -93,11 +104,11 @@ func (p *PeakInuseTracker) UpdateIO(n uint64) {
 			return
 		}
 		// copy
-		newData := *ptr
+		newData := ptr.Copy()
 		newData.IO.Value = n
 		newData.IO.Time = time.Now()
 		// update
-		if p.ptr.CompareAndSwap(ptr, &newData) {
+		if p.ptr.CompareAndSwap(ptr, newData) {
 			return
 		}
 	}
@@ -111,11 +122,11 @@ func (p *PeakInuseTracker) UpdateMemoryCache(n uint64) {
 			return
 		}
 		// copy
-		newData := *ptr
+		newData := ptr.Copy()
 		newData.MemoryCache.Value = n
 		newData.MemoryCache.Time = time.Now()
 		// update
-		if p.ptr.CompareAndSwap(ptr, &newData) {
+		if p.ptr.CompareAndSwap(ptr, newData) {
 			return
 		}
 	}
@@ -129,11 +140,31 @@ func (p *PeakInuseTracker) UpdateHashmap(n uint64) {
 			return
 		}
 		// copy
-		newData := *ptr
+		newData := ptr.Copy()
 		newData.Hashmap.Value = n
 		newData.Hashmap.Time = time.Now()
 		// update
-		if p.ptr.CompareAndSwap(ptr, &newData) {
+		if p.ptr.CompareAndSwap(ptr, newData) {
+			return
+		}
+	}
+}
+
+func (p *PeakInuseTracker) UpdateGoMetrics(sample metrics.Sample) {
+	for {
+		// read
+		ptr := p.ptr.Load()
+		if sample.Value.Uint64() <= ptr.GoMetrics[sample.Name].Value {
+			return
+		}
+		// copy
+		newData := ptr.Copy()
+		newData.GoMetrics[sample.Name] = peakInuseValue{
+			Value: sample.Value.Uint64(),
+			Time:  time.Now(),
+		}
+		// update
+		if p.ptr.CompareAndSwap(ptr, newData) {
 			return
 		}
 	}
