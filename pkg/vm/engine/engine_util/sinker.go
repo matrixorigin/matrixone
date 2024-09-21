@@ -515,7 +515,7 @@ func (sinker *Sinker) Write(
 			if err = sinker.pushStaged(ctx, curr); err != nil {
 				return
 			}
-			curr = sinker.fetchBuffer()
+			curr = nil
 		}
 		left -= toAdd
 		offset += toAdd

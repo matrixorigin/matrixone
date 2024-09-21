@@ -98,7 +98,7 @@ func TestNewSinker2(t *testing.T) {
 		proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	schema := catalog.MockSchema(3, 2)
+	schema := catalog.MockSchema(3, -1)
 	seqnums := make([]uint16, len(schema.Attrs()))
 	for i := range schema.Attrs() {
 		seqnums[i] = schema.GetSeqnum(schema.Attrs()[i])
@@ -125,6 +125,12 @@ func TestNewSinker2(t *testing.T) {
 		bat := catalog.MockBatch(schema, 8192*10)
 		err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
 		assert.Nil(t, err)
+
+		for j := range sinker.staged.inMemory {
+			if j != len(sinker.staged.inMemory)-1 {
+				require.Equal(t, 8192, int(sinker.staged.inMemory[j].RowCount()))
+			}
+		}
 	}
 
 	err = sinker.Sync(context.Background())
@@ -142,7 +148,7 @@ func TestNewSinker2(t *testing.T) {
 	}
 
 	require.Equal(t, 8192*10*100, rows)
-
 	require.NoError(t, sinker.Close())
+
 	require.Equal(t, 0, int(proc.Mp().CurrNB()))
 }

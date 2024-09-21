@@ -995,6 +995,12 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.T_int32.ToType())
 		}
 	}
+
+	if pkIdx == -1 {
+		_ = schema.AppendFakePKCol()
+		schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
+	}
+
 	schema.Constraint, _ = constraintDef.MarshalBinary()
 
 	_ = schema.Finalize(false)
