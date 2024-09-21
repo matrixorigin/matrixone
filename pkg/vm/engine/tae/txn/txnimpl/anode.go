@@ -122,7 +122,7 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 			continue
 		}
 		// if n.isTombstone {
-		// 	if attr == catalog.AttrCommitTs || attr == catalog.AttrAborted {
+		// 	if attr == objectio.TombstoneAttr_CommitTs_Attr || attr == catalog.AttrAborted {
 		// 		continue
 		// 	}
 		// }

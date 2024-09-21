@@ -850,7 +850,7 @@ func checkLineValidRestrictive(param *ExternalParam, proc *process.Process, line
 			return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
 		}
 	} else {
-		if param.Extern.ExtTab {
+		if param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) {
 			if len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
 				return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is less than input columns", rowIdx+1)
 			}
@@ -1170,7 +1170,7 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 
 // scanFileData read batch data from external file
 func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
-	if param.Extern.QueryResult {
+	if param.Extern.ExternType == int32(plan.ExternType_RESULT_SCAN) {
 		return scanZonemapFile(ctx, param, proc, bat)
 	}
 	if param.Extern.Format == tree.PARQUET {
@@ -1310,9 +1310,6 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam) csvparser.Field {
 	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
-	}
-	if param.Extern.ExtTab {
-		return line[param.Name2ColIndex[strings.ToLower(colName)]]
 	}
 	return line[param.TbColToDataCol[strings.ToLower(colName)]]
 }

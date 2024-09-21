@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -30,7 +31,7 @@ const (
 	// for schema
 	PropSchemaExtra = "schema_extra"
 
-	Row_ID           = "__mo_rowid"
+	Row_ID           = objectio.DefaultRowid_Attr
 	PrefixPriColName = "__mo_cpkey_"
 	PrefixCBColName  = "__mo_cbkey_"
 
@@ -42,10 +43,10 @@ const (
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 	// TableTailAttr are attrs in table tail
-	TableTailAttrDeleteRowID = "__mo_%1_delete_rowid"
-	TableTailAttrCommitTs    = "__mo_%1_commit_time"
-	TableTailAttrAborted     = "__mo_%1_aborted"
-	TableTailAttrPKVal       = "__mo_%1_pk_val"
+	TableTailAttrDeleteRowID = objectio.TombstoneAttr_Rowid_Attr
+	TableTailAttrCommitTs    = objectio.TombstoneAttr_CommitTs_Attr
+	TableTailAttrAborted     = objectio.TombstoneAttr_Abort_Attr
+	TableTailAttrPKVal       = objectio.TombstoneAttr_PK_Attr
 
 	MOAccountTable = "mo_account"
 	// MOVersionTable mo version table. This table records information about the
