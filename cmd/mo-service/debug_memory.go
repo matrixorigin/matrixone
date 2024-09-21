@@ -15,6 +15,7 @@
 package main
 
 import (
+	"runtime/metrics"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -23,9 +24,56 @@ import (
 )
 
 func init() {
+	// log peak in-use memory
 	go func() {
 		for range time.NewTicker(time.Millisecond * 5003).C {
 			logutil.Info("peak inuse memory", zap.Any("info", malloc.GlobalPeakInuseTracker))
 		}
 	}()
+
+	// collect peak runtime/metrics
+	go startCollectGoRuntimeMetrics()
+}
+
+func startCollectGoRuntimeMetrics() {
+	samples := []metrics.Sample{
+		{
+			Name: "/gc/heap/goal:bytes",
+		},
+		{
+			Name: "/gc/heap/live:bytes",
+		},
+		{
+			Name: "/gc/scan/heap:bytes",
+		},
+		{
+			Name: "/gc/scan/total:bytes",
+		},
+
+		{
+			Name: "/memory/classes/heap/free:bytes",
+		},
+		{
+			Name: "/memory/classes/heap/objects:bytes",
+		},
+		{
+			Name: "/memory/classes/heap/released:bytes",
+		},
+		{
+			Name: "/memory/classes/heap/stacks:bytes",
+		},
+		{
+			Name: "/memory/classes/heap/unused:bytes",
+		},
+		{
+			Name: "/memory/classes/total:bytes",
+		},
+	}
+
+	for range time.NewTicker(time.Millisecond * 100).C {
+		metrics.Read(samples)
+		for _, sample := range samples {
+			malloc.GlobalPeakInuseTracker.UpdateGoMetrics(sample)
+		}
+	}
 }
