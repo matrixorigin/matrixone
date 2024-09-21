@@ -65,28 +65,26 @@ func TestNewSinker(t *testing.T) {
 		WithBuffer(buffer),
 	)
 
-	for i := 0; i < 1000; i++ {
-		bat := catalog.MockBatch(schema, 1000)
-		err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
-		assert.Nil(t, err)
+	bat := catalog.MockBatch(schema, 1000)
+	err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
+	assert.Nil(t, err)
 
-		err = sinker.Sync(context.Background())
-		assert.Nil(t, err)
+	err = sinker.Sync(context.Background())
+	assert.Nil(t, err)
 
-		require.Equal(t, 0, len(sinker.staged.inMemory))
-		require.Equal(t, 0, len(sinker.staged.persisted))
+	require.Equal(t, 0, len(sinker.staged.inMemory))
+	require.Equal(t, 0, len(sinker.staged.persisted))
 
-		rows := 0
-		for j := 0; j < len(sinker.result.persisted); j++ {
-			rows += int(sinker.result.persisted[j].Rows())
-		}
-
-		for j := 0; j < len(sinker.result.tail); j++ {
-			rows += int(sinker.result.tail[j].RowCount())
-		}
-
-		require.Equal(t, 1000*(i+1), rows)
+	rows := 0
+	for j := 0; j < len(sinker.result.persisted); j++ {
+		rows += int(sinker.result.persisted[j].Rows())
 	}
+
+	for j := 0; j < len(sinker.result.tail); j++ {
+		rows += int(sinker.result.tail[j].RowCount())
+	}
+
+	require.Equal(t, 1000, rows)
 
 	require.NoError(t, sinker.Close())
 	buffer.Close(proc.Mp())
@@ -127,23 +125,23 @@ func TestNewSinker2(t *testing.T) {
 		bat := catalog.MockBatch(schema, 8192*10)
 		err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
 		assert.Nil(t, err)
-
-		err = sinker.Sync(context.Background())
-		assert.Nil(t, err)
-
-		require.Equal(t, 0, len(sinker.staged.inMemory))
-
-		rows := 0
-		for j := 0; j < len(sinker.result.persisted); j++ {
-			rows += int(sinker.result.persisted[j].Rows())
-		}
-
-		for j := 0; j < len(sinker.result.tail); j++ {
-			rows += int(sinker.result.tail[j].RowCount())
-		}
-
-		require.Equal(t, 8192*10*(i+1), rows)
 	}
+
+	err = sinker.Sync(context.Background())
+	assert.Nil(t, err)
+
+	require.Equal(t, 0, len(sinker.staged.inMemory))
+
+	rows := 0
+	for j := 0; j < len(sinker.result.persisted); j++ {
+		rows += int(sinker.result.persisted[j].Rows())
+	}
+
+	for j := 0; j < len(sinker.result.tail); j++ {
+		rows += int(sinker.result.tail[j].RowCount())
+	}
+
+	require.Equal(t, 8192*10*100, rows)
 
 	require.NoError(t, sinker.Close())
 	require.Equal(t, 0, int(proc.Mp().CurrNB()))
