@@ -111,7 +111,7 @@ func TestChangesHandle1(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, hint, engine.ChangesHandle_Tail_wip)
+			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 			t.Log(tombstone.Attrs)
 			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
@@ -202,7 +202,7 @@ func TestChangesHandle2(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, hint, engine.ChangesHandle_Tail_wip)
+			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
 			tombstone.Clean(mp)
@@ -311,27 +311,26 @@ func TestChangesHandle3(t *testing.T) {
 
 		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
 		assert.NoError(t, err)
-		batchCount := 0
+		totalRows = 0
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if data == nil && tombstone == nil {
 				break
 			}
-			batchCount++
 			assert.NoError(t, err)
-			if batchCount > 1 {
-				assert.Nil(t, tombstone)
-			} else {
-				assert.Equal(t, hint, engine.ChangesHandle_Tail_wip)
+			if tombstone != nil {
+				assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 				// assert.Equal(t, tombstone.Vecs[0].Length(), 20)// tombstone may transfer
 				tombstone.Clean(mp)
 			}
-			checkInsertBatch(bat, data, t)
-			assert.Equal(t, data.Vecs[0].Length(), 8192)
-			data.Clean(mp)
+			if data != nil {
+				checkInsertBatch(bat, data, t)
+				totalRows += data.Vecs[0].Length()
+				data.Clean(mp)
+			}
 		}
-		assert.Equal(t, batchCount, 20)
+		assert.Equal(t, totalRows, 163840)
 		assert.NoError(t, handle.Close())
 	}
 }

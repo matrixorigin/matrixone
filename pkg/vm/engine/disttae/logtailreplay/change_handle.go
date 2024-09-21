@@ -81,7 +81,7 @@ func closeBatch(bat *batch.Batch, mp *mpool.MPool) {
 	}
 }
 func (r *BatchHandle) isEnd() bool {
-	return r.batches == nil || r.rowOffsetCursor >= r.batchLength
+	return r == nil || r.batches == nil || r.rowOffsetCursor >= r.batchLength
 }
 func (r *BatchHandle) NextTS() types.TS {
 	if r.isEnd() {
@@ -165,17 +165,24 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		)
 	}
 	if *bat == nil {
-		*bat = data
-	} else {
-		srcLen := data.Vecs[0].Length()
-		sels := make([]int64, srcLen)
-		for j := 0; j < srcLen; j++ {
-			sels[j] = int64(j)
+		*bat = batch.NewWithSize(0)
+		(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
+		for _, vec := range data.Vecs {
+			newVec := vector.NewVec(*vec.GetType())
+			if err != nil {
+				return err
+			}
+			(*bat).Vecs = append((*bat).Vecs, newVec)
 		}
-		for i, vec := range (*bat).Vecs {
-			src := data.Vecs[i]
-			vec.Union(src, sels, mp)
-		}
+	}
+	srcLen := data.Vecs[0].Length()
+	sels := make([]int64, srcLen)
+	for j := 0; j < srcLen; j++ {
+		sels[j] = int64(j)
+	}
+	for i, vec := range (*bat).Vecs {
+		src := data.Vecs[i]
+		vec.Union(src, sels, mp)
 	}
 	h.blkOffsetCursor++
 	if h.blkOffsetCursor >= int(currentObject.BlkCnt()) {
@@ -244,12 +251,12 @@ func (h *AObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 	if *bat == nil {
 		*bat = batch.NewWithSize(len(h.currentBatch.Vecs))
 		(*bat).Attrs = append((*bat).Attrs, h.currentBatch.Attrs...)
-		for _, vec := range h.currentBatch.Vecs {
+		for i, vec := range h.currentBatch.Vecs {
 			newVec, err := vec.CloneWindow(start, end, mp)
 			if err != nil {
 				return err
 			}
-			(*bat).Vecs = append((*bat).Vecs, newVec)
+			(*bat).Vecs[i] = newVec
 		}
 	} else {
 		for i, vec := range (*bat).Vecs {
@@ -271,7 +278,7 @@ func (h *AObjectHandle) NextTS() types.TS {
 	if h.isEnd() {
 		return types.TS{}
 	}
-	commitTSVec := h.currentBatch.Vecs[len(h.currentBatch.Vecs)]
+	commitTSVec := h.currentBatch.Vecs[len(h.currentBatch.Vecs)-1]
 	return vector.GetFixedAtNoTypeCheck[types.TS](commitTSVec, h.rowOffsetCursor)
 }
 
@@ -302,6 +309,9 @@ func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool,
 	rowIter := state.rows.Copy().Iter()
 	defer rowIter.Release()
 	p.inMemoryHandle, err = p.newBatchHandleWithRowIterator(ctx, rowIter, start, end, tombstone, mp)
+	if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+		err = nil
+	}
 	if err != nil {
 		return
 	}
@@ -314,14 +324,22 @@ func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool,
 	return
 }
 func (p *baseHandle) Close() {
-	p.inMemoryHandle.Close()
+	if p.inMemoryHandle != nil {
+		p.inMemoryHandle.Close()
+	}
 }
 func (p *baseHandle) nextTS() (types.TS, int) {
 	inMemoryTS := p.inMemoryHandle.NextTS()
 	aobjTS := p.aobjHandle.NextTS()
 	cnObjTS := p.cnObjectHandle.NextTS()
+	if aobjTS.IsEmpty() && cnObjTS.IsEmpty() {
+		return inMemoryTS, NextChangeHandle_InMemory
+	}
 	if !inMemoryTS.IsEmpty() && inMemoryTS.LessEq(&aobjTS) && inMemoryTS.LessEq(&cnObjTS) {
 		return inMemoryTS, NextChangeHandle_InMemory
+	}
+	if cnObjTS.IsEmpty() {
+		return aobjTS, NextChangeHandle_AObj
 	}
 	if !aobjTS.IsEmpty() && aobjTS.LessEq(&cnObjTS) {
 		return aobjTS, NextChangeHandle_AObj
@@ -427,6 +445,9 @@ func (p *ChangeHandler) Close() error {
 func (p *ChangeHandler) decideNextHandle() int {
 	tombstoneTS := p.tombstoneHandle.NextTS()
 	dataTS := p.dataHandle.NextTS()
+	if dataTS.IsEmpty() {
+		return NextChangeHandle_Tombstone
+	}
 	if !tombstoneTS.IsEmpty() && tombstoneTS.LessEq(&dataTS) {
 		return NextChangeHandle_Tombstone
 	}
@@ -439,24 +460,23 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		switch typ {
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
-			if err == nil && data.Vecs[0].Length() > p.coarseMaxRow {
+			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow {
 				return
 			}
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
-			if err == nil && tombstone.Vecs[0].Length() > p.coarseMaxRow {
+			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow {
 				return
 			}
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
-			break
+			return
 		}
 		if err != nil {
-			break
+			return
 		}
 	}
-	return
 }
 
 func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, start, end types.TS) error {
