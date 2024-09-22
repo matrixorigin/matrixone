@@ -534,7 +534,7 @@ func (txn *Transaction) dumpInsertBatchLocked(offset int, size *uint64, pkCount 
 		if err != nil {
 			return err
 		}
-		defer s3Writer.Free(txn.proc)
+		defer s3Writer.Free(txn.proc.GetMPool())
 		for i := 0; i < len(mp[tbKey]); i++ {
 			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
@@ -644,7 +644,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
-		defer s3Writer.Free(txn.proc)
+		defer s3Writer.Free(txn.proc.GetMPool())
 		for i := 0; i < len(mp[tbKey]); i++ {
 			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
@@ -653,7 +653,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(offset int) error {
 			return err
 		}
 		bat := batch.NewWithSize(2)
-		bat.Attrs = []string{catalog2.ObjectAttr_ObjectStats, catalog2.AttrPKVal}
+		bat.Attrs = []string{catalog2.ObjectAttr_ObjectStats, objectio.TombstoneAttr_PK_Attr}
 		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		if err = vector.AppendBytes(
 			bat.GetVector(0), stats.Marshal(), false, txn.proc.GetMPool()); err != nil {
@@ -1258,7 +1258,7 @@ func (txn *Transaction) delTransaction() {
 		if txn.writes[i].bat == nil {
 			continue
 		}
-		txn.proc.PutBatch(txn.writes[i].bat)
+		txn.writes[i].bat.Clean(txn.proc.Mp())
 	}
 	txn.CleanToFreeBatches()
 	txn.tableCache = nil
@@ -1425,7 +1425,7 @@ func (txn *Transaction) GetHaveDDL() bool {
 func (txn *Transaction) CleanToFreeBatches() {
 	for key := range txn.toFreeBatches {
 		for _, bat := range txn.toFreeBatches[key] {
-			txn.proc.PutBatch(bat)
+			bat.Clean(txn.proc.Mp())
 		}
 		delete(txn.toFreeBatches, key)
 	}

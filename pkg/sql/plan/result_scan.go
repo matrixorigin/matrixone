@@ -102,9 +102,6 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 			// S3Param:     &tree.S3Parameter{},
 			Tail: &tree.TailParameter{},
 		},
-		ExParam: tree.ExParam{
-			QueryResult: true,
-		},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -128,7 +125,10 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		}})
 	tableDef.Createsql = string(b)
 	node := &plan.Node{
-		NodeType:     plan.Node_EXTERNAL_SCAN,
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		ExternScan: &plan.ExternScan{
+			Type: int32(plan.ExternType_RESULT_SCAN),
+		},
 		Stats:        &plan.Stats{},
 		TableDef:     tableDef,
 		BindingTags:  []int32{builder.genNewTag()},

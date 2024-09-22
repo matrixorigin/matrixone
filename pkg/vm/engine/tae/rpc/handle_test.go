@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
@@ -60,9 +61,10 @@ func TestHandleInspectPolicy(t *testing.T) {
 	asyncTxn, err := handle.db.StartTxn(nil)
 	require.NoError(t, err)
 
-	database, err := asyncTxn.CreateDatabase("db1", "create", "type")
+	ctx := context.Background()
+	database, err := testutil.CreateDatabase2(ctx, asyncTxn, "db1")
 	require.NoError(t, err)
-	_, err = database.CreateRelation(&catalog.Schema{
+	_, err = testutil.CreateRelation2(ctx, asyncTxn, database, &catalog.Schema{
 		Name:  "test1",
 		Extra: &apipb.SchemaExtra{},
 	})
