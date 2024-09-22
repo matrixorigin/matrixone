@@ -237,7 +237,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			checkpoint := item.(*checkpoint.CheckpointEntry)
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
 			endTS := checkpoint.GetEnd()
-			return !endTS.GreaterEq(&ts)
+			return !endTS.GE(&ts)
 		}, gc2.CheckerKeyTTL)
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()

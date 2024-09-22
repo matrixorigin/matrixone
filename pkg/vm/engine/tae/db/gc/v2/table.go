@@ -184,7 +184,7 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, pitrVec types.TS, na
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		if snapTS.GreaterEq(&obj.createTS) && snapTS.LT(&obj.dropTS) {
+		if snapTS.GE(&obj.createTS) && snapTS.LT(&obj.dropTS) {
 			logutil.Debug("[soft GC]Snapshot Refers",
 				zap.String("name", name),
 				zap.String("snapTS", snapTS.ToString()),

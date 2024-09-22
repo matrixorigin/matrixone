@@ -263,7 +263,7 @@ func (r *runner) getGCedTS() types.TS {
 	if minIncremental == nil {
 		return minGlobal.end
 	}
-	if minIncremental.start.GreaterEq(&minGlobal.end) {
+	if minIncremental.start.GE(&minGlobal.end) {
 		return minGlobal.end
 	}
 	return minIncremental.start

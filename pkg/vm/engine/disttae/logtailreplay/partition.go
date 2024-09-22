@@ -51,10 +51,11 @@ type TableInfo struct {
 	PrimarySeqnum int
 }
 
+// PXU TODO
 func (p *Partition) CanServe(ts types.TS) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return ts.GreaterEq(&p.mu.start) && ts.LE(&p.mu.end)
+	return ts.GE(&p.mu.start) && ts.LE(&p.mu.end)
 }
 
 func NewPartition(

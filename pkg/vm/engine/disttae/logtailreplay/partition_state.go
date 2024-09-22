@@ -762,7 +762,7 @@ func (p *PartitionState) PKExistInMemBetween(
 				break
 			}
 
-			if entry.Time.GreaterEq(&from) {
+			if entry.Time.GE(&from) {
 				return true, false
 			}
 
@@ -790,7 +790,7 @@ func (p *PartitionState) PKExistInMemBetween(
 				if !row.RowID.EQ(&entry.RowID) {
 					break
 				}
-				if row.Time.GreaterEq(&from) {
+				if row.Time.GE(&from) {
 					rowIter.Release()
 					return true, false
 				}

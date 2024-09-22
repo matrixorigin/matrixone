@@ -599,7 +599,7 @@ func (c *checkpointCleaner) getDeleteFile(
 
 func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS) error {
 	if stage.IsEmpty() ||
-		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
+		(c.GeteCkpStage() != nil && c.GeteCkpStage().GE(&stage)) {
 		return nil
 	}
 	metas := c.GetCheckpoints()
@@ -1072,7 +1072,7 @@ func isSnapshotCKPRefers(start, end types.TS, snapVec []types.TS) bool {
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		if snapTS.GreaterEq(&start) && snapTS.LT(&end) {
+		if snapTS.GE(&start) && snapTS.LT(&end) {
 			logutil.Debugf("isSnapshotRefers: %s, create %v, drop %v",
 				snapTS.ToString(), start.ToString(), end.ToString())
 			return true

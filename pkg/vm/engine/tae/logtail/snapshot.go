@@ -1388,7 +1388,7 @@ func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr types.TS) bool 
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		if snapTS.GreaterEq(&table.createAt) && snapTS.LT(&table.deleteAt) {
+		if snapTS.GE(&table.createAt) && snapTS.LT(&table.deleteAt) {
 			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v, tid %d",
 				snapTS.ToString(), table.createAt.ToString(), table.deleteAt.ToString(), table.tid)
 			return true

@@ -266,7 +266,7 @@ func (d *dirtyCollector) tryUpdateMerged(merged *DirtyTreeEntry) (updated bool) 
 	var old *DirtyTreeEntry
 	for {
 		old = d.merged.Load()
-		if old.end.GreaterEq(&merged.end) {
+		if old.end.GE(&merged.end) {
 			break
 		}
 		if d.merged.CompareAndSwap(old, merged) {

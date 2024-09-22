@@ -426,7 +426,7 @@ func LoadCheckpointEntriesFromKey(
 			DropTS:   deletedAt,
 		}
 		if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
-			(createAt.GreaterEq(baseTS) || commitAt.GreaterEq(baseTS))) {
+			(createAt.GE(baseTS) || commitAt.GE(baseTS))) {
 			bo.NeedCopy = true
 		}
 		locations = append(locations, bo)
@@ -452,7 +452,7 @@ func LoadCheckpointEntriesFromKey(
 			CrateTS:  commitTS,
 		}
 		if baseTS.IsEmpty() ||
-			(!baseTS.IsEmpty() && commitTS.GreaterEq(baseTS)) {
+			(!baseTS.IsEmpty() && commitTS.GE(baseTS)) {
 			bo.NeedCopy = true
 		}
 		locations = append(locations, bo)
@@ -533,7 +533,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			if deleteAt.IsEmpty() {
 				continue
 			}
-			if createAt.GreaterEq(&ts) {
+			if createAt.GE(&ts) {
 				panic(any(fmt.Sprintf("createAt equal to ts: %v-%v", createAt.ToString(), ts.ToString())))
 			}
 			addObjectToObjectData(stats, appendable, i, tid, dataType, od)

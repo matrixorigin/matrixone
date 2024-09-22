@@ -5567,7 +5567,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 			assert.Nil(t, err)
 			entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 			num := len(entries)
-			assert.GT(t, num, 0)
+			assert.Greater(t, num, 0)
 			testutils.WaitExpect(5000, func() bool {
 				if manager.GetCleaner().GetMaxConsumed() == nil {
 					return false
@@ -5638,7 +5638,7 @@ func TestGCDropDB(t *testing.T) {
 			assert.Nil(t, err)
 			entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 			num := len(entries)
-			assert.GT(t, num, 0)
+			assert.Greater(t, num, 0)
 			testutils.WaitExpect(5000, func() bool {
 				if manager.GetCleaner().GetMaxConsumed() == nil {
 					return false
@@ -5725,7 +5725,7 @@ func TestGCDropTable(t *testing.T) {
 			assert.Nil(t, err)
 			entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 			num := len(entries)
-			assert.GT(t, num, 0)
+			assert.Greater(t, num, 0)
 			testutils.WaitExpect(10000, func() bool {
 				if manager.GetCleaner().GetMaxConsumed() == nil {
 					return false
@@ -6416,11 +6416,11 @@ func TestAppendAndGC(t *testing.T) {
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 		minEnd := minMerged.GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd := minMerged.GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 
@@ -6638,11 +6638,11 @@ func TestSnapshotGC(t *testing.T) {
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 		minEnd := minMerged.GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd := minMerged.GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 
@@ -6805,11 +6805,11 @@ func TestSnapshotMeta(t *testing.T) {
 			return false
 		}
 		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd = db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
 	defer logtail.CloseSnapshotList(snaps)

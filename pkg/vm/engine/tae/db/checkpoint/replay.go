@@ -260,7 +260,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 		}
 	}
 	for _, e := range c.emptyFile {
-		if e.end.GreaterEq(&maxTs) {
+		if e.end.GE(&maxTs) {
 			return types.TS{}, 0, false,
 				moerr.NewInternalErrorf(ctx,
 					"read checkpoint %v failed",

@@ -78,10 +78,11 @@ func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	}
 }
 
+// PXU TODO
 func (cc *CatalogCache) CanServe(ts types.TS) bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	return ts.GreaterEq(&cc.mu.start) && ts.LE(&cc.mu.end)
+	return ts.GE(&cc.mu.start) && ts.LE(&cc.mu.end)
 }
 
 type GCReport struct {

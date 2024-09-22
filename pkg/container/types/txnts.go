@@ -78,7 +78,7 @@ func (ts *TS) LE(rhs *TS) bool {
 func (ts *TS) GT(rhs *TS) bool {
 	return ts.Compare(rhs) > 0
 }
-func (ts *TS) GreaterEq(rhs *TS) bool {
+func (ts *TS) GE(rhs *TS) bool {
 	return ts.Compare(rhs) >= 0
 }
 

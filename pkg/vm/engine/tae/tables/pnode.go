@@ -235,7 +235,7 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 			for i := 0; i < len(commitTSs); i++ {
 				commitTS := commitTSs[i]
-				if commitTS.GreaterEq(&start) && commitTS.LE(&end) &&
+				if commitTS.GE(&start) && commitTS.LE(&end) &&
 					types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
 						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)

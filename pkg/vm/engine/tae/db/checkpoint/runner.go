@@ -373,7 +373,7 @@ func (r *runner) getTSTOGC() (ts types.TS, needGC bool) {
 		ts = tsTOGC
 	}
 	gcedTS := r.getGCedTS()
-	if gcedTS.GreaterEq(&ts) {
+	if gcedTS.GE(&ts) {
 		return
 	}
 	needGC = true

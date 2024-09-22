@@ -273,7 +273,7 @@ func (blk *txnBlock) Less(b BlockT) bool {
 
 func timeBasedTruncateFactory(ts types.TS) func(b BlockT) bool {
 	return func(b BlockT) bool {
-		return b.bornTS.GreaterEq(&ts)
+		return b.bornTS.GE(&ts)
 	}
 }
 

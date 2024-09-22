@@ -176,7 +176,7 @@ func (un *TxnMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// true: prepared in range
 	// false: not prepared before minTs
-	if un.Prepare.GreaterEq(&minTS) && un.Prepare.LE(&maxTS) {
+	if un.Prepare.GE(&minTS) && un.Prepare.LE(&maxTS) {
 		return true, false
 	}
 
@@ -220,7 +220,7 @@ func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// true: committed in range
 	// false: not committed before minTs
-	if un.End.GreaterEq(&minTS) && un.End.LE(&maxTS) {
+	if un.End.GE(&minTS) && un.End.LE(&maxTS) {
 		return true, false
 	}
 
@@ -245,7 +245,7 @@ func (un *TxnMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	//         Ts           PrepareTs                Time
 	// If ts is before the prepare ts. not to wait
 	prepareTS := un.Txn.GetPrepareTS()
-	if prepareTS.GreaterEq(&ts) {
+	if prepareTS.GE(&ts) {
 		return false, nil
 	}
 

@@ -442,7 +442,7 @@ func copyFileAndGetMetaFiles(
 			panic("not support dir")
 		}
 		start, end, ext := decodeFunc(file.Name)
-		if !backup.IsEmpty() && start.GreaterEq(&backup) {
+		if !backup.IsEmpty() && start.GE(&backup) {
 			logutil.Infof("[Backup] skip file %v", file.Name)
 			continue
 		}
