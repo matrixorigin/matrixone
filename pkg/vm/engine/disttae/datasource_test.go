@@ -112,13 +112,13 @@ func TestTombstoneData1(t *testing.T) {
 		}
 
 		bid := tombstoneRowIds[i].BorrowBlockID()
-		exist, err := tombstones1.HasBlockTombstone(ctx, *bid, fs)
+		exist, err := tombstones1.HasBlockTombstone(ctx, bid, fs)
 		require.NoError(t, err)
 		require.True(t, exist)
 
 		maxTS := types.MaxTs()
 		left, err := tombstones1.ApplyPersistedTombstones(
-			ctx, fs, &maxTS, *bid,
+			ctx, fs, &maxTS, bid,
 			[]int64{int64(tombstoneRowIds[i].GetRowOffset())},
 			&deleteMask)
 
@@ -335,7 +335,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	deletedMask := &nulls.Nulls{}
 	for i := range tombstoneRowIds {
 		bid := tombstoneRowIds[i].BorrowBlockID()
-		left, err := ls.applyWorkspaceFlushedS3Deletes(*bid, nil, deletedMask)
+		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, deletedMask)
 		require.NoError(t, err)
 		require.Zero(t, len(left))
 
