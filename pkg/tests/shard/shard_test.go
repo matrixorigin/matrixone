@@ -214,7 +214,7 @@ func getAllPartitionValues(
 	_, metadata, err := store.Get(table)
 	require.NoError(t, err)
 
-	var values []int
+	values := make([]int, 0, len(metadata.ShardIDs))
 	for i := range metadata.ShardIDs {
 		values = append(values, i*10+1)
 	}

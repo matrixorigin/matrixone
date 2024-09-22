@@ -604,18 +604,13 @@ func (r *shardingLocalReader) close() error {
 }
 
 func (r *shardingLocalReader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	return
-	// panic("not implemented")
 }
 
 func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {
-	// panic("not implemented")
 	return nil
 }
 
 func (r *shardingLocalReader) SetFilterZM(zm objectio.ZoneMap) {
-	return
-	// panic("not implemented")
 }
 
 func (tbl *txnTableDelegate) BuildShardingReaders(
