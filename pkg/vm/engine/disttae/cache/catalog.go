@@ -78,7 +78,6 @@ func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	}
 }
 
-// PXU TODO
 func (cc *CatalogCache) CanServe(ts types.TS) bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()

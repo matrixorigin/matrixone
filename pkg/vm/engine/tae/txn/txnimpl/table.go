@@ -830,7 +830,7 @@ func (tbl *txnTable) GetByFilter(
 	id.BlockID = *rowID.BorrowBlockID()
 	offset = rowID.GetRowOffset()
 	var deleted bool
-	deleted, err = tbl.IsDeletedInWorkSpace(id.BlockID, offset)
+	deleted, err = tbl.IsDeletedInWorkSpace(&id.BlockID, offset)
 	if err != nil {
 		return
 	}
@@ -1656,8 +1656,7 @@ func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls
 	return nil
 }
 
-// PXU TODO
-func (tbl *txnTable) IsDeletedInWorkSpace(blkID objectio.Blockid, row uint32) (bool, error) {
+func (tbl *txnTable) IsDeletedInWorkSpace(blkID *objectio.Blockid, row uint32) (bool, error) {
 	if tbl.tombstoneTable == nil || tbl.tombstoneTable.tableSpace == nil {
 		return false, nil
 	}
@@ -1666,7 +1665,7 @@ func (tbl *txnTable) IsDeletedInWorkSpace(blkID objectio.Blockid, row uint32) (b
 		for i := 0; i < node.data.Length(); i++ {
 			rowID := node.data.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(i).(types.Rowid)
 			blk, rowOffset := rowID.Decode()
-			if blk.EQ(&blkID) && row == rowOffset {
+			if blk.EQ(blkID) && row == rowOffset {
 				return true, nil
 			}
 		}
@@ -1707,7 +1706,7 @@ func (tbl *txnTable) IsDeletedInWorkSpace(blkID objectio.Blockid, row uint32) (b
 			for i := 0; i < vectors[0].Length(); i++ {
 				rowID := vectors[0].Get(i).(types.Rowid)
 				blk, rowOffset := rowID.Decode()
-				if blk.EQ(&blkID) && row == rowOffset {
+				if blk.EQ(blkID) && row == rowOffset {
 					return true, nil
 				}
 			}
