@@ -293,6 +293,9 @@ type FrontendParameters struct {
 	// PubAllAccounts shows the accounts which can publish data to all accounts
 	// consists of account names are separated by comma
 	PubAllAccounts string `toml:"pub-all-accounts"`
+
+	// KeyEncryptionKey is the key for encrypt key
+	KeyEncryptionKey string `toml:"key-encryption-key"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {

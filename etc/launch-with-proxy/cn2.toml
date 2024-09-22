@@ -44,3 +44,4 @@ type = "distributed-tae"
 port = 16002
 unix-socket = "/tmp/mysql2.sock"
 proxy-enabled = true
+key-encryption-key = "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y"
