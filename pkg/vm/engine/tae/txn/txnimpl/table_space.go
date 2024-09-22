@@ -407,7 +407,8 @@ func (space *tableSpace) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 	if !space.table.GetLocalSchema(space.isTombstone).HasPK() {
 		id = space.table.entry.AsCommonID()
 		rid := filter.Val.(types.Rowid)
-		id.BlockID, offset = rid.Decode()
+		offset = rid.GetRowOffset()
+		id.BlockID = *rid.BorrowBlockID()
 		return
 	}
 	id = space.entry.AsCommonID()

@@ -103,7 +103,7 @@ func (d *BackupDeltaLocDataSource) Close() {
 
 func (d *BackupDeltaLocDataSource) ApplyTombstones(
 	_ context.Context,
-	_ objectio.Blockid,
+	_ *objectio.Blockid,
 	_ []int64,
 	_ engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
@@ -148,7 +148,7 @@ func buildDS(
 }
 
 func GetTombstonesByBlockId(
-	bid objectio.Blockid,
+	bid *objectio.Blockid,
 	deleteMask *nulls.Nulls,
 	scanOp func(func(tombstone *objData) (bool, error)) error,
 	needShrink bool,
@@ -168,7 +168,7 @@ func GetTombstonesByBlockId(
 
 		for idx := 0; idx < int(obj.BlkCnt()); idx++ {
 			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](oData.data[idx].Vecs[0])
-			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, &bid)
+			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, bid)
 			if start == end {
 				continue
 			}
@@ -193,7 +193,7 @@ func GetTombstonesByBlockId(
 }
 
 func (d *BackupDeltaLocDataSource) GetTombstones(
-	ctx context.Context, bid objectio.Blockid,
+	ctx context.Context, bid *objectio.Blockid,
 ) (deletedRows *nulls.Nulls, err error) {
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)

@@ -183,9 +183,8 @@ func (r *Rowid) CloneSegmentID() Segmentid {
 	return *(*Segmentid)(unsafe.Pointer(&r[0]))
 }
 
-// PXU TODO:
-func (r *Rowid) Decode() (Blockid, uint32) {
-	b := *(*Blockid)(r[:BlockidSize])
+func (r *Rowid) Decode() (*Blockid, uint32) {
+	b := (*Blockid)(r[:BlockidSize])
 	s := DecodeUint32(r[BlockidSize:])
 	return b, s
 }
@@ -225,6 +224,10 @@ func (r *Rowid) ShortStringEx() string {
 	b := (*Blockid)(unsafe.Pointer(&r[0]))
 	s := DecodeUint32(r[BlockidSize:])
 	return fmt.Sprintf("%s-%d", b.ShortStringEx(), s)
+}
+
+func (b *Blockid) EQ(than *Blockid) bool {
+	return b.Compare(than) == 0
 }
 
 func (b *Blockid) LT(than *Blockid) bool {

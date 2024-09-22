@@ -177,15 +177,15 @@ func (p *PartitionState) GetChangedObjsBetween(
 	return
 }
 
-func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
+func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
 	iter := p.dataObjectsNameIndex.Copy().Iter()
 	defer iter.Release()
 
 	pivot := ObjectEntry{}
-	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
+	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(blockID))
 	if ok := iter.Seek(pivot); ok {
 		e := iter.Item()
-		if bytes.Equal(e.ObjectShortName()[:], objectio.ShortName(&blockID)[:]) {
+		if bytes.Equal(e.ObjectShortName()[:], objectio.ShortName(blockID)[:]) {
 			return true
 		}
 	}

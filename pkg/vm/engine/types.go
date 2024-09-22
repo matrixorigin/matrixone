@@ -617,7 +617,7 @@ type Tombstoner interface {
 	StringWithPrefix(string) string
 
 	// false positive check
-	HasBlockTombstone(ctx context.Context, id objectio.Blockid, fs fileservice.FileService) (bool, error)
+	HasBlockTombstone(ctx context.Context, id *objectio.Blockid, fs fileservice.FileService) (bool, error)
 
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 	UnmarshalBinary(buf []byte) error
@@ -630,7 +630,7 @@ type Tombstoner interface {
 	// `deleted` is the rows that are deleted from this apply
 	// `left` is the rows that are left after this apply
 	ApplyInMemTombstones(
-		bid types.Blockid,
+		bid *types.Blockid,
 		rowsOffset []int64,
 		deleted *nulls.Nulls,
 	) (left []int64)
@@ -640,8 +640,8 @@ type Tombstoner interface {
 	ApplyPersistedTombstones(
 		ctx context.Context,
 		fs fileservice.FileService,
-		snapshot types.TS,
-		bid types.Blockid,
+		snapshot *types.TS,
+		bid *types.Blockid,
 		rowsOffset []int64,
 		deletedMask *nulls.Nulls,
 	) (left []int64, err error)
@@ -758,13 +758,13 @@ type DataSource interface {
 
 	ApplyTombstones(
 		ctx context.Context,
-		bid objectio.Blockid,
+		bid *objectio.Blockid,
 		rowsOffset []int64,
 		applyPolicy TombstoneApplyPolicy,
 	) ([]int64, error)
 
 	GetTombstones(
-		ctx context.Context, bid objectio.Blockid,
+		ctx context.Context, bid *objectio.Blockid,
 	) (deletedRows *nulls.Nulls, err error)
 
 	SetOrderBy(orderby []*plan.OrderBySpec)

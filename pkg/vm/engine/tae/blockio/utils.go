@@ -78,8 +78,8 @@ func IsRowDeleted(
 
 func GetTombstonesByBlockId(
 	ctx context.Context,
-	ts types.TS,
-	blockId objectio.Blockid,
+	ts *types.TS,
+	blockId *objectio.Blockid,
 	getTombstoneFileFn func() (*objectio.ObjectStats, error),
 	deletedMask *nulls.Nulls,
 	fs fileservice.FileService,

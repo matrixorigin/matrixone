@@ -116,8 +116,9 @@ func TestTombstoneData1(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, exist)
 
+		maxTS := types.MaxTs()
 		left, err := tombstones1.ApplyPersistedTombstones(
-			ctx, fs, types.MaxTs(), *bid,
+			ctx, fs, &maxTS, *bid,
 			[]int64{int64(tombstoneRowIds[i].GetRowOffset())},
 			&deleteMask)
 
@@ -182,7 +183,7 @@ func TestTombstoneData1(t *testing.T) {
 	target := types.NewBlockidWithObjectID(obj1, 3)
 	rowsOffset := []int64{0, 1, 2, 3}
 	left := tombstones1.ApplyInMemTombstones(
-		*target,
+		target,
 		rowsOffset,
 		nil,
 	)
@@ -193,7 +194,7 @@ func TestTombstoneData1(t *testing.T) {
 	deleted := nulls.NewWithSize(0)
 	deleted.Add(5)
 	left = tombstones1.ApplyInMemTombstones(
-		*target,
+		target,
 		nil,
 		deleted,
 	)
@@ -206,7 +207,7 @@ func TestTombstoneData1(t *testing.T) {
 	target = types.NewBlockidWithObjectID(obj2, 0)
 	rowsOffset = []int64{2, 3, 4}
 	left = tombstones1.ApplyInMemTombstones(
-		*target,
+		target,
 		rowsOffset,
 		nil,
 	)
@@ -218,7 +219,7 @@ func TestTombstoneData1(t *testing.T) {
 	deleted = nulls.NewWithSize(0)
 	deleted.Add(4)
 	left = tombstones1.ApplyInMemTombstones(
-		*target,
+		target,
 		nil,
 		deleted,
 	)

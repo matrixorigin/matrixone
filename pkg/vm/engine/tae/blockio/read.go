@@ -86,7 +86,7 @@ func ReadDataByFilter(
 	if len(sels) == 0 {
 		return
 	}
-	sels, err = ds.ApplyTombstones(ctx, info.BlockID, sels, engine.Policy_CheckAll)
+	sels, err = ds.ApplyTombstones(ctx, &info.BlockID, sels, engine.Policy_CheckAll)
 	return
 }
 
@@ -128,7 +128,7 @@ func BlockDataReadNoCopy(
 	); err != nil {
 		return nil, nil, nil, err
 	}
-	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -299,7 +299,7 @@ func BlockDataReadBackup(
 			}
 		}
 	}
-	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
 	if err != nil {
 		return
 	}
@@ -390,7 +390,7 @@ func BlockDataReadInner(
 		return
 	}
 
-	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
 	if err != nil {
 		return
 	}
@@ -597,7 +597,7 @@ func ReadDeletes(
 func EvalDeleteMaskFromDNCreatedTombstones(
 	deletes *batch.Batch,
 	meta objectio.BlockObject,
-	ts types.TS,
+	ts *types.TS,
 	blockid *types.Blockid,
 ) (rows *nulls.Bitmap) {
 	if deletes == nil {
@@ -624,7 +624,7 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	} else {
 		tss := vector.MustFixedColWithTypeCheck[types.TS](deletes.Vecs[1])
 		for i := end - 1; i >= start; i-- {
-			if tss[i].GT(&ts) {
+			if tss[i].GT(ts) {
 				continue
 			}
 			row := rowids[i].GetRowOffset()
@@ -639,7 +639,7 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 }
 
 func EvalDeleteMaskFromCNCreatedTombstones(
-	bid types.Blockid,
+	bid *types.Blockid,
 	deletes *batch.Batch,
 ) (rows *nulls.Bitmap) {
 	if deletes == nil {
@@ -647,7 +647,7 @@ func EvalDeleteMaskFromCNCreatedTombstones(
 	}
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0])
 
-	start, end := FindStartEndOfBlockFromSortedRowids(rowids, &bid)
+	start, end := FindStartEndOfBlockFromSortedRowids(rowids, bid)
 	for i := end - 1; i >= start; i-- {
 		row := rowids[i].GetRowOffset()
 		if rows == nil {
@@ -727,8 +727,8 @@ func IsRowDeletedByLocation(
 
 func FillBlockDeleteMask(
 	ctx context.Context,
-	snapshotTS types.TS,
-	blockId types.Blockid,
+	snapshotTS *types.TS,
+	blockId *types.Blockid,
 	location objectio.Location,
 	fs fileservice.FileService,
 	createdByCN bool,
@@ -750,7 +750,7 @@ func FillBlockDeleteMask(
 			rows = EvalDeleteMaskFromCNCreatedTombstones(blockId, persistedDeletes)
 		} else {
 			rows = EvalDeleteMaskFromDNCreatedTombstones(
-				persistedDeletes, meta.GetBlockMeta(uint32(location.ID())), snapshotTS, &blockId,
+				persistedDeletes, meta.GetBlockMeta(uint32(location.ID())), snapshotTS, blockId,
 			)
 		}
 
