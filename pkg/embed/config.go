@@ -140,6 +140,9 @@ func newServiceConfig() ServiceConfig {
 		LogService:    logservice.DefaultConfig(),
 		CN: cnservice.Config{
 			AutomaticUpgrade: true,
+			Frontend: config.FrontendParameters{
+				KeyEncryptionKey: "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y",
+			},
 		},
 	}
 }

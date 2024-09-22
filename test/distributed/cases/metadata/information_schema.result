@@ -28,6 +28,7 @@ def    mo_catalog    mo_account    BASE TABLE    Tae
 def    mo_catalog    mo_cdc_task    BASE TABLE    Tae
 def    mo_catalog    mo_cdc_watermark    BASE TABLE    Tae
 def    mo_catalog    mo_columns    BASE TABLE    Tae
+def    mo_catalog    mo_data_key    BASE TABLE    Tae
 def    mo_catalog    mo_database    BASE TABLE    Tae
 def    mo_catalog    mo_foreign_keys    BASE TABLE    Tae
 def    mo_catalog    mo_indexes    BASE TABLE    Tae
