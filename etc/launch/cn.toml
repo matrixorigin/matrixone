@@ -12,5 +12,3 @@ port-base = 18000
 check-fraction = 65536
 enable-metrics = true
 
-[cn.frontend]
-key-encryption-key = "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y"
