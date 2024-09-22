@@ -309,10 +309,10 @@ func (h *Handle) HandlePreCommitWrite(
 			if req.FileName != "" {
 				col := req.Batch.Vecs[0]
 				for i := 0; i < req.Batch.RowCount(); i++ {
+					stats := objectio.ObjectStats(col.GetBytesAt(i))
 					if req.Type == db.EntryInsert {
-						req.MetaLocs = append(req.MetaLocs, col.GetStringAt(i))
+						req.DataObjectStats = append(req.DataObjectStats, stats)
 					} else {
-						stats := objectio.ObjectStats(col.GetBytesAt(i))
 						req.TombstoneStats = append(req.TombstoneStats, stats)
 					}
 				}
@@ -718,31 +718,31 @@ func (h *Handle) HandleWrite(
 	if req.Type == db.EntryInsert {
 		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
-			metalocations := make(map[string]struct{})
-			for _, metLoc := range req.MetaLocs {
-				location, err := blockio.EncodeLocationFromString(metLoc)
-				if err != nil {
-					return err
-				}
-				metalocations[location.Name().String()] = struct{}{}
-			}
-			statsVec := req.Batch.Vecs[1]
+			//metalocations := make(map[string]struct{})
+			//for _, metLoc := range req.MetaLocs {
+			//	location, err := blockio.EncodeLocationFromString(metLoc)
+			//	if err != nil {
+			//		return err
+			//	}
+			//	metalocations[location.Name().String()] = struct{}{}
+			//}
+			statsVec := req.Batch.Vecs[0]
 			for i := 0; i < statsVec.Length(); i++ {
 				s := objectio.ObjectStats(statsVec.GetBytesAt(i))
 				if !s.GetCNCreated() {
 					logutil.Fatal("the `CNCreated` mask not set")
 				}
-				delete(metalocations, s.ObjectName().String())
+				//delete(metalocations, s.ObjectName().String())
 			}
-			if len(metalocations) != 0 {
-				logutil.Warn(
-					"TAE-EMPTY-STATS",
-					zap.Any("locations", metalocations),
-					zap.String("table", req.TableName),
-				)
-				err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
-				return
-			}
+			//if len(metalocations) != 0 {
+			//	logutil.Warn(
+			//		"TAE-EMPTY-STATS",
+			//		zap.Any("locations", metalocations),
+			//		zap.String("table", req.TableName),
+			//	)
+			//	err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
+			//	return
+			//}
 			err = tb.AddObjsWithMetaLoc(
 				ctx,
 				containers.ToTNVector(statsVec, common.WorkspaceAllocator),

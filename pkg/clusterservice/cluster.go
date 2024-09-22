@@ -80,6 +80,7 @@ type cluster struct {
 	readyOnce       sync.Once
 	readyC          chan struct{}
 	services        atomic.Pointer[services]
+	regexpCache     *regexpCache
 	options         struct {
 		disableRefresh bool
 	}
@@ -103,6 +104,7 @@ func NewMOCluster(
 		forceRefreshC:   make(chan struct{}, 1),
 		readyC:          make(chan struct{}),
 		refreshInterval: refreshInterval,
+		regexpCache:     newRegexCache(cacheTTL),
 	}
 
 	c.services.Store(&services{})
@@ -119,12 +121,33 @@ func NewMOCluster(
 			close(c.readyC)
 		})
 	}
+	if err := c.stopper.RunTask(c.regexpCacheGC); err != nil {
+		c.logger.Error("failed to start regex cache gc task", zap.Error(err))
+	}
 	return c
+}
+
+func (c *cluster) regexpCacheGC(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour * 5)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if c.regexpCache != nil {
+				c.regexpCache.gc()
+				c.logger.Info("regex cache gc")
+			}
+		}
+	}
 }
 
 func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService) bool) {
 	c.waitReady()
-
+	if selector.regexpCache == nil && c.regexpCache != nil {
+		selector.regexpCache = c.regexpCache
+	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
 		// If the all field is false, the work state of CN service MUST be
@@ -146,6 +169,9 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(metadata.CNService) bool) {
 	c.waitReady()
 
+	if selector.regexpCache == nil && c.regexpCache != nil {
+		selector.regexpCache = c.regexpCache
+	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
 		if selector.filterCN(cn) {
@@ -158,7 +184,9 @@ func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(
 
 func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService) bool) {
 	c.waitReady()
-
+	if selector.regexpCache == nil && c.regexpCache != nil {
+		selector.regexpCache = c.regexpCache
+	}
 	s := c.services.Load()
 	for _, tn := range s.tn {
 		if selector.filterTN(tn) {

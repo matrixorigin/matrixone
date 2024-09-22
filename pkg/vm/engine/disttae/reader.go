@@ -231,7 +231,6 @@ func (r *mergeReader) Read(
 }
 
 // -----------------------------------------------------------------
-
 func NewReader(
 	ctx context.Context,
 	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
@@ -276,12 +275,11 @@ func NewReader(
 			ctx:      ctx,
 			fs:       e.fs,
 			ts:       ts,
-			proc:     proc,
 			tableDef: tableDef,
+			name:     tableDef.Name,
 		},
 		memFilter: memFilter,
 		source:    source,
-		ts:        ts,
 	}
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
@@ -313,6 +311,7 @@ func (r *reader) Read(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
+	outBatch.CleanOnlyData()
 
 	var dataState engine.DataState
 
@@ -363,6 +362,7 @@ func (r *reader) Read(
 
 	err = blockio.BlockDataRead(
 		statsCtx,
+		r.isTombstone,
 		blkInfo,
 		r.source,
 		r.columns.seqnums,
@@ -372,7 +372,7 @@ func (r *reader) Read(
 		r.filterState.colTypes,
 		filter,
 		policy,
-		r.tableDef.Name,
+		r.name,
 		outBatch,
 		mp,
 		r.fs,

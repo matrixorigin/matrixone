@@ -130,6 +130,15 @@ message Insert{
   plan.TableDef table_def = 10;
 }
 
+message MultiUpdate {
+  uint64 affected_rows = 1;
+  bool ToWriteS3 = 2;
+  uint32 IBucket = 3;
+  uint32 NBucket = 4;
+  map<string,int32> SegmentMap = 5;
+  repeated plan.UpdateCtx update_ctx = 6;
+}
+
 message Array{
   repeated int32 array = 1;
 }

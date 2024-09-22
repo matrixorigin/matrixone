@@ -10,3 +10,6 @@ port-base = 18000
 
 [cn.python-udf-client]
 server-address = "127.0.0.1:50051"
+
+[cn.frontend]
+key-encryption-key = "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y"
