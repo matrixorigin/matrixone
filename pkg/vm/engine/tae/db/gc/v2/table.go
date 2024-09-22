@@ -166,11 +166,6 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, pitrVec types.TS, na
 		return false
 	}
 	if obj.dropTS.IsEmpty() {
-		logutil.Debug("[soft GC]Snapshot Refers",
-			zap.String("name", name),
-			zap.String("snapTS", snapVec[0].ToString()),
-			zap.String("createTS", obj.createTS.ToString()),
-			zap.String("dropTS", obj.dropTS.ToString()))
 		return true
 	}
 
