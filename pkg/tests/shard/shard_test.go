@@ -183,12 +183,15 @@ func getRemotePartitionValue(
 	info := ""
 	info += fmt.Sprintf(">>>>>>>>> shards-values: %v\n", values)
 	info += fmt.Sprintf(">>>>>>>>> shards: %v\n", shards)
+	selected := make(map[uint64]uint64)
 	for i := 0; i < 3; i++ {
 		local := shards[i]
 		result = append(result,
 			func(local uint64) int {
 				for shard, value := range values {
-					if shard != local {
+					preSelected := selected[shard]
+					if shard != local && local != preSelected {
+						selected[local] = shard
 						delete(values, shard)
 						info += fmt.Sprintf(">>>>>>>>> %d select %d: %v\n", local, value, shards)
 						return value
