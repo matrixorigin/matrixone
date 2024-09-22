@@ -63,9 +63,9 @@ func WithMemorySizeThreshold(size int) SinkerOption {
 	}
 }
 
-func WithBuffer(buffer *containers.OneSchemaBatchBuffer) SinkerOption {
+func WithBuffer(buffer *containers.OneSchemaBatchBuffer, isOwner bool) SinkerOption {
 	return func(sinker *Sinker) {
-		sinker.buf.isOwner = false
+		sinker.buf.isOwner = isOwner
 		sinker.buf.buffers = buffer
 	}
 }

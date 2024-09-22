@@ -42,9 +42,8 @@ func ConstructTransferFlow(
 	table *txnTable,
 	withHidden bool,
 	sourcer engine.Reader,
-	sinker *engine_util.Sinker,
 	isObjectDeletedFn func(*objectio.ObjectId) bool,
-	targetObjects []objectio.ObjectStats,
+	newDataObjects []objectio.ObjectStats,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	opts ...TransferOption,
@@ -53,9 +52,8 @@ func ConstructTransferFlow(
 		table:             table,
 		withHidden:        withHidden,
 		sourcer:           sourcer,
-		sinker:            sinker,
 		isObjectDeletedFn: isObjectDeletedFn,
-		targetObjects:     targetObjects,
+		newDataObjects:    newDataObjects,
 		mp:                mp,
 		fs:                fs,
 	}
@@ -71,7 +69,7 @@ type TransferFlow struct {
 	withHidden        bool
 	sourcer           engine.Reader
 	isObjectDeletedFn func(*objectio.ObjectId) bool
-	targetObjects     []objectio.ObjectStats
+	newDataObjects    []objectio.ObjectStats
 	buffer            *containers.OneSchemaBatchBuffer
 	staged            *batch.Batch
 	sinker            *engine_util.Sinker
@@ -80,8 +78,8 @@ type TransferFlow struct {
 }
 
 func (flow *TransferFlow) fillDefaults() {
+	pkType := plan2.ExprType2Type(&flow.table.tableDef.Cols[flow.table.primaryIdx].Typ)
 	if flow.buffer == nil {
-		pkType := plan2.ExprType2Type(&flow.table.tableDef.Cols[flow.table.primaryIdx].Typ)
 		attrs, attrTypes := objectio.GetTombstoneSchema(
 			pkType, flow.withHidden,
 		)
@@ -89,6 +87,17 @@ func (flow *TransferFlow) fillDefaults() {
 			mpool.MB*8,
 			attrs,
 			attrTypes,
+		)
+	}
+	if flow.sinker == nil {
+		flow.sinker = engine_util.NewTombstoneSinker(
+			flow.withHidden,
+			pkType,
+			flow.mp,
+			flow.fs,
+			engine_util.WithBuffer(flow.buffer, false),
+			engine_util.WithMemorySizeThreshold(mpool.MB*16),
+			// engine_util.WithAllMergeSorted(),
 		)
 	}
 }
@@ -181,7 +190,7 @@ func (flow *TransferFlow) transferStaged(ctx context.Context) error {
 	if err := doTransferRowids(
 		ctx,
 		flow.table,
-		flow.targetObjects,
+		flow.newDataObjects,
 		staged.Vecs[0], // rowid intents
 		result.Vecs[0], // rowid results
 		staged.Vecs[1], // pk intents
