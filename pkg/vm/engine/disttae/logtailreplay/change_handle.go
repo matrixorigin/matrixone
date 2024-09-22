@@ -532,7 +532,7 @@ type ChangeHandler struct {
 }
 
 func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (changeHandle *ChangeHandler, err error) {
-	if state.minTS.Greater(&start) {
+	if state.minTS.GT(&start) {
 		return nil, moerr.NewErrStaleReadNoCtx(state.minTS.ToString(), start.ToString())
 	}
 	changeHandle = &ChangeHandler{
@@ -638,7 +638,7 @@ func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, start, end types.TS) e
 	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[sortIdx])
 	deletes := make([]int64, 0)
 	for i, ts := range commitTSs {
-		if ts.LT(&start) || ts.Greater(&end) {
+		if ts.LT(&start) || ts.GT(&end) {
 			deletes = append(deletes, int64(i))
 		}
 	}
@@ -670,7 +670,7 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 
 func checkObjectEntry(entry *ObjectEntry, start, end types.TS) bool {
 	if entry.GetAppendable() {
-		if entry.CreateTime.Greater(&end) {
+		if entry.CreateTime.GT(&end) {
 			return false
 		}
 		if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {

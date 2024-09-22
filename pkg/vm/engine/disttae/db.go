@@ -349,7 +349,7 @@ func (e *Engine) getOrCreateSnapPart(
 
 	start, end := snap.GetDuration()
 	//if has no checkpoints or ts > snap.end, use latest partition.
-	if snap.IsEmpty() || ts.Greater(&end) {
+	if snap.IsEmpty() || ts.GT(&end) {
 		ps, err := tbl.tryToSubscribe(ctx)
 		if err != nil {
 			return nil, err

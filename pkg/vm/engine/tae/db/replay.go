@@ -164,7 +164,7 @@ func (replayer *Replayer) GetMaxTS() types.TS {
 }
 
 func (replayer *Replayer) OnTimeStamp(ts types.TS) {
-	if ts.Greater(&replayer.maxTs) {
+	if ts.GT(&replayer.maxTs) {
 		replayer.maxTs = ts
 	}
 }

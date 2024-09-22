@@ -221,7 +221,7 @@ func (n *AppendMVCCHandle) GetVisibleRowLocked(
 			}
 		}
 		startTS := txn.GetStartTS()
-		return !an.Prepare.Greater(&startTS)
+		return !an.Prepare.GT(&startTS)
 	}, true)
 	if len(anToWait) != 0 {
 		n.RUnlock()

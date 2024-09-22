@@ -97,7 +97,7 @@ func NewDirtyTreeEntry(start, end types.TS, tree *model.Tree) *DirtyTreeEntry {
 }
 
 func (entry *DirtyTreeEntry) Merge(o *DirtyTreeEntry) {
-	if entry.start.Greater(&o.start) {
+	if entry.start.GT(&o.start) {
 		entry.start = o.start
 	}
 	if entry.end.LT(&o.end) {

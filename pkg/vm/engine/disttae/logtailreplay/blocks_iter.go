@@ -158,7 +158,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	}); ok; ok = iter.Next() {
 		entry := iter.Item()
 
-		if entry.Time.Greater(&end) {
+		if entry.Time.GT(&end) {
 			break
 		}
 

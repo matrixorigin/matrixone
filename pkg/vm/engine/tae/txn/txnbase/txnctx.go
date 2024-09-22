@@ -118,7 +118,7 @@ func (ctx *TxnCtx) CommitBefore(startTs types.TS) bool {
 }
 func (ctx *TxnCtx) CommitAfter(startTs types.TS) bool {
 	commitTS := ctx.GetCommitTS()
-	return commitTS.Greater(&startTs)
+	return commitTS.GT(&startTs)
 }
 
 func (ctx *TxnCtx) String() string            { return ctx.Repr() }

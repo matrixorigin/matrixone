@@ -286,7 +286,7 @@ func BlockDataReadBackup(
 			if err != nil {
 				return
 			}
-			if commitTs.Greater(&ts) {
+			if commitTs.GT(&ts) {
 				err = windowCNBatch(loaded, 0, uint64(v))
 				if err != nil {
 					return
@@ -553,7 +553,7 @@ func readBlockData(
 		//aborts := vector.MustFixedColWithTypeCheck[bool](loaded.Vecs[len(loaded.Vecs)-1])
 		commits := vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[len(loaded.Vecs)-1])
 		for i := 0; i < len(commits); i++ {
-			if commits[i].Greater(&ts) {
+			if commits[i].GT(&ts) {
 				deletes.Add(uint64(i))
 			}
 		}
@@ -624,7 +624,7 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	} else {
 		tss := vector.MustFixedColWithTypeCheck[types.TS](deletes.Vecs[1])
 		for i := end - 1; i >= start; i-- {
-			if tss[i].Greater(&ts) {
+			if tss[i].GT(&ts) {
 				continue
 			}
 			row := rowids[i].GetRowOffset()

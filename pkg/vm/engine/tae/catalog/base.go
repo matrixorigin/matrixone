@@ -236,7 +236,7 @@ func (be *BaseEntryImpl[T]) DeleteAfter(ts types.TS) bool {
 	if un == nil {
 		return false
 	}
-	return un.DeletedAt.Greater(&ts)
+	return un.DeletedAt.GT(&ts)
 }
 
 func (be *BaseEntryImpl[T]) GetCreatedAtLocked() types.TS {

@@ -413,7 +413,7 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 }
 func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
 	new := txn.GetCommitTS()
-	for old := mgr.MaxCommittedTS.Load(); new.Greater(old); old = mgr.MaxCommittedTS.Load() {
+	for old := mgr.MaxCommittedTS.Load(); new.GT(old); old = mgr.MaxCommittedTS.Load() {
 		if mgr.MaxCommittedTS.CompareAndSwap(old, &new) {
 			return
 		}

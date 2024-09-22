@@ -220,7 +220,7 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 						if err != nil {
 							return false, err
 						}
-						if commitTs.Greater(&d.ts) {
+						if commitTs.GT(&d.ts) {
 							logutil.Debugf("delete row %v, commitTs %v, location %v",
 								v, commitTs.ToString(), name.String())
 						} else {
@@ -333,7 +333,7 @@ func trimTombstoneData(
 			if err != nil {
 				return err
 			}
-			if commitTs.Greater(&ts) {
+			if commitTs.GT(&ts) {
 				logutil.Debugf("delete row %v, commitTs %v, location %v",
 					v, commitTs.ToString(), (*objectsData)[name].stats.ObjectLocation().String())
 			} else {

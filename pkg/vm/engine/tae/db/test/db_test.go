@@ -5567,7 +5567,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 			assert.Nil(t, err)
 			entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 			num := len(entries)
-			assert.Greater(t, num, 0)
+			assert.GT(t, num, 0)
 			testutils.WaitExpect(5000, func() bool {
 				if manager.GetCleaner().GetMaxConsumed() == nil {
 					return false
@@ -5638,7 +5638,7 @@ func TestGCDropDB(t *testing.T) {
 			assert.Nil(t, err)
 			entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 			num := len(entries)
-			assert.Greater(t, num, 0)
+			assert.GT(t, num, 0)
 			testutils.WaitExpect(5000, func() bool {
 				if manager.GetCleaner().GetMaxConsumed() == nil {
 					return false
@@ -5725,7 +5725,7 @@ func TestGCDropTable(t *testing.T) {
 			assert.Nil(t, err)
 			entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 			num := len(entries)
-			assert.Greater(t, num, 0)
+			assert.GT(t, num, 0)
 			testutils.WaitExpect(10000, func() bool {
 				if manager.GetCleaner().GetMaxConsumed() == nil {
 					return false
@@ -6766,7 +6766,7 @@ func TestSnapshotMeta(t *testing.T) {
 			return true
 		}
 		initMinEnd := initMinMerged.GetEnd()
-		return minEnd.Greater(&initMinEnd)
+		return minEnd.GT(&initMinEnd)
 	})
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	if minMerged == nil {
@@ -6778,7 +6778,7 @@ func TestSnapshotMeta(t *testing.T) {
 	}
 	if initMinMerged != nil {
 		initMinEnd := initMinMerged.GetEnd()
-		if !minEnd.Greater(&initMinEnd) {
+		if !minEnd.GT(&initMinEnd) {
 			return
 		}
 	}

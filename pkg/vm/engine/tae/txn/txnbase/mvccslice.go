@@ -180,7 +180,7 @@ func (be *MVCCSlice[T]) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node 
 
 	// 1. Last append node is in the window and it was already committed
 	prepareTS := lastAppend.GetPrepare()
-	if ts.Greater(&prepareTS) {
+	if ts.GT(&prepareTS) {
 		return len(be.MVCC) - 1, lastAppend
 	}
 	start, end := 0, len(be.MVCC)-1
@@ -190,7 +190,7 @@ func (be *MVCCSlice[T]) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node 
 		midPrepareTS := be.MVCC[mid].GetPrepare()
 		if midPrepareTS.LT(&ts) {
 			start = mid + 1
-		} else if midPrepareTS.Greater(&ts) {
+		} else if midPrepareTS.GT(&ts) {
 			end = mid - 1
 		} else {
 			break

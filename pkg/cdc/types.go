@@ -186,7 +186,7 @@ func (row AtomicBatchRow) Less(other AtomicBatchRow) bool {
 	if row.Ts.LT(&other.Ts) {
 		return true
 	}
-	if row.Ts.Greater(&other.Ts) {
+	if row.Ts.GT(&other.Ts) {
 		return false
 	}
 	//pk asc

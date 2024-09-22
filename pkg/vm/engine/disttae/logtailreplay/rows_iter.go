@@ -70,7 +70,7 @@ func (p *rowsIter) Next() bool {
 			// no more
 			return false
 		}
-		if entry.Time.Greater(&p.ts) {
+		if entry.Time.GT(&p.ts) {
 			// not visible
 			continue
 		}
@@ -414,7 +414,7 @@ func (p *primaryKeyIter) Next() bool {
 				// no more
 				break
 			}
-			if row.Time.Greater(&p.ts) {
+			if row.Time.GT(&p.ts) {
 				// not visible
 				continue
 			}
@@ -483,7 +483,7 @@ func (p *primaryKeyDelIter) Next() bool {
 				// no more
 				break
 			}
-			if row.Time.Greater(&p.ts) {
+			if row.Time.GT(&p.ts) {
 				// not visible
 				continue
 			}

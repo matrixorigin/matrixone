@@ -85,7 +85,7 @@ func (un *TxnMVCCNode) CheckConflict(txn txnif.TxnReader) error {
 	// -------+-------------+-------------------->
 	//        ts         CommitTs            time
 	startTS := txn.GetStartTS()
-	if un.End.Greater(&startTS) {
+	if un.End.GT(&startTS) {
 		return txnif.ErrTxnWWConflict
 	}
 	return nil

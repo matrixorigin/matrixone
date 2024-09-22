@@ -344,7 +344,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		creates := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
 		for i := 0; i < len(ids); i++ {
 			createAt := creates[i]
-			if createAt.LT(&startts) || createAt.Greater(&endts) {
+			if createAt.LT(&startts) || createAt.GT(&endts) {
 				continue
 			}
 			name := string(nameVarlena[i].GetByteSlice(nameArea))
@@ -375,7 +375,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			}
 			table := sm.tables[account][tid]
 			if table != nil {
-				if table.createAt.Greater(&createAt) {
+				if table.createAt.GT(&createAt) {
 					panic(fmt.Sprintf("table %v %v create at %v is greater than %v",
 						tid, tuple.ErrString(nil), table.createAt.ToString(), createAt.ToString()))
 				}
@@ -414,7 +414,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		for i := 0; i < len(commitTsVec); i++ {
 			pk, _, _, _ := types.DecodeTuple(objectBat.Vecs[1].GetRawBytesAt(i))
 			commitTs := commitTsVec[i]
-			if commitTs.LT(&startts) || commitTs.Greater(&endts) {
+			if commitTs.LT(&startts) || commitTs.GT(&endts) {
 				continue
 			}
 			if _, ok := sm.aobjDelTsMap[commitTs]; ok {
@@ -441,7 +441,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			panic(fmt.Sprintf("delete table %v not found @ %v, start is %v, end is %v", del.pk.ErrString(nil), del.ts.ToString(), startts.ToString(), endts.ToString()))
 		}
 		table := sm.pkIndexes[pk][0]
-		if !table.deleteAt.IsEmpty() && table.deleteAt.Greater(&del.ts) {
+		if !table.deleteAt.IsEmpty() && table.deleteAt.GT(&del.ts) {
 			panic(fmt.Sprintf("table %v delete at %v is greater than %v", table.tid, table.deleteAt, del.ts))
 		}
 		table.deleteAt = del.ts
@@ -1377,7 +1377,7 @@ func (sm *SnapshotMeta) String() string {
 
 func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr types.TS) bool {
 	if !pitr.IsEmpty() {
-		if table.deleteAt.Greater(&pitr) {
+		if table.deleteAt.GT(&pitr) {
 			return true
 		}
 	}

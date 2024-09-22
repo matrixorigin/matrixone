@@ -295,7 +295,7 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				}
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
-				if commitTS.Greater(&startTS) {
+				if commitTS.GT(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
 				if skip && commitTS.LT(&startTS) {
@@ -345,7 +345,7 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 					}
 					commitTS := tsVec.Get(row).(types.TS)
 					startTS := txn.GetStartTS()
-					if commitTS.Greater(&startTS) {
+					if commitTS.GT(&startTS) {
 						return txnif.ErrTxnWWConflict
 					}
 					if skip && commitTS.LT(&startTS) {
@@ -390,7 +390,7 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 				rowIDs.Update(rowOffset, nil, true)
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
-				if commitTS.Greater(&startTS) {
+				if commitTS.GT(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
 			}
@@ -446,7 +446,7 @@ func dedupABlkClosureFactory(
 				}
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
-				if commitTS.Greater(&startTS) {
+				if commitTS.GT(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(*vec.GetType(), v1, false)

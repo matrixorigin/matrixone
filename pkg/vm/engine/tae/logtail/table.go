@@ -239,7 +239,7 @@ func (blk *txnBlock) ForeachRowInBetween(
 	for _, row := range rows {
 		readRows += 1
 		ts := row.GetPrepareTS()
-		if ts.IsEmpty() || ts.Greater(&to) {
+		if ts.IsEmpty() || ts.GT(&to) {
 			outOfRange = true
 			return
 		}
@@ -340,7 +340,7 @@ func (table *TxnTable) ForeachRowInBetween(
 
 	// from is smaller than the very first block and it is not special like 0-0, 0-1, 1-0
 	ts := types.BuildTS(1, 1)
-	if outOfLeft && from.Greater(&ts) {
+	if outOfLeft && from.GT(&ts) {
 		minTs := types.TS{}
 		snapshot.Ascend(&txnBlock{}, func(blk *txnBlock) bool {
 			minTs = blk.bornTS
@@ -349,7 +349,7 @@ func (table *TxnTable) ForeachRowInBetween(
 		logutil.Info("[logtail] fetch with too small ts", zap.String("ts", from.ToString()), zap.String("minTs", minTs.ToString()))
 	}
 	snapshot.Ascend(pivot, func(blk BlockT) bool {
-		if blk.bornTS.Greater(&to) {
+		if blk.bornTS.GT(&to) {
 			return false
 		}
 

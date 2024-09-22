@@ -139,7 +139,7 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 		if global == nil {
 			return false, nil
 		}
-		return global.end.Greater(&prevGlobalEnd), nil
+		return global.end.GT(&prevGlobalEnd), nil
 	}
 	err := common.RetryWithIntervalAndTimeout(
 		op,

@@ -132,7 +132,7 @@ func (p *PartitionState) HandleDataObjectList(
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
 		p.shared.Lock()
-		if t := commitTSCol[idx]; t.Greater(&p.shared.lastFlushTimestamp) {
+		if t := commitTSCol[idx]; t.GT(&p.shared.lastFlushTimestamp) {
 			p.shared.lastFlushTimestamp = t
 		}
 		p.shared.Unlock()
@@ -284,7 +284,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
 		p.shared.Lock()
-		if t := commitTSCol[idx]; t.Greater(&p.shared.lastFlushTimestamp) {
+		if t := commitTSCol[idx]; t.GT(&p.shared.lastFlushTimestamp) {
 			p.shared.lastFlushTimestamp = t
 		}
 		p.shared.Unlock()
@@ -627,7 +627,7 @@ func (p *PartitionState) truncateTombstoneObjects(
 
 	for iter.Next() {
 		entry := iter.Item()
-		if entry.DeleteTime.IsEmpty() || entry.DeleteTime.Greater(&ts) {
+		if entry.DeleteTime.IsEmpty() || entry.DeleteTime.GT(&ts) {
 			break
 		}
 
@@ -646,7 +646,7 @@ func (p *PartitionState) truncateTombstoneObjects(
 }
 
 func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
-	if p.minTS.Greater(&ts) {
+	if p.minTS.GT(&ts) {
 		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.ToString(), ts.ToString())
 		return
 	}
@@ -669,7 +669,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 	objectsToDelete := ""
 	for ; ok; ok = iter.Prev() {
 		entry := iter.Item()
-		if entry.Time.Greater(&ts) {
+		if entry.Time.GT(&ts) {
 			continue
 		}
 		if entry.IsDelete {
@@ -689,7 +689,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 	}
 	for ; ok; ok = iter.Prev() {
 		entry := iter.Item()
-		if entry.Time.Greater(&ts) {
+		if entry.Time.GT(&ts) {
 			continue
 		}
 		if _, ok := objIDsToDelete[entry.ShortObjName]; ok {
@@ -831,7 +831,7 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 		if entry.RowID != rowID {
 			break
 		}
-		if entry.Time.Greater(&ts) {
+		if entry.Time.GT(&ts) {
 			// not visible
 			continue
 		}

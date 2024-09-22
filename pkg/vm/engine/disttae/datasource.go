@@ -732,7 +732,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 				continue
 			}
 
-			if minTS.Greater(&entry.Time) {
+			if minTS.GT(&entry.Time) {
 				minTS = entry.Time
 			}
 

@@ -336,7 +336,7 @@ func tsLess(data []types.TS, i, j int64) bool {
 }
 
 func tsGreater(data []types.TS, i, j int64) bool {
-	return data[i].Greater(&data[j])
+	return data[i].GT(&data[j])
 }
 
 func rowidLess(data []types.Rowid, i, j int64) bool {

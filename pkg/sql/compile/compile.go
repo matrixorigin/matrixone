@@ -4350,7 +4350,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 					case types.T_TS:
 						max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
 						ts := partialResults[i].(types.TS)
-						if max.Greater(&ts) {
+						if max.GT(&ts) {
 							partialResults[i] = max
 						}
 					case types.T_Rowid:

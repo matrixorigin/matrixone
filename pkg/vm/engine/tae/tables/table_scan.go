@@ -102,7 +102,7 @@ func TombstoneRangeScanByObject(
 			if !tombstone.DeletedAt.IsEmpty() && tombstone.DeletedAt.LT(&start) {
 				continue
 			}
-			if tombstone.CreatedAt.Greater(&end) {
+			if tombstone.CreatedAt.GT(&end) {
 				continue
 			}
 		} else {

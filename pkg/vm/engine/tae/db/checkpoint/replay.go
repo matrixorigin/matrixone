@@ -494,7 +494,7 @@ func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 		}
 		entries[i] = checkpointEntry
 		if typ == ET_Global {
-			if end.Greater(&maxGlobalEnd) {
+			if end.GT(&maxGlobalEnd) {
 				maxGlobalEnd = end
 			}
 		}

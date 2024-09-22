@@ -172,7 +172,7 @@ func (p *Partition) ConsumeSnapCkps(
 				start = ckpstart
 			}
 			ckpend := ckp.GetEnd()
-			if ckpend.Greater(&end) {
+			if ckpend.GT(&end) {
 				end = ckpend
 			}
 		}
