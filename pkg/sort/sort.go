@@ -64,7 +64,6 @@ func UuidLess(a, b types.Uuid) bool {
 }
 
 // it seems that go has no const generic type, handle these types respectively
-// PXU FIXME Done
 func TsLess(a, b types.TS) bool {
 	return a.Compare(&b) < 0
 }

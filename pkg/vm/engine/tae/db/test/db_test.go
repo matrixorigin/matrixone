@@ -618,7 +618,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 	//read new non-appendable block data and check
 	{
 		txn, rel := testutil.GetRelation(t, 0, db, "db", schema.Name)
-		assert.True(t, newBlockFp2.ObjectID().Eq(*newBlockFp1.ObjectID()))
+		assert.True(t, newBlockFp2.ObjectID().EQ(newBlockFp1.ObjectID()))
 		obj, err := rel.GetObject(newBlockFp1.ObjectID(), false)
 		assert.Nil(t, err)
 		var view *containers.Batch

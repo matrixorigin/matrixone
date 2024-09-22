@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"math"
 	"runtime/trace"
 	"sync/atomic"
+
+	"go.uber.org/zap"
 
 	"github.com/tidwall/btree"
 
@@ -338,7 +339,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 			}
 
 			current := types.Objectid(tbIter.Item().Bytes)
-			if !objEntry.ObjectName().ObjectId().Eq(current) {
+			if !objEntry.ObjectName().ObjectId().EQ(&current) {
 				break
 			}
 

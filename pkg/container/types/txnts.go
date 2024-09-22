@@ -298,7 +298,6 @@ func MockColTypes() (ct []Type) {
 	return columnTypes
 }
 
-// PXU FIXME Done
 func CompareTSTSAligned(a, b TS) int {
 	return a.Compare(&b)
 }

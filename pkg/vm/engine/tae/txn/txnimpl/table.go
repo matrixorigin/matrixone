@@ -843,7 +843,7 @@ func (tbl *txnTable) GetByFilter(
 func (tbl *txnTable) GetValue(
 	ctx context.Context, id *common.ID, row uint32, col uint16, skipCheckDelete bool,
 ) (v any, isNull bool, err error) {
-	if tbl.dataTable.tableSpace != nil && id.ObjectID().Eq(*tbl.dataTable.tableSpace.entry.ID()) {
+	if tbl.dataTable.tableSpace != nil && id.ObjectID().EQ(tbl.dataTable.tableSpace.entry.ID()) {
 		return tbl.dataTable.tableSpace.GetValue(row, col)
 	}
 	meta, err := tbl.store.warChecker.CacheGet(
@@ -1384,7 +1384,7 @@ func (tbl *txnTable) RangeDelete(
 	end uint32,
 	pk containers.Vector,
 	dt handle.DeleteType) (err error) {
-	if tbl.dataTable.tableSpace != nil && id.ObjectID().Eq(*tbl.dataTable.tableSpace.entry.ID()) {
+	if tbl.dataTable.tableSpace != nil && id.ObjectID().EQ(tbl.dataTable.tableSpace.entry.ID()) {
 		err = tbl.RangeDeleteLocalRows(start, end)
 		return
 	}

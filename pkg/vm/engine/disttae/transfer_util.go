@@ -143,15 +143,15 @@ func (flow *TransferFlow) orphanStaged() {
 func (flow *TransferFlow) processOneBatch(ctx context.Context, buffer *batch.Batch) error {
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](buffer.Vecs[0])
 	var (
-		last    objectio.ObjectId
+		last    *objectio.ObjectId
 		deleted bool
 	)
 	staged := flow.getStaged()
 	for i, rowid := range rowids {
 		objectid := rowid.BorrowObjectID()
-		if !objectid.Eq(last) {
+		if !objectid.EQ(last) {
 			deleted = flow.isObjectDeletedFn(objectid)
-			last = *objectid
+			last = objectid
 		}
 		if deleted {
 			continue

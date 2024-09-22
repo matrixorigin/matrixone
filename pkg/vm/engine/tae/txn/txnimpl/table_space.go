@@ -253,7 +253,7 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 			return true
 		}
 		entry := space.nobj.GetMeta().(*catalog.ObjectEntry)
-		return !entry.ID().Eq(*sid)
+		return !entry.ID().EQ(sid)
 	}
 
 	if shouldCreateNewObj() {

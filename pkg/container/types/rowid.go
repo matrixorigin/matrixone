@@ -341,8 +341,8 @@ func (o *Objectid) Compare(other *Objectid) int {
 	return 0
 }
 
-func (o *Objectid) Eq(other Objectid) bool {
-	return o.Compare(&other) == 0
+func (o *Objectid) EQ(other *Objectid) bool {
+	return o.Compare(other) == 0
 }
 
 func (o *Objectid) Le(other Objectid) bool {
