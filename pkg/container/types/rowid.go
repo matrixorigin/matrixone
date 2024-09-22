@@ -345,15 +345,15 @@ func (o *Objectid) EQ(other *Objectid) bool {
 	return o.Compare(other) == 0
 }
 
-func (o *Objectid) Le(other Objectid) bool {
-	return o.Compare(&other) <= 0
+func (o *Objectid) LE(other *Objectid) bool {
+	return o.Compare(other) <= 0
 }
-func (o *Objectid) Ge(other Objectid) bool {
-	return o.Compare(&other) >= 0
+func (o *Objectid) GE(other *Objectid) bool {
+	return o.Compare(other) >= 0
 }
-func (o *Objectid) Lt(other Objectid) bool {
-	return o.Compare(&other) < 0
+func (o *Objectid) LT(other *Objectid) bool {
+	return o.Compare(other) < 0
 }
-func (o *Objectid) Gt(other Objectid) bool {
-	return o.Compare(&other) > 0
+func (o *Objectid) GT(other *Objectid) bool {
+	return o.Compare(other) > 0
 }

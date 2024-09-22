@@ -332,7 +332,7 @@ func decimal128Greater(data []types.Decimal128, i, j int64) bool {
 }
 
 func tsLess(data []types.TS, i, j int64) bool {
-	return data[i].Less(&data[j])
+	return data[i].LT(&data[j])
 }
 
 func tsGreater(data []types.TS, i, j int64) bool {

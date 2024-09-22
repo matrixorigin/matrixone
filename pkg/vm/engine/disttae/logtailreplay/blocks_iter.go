@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -119,7 +120,7 @@ func (p *PartitionState) NewObjectsIter(
 	onlyVisible bool,
 	visitTombstone bool) (ObjectsIter, error) {
 
-	if snapshot.Less(&p.minTS) {
+	if snapshot.LT(&p.minTS) {
 		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.minTS.ToString())
 		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}

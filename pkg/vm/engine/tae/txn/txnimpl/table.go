@@ -1013,7 +1013,7 @@ func (tbl *txnTable) findDeletes(
 		if objData == nil {
 			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
 		}
-		if obj.DeletedAt.Less(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
+		if obj.DeletedAt.LT(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
 			continue
 		}
 		if dedupAfterSnapshotTS && objData.CoarseCheckAllRowsCommittedBefore(snapshotTS) {

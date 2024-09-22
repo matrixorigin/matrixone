@@ -298,7 +298,7 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				if commitTS.Greater(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
-				if skip && commitTS.Less(&startTS) {
+				if skip && commitTS.LT(&startTS) {
 					return nil
 				}
 				rowID := objectio.NewRowid(blkID, uint32(row))
@@ -348,7 +348,7 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 					if commitTS.Greater(&startTS) {
 						return txnif.ErrTxnWWConflict
 					}
-					if skip && commitTS.Less(&startTS) {
+					if skip && commitTS.LT(&startTS) {
 						return nil
 					}
 					rowID := objectio.NewRowid(blkID, uint32(row))

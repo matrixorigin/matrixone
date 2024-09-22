@@ -316,7 +316,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		orderedInfos = append(orderedInfos, info)
 	}
 	sort.Slice(orderedInfos, func(i, j int) bool {
-		return orderedInfos[i].createAt.Less(&orderedInfos[j].createAt)
+		return orderedInfos[i].createAt.LT(&orderedInfos[j].createAt)
 	})
 
 	for _, info := range orderedInfos {
@@ -344,7 +344,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		creates := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
 		for i := 0; i < len(ids); i++ {
 			createAt := creates[i]
-			if createAt.Less(&startts) || createAt.Greater(&endts) {
+			if createAt.LT(&startts) || createAt.Greater(&endts) {
 				continue
 			}
 			name := string(nameVarlena[i].GetByteSlice(nameArea))
@@ -414,7 +414,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		for i := 0; i < len(commitTsVec); i++ {
 			pk, _, _, _ := types.DecodeTuple(objectBat.Vecs[1].GetRawBytesAt(i))
 			commitTs := commitTsVec[i]
-			if commitTs.Less(&startts) || commitTs.Greater(&endts) {
+			if commitTs.LT(&startts) || commitTs.Greater(&endts) {
 				continue
 			}
 			if _, ok := sm.aobjDelTsMap[commitTs]; ok {
@@ -429,7 +429,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 	}
 	sort.Slice(deletes, func(i, j int) bool {
 		ts2 := deletes[j].ts
-		return deletes[i].ts.Less(&ts2)
+		return deletes[i].ts.LT(&ts2)
 	})
 
 	for _, del := range deletes {
@@ -761,7 +761,7 @@ func (sm *SnapshotMeta) GetPITR(
 				} else if level == PitrLevelAccount {
 					id := uint32(account)
 					p := pitr.account[id]
-					if !p.IsEmpty() && p.Less(&pitrTs) {
+					if !p.IsEmpty() && p.LT(&pitrTs) {
 						continue
 					}
 					pitr.account[id] = pitrTs
@@ -1271,7 +1271,7 @@ func (sm *SnapshotMeta) GetSnapshotListLocked(SnapshotList map[uint32][]types.TS
 			snapshotList = append(snapshotList, snapshot)
 		}
 		sort.Slice(snapshotList, func(i, j int) bool {
-			return snapshotList[i].Less(&snapshotList[j])
+			return snapshotList[i].LT(&snapshotList[j])
 		})
 		return snapshotList
 	}
@@ -1289,18 +1289,18 @@ func (sm *SnapshotMeta) GetPitrLocked(pitr *PitrInfo, db, tid uint64) types.TS {
 	}
 	if isMoTable(tid) || isMoDB(tid) || isMoCol(tid) {
 		for _, p := range pitr.account {
-			if ts.IsEmpty() || p.Less(&ts) {
+			if ts.IsEmpty() || p.LT(&ts) {
 				ts = p
 			}
 		}
 		for _, p := range pitr.database {
-			if ts.IsEmpty() || p.Less(&ts) {
+			if ts.IsEmpty() || p.LT(&ts) {
 				ts = p
 			}
 		}
 
 		for _, p := range pitr.tables {
-			if ts.IsEmpty() || p.Less(&ts) {
+			if ts.IsEmpty() || p.LT(&ts) {
 				ts = p
 			}
 		}
@@ -1314,11 +1314,11 @@ func (sm *SnapshotMeta) GetPitrLocked(pitr *PitrInfo, db, tid uint64) types.TS {
 		}
 	}
 	p := pitr.database[db]
-	if !p.IsEmpty() && (ts.IsEmpty() || p.Less(&ts)) {
+	if !p.IsEmpty() && (ts.IsEmpty() || p.LT(&ts)) {
 		ts = p
 	}
 	p = pitr.tables[tid]
-	if !p.IsEmpty() && (ts.IsEmpty() || p.Less(&ts)) {
+	if !p.IsEmpty() && (ts.IsEmpty() || p.LT(&ts)) {
 		ts = p
 	}
 	return ts
@@ -1361,7 +1361,7 @@ func (sm *SnapshotMeta) MergeTableInfo(
 	}
 	hoursAgo := types.BuildTS(time.Now().UnixNano()-int64(3*time.Hour), 0)
 	for key := range sm.aobjDelTsMap {
-		if key.Less(&hoursAgo) {
+		if key.LT(&hoursAgo) {
 			delete(sm.aobjDelTsMap, key)
 		}
 	}
@@ -1388,11 +1388,11 @@ func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr types.TS) bool 
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		if snapTS.GreaterEq(&table.createAt) && snapTS.Less(&table.deleteAt) {
+		if snapTS.GreaterEq(&table.createAt) && snapTS.LT(&table.deleteAt) {
 			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v, tid %d",
 				snapTS.ToString(), table.createAt.ToString(), table.deleteAt.ToString(), table.tid)
 			return true
-		} else if snapTS.Less(&table.createAt) {
+		} else if snapTS.LT(&table.createAt) {
 			left = mid + 1
 		} else {
 			right = mid - 1

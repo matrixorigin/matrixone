@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"math/rand"
 	"slices"
 	"strconv"
@@ -26,6 +25,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
@@ -256,12 +257,12 @@ func NewRunner(
 		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(&b.end)
+		return a.end.LT(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
 	r.storage.globals = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(&b.end)
+		return a.end.LT(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
@@ -368,7 +369,7 @@ func (r *runner) getTSTOGC() (ts types.TS, needGC bool) {
 		return
 	}
 	tsTOGC := r.getTSToGC()
-	if tsTOGC.Less(&ts) {
+	if tsTOGC.LT(&ts) {
 		ts = tsTOGC
 	}
 	gcedTS := r.getGCedTS()
@@ -1197,7 +1198,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 				locs = append(locs, e.GetLocation().String())
 				locs = append(locs, strconv.Itoa(int(e.version)))
 				start := e.GetStart()
-				if start.Less(&ckpStart) {
+				if start.LT(&ckpStart) {
 					ckpStart = start
 				}
 				checkpointed = e.GetEnd()
@@ -1213,7 +1214,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			locs = append(locs, e.GetLocation().String())
 			locs = append(locs, strconv.Itoa(int(e.version)))
 			start := e.GetStart()
-			if start.Less(&ckpStart) {
+			if start.LT(&ckpStart) {
 				ckpStart = start
 			}
 			checkpointed = e.GetEnd()
@@ -1252,7 +1253,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 		locs = append(locs, e.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(e.version)))
 		start := e.GetStart()
-		if start.Less(&ckpStart) {
+		if start.LT(&ckpStart) {
 			ckpStart = start
 		}
 		checkpointed = e.GetEnd()

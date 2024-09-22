@@ -929,7 +929,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal.LessEq(&col[i])
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal.Less(&col[i])
+			return maxVal.LT(&col[i])
 		})
 		return lowerBound, upperBound
 

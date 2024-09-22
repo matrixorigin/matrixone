@@ -88,7 +88,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	}
 	r.checkpointMetaFiles.Unlock()
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.Less(&metaFiles[j].end)
+		return metaFiles[i].end.LT(&metaFiles[j].end)
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
@@ -145,7 +145,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	readfn := func(i int, readType uint16) {
 		checkpointEntry := entries[i]
 		checkpointEntry.sid = r.rt.SID()
-		if checkpointEntry.end.Less(&maxGlobalEnd) {
+		if checkpointEntry.end.LT(&maxGlobalEnd) {
 			return
 		}
 		var err2 error
@@ -247,7 +247,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 		if err != nil {
 			return
 		}
-		if maxTs.Less(&maxGlobal.end) {
+		if maxTs.LT(&maxGlobal.end) {
 			maxTs = maxGlobal.end
 		}
 		// for force checkpoint, ckpLSN is 0.
@@ -281,7 +281,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 		if err != nil {
 			return
 		}
-		if maxTs.Less(&checkpointEntry.end) {
+		if maxTs.LT(&checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
 		if checkpointEntry.ckpLSN != 0 {
@@ -349,7 +349,7 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 		if err != nil {
 			return
 		}
-		if maxTs.Less(&checkpointEntry.end) {
+		if maxTs.LT(&checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
 		ckpVers = append(ckpVers, checkpointEntry.version)
@@ -399,7 +399,7 @@ func MergeCkpMeta(
 		})
 	}
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.Less(&metaFiles[j].end)
+		return metaFiles[i].end.LT(&metaFiles[j].end)
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]

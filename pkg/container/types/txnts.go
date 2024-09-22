@@ -69,7 +69,7 @@ func (ts *TS) Compare(rhs *TS) int {
 	return 1
 }
 
-func (ts *TS) Less(rhs *TS) bool {
+func (ts *TS) LT(rhs *TS) bool {
 	return ts.Compare(rhs) < 0
 }
 func (ts *TS) LessEq(rhs *TS) bool {

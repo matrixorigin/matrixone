@@ -166,7 +166,7 @@ func (un *TxnMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// false: not prepared in range
 	// true: prepared before minTs
-	if un.Prepare.Less(&minTS) {
+	if un.Prepare.LT(&minTS) {
 		return false, true
 	}
 
@@ -210,7 +210,7 @@ func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// false: not committed in range
 	// true: committed before minTs
-	if un.End.Less(&minTS) {
+	if un.End.LT(&minTS) {
 		return false, true
 	}
 
@@ -297,7 +297,7 @@ func (un *TxnMVCCNode) GetTxn() txnif.TxnReader {
 }
 
 func (un *TxnMVCCNode) Compare(o *TxnMVCCNode) int {
-	if un.Start.Less(&o.Start) {
+	if un.Start.LT(&o.Start) {
 		return -1
 	}
 	if un.Start.Equal(&o.Start) {
@@ -307,7 +307,7 @@ func (un *TxnMVCCNode) Compare(o *TxnMVCCNode) int {
 }
 
 func (un *TxnMVCCNode) Compare2(o *TxnMVCCNode) int {
-	if un.Prepare.Less(&o.Prepare) {
+	if un.Prepare.LT(&o.Prepare) {
 		return -1
 	}
 	if un.Prepare.Equal(&o.Prepare) {

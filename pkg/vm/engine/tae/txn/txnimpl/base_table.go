@@ -183,7 +183,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 				maxNAObjectHint = objectHint
 			}
 		}
-		if obj.DeletedAt.Less(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
+		if obj.DeletedAt.LT(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
 			continue
 		}
 		objData := obj.GetObjectData()

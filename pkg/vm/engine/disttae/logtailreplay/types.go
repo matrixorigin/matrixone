@@ -69,7 +69,7 @@ func (o ObjectEntry) ObjectDTSIndexLess(than ObjectEntry) bool {
 	}
 
 	if !x.Equal(&y) {
-		return x.Less(&y)
+		return x.LT(&y)
 	}
 
 	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
@@ -81,7 +81,7 @@ func (o ObjectEntry) IsEmpty() bool {
 
 func (o ObjectEntry) Visible(ts types.TS) bool {
 	return o.CreateTime.LessEq(&ts) &&
-		(o.DeleteTime.IsEmpty() || ts.Less(&o.DeleteTime))
+		(o.DeleteTime.IsEmpty() || ts.LT(&o.DeleteTime))
 }
 
 func (o ObjectEntry) Location() objectio.Location {
@@ -129,10 +129,10 @@ func (r RowEntry) Less(than RowEntry) bool {
 		return false
 	}
 	// desc
-	if than.Time.Less(&r.Time) {
+	if than.Time.LT(&r.Time) {
 		return true
 	}
-	if r.Time.Less(&than.Time) {
+	if r.Time.LT(&than.Time) {
 		return false
 	}
 	return false
@@ -167,10 +167,10 @@ type ObjectIndexByTSEntry struct {
 
 func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 	// asc
-	if b.Time.Less(&than.Time) {
+	if b.Time.LT(&than.Time) {
 		return true
 	}
-	if than.Time.Less(&b.Time) {
+	if than.Time.LT(&b.Time) {
 		return false
 	}
 

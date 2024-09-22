@@ -191,7 +191,7 @@ func (c *checkpointCleaner) Replay() error {
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.GCFullExt {
-			if minMergedStart.IsEmpty() || minMergedStart.Less(&start) {
+			if minMergedStart.IsEmpty() || minMergedStart.LT(&start) {
 				minMergedStart = start
 				minMergedEnd = end
 				maxConsumedStart = start
@@ -199,11 +199,11 @@ func (c *checkpointCleaner) Replay() error {
 				fullGCFile = dir
 			}
 		}
-		if ext == blockio.SnapshotExt && maxSnapEnd.Less(&end) {
+		if ext == blockio.SnapshotExt && maxSnapEnd.LT(&end) {
 			maxSnapEnd = end
 			snapFile = dir.Name
 		}
-		if ext == blockio.AcctExt && maxAcctEnd.Less(&end) {
+		if ext == blockio.AcctExt && maxAcctEnd.LT(&end) {
 			maxAcctEnd = end
 			acctFile = dir.Name
 		}
@@ -217,8 +217,8 @@ func (c *checkpointCleaner) Replay() error {
 		if ext == blockio.GCFullExt || ext == blockio.SnapshotExt || ext == blockio.AcctExt {
 			continue
 		}
-		if (maxConsumedStart.IsEmpty() || maxConsumedStart.Less(&end)) &&
-			minMergedEnd.Less(&end) {
+		if (maxConsumedStart.IsEmpty() || maxConsumedStart.LT(&end)) &&
+			minMergedEnd.LT(&end) {
 			maxConsumedStart = start
 			maxConsumedEnd = end
 			readDirs = append(readDirs, dir)
@@ -415,7 +415,7 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	deleteFiles := make([]string, 0)
 	mergeSnapAcctFile := func(name string, ts, max *types.TS, file *string) error {
 		if *file != "" {
-			if max.Less(ts) {
+			if max.LT(ts) {
 				max = ts
 				err = c.fs.Delete(*file)
 				if err != nil {
@@ -550,7 +550,7 @@ func (c *checkpointCleaner) getDeleteFile(
 	for i := len(ckps) - 1; i >= 0; i-- {
 		ckp := ckps[i]
 		end := ckp.GetEnd()
-		if end.Less(&stage) {
+		if end.LT(&stage) {
 			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) &&
 				ckp.GetType() != checkpoint.ET_Global {
 				// TODO: remove this log
@@ -622,7 +622,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		ckpSnapList = append(ckpSnapList, ts...)
 	}
 	sort.Slice(ckpSnapList, func(i, j int) bool {
-		return ckpSnapList[i].Less(&ckpSnapList[j])
+		return ckpSnapList[i].LT(&ckpSnapList[j])
 	})
 	for _, idx := range idxes {
 		logutil.Info("[MergeCheckpoint]",
@@ -930,7 +930,7 @@ func (c *checkpointCleaner) Process() {
 		return
 	}
 	maxEnd := maxGlobalCKP.GetEnd()
-	if compareTS.Less(&maxEnd) {
+	if compareTS.LT(&maxEnd) {
 		logutil.Info("[DiskCleaner]", common.OperationField("Try GC"),
 			common.AnyField("maxGlobalCKP :", maxGlobalCKP.String()),
 			common.AnyField("compareTS :", compareTS.ToString()))
@@ -1072,11 +1072,11 @@ func isSnapshotCKPRefers(start, end types.TS, snapVec []types.TS) bool {
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		if snapTS.GreaterEq(&start) && snapTS.Less(&end) {
+		if snapTS.GreaterEq(&start) && snapTS.LT(&end) {
 			logutil.Debugf("isSnapshotRefers: %s, create %v, drop %v",
 				snapTS.ToString(), start.ToString(), end.ToString())
 			return true
-		} else if snapTS.Less(&start) {
+		} else if snapTS.LT(&start) {
 			left = mid + 1
 		} else {
 			right = mid - 1

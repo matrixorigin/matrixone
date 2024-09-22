@@ -162,7 +162,7 @@ func (be *BaseEntryImpl[T]) DeleteBeforeLocked(ts types.TS) bool {
 	if createAt.IsEmpty() {
 		return false
 	}
-	return createAt.Less(&ts)
+	return createAt.LT(&ts)
 }
 
 func (be *BaseEntryImpl[T]) NeedWaitCommittingLocked(startTS types.TS) (bool, txnif.TxnReader) {

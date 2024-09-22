@@ -117,7 +117,7 @@ func (n *AppendMVCCHandle) CollectAppendLocked(
 	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
 	if node != nil {
 		prepareTS := node.GetPrepare()
-		if prepareTS.Less(&start) {
+		if prepareTS.LT(&start) {
 			startOffset++
 		}
 	}
@@ -363,7 +363,7 @@ func (n *AppendMVCCHandle) AllAppendsCommittedBeforeLocked(ts types.TS) bool {
 
 	// check if the latest appendnode is committed before ts
 	commitTS := anode.GetCommitTS()
-	return commitTS.Less(&ts)
+	return commitTS.LT(&ts)
 }
 
 func (n *AppendMVCCHandle) StringLocked() string {

@@ -327,7 +327,7 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 
 	ts = mgr.ts.allocator.Alloc()
 	if !mgr.prevPrepareTS.IsEmpty() {
-		if ts.Less(&mgr.prevPrepareTS) {
+		if ts.LT(&mgr.prevPrepareTS) {
 			panic(fmt.Sprintf("timestamp rollback current %v, previous %v", ts.ToString(), mgr.prevPrepareTS.ToString()))
 		}
 	}
@@ -476,7 +476,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		if !op.Txn.IsReplay() {
 			if !mgr.prevPrepareTSInPreparing.IsEmpty() {
 				prepareTS := op.Txn.GetPrepareTS()
-				if prepareTS.Less(&mgr.prevPrepareTSInPreparing) {
+				if prepareTS.LT(&mgr.prevPrepareTSInPreparing) {
 					panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPreparing.ToString()))
 				}
 			}
@@ -515,7 +515,7 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 			if !op.Txn.IsReplay() {
 				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
 					prepareTS := op.Txn.GetPrepareTS()
-					if prepareTS.Less(&mgr.prevPrepareTSInPrepareWAL) {
+					if prepareTS.LT(&mgr.prevPrepareTSInPrepareWAL) {
 						panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
 					}
 				}
@@ -597,7 +597,7 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 	mgr.IDMap.Range(func(key, value any) bool {
 		txn := value.(txnif.AsyncTxn)
 		startTS := txn.GetStartTS()
-		if startTS.Less(&minTS) {
+		if startTS.LT(&minTS) {
 			minTS = startTS
 		}
 		return true

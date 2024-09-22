@@ -334,7 +334,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 		for ok := tbIter.Seek(&PrimaryIndexEntry{
 			Bytes: objEntry.ObjectName().ObjectId()[:],
 		}); ok; ok = tbIter.Next() {
-			if truncatePoint.Less(&tbIter.Item().Time) {
+			if truncatePoint.LT(&tbIter.Item().Time) {
 				continue
 			}
 

@@ -100,7 +100,7 @@ func (entry *DirtyTreeEntry) Merge(o *DirtyTreeEntry) {
 	if entry.start.Greater(&o.start) {
 		entry.start = o.start
 	}
-	if entry.end.Less(&o.end) {
+	if entry.end.LT(&o.end) {
 		entry.end = o.end
 	}
 	entry.tree.Merge(o.tree)
@@ -159,7 +159,7 @@ func NewDirtyCollector(
 	}
 	collector.storage.entries = btree.NewBTreeGOptions(
 		func(a, b *DirtyTreeEntry) bool {
-			return a.start.Less(&b.start) && a.end.Less(&b.end)
+			return a.start.LT(&b.start) && a.end.LT(&b.end)
 		}, btree.Options{
 			NoLocks: true,
 		})

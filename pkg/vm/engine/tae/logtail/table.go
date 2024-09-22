@@ -243,7 +243,7 @@ func (blk *txnBlock) ForeachRowInBetween(
 			outOfRange = true
 			return
 		}
-		if ts.Less(&from) {
+		if ts.LT(&from) {
 			continue
 		}
 
@@ -268,7 +268,7 @@ type TxnTable struct {
 }
 
 func (blk *txnBlock) Less(b BlockT) bool {
-	return blk.bornTS.Less(&b.bornTS)
+	return blk.bornTS.LT(&b.bornTS)
 }
 
 func timeBasedTruncateFactory(ts types.TS) func(b BlockT) bool {

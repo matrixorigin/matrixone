@@ -1222,7 +1222,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		obj := iter.Entry()
 
 		if !obj.GetAppendable() {
-			if obj.CreateTime.Less(&minTS) {
+			if obj.CreateTime.LT(&minTS) {
 				continue
 			}
 		}

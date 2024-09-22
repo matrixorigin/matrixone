@@ -638,7 +638,7 @@ func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, start, end types.TS) e
 	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[sortIdx])
 	deletes := make([]int64, 0)
 	for i, ts := range commitTSs {
-		if ts.Less(&start) || ts.Greater(&end) {
+		if ts.LT(&start) || ts.Greater(&end) {
 			deletes = append(deletes, int64(i))
 		}
 	}

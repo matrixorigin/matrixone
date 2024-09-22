@@ -8087,7 +8087,7 @@ func TestDeduplication(t *testing.T) {
 	ObjectIDs[0] = objectio.NewObjectid()
 	ObjectIDs[1] = objectio.NewObjectid()
 	sort.Slice(ObjectIDs, func(i, j int) bool {
-		return ObjectIDs[i].Le(*ObjectIDs[j])
+		return ObjectIDs[i].LE(ObjectIDs[j])
 	})
 
 	blk1Name := objectio.BuildObjectNameWithObjectID(ObjectIDs[1])

@@ -188,7 +188,7 @@ func (be *MVCCSlice[T]) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node 
 	for start <= end {
 		mid = (start + end) / 2
 		midPrepareTS := be.MVCC[mid].GetPrepare()
-		if midPrepareTS.Less(&ts) {
+		if midPrepareTS.LT(&ts) {
 			start = mid + 1
 		} else if midPrepareTS.Greater(&ts) {
 			end = mid - 1
@@ -259,7 +259,7 @@ func (be *MVCCSlice[T]) IsCommitted() bool {
 func (be *MVCCSlice[T]) LoopInRange(start, end types.TS, fn func(T) bool) {
 	startOffset, node := be.GetNodeToReadByPrepareTS(start)
 	prepareTS := node.GetPrepare()
-	if node.IsNil() && prepareTS.Less(&start) {
+	if node.IsNil() && prepareTS.LT(&start) {
 		startOffset++
 	}
 	endOffset, node := be.GetNodeToReadByPrepareTS(end)

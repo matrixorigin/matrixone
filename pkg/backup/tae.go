@@ -472,7 +472,7 @@ func copyFileAndGetMetaFiles(
 	sort.Slice(metaFiles, func(i, j int) bool {
 		end1 := metaFiles[i].GetEnd()
 		end2 := metaFiles[j].GetEnd()
-		return end1.Less(&end2)
+		return end1.LT(&end2)
 	})
 
 	return taeFileList, metaFiles, files, nil
@@ -495,7 +495,7 @@ func CopyGCDir(
 		name := metaFile.GetName()
 		if i == len(metaFiles)-1 {
 			end := metaFile.GetEnd()
-			if !min.IsEmpty() && end.Less(&min) {
+			if !min.IsEmpty() && end.LT(&min) {
 				// It means that the gc consumption is too slow, and the gc water level needs to be raised.
 				// Otherwise, the gc will not work after the cluster is restored because it cannot find the checkpoint.
 				// The gc water level is determined by the name of the meta,

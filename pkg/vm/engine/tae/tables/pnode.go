@@ -172,13 +172,13 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 	var startTS types.TS
 	if !node.object.meta.Load().IsAppendable() {
 		startTS = node.object.meta.Load().GetCreatedAt()
-		if startTS.Less(&start) || startTS.Greater(&end) {
+		if startTS.LT(&start) || startTS.Greater(&end) {
 			return
 		}
 	} else {
 		createAt := node.object.meta.Load().GetCreatedAt()
 		deleteAt := node.object.meta.Load().GetDeleteAt()
-		if deleteAt.Less(&start) || createAt.Greater(&end) {
+		if deleteAt.LT(&start) || createAt.Greater(&end) {
 			return
 		}
 	}

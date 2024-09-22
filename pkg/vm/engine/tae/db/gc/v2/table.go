@@ -81,7 +81,7 @@ func (t *GCTable) addObjectLocked(
 		return
 	}
 	objects[name] = objEntry
-	if object.commitTS.Less(&commitTS) {
+	if object.commitTS.LT(&commitTS) {
 		objects[name].commitTS = commitTS
 	}
 }
@@ -146,13 +146,13 @@ func (t *GCTable) objectsComparedAndDeleteLocked(
 		tsList := meta.GetSnapshotListLocked(snapList, entry.table)
 		pList := meta.GetPitrLocked(pitrList, entry.db, entry.table)
 		if tsList == nil && pList.IsEmpty() {
-			if objectEntry == nil && entry.commitTS.Less(&ts) {
+			if objectEntry == nil && entry.commitTS.LT(&ts) {
 				gc = append(gc, name)
 				delete(t.objects, name)
 			}
 			continue
 		}
-		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, tsList, pList, name) {
+		if objectEntry == nil && entry.commitTS.LT(&ts) && !isSnapshotRefers(entry, tsList, pList, name) {
 			gc = append(gc, name)
 			delete(t.objects, name)
 		}
@@ -184,14 +184,14 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, pitrVec types.TS, na
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		if snapTS.GreaterEq(&obj.createTS) && snapTS.Less(&obj.dropTS) {
+		if snapTS.GreaterEq(&obj.createTS) && snapTS.LT(&obj.dropTS) {
 			logutil.Debug("[soft GC]Snapshot Refers",
 				zap.String("name", name),
 				zap.String("snapTS", snapTS.ToString()),
 				zap.String("createTS", obj.createTS.ToString()),
 				zap.String("dropTS", obj.dropTS.ToString()))
 			return true
-		} else if snapTS.Less(&obj.createTS) {
+		} else if snapTS.LT(&obj.createTS) {
 			left = mid + 1
 		} else {
 			right = mid - 1

@@ -125,7 +125,7 @@ func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 			if !e.IsFinished() {
 				break
 			}
-			if e.start.Less(&ts) {
+			if e.start.LT(&ts) {
 				if !it.Next() {
 					break
 				}
@@ -154,7 +154,7 @@ func (r *runner) GetStage() types.TS {
 	if !okI {
 		return global.start
 	}
-	if global.end.Less(&incremental.start) {
+	if global.end.LT(&incremental.start) {
 		return global.end
 	}
 	return incremental.start
@@ -235,7 +235,7 @@ func (r *runner) GCByTS(ctx context.Context, ts types.TS) error {
 		r.gcTS.Store(ts)
 	} else {
 		prevTS := prev.(types.TS)
-		if prevTS.Less(&ts) {
+		if prevTS.LT(&ts) {
 			r.gcTS.Store(ts)
 		}
 	}
