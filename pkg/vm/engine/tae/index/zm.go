@@ -926,7 +926,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		col := vector.MustFixedColNoTypeCheck[types.TS](vec)
 		minVal, maxVal := types.DecodeFixed[types.TS](zm.GetMinBuf()), types.DecodeFixed[types.TS](zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal.LessEq(&col[i])
+			return minVal.LE(&col[i])
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
 			return maxVal.LT(&col[i])
@@ -1170,10 +1170,10 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		col := vector.MustFixedColNoTypeCheck[types.TS](vec)
 		minVal, maxVal := types.DecodeFixed[types.TS](zm.GetMinBuf()), types.DecodeFixed[types.TS](zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal.LessEq(&col[i])
+			return minVal.LE(&col[i])
 		})
 
-		return lowerBound < len(col) && col[lowerBound].LessEq(&maxVal)
+		return lowerBound < len(col) && col[lowerBound].LE(&maxVal)
 
 	case types.T_uuid:
 		col := vector.MustFixedColNoTypeCheck[types.Uuid](vec)

@@ -210,7 +210,7 @@ func (p *PartitionState) HandleDataObjectList(
 				// if the inserting block is non-appendable and has delta location, need to delete
 				// the deletes for it.
 				if objEntry.GetAppendable() {
-					if entry.Time.LessEq(&trunctPoint) {
+					if entry.Time.LE(&trunctPoint) {
 						// delete the row
 						p.rows.Delete(entry)
 
@@ -718,7 +718,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 
 		objEntry := objIter.Item()
 
-		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(&ts) {
+		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LE(&ts) {
 			p.dataObjectsNameIndex.Delete(objEntry)
 			//p.dataObjectsByCreateTS.Delete(ObjectIndexByCreateTSEntry{
 			//	//CreateTime:   objEntry.CreateTime,
@@ -804,7 +804,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	p.shared.Lock()
 	lastFlushTimestamp := p.shared.lastFlushTimestamp
 	p.shared.Unlock()
-	if lastFlushTimestamp.LessEq(&from) {
+	if lastFlushTimestamp.LE(&from) {
 		return false, false
 	}
 	return false, true

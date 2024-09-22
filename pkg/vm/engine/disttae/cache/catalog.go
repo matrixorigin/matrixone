@@ -81,7 +81,7 @@ func (cc *CatalogCache) UpdateStart(ts types.TS) {
 func (cc *CatalogCache) CanServe(ts types.TS) bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	return ts.GreaterEq(&cc.mu.start) && ts.LessEq(&cc.mu.end)
+	return ts.GreaterEq(&cc.mu.start) && ts.LE(&cc.mu.end)
 }
 
 type GCReport struct {

@@ -1073,7 +1073,8 @@ func (ls *LocalDataSource) applyPStateInMemDeletes(
 	leftRows = offsets
 
 	for delIter.Next() {
-		_, o := delIter.Entry().RowID.Decode()
+		rowid := delIter.Entry().RowID
+		_, o := rowid.Decode()
 		leftRows = fastApplyDeletedRows(leftRows, deletedRows, o)
 		if leftRows != nil && len(leftRows) == 0 {
 			break
@@ -1258,7 +1259,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 
 				for j := s; j < e; j++ {
 					if rowIds[i].EQ(&deletedRowIds[j]) &&
-						(commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
+						(commit == nil || commit[j].LE(&ls.snapshotTS)) {
 						deleted = append(deleted, int64(i))
 						break
 					}

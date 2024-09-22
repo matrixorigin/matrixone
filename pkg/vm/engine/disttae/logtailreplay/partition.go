@@ -54,7 +54,7 @@ type TableInfo struct {
 func (p *Partition) CanServe(ts types.TS) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return ts.GreaterEq(&p.mu.start) && ts.LessEq(&p.mu.end)
+	return ts.GreaterEq(&p.mu.start) && ts.LE(&p.mu.end)
 }
 
 func NewPartition(
@@ -105,7 +105,7 @@ func (p *Partition) Unlock() {
 func (p *Partition) IsValid() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.mu.start.LessEq(&p.mu.end)
+	return p.mu.start.LE(&p.mu.end)
 }
 
 func (p *Partition) IsEmpty() bool {

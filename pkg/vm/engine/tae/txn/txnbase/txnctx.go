@@ -216,7 +216,7 @@ func (ctx *TxnCtx) IsVisible(o txnif.TxnReader) bool {
 	ostart := o.GetStartTS()
 	ctx.RLock()
 	defer ctx.RUnlock()
-	return ostart.LessEq(&ctx.StartTS)
+	return ostart.LE(&ctx.StartTS)
 }
 
 func (ctx *TxnCtx) IsActiveLocked() bool {
@@ -224,7 +224,7 @@ func (ctx *TxnCtx) IsActiveLocked() bool {
 }
 
 func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
-	if ts.LessEq(&ctx.StartTS) {
+	if ts.LE(&ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
 	// if !ctx.CommitTS.Equal(txnif.UncommitTS) {

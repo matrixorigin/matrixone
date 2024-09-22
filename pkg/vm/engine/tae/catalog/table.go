@@ -152,7 +152,7 @@ func (entry *TableEntry) GetSoftdeleteObjects(txnStartTS, dedupedTS, collectTS t
 		if obj.DeletedAt.IsEmpty() {
 			continue
 		}
-		if obj.DeletedAt.GreaterEq(&dedupedTS) && obj.DeletedAt.LessEq(&collectTS) {
+		if obj.DeletedAt.GreaterEq(&dedupedTS) && obj.DeletedAt.LE(&collectTS) {
 			if objs == nil {
 				objs = make([]*ObjectEntry, 0)
 			}

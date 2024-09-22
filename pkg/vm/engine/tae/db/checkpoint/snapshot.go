@@ -30,7 +30,7 @@ type GetCheckpointRange = func(snapshot types.TS, files []*MetaFile) ([]*MetaFil
 
 func SpecifiedCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error) {
 	for i, file := range files {
-		if snapshot.LessEq(&file.end) {
+		if snapshot.LE(&file.end) {
 			return files, i, nil
 		}
 	}
@@ -40,7 +40,7 @@ func SpecifiedCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int
 func AllAfterAndGCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error) {
 	prev := &MetaFile{}
 	for i, file := range files {
-		if snapshot.LessEq(&file.end) &&
+		if snapshot.LE(&file.end) &&
 			snapshot.LT(&prev.end) &&
 			file.start.IsEmpty() {
 			return files, i - 1, nil

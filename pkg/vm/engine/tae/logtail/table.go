@@ -355,7 +355,7 @@ func (table *TxnTable) ForeachRowInBetween(
 
 		if skipBlkOp != nil && skipBlkOp(blk) {
 			prepareTS := blk.rows[len(blk.rows)-1].GetPrepareTS()
-			return prepareTS.LessEq(&to)
+			return prepareTS.LE(&to)
 		}
 		outOfRange, cnt := blk.ForeachRowInBetween(
 			from,

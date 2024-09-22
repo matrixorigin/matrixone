@@ -106,7 +106,7 @@ func (un *TxnMVCCNode) IsVisible(txn txnif.TxnReader) (visible bool) {
 
 	// Node is visible if the commit ts is le ts
 	startTS := txn.GetStartTS()
-	if un.End.LessEq(&startTS) && !un.Aborted {
+	if un.End.LE(&startTS) && !un.Aborted {
 		return true
 	}
 
@@ -134,7 +134,7 @@ func (un *TxnMVCCNode) IsVisibleByTS(ts types.TS) (visible bool) {
 	}
 
 	// Node is visible if the commit ts is le ts
-	if un.End.LessEq(&ts) && !un.Aborted {
+	if un.End.LE(&ts) && !un.Aborted {
 		return true
 	}
 
@@ -176,7 +176,7 @@ func (un *TxnMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// true: prepared in range
 	// false: not prepared before minTs
-	if un.Prepare.GreaterEq(&minTS) && un.Prepare.LessEq(&maxTS) {
+	if un.Prepare.GreaterEq(&minTS) && un.Prepare.LE(&maxTS) {
 		return true, false
 	}
 
@@ -220,7 +220,7 @@ func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// true: committed in range
 	// false: not committed before minTs
-	if un.End.GreaterEq(&minTS) && un.End.LessEq(&maxTS) {
+	if un.End.GreaterEq(&minTS) && un.End.LE(&maxTS) {
 		return true, false
 	}
 

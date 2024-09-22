@@ -197,7 +197,7 @@ func (be *MVCCSlice[T]) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node 
 		}
 	}
 	midPrepareTS := be.MVCC[mid].GetPrepare()
-	visible := midPrepareTS.LessEq(&ts)
+	visible := midPrepareTS.LE(&ts)
 	if mid == 0 && !visible {
 		// 2. The first node is found and it was committed after ts
 		return 0, be.zero

@@ -183,6 +183,7 @@ func (r *Rowid) CloneSegmentID() Segmentid {
 	return *(*Segmentid)(unsafe.Pointer(&r[0]))
 }
 
+// PXU TODO:
 func (r *Rowid) Decode() (Blockid, uint32) {
 	b := *(*Blockid)(r[:BlockidSize])
 	s := DecodeUint32(r[BlockidSize:])

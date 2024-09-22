@@ -166,7 +166,7 @@ func (r *runner) GetPenddingIncrementalCount() int {
 
 	count := 0
 	for i := len(entries) - 1; i >= 0; i-- {
-		if global != nil && entries[i].end.LessEq(&global.end) {
+		if global != nil && entries[i].end.LE(&global.end) {
 			break
 		}
 		if !entries[i].IsFinished() {

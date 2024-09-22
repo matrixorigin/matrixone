@@ -272,7 +272,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 		if checkpointEntry == nil {
 			continue
 		}
-		if checkpointEntry.end.LessEq(&maxTs) {
+		if checkpointEntry.end.LE(&maxTs) {
 			continue
 		}
 		logutil.Infof("replay checkpoint %v", checkpointEntry)
@@ -342,7 +342,7 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 		if checkpointEntry == nil {
 			continue
 		}
-		if checkpointEntry.end.LessEq(&maxTs) {
+		if checkpointEntry.end.LE(&maxTs) {
 			continue
 		}
 		err = datas[i].ApplyReplayTo(r.catalog, dataFactory, false)

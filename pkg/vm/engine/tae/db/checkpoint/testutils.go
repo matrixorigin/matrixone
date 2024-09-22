@@ -204,7 +204,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 		return moerr.NewPrevCheckpointNotFinished()
 	}
 
-	if prev != nil && end.LessEq(&prev.end) {
+	if prev != nil && end.LE(&prev.end) {
 		return nil
 	}
 	var (

@@ -716,7 +716,7 @@ func IsRowDeletedByLocation(
 			if !rowids[i].EQ(row) {
 				break
 			}
-			if tss[i].LessEq(snapshotTS) {
+			if tss[i].LE(snapshotTS) {
 				deleted = true
 				break
 			}

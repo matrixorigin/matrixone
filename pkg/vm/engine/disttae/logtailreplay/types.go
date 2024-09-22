@@ -80,7 +80,7 @@ func (o ObjectEntry) IsEmpty() bool {
 }
 
 func (o ObjectEntry) Visible(ts types.TS) bool {
-	return o.CreateTime.LessEq(&ts) &&
+	return o.CreateTime.LE(&ts) &&
 		(o.DeleteTime.IsEmpty() || ts.LT(&o.DeleteTime))
 }
 
