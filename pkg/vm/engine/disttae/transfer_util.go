@@ -23,32 +23,82 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
 
+type TransferOption func(*TransferFlow)
+
+func WithTrasnferBuffer(buffer *containers.OneSchemaBatchBuffer) TransferOption {
+	return func(flow *TransferFlow) {
+		flow.buffer = buffer
+	}
+}
+
+func ConstructTransferFlow(
+	table *txnTable,
+	withHidden bool,
+	sourcer engine.Reader,
+	sinker *engine_util.Sinker,
+	isObjectDeletedFn func(*objectio.ObjectId) bool,
+	targetObjects []objectio.ObjectStats,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	opts ...TransferOption,
+) *TransferFlow {
+	flow := &TransferFlow{
+		table:             table,
+		withHidden:        withHidden,
+		sourcer:           sourcer,
+		sinker:            sinker,
+		isObjectDeletedFn: isObjectDeletedFn,
+		targetObjects:     targetObjects,
+		mp:                mp,
+		fs:                fs,
+	}
+	for _, opt := range opts {
+		opt(flow)
+	}
+	flow.fillDefaults()
+	return flow
+}
+
 type TransferFlow struct {
 	table             *txnTable
+	withHidden        bool
 	sourcer           engine.Reader
 	isObjectDeletedFn func(*objectio.ObjectId) bool
 	targetObjects     []objectio.ObjectStats
-	mp                *mpool.MPool
-	fs                fileservice.FileService
-	attrs             []string
-	types             []types.Type
-	batchBuffer       *containers.OneSchemaBatchBuffer
+	buffer            *containers.OneSchemaBatchBuffer
 	staged            *batch.Batch
 	sinker            *engine_util.Sinker
+	mp                *mpool.MPool
+	fs                fileservice.FileService
+}
+
+func (flow *TransferFlow) fillDefaults() {
+	if flow.buffer == nil {
+		pkType := plan2.ExprType2Type(&flow.table.tableDef.Cols[flow.table.primaryIdx].Typ)
+		attrs, attrTypes := objectio.GetTombstoneSchema(
+			pkType, flow.withHidden,
+		)
+		flow.buffer = containers.NewOneSchemaBatchBuffer(
+			mpool.MB*8,
+			attrs,
+			attrTypes,
+		)
+	}
 }
 
 func (flow *TransferFlow) getBuffer() *batch.Batch {
-	return flow.batchBuffer.Fetch()
+	return flow.buffer.Fetch()
 }
 
 func (flow *TransferFlow) putBuffer(bat *batch.Batch) {
-	flow.batchBuffer.Putback(bat, flow.mp)
+	flow.buffer.Putback(bat, flow.mp)
 }
 
 func (flow *TransferFlow) Process(ctx context.Context) error {
@@ -147,6 +197,10 @@ func (flow *TransferFlow) transferStaged(ctx context.Context) error {
 	return flow.sinker.Write(ctx, result)
 }
 
+func (flow *TransferFlow) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
+	return flow.sinker.GetResult()
+}
+
 func (flow *TransferFlow) Close() error {
 	if flow.sourcer != nil {
 		flow.sourcer.Close()
@@ -156,9 +210,9 @@ func (flow *TransferFlow) Close() error {
 		flow.sinker.Close()
 		flow.sinker = nil
 	}
-	if flow.batchBuffer != nil {
-		flow.batchBuffer.Close(flow.mp)
-		flow.batchBuffer = nil
+	if flow.buffer != nil {
+		flow.buffer.Close(flow.mp)
+		flow.buffer = nil
 	}
 	if flow.staged != nil {
 		flow.staged.Clean(flow.mp)
