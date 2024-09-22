@@ -273,6 +273,8 @@ message ReaderBuildParam {
     plan.Expr expr = 2;
     int32 scanType = 3;
     int32 tombstoneApplyPolicy = 4;
+    repeated plan.OrderBySpec order_by = 5;
+    bytes zm = 6;
 }
 
 message ReaderBuildResult {

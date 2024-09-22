@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1257,13 +1256,16 @@ func Test_ShardingLocalReader(t *testing.T) {
 
 	//test set orderby
 	shardingLRD := disttae.MockShardingLocalReader()
-	assert.Panics(t, func() {
-		shardingLRD.SetOrderBy(nil)
-	})
-	assert.Panics(t, func() {
-		shardingLRD.GetOrderBy()
-	})
-	assert.Panics(t, func() {
-		shardingLRD.SetFilterZM(nil)
-	})
+	shardingLRD.SetOrderBy(nil)
+	shardingLRD.GetOrderBy()
+	shardingLRD.SetFilterZM(nil)
+	//assert.Panics(t, func() {
+	//	shardingLRD.SetOrderBy(nil)
+	//})
+	//assert.Panics(t, func() {
+	//	shardingLRD.GetOrderBy()
+	//})
+	//assert.Panics(t, func() {
+	//	shardingLRD.SetFilterZM(nil)
+	//})
 }

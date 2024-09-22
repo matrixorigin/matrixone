@@ -295,7 +295,6 @@ func (r *reader) Close() error {
 }
 
 func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	//r.OrderBy = orderby
 	r.source.SetOrderBy(orderby)
 }
 
