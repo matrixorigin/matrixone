@@ -72,7 +72,7 @@ type container struct {
 	allExecutors     []colexec.ExpressionExecutor // = executors + runtimeExecutor, do not free this executors
 }
 
-func (filter *Filter) SetExeExpr(proc *process.Process, exes []*plan.Expr) (err error) {
+func (filter *Filter) SetRuntimeExpr(proc *process.Process, exes []*plan.Expr) (err error) {
 	filter.ctr.cleanRuntimeExecutor()
 	filter.ctr.runtimeExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, exes)
 	return

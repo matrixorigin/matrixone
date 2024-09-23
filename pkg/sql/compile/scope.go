@@ -540,7 +540,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if !ok {
 			panic("missing instruction for runtime filter!")
 		}
-		arg.SetExeExpr(s.Proc, appendNotPkFilter)
+		arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
 	}
 
 	// reset datasource
