@@ -17,20 +17,19 @@ package spool
 import (
 	"math"
 	"sync"
-	"sync/atomic"
 )
 
 // Spool is a single producer multiple consumer queue
 type Spool[T Element] struct {
-	mu       sync.Mutex
-	cond     *sync.Cond
-	capacity int64
-	inuse    int64
-	head     *node[T]
-	tail     *node[T]
-	nodePool sync.Pool
-	closed   bool
-	checking atomic.Bool
+	mu        sync.Mutex
+	cond      *sync.Cond
+	capacity  int64
+	inuse     int64
+	head      *node[T]
+	tail      *node[T]
+	nodePool  sync.Pool
+	closed    bool
+	checkLock sync.Mutex
 }
 
 type Element interface {
@@ -131,10 +130,8 @@ func (s *Spool[T]) Close() {
 }
 
 func (s *Spool[T]) checkFree() {
-	if !s.checking.CompareAndSwap(false, true) {
-		return
-	}
-	defer s.checking.Store(false)
+	s.checkLock.Lock()
+	defer s.checkLock.Unlock()
 
 	for {
 		tail := s.tail
