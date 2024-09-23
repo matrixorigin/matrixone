@@ -1414,7 +1414,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 	switch GetExecType(qry, txnHaveDDL) {
 	case ExecTypeTP:
-		return "TP QURERY PLAN"
+		return "TP QUERY PLAN"
 	case ExecTypeAP_ONECN:
 		return "AP QUERY PLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
 	case ExecTypeAP_MULTICN:
@@ -1426,7 +1426,7 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 	switch GetExecType(qry, txnHaveDDL) {
 	case ExecTypeTP:
-		return "TP QURERY PHYPLAN"
+		return "TP QUERY PHYPLAN"
 	case ExecTypeAP_ONECN:
 		return "AP QUERY PHYPLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
 	case ExecTypeAP_MULTICN:
