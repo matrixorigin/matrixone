@@ -164,6 +164,7 @@ func (p *Partition) ConsumeSnapCkps(
 				start = ckp.GetEnd()
 			} else {
 				start = ckp.GetStart()
+				end = ckp.GetEnd()
 			}
 		}
 		if ckp.GetType() == checkpoint.ET_Incremental {
