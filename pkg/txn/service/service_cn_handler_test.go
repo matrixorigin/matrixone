@@ -987,6 +987,7 @@ func newTestLockTablesAllocator(
 			With(zap.String("case", t.Name())))
 	runtime.SetupServiceBasedRuntime("", r)
 	c := clusterservice.NewMOCluster("", nil, time.Hour, clusterservice.WithDisableRefresh())
+	defer c.Close()
 	r.SetGlobalVariables(runtime.ClusterService, c)
 	return lockservice.NewLockTableAllocator(
 		"",

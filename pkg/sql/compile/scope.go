@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
@@ -163,10 +165,15 @@ func (s *Scope) Run(c *Compile) (err error) {
 		} else {
 			if s.DataSource.R == nil {
 				s.NodeInfo.Data = engine.BuildEmptyRelData()
+				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
+
+				buildStart := time.Now()
 				readers, err := s.buildReaders(c)
+				stats.AddBuidReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
 					return err
 				}
+
 				s.DataSource.R = readers[0]
 				s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 			}
@@ -435,6 +442,11 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
 	}
 
+	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
+	buildStart := time.Now()
+	defer func() {
+		stats.AddBuidReaderTimeConsumption(time.Since(buildStart))
+	}()
 	readers, err := s.buildReaders(c)
 	if err != nil {
 		return nil, err
@@ -589,8 +601,10 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 		return s, nil
 	}
 
-	if _, ok := s.RootOp.(*dispatch.Dispatch); ok {
-		panic("dispatch operator should never dup!")
+	if op, ok := s.RootOp.(*dispatch.Dispatch); ok {
+		if len(op.RemoteRegs) > 0 {
+			panic("pipeline end with dispatch should have been merged in multi CN!")
+		}
 	}
 
 	// fake scope is used to merge parallel scopes, and do nothing itself

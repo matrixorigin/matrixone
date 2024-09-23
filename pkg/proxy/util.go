@@ -115,6 +115,19 @@ func isErrPacket(p []byte) bool {
 	return false
 }
 
+// isEmptyPacket returns true if []byte is a empty packet.
+func isEmptyPacket(p []byte) bool {
+	return len(p) == 0
+}
+
+// isDeallocatePacket returns true if []byte is a MySQL
+func isDeallocatePacket(p []byte) bool {
+	if len(p) > 4 && p[4] == 0x19 {
+		return true
+	}
+	return false
+}
+
 // packetToBytes convert Packet to bytes.
 func packetToBytes(p *frontend.Packet) []byte {
 	if p == nil || len(p.Payload) == 0 {

@@ -30,9 +30,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tidwall/btree"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -60,6 +57,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/tidwall/btree"
+	"golang.org/x/sync/errgroup"
 )
 
 type TenantInfo struct {
@@ -1000,6 +999,7 @@ var (
 		MoCatalogMoCacheDDL,
 		MoCatalogMoCdcTaskDDL,
 		MoCatalogMoCdcWatermarkDDL,
+		MoCatalogMoDataKeyDDL,
 	}
 
 	//drop tables for the tenant
@@ -1486,6 +1486,8 @@ const (
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
 
 	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
+
+	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
 )
 
 var (
@@ -1831,6 +1833,10 @@ func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(getDbPubCountFormat, dbName), nil
+}
+
+func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
+	return fmt.Sprintf(getTableColumnDefFormat, accountId, dbName, tableName), nil
 }
 
 func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {
@@ -7382,6 +7388,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
 			return true
 		}
 		return false

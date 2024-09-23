@@ -53,7 +53,6 @@ func NewRemoteDataSource(
 	return &RemoteDataSource{
 		data: relData,
 		ctx:  ctx,
-		proc: proc,
 		fs:   fs,
 		ts:   types.TimestampToTS(snapshotTS),
 	}
@@ -145,6 +144,10 @@ func (rs *RemoteDataSource) Next(
 }
 
 func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
+	// TODO: remove proc and don't GetService
+	if rs.proc == nil {
+		return
+	}
 	if rs.batchPrefetchCursor >= rs.data.DataCnt() ||
 		rs.cursor < rs.batchPrefetchCursor {
 		return
@@ -169,7 +172,10 @@ func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
 
-	rs.data.GetTombstones().PrefetchTombstones(rs.proc.GetService(), rs.fs, bids)
+	tombstoner := rs.data.GetTombstones()
+	if tombstoner != nil {
+		rs.data.GetTombstones().PrefetchTombstones(rs.proc.GetService(), rs.fs, bids)
+	}
 
 	rs.batchPrefetchCursor = end
 }
@@ -1212,7 +1218,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		return false
 	}
 
-	for iter.Next() && len(rowIds) > len(deleted) {
+	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
 
 		if !obj.GetAppendable() {
@@ -1246,10 +1252,13 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				commit = vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[1])
 			}
 
-			for i := range rowIds {
-				s, e := blockio.FindStartEndOfBlockFromSortedRowids(deletedRowIds, rowIds[i].BorrowBlockID())
+			for i := 0; i < len(rowIds); i++ {
+				s, e := blockio.FindStartEndOfBlockFromSortedRowids(
+					deletedRowIds, rowIds[i].BorrowBlockID())
+
 				for j := s; j < e; j++ {
-					if rowIds[i].EQ(&deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
+					if rowIds[i].EQ(&deletedRowIds[j]) &&
+						(commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
 						deleted = append(deleted, int64(i))
 						break
 					}

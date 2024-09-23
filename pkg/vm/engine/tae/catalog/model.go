@@ -19,30 +19,22 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
-	PhyAddrColumnName    = pkgcatalog.Row_ID
+	PhyAddrColumnName    = objectio.DefaultRowid_Attr
 	PhyAddrColumnComment = "Physical address"
-
-	AttrRowID    = pkgcatalog.TableTailAttrDeleteRowID
-	AttrCommitTs = pkgcatalog.TableTailAttrCommitTs
-	AttrAborted  = pkgcatalog.TableTailAttrAborted
-	AttrPKVal    = pkgcatalog.TableTailAttrPKVal
 
 	TenantSysID = uint32(0)
 )
 
 var SystemDBSchema *Schema
-var SystemDBSchema_V1 *Schema
 var SystemTableSchema *Schema
-var SystemTableSchema_V1 *Schema
-var SystemTableSchema_V2 *Schema
 var SystemColumnSchema *Schema
-var SystemColumnSchema_V1 *Schema
-var SystemColumnSchema_V2 *Schema
 
 const (
 	ModelSchemaName   = "_ModelSchema"
@@ -73,86 +65,6 @@ func init() {
 
 	SystemColumnSchema, err = DefsToSchema(pkgcatalog.MO_COLUMNS, defs.MoColumnsTableDefs)
 	if err != nil {
-		panic(err)
-	}
-
-	SystemDBSchema_V1 = NewEmptySchema(pkgcatalog.MO_DATABASE + "_v1")
-	for i, colname := range pkgcatalog.MoDatabaseSchema_V1 {
-		if i == 0 {
-			if err = SystemDBSchema_V1.AppendPKCol(colname, pkgcatalog.MoDatabaseTypes_V1[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err = SystemDBSchema_V1.AppendCol(colname, pkgcatalog.MoDatabaseTypes_V1[i]); err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err = SystemDBSchema_V1.Finalize(true); err != nil {
-		panic(err)
-	}
-
-	SystemTableSchema_V1 = NewEmptySchema(pkgcatalog.MO_TABLES + "_v1")
-	for i, colname := range pkgcatalog.MoTablesSchema_V1 {
-		if i == 0 {
-			if err = SystemTableSchema_V1.AppendPKCol(colname, pkgcatalog.MoTablesTypes_V1[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err = SystemTableSchema_V1.AppendCol(colname, pkgcatalog.MoTablesTypes_V1[i]); err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err = SystemTableSchema_V1.Finalize(true); err != nil {
-		panic(err)
-	}
-
-	SystemTableSchema_V2 = NewEmptySchema(pkgcatalog.MO_TABLES + "_v2")
-	for i, colname := range pkgcatalog.MoTablesSchema_V2 {
-		if i == 0 {
-			if err = SystemTableSchema_V2.AppendPKCol(colname, pkgcatalog.MoTablesTypes_V2[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err = SystemTableSchema_V2.AppendCol(colname, pkgcatalog.MoTablesTypes_V2[i]); err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err = SystemTableSchema_V2.Finalize(true); err != nil {
-		panic(err)
-	}
-
-	SystemColumnSchema_V1 = NewEmptySchema(pkgcatalog.MO_COLUMNS + "_v1")
-	for i, colname := range pkgcatalog.MoColumnsSchema_V1 {
-		if i == 0 {
-			if err = SystemColumnSchema_V1.AppendPKCol(colname, pkgcatalog.MoColumnsTypes_V1[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err = SystemColumnSchema_V1.AppendCol(colname, pkgcatalog.MoColumnsTypes_V1[i]); err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err = SystemColumnSchema_V1.Finalize(true); err != nil {
-		panic(err)
-	}
-
-	SystemColumnSchema_V2 = NewEmptySchema(pkgcatalog.MO_COLUMNS + "_v2")
-	for i, colname := range pkgcatalog.MoColumnsSchema_V2 {
-		if i == 0 {
-			if err = SystemColumnSchema_V2.AppendPKCol(colname, pkgcatalog.MoColumnsTypes_V2[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err = SystemColumnSchema_V2.AppendCol(colname, pkgcatalog.MoColumnsTypes_V2[i]); err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err = SystemColumnSchema_V2.Finalize(true); err != nil {
 		panic(err)
 	}
 }
@@ -197,6 +109,8 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err erro
 					schema.Relkind = property.Value
 				case pkgcatalog.SystemRelAttr_CreateSQL:
 					schema.Createsql = property.Value
+				case pkgcatalog.PropSchemaExtra:
+					schema.Extra = api.MustUnmarshalTblExtra([]byte(property.Value))
 				default:
 				}
 			}
@@ -272,6 +186,10 @@ func SchemaToDefs(schema *Schema) (defs []engine.TableDef, err error) {
 			Value: schema.Createsql,
 		})
 	}
+	pro.Properties = append(pro.Properties, engine.Property{
+		Key:   pkgcatalog.PropSchemaExtra,
+		Value: string(api.MustMarshalTblExtra(schema.Extra)),
+	})
 	defs = append(defs, pro)
 
 	return

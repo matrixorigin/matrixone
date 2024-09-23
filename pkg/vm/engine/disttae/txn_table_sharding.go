@@ -70,7 +70,7 @@ func newTxnTableWithItem(
 		partition:     item.Partition,
 		createSql:     item.CreateSql,
 		constraint:    item.Constraint,
-		rowid:         item.Rowid,
+		extraInfo:     item.ExtraInfo,
 		lastTS:        db.op.SnapshotTS(),
 	}
 	tbl.proc.Store(process)
@@ -629,12 +629,15 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	scanType := determineScanType(relData, newNum)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
+	current := 0
 	var shard engine.RelData
 	for i := 0; i < newNum; i++ {
-		if i == 0 {
-			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
+		if i < mod {
+			shard = relData.DataSlice(current, current+divide+1)
+			current = current + divide + 1
 		} else {
-			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
+			shard = relData.DataSlice(current, current+divide)
+			current = current + divide
 		}
 
 		localRelData, remoteRelData := group(shard)

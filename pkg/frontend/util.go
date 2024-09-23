@@ -1617,15 +1617,14 @@ func compositedUriInfo(uri string, uriPrefix string) (bool, cdc.UriInfo) {
 		return false, cdc.UriInfo{}
 	}
 	seps2 := strings.Split(seps[0], ":")
-	if len(seps2) != 2 || len(seps2[0]) == 0 {
+	if len(seps2) < 2 {
 		return false, cdc.UriInfo{}
 	}
-	userName := seps2[0]
-	password := seps2[1]
+	userName := strings.Join(seps2[0:len(seps2)-1], ":")
+	password := seps2[len(seps2)-1]
 	passwordStart := len(uriPrefix) + len(userName) + 1
 	passwordEnd := passwordStart + len(password)
-	if passwordEnd > len(uri) ||
-		password != uri[passwordStart:passwordEnd] {
+	if passwordEnd > len(uri) || password != uri[passwordStart:passwordEnd] {
 		return false, cdc.UriInfo{}
 	}
 
@@ -1683,4 +1682,105 @@ func extractUriInfo(ctx context.Context, uri string, uriPrefix string) (string, 
 		return "", cdc.UriInfo{}, err
 	}
 	return jsonUriInfo, uriInfo, nil
+}
+
+func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, table string, ses FeSession) (*plan.TableDef, error) {
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+	var (
+		sql     string
+		erArray []ExecResult
+		err     error
+	)
+
+	sql, err = getTableColumnDefSql(accountId, dbName, table)
+	if err != nil {
+		return nil, err
+	}
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if !execResultArrayHasData(erArray) {
+		return nil, moerr.NewNoSuchTable(ctx, dbName, table)
+	}
+
+	cols, err := extractTableDefColumns(erArray, ctx, dbName, table)
+	if err != nil {
+		return nil, err
+	}
+
+	return &plan.TableDef{
+		Name:   table,
+		DbName: dbName,
+		Cols:   cols,
+	}, nil
+}
+
+func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, table string) ([]*plan.ColDef, error) {
+	cols := make([]*plan.ColDef, 0)
+	for _, result := range erArray {
+		for i := uint64(0); i < result.GetRowCount(); i++ {
+			colName, err := result.GetString(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+
+			colType, err := result.GetString(ctx, i, 1)
+			if err != nil {
+				return nil, err
+			}
+
+			typ := new(types.Type)
+			err = typ.Unmarshal([]byte(colType))
+			if err != nil {
+				return nil, err
+			}
+
+			colNum, err := result.GetUint64(ctx, i, 2)
+			if err != nil {
+				return nil, err
+			}
+
+			attDefault, err := result.GetString(ctx, i, 4)
+			if err != nil {
+				return nil, err
+			}
+			def := new(plan.Default)
+			err = types.Decode([]byte(attDefault), def)
+			if err != nil {
+				return nil, err
+			}
+
+			isHidden, err := result.GetInt64(ctx, i, 6)
+			if err != nil {
+				return nil, err
+			}
+
+			cols = append(cols, &plan.ColDef{
+				TblName:    table,
+				DbName:     dbName,
+				ColId:      colNum,
+				Name:       strings.ToLower(colName),
+				OriginName: colName,
+				Hidden:     isHidden == 1,
+				Typ: plan.Type{
+					Id:          int32(typ.Oid),
+					Width:       typ.Width,
+					Scale:       typ.Scale,
+					Table:       table,
+					NotNullable: !def.NullAbility,
+				},
+				Default: def,
+			})
+		}
+	}
+	return cols, nil
 }

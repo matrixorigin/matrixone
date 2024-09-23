@@ -18,9 +18,8 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -68,6 +67,7 @@ const (
 	Insert
 	External
 	Source
+	MultiUpdate
 
 	Minus
 	Intersect
@@ -108,6 +108,115 @@ const (
 	Mock
 	Apply
 )
+
+var OperatorToStrMap map[OpType]string
+var StrToOperatorMap map[string]OpType
+var MinorOpMap map[string]struct{}
+var MajorOpMap map[string]struct{}
+
+func init() {
+	// Initialize OperatorToStrMap
+	OperatorToStrMap = map[OpType]string{
+		Top:                     "Top",
+		Limit:                   "Limit",
+		Order:                   "Order",
+		Group:                   "Group",
+		Window:                  "Window",
+		TimeWin:                 "TimeWin",
+		Fill:                    "Fill",
+		Output:                  "Output",
+		Offset:                  "Offset",
+		Product:                 "Product",
+		Filter:                  "Filter",
+		Dispatch:                "Dispatch",
+		Connector:               "Connector",
+		Projection:              "Projection",
+		Join:                    "Join",
+		LoopJoin:                "LoopJoin",
+		Left:                    "Left",
+		Single:                  "Single",
+		Semi:                    "Semi",
+		RightSemi:               "RightSemi",
+		Anti:                    "Anti",
+		RightAnti:               "RightAnti",
+		Mark:                    "Mark",
+		IndexJoin:               "IndexJoin",
+		IndexBuild:              "IndexBuild",
+		Merge:                   "Merge",
+		MergeTop:                "MergeTop",
+		MergeLimit:              "MergeLimit",
+		MergeOrder:              "MergeOrder",
+		MergeGroup:              "MergeGroup",
+		MergeOffset:             "MergeOffset",
+		MergeRecursive:          "MergeRecursive",
+		MergeCTE:                "MergeCTE",
+		Partition:               "Partition",
+		Deletion:                "Deletion",
+		Insert:                  "Insert",
+		External:                "External",
+		Source:                  "Source",
+		Minus:                   "Minus",
+		Intersect:               "Intersect",
+		IntersectAll:            "IntersectAll",
+		UnionAll:                "UnionAll",
+		HashBuild:               "HashBuild",
+		ShuffleBuild:            "ShuffleBuild",
+		TableFunction:           "TableFunction",
+		TableScan:               "TableScan",
+		ValueScan:               "ValueScan",
+		MergeBlock:              "MergeBlock",
+		MergeDelete:             "MergeDelete",
+		Right:                   "Right",
+		OnDuplicateKey:          "OnDuplicateKey",
+		FuzzyFilter:             "FuzzyFilter",
+		PreInsert:               "PreInsert",
+		PreInsertUnique:         "PreInsertUnique",
+		PreInsertSecondaryIndex: "PreInsertSecondaryIndex",
+		LastInstructionOp:       "LastInstructionOp",
+		LockOp:                  "LockOp",
+		Shuffle:                 "Shuffle",
+		Sample:                  "Sample",
+		ProductL2:               "ProductL2",
+		Mock:                    "Mock",
+		Apply:                   "Apply",
+	}
+
+	// Initialize StrToOperatorMap
+	StrToOperatorMap = make(map[string]OpType)
+	for op, str := range OperatorToStrMap {
+		StrToOperatorMap[str] = op
+	}
+
+	// Initialize MinorOpMap (small impact on time consumption)
+	MinorOpMap = map[string]struct{}{
+		OperatorToStrMap[HashBuild]:    {},
+		OperatorToStrMap[ShuffleBuild]: {},
+		OperatorToStrMap[IndexBuild]:   {},
+		OperatorToStrMap[Filter]:       {},
+		OperatorToStrMap[MergeGroup]:   {},
+		OperatorToStrMap[MergeOrder]:   {},
+	}
+
+	// Initialize MajorOpMap (large impact on time consumption)
+	MajorOpMap = map[string]struct{}{
+		OperatorToStrMap[TableScan]: {},
+		OperatorToStrMap[External]:  {},
+		OperatorToStrMap[Order]:     {},
+		OperatorToStrMap[Window]:    {},
+		OperatorToStrMap[Group]:     {},
+		OperatorToStrMap[Join]:      {},
+		OperatorToStrMap[LoopJoin]:  {},
+		OperatorToStrMap[Left]:      {},
+		OperatorToStrMap[Single]:    {},
+		OperatorToStrMap[Semi]:      {},
+		OperatorToStrMap[RightSemi]: {},
+		OperatorToStrMap[Anti]:      {},
+		OperatorToStrMap[RightAnti]: {},
+		OperatorToStrMap[Mark]:      {},
+		OperatorToStrMap[Product]:   {},
+		OperatorToStrMap[ProductL2]: {},
+	}
+}
 
 func (op OpType) String() string {
 	switch op {
@@ -183,6 +292,8 @@ func (op OpType) String() string {
 		return "Deletion"
 	case Insert:
 		return "Insert"
+	case MultiUpdate:
+		return "MultiUpdate"
 	case External:
 		return "External"
 	case Source:

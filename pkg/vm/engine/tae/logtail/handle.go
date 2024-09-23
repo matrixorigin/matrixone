@@ -139,12 +139,6 @@ func HandleSyncLogTailReq(
 	req.Table.DbName = dbEntry.GetName()
 	req.Table.TbName = schema.Name
 	req.Table.PrimarySeqnum = uint32(schema.GetPrimaryKey().SeqNum)
-	tableEntry.RLock()
-	createTS := tableEntry.GetCreatedAtLocked()
-	tableEntry.RUnlock()
-	if start.Less(&createTS) {
-		start = createTS
-	}
 
 	ckpLoc, checkpointed, err := ckpClient.CollectCheckpointsInRange(ctx, start, end)
 	if err != nil {
@@ -191,25 +185,6 @@ type RespBuilder interface {
 	catalog.Processor
 	BuildResp() (api.SyncLogTailResp, error)
 	Close()
-}
-
-// this is used to collect ONE ROW of db or table change
-func catalogEntry2Batch[
-	T *catalog.DBEntry | *catalog.TableEntry,
-	N *catalog.MVCCNode[*catalog.EmptyMVCCNode] | *catalog.MVCCNode[*catalog.TableMVCCNode]](
-	dstBatch *containers.Batch,
-	e T,
-	node N,
-	schema *catalog.Schema,
-	fillDataRow func(e T, node N, attr string, col containers.Vector),
-	rowid types.Rowid,
-	commitTs types.TS,
-) {
-	for _, col := range schema.ColDefs {
-		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name))
-	}
-	dstBatch.GetVectorByName(catalog.PhyAddrColumnName).Append(rowid, false)
-	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs, false)
 }
 
 // CatalogLogtailRespBuilder knows how to make api-entry from block entry.
@@ -323,12 +298,11 @@ func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
 func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS) {
 	batch.GetVectorByName(catalog.PhyAddrColumnName).Append(objectio.HackObjid2Rowid(entry.ID()), false)
 	if push {
-		batch.GetVectorByName(catalog.AttrCommitTs).Append(committs, false)
+		batch.GetVectorByName(objectio.DefaultCommitTS_Attr).Append(committs, false)
 	} else {
-		batch.GetVectorByName(catalog.AttrCommitTs).Append(txnMVCCNode.End, false)
+		batch.GetVectorByName(objectio.DefaultCommitTS_Attr).Append(txnMVCCNode.End, false)
 	}
-	empty := entry.IsAppendable() && create
-	entry.ObjectMVCCNode.AppendTuple(entry.ID(), batch, empty)
+	entry.ObjectMVCCNode.AppendTuple(entry.ID(), batch)
 	if push {
 		txnMVCCNode.AppendTupleWithCommitTS(batch, committs)
 	} else {
