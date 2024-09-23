@@ -132,7 +132,7 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 
 	proc := testutil.NewProc()
 	for _, kase := range kases {
-		var gs genNumState[T]
+		var gs genNumState[int64]
 		startVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.start, 1, proc.Mp())
 		endVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.end, 1, proc.Mp())
 		stepVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.step, 1, proc.Mp())
@@ -144,7 +144,7 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 		}
 
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(typ.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 
 		var result []T
 		for {
@@ -155,8 +155,8 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 			}
 			vec := bat.GetVector(0)
 			for i := 0; i < bat.RowCount(); i++ {
-				val := vector.GetFixedAtWithTypeCheck[T](vec, i)
-				result = append(result, val)
+				val := vector.GetFixedAtWithTypeCheck[int64](vec, i)
+				result = append(result, T(val))
 			}
 		}
 		if len(kase.res) == 0 {
