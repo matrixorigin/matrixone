@@ -677,7 +677,7 @@ func extractTablePair(ctx context.Context, pattern string, defaultAcc string) (*
 		//Format: account.db.table:db.table
 		splitRes := strings.Split(pattern, ":")
 		if len(splitRes) != 2 {
-			return nil, moerr.NewInternalErrorf(ctx, "must be source : sink. invalid format")
+			return nil, moerr.NewInternalErrorf(ctx, "invalid table format: %s, must be `source:sink`.", pattern)
 		}
 
 		//handle source part
@@ -731,7 +731,7 @@ func extractTablePair(ctx context.Context, pattern string, defaultAcc string) (*
 func extractTableInfo(ctx context.Context, input string, mustBeConcreteTable bool) (account string, db string, table string, isRegexpTable bool, err error) {
 	parts := strings.Split(strings.TrimSpace(input), ".")
 	if len(parts) != 2 && len(parts) != 3 {
-		err = moerr.NewInternalErrorf(ctx, "needs account.database.table or database.table. invalid format.")
+		err = moerr.NewInternalErrorf(ctx, "invalid table format: %s, needs account.database.table or database.table.", input)
 		return
 	}
 
@@ -741,18 +741,18 @@ func extractTableInfo(ctx context.Context, input string, mustBeConcreteTable boo
 		account, db, table = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
 
 		if !accountNameIsLegal(account) {
-			err = moerr.NewInternalErrorf(ctx, "invalid account name")
+			err = moerr.NewInternalErrorf(ctx, "invalid account name: %s", account)
 			return
 		}
 	}
 
 	if !dbNameIsLegal(db) {
-		err = moerr.NewInternalErrorf(ctx, "invalid database name")
+		err = moerr.NewInternalErrorf(ctx, "invalid database name: %s", db)
 		return
 	}
 
 	if !tableNameIsLegal(table) {
-		err = moerr.NewInternalErrorf(ctx, "invalid table name")
+		err = moerr.NewInternalErrorf(ctx, "invalid table name: %s", table)
 		return
 	}
 
@@ -790,7 +790,7 @@ func extractTablePairs(ctx context.Context, pattern string, defaultAcc string) (
 
 	tablePairs := strings.Split(pattern, ",")
 	if len(tablePairs) == 0 {
-		return nil, moerr.NewInternalError(ctx, "invalid pattern format")
+		return nil, moerr.NewInternalErrorf(ctx, "invalid pattern format: %s", pattern)
 	}
 
 	//step1 : split pattern by ',' => table pair
@@ -832,7 +832,7 @@ func extractRules(ctx context.Context, pattern string) (*cdc2.PatternTuples, err
 
 	tablePairs := strings.Split(pattern, ",")
 	if len(tablePairs) == 0 {
-		return nil, moerr.NewInternalError(ctx, "invalid pattern format")
+		return nil, moerr.NewInternalErrorf(ctx, "invalid pattern format: %s", pattern)
 	}
 	var err error
 	//step1 : split pattern by ',' => table pair
