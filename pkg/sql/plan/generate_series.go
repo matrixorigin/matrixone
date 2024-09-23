@@ -69,10 +69,8 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 			Cols: GSColDefs[retsIdx],
 		},
 		BindingTags:     []int32{builder.genNewTag()},
+		Children:        []int32{childId},
 		TblFuncExprList: exprs,
-	}
-	if childId >= 0 {
-		node.Children = []int32{childId}
 	}
 	return builder.appendNode(node, ctx)
 }
