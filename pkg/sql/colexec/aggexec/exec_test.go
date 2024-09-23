@@ -342,13 +342,18 @@ func TestGroupConcatExec(t *testing.T) {
 		// data Fill.
 		require.NoError(t, executor.Fill(0, 0, inputs))
 		require.NoError(t, executor.Fill(0, 1, inputs))
-		require.NoError(t, executor.Fill(0, 2, inputs))
-		require.NoError(t, executor.Fill(0, 3, inputs))
 		// data merge
 		executor2 := MakeAgg(mg, info.aggID, info.distinct, info.argTypes...)
 		require.NoError(t, executor2.GroupGrow(1))
+		require.NoError(t, executor2.Fill(0, 2, inputs))
+		require.NoError(t, executor2.Fill(0, 3, inputs))
 		require.NoError(t, executor.Merge(executor2, 0, 0))
 		executor2.Free()
+		// merge empty.
+		executor3 := MakeAgg(mg, info.aggID, info.distinct, info.argTypes...)
+		require.NoError(t, executor3.GroupGrow(1))
+		require.NoError(t, executor.Merge(executor3, 0, 0))
+		executor3.Free()
 	}
 	{
 		// result check.
