@@ -257,7 +257,7 @@ var (
     			table_id bigint unsigned,			
     			watermark varchar(128),			
     			primary key(account_id,task_id,table_id)
-	)`
+			)`
 
 	MoCatalogMoSessionsDDL       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
 	MoCatalogMoConfigurationsDDL = `CREATE VIEW mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`
@@ -265,6 +265,15 @@ var (
 	MoCatalogMoVariablesDDL      = `CREATE VIEW mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode`
 	MoCatalogMoTransactionsDDL   = `CREATE VIEW mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp`
 	MoCatalogMoCacheDDL          = `CREATE VIEW mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp`
+
+	MoCatalogMoDataKeyDDL = `create table mo_catalog.mo_data_key (
+    			account_id bigint unsigned,			
+    			key_id uuid, 
+    			encrypted_key varchar(128), 
+				create_time timestamp not null default current_timestamp,
+				update_time timestamp not null default current_timestamp on update current_timestamp,
+    			primary key(account_id, key_id)
+			)`
 )
 
 // `mo_catalog` database system tables

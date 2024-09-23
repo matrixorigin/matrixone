@@ -463,9 +463,9 @@ func (s *sPool) Result(end bool) (bat *batch.Batch, err error) {
 
 				seenRows += s.sPools[i].seen
 				bat, err = bat.Append(s.proc.Ctx, mp, b)
-				s.proc.PutBatch(b)
+				b.Clean(mp)
 				if err != nil {
-					s.proc.PutBatch(bat)
+					bat.Clean(mp)
 					return nil, err
 				}
 			}
@@ -482,9 +482,9 @@ func (s *sPool) Result(end bool) (bat *batch.Batch, err error) {
 
 			seenRows += s.mPools[i].seen
 			bat, err = bat.Append(s.proc.Ctx, mp, b)
-			s.proc.PutBatch(b)
+			b.Clean(mp)
 			if err != nil {
-				s.proc.PutBatch(bat)
+				bat.Clean(mp)
 				return nil, err
 			}
 		}
@@ -499,7 +499,7 @@ func (s *sPool) Result(end bool) (bat *batch.Batch, err error) {
 		bat.Vecs = append(bat.Vecs, nil)
 		bat.Vecs[len(bat.Vecs)-1], err = vector.NewConstFixed[int64](types.T_int64.ToType(), int64(seenRows), bat.RowCount(), mp)
 		if err != nil {
-			s.proc.PutBatch(bat)
+			bat.Clean(s.proc.Mp())
 			return nil, err
 		}
 	}

@@ -501,6 +501,7 @@ message Instruction{
   HashBuild hash_build = 48;
   Shufflebuild shuffle_build = 49;
   Indexbuild index_build = 50;
+  Apply apply = 51;
 }
 
 message AnalysisList {
@@ -618,4 +619,11 @@ message UuidToRegIdx {
   int32 idx = 1;
   bytes uuid = 2;
   string from_addr = 3;
+}
+
+message Apply{
+  int32 apply_type = 1;
+  repeated int32 rel_list = 2;
+  repeated int32 col_list = 3;
+  repeated plan.Type types = 4 [(gogoproto.nullable) = false];
 }

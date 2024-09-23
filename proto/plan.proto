@@ -769,6 +769,11 @@ message Node {
 		LINEAR = 5;
 	}
 
+	enum ApplyType {
+		CROSSAPPLY = 0;
+		OUTERAPPLY = 1;
+	}
+
 	NodeType node_type = 1;
 	int32 node_id = 2;
 	Stats stats = 3;
@@ -865,6 +870,9 @@ message Node {
 	bool recursive_cte = 59;
 	
 	repeated UpdateCtx update_ctx_list = 60;
+
+    ApplyType apply_type = 61;
+
 }
 
 // Snapshot Represents a snapshot of the database
@@ -881,17 +889,24 @@ message SnapshotTenant {
 	uint32 tenantID = 2;
 }
 
+enum ExternType {
+	LOAD 		= 0;
+	EXTERNAL_TB 	= 1;
+	RESULT_SCAN 	= 2;
+}
+
 
 message ExternScan {
     int32 type = 1;
-    string data = 2;
-    string format = 3;
-    uint64 ignored_lines = 4;
-    bytes  enclosed_by = 5;
-    string terminated = 6;
-	string json_type = 7;
-    bytes  escaped_by = 8;
-	map<string, int32> TbColToDataCol = 9;
+    int32 load_type = 2;
+    string data = 3;
+    string format = 4;
+    uint64 ignored_lines = 5;
+    bytes  enclosed_by = 6;
+    string terminated = 7;
+    string json_type = 8;
+    bytes  escaped_by = 9;
+    map<string, int32> TbColToDataCol = 10;
 }
 
 message LockTarget {

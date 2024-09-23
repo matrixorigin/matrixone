@@ -1125,7 +1125,8 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 			if (targetStatus == task.TaskStatus_ResumeRequested || targetStatus == task.TaskStatus_RestartRequested) && dTask.TaskStatus != task.TaskStatus_Paused ||
 				targetStatus == task.TaskStatus_PauseRequested && dTask.TaskStatus != task.TaskStatus_Running {
 				err = moerr.NewInternalErrorf(ctx,
-					"status can not be change, now it is %s",
+					"Task %s status can not be change, now it is %s",
+					dTask.Details.Details.(*task.Details_CreateCdc).CreateCdc.TaskName,
 					dTask.TaskStatus.String())
 				return 0, err
 			}
