@@ -37,6 +37,8 @@ var (
 	}
 )
 
+type KekKey struct{}
+
 type versionHandle struct {
 	metadata versions.Version
 }
@@ -105,7 +107,10 @@ func (v *versionHandle) HandleClusterUpgrade(
 			return err
 		}
 	}
-	return nil
+
+	kek := ctx.Value(KekKey{}).(string)
+	err := InsertInitDataKey(txn, kek)
+	return err
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
