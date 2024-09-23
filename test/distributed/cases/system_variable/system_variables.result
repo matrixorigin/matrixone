@@ -254,7 +254,7 @@ select grantee, table_catalog from user_privileges limit 2;
 grantee    table_catalog
 desc schemata;
 Field    Type    Null    Key    Default    Extra    Comment
-catalog_name    VARCHAR(5000)    YES        null        
+catalog_name    VARCHAR(3)    YES        null        
 schema_name    VARCHAR(5000)    YES        null        
 default_character_set_name    VARCHAR(7)    NO        null        
 default_collation_name    VARCHAR(18)    NO        null        
@@ -263,7 +263,7 @@ default_encryption    VARCHAR(3)    NO        null
 select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
 catalog_name    schema_name
 def    mo_task
-mo_catalog    mo_catalog
+def    mo_catalog
 desc character_sets;
 Field    Type    Null    Key    Default    Extra    Comment
 CHARACTER_SET_NAME    VARCHAR(64)    YES        null        
