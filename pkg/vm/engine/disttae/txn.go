@@ -653,7 +653,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(offset int) error {
 			return err
 		}
 		bat := batch.NewWithSize(2)
-		bat.Attrs = []string{catalog2.ObjectAttr_ObjectStats, catalog2.AttrPKVal}
+		bat.Attrs = []string{catalog2.ObjectAttr_ObjectStats, objectio.TombstoneAttr_PK_Attr}
 		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		if err = vector.AppendBytes(
 			bat.GetVector(0), stats.Marshal(), false, txn.proc.GetMPool()); err != nil {

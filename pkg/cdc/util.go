@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	cryptorand "crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -27,8 +28,7 @@ import (
 	"strconv"
 	"time"
 
-	"go.uber.org/zap"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
@@ -467,14 +468,21 @@ func GetTableDef(
 }
 
 const (
-	aesKey = "test-aes-key-not-use-it-in-cloud"
+	InitKeyId           = "4e3da275-5003-4ca0-8667-5d3cdbecdd35"
+	InsertDataKeyFormat = "insert into mo_catalog.mo_data_key (account_id, key_id, encrypted_key) values (%d, '%s', '%s')"
 )
 
+var AesKey string
+
 func AesCFBEncode(data []byte) (string, error) {
-	return aesCFBEncode(data, []byte(aesKey))
+	return aesCFBEncodeWithKey(data, []byte(AesKey))
 }
 
-func aesCFBEncode(data []byte, aesKey []byte) (string, error) {
+func aesCFBEncodeWithKey(data []byte, aesKey []byte) (string, error) {
+	if len(aesKey) == 0 {
+		return "", moerr.NewInternalErrorNoCtx("AesKey is not initialized")
+	}
+
 	block, err := aes.NewCipher(aesKey)
 	if err != nil {
 		return "", err
@@ -490,10 +498,14 @@ func aesCFBEncode(data []byte, aesKey []byte) (string, error) {
 }
 
 func AesCFBDecode(ctx context.Context, data string) (string, error) {
-	return aesCFBDecode(ctx, data, []byte(aesKey))
+	return AesCFBDecodeWithKey(ctx, data, []byte(AesKey))
 }
 
-func aesCFBDecode(ctx context.Context, data string, aesKey []byte) (string, error) {
+func AesCFBDecodeWithKey(ctx context.Context, data string, aesKey []byte) (string, error) {
+	if len(aesKey) == 0 {
+		return "", moerr.NewInternalErrorNoCtx("AesKey is not initialized")
+	}
+
 	encodedData, err := hex.DecodeString(data)
 	if err != nil {
 		return "", err
@@ -523,4 +535,23 @@ func generateSalt(n int) []byte {
 		}
 	}
 	return buf
+}
+
+var (
+	encrypt        = aesCFBEncodeWithKey
+	cryptoRandRead = cryptorand.Read
+)
+
+func GetInitDataKeySql(kek string) (_ string, err error) {
+	aesKey := make([]byte, 32)
+	if _, err = cryptoRandRead(aesKey); err != nil {
+		return
+	}
+
+	encryptedKey, err := encrypt(aesKey, []byte(kek))
+	if err != nil {
+		return
+	}
+
+	return fmt.Sprintf(InsertDataKeyFormat, catalog.System_Account, InitKeyId, encryptedKey), nil
 }

@@ -90,8 +90,7 @@ var (
 )
 
 var (
-	//insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` (doc_id, pos, word, doc_count) SELECT f.* FROM `%s`.`%s` AS src CROSS APPLY fulltext_index_tokenize(%s) as f;"
-	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS JOIN fulltext_index_tokenize('%s', %s, %s) AS f WHERE %s = f.doc_id;"
+	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
 )
 
 // genCreateIndexTableSql: Generate ddl statements for creating index table
@@ -661,8 +660,7 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 		src_alias,
 		params,
 		pkColName,
-		concat,
-		pkColName)
+		concat)
 
 	return []string{sql}
 }

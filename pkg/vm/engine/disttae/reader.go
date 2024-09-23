@@ -357,10 +357,7 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.readBlockCnt == 0 {
-		r.smallScanThreshHold = GetSmallScanThreshHold()
-	}
-	if r.readBlockCnt > r.smallScanThreshHold {
+	if r.scanType == LARGE || r.scanType == NORMAL {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 
@@ -384,7 +381,6 @@ func (r *reader) Read(
 	if err != nil {
 		return false, err
 	}
-	r.readBlockCnt++
 
 	if filter.Valid {
 		// we collect mem cache hit related statistics info for blk read here

@@ -99,10 +99,8 @@ func (builder *QueryBuilder) buildMetadataScan(tbl *tree.TableFunction, ctx *Bin
 			Cols: MetadataScanColDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
+		Children:        []int32{childId},
 		TblFuncExprList: exprs,
-	}
-	if childId >= 0 {
-		node.Children = []int32{childId}
 	}
 	return builder.appendNode(node, ctx)
 }

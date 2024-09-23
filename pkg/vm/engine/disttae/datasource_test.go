@@ -56,7 +56,6 @@ func TestTombstoneData1(t *testing.T) {
 		writer, err := colexec.NewS3TombstoneWriter()
 		require.NoError(t, err)
 		bat := engine_util.NewCNTombstoneBatch(
-			"pkey",
 			&int32Type,
 		)
 		for j := 0; j < 10; j++ {
@@ -310,7 +309,6 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		require.NoError(t, err)
 
 		bat := engine_util.NewCNTombstoneBatch(
-			"pkey",
 			&int32Type,
 		)
 
