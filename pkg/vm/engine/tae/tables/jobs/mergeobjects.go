@@ -17,6 +17,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -55,11 +56,9 @@ type mergeObjectsTask struct {
 	createdBObjs      []*catalog.ObjectEntry
 	commitEntry       *api.MergeCommitEntry
 	transferMaps      api.TransferMaps
-	rel               handle.Relation
+	tableEntry        *catalog.TableEntry
 	did, tid          uint64
 	isTombstone       bool
-
-	doTransfer bool
 
 	blkCnt     []int
 	nMergedBlk []int
@@ -83,19 +82,29 @@ func NewMergeObjectsTask(
 		panic("empty mergedObjs")
 	}
 	task = &mergeObjectsTask{
-		txn:          txn,
-		rt:           rt,
-		mergedObjs:   mergedObjs,
-		createdBObjs: make([]*catalog.ObjectEntry, 0),
-		mergedBlkCnt: make([]int, len(mergedObjs)),
-		isTombstone:  isTombstone,
-		nMergedBlk:   make([]int, len(mergedObjs)),
-		blkCnt:       make([]int, len(mergedObjs)),
-
-		targetObjSize: targetObjSize,
-
-		createAt: time.Now(),
+		txn:              txn,
+		rt:               rt,
+		did:              mergedObjs[0].GetTable().GetDB().ID,
+		tid:              mergedObjs[0].GetTable().ID,
+		mergedObjs:       mergedObjs,
+		mergedObjsHandle: make([]handle.Object, len(mergedObjs)),
+		mergedBlkCnt:     make([]int, len(mergedObjs)),
+		isTombstone:      isTombstone,
+		nMergedBlk:       make([]int, len(mergedObjs)),
+		blkCnt:           make([]int, len(mergedObjs)),
+		targetObjSize:    targetObjSize,
+		createAt:         time.Now(),
 	}
+
+	database, err := txn.GetDatabaseByID(task.did)
+	if err != nil {
+		return
+	}
+	rel, err := database.GetRelationByID(task.tid)
+	if err != nil {
+		return
+	}
+
 	for i, obj := range mergedObjs {
 		if obj.IsTombstone != isTombstone {
 			panic(fmt.Sprintf("task.IsTombstone %v, object %v %v", isTombstone, obj.ID().String(), obj.IsTombstone))
@@ -103,27 +112,16 @@ func NewMergeObjectsTask(
 		task.mergedBlkCnt[i] = task.totalMergedBlkCnt
 		task.blkCnt[i] = obj.BlockCnt()
 		task.totalMergedBlkCnt += task.blkCnt[i]
-	}
 
-	task.did = mergedObjs[0].GetTable().GetDB().ID
-	database, err := txn.GetDatabaseByID(task.did)
-	if err != nil {
-		return
-	}
-	task.tid = mergedObjs[0].GetTable().ID
-	task.rel, err = database.GetRelationByID(task.tid)
-	if err != nil {
-		return
-	}
-	for _, meta := range mergedObjs {
-		obj, err := task.rel.GetObject(meta.ID(), isTombstone)
+		objHandle, err := rel.GetObject(obj.ID(), isTombstone)
 		if err != nil {
 			return nil, err
 		}
-		task.mergedObjsHandle = append(task.mergedObjsHandle, obj)
+		task.mergedObjsHandle[i] = objHandle
 	}
-	task.schema = task.rel.Schema(isTombstone).(*catalog.Schema)
-	task.doTransfer = !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
+
+	task.schema = rel.Schema(isTombstone).(*catalog.Schema)
+	task.tableEntry = rel.GetMeta().(*catalog.TableEntry)
 	task.idxs = make([]int, 0, len(task.schema.ColDefs)-1)
 	task.attrs = make([]string, 0, len(task.schema.ColDefs)-1)
 	for _, def := range task.schema.ColDefs {
@@ -134,8 +132,8 @@ func NewMergeObjectsTask(
 		task.attrs = append(task.attrs, def.Name)
 	}
 	if isTombstone {
-		task.idxs = append(task.idxs, catalog.COLIDX_COMMITS)
-		task.attrs = append(task.attrs, catalog.AttrCommitTs)
+		task.idxs = append(task.idxs, objectio.SEQNUM_COMMITTS)
+		task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 	return
@@ -154,11 +152,11 @@ func (task *mergeObjectsTask) GetAccBlkCnts() []int {
 }
 
 func (task *mergeObjectsTask) GetBlockMaxRows() uint32 {
-	return task.schema.BlockMaxRows
+	return task.schema.Extra.BlockMaxRows
 }
 
 func (task *mergeObjectsTask) GetObjectMaxBlocks() uint16 {
-	return task.schema.ObjectMaxBlocks
+	return uint16(task.schema.Extra.ObjectMaxBlocks)
 }
 
 func (task *mergeObjectsTask) GetTargetObjSize() uint32 {
@@ -222,24 +220,22 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 		return nil, nil, nil, err
 	}
 	if task.isTombstone {
-		rowIDs := data.Vecs[0]
-		tbl := task.rel.GetMeta().(*catalog.TableEntry)
-		rowIDs.Foreach(func(v any, isNull bool, row int) error {
+		err = data.Vecs[0].Foreach(func(v any, isNull bool, row int) error {
 			rowID := v.(types.Rowid)
 			objectID := rowID.BorrowObjectID()
-			obj, err := tbl.GetObjectByID(objectID, false)
-			if err != nil {
-				data.Deletes.Add(uint64(row))
-				return nil
-			}
-			if obj.HasDropCommitted() {
+			obj, err := task.tableEntry.GetObjectByID(objectID, false)
+			if err != nil || obj.HasDropCommitted() {
 				if data.Deletes == nil {
 					data.Deletes = &nulls.Nulls{}
 				}
 				data.Deletes.Add(uint64(row))
+				return nil
 			}
 			return nil
 		}, nil)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	if len(task.attrs) != len(data.Vecs) {
 		panic(fmt.Sprintf("mismatch %v, %v, %v", task.attrs, len(task.attrs), len(data.Vecs)))
@@ -248,16 +244,10 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 
 	bat := batch.New(true, task.attrs)
 	for i, idx := range task.idxs {
-		if idx == catalog.COLIDX_COMMITS {
-			id := 0
-			for i, attr := range task.attrs {
-				if attr == catalog.AttrCommitTs {
-					id = i
-				}
-			}
+		if idx == objectio.SEQNUM_COMMITTS {
+			id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 			bat.Vecs[id] = data.Vecs[i].GetDownstreamVector()
 		} else {
-
 			bat.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
 		}
 	}
@@ -284,15 +274,14 @@ func (task *mergeObjectsTask) GetTransferMaps() api.TransferMaps {
 }
 
 func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
-	schema := task.rel.Schema(false).(*catalog.Schema)
 	commitEntry := &api.MergeCommitEntry{}
 	commitEntry.DbId = task.did
 	commitEntry.TblId = task.tid
-	commitEntry.TableName = schema.Name
+	commitEntry.TableName = task.schema.Name
 	commitEntry.StartTs = task.txn.GetStartTS().ToTimestamp()
 	for _, o := range task.mergedObjs {
-		obj := o.GetObjectStats()
-		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj.Clone().Marshal())
+		obj := *o.GetObjectStats()
+		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj[:])
 	}
 	task.commitEntry = commitEntry
 	// leave mapping to ReadMergeAndWrite
@@ -300,9 +289,8 @@ func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
 }
 
 func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
-	schema := task.rel.Schema(task.isTombstone).(*catalog.Schema)
-	seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
-	for _, def := range schema.ColDefs {
+	seqnums := make([]uint16, 0, len(task.schema.ColDefs)-1)
+	for _, def := range task.schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
 		}
@@ -314,22 +302,29 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 	sortkeyIsPK := false
 	sortkeyPos := -1
 
-	if schema.HasPK() {
-		sortkeyPos = schema.GetSingleSortKeyIdx()
+	if task.schema.HasPK() {
+		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 		sortkeyIsPK = true
-	} else if schema.HasSortKey() {
-		sortkeyPos = schema.GetSingleSortKeyIdx()
+	} else if task.schema.HasSortKey() {
+		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
 
-	return mergesort.GetNewWriter(task.rt.Fs.Service, schema.Version, seqnums, sortkeyPos, sortkeyIsPK, task.isTombstone)
+	return blockio.ConstructWriter(
+		task.schema.Version,
+		seqnums,
+		sortkeyPos,
+		sortkeyIsPK,
+		task.isTombstone,
+		task.rt.Fs.Service,
+	)
 }
 
 func (task *mergeObjectsTask) DoTransfer() bool {
-	return task.doTransfer
+	return !task.isTombstone && !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
 }
 
 func (task *mergeObjectsTask) Name() string {
-	return fmt.Sprintf("[MT-%d]-%d-%s", task.ID(), task.rel.ID(), task.schema.Name)
+	return fmt.Sprintf("[MT-%d]-%d-%s", task.ID(), task.tableEntry.GetID(), task.schema.Name)
 }
 
 func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
@@ -352,12 +347,11 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		)
 	}
 
-	schema := task.rel.Schema(task.isTombstone).(*catalog.Schema)
 	sortkeyPos := -1
-	if schema.HasSortKey() {
-		sortkeyPos = schema.GetSingleSortKeyIdx()
+	if task.schema.HasSortKey() {
+		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
-	if task.rt.LockMergeService.IsLockedByUser(task.rel.ID()) {
+	if task.rt.LockMergeService.IsLockedByUser(task.tableEntry.GetID()) {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
 	}
 	phaseDesc = "1-DoMergeAndWrite"
@@ -425,7 +419,10 @@ func HandleMergeEntryInTxn(
 		objID := stats.ObjectName().ObjectId()
 		// set stats and sorted property
 		objstats := objectio.NewObjectStatsWithObjectID(objID, false, sorted, false)
-		objectio.SetObjectStats(objstats, &stats)
+		err := objectio.SetObjectStats(objstats, &stats)
+		if err != nil {
+			return nil, err
+		}
 		obj, err := rel.CreateNonAppendableObject(
 			isTombstone,
 			new(objectio.CreateObjOpt).WithObjectStats(objstats).WithIsTombstone(isTombstone))
@@ -466,7 +463,7 @@ func HandleMergeEntryInTxn(
 func (task *mergeObjectsTask) GetTotalSize() uint64 {
 	totalSize := uint64(0)
 	for _, obj := range task.mergedObjs {
-		totalSize += uint64(obj.GetOriginSize())
+		totalSize += uint64(obj.OriginSize())
 	}
 	return totalSize
 }
@@ -474,7 +471,7 @@ func (task *mergeObjectsTask) GetTotalSize() uint64 {
 func (task *mergeObjectsTask) GetTotalRowCnt() uint32 {
 	totalRowCnt := 0
 	for _, obj := range task.mergedObjs {
-		totalRowCnt += obj.GetRows()
+		totalRowCnt += int(obj.Rows())
 	}
 	return uint32(totalRowCnt)
 }

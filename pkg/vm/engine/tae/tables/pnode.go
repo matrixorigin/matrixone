@@ -47,11 +47,7 @@ func newPersistedNode(object *baseObject) *persistedNode {
 func (node *persistedNode) close() {}
 
 func (node *persistedNode) Rows() (uint32, error) {
-	stats, err := node.object.meta.Load().MustGetObjectStats()
-	if err != nil {
-		return 0, err
-	}
-	return stats.Rows(), nil
+	return node.object.meta.Load().GetObjectStats().Rows(), nil
 }
 
 func (node *persistedNode) Contains(
@@ -102,8 +98,13 @@ func (node *persistedNode) Scan(
 	if err != nil {
 		return err
 	}
-	vecs, err := LoadPersistedColumnDatas(
-		ctx, readSchema, node.object.rt, id, colIdxes, location, mp,
+	var tsForAppendable *types.TS
+	if node.object.meta.Load().IsAppendable() {
+		ts := txn.GetStartTS()
+		tsForAppendable = &ts
+	}
+	vecs, deletes, err := LoadPersistedColumnDatas(
+		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, tsForAppendable,
 	)
 	if err != nil {
 		return err
@@ -111,13 +112,14 @@ func (node *persistedNode) Scan(
 	// TODO: check visibility
 	if *bat == nil {
 		*bat = containers.NewBatch()
+		(*bat).Deletes = deletes
 		for i, idx := range colIdxes {
 			var attr string
-			if idx == catalog.COLIDX_COMMITS {
-				attr = catalog.AttrCommitTs
+			if idx == objectio.SEQNUM_COMMITTS {
+				attr = objectio.TombstoneAttr_CommitTs_Attr
 				if vecs[i].GetType().Oid != types.T_TS {
 					vecs[i].Close()
-					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&catalog.CommitTSType)
+					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
 					createTS := node.object.meta.Load().GetCreatedAt()
 					vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, vecs[0].Length(), mp)
 				}
@@ -127,13 +129,21 @@ func (node *persistedNode) Scan(
 			(*bat).AddVector(attr, vecs[i])
 		}
 	} else {
+		if (*bat).Deletes == nil {
+			(*bat).Deletes = nulls.NewWithSize(1024)
+		}
+		len := (*bat).Length()
+		deletes.Foreach(func(i uint64) bool {
+			(*bat).Deletes.Add(i + uint64(len))
+			return true
+		})
 		for i, idx := range colIdxes {
 			var attr string
-			if idx == catalog.COLIDX_COMMITS {
-				attr = catalog.AttrCommitTs
+			if idx == objectio.SEQNUM_COMMITTS {
+				attr = objectio.TombstoneAttr_CommitTs_Attr
 				if vecs[i].GetType().Oid != types.T_TS {
 					vecs[i].Close()
-					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&catalog.CommitTSType)
+					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
 					createTS := node.object.meta.Load().GetCreatedAt()
 					vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, vecs[0].Length(), mp)
 				}
@@ -157,8 +167,7 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 	if !node.object.meta.Load().IsTombstone {
 		panic("not support")
 	}
-	colIdxes := catalog.TombstoneBatchIdxes
-	colIdxes = append(colIdxes, catalog.COLIDX_COMMITS)
+	colIdxes := objectio.TombstoneColumns_TN_Created
 	readSchema := node.object.meta.Load().GetTable().GetLastestSchema(true)
 	var startTS types.TS
 	if !node.object.meta.Load().IsAppendable() {
@@ -209,8 +218,8 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		if err != nil {
 			return err
 		}
-		vecs, err := LoadPersistedColumnDatas(
-			ctx, readSchema, node.object.rt, id, colIdxes, location, mp,
+		vecs, _, err := LoadPersistedColumnDatas(
+			ctx, readSchema, node.object.rt, id, colIdxes, location, mp, nil,
 		)
 		if err != nil {
 			return err
@@ -229,13 +238,13 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 				if commitTS.GreaterEq(&start) && commitTS.LessEq(&end) &&
 					types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
-						pkIdx := readSchema.GetColIdx(catalog.AttrPKVal)
+						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
 						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
-					(*bat).GetVectorByName(catalog.AttrRowID).Append(rowIDs[i], false)
-					(*bat).GetVectorByName(catalog.AttrPKVal).Append(vecs[1].Get(i), false)
-					(*bat).GetVectorByName(catalog.AttrCommitTs).Append(commitTS, false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(vecs[1].Get(i), false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(commitTS, false)
 				}
 			}
 		} else {
@@ -243,13 +252,13 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 			for i := 0; i < len(rowIDs); i++ {
 				if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
-						pkIdx := readSchema.GetColIdx(catalog.AttrPKVal)
+						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
 						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
-					(*bat).GetVectorByName(catalog.AttrRowID).Append(rowIDs[i], false)
-					(*bat).GetVectorByName(catalog.AttrPKVal).Append(vecs[1].Get(i), false)
-					(*bat).GetVectorByName(catalog.AttrCommitTs).Append(startTS, false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(vecs[1].Get(i), false)
+					(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(startTS, false)
 				}
 			}
 		}
@@ -262,6 +271,7 @@ func (node *persistedNode) FillBlockTombstones(
 	txn txnif.TxnReader,
 	blkID *objectio.Blockid,
 	deletes **nulls.Nulls,
+	deleteStartOffset uint64,
 	mp *mpool.MPool) error {
 	startTS := txn.GetStartTS()
 	if !node.object.meta.Load().IsAppendable() {
@@ -302,8 +312,8 @@ func (node *persistedNode) FillBlockTombstones(
 		if err != nil {
 			return err
 		}
-		vecs, err := LoadPersistedColumnDatas(
-			ctx, readSchema, node.object.rt, id, []int{0}, location, mp,
+		vecs, _, err := LoadPersistedColumnDatas(
+			ctx, readSchema, node.object.rt, id, []int{0}, location, mp, nil,
 		)
 		if err != nil {
 			return err
@@ -339,7 +349,7 @@ func (node *persistedNode) FillBlockTombstones(
 					*deletes = &nulls.Nulls{}
 				}
 				offset := rowID.GetRowOffset()
-				(*deletes).Add(uint64(offset))
+				(*deletes).Add(uint64(offset) + deleteStartOffset)
 			}
 		}
 	}

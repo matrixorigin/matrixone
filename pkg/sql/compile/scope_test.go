@@ -301,14 +301,14 @@ func TestNewParallelScope(t *testing.T) {
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector})
+			[]vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch})
 
 		scopeToParallel.NodeInfo.Mcpu = 3
 
 		_, ss := newParallelScope(scopeToParallel)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
 	}
 }
 
@@ -326,14 +326,15 @@ func TestCompileExternValueScan(t *testing.T) {
 		},
 	}
 	n := &plan.Node{
-		TableDef: &plan.TableDef{},
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
 	}
 	rs, err := testCompile.compileExternValueScan(n, param, true)
 	require.NoError(t, err)
 	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.External}))
 }
 
-func TestCompileExternScanParallel(t *testing.T) {
+func TestCompileExternScanParallelWrite(t *testing.T) {
 	testCompile := &Compile{
 		proc: testutil.NewProcess(),
 	}
@@ -347,9 +348,10 @@ func TestCompileExternScanParallel(t *testing.T) {
 		},
 	}
 	n := &plan.Node{
-		TableDef: &plan.TableDef{},
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
 	}
-	rs, err := testCompile.compileExternScanParallel(n, param, []string{"a", "b"}, []int64{100000, 100000}, true)
+	rs, err := testCompile.compileExternScanParallelWrite(n, param, []string{"a", "b"}, []int64{100000, 100000}, true)
 	require.NoError(t, err)
 	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
 	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))

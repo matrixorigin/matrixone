@@ -26,6 +26,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
@@ -39,11 +41,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
@@ -61,7 +63,17 @@ type TxnCompilerContext struct {
 	mu      sync.Mutex
 }
 
+func (tcc *TxnCompilerContext) Close() {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.execCtx = nil
+	tcc.snapshot = nil
+	tcc.views = nil
+}
+
 func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		val = int64(1)
@@ -668,6 +680,12 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 }
 
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (varValue interface{}, err error) {
+	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
+	start := time.Now()
+	defer func() {
+		stats.AddBuildPlanResolveVarConsumption(time.Since(start))
+	}()
+
 	ctx := tcc.execCtx.reqCtx
 
 	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
@@ -794,9 +812,11 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string,
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snapshot) (*pb.StatsInfo, error) {
+	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
+		stats.AddBuildPlanStatsConsumption(time.Since(start))
 	}()
 
 	dbName := obj.GetSchemaName()
@@ -1007,6 +1027,10 @@ func (tcc *TxnCompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta 
 
 func (tcc *TxnCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return isDbPublishing(tcc.GetContext(), dbName, tcc.GetSession())
+}
+
+func (tcc *TxnCompilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
+	return buildTableDefFromMoColumns(tcc.GetContext(), uint64(tcc.GetSession().GetAccountId()), dbName, table, tcc.GetSession())
 }
 
 // makeResultMetaPath gets query result meta path

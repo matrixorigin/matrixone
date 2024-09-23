@@ -30,7 +30,7 @@ create table t1(
 col1 date not null,
 col2 datetime
 );
-load data infile '$resources/into_outfile/stage/local_stage_table001.csv' into table t1 fields terminated by ',' ignore 1 lines;
+load data infile 'stage://stage01/local_stage_table001.csv' into table t1 fields terminated by ',' ignore 1 lines;
 select * from t1;
 show create table t1;
 drop table t1;
@@ -61,7 +61,7 @@ create table t2(
 col3 decimal(5,2),
 col4 decimal(20,5)
 );
-load data infile '$resources/into_outfile/stage/local_stage_table002.csv' into table t2 fields terminated by ',' ignore 1 lines;
+load data infile 'stage://stage02/local_stage_table002.csv' into table t2 fields terminated by ',' ignore 1 lines;
 select * from t2;
 show create table t2;
 drop table t2;
@@ -92,7 +92,7 @@ create table t3(
 col1 char(225) default 'a',
 col3 text
 );
-load data infile '$resources/into_outfile/stage/local_stage_table003.csv' into table t3 fields terminated by ',' ignore 1 lines;
+load data infile 'stage://stage03/local_stage_table003.csv' into table t3 fields terminated by ',' ignore 1 lines;
 select * from t3;
 show create table t3;
 drop table t3;
@@ -129,7 +129,7 @@ col3 int,
 col5 tinyint unsigned,
 col7 int unsigned
 );
-load data infile '$resources/into_outfile/stage/local_stage_table004.csv' into table t4 fields terminated by ',' ignore 1 lines;
+load data infile 'stage://stage04/local_stage_table004.csv' into table t4 fields terminated by ',' ignore 1 lines;
 select * from t4;
 show create table t4;
 drop table t4;
@@ -158,9 +158,9 @@ select col1,col2,col3 from t5 into outfile 'stage://stage05/local_stage_table005
 truncate t5;
 insert into t5 values (1,1,1);
 -- echo duplicate
-load data infile '$resources/into_outfile/stage/local_stage_table005.csv' into table t5 fields terminated by ',' ignore 1 lines;
+load data infile 'stage://stage05/local_stage_table005.csv' into table t5 fields terminated by ',' ignore 1 lines;
 delete from t5;
-load data infile '$resources/into_outfile/stage/local_stage_table005.csv' into table t5 fields terminated by ',' ignore 1 lines;
+load data infile 'stage://stage05/local_stage_table005.csv' into table t5 fields terminated by ',' ignore 1 lines;
 select * from t5;
 show create table t5;
 drop table t5;
@@ -183,7 +183,7 @@ show stages;
 select col2 from t6 into outfile 'stage://stage06/local_stage_table006.csv';
 drop table if exists t6;
 create table t6 (col2 varchar(20));
-load data infile '$resources/into_outfile/stage/local_stage_table006.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
+load data infile 'stage://stage06/local_stage_table006.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
 select * from t6;
 show create table t6;
 drop table t6;
@@ -206,7 +206,7 @@ show stages;
 select col2 from t7 into outfile 'stage://stage07/local_stage_table007.csv';
 drop table if exists t7;
 create table t7(col1 text);
-load data infile '$resources/into_outfile/stage/local_stage_table007.csv' into table t7 FIELDS ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' ignore 1 lines parallel 'true';
+load data infile 'stage://stage07/local_stage_table007.csv' into table t7 FIELDS ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' ignore 1 lines parallel 'true';
 select * from t7;
 show create table t7;
 drop table t7;
@@ -232,7 +232,7 @@ show stages;
 select col1 from t11 into outfile 'stage://stage11/local_stage_table011.csv';
 drop table if exists t11;
 create table t11 (col1 int);
-load data infile '$resources/into_outfile/stage/local_stage_table011.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' ignore 1 lines;
+load data infile 'stage://stage11/local_stage_table011.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' ignore 1 lines;
 select * from t11;
 drop table t11;
 drop stage stage11;

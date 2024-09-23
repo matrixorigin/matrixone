@@ -154,12 +154,8 @@ func (obj *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) 
 	if !obj.meta.Load().ObjectPersisted() {
 		panic("logic error")
 	}
-	stats, err := obj.meta.Load().MustGetObjectStats()
-	if err != nil {
-		return nil, err
-	}
-	blkMaxRows := obj.meta.Load().GetSchema().BlockMaxRows
-	return stats.BlockLocation(bid, blkMaxRows), nil
+	blkMaxRows := obj.meta.Load().GetSchema().Extra.BlockMaxRows
+	return obj.meta.Load().BlockLocation(bid, blkMaxRows), nil
 }
 
 func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector, err error) {
@@ -453,13 +449,14 @@ func (obj *baseObject) FillBlockTombstones(
 	txn txnif.TxnReader,
 	blkID *objectio.Blockid,
 	deletes **nulls.Nulls,
+	deleteStartOffset uint64,
 	mp *mpool.MPool) error {
 	node := obj.PinNode()
 	defer node.Unref()
 	if !obj.meta.Load().IsTombstone {
 		panic("logic err")
 	}
-	return node.FillBlockTombstones(ctx, txn, blkID, deletes, mp)
+	return node.FillBlockTombstones(ctx, txn, blkID, deletes, deleteStartOffset, mp)
 }
 
 func (obj *baseObject) ScanInMemory(
@@ -511,7 +508,7 @@ func (obj *baseObject) GetValue(
 			return
 		}
 		defer bat.Close()
-		err = txn.GetStore().FillInWorkspaceDeletes(obj.meta.Load().AsCommonID(), &bat.Deletes)
+		err = txn.GetStore().FillInWorkspaceDeletes(obj.meta.Load().AsCommonID(), &bat.Deletes, uint64(0))
 		if err != nil {
 			return
 		}

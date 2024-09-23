@@ -138,8 +138,8 @@ func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	}
 }
 func (e *ObjectMVCCNode) String() string {
-	if e == nil || e.IsEmpty() {
-		return "empty"
+	if e == nil {
+		return "[OBJ(nil)]"
 	}
 	return e.ObjectStats.String()
 }
@@ -167,15 +167,7 @@ func (e *ObjectMVCCNode) IsEmpty() bool {
 	return e.Size() == 0
 }
 
-func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch, empty bool) {
-	if empty {
-		stats := objectio.NewObjectStatsWithObjectID(sid, e.GetAppendable(), e.GetSorted(), e.GetCNCreated()) // when replay, sid is get from object name
-		batch.GetVectorByName(ObjectAttr_ObjectStats).Append(stats[:], false)
-		return
-	}
-	if e.IsEmpty() {
-		panic("logic error")
-	}
+func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
 	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
 }
 
@@ -193,6 +185,8 @@ type ObjectNode struct {
 
 	// for tombstone
 	IsTombstone bool
+
+	forcePNode bool // not persisted, a flag to force ckp-replayed aobject to be created as a pnode
 }
 
 const (

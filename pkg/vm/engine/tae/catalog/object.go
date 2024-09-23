@@ -16,7 +16,6 @@ package catalog
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -28,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -59,29 +57,9 @@ func (entry *ObjectEntry) GetCreatedAt() types.TS {
 	return entry.CreatedAt
 }
 func (entry *ObjectEntry) GetLoaded() bool {
-	stats := entry.GetObjectStats()
-	return stats.Rows() != 0
+	return entry.Rows() != 0
 }
 
-func (entry *ObjectEntry) GetSortKeyZonemap() index.ZM {
-	stats := entry.GetObjectStats()
-	return stats.SortKeyZoneMap()
-}
-
-func (entry *ObjectEntry) GetRows() int {
-	stats := entry.GetObjectStats()
-	return int(stats.Rows())
-}
-
-func (entry *ObjectEntry) GetOriginSize() int {
-	stats := entry.GetObjectStats()
-	return int(stats.OriginSize())
-}
-
-func (entry *ObjectEntry) GetCompSize() int {
-	stats := entry.GetObjectStats()
-	return int(stats.Size())
-}
 func (entry *ObjectEntry) GetLastMVCCNode() *txnbase.TxnMVCCNode {
 	if !entry.DeleteNode.Start.IsEmpty() {
 		return &entry.DeleteNode
@@ -226,7 +204,7 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
-	if z := entry.GetSortKeyZonemap(); z != nil {
+	if z := entry.SortKeyZoneMap(); z != nil {
 		switch zonemapKind {
 		case common.ZonemapPrintKindNormal:
 			zonemapStr = z.String()
@@ -239,9 +217,9 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 	return fmt.Sprintf(
 		"loaded:%t, oSize:%s, cSzie:%s rows:%d, zm: %s",
 		entry.GetLoaded(),
-		common.HumanReadableBytes(entry.GetOriginSize()),
-		common.HumanReadableBytes(entry.GetCompSize()),
-		entry.GetRows(),
+		common.HumanReadableBytes(int(entry.OriginSize())),
+		common.HumanReadableBytes(int(entry.Size())),
+		entry.Rows(),
 		zonemapStr,
 	)
 }
@@ -314,8 +292,8 @@ func (entry *ObjectEntry) HasPersistedData() bool {
 	return entry.ObjectPersisted()
 }
 func (entry *ObjectEntry) GetObjectData() data.Object { return entry.objData }
-func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
-	return entry.ObjectStats
+func (entry *ObjectEntry) GetObjectStats() (stats *objectio.ObjectStats) {
+	return &entry.ObjectStats
 }
 
 func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
@@ -361,28 +339,23 @@ func (entry *ObjectEntry) String() string {
 }
 
 func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
-	nameStr := "OBJ"
+	nameStr := "DATA"
 	if entry.IsTombstone {
 		nameStr = "TOMBSTONE"
 	}
-	state := "A"
-	if !entry.IsAppendable() {
-		state = "NA"
-	}
-	sorted := "S"
-	if !entry.IsSorted() {
-		sorted = "US"
-	}
+	s := fmt.Sprintf(
+		"%s|OS(%d)|Hint(%d)|%s|%s",
+		nameStr, entry.ObjectState, entry.ObjectNode.SortHint,
+		entry.ObjectStats.String(), entry.ObjectMVCCNode.String(),
+	)
 	if level <= common.PPL1 {
-		return fmt.Sprintf("%v[%s-%s%d]%v[%s]%v",
-			entry.ObjectState, state, sorted, entry.ObjectNode.SortHint, nameStr, entry.ID().String(), entry.EntryMVCCNode.String())
+		return s
 	}
-	s := fmt.Sprintf("[%s-%s%d]%s[%s]%v%v", state, sorted, entry.ObjectNode.SortHint, nameStr, entry.ID().String(), entry.EntryMVCCNode.String(), entry.ObjectMVCCNode.String())
 	if !entry.DeleteNode.IsEmpty() {
-		s = fmt.Sprintf("%s -> %s", s, entry.DeleteNode.String())
+		s = fmt.Sprintf("%s -> [DNODE]:%s", s, entry.DeleteNode.String())
 	}
 
-	s = fmt.Sprintf("%s -> %s", s, entry.CreateNode.String())
+	s = fmt.Sprintf("%s -> [CNODE]:%s", s, entry.CreateNode.String())
 	return s
 }
 func (entry *ObjectEntry) IsVisible(txn txnif.TxnReader) bool {
@@ -502,10 +475,14 @@ func (entry *ObjectEntry) HasDropIntent() bool {
 	return !entry.DeletedAt.IsEmpty()
 }
 
+func (entry *ObjectEntry) IsForcePNode() bool {
+	return entry.forcePNode
+}
+
 // for old flushed objects, stats may be empty
 func (entry *ObjectEntry) ObjectPersisted() bool {
 	if entry.IsAppendable() {
-		return entry.HasDropIntent()
+		return entry.IsForcePNode() || entry.HasDropIntent()
 	} else {
 		return true
 	}
@@ -520,19 +497,6 @@ func (entry *ObjectEntry) HasCommittedPersistedData() bool {
 	} else {
 		return entry.IsCommitted()
 	}
-}
-func (entry *ObjectEntry) MustGetObjectStats() (objectio.ObjectStats, error) {
-	return entry.GetObjectStats(), nil
-}
-
-func (entry *ObjectEntry) GetPKZoneMap(
-	ctx context.Context,
-) (zm index.ZM, err error) {
-	stats, err := entry.MustGetObjectStats()
-	if err != nil {
-		return
-	}
-	return stats.SortKeyZoneMap(), nil
 }
 
 // TODO: REMOVEME
@@ -569,7 +533,7 @@ func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
 	logutil.Info(s)
 }
 
-func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
+func MockObjEntryWithTbl(tbl *TableEntry, size uint64, isTombstone bool) *ObjectEntry {
 	stats := objectio.NewObjectStats()
 	objectio.SetObjectStatsSize(stats, uint32(size))
 	// to make sure pass the stats empty check
@@ -577,7 +541,7 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
 	ts := types.BuildTS(time.Now().UnixNano(), 0)
 	e := &ObjectEntry{
 		table:      tbl,
-		ObjectNode: ObjectNode{},
+		ObjectNode: ObjectNode{IsTombstone: isTombstone},
 		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: ts,
 		},

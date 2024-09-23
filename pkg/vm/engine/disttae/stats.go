@@ -698,7 +698,7 @@ func updateInfoFromZoneMap(
 				objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] = int64(objColMeta.NullCnt())
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
-				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
+				info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
 					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())
@@ -768,6 +768,16 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 			}
 			if rate < 0.2 {
 				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
+				if plan2.GetSortOrder(tableDef, int32(idx)) == -1 { //non sorted column, need to adjust ndv down
+					if info.ColumnNDVs[idx] < 50000 && info.ColumnNDVs[idx] > 500 {
+						info.ColumnNDVs[idx] /= math.Pow(info.ColumnNDVs[idx], 0.2)
+					}
+				} else if info.ColumnNDVs[idx] > 500 { //sorted column, need to adjust ndv up
+					info.ColumnNDVs[idx] *= math.Pow(info.ColumnNDVs[idx], 0.2)
+					if info.ColumnSize[idx] > 0 {
+						info.ColumnNDVs[idx] *= math.Pow(float64(info.ColumnSize[idx]), 0.2)
+					}
+				}
 			}
 			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
 			if ndvUsingZonemap != -1 && info.ColumnNDVs[idx] > ndvUsingZonemap {

@@ -214,7 +214,7 @@ func (r Rowid) GetObjectString() string {
 	return fmt.Sprintf("%s-%d", uuid.String(), s)
 }
 
-func (r *Rowid) String() string {
+func (r Rowid) String() string {
 	b := (*Blockid)(unsafe.Pointer(&r[0]))
 	s := DecodeUint32(r[BlockidSize:])
 	return fmt.Sprintf("%s-%d", b.String(), s)

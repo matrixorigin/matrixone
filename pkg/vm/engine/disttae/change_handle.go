@@ -17,16 +17,15 @@ package disttae
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func (tbl *txnTable) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
@@ -37,7 +36,7 @@ func (tbl *txnTable) CollectChanges(ctx context.Context, from, to types.TS, mp *
 	if err != nil {
 		return nil, err
 	}
-	return logtailreplay.NewChangesHandler(state, from, to, mp, 8192, tbl.getTxn().engine.fs, ctx), nil
+	return logtailreplay.NewChangesHandler(state, from, to, mp, 8192, tbl.getTxn().engine.fs, ctx)
 }
 
 type ChangesHandle interface {
@@ -70,13 +69,16 @@ func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 	default:
 	}
 	hint = engine.ChangesHandle_Snapshot
+	if h.isEnd {
+		return nil, nil, hint, nil
+	}
 	tblDef := h.table.GetTableDef(ctx)
 
 	buildBatch := func() *batch.Batch {
 		bat := batch.NewWithSize(len(tblDef.Cols))
 		for i, col := range tblDef.Cols {
 			bat.Attrs = append(bat.Attrs, col.Name)
-			typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+			typ := plan2.ExprType2Type(&col.Typ)
 			bat.Vecs[i] = vector.NewVec(typ)
 		}
 		return bat
@@ -90,8 +92,7 @@ func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 		data,
 	)
 	if h.isEnd {
-		err = moerr.GetOkExpectedEOF()
-		return
+		return nil, nil, hint, nil
 	}
 	if err != nil {
 		return
@@ -105,7 +106,7 @@ func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 	rowidVec := data.Vecs[len(data.Vecs)-1]
 	rowidVec.Free(mp)
 	data.Vecs[len(data.Vecs)-1] = committs
-	data.Attrs[len(data.Attrs)-1] = catalog.AttrCommitTs
+	data.Attrs[len(data.Attrs)-1] = objectio.DefaultCommitTS_Attr
 	return
 }
 func (h *CheckpointChangesHandle) Close() error {
@@ -140,10 +141,9 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 	); err != nil {
 		return
 	}
-	relData := NewEmptyBlockListRelationData()
-	relData.AppendBlockInfo(objectio.EmptyBlockInfo) // read partition insert
+	relData := NewBlockListRelationData(1)
 	for i, end := 0, blockList.Len(); i < end; i++ {
-		relData.AppendBlockInfo(*blockList.Get(i))
+		relData.AppendBlockInfo(blockList.Get(i))
 	}
 
 	readers, err := h.table.BuildReaders(

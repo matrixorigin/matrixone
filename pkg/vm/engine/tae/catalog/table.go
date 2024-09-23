@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strings"
 	"sync/atomic"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -354,12 +353,19 @@ func (entry *TableEntry) ObjectCnt(isTombstone bool) int {
 	return entry.dataObjects.tree.Load().Len()
 }
 
-func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat TableStat, w bytes.Buffer) {
+func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTombstone bool) (stat TableStat, w bytes.Buffer) {
+	var it btree.IterG[*ObjectEntry]
+	if isTombstone {
+		w.WriteString("TOMBSTONES\n")
+		it = entry.MakeTombstoneObjectIt()
+	} else {
+		w.WriteString("DATA\n")
+		it = entry.MakeDataObjectIt()
+	}
 
-	it := entry.MakeDataObjectIt()
 	defer it.Release()
 	zonemapKind := common.ZonemapPrintKindNormal
-	if schema := entry.GetLastestSchemaLocked(false); schema.HasSortKey() && strings.HasPrefix(schema.GetSingleSortKey().Name, "__") {
+	if schema := entry.GetLastestSchemaLocked(isTombstone); schema.HasSortKey() && schema.GetSingleSortKey().Name == "__mo_cpkey_col" {
 		zonemapKind = common.ZonemapPrintKindCompose
 	}
 
@@ -389,9 +395,9 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 		stat.ObjectCnt += 1
 		if objectEntry.GetLoaded() {
 			stat.Loaded += 1
-			stat.Rows += int(objectEntry.GetRows())
-			stat.OSize += int(objectEntry.GetOriginSize())
-			stat.Csize += int(objectEntry.GetCompSize())
+			stat.Rows += int(objectEntry.Rows())
+			stat.OSize += int(objectEntry.OriginSize())
+			stat.Csize += int(objectEntry.Size())
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')
@@ -411,8 +417,8 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 	return
 }
 
-func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int) string {
-	stat, detail := entry.ObjectStats(level, start, end)
+func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int, isTombstone bool) string {
+	stat, detail := entry.ObjectStats(level, start, end, isTombstone)
 
 	var avgCsize, avgRow, avgOsize int
 	if stat.Loaded > 0 {
@@ -658,6 +664,8 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			MaxObjOnerun:      newSchema.Extra.MaxObjOnerun,
 			MaxOsizeMergedObj: newSchema.Extra.MaxOsizeMergedObj,
 			MinCnMergeSize:    newSchema.Extra.MinCnMergeSize,
+			BlockMaxRows:      newSchema.Extra.BlockMaxRows,
+			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
 			Hints:             hints,
 		}
 
@@ -712,6 +720,7 @@ func MockTableEntryWithDB(dbEntry *DBEntry, tblId uint64) *TableEntry {
 	entry := NewReplayTableEntry()
 	entry.TableNode = &TableNode{}
 	entry.TableNode.schema.Store(NewEmptySchema("test"))
+	entry.TableNode.tombstoneSchema.Store(NewEmptySchema("tombstone"))
 	entry.ID = tblId
 	entry.db = dbEntry
 	return entry

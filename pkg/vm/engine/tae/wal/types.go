@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	GroupC uint32 = iota + 10
-	GroupPrepare
+	GroupPrepare = entry.GTCustomized + iota
+	GroupC
 )
 
 type ReplayObserver interface {
@@ -41,4 +41,6 @@ type Driver interface {
 	Replay(handle store.ApplyHandle) error
 	Start()
 	Close() error
+
+	GetTruncated() uint64
 }

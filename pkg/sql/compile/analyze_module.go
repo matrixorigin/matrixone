@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -121,7 +123,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 // applyOpStatsToNode Recursive traversal of PhyOperator tree,
 // and add OpStats statistics to the corresponding NodeAnalyze Info
-func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
+func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalleInfo *ParallelScopeInfo) {
 	if op == nil {
 		return
 	}
@@ -139,17 +141,30 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TotalTimeConsumed
 		node.AnalyzeInfo.MemorySize += op.OpStats.TotalMemorySize
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
-		node.AnalyzeInfo.S3IOByte += op.OpStats.TotalS3IOByte
+		node.AnalyzeInfo.ScanBytes += op.OpStats.TotalScanBytes
 		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
 		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
-
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
+
+		if _, isMinorOp := vm.MinorOpMap[op.OpName]; isMinorOp {
+			isMinor := true
+			if op.OpName == vm.OperatorToStrMap[vm.Filter] {
+				if op.OpName != vm.OperatorToStrMap[vm.TableScan] && op.OpName != vm.OperatorToStrMap[vm.External] {
+					isMinor = false // restrict operator is minor only for scan
+				}
+			}
+			if isMinor {
+				scopeParalleInfo.NodeIdxTimeConsumeMinor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+			}
+		} else if _, isMajorOp := vm.MajorOpMap[op.OpName]; isMajorOp {
+			scopeParalleInfo.NodeIdxTimeConsumeMajor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+		}
 	}
 
 	// Recursive processing of sub operators
 	for _, childOp := range op.Children {
-		applyOpStatsToNode(childOp, nodes)
+		applyOpStatsToNode(childOp, nodes, scopeParalleInfo)
 	}
 }
 
@@ -161,7 +176,16 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
-		applyOpStatsToNode(scope.RootOperator, nodes)
+		scopeParallInfo := NewParallelScopeInfo()
+		applyOpStatsToNode(scope.RootOperator, nodes, scopeParallInfo)
+
+		for nodeIdx, timeConsumeMajor := range scopeParallInfo.NodeIdxTimeConsumeMajor {
+			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor, timeConsumeMajor)
+		}
+
+		for nodeIdx, timeConsumeMinor := range scopeParallInfo.NodeIdxTimeConsumeMinor {
+			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMinor, timeConsumeMinor)
+		}
 	}
 
 	// handle preScopes recursively
@@ -374,7 +398,6 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 		}
 	}
 
-	//-------------------------------------------------------------------------------------------
 	// record the number of s3 requests
 	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.Put.Load()
 	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.List.Load()
@@ -389,6 +412,19 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
 		c.anal.phyPlan.S3IOInputCount += remotePhy.S3IOInputCount
 		c.anal.phyPlan.S3IOOutputCount += remotePhy.S3IOOutputCount
+	}
+}
+
+type ParallelScopeInfo struct {
+	NodeIdxTimeConsumeMajor map[int]int64
+	NodeIdxTimeConsumeMinor map[int]int64
+	//scopeId                 int32
+}
+
+func NewParallelScopeInfo() *ParallelScopeInfo {
+	return &ParallelScopeInfo{
+		NodeIdxTimeConsumeMajor: make(map[int]int64),
+		NodeIdxTimeConsumeMinor: make(map[int]int64),
 	}
 }
 
@@ -418,21 +454,59 @@ func getExplainOption(options []tree.OptionElem) *ExplainOption {
 	return es
 }
 
-func makeExplainPhyPlanBuffer(ss []*Scope, option *ExplainOption) *bytes.Buffer {
+func makeExplainPhyPlanBuffer(ss []*Scope, queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption) *bytes.Buffer {
 	receiverMap := make(map[*process.WaitRegister]int)
 	for i := range ss {
 		genReceiverMap(ss[i], receiverMap)
 	}
 
-	return explainScopes(ss, 0, receiverMap, option)
+	buffer := bytes.NewBuffer(make([]byte, 0, 300))
+
+	explainGlobalResources(queryResult, statsInfo, anal, option, buffer)
+	explainScopes(ss, 0, receiverMap, option, buffer)
+	return buffer
 }
 
-func explainScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption) *bytes.Buffer {
-	buffer := bytes.NewBuffer(make([]byte, 0, 300))
+func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption, buffer *bytes.Buffer) {
+	if option.Analyze {
+		gblStats := extractPhyPlanGlbStats(anal.phyPlan)
+		buffer.WriteString(fmt.Sprintf("PhyPlan TimeConsumed:%dns, MemorySize:%dbytes, S3InputCount: %d, S3OutputCount: %d, AffectRows: %d",
+			gblStats.TimeConsumed,
+			gblStats.MemorySize,
+			anal.phyPlan.S3IOInputCount,
+			anal.phyPlan.S3IOOutputCount,
+			queryResult.AffectRows,
+		))
+
+		if statsInfo != nil {
+			buffer.WriteString("\n")
+			cpuTimeVal := gblStats.TimeConsumed + statsInfo.BuildReaderDuration +
+				int64(statsInfo.ParseDuration+
+					statsInfo.CompileDuration+
+					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
+
+			buffer.WriteString(fmt.Sprintf("StatsInfo：CpuTime(%dns) = PhyTime(%d)+BuildReaderTime(%d)+ParseTime(%d)+CompileTime(%d)+PlanTime(%d)-IOAccessTime(%d)-IOMergeTime(%d)\n",
+				cpuTimeVal,
+				gblStats.TimeConsumed,
+				statsInfo.BuildReaderDuration,
+				statsInfo.ParseDuration,
+				statsInfo.CompileDuration,
+				statsInfo.PlanDuration,
+				statsInfo.IOAccessTimeConsumption,
+				statsInfo.IOMergerTimeConsumption()))
+
+			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %dns, PlanResolveVariableDuration: %dns",
+				statsInfo.BuildPlanStatsDuration,
+				statsInfo.BuildPlanResolveVarDuration,
+			))
+		}
+	}
+}
+
+func explainScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption, buffer *bytes.Buffer) {
 	for i := range scopes {
 		explainSingleScope(scopes[i], i, gap, rmp, option, buffer)
 	}
-	return buffer
 }
 
 // showSingleScope generates and outputs a string representation of a single Scope.
@@ -535,4 +609,61 @@ func explainPipeline(node vm.Operator, prefix string, isRoot bool, isTail bool, 
 	if isRoot {
 		trimLastNewline(buffer)
 	}
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+
+// Define a struct to hold the total time and wait time
+type GblStats struct {
+	TimeConsumed int64
+	MemorySize   int64
+}
+
+// Function to recursively process PhyScope and extract stats from PhyOperator
+func handlePhyOperator(op *models.PhyOperator, stats *GblStats) {
+	if op == nil {
+		return
+	}
+
+	// Accumulate stats from the current operator
+	if op.OpStats != nil && op.NodeIdx >= 0 {
+		stats.TimeConsumed += op.OpStats.TotalTimeConsumed
+		stats.MemorySize += op.OpStats.TotalWaitTimeConsumed
+	}
+
+	// Recursively process child operators
+	for _, childOp := range op.Children {
+		handlePhyOperator(childOp, stats)
+	}
+}
+
+// Function to process PhyScope (including PreScopes and RootOperator)
+func handlePhyScope(scope *models.PhyScope, stats *GblStats) {
+	// Process the RootOperator of the current scope
+	handlePhyOperator(scope.RootOperator, stats)
+
+	// Recursively process PreScopes (which are also PhyScopes)
+	for _, preScope := range scope.PreScopes {
+		handlePhyScope(&preScope, stats)
+	}
+}
+
+// Function to process all scopes in a PhyPlan (LocalScope and RemoteScope)
+func handlePhyPlanScopes(scopes []models.PhyScope, stats *GblStats) {
+	for _, scope := range scopes {
+		handlePhyScope(&scope, stats)
+	}
+}
+
+// Function to process the entire PhyPlan and extract the stats
+func extractPhyPlanGlbStats(plan *models.PhyPlan) GblStats {
+	var stats GblStats
+
+	// Process LocalScope
+	handlePhyPlanScopes(plan.LocalScope, &stats)
+
+	// Process RemoteScope
+	handlePhyPlanScopes(plan.RemoteScope, &stats)
+
+	return stats
 }

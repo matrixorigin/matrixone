@@ -180,8 +180,8 @@ func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.Object
 		stats := make([][]byte, 0, len(mobjs))
 		cids := make([]common.ID, 0, len(mobjs))
 		for _, obj := range mobjs {
-			stat := obj.GetObjectStats()
-			stats = append(stats, stat.Clone().Marshal())
+			stat := *obj.GetObjectStats()
+			stats = append(stats, stat[:])
 			cids = append(cids, *obj.AsCommonID())
 		}
 		if e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
@@ -231,7 +231,7 @@ func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.Object
 			}
 		}
 
-		if len(objs) > 1 {
+		if len(objs) > 0 {
 			e.scheduleMergeObjects(objScopes, objs, objectBlkCnt, entry, false)
 		}
 		if len(tombstones) > 1 {
@@ -259,7 +259,7 @@ func (e *executor) scheduleMergeObjects(scopes []common.ID, mobjs []*catalog.Obj
 	}
 	e.addActiveTask(task.ID(), blkCnt, esize)
 	for _, obj := range mobjs {
-		e.roundMergeRows += uint64(obj.GetRows())
+		e.roundMergeRows += uint64(obj.Rows())
 	}
 	logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
@@ -286,7 +286,7 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 	rows := 0
 	infoBuf := &bytes.Buffer{}
 	for _, obj := range merges {
-		r := obj.GetRows()
+		r := int(obj.Rows())
 		rows += r
 		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, obj.ID().ShortStringEx()))
 	}

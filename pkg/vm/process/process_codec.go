@@ -18,6 +18,9 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,9 +34,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
+
+func MockProcessInfoWithPro(
+	sql string,
+	pro any,
+) (pipeline.ProcessInfo, error) {
+	process := pro.(*Process)
+	process.Base.SessionInfo.TimeZone = time.UTC
+	return process.BuildProcessInfo(sql)
+}
 
 func (proc *Process) BuildProcessInfo(
 	sql string,
@@ -69,9 +79,13 @@ func (proc *Process) BuildProcessInfo(
 		}
 	}
 	{ // session info
-		timeBytes, err := time.Time{}.In(proc.Base.SessionInfo.TimeZone).MarshalBinary()
-		if err != nil {
-			return procInfo, err
+		var timeBytes []byte
+		var err error
+		if proc.Base.SessionInfo.TimeZone != nil {
+			timeBytes, err = time.Time{}.In(proc.Base.SessionInfo.TimeZone).MarshalBinary()
+			if err != nil {
+				return procInfo, err
+			}
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{

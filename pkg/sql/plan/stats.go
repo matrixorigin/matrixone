@@ -1191,17 +1191,6 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 
-	// if there is a limit, outcnt is limit number
-	if node.Limit != nil {
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				stats.Outcnt = float64(c.U64Val)
-				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
-				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
-			}
-		}
-	}
-
 	return stats
 }
 
@@ -1425,7 +1414,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 	switch GetExecType(qry, txnHaveDDL) {
 	case ExecTypeTP:
-		return "TP QURERY PLAN"
+		return "TP QUERY PLAN"
 	case ExecTypeAP_ONECN:
 		return "AP QUERY PLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
 	case ExecTypeAP_MULTICN:
@@ -1437,7 +1426,7 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 	switch GetExecType(qry, txnHaveDDL) {
 	case ExecTypeTP:
-		return "TP QURERY PHYPLAN"
+		return "TP QUERY PHYPLAN"
 	case ExecTypeAP_ONECN:
 		return "AP QUERY PHYPLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
 	case ExecTypeAP_MULTICN:

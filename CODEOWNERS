@@ -39,6 +39,9 @@
 # pkg/catalog
 /pkg/catalog @XuPeng-SH
 
+#pkg/cdc
+/pkg/cdc @daviszhen @ck89119
+
 # pkg/cnservice
 /pkg/cnservice @reusee @daviszhen
 
@@ -137,7 +140,8 @@
 # pkg/sql
 /pkg/sql @aunjgr
 /pkg/sql/colexec @m-schen
-/pkg/sql/compile @m-schen @ouyuanning @aunjgr @badboynt1
+/pkg/sql/compile @m-schen @ouyuanning @aunjgr @badboynt1 @qingxinhome
+/pkg/sql/models @qingxinhome
 /pkg/sql/parsers @iamlinjunhong
 /pkg/sql/plan @ouyuanning @aunjgr @badboynt1
 /pkg/sql/plan/function @m-schen
@@ -164,6 +168,7 @@
 /pkg/sql/colexec/left @aunjgr @badboynt1
 /pkg/sql/colexec/shuffle @badboynt1
 /pkg/sql/colexec/shufflebuild @badboynt1
+/pkg/sql/colexec/multi_update @ouyuanning
 
 # pkg/taskservice
 /pkg/taskservice @zhangxu19830126

@@ -462,6 +462,25 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.SetInfo(&info)
 		return op
+	case vm.Dispatch:
+		sourceArg := sourceOp.(*dispatch.Dispatch)
+		op := dispatch.NewArgument()
+		op.IsSink = sourceArg.IsSink
+		op.RecSink = sourceArg.RecSink
+		op.ShuffleType = sourceArg.ShuffleType
+		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
+		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote
+		op.FuncId = sourceArg.FuncId
+		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
+		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
+		for j := range op.LocalRegs {
+			op.LocalRegs[j] = sourceArg.LocalRegs[j]
+		}
+		for j := range op.RemoteRegs {
+			op.RemoteRegs[j] = sourceArg.RemoteRegs[j]
+		}
+		op.SetInfo(&info)
+		return op
 	case vm.Insert:
 		t := sourceOp.(*insert.Insert)
 		op := insert.NewArgument()
@@ -523,7 +542,17 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Apply:
 		t := sourceOp.(*apply.Apply)
 		op := apply.NewArgument()
+		op.ApplyType = t.ApplyType
+		op.Result = t.Result
+		op.Typs = t.Typs
 		op.ProjectList = t.ProjectList
+		op.TableFunction = table_function.NewArgument()
+		op.TableFunction.FuncName = t.TableFunction.FuncName
+		op.TableFunction.Args = t.TableFunction.Args
+		op.TableFunction.Rets = t.TableFunction.Rets
+		op.TableFunction.Attrs = t.TableFunction.Attrs
+		op.TableFunction.Params = t.TableFunction.Params
+		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
 	}
@@ -756,11 +785,6 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 		}
 	}
 
-	var tbColToDataCol map[string]int32
-	if n.ExternScan != nil {
-		tbColToDataCol = n.ExternScan.TbColToDataCol
-	}
-
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
@@ -768,7 +792,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				Cols:            n.TableDef.Cols,
 				Extern:          param,
 				Name2ColIndex:   n.TableDef.Name2ColIndex,
-				TbColToDataCol:  tbColToDataCol,
+				TbColToDataCol:  n.ExternScan.TbColToDataCol,
 				FileOffsetTotal: fileOffset,
 				CreateSql:       n.TableDef.Createsql,
 				Ctx:             ctx,
@@ -1315,8 +1339,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 			break
 		}
 	}
-
-	if source.NodeInfo.Mcpu > 1 {
+	if hasRemote && source.NodeInfo.Mcpu > 1 {
 		panic("pipeline end with dispatch should have been merged in multi CN!")
 	}
 
@@ -1324,6 +1347,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 		if isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
+			s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = source.NodeInfo.Mcpu
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
@@ -1835,20 +1859,23 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
-/*
-	func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
-		result := make([]colexec.ResultPos, len(n.ProjectList))
-		for i, expr := range n.ProjectList {
-			result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
-		}
-		arg := apply.NewArgument()
-		arg.ApplyType = applyType
-		arg.Result = result
-		arg.Args = plan2.DeepCopyExprList(right.TblFuncExprList)
-		arg.FuncName = right.TableDef.TblFunc.Name
-		return arg
+func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-*/
+	rightTyps := make([]types.Type, len(right.TableDef.Cols))
+	for i, expr := range right.TableDef.Cols {
+		rightTyps[i] = dupType(&expr.Typ)
+	}
+	arg := apply.NewArgument()
+	arg.ApplyType = applyType
+	arg.Result = result
+	arg.Typs = rightTyps
+	arg.TableFunction = constructTableFunction(right)
+	return arg
+}
+
 func constructTableScan(n *plan.Node) *table_scan.TableScan {
 	types := make([]plan.Type, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {

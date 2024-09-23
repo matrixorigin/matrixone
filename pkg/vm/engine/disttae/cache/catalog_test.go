@@ -17,6 +17,8 @@ package cache
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -95,6 +96,7 @@ func TestTables(t *testing.T) {
 	bat := newTestTableBatch(mp)
 	accounts := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
 	databaseIds := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
+	extraInfos := vector.MustFixedColWithTypeCheck[types.Varlena](bat.GetVector(catalog.MO_TABLES_EXTRA_INFO_IDX + MO_OFF))
 	{ // reset account id
 		for i := range accounts {
 			accounts[i] = 1
@@ -103,6 +105,12 @@ func TestTables(t *testing.T) {
 	{ // reset database id
 		for i := range databaseIds {
 			databaseIds[i] = 12
+		}
+	}
+	empty, _, _ := types.BuildVarlena([]byte{}, nil, nil)
+	{
+		for i := range extraInfos {
+			extraInfos[i] = empty
 		}
 	}
 	cc.InsertTable(bat)
@@ -215,10 +223,12 @@ func TestTableInsert(t *testing.T) {
 
 	cstrs := vector.MustFixedColWithTypeCheck[types.Varlena](bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
 	partitioned := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
+	extras := vector.MustFixedColWithTypeCheck[types.Varlena](bat.GetVector(catalog.MO_TABLES_EXTRA_INFO_IDX + MO_OFF))
 	empty, _, _ := types.BuildVarlena([]byte{}, nil, nil)
 	for i := range accounts {
 		// avoid unmarshal error
 		cstrs[i] = empty
+		extras[i] = empty
 		partitioned[i] = 0
 	}
 
