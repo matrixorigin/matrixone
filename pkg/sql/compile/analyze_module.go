@@ -469,26 +469,33 @@ func makeExplainPhyPlanBuffer(ss []*Scope, queryResult *util.RunResult, statsInf
 
 func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption, buffer *bytes.Buffer) {
 	if option.Analyze {
-		buffer.WriteString(fmt.Sprintf("SQL AffectRows: %d, S3InputCount: %d, S3OutputCount: %d",
-			queryResult.AffectRows, anal.phyPlan.S3IOInputCount, anal.phyPlan.S3IOOutputCount))
+		gblStats := extractPhyPlanGlbStats(anal.phyPlan)
+		buffer.WriteString(fmt.Sprintf("PhyPlan TimeConsumed:%d ns, MemorySize:%d bytes, S3InputCount: %d, S3OutputCount: %d, AffectRows: %d",
+			gblStats.TimeConsumed,
+			gblStats.MemorySize,
+			anal.phyPlan.S3IOInputCount,
+			anal.phyPlan.S3IOOutputCount,
+			queryResult.AffectRows,
+		))
 
 		if statsInfo != nil {
 			buffer.WriteString("\n")
-			gblStats := extractPhyPlanGlbStats(anal.phyPlan)
-			val := gblStats.TimeConsumed + statsInfo.BuildReaderDuration +
+			cpuTimeVal := gblStats.TimeConsumed + statsInfo.BuildReaderDuration +
 				int64(statsInfo.ParseDuration+
 					statsInfo.CompileDuration+
 					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
-			buffer.WriteString(fmt.Sprintf("PhyPlan TimeConsumed:%d ns,  MemorySize:%d bytes\n", gblStats.TimeConsumed, gblStats.MemorySize))
-			buffer.WriteString(fmt.Sprintf("SQL StatsInfo(%d + %d + %d + %d + %d - %d - %d) = %d, PlanStatsDuration: %d, PlanResolveVariableDuration: %d",
+
+			buffer.WriteString(fmt.Sprintf("StatsInfo：CpuTime(%d ns)=PhyTime(%d)+BuildReaderTime(%d)+ParseTime(%d)+CompileTime(%d)+PlanTime(%d)-IOAccessTime(%d)-IOMergeTime(%d)\n",
+				cpuTimeVal,
 				gblStats.TimeConsumed,
 				statsInfo.BuildReaderDuration,
 				statsInfo.ParseDuration,
 				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.IOMergerTimeConsumption(),
-				val,
+				statsInfo.IOMergerTimeConsumption()))
+
+			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %d, PlanResolveVariableDuration: %d",
 				statsInfo.BuildPlanStatsDuration,
 				statsInfo.BuildPlanResolveVarDuration,
 			))
