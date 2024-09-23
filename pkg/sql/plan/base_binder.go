@@ -2091,35 +2091,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 }
 
 func resetIntervalFunction(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
-	switch intervalExpr.Expr.(type) {
-	case *plan.Expr_List:
-		return resetIntervalFunctionArgs(ctx, intervalExpr)
-	}
-	list := &plan.ExprList{
-		List: make([]*Expr, 2),
-	}
-	list.List[0] = intervalExpr
-	strType := &plan.Type{
-		Id: int32(types.T_char),
-	}
-	strExpr := &Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &Const{
-				Value: &plan.Literal_Sval{
-					Sval: "day",
-				},
-			},
-		},
-		Typ: *strType,
-	}
-	list.List[1] = strExpr
-	expr := &plan.Expr_List{
-		List: list,
-	}
-	listExpr := &Expr{
-		Expr: expr,
-	}
-	return resetIntervalFunctionArgs(ctx, listExpr)
+	return resetIntervalFunctionArgs(ctx, intervalExpr)
 }
 
 func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
