@@ -138,13 +138,12 @@ func (p *PartitionState) HandleDataObjectList(
 		var objEntry ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
-		if objEntry.Size() == 0 {
-			//logutil.Infof("handle dataObjectList all pushed objects should have stats: %s", objEntry.String())
-			continue
-		}
-
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
+		if objEntry.Size() == 0 || (objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty()) {
+			// CN doesn't consume the create event of appendable object
+			continue
+		}
 
 		old, exist := p.dataObjectsNameIndex.Get(objEntry)
 		if exist {
@@ -181,10 +180,6 @@ func (p *PartitionState) HandleDataObjectList(
 				IsAppendable: objEntry.GetAppendable(),
 			}
 			p.dataObjectTSIndex.Set(e)
-		}
-
-		if objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty() {
-			panic("logic error")
 		}
 
 		// for appendable object, gc rows when delete object
@@ -295,12 +290,11 @@ func (p *PartitionState) HandleTombstoneObjectList(
 		var objEntry ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
-		if objEntry.Size() == 0 {
-			continue
-		}
-
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
+		if objEntry.Size() == 0 || (objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty()) {
+			continue
+		}
 
 		old, exist := p.tombstoneObjectsNameIndex.Get(objEntry)
 		if exist {
@@ -325,10 +319,6 @@ func (p *PartitionState) HandleTombstoneObjectList(
 			// if already exists, delete it first
 			p.tombstoneObjectDTSIndex.Delete(tmpObj)
 			p.tombstoneObjectDTSIndex.Set(objEntry)
-		}
-
-		if objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty() {
-			panic("logic error")
 		}
 
 		// for appendable object, gc rows when delete object

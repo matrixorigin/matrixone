@@ -15,17 +15,19 @@
 package v1_3_0
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
-
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_UpgEntry(t *testing.T) {
@@ -190,4 +192,19 @@ func Test_UpgEntry(t *testing.T) {
 			upg_information_schema_columns.Upgrade(executor, uint32(0))
 		},
 	)
+}
+
+func Test_versionHandle_HandleClusterUpgrade_InsertInitDataKey(t *testing.T) {
+	clusterUpgEntries = []versions.UpgradeEntry{}
+
+	v := &versionHandle{
+		metadata: versions.Version{
+			Version: "v1.3.0",
+		},
+	}
+	err := v.HandleClusterUpgrade(
+		context.WithValue(context.Background(), KekKey{}, "kek"),
+		&MockTxnExecutor{},
+	)
+	assert.Error(t, err)
 }

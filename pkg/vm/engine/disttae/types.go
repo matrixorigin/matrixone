@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -55,15 +56,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func GetSmallScanThreshHold() uint64 {
-	if ncpu > 32 {
-		return 100
-	}
-	if ncpu > 16 {
-		return 200
-	}
-	return 400
-}
+const (
+	PREFETCH_THRESHOLD  = 256
+	PREFETCH_ROUNDS     = 24
+	SMALLSCAN_THRESHOLD = 100
+	LARGESCAN_THRESHOLD = 1500
+)
 
 const (
 	INSERT = iota
@@ -119,6 +117,12 @@ func noteSplitAlter(note string) (bool, int, uint64, string) {
 	}
 	panic("bad format of alter note")
 }
+
+const (
+	SMALL = iota
+	NORMAL
+	LARGE
+)
 
 const (
 	MO_DATABASE_ID_NAME_IDX       = 1
@@ -862,17 +866,10 @@ type txnTable struct {
 	relKind       string
 	createSql     string
 	constraint    []byte
+	extraInfo     *api.SchemaExtra
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
-
-	// this should be the statement id
-	// but seems that we're not maintaining it at the moment
-	// localTS timestamp.Timestamp
-	//rowid in mo_tables
-	rowid types.Rowid
-	//rowids in mo_columns
-	rowids []types.Rowid
 
 	// process for statement
 	//proc *process.Process
@@ -918,9 +915,9 @@ type reader struct {
 	isTombstone bool
 	source      engine.DataSource
 
-	memFilter           MemPKFilter
-	readBlockCnt        uint64
-	smallScanThreshHold uint64
+	memFilter MemPKFilter
+
+	scanType int
 }
 
 type mergeReader struct {
