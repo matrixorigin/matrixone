@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/dnservice"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/tnservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -87,6 +87,9 @@ type Service struct {
 	}
 
 	config *util.ConfigData
+
+	// dataSync is used to sync data to other modules.
+	dataSync DataSync
 }
 
 func NewService(
@@ -115,9 +118,13 @@ func NewService(
 		service.runtime = runtime.DefaultRuntime()
 	}
 
-	dnservice.InitCheckState(cfg.UUID)
+	tnservice.InitCheckState(cfg.UUID)
 
-	store, err := newLogStore(cfg, service.getTaskService, service.runtime)
+	var onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType)
+	if service.dataSync != nil {
+		onReplicaChanged = service.dataSync.NotifyReplicaID
+	}
+	store, err := newLogStore(cfg, service.getTaskService, onReplicaChanged, service.runtime)
 	if err != nil {
 		service.runtime.Logger().Error("failed to create log store", zap.Error(err))
 		return nil, err
@@ -215,6 +222,9 @@ func (s *Service) Close() (err error) {
 	if ts != nil {
 		err = firstError(err, ts.Close())
 	}
+	if s.dataSync != nil {
+		err = firstError(err, s.dataSync.Close())
+	}
 	return err
 }
 
@@ -293,6 +303,18 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleDeleteCNStore(ctx, req), pb.LogRecordResponse{}
 	case pb.PROXY_HEARTBEAT:
 		return s.handleProxyHeartbeat(ctx, req), pb.LogRecordResponse{}
+	case pb.UPDATE_NON_VOTING_REPLICA_NUM:
+		return s.handleUpdateNonVotingReplicaNum(ctx, req), pb.LogRecordResponse{}
+	case pb.UPDATE_NON_VOTING_LOCALITY:
+		return s.handleUpdateNonVotingLocality(ctx, req), pb.LogRecordResponse{}
+	case pb.GET_LATEST_LSN:
+		return s.handleGetLatestLsn(ctx, req), pb.LogRecordResponse{}
+	case pb.SET_REQUIRED_LSN:
+		return s.handleSetRequiredLsn(ctx, req), pb.LogRecordResponse{}
+	case pb.GET_REQUIRED_LSN:
+		return s.handleGetRequiredLsn(ctx, req), pb.LogRecordResponse{}
+	case pb.GET_LEADER_ID:
+		return s.handleGetLeaderID(ctx, req), pb.LogRecordResponse{}
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -374,8 +396,15 @@ func (s *Service) handleAppend(ctx context.Context, req pb.Request, payload []by
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
 		resp.LogResponse.Lsn = lsn
+		s.onAppend(ctx, req, lsn, payload)
 	}
 	return resp
+}
+
+func (s *Service) onAppend(ctx context.Context, req pb.Request, lsn Lsn, payload []byte) {
+	if s.dataSync != nil && req.LogRequest.TNID > 0 { // send the data only from the TN
+		s.dataSync.Append(ctx, lsn, payload)
+	}
 }
 
 func (s *Service) handleRead(ctx context.Context, req pb.Request) (pb.Response, pb.LogRecordResponse) {
@@ -534,6 +563,108 @@ func (s *Service) handleProxyHeartbeat(ctx context.Context, req pb.Request) pb.R
 		resp.CommandBatch = &cb
 	}
 	return resp
+}
+
+func (s *Service) handleUpdateNonVotingReplicaNum(ctx context.Context, req pb.Request) pb.Response {
+	num := req.NonVotingReplicaNum
+	resp := getResponse(req)
+	if err := s.store.updateNonVotingReplicaNum(ctx, num); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleUpdateNonVotingLocality(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if err := s.store.updateNonVotingLocality(ctx, *req.NonVotingLocality); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleGetLatestLsn(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	lsn, err := s.store.getLatestLsn(ctx, r.ShardID)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	} else {
+		resp.LogResponse.Lsn = lsn
+	}
+	return resp
+}
+
+func (s *Service) handleSetRequiredLsn(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	if err := s.store.setRequiredLsn(ctx, r.ShardID, r.Lsn); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
+}
+
+func (s *Service) handleGetRequiredLsn(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	lsn, err := s.store.getRequiredLsn(ctx, r.ShardID)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	} else {
+		resp.LogResponse.Lsn = lsn
+	}
+	return resp
+}
+
+func (s *Service) handleGetLeaderID(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	leaderID, err := s.store.leaderID(r.ShardID)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	} else {
+		resp.LogResponse.LeaderID = leaderID
+	}
+	return resp
+}
+
+func (s *Service) handleAddLogShard(cmd pb.ScheduleCommand) {
+	shardID := cmd.AddLogShard.ShardID
+	var wg sync.WaitGroup
+	wg.Add(1)
+	if err := s.stopper.RunNamedTask("add new log shard", func(ctx context.Context) {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+		defer cancel()
+		if err := s.store.addLogShard(ctx, pb.AddLogShard{ShardID: shardID}); err != nil {
+			s.runtime.Logger().Error("failed to add shard",
+				zap.Uint64("shard ID", shardID),
+				zap.Error(err),
+			)
+		}
+	}); err != nil {
+		s.runtime.Logger().Error("failed to create add log shard task",
+			zap.Uint64("shard ID", shardID),
+			zap.Error(err),
+		)
+		wg.Done()
+	}
+	wg.Wait()
+}
+
+func (s *Service) handleBootstrapShard(cmd pb.ScheduleCommand) {
+	if err := s.store.startReplica(
+		cmd.BootstrapShard.ShardID,
+		cmd.BootstrapShard.ReplicaID,
+		cmd.BootstrapShard.InitialMembers,
+		cmd.BootstrapShard.Join,
+	); err != nil {
+		s.runtime.Logger().Error("failed to bootstrap shard",
+			zap.Uint64("shard ID", cmd.BootstrapShard.ShardID),
+			zap.Error(err),
+		)
+	}
 }
 
 func (s *Service) getBackendOptions() []morpc.BackendOption {

@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	metadataDir = "dnservice"
+	metadataDir = "tnservice"
 )
 
 func getMetadataFile(uuid string) string {

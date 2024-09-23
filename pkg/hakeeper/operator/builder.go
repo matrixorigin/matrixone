@@ -48,11 +48,18 @@ type Builder struct {
 	originPeers peersMap
 	targetPeers peersMap
 
+	// for non-voting
+	originNonVotingPeers peersMap
+	targetNonVotingPeers peersMap
+
 	err error
 
 	// intermediate states
 	toAdd, toRemove peersMap // pending tasks.
-	steps           []OpStep // generated steps.
+	// non-voting replicas
+	toAddNonVoting, toRemoveNonVoting peersMap // pending tasks.
+
+	steps []OpStep // generated steps.
 }
 
 // NewBuilder creates a Builder.
@@ -66,6 +73,7 @@ func NewBuilder(desc string, shardInfo logservice.LogShardInfo) *Builder {
 	// origin peers
 	err := b.err
 	originPeers := newPeersMap()
+	originNonVotingPeers := newPeersMap()
 
 	for replicaID, uuid := range shardInfo.Replicas {
 		if uuid == "" {
@@ -74,9 +82,18 @@ func NewBuilder(desc string, shardInfo logservice.LogShardInfo) *Builder {
 		}
 		originPeers.Set(uuid, replicaID)
 	}
+	for replicaID, uuid := range shardInfo.NonVotingReplicas {
+		if uuid == "" {
+			err = moerr.NewInternalErrorNoCtx("cannot build operator for shard with nil peer")
+			break
+		}
+		originNonVotingPeers.Set(uuid, replicaID)
+	}
 
 	b.originPeers = originPeers
 	b.targetPeers = originPeers.Copy()
+	b.originNonVotingPeers = originNonVotingPeers
+	b.targetNonVotingPeers = originNonVotingPeers.Copy()
 	b.err = err
 	return b
 }
@@ -105,6 +122,31 @@ func (b *Builder) AddPeer(uuid string, peer uint64) *Builder {
 	return b
 }
 
+// AddNonVotingPeer records an add non-voting Peer operation in Builder.
+func (b *Builder) AddNonVotingPeer(uuid string, peer uint64) *Builder {
+	if b.err != nil {
+		return b
+	}
+	if uuid == "" {
+		b.err = moerr.NewInternalErrorNoCtx("cannot add non-voting peer to nil store")
+		return b
+	}
+	if old, ok := b.targetNonVotingPeers[uuid]; ok {
+		b.err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("cannot add non-voting peer %+v to %s: "+
+			"already have non-voting peer %+v on %s", peer, uuid, old, uuid))
+		return b
+	}
+	for oldUuid, old := range b.targetNonVotingPeers {
+		if old == peer {
+			b.err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("cannot add non-voting peer %+v to %s: "+
+				"already have non-voting peer %+v on %s", peer, uuid, old, oldUuid))
+			return b
+		}
+	}
+	b.targetNonVotingPeers.Set(uuid, peer)
+	return b
+}
+
 // RemovePeer records a remove peer operation in Builder.
 func (b *Builder) RemovePeer(uuid string) *Builder {
 	if b.err != nil {
@@ -114,6 +156,20 @@ func (b *Builder) RemovePeer(uuid string) *Builder {
 		b.err = moerr.NewInternalErrorNoCtxf("cannot remove peer from %s: not found", uuid)
 	} else {
 		delete(b.targetPeers, uuid)
+	}
+	return b
+}
+
+// RemoveNonVotingPeer records a remove non-voting peer operation in Builder.
+func (b *Builder) RemoveNonVotingPeer(uuid string) *Builder {
+	if b.err != nil {
+		return b
+	}
+	if _, ok := b.targetNonVotingPeers[uuid]; !ok {
+		b.err = moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+			"cannot remove non-voting peer from %s: not found", uuid))
+	} else {
+		delete(b.targetNonVotingPeers, uuid)
 	}
 	return b
 }
@@ -136,11 +192,20 @@ func (b *Builder) Build() (*Operator, error) {
 func (b *Builder) prepareBuild() string {
 	b.toAdd = newPeersMap()
 	b.toRemove = newPeersMap()
+	b.toAddNonVoting = newPeersMap()
+	b.toRemoveNonVoting = newPeersMap()
 
 	for uuid, replicaID := range b.originPeers {
 		// new peer not exists
 		if _, ok := b.targetPeers[uuid]; !ok {
 			b.toRemove.Set(uuid, replicaID)
+		}
+	}
+
+	for uuid, replicaID := range b.originNonVotingPeers {
+		// new peer not exists
+		if _, ok := b.targetNonVotingPeers[uuid]; !ok {
+			b.toRemoveNonVoting.Set(uuid, replicaID)
 		}
 	}
 
@@ -151,10 +216,17 @@ func (b *Builder) prepareBuild() string {
 		}
 	}
 
+	for uuid, replicaID := range b.targetNonVotingPeers {
+		// old peer not exists.
+		if _, ok := b.originNonVotingPeers[uuid]; !ok {
+			b.toAddNonVoting.Set(uuid, replicaID)
+		}
+	}
+
 	return b.brief()
 }
 
-func (b *Builder) buildSteps() error {
+func (b *Builder) buildToRemoveSteps() *Builder {
 	for len(b.toRemove) > 0 {
 		var targets []string
 		for target := range b.targetPeers {
@@ -168,9 +240,29 @@ func (b *Builder) buildSteps() error {
 			Replica: Replica{uuid, b.shardID, replicaID, b.epoch},
 		})
 		delete(b.toRemove, uuid)
-		continue
 	}
+	return b
+}
 
+func (b *Builder) buildToRemoveNonVotingSteps() *Builder {
+	for len(b.toRemoveNonVoting) > 0 {
+		var targets []string
+		for target := range b.targetPeers {
+			targets = append(targets, target)
+		}
+		sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
+
+		uuid, replicaID := b.toRemoveNonVoting.Get()
+		b.steps = append(b.steps, RemoveNonVotingLogService{
+			Target:  targets[0],
+			Replica: Replica{uuid, b.shardID, replicaID, b.epoch},
+		})
+		delete(b.toRemoveNonVoting, uuid)
+	}
+	return b
+}
+
+func (b *Builder) buildToAddSteps() *Builder {
 	for len(b.toAdd) > 0 {
 		var targets []string
 		for target := range b.originPeers {
@@ -190,7 +282,37 @@ func (b *Builder) buildSteps() error {
 		})
 		delete(b.toAdd, uuid)
 	}
+	return b
+}
 
+func (b *Builder) buildToAddNonVotingSteps() *Builder {
+	for len(b.toAddNonVoting) > 0 {
+		var targets []string
+		for target := range b.originPeers {
+			targets = append(targets, target)
+		}
+		sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
+
+		uuid, replicaID := b.toAddNonVoting.Get()
+		b.steps = append(b.steps, AddNonVotingLogService{
+			Target: targets[0],
+			Replica: Replica{
+				UUID:      uuid,
+				ShardID:   b.shardID,
+				ReplicaID: replicaID,
+				Epoch:     b.epoch,
+			},
+		})
+		delete(b.toAddNonVoting, uuid)
+	}
+	return b
+}
+
+func (b *Builder) buildSteps() error {
+	b.buildToRemoveSteps().
+		buildToAddSteps().
+		buildToRemoveNonVotingSteps().
+		buildToAddNonVotingSteps()
 	if len(b.steps) == 0 {
 		return moerr.NewInternalErrorNoCtx("no operator step is built")
 	}
@@ -204,6 +326,10 @@ func (b *Builder) brief() string {
 		return fmt.Sprintf("add peer: store %s", b.toAdd)
 	case len(b.toRemove) > 0:
 		return fmt.Sprintf("rm peer: store %s", b.toRemove)
+	case len(b.toAddNonVoting) > 0:
+		return fmt.Sprintf("add non-voting peer: store %s", b.toAddNonVoting)
+	case len(b.toRemoveNonVoting) > 0:
+		return fmt.Sprintf("rm non-voting peer: store %s", b.toRemoveNonVoting)
 	default:
 		return ""
 	}
