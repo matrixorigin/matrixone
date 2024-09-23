@@ -17,6 +17,8 @@ package backup
 import (
 	"context"
 	"fmt"
+	"github.com/panjf2000/ants/v2"
+	"github.com/prashantv/gostub"
 	"path"
 	"sync"
 	"testing"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -35,8 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
-	"github.com/panjf2000/ants/v2"
-	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -86,9 +85,19 @@ func TestBackupData(t *testing.T) {
 	}
 	wg.Wait()
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
+
+	deletedRows := 0
 	{
 		txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 		testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
+
+		obj := testutil.GetOneObject(rel)
+		id := obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
+		err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+		require.NoError(t, err)
+		deletedRows = 1
+		testutil.CompactBlocks(t, 0, db.DB, "db", schema, false)
+
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
@@ -137,7 +146,7 @@ func TestBackupData(t *testing.T) {
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100), true)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
@@ -401,7 +410,7 @@ func Test_backupConfigFile(t *testing.T) {
 	}
 }
 
-var _ logservice.CNHAKeeperClient = new(dumpHakeeper)
+var _ logservice.BRHAKeeperClient = new(dumpHakeeper)
 
 const (
 	backupData = "backup_data"
@@ -415,38 +424,8 @@ func (d *dumpHakeeper) Close() error {
 	panic("implement me")
 }
 
-func (d *dumpHakeeper) AllocateID(ctx context.Context) (uint64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *dumpHakeeper) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *dumpHakeeper) AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *dumpHakeeper) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *dumpHakeeper) GetClusterState(ctx context.Context) (pb.CheckerState, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (d *dumpHakeeper) GetBackupData(ctx context.Context) ([]byte, error) {
 	return []byte(backupData), nil
-}
-
-func (d *dumpHakeeper) SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
-	//TODO implement me
-	panic("implement me")
 }
 
 func Test_backupHakeeper(t *testing.T) {

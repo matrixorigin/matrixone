@@ -41,6 +41,7 @@ type Profiler[T any, P interface {
 type SampleInfo[T any] struct {
 	Values    T
 	Locations []*profile.Location
+	Scale     int64
 }
 
 type SampleValues interface {
@@ -94,7 +95,7 @@ func (p *Profiler[T, P]) Sample(
 	// full stack
 	var pcs _PCs
 	runtime.Callers(skip, pcs[:])
-	return p.getSampleValueFromPCs(pcs)
+	return p.getSampleValueFromPCs(pcs, int64(fullStackFraction))
 }
 
 func (p *Profiler[T, P]) getLocation(frame runtime.Frame) *profile.Location {
@@ -182,7 +183,7 @@ func (p *Profiler[T, P]) getMockFunction(label string) *profile.Function {
 	return v.(*profile.Function)
 }
 
-func (p *Profiler[T, P]) getSampleValueFromPCs(pcs _PCs) P {
+func (p *Profiler[T, P]) getSampleValueFromPCs(pcs _PCs, scale int64) P {
 	key := SampleKey{
 		PCs: pcs,
 	}
@@ -196,6 +197,7 @@ func (p *Profiler[T, P]) getSampleValueFromPCs(pcs _PCs) P {
 	v, _ := p.samples.LoadOrStore(key, &SampleInfo[P]{
 		Values:    &value,
 		Locations: p.getLocationsFromPCs(pcs),
+		Scale:     scale,
 	})
 
 	return v.(*SampleInfo[P]).Values
@@ -241,17 +243,16 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 
 	p.samples.Range(func(k, v any) bool {
 		info := v.(*SampleInfo[P])
+		values := info.Values.Values()
+		for i := range values {
+			values[i] *= info.Scale
+		}
 		sample := &profile.Sample{
 			Location: info.Locations,
-			Value:    info.Values.Values(),
+			Value:    values,
 		}
 		prof.Sample = append(prof.Sample, sample)
 		return true
-	})
-
-	prof.Sample = append(prof.Sample, &profile.Sample{
-		Location: p.stackOmittedSample.Locations,
-		Value:    P(&p.stackOmittedSample.Values).Values(),
 	})
 
 	p.locations.Range(func(k, v any) bool {

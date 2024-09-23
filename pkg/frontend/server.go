@@ -113,11 +113,9 @@ func (mo *MOServer) Stop() error {
 	logutil.Debug("application listener closed")
 	mo.wg.Wait()
 
-	for s := range mo.rm.clients {
-		if err := s.Close(); err != nil {
-			return err
-		}
-	}
+	mo.rm.cancelCtx()
+	mo.rm.killNetConns()
+
 	logutil.Debug("application stopped")
 	return nil
 }
@@ -136,15 +134,25 @@ func (mo *MOServer) startListener() {
 
 	for _, listener := range mo.listeners {
 		mo.wg.Add(1)
-		go mo.startAccept(listener)
+		go mo.startAccept(mo.rm.ctx, listener)
 	}
 }
 
-func (mo *MOServer) startAccept(listener net.Listener) {
+func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 	defer mo.wg.Done()
 
 	var tempDelay time.Duration
+	quit := false
 	for {
+		select {
+		case <-ctx.Done():
+			quit = true
+		default:
+
+		}
+		if quit {
+			break
+		}
 		conn, err := listener.Accept()
 		if err != nil {
 
@@ -164,11 +172,10 @@ func (mo *MOServer) startAccept(listener net.Listener) {
 		}
 		tempDelay = 0
 
-		go mo.handleConn(conn)
-
+		go mo.handleConn(ctx, conn)
 	}
 }
-func (mo *MOServer) handleConn(conn net.Conn) {
+func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 	var rs *Conn
 	var err error
 	defer func() {
@@ -196,11 +203,11 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 		logutil.Error("HandShake error", zap.Error(err))
 		return
 	}
-	mo.handleLoop(rs)
+	mo.handleLoop(ctx, rs)
 }
 
-func (mo *MOServer) handleLoop(rs *Conn) {
-	if err := mo.handleMessage(rs); err != nil {
+func (mo *MOServer) handleLoop(ctx context.Context, rs *Conn) {
+	if err := mo.handleMessage(ctx, rs); err != nil {
 		logutil.Error("handle session failed", zap.Error(err))
 	}
 }
@@ -435,8 +442,17 @@ func NewMOServer(
 }
 
 // handleMessage receives the message from the client and executes it
-func (mo *MOServer) handleMessage(rs *Conn) error {
+func (mo *MOServer) handleMessage(ctx context.Context, rs *Conn) error {
+	quit := false
 	for {
+		select {
+		case <-ctx.Done():
+			quit = true
+		default:
+		}
+		if quit {
+			break
+		}
 		err := mo.handleRequest(rs)
 		if err != nil {
 			if err == io.EOF {
@@ -448,6 +464,7 @@ func (mo *MOServer) handleMessage(rs *Conn) error {
 			return err
 		}
 	}
+	return nil
 }
 
 func (mo *MOServer) handleRequest(rs *Conn) error {

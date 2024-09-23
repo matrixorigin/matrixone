@@ -54,7 +54,9 @@ func TestStatusCheckExpired(t *testing.T) {
 	// Not expired
 	{
 		before := time.Now()
+		time.Sleep(time.Millisecond * 10)
 		trk := NewOpStatusTracker()
+		time.Sleep(time.Millisecond * 10)
 		after := time.Now()
 		assert.False(t, trk.CheckExpired(10*time.Second))
 		assert.Equal(t, STARTED, trk.Status())

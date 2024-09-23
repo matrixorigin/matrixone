@@ -80,6 +80,8 @@ const (
 	ATAN
 	ATAN2
 	AVG
+	AVG_TW_CACHE
+	AVG_TW_RESULT
 	BASE64_DECODE
 	BASE64_ENCODE
 	BIT_AND
@@ -116,6 +118,7 @@ const (
 	TIMEDIFF
 	TIMESTAMPDIFF
 	DENSE_RANK
+	MO_WIN_DIVISOR
 	EMPTY
 	ENDSWITH
 	EXP
@@ -305,6 +308,7 @@ const (
 	ADD_FAULT_POINT     // Add a fault point
 	REMOVE_FAULT_POINT  // Remove
 	TRIGGER_FAULT_POINT // Trigger.
+	MO_WIN_TRUNCATE
 
 	MO_MEMORY_USAGE // Dump memory usage
 	MO_ENABLE_MEMORY_USAGE_DETAIL
@@ -457,6 +461,8 @@ var functionIdRegister = map[string]int32{
 	"sum":                   SUM,
 	"group_concat":          GROUP_CONCAT,
 	"avg":                   AVG,
+	"avg_tw_cache":          AVG_TW_CACHE,
+	"avg_tw_result":         AVG_TW_RESULT,
 	"count":                 COUNT,
 	"starcount":             STARCOUNT,
 	"bit_or":                BIT_OR,
@@ -596,9 +602,11 @@ var functionIdRegister = map[string]int32{
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
 	"dense_rank":                     DENSE_RANK,
+	"mo_win_divisor":                 MO_WIN_DIVISOR,
 	"add_fault_point":                ADD_FAULT_POINT,
 	"remove_fault_point":             REMOVE_FAULT_POINT,
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
+	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
 	"save_file":                      SAVE_FILE,

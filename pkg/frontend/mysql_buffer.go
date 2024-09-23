@@ -147,15 +147,17 @@ func (c *Conn) Close() error {
 	var err error
 	c.closeFunc.Do(func() {
 		defer func() {
-			if len(c.fixBuf.data) > 0 {
+			if c.fixBuf != nil && len(c.fixBuf.data) > 0 {
 				// Free all allocated memory
 				c.allocator.Free(c.fixBuf.data)
 				c.fixBuf.data = nil
 			}
-			for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
-				c.allocator.Free(e.Value.([]byte))
+			if c.dynamicBuf != nil {
+				for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
+					c.allocator.Free(e.Value.([]byte))
+				}
+				c.dynamicBuf.Init()
 			}
-			c.dynamicBuf.Init()
 		}()
 
 		err = c.closeConn()

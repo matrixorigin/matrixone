@@ -16,17 +16,20 @@ package blockio
 
 import (
 	"context"
+	"math/rand"
 	"path"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -338,4 +341,37 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			assert.Equal(t, uint8(124), bf.PrefixFnId(2))
 		},
 	)
+}
+
+func TestConstructTombstoneWriter(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	fs := testutil.NewSharedFS()
+	writer := ConstructTombstoneWriter(false, fs)
+	assert.NotNil(t, writer)
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+
+	for i := 0; i < 100; i++ {
+		row := types.RandomRowid()
+		pk := rand.Int()
+
+		err := vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, mp)
+		require.NoError(t, err)
+
+		err = vector.AppendFixed[int32](bat.Vecs[1], int32(pk), false, mp)
+		require.NoError(t, err)
+	}
+
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+
+	_, _, err = writer.Sync(context.Background())
+	require.NoError(t, err)
+
+	ss := writer.GetObjectStats()
+	require.Equal(t, 100, int(ss.Rows()))
+
 }

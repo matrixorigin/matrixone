@@ -730,10 +730,9 @@ func (tbl *txnTable) rangesOnePart(
 		)
 	}
 
-	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
-	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
-	if err == nil {
-		exprs = newExprs
+	hasFoldExpr := plan2.HasFoldExprForList(exprs)
+	if hasFoldExpr {
+		exprs = nil
 	}
 
 	var (
@@ -1747,6 +1746,7 @@ func (tbl *txnTable) BuildReaders(
 		}
 	}
 
+	scanType := determineScanType(relData, newNum)
 	def := tbl.GetTableDef(ctx)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
@@ -1776,6 +1776,8 @@ func (tbl *txnTable) BuildReaders(
 		if err != nil {
 			return nil, err
 		}
+
+		rd.scanType = scanType
 		rds = append(rds, rd)
 	}
 	return rds, nil

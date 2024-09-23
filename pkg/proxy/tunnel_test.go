@@ -702,24 +702,64 @@ func TestReplaceServerConn(t *testing.T) {
 }
 
 func TestCheckTxnStatus(t *testing.T) {
-	inTxn, ok := checkTxnStatus(nil)
-	require.True(t, ok)
-	require.True(t, inTxn)
+	t.Run("mustOK false", func(t *testing.T) {
+		inTxn, ok := checkTxnStatus(nil, false)
+		require.True(t, ok)
+		require.True(t, inTxn)
 
-	inTxn, ok = checkTxnStatus(makeErrPacket(8))
-	require.False(t, ok)
-	require.True(t, inTxn)
+		inTxn, ok = checkTxnStatus(makeErrPacket(8), false)
+		require.False(t, ok)
+		require.True(t, inTxn)
 
-	p1 := makeOKPacket(5)
-	value := frontend.SERVER_QUERY_WAS_SLOW | frontend.SERVER_STATUS_NO_GOOD_INDEX_USED
-	binary.LittleEndian.PutUint16(p1[7:], value)
-	inTxn, ok = checkTxnStatus(p1)
-	require.True(t, ok)
-	require.False(t, inTxn)
+		p1 := makeOKPacket(5)
+		value := frontend.SERVER_QUERY_WAS_SLOW | frontend.SERVER_STATUS_NO_GOOD_INDEX_USED
+		binary.LittleEndian.PutUint16(p1[7:], value)
+		inTxn, ok = checkTxnStatus(p1, false)
+		require.True(t, ok)
+		require.False(t, inTxn)
 
-	value |= frontend.SERVER_STATUS_IN_TRANS
-	binary.LittleEndian.PutUint16(p1[7:], value)
-	inTxn, ok = checkTxnStatus(p1)
-	require.True(t, ok)
-	require.True(t, inTxn)
+		value |= frontend.SERVER_STATUS_IN_TRANS
+		binary.LittleEndian.PutUint16(p1[7:], value)
+		inTxn, ok = checkTxnStatus(p1, false)
+		require.True(t, ok)
+		require.True(t, inTxn)
+	})
+
+	t.Run("mustOK true", func(t *testing.T) {
+		inTxn, ok := checkTxnStatus(nil, true)
+		require.True(t, ok)
+		require.True(t, inTxn)
+
+		inTxn, ok = checkTxnStatus(makeErrPacket(8), true)
+		require.False(t, ok)
+		require.True(t, inTxn)
+
+		p1 := makeOKPacket(5)
+		value := frontend.SERVER_QUERY_WAS_SLOW | frontend.SERVER_STATUS_NO_GOOD_INDEX_USED
+		binary.LittleEndian.PutUint16(p1[7:], value)
+		inTxn, ok = checkTxnStatus(p1, true)
+		require.True(t, ok)
+		require.False(t, inTxn)
+
+		value |= frontend.SERVER_STATUS_IN_TRANS
+		binary.LittleEndian.PutUint16(p1[7:], value)
+		inTxn, ok = checkTxnStatus(p1, true)
+		require.True(t, ok)
+		require.True(t, inTxn)
+
+		value ^= frontend.SERVER_STATUS_IN_TRANS
+		binary.LittleEndian.PutUint16(p1[7:], value)
+		inTxn, ok = checkTxnStatus(p1, true)
+		require.True(t, ok)
+		require.False(t, inTxn)
+
+		p1[3] = 4
+		inTxn, ok = checkTxnStatus(p1, false)
+		require.True(t, ok)
+		require.True(t, inTxn)
+
+		inTxn, ok = checkTxnStatus(p1, true)
+		require.True(t, ok)
+		require.False(t, inTxn)
+	})
 }

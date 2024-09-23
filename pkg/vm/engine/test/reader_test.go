@@ -120,11 +120,19 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	// 	require.Equal(t, rowsCount, stats.DataObjectsVisible.RowCnt)
 	// }
 
+	var exes []colexec.ExpressionExecutor
+	proc := testutil3.NewProcessWithMPool("", mp)
 	expr := []*plan.Expr{
 		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
 			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
 		}),
+	}
+	for _, e := range expr {
+		plan2.ReplaceFoldExpr(proc, e, &exes)
+	}
+	for _, e := range expr {
+		plan2.EvalFoldExpr(proc, e, &exes)
 	}
 
 	txn, _, reader, err := testutil.GetTableTxnReader(
@@ -148,6 +156,9 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		ret.CleanOnlyData()
 	}
 
+	for _, exe := range exes {
+		exe.Free()
+	}
 	require.Equal(t, 1, resultHit)
 	require.NoError(t, txn.Commit(ctx))
 }
@@ -782,6 +793,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 		data, err := relData.MarshalBinary()
 		require.NoError(t, err)
 		readerBuildParam.ReaderBuildParam.RelData = data
+		readerBuildParam.ReaderBuildParam.ScanType = disttae.SMALL
 		readerBuildParam.ReaderBuildParam.TombstoneApplyPolicy =
 			int32(engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3)
 		res, err := disttae.HandleShardingReadBuildReader(
@@ -1276,7 +1288,6 @@ func Test_SimpleReader(t *testing.T) {
 	proc := testutil3.NewProcessWithMPool("", mp)
 	pkType := types.T_int32.ToType()
 	bat1 := engine_util.NewCNTombstoneBatch(
-		"pk",
 		&pkType,
 	)
 	defer bat1.Clean(mp)
@@ -1340,7 +1351,6 @@ func Test_SimpleReader(t *testing.T) {
 	blockio.Start("")
 	defer blockio.Stop("")
 	bat2 := engine_util.NewCNTombstoneBatch(
-		"pk",
 		&pkType,
 	)
 	defer bat2.Clean(mp)

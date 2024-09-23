@@ -22,34 +22,43 @@ import (
 	"go.uber.org/zap"
 )
 
-func Check(
-	service string,
-	cfg hakeeper.Config,
-	infos pb.CNState,
-	user pb.TaskTableUser,
-	currentTick uint64,
-) (operators []*operator.Operator) {
-	if user.Username == "" {
-		runtime.ServiceRuntime(service).Logger().Warn("username is still empty.")
+type cnServiceChecker struct {
+	hakeeper.CheckerCommonFields
+	cnState pb.CNState
+}
+
+func NewCNServiceChecker(
+	commonFields hakeeper.CheckerCommonFields,
+	cnState pb.CNState,
+) hakeeper.ModuleChecker {
+	return &cnServiceChecker{
+		CheckerCommonFields: commonFields,
+		cnState:             cnState,
+	}
+}
+
+func (c *cnServiceChecker) Check() (operators []*operator.Operator) {
+	if c.User.Username == "" {
+		runtime.ServiceRuntime(c.ServiceID).Logger().Warn("username is still empty.")
 		return
 	}
-	working, expired := parseCNStores(cfg, infos, currentTick)
+	working, expired := parseCNStores(c.Cfg, c.cnState, c.CurrentTick)
 	if len(working)+len(expired) == 0 {
-		runtime.ServiceRuntime(service).Logger().Error("there are no CNs yet.")
+		runtime.ServiceRuntime(c.ServiceID).Logger().Error("there are no CNs yet.")
 		return
 	}
 	for _, store := range working {
-		if !infos.Stores[store].TaskServiceCreated {
-			runtime.ServiceRuntime(service).Logger().Info("create task service for CN.",
+		if !c.cnState.Stores[store].TaskServiceCreated {
+			runtime.ServiceRuntime(c.ServiceID).Logger().Info("create task service for CN.",
 				zap.String("uuid", store))
 			operators = append(operators, operator.CreateTaskServiceOp("",
-				store, pb.CNService, user))
+				store, pb.CNService, c.User))
 		}
 		// If this instance has not joined gossip cluster, we generate join command.
-		if !infos.Stores[store].GossipJoined {
-			addresses := getGossipAddresses(cfg, infos, currentTick, store)
+		if !c.cnState.Stores[store].GossipJoined {
+			addresses := getGossipAddresses(c.Cfg, c.cnState, c.CurrentTick, store)
 			if len(addresses) > 0 {
-				runtime.ServiceRuntime(service).Logger().Info("join gossip cluster for CN",
+				runtime.ServiceRuntime(c.ServiceID).Logger().Info("join gossip cluster for CN",
 					zap.String("uuid", store),
 					zap.Any("addresses", addresses))
 				operators = append(operators, operator.JoinGossipClusterOp("",
@@ -58,7 +67,7 @@ func Check(
 		}
 	}
 	for _, store := range expired {
-		runtime.ServiceRuntime(service).Logger().Warn("expired CN.",
+		runtime.ServiceRuntime(c.ServiceID).Logger().Warn("expired CN.",
 			zap.String("uuid", store))
 		operators = append(operators, operator.CreateDeleteCNOp("", store))
 	}

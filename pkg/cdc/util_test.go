@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +37,9 @@ import (
 )
 
 func Test_aes(t *testing.T) {
+	AesKey = "test-aes-key-not-use-it-in-cloud"
+	defer func() { AesKey = "" }()
+
 	data := "test ase"
 	encData, err := AesCFBEncode([]byte(data))
 	assert.NoError(t, err)
@@ -880,4 +884,34 @@ func TestGetTableDef(t *testing.T) {
 			assert.Equalf(t, tt.want, got, "GetTableDef(%v, %v, %v, %v)", tt.args.ctx, tt.args.txnOp, tt.args.cnEngine, tt.args.tblId)
 		})
 	}
+}
+
+func TestGetInitDataKeySql(t *testing.T) {
+	{
+		stub := gostub.Stub(&cryptoRandRead, func([]byte) (int, error) {
+			return 0, moerr.NewInternalErrorNoCtx("")
+		})
+		_, err := GetInitDataKeySql("01234567890123456789012345678901")
+		assert.Error(t, err)
+		stub.Reset()
+	}
+	{
+		stub := gostub.Stub(&encrypt, func(data []byte, aesKey []byte) (string, error) {
+			return "encrypted", nil
+		})
+		s, err := GetInitDataKeySql("01234567890123456789012345678901")
+		assert.NoError(t, err)
+		assert.Equal(t, "insert into mo_catalog.mo_data_key (account_id, key_id, encrypted_key) values (0, '4e3da275-5003-4ca0-8667-5d3cdbecdd35', 'encrypted')", s)
+		stub.Reset()
+	}
+}
+
+func TestAesCFBEncodeWithKey_EmptyKey(t *testing.T) {
+	_, err := aesCFBEncodeWithKey([]byte("01234567890123456789012345678901"), []byte{})
+	assert.Error(t, err)
+}
+
+func TestAesCFBDecodeWithKey_EmptyKey(t *testing.T) {
+	_, err := AesCFBDecodeWithKey(context.Background(), "01234567890123456789012345678901", []byte{})
+	assert.Error(t, err)
 }

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -133,8 +134,15 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 	addSqlIntoSet(addInitSystemVariablesSql(sysAccountID, sysAccountName, QueryResultMaxsize, pu))
 	addSqlIntoSet(addInitSystemVariablesSql(sysAccountID, sysAccountName, QueryResultTimeout, pu))
 
+	//step7: add entry into data key
+	sql, err := cdc.GetInitDataKeySql(pu.SV.KeyEncryptionKey)
+	if err != nil {
+		return err
+	}
+	addSqlIntoSet(sql)
+
 	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatibility_mode
-	for _, sql := range initDataSqls {
+	for _, sql = range initDataSqls {
 		res, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
 			return err

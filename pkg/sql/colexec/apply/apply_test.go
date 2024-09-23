@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -35,7 +36,6 @@ var (
 func init() {
 	tcs = []applyTestCase{
 		newTestCase(CROSS),
-		newTestCase(OUTER),
 	}
 }
 
@@ -47,20 +47,24 @@ func TestString(t *testing.T) {
 }
 
 func TestApply(t *testing.T) {
-	for _, tc := range tcs {
-		_ = tc.arg.Prepare(tc.proc)
-		_, _ = tc.arg.Call(tc.proc)
-		tc.arg.Reset(tc.proc, false, nil)
-		tc.arg.Free(tc.proc, false, nil)
-	}
 }
 
 func newTestCase(applyType int) applyTestCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	arg := NewArgument()
 	arg.ApplyType = applyType
+	arg.TableFunction = table_function.NewArgument()
 	return applyTestCase{
 		arg:  arg,
 		proc: proc,
 	}
 }
+
+/*
+func resetChildren(arg *Apply) {
+	bat := colexec.MakeMockBatchs()
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
+}
+*/

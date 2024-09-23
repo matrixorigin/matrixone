@@ -158,3 +158,26 @@ func (tableFunction *TableFunction) createResultBatch() *batch.Batch {
 	}
 	return bat
 }
+
+func (tableFunction *TableFunction) ApplyPrepare(proc *process.Process) error {
+	return tableFunction.Prepare(proc)
+}
+
+func (tableFunction *TableFunction) ApplyArgsEval(inbat *batch.Batch, proc *process.Process) error {
+	var err error
+	for i := range tableFunction.ctr.executorsForArgs {
+		tableFunction.ctr.argVecs[i], err = tableFunction.ctr.executorsForArgs[i].Eval(proc, []*batch.Batch{inbat}, nil)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (tableFunction *TableFunction) ApplyStart(nthRow int, proc *process.Process) error {
+	return tableFunction.ctr.state.start(tableFunction, proc, nthRow)
+}
+
+func (tableFunction *TableFunction) ApplyCall(proc *process.Process) (vm.CallResult, error) {
+	return tableFunction.ctr.state.call(tableFunction, proc)
+}
