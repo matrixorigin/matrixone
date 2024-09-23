@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -723,7 +724,14 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 	})
 
 	tableDef.Pkey.PkeyColName = "a"
+	var exes []colexec.ExpressionExecutor
+
+	for _, expr := range exprs {
+		plan2.ReplaceFoldExpr(proc, expr, &exes)
+	}
 	for i, expr := range exprs {
+		plan2.EvalFoldExpr(proc, expr, &exes)
+
 		BasePKFilter, err := ConstructBasePKFilter(expr, tableDef, proc)
 		require.NoError(t, err)
 		require.Equal(t, filters[i].Valid, BasePKFilter.Valid, exprStrings[i])
@@ -734,6 +742,9 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		}
 	}
 
+	for _, exe := range exes {
+		exe.Free()
+	}
 	for i := range needFreeVecs {
 		needFreeVecs[i].Free(m)
 	}
