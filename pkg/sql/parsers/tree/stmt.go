@@ -139,6 +139,9 @@ var (
 	//    ShowCollation
 	//    ShowSubscriptions
 	//    ShowBackendServers
+	//    ShowLogserviceReplicas
+	//    ShowLogserviceStores
+	//    ShowLogserviceSettings
 	compositeResRowType = MakeStmtKind(OUTPUT_RESULT_ROW, RESP_PREBUILD_RESULT_ROW, EXEC_IN_FRONTEND)
 )
 
@@ -439,6 +442,18 @@ func (node *ShowConnectors) StmtKind() StmtKind {
 	return compositeResRowType
 }
 
+func (node *ShowLogserviceReplicas) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *ShowLogserviceStores) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *ShowLogserviceSettings) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
 func (node *AlterTable) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
@@ -662,5 +677,9 @@ func (node *ResumeCDC) StmtKind() StmtKind {
 }
 
 func (node *RestartCDC) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *SetLogserviceSettings) StmtKind() StmtKind {
 	return frontendStatusTyp
 }

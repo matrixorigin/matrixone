@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dnservice
+package tnservice
 
 import (
 	"fmt"
@@ -113,7 +113,7 @@ func checkReportedState(
 		// avoid Operator with nil steps
 		if len(steps) > 0 {
 			ops = append(ops,
-				operator.NewOperator("dnservice", shardID, operator.NoopEpoch, steps...),
+				operator.NewOperator("tnservice", shardID, operator.NoopEpoch, steps...),
 			)
 		}
 	}
@@ -161,7 +161,7 @@ func checkInitiatingShards(
 		steps := checkShard(service, newTnShard(id), mapper, workingStores, idAlloc)
 		if len(steps) > 0 { // avoid Operator with nil steps
 			ops = append(ops,
-				operator.NewOperator("dnservice", id, operator.NoopEpoch, steps...),
+				operator.NewOperator("tnservice", id, operator.NoopEpoch, steps...),
 			)
 		}
 	}
