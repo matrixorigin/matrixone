@@ -434,7 +434,7 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 			return
 		}
 		n += int64(sn2)
-		if _, err = r.Read(colBuf); err != nil {
+		if _, err = io.ReadFull(r, colBuf); err != nil {
 			return
 		}
 		n += int64(types.TSize)

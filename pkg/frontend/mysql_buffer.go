@@ -445,12 +445,7 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 			return 0, err
 		}
 	}
-
-	n, err := c.conn.Read(buf)
-	if err != nil {
-		return 0, err
-	}
-	return n, nil
+	return c.conn.Read(buf)
 }
 
 // Append Add bytes to buffer
