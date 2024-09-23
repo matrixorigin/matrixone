@@ -83,6 +83,19 @@ type Client interface {
 	// return the first assigned such timestamp, that is TSO timestamps
 	// [returned value, returned value + count] will be owned by the caller.
 	GetTSOTimestamp(ctx context.Context, count uint64) (uint64, error)
+	// GetLatestLsn returns the latest Lsn.
+	GetLatestLsn(ctx context.Context) (Lsn, error)
+	// SetRequiredLsn updates the required Lsn.
+	SetRequiredLsn(ctx context.Context, lsn Lsn) error
+	// GetRequiredLsn returns the required Lsn, which is required by other shards or
+	// module. It is only a mark that other shards will read log entries from this value.
+	// If the log entries after it are removed, other shards read data from S3 storage.
+	GetRequiredLsn(ctx context.Context) (Lsn, error)
+}
+
+type StandbyClient interface {
+	Client
+	GetLeaderID(ctx context.Context) (uint64, error)
 }
 
 type managedClient struct {
@@ -92,6 +105,7 @@ type managedClient struct {
 }
 
 var _ Client = (*managedClient)(nil)
+var _ StandbyClient = (*managedClient)(nil)
 
 // NewClient creates a Log Service client. Each returned client can be used
 // to synchronously issue requests to the Log Service. To send multiple requests
@@ -102,7 +116,7 @@ func NewClient(
 	sid string,
 	cfg ClientConfig,
 ) (Client, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.ValidateClient(); err != nil {
 		return nil, err
 	}
 	client, err := newClient(ctx, sid, cfg)
@@ -110,6 +124,54 @@ func NewClient(
 		return nil, err
 	}
 	return &managedClient{cfg: cfg, client: client, sid: sid}, nil
+}
+
+// NewStandbyClient creates a Log Service client which is used by standby shard.
+func NewStandbyClient(ctx context.Context, sid string, cfg ClientConfig) (StandbyClient, error) {
+	if err := cfg.ValidateStandbyClient(); err != nil {
+		return nil, err
+	}
+	client, err := newClient(ctx, sid, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &managedClient{cfg: cfg, client: client, sid: sid}, nil
+}
+
+// NewStandbyClientWithRetry creates a Log Service client with retry.
+func NewStandbyClientWithRetry(
+	ctx context.Context, sid string, cfg ClientConfig,
+) StandbyClient {
+	var c StandbyClient
+	createFn := func() error {
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		lc, err := NewStandbyClient(ctx, sid, cfg)
+		if err != nil {
+			logutil.Errorf("failed to create logservice client: %v", err)
+			return err
+		}
+		c = lc
+		return nil
+	}
+	timer := time.NewTimer(time.Minute * 3)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case <-timer.C:
+			panic("failed to create logservice client")
+
+		default:
+			if err := createFn(); err != nil {
+				time.Sleep(time.Second * 3)
+				continue
+			}
+			return c
+		}
+	}
 }
 
 func (c *managedClient) Close() error {
@@ -214,6 +276,70 @@ func (c *managedClient) GetTSOTimestamp(ctx context.Context, count uint64) (uint
 			continue
 		}
 		return v, err
+	}
+}
+
+func (c *managedClient) GetLatestLsn(ctx context.Context) (Lsn, error) {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return 0, err
+		}
+		lsn, err := c.client.getLatestLsn(ctx)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return lsn, err
+	}
+}
+
+func (c *managedClient) SetRequiredLsn(ctx context.Context, lsn Lsn) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.client.setRequiredLsn(ctx, lsn)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
+	}
+}
+
+func (c *managedClient) GetRequiredLsn(ctx context.Context) (Lsn, error) {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return 0, err
+		}
+		lsn, err := c.client.getRequiredLsn(ctx)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return lsn, err
+	}
+}
+
+func (c *managedClient) GetLeaderID(ctx context.Context) (uint64, error) {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return 0, err
+		}
+		leaderID, err := c.client.getLeaderID(ctx)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return leaderID, err
 	}
 }
 
@@ -416,6 +542,22 @@ func (c *client) getTSOTimestamp(ctx context.Context, count uint64) (uint64, err
 	return c.tsoRequest(ctx, count)
 }
 
+func (c *client) getLatestLsn(ctx context.Context) (Lsn, error) {
+	return c.doGetLatestLsn(ctx)
+}
+
+func (c *client) setRequiredLsn(ctx context.Context, lsn Lsn) error {
+	return c.doSetRequiredLsn(ctx, lsn)
+}
+
+func (c *client) getRequiredLsn(ctx context.Context) (Lsn, error) {
+	return c.doGetRequiredLsn(ctx)
+}
+
+func (c *client) getLeaderID(ctx context.Context) (uint64, error) {
+	return c.doGetLeaderID(ctx)
+}
+
 func (c *client) readOnly() bool {
 	return c.cfg.ReadOnly
 }
@@ -541,6 +683,35 @@ func (c *client) doGetTruncatedLsn(ctx context.Context) (Lsn, error) {
 		return 0, err
 	}
 	return resp.LogResponse.Lsn, nil
+}
+
+func (c *client) doGetLatestLsn(ctx context.Context) (Lsn, error) {
+	resp, _, err := c.request(ctx, pb.GET_LATEST_LSN, nil, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	return resp.LogResponse.Lsn, nil
+}
+
+func (c *client) doSetRequiredLsn(ctx context.Context, lsn Lsn) error {
+	_, _, err := c.request(ctx, pb.SET_REQUIRED_LSN, nil, lsn, 0)
+	return err
+}
+
+func (c *client) doGetRequiredLsn(ctx context.Context) (Lsn, error) {
+	resp, _, err := c.request(ctx, pb.GET_REQUIRED_LSN, nil, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	return resp.LogResponse.Lsn, nil
+}
+
+func (c *client) doGetLeaderID(ctx context.Context) (Lsn, error) {
+	resp, _, err := c.request(ctx, pb.GET_LEADER_ID, nil, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	return resp.LogResponse.LeaderID, nil
 }
 
 func getRPCClient(

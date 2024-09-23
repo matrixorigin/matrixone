@@ -489,6 +489,9 @@ import (
 // ROLLUP
 %token <str> ROLLUP
 
+// Logservice
+%token <str> LOGSERVICE REPLICAS STORES SETTINGS
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
@@ -503,11 +506,11 @@ import (
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> show_servers_stmt show_connectors_stmt
+%type <statement> show_servers_stmt show_connectors_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt rename_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
-%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt
+%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
@@ -2296,6 +2299,16 @@ set_stmt:
 |   set_default_role_stmt
 |   set_transaction_stmt
 |   set_connection_id_stmt
+|   set_logservice_non_voting_replica_num
+
+set_logservice_non_voting_replica_num:
+  SET LOGSERVICE SETTINGS var_name equal_or_assignment set_expr
+  {
+    $$ = &tree.SetLogserviceSettings{
+      Name: $4,
+      Value: $6,
+    }
+  }
 
 set_transaction_stmt:
     SET TRANSACTION transaction_characteristic_list
@@ -3978,6 +3991,27 @@ show_stmt:
 |   show_snapshots_stmt
 |   show_pitr_stmt
 |   show_cdc_stmt
+|   show_logservice_replicas_stmt
+|   show_logservice_stores_stmt
+|   show_logservice_settings_stmt
+
+show_logservice_replicas_stmt:
+    SHOW LOGSERVICE REPLICAS
+    {
+        $$ = &tree.ShowLogserviceReplicas{}
+    }
+
+show_logservice_stores_stmt:
+    SHOW LOGSERVICE STORES
+    {
+        $$ = &tree.ShowLogserviceStores{}
+    }
+
+show_logservice_settings_stmt:
+    SHOW LOGSERVICE SETTINGS
+    {
+        $$ = &tree.ShowLogserviceSettings{}
+    }
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -12199,6 +12233,7 @@ non_reserved_keyword:
 |   LESS
 |   LEVEL
 |   LINESTRING
+|   LOGSERVICE
 |   LONGBLOB
 |   LONGTEXT
 |   LOCAL
@@ -12248,6 +12283,7 @@ non_reserved_keyword:
 |   REDUNDANT
 |   REPAIR
 |   REPEATABLE
+|   REPLICAS
 |   RELEASE
 |   RESUME
 |   REVOKE
@@ -12256,6 +12292,7 @@ non_reserved_keyword:
 |   ROLLBACK
 |   RESTRICT
 |   SESSION
+|   SETTINGS
 |   SERIALIZABLE
 |   SHARE
 |   SIGNED
@@ -12266,6 +12303,7 @@ non_reserved_keyword:
 |   START
 |   STATUS
 |   STORAGE
+|   STORES
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
 |   STATS_SAMPLE_PAGES
