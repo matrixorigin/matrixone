@@ -669,7 +669,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		return nil, nil
 	}
 
-	// insert pk col with default value
+	// insert pk col with default value, skip build pk filter expr
 	insertColMap := make(map[string]bool)
 	for _, name := range insertColsNameFromStmt {
 		insertColMap[name] = true
