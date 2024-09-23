@@ -557,7 +557,6 @@ func (r *shardingLocalReader) close() error {
 }
 
 func (r *shardingLocalReader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	return
 }
 
 func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {
@@ -565,7 +564,6 @@ func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {
 }
 
 func (r *shardingLocalReader) SetFilterZM(zm objectio.ZoneMap) {
-	return
 }
 
 func (tbl *txnTableDelegate) BuildShardingReaders(
