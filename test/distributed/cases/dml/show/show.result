@@ -230,6 +230,7 @@ mo_cdc_task
 mo_cdc_watermark
 mo_columns
 mo_configurations
+mo_data_key
 mo_database
 mo_foreign_keys
 mo_indexes
@@ -260,7 +261,7 @@ mo_variables
 mo_version
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-34
+35
 show column_number from mo_database;
 Number of columns in mo_database
 9

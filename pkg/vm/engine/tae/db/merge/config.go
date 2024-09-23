@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -33,6 +34,7 @@ var (
 		MaxOsizeMergedObj: common.DefaultMaxOsizeObjMB * common.Const1MBytes,
 		ObjectMinOsize:    common.DefaultMinOsizeQualifiedMB * common.Const1MBytes,
 		MinCNMergeSize:    common.DefaultMinCNMergeSize * common.Const1MBytes,
+		TombstoneLifetime: 30 * time.Minute,
 	}
 )
 
@@ -46,6 +48,8 @@ type BasicPolicyConfig struct {
 	MinCNMergeSize    uint64
 	FromUser          bool
 	MergeHints        []api.MergeHint
+
+	TombstoneLifetime time.Duration
 }
 
 func (c *BasicPolicyConfig) String() string {
@@ -102,6 +106,7 @@ func (o *customConfigProvider) getConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 				MinCNMergeSize:    cnSize,
 				FromUser:          true,
 				MergeHints:        extra.Hints,
+				TombstoneLifetime: 30 * time.Minute,
 			}
 			o.configs[tbl.ID] = p
 		}

@@ -1387,7 +1387,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_APPLY:
 		internalMap := make(map[[2]int32][2]int32)
 
-		for _, expr := range node.TblFuncExprList {
+		right := builder.qry.Nodes[node.Children[1]]
+		rightTag := right.BindingTags[0]
+
+		for _, expr := range right.TblFuncExprList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
@@ -1420,8 +1423,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-		right := builder.qry.Nodes[node.Children[1]]
-		rightTag := right.BindingTags[0]
 		for i, col := range right.TableDef.Cols {
 			globalRef := [2]int32{rightTag, int32(i)}
 			if colRefCnt[globalRef] == 0 {
@@ -3663,12 +3664,21 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		tableDef.Name2ColIndex = map[string]int32{}
+		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)
 		for i := 0; i < len(tableDef.Cols); i++ {
 			tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
+			if !tableDef.Cols[i].Hidden {
+				tbColToDataCol[tableDef.Cols[i].Name] = int32(i)
+			}
 		}
 		nodeType := plan.Node_TABLE_SCAN
+		var externScan *plan.ExternScan
 		if tableDef.TableType == catalog.SystemExternalRel {
 			nodeType = plan.Node_EXTERNAL_SCAN
+			externScan = &plan.ExternScan{
+				Type:           int32(plan.ExternType_EXTERNAL_TB),
+				TbColToDataCol: tbColToDataCol,
+			}
 			col := &ColDef{
 				Name: catalog.ExternalFilePath,
 				Typ: plan.Type{
@@ -3769,6 +3779,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			Stats:        nil,
 			ObjRef:       obj,
 			TableDef:     tableDef,
+			ExternScan:   externScan,
 			BindingTags:  []int32{builder.genNewTag()},
 			ScanSnapshot: snapshot,
 		}, ctx)
@@ -4173,13 +4184,13 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 }
 
 func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *BindContext) (int32, error) {
-	var applyType plan.Node_JoinType
+	var applyType plan.Node_ApplyType
 
 	switch tbl.ApplyType {
 	case tree.APPLY_TYPE_CROSS:
-		applyType = plan.Node_INNER
+		applyType = plan.Node_CROSSAPPLY
 	case tree.APPLY_TYPE_OUTER:
-		applyType = plan.Node_OUTER
+		applyType = plan.Node_OUTERAPPLY
 	}
 
 	leftCtx := NewBindContext(builder, ctx)
@@ -4202,9 +4213,9 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 		return 0, err
 	}
 	nodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_APPLY,
-		Children: []int32{leftChildID, rightChildID},
-		JoinType: applyType,
+		NodeType:  plan.Node_APPLY,
+		Children:  []int32{leftChildID, rightChildID},
+		ApplyType: applyType,
 	}, ctx)
 	return nodeID, nil
 }

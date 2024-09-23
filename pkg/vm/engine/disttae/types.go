@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -865,17 +866,10 @@ type txnTable struct {
 	relKind       string
 	createSql     string
 	constraint    []byte
+	extraInfo     *api.SchemaExtra
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
-
-	// this should be the statement id
-	// but seems that we're not maintaining it at the moment
-	// localTS timestamp.Timestamp
-	//rowid in mo_tables
-	rowid types.Rowid
-	//rowids in mo_columns
-	rowids []types.Rowid
 
 	// process for statement
 	//proc *process.Process
@@ -888,8 +882,8 @@ type withFilterMixin struct {
 	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
-	proc     *process.Process
 	tableDef *plan.TableDef
+	name     string
 
 	// columns used for reading
 	columns struct {
@@ -918,8 +912,8 @@ type blockSortHelper struct {
 type reader struct {
 	withFilterMixin
 
-	source engine.DataSource
-	ts     timestamp.Timestamp
+	isTombstone bool
+	source      engine.DataSource
 
 	memFilter MemPKFilter
 
