@@ -483,16 +483,10 @@ func (r *shardingLocalReader) Read(
 				ctx,
 				shardservice.ReadBuildReader,
 				func(param *shard.ReadParam) {
-					zm, err := r.filterZM.Marshal()
-					if err != nil {
-						panic(err)
-					}
 					param.ReaderBuildParam.RelData = relData
 					param.ReaderBuildParam.Expr = expr
 					param.ReaderBuildParam.ScanType = int32(r.remoteScanType)
 					param.ReaderBuildParam.TombstoneApplyPolicy = int32(r.remoteTombApplyPolicy)
-					param.ReaderBuildParam.OrderBy = r.orderBy
-					param.ReaderBuildParam.Zm = zm
 				},
 				func(resp []byte) {
 					r.streamID = types.DecodeUuid(resp)
@@ -566,17 +560,15 @@ func (r *shardingLocalReader) close() error {
 }
 
 func (r *shardingLocalReader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	r.lrd.SetOrderBy(orderby)
-	r.orderBy = orderby
+	return
 }
 
 func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {
-	return r.orderBy
+	return nil
 }
 
 func (r *shardingLocalReader) SetFilterZM(zm objectio.ZoneMap) {
-	r.lrd.SetFilterZM(zm)
-	r.filterZM = zm
+	return
 }
 
 func (tbl *txnTableDelegate) BuildShardingReaders(

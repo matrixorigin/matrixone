@@ -284,11 +284,6 @@ func HandleShardingReadBuildReader(
 		return nil, err
 	}
 
-	rd.SetOrderBy(param.ReaderBuildParam.OrderBy)
-	var zm objectio.ZoneMap
-	zm.Unmarshal(param.ReaderBuildParam.Zm)
-	rd.SetFilterZM(zm)
-
 	uuid, err := types.BuildUuid()
 	if err != nil {
 		return nil, err
