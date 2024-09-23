@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -124,7 +125,9 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Rel                    engine.Relation
-	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
+	FilterExpr             *plan.Expr   // todo: change this to []*plan.Expr,  is FilterList + RuntimeFilter
+	FilterList             []*plan.Expr //from node.FilterList, use for reader
+	BlockFilterList        []*plan.Expr //from node.BlockFilterList, use for range
 	node                   *plan.Node
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
@@ -299,6 +302,8 @@ type Compile struct {
 	metaTables   map[string]struct{}
 	lockTables   map[uint64]*plan.LockTarget
 	disableRetry bool
+
+	filterExprExes []colexec.ExpressionExecutor
 
 	isPrepare bool
 }
