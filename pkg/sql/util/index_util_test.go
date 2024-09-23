@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 func TestBuildIndexTableName(t *testing.T) {
@@ -188,5 +189,73 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 		for _, p := range packers.ps {
 			p.Close()
 		}
+	}
+}
+
+func TestIsIndexTableName(t *testing.T) {
+	tests := []struct {
+		name      string
+		tableName string
+		expected  bool
+	}{
+		{
+			name:      "test01",
+			tableName: "__mo_index_unique_c1d278ec-bfd6-11ed-9e9d-000c29203f30",
+			expected:  true,
+		},
+		{
+			name:      "test02",
+			tableName: "something_random",
+			expected:  false,
+		},
+		{
+			name:      "test03",
+			tableName: "",
+			expected:  false,
+		},
+		{
+			name:      "test04",
+			tableName: "normal_table_001",
+			expected:  false,
+		},
+		{
+			name:      "test05",
+			tableName: "__mo_index_unique_c1d278ec-bfd6",
+			expected:  false,
+		},
+		{
+			name:      "test06",
+			tableName: "secondary_idx_5678",
+			expected:  false,
+		},
+		{
+			name:      "test07",
+			tableName: "__mo_index_secondary_c1d278ec-bfd6-11ed-9e9d-000c29203f30",
+			expected:  true,
+		},
+		{
+			name:      "test08",
+			tableName: "__mo_index_secondary_c1d278ec-bfd6-11ed-9e9d",
+			expected:  false,
+		},
+		{
+			name:      "test09",
+			tableName: "__mo_index_unique_",
+			expected:  false,
+		},
+		{
+			name:      "test10",
+			tableName: "__mo_index_secondary_",
+			expected:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsIndexTableName(tt.tableName)
+			if result != tt.expected {
+				t.Errorf("IsIndexTableName(%s) = %v, expected %v", tt.tableName, result, tt.expected)
+			}
+		})
 	}
 }
