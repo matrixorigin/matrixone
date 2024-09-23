@@ -212,3 +212,37 @@ func TestApproxSize(t *testing.T) {
 	}
 	t.Log(svec.ApproxSize(), sizeCnt)
 }
+
+func TestCompatibilityV2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	vecTypes := types.MockColTypes()[2:4] // int32, int64
+	attrs := []string{"attr1", "attr2"}
+	opts := Options{}
+	opts.Capacity = 0
+	bat := BuildBatch(attrs, vecTypes, opts)
+	bat.Vecs[0].Append(int32(1), false)
+	bat.Vecs[0].Append(int32(2), false)
+	bat.Vecs[0].Append(int32(3), true)
+	bat.Vecs[1].Append(int64(11), false)
+	bat.Vecs[1].Append(int64(12), true)
+	bat.Vecs[1].Append(int64(13), false)
+
+	assert.Equal(t, 3, bat.Length())
+	assert.False(t, bat.HasDelete())
+	bat.Delete(1)
+	assert.Equal(t, 3, bat.Length())
+	assert.True(t, bat.HasDelete())
+	assert.True(t, bat.IsDeleted(1))
+
+	w := new(bytes.Buffer)
+	_, err := bat.WriteToV2(w)
+	assert.NoError(t, err)
+
+	r := bytes.NewBuffer(w.Bytes())
+	bat2 := NewEmptyBatch()
+	_, err = bat2.ReadFromV2(r)
+	assert.NoError(t, err)
+	assert.True(t, bat.Equals(bat2))
+
+	bat.Close()
+}

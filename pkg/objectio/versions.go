@@ -38,12 +38,13 @@ const (
 	IOET_ObjectMeta_V2  = 2
 	IOET_ObjectMeta_V3  = 3
 	IOET_ColumnData_V1  = 1
+	IOET_ColumnData_V2  = 2
 	IOET_BloomFilter_V1 = 1
 	IOET_BloomFilter_V2 = 2
 	IOET_ZoneMap_V1     = 1
 
 	IOET_ObjectMeta_CurrVer  = IOET_ObjectMeta_V3
-	IOET_ColumnData_CurrVer  = IOET_ColumnData_V1
+	IOET_ColumnData_CurrVer  = IOET_ColumnData_V2
 	IOET_BloomFilter_CurrVer = IOET_BloomFilter_V2
 	IOET_ZoneMap_CurrVer     = IOET_ZoneMap_V1
 )
@@ -53,6 +54,7 @@ func init() {
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_V2}, nil, DecodeObjectMetaV2)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_V3}, nil, DecodeObjectMetaV3)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V1}, EncodeColumnDataV1, DecodeColumnDataV1)
+	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V2}, EncodeColumnDataV1, DecodeColumnDataV2)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_BF, IOET_BloomFilter_V1}, nil, nil)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_BF, IOET_BloomFilter_V2}, nil, nil)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ZM, IOET_ZoneMap_V1}, nil, nil)
@@ -63,6 +65,14 @@ func EncodeColumnDataV1(ioe any) (buf []byte, err error) {
 }
 
 func DecodeColumnDataV1(buf []byte) (ioe any, err error) {
+	vec := vector.NewVec(types.Type{})
+	if err = vec.UnmarshalBinaryV1(buf); err != nil {
+		return
+	}
+	return vec, err
+}
+
+func DecodeColumnDataV2(buf []byte) (ioe any, err error) {
 	vec := vector.NewVec(types.Type{})
 	if err = vec.UnmarshalBinary(buf); err != nil {
 		return

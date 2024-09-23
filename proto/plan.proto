@@ -769,6 +769,11 @@ message Node {
 		LINEAR = 5;
 	}
 
+	enum ApplyType {
+		CROSSAPPLY = 0;
+		OUTERAPPLY = 1;
+	}
+
 	NodeType node_type = 1;
 	int32 node_id = 2;
 	Stats stats = 3;
@@ -865,6 +870,9 @@ message Node {
 	bool recursive_cte = 59;
 	
 	repeated UpdateCtx update_ctx_list = 60;
+
+    ApplyType apply_type = 61;
+
 }
 
 // Snapshot Represents a snapshot of the database
