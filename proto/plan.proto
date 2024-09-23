@@ -764,6 +764,11 @@ message Node {
 		UPDATE = 2;
 	}
 
+	enum ApplyType {
+		CROSSAPPLY = 0;
+		OUTERAPPLY = 1;
+	}
+
 	NodeType node_type = 1;
 	int32 node_id = 2;
 	Stats stats = 3;
@@ -858,11 +863,14 @@ message Node {
 	repeated msgHeader recv_msg_list = 57;
 
 	Snapshot scan_snapshot = 58;
-	
+
 	bool recursive_cte = 59;
-	
-	OnDuplicateAction on_duplicate_action = 60;
-	repeated UpdateCtx update_ctx_list = 61;
+
+	repeated UpdateCtx update_ctx_list = 60;
+
+    ApplyType apply_type = 61;
+
+	OnDuplicateAction on_duplicate_action = 62;
 }
 
 // Snapshot Represents a snapshot of the database

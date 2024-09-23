@@ -109,17 +109,12 @@ func (t *GCTable) getTombstones() map[string]*ObjectEntry {
 	return t.tombstones
 }
 
-// func (t *GCTable) getTombstonesLocked() map[string]*ObjectEntry {
-// 	t.Lock()
-// 	defer t.Unlock()
-// 	return t.tombstones
-// }
-
 // SoftGC is to remove objectentry that can be deleted from GCTable
 func (t *GCTable) SoftGC(
 	table *GCTable,
 	ts types.TS,
 	snapShotList map[uint32]containers.Vector,
+	pitrs *logtail.PitrInfo,
 	meta *logtail.SnapshotMeta,
 ) ([]string, map[uint32][]types.TS) {
 	var gc []string
@@ -133,8 +128,8 @@ func (t *GCTable) SoftGC(
 		meta.Unlock()
 		t.Unlock()
 	}()
-	gc = t.objectsComparedAndDeleteLocked(t.objects, table.objects, meta, snapList, ts)
-	gc = append(gc, t.objectsComparedAndDeleteLocked(t.tombstones, table.tombstones, meta, snapList, ts)...)
+	gc = t.objectsComparedAndDeleteLocked(t.objects, table.objects, meta, snapList, pitrs, ts)
+	gc = append(gc, t.objectsComparedAndDeleteLocked(t.tombstones, table.tombstones, meta, snapList, pitrs, ts)...)
 	return gc, snapList
 }
 
@@ -142,20 +137,22 @@ func (t *GCTable) objectsComparedAndDeleteLocked(
 	objects, comparedObjects map[string]*ObjectEntry,
 	meta *logtail.SnapshotMeta,
 	snapList map[uint32][]types.TS,
+	pitrList *logtail.PitrInfo,
 	ts types.TS,
 ) []string {
 	gc := make([]string, 0)
 	for name, entry := range objects {
 		objectEntry := comparedObjects[name]
 		tsList := meta.GetSnapshotListLocked(snapList, entry.table)
-		if tsList == nil {
+		pList := meta.GetPitrLocked(pitrList, entry.db, entry.table)
+		if tsList == nil && pList.IsEmpty() {
 			if objectEntry == nil && entry.commitTS.Less(&ts) {
 				gc = append(gc, name)
 				delete(t.objects, name)
 			}
 			continue
 		}
-		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, tsList, name) {
+		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, tsList, pList, name) {
 			gc = append(gc, name)
 			delete(t.objects, name)
 		}
@@ -163,18 +160,26 @@ func (t *GCTable) objectsComparedAndDeleteLocked(
 	return gc
 }
 
-func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, name string) bool {
-	if len(snapVec) == 0 {
+func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, pitrVec types.TS, name string) bool {
+	if len(snapVec) == 0 && len(pitrVec) == 0 {
+		logutil.Info("[soft GC]Snapshot Refers", zap.String("name", name))
 		return false
 	}
 	if obj.dropTS.IsEmpty() {
-		logutil.Debug("[soft GC]Snapshot Refers",
-			zap.String("name", name),
-			zap.String("snapTS", snapVec[0].ToString()),
-			zap.String("createTS", obj.createTS.ToString()),
-			zap.String("dropTS", obj.dropTS.ToString()))
 		return true
 	}
+
+	if !pitrVec.IsEmpty() {
+		if obj.dropTS.Greater(&pitrVec) {
+			logutil.Info("[soft GC]Pitr Refers",
+				zap.String("name", name),
+				zap.String("snapTS", pitrVec.ToString()),
+				zap.String("createTS", obj.createTS.ToString()),
+				zap.String("dropTS", obj.dropTS.ToString()))
+			return true
+		}
+	}
+
 	left, right := 0, len(snapVec)-1
 	for left <= right {
 		mid := left + (right-left)/2
@@ -304,8 +309,8 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		objectCount := 0
 		tombstoneCount := 0
 		if len(blocks) > 0 && err == nil {
-			ss := writer.GetObjectStats()
-			size = ss.OriginSize()
+			stats := writer.GetObjectStats()
+			size = stats.OriginSize()
 		}
 		if bats != nil {
 			objectCount = bats[ObjectList].Length()
