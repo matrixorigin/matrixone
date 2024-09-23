@@ -669,6 +669,17 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		return nil, nil
 	}
 
+	// insert pk col with default value
+	insertColMap := make(map[string]bool)
+	for _, name := range insertColsNameFromStmt {
+		insertColMap[name] = true
+	}
+	for col := range lmap.m {
+		if _, ok := insertColMap[col]; !ok {
+			return nil, nil
+		}
+	}
+
 	// colExprs will store the constant value expressions (or UUID value) for each primary key column by the order in insert value SQL
 	// that is, the key part of pkPosInValues, more info see the comment of func getPkOrderInValues
 	colExprs := make([][]*Expr, len(lmap.m))
@@ -867,10 +878,6 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				},
 			})
 		}
-	}
-
-	if filterExpr == nil {
-		return nil, nil
 	}
 
 	filterExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, filterExpr, proc, false, true)

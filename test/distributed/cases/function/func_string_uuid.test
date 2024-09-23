@@ -16,3 +16,8 @@ INSERT INTO namelists (id, name) VALUES ('019213b0-d7bd-7271-a681-49e9d979d8d3',
 -- @ignore:0
 SELECT * from namelists;
 Drop Table namelists;
+
+create table tttt(a int default 0 primary key, b int);
+insert into tttt (b) values(1);
+insert into tttt (b) values(1);
+drop table tttt;
