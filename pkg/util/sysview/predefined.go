@@ -233,7 +233,7 @@ var (
 		")"
 
 	InformationSchemaSchemataDDL = "CREATE VIEW information_schema.SCHEMATA AS SELECT " +
-		"dat_catalog_name AS CATALOG_NAME," +
+		"'def' AS CATALOG_NAME," +
 		"datname AS SCHEMA_NAME," +
 		"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
 		"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
