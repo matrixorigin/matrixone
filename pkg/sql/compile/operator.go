@@ -1699,6 +1699,18 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
+
+	case vm.DedupJoin:
+		arg := op.(*dedupjoin.DedupJoin)
+		ret.NeedHashMap = true
+		ret.Conditions = arg.Conditions[1]
+		ret.NeedBatches = true
+		//ret.NeedAllocateSels = true
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		}
+		ret.JoinMapTag = arg.JoinMapTag
+
 	default:
 		ret.Release()
 		panic(moerr.NewInternalErrorf(proc.Ctx, "unsupport join type '%v'", op.OpType()))

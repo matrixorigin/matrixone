@@ -30,6 +30,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.ObjectRef, []*plan.TableDef, error) {
+	objRefs := make([]*plan.ObjectRef, len(tables))
+	tableDefs := make([]*plan.TableDef, len(tables))
+	for i, tbl := range tables {
+		tn, ok := tbl.(*tree.TableName)
+		if !ok {
+			return nil, nil, moerr.NewUnsupportedDML(builder.GetContext(), "insert not into single table")
+		}
+		dbName := string(tn.SchemaName)
+		tblName := string(tn.ObjectName)
+		if len(dbName) == 0 {
+			dbName = builder.compCtx.DefaultDatabase()
+		}
+
+		objRefs[i], tableDefs[i] = builder.compCtx.Resolve(dbName, tblName, nil)
+		if tableDefs[i] == nil {
+			return nil, nil, moerr.NewNoSuchTable(builder.compCtx.GetContext(), dbName, tblName)
+		}
+		if tableDefs[i].TableType == catalog.SystemSourceRel {
+			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from source")
+		} else if tableDefs[i].TableType == catalog.SystemExternalRel {
+			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from external table")
+		} else if tableDefs[i].TableType == catalog.SystemViewRel {
+			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from view")
+		} else if tableDefs[i].TableType == catalog.SystemSequenceRel && builder.compCtx.GetContext().Value(defines.BgKey{}) == nil {
+			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "Cannot insert/update/delete from sequence")
+		}
+
+		if tableDefs[i].Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+			return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "fake primary key")
+		}
+	}
+
+	return objRefs, tableDefs, nil
+}
+
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (int32, error) {
 	var onDupAction plan.Node_OnDuplicateAction
 	if len(stmt.OnDuplicateUpdate) == 0 {
@@ -41,37 +77,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "on duplicate key update")
 	}
 
-	tables := tree.TableExprs{stmt.Table}
-	objRefs := make([]*plan.ObjectRef, len(tables))
-	tableDefs := make([]*plan.TableDef, len(tables))
-	for i, tbl := range tables {
-		tn, ok := tbl.(*tree.TableName)
-		if !ok {
-			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert not into single table")
-		}
-		dbName := string(tn.SchemaName)
-		tblName := string(tn.ObjectName)
-		if len(dbName) == 0 {
-			dbName = builder.compCtx.DefaultDatabase()
-		}
-
-		objRefs[i], tableDefs[i] = builder.compCtx.Resolve(dbName, tblName, nil)
-		if tableDefs[i] == nil {
-			return 0, moerr.NewNoSuchTable(builder.compCtx.GetContext(), dbName, tblName)
-		}
-		if tableDefs[i].TableType == catalog.SystemSourceRel {
-			return 0, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from source")
-		} else if tableDefs[i].TableType == catalog.SystemExternalRel {
-			return 0, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from external table")
-		} else if tableDefs[i].TableType == catalog.SystemViewRel {
-			return 0, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from view")
-		} else if tableDefs[i].TableType == catalog.SystemSequenceRel && builder.compCtx.GetContext().Value(defines.BgKey{}) == nil {
-			return 0, moerr.NewInvalidInput(builder.compCtx.GetContext(), "Cannot insert/update/delete from sequence")
-		}
-
-		if tableDefs[i].Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-			return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "fake primary key")
-		}
+	objRefs, tableDefs, err := builder.getTableDefs(tree.TableExprs{stmt.Table})
+	if err != nil {
+		return 0, err
 	}
 
 	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])

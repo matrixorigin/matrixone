@@ -28,9 +28,9 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 	}
 
 	//FIXME: optimize truncate table?
-	//if stmt.Where == nil && stmt.Limit == nil {
-	//	return 0, moerr.NewUnsupportedDML(builder.GetContext(), "rewrite to truncate table")
-	//}
+	if stmt.Where == nil && stmt.Limit == nil {
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "rewrite to truncate table")
+	}
 
 	aliasMap := make(map[string][2]string)
 	for _, tbl := range stmt.TableRefs {
