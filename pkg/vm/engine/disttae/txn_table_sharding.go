@@ -90,7 +90,8 @@ type txnTableDelegate struct {
 		tableID uint64
 		is      bool
 	}
-	isMock bool
+	isMock  bool
+	isLocal func() (bool, error)
 }
 
 func MockTableDelegate(
@@ -139,6 +140,7 @@ func newTxnTable(
 
 	tbl.shard.service = service
 	tbl.shard.is = false
+	tbl.isLocal = tbl.isLocalFunc
 
 	if service.Config().Enable &&
 		db.databaseId != catalog.MO_CATALOG_ID {
@@ -979,7 +981,7 @@ func (tbl *txnTableDelegate) GetProcess() any {
 	return tbl.origin.GetProcess()
 }
 
-func (tbl *txnTableDelegate) isLocal() (bool, error) {
+func (tbl *txnTableDelegate) isLocalFunc() (bool, error) {
 	if !tbl.shard.service.Config().Enable || // sharding not enabled
 		!tbl.shard.is || // sharding not enabled
 		(tbl.shard.policy == shard.Policy_Partition && tbl.origin.tableId == tbl.shard.tableID) { // partition table self.
