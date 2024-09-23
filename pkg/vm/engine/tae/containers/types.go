@@ -48,7 +48,9 @@ type Vector interface {
 	PreExtend(length int) error
 
 	WriteTo(w io.Writer) (int64, error)
+	WriteToV1(w io.Writer) (int64, error)
 	ReadFrom(r io.Reader) (int64, error)
+	ReadFromV1(r io.Reader) (int64, error)
 
 	// Shallow Ops
 	ShallowGet(i int) any

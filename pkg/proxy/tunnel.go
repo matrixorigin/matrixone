@@ -576,6 +576,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		p.mu.started = false
 		p.mu.cond.Broadcast()
 	}
+
+	var firstCond bool
+	var currSeq int16
 	var lastSeq int16 = -1
 	var rotated bool
 	prepareNextMessage := func() (terminate bool, err error) {
@@ -613,8 +616,6 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		// set txn status and cmd time within the mutex together.
 		// only server->client pipe need to set the txn status.
 		if p.name == pipeServerToClient {
-			var currSeq int16
-
 			// issue#16042
 			if len(tempBuf) > 3 {
 				currSeq = int16(tempBuf[3])
@@ -632,7 +633,27 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				rotated = false
 			}
 
-			inTxn, ok := checkTxnStatus(tempBuf)
+			// seqID is mainly used for server side. It records the sequence ID of
+			// each packet.
+			// In the case of "load data local infile" statement, client sends the
+			// first packet, then server sends response, which is "0xFB + filename",
+			// after that, client sends content of filename and an empty packet, at
+			// last, server sends OK packet. The sequence ID of this OK packet is not
+			// 1, and will cause the session cannot be transferred after this stmt
+			// finished.
+			// So, the solution is: when server sends 0xFB and the sequence ID of
+			// next packet is 3 bigger than last one, the next packet MUST be an
+			// OK packet, and the transfer is allowed.
+			// Related issue: https://github.com/matrixorigin/mo-cloud/issues/4088
+			var mustOK bool
+			if !firstCond {
+				firstCond = isLoadDataLocalInfileRespPacket(tempBuf)
+			} else {
+				mustOK = currSeq-lastSeq == 3
+				firstCond = false
+			}
+
+			inTxn, ok := checkTxnStatus(tempBuf, mustOK)
 			if ok {
 				p.mu.inTxn = inTxn
 			}
@@ -777,10 +798,10 @@ func txnStatus(status uint16) bool {
 }
 
 // handleOKPacket handles the OK packet from server to update the txn state.
-func handleOKPacket(msg []byte) bool {
+func handleOKPacket(msg []byte, mustOK bool) bool {
 	var mp *frontend.MysqlProtocolImpl
-	// the sequence ID should be 1 for OK packet.
-	if msg[3] != 1 {
+	// if the mustOK is false, then the sequence ID should be 1 for OK packet.
+	if !mustOK && msg[3] != 1 {
 		return txnStatus(0)
 	}
 	pos := 5
@@ -810,14 +831,14 @@ func handleEOFPacket(msg []byte) bool {
 // the first return value is the txn status, and the second return value
 // indicates if we can get the txn status from the packet. If it is a ERROR
 // packet, the second return value is false.
-func checkTxnStatus(msg []byte) (bool, bool) {
+func checkTxnStatus(msg []byte, mustOK bool) (bool, bool) {
 	ok := true
 	inTxn := true
 	// For the server->client pipe, we get the transaction status from the
 	// OK and EOF packet, which is used in connection transfer. If the session
 	// is in a transaction, a transfer should not start.
 	if isOKPacket(msg) {
-		inTxn = handleOKPacket(msg)
+		inTxn = handleOKPacket(msg, mustOK)
 	} else if isEOFPacket(msg) {
 		inTxn = handleEOFPacket(msg)
 	} else if isErrPacket(msg) {

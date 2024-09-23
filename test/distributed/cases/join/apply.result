@@ -1,0 +1,31 @@
+drop table if exists t;
+create table t (a int, b int, j json);
+insert into t values(1,3,'{"foo":1,"bar":2}'),(2,-2,'{"foo":11,"bar":22}');
+select * from t;
+a    b    j
+1    3    {"bar": 2, "foo": 1}
+2    -2    {"bar": 22, "foo": 11}
+select t.a,t.b,tf.* from t cross apply generate_series(t.a, t.b) tf;
+a    b    result
+1    3    1
+1    3    2
+1    3    3
+2    -2    2
+2    -2    1
+2    -2    0
+2    -2    -1
+2    -2    -2
+select t.a,t.b,tf.* from t cross apply generate_series(t.a, t.b) tf where t.a>1;
+a    b    result
+2    -2    2
+2    -2    1
+2    -2    0
+2    -2    -1
+2    -2    -2
+select t.a,tmp.* from t cross apply unnest(t.j,'$') tmp;
+a    col    seq    key    path    index    value    this
+1    t.j    0    bar    $.bar    null    2    {"bar": 2, "foo": 1}
+1    t.j    1    foo    $.foo    null    1    {"bar": 2, "foo": 1}
+2    t.j    0    bar    $.bar    null    22    {"bar": 22, "foo": 11}
+2    t.j    1    foo    $.foo    null    11    {"bar": 22, "foo": 11}
+drop table t;
