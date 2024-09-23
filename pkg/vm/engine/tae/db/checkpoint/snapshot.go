@@ -203,7 +203,7 @@ func ListSnapshotCheckpointWithMeta(
 		checkpointVersion = 3
 	}
 
-	entries, maxGlobalEnd := replayCheckpointEntries(bat, checkpointVersion)
+	entries, maxGlobalEnd := ReplayCheckpointEntries(bat, checkpointVersion)
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].end.Less(&entries[j].end)
 	})
