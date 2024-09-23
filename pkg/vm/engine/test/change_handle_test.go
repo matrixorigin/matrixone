@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -440,4 +441,151 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		assert.Equal(t, batchCount, 10)
 		assert.NoError(t, handle.Close())
 	}
+}
+
+func TestChangesHandle4(t *testing.T) {
+	var (
+		err          error
+		txn          client.TxnOperator
+		mp           *mpool.MPool
+		accountId    = catalog.System_Account
+		tableName    = "test_reader_table"
+		databaseName = "test_reader_database"
+
+		primaryKeyIdx int = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+	require.NoError(t, err)
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+	startTS := taeEngine.GetDB().TxnMgr.Now()
+
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	blockCnt := 10
+	batchCount := blockCnt * 2
+	rowsCount := objectio.BlockMaxRows * blockCnt
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bats := bat.Split(batchCount)
+
+	dntxn, dnrel := testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
+	assert.NoError(t, dnrel.Append(ctx, bats[0]))
+	assert.NoError(t, dntxn.Commit(ctx))
+
+	testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, true)
+
+	dntxn, dnrel = testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
+	assert.NoError(t, dnrel.Append(ctx, bats[1]))
+	assert.NoError(t, dntxn.Commit(ctx))
+	// write table
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		for idx := 3; idx < batchCount; idx++ {
+			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx])))
+		}
+
+		require.NoError(t, txn.Commit(ctx))
+	}
+	dnTxn, dnRel := testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
+	id := dnRel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	t.Log(taeEngine.GetDB().Catalog.SimplePPString(3))
+	assert.NoError(t, dnTxn.Commit(ctx))
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+
+	dntxn, dnrel = testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
+	assert.NoError(t, dnrel.Append(ctx, bats[2]))
+	assert.NoError(t, dntxn.Commit(ctx))
+
+	// check partition state, before flush
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		c := &checkHelper{}
+		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), mp)
+		assert.NoError(t, err)
+		for {
+			data, tombstone, _, err := handle.Next(ctx, mp)
+			if data == nil && tombstone == nil {
+				break
+			}
+			assert.NoError(t, err)
+			c.check(data, tombstone, t)
+			if tombstone != nil {
+				tombstone.Clean(mp)
+			}
+			if data != nil {
+				data.Clean(mp)
+			}
+		}
+		c.checkRows(rowsCount, 0, t)
+		assert.NoError(t, handle.Close())
+	}
+
+}
+
+type checkHelper struct {
+	prevDataTS, prevTombstoneTS       types.TS
+	totalDataRows, totalTombstoneRows int
+}
+
+func (c *checkHelper) check(data, tombstone *batch.Batch, t *testing.T) {
+	if data != nil {
+		maxTS := types.TS{}
+		commitTSVec := data.Vecs[len(data.Vecs)-1]
+		commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec)
+		for _, ts := range commitTSs {
+			assert.True(t, ts.GreaterEq(&c.prevDataTS))
+			assert.True(t, ts.GreaterEq(&c.prevTombstoneTS))
+			if ts.Greater(&maxTS) {
+				maxTS = ts
+			}
+		}
+		c.prevDataTS = maxTS
+		c.totalDataRows += commitTSVec.Length()
+	}
+	if tombstone != nil {
+		maxTS := types.TS{}
+		commitTSVec := data.Vecs[len(tombstone.Vecs)-1]
+		commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec)
+		for _, ts := range commitTSs {
+			assert.True(t, ts.Greater(&c.prevDataTS))
+			assert.True(t, ts.GreaterEq(&c.prevTombstoneTS))
+			if ts.Greater(&maxTS) {
+				maxTS = ts
+			}
+		}
+		c.prevTombstoneTS = maxTS
+		c.totalTombstoneRows += commitTSVec.Length()
+	}
+}
+
+func (c *checkHelper) checkRows(data, tombstone int, t *testing.T) {
+	assert.Equal(t, data, c.totalDataRows)
+	assert.Equal(t, tombstone, c.totalTombstoneRows)
 }
