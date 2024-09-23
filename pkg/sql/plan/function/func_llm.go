@@ -618,7 +618,7 @@ func LLMAsk3Arguments(parameters []*vector.Vector, result vector.FunctionResultW
 		extractSQL := fmt.Sprintf("SELECT chunk "+
 			"FROM `%s`.`%s` "+
 			"ORDER BY l2_distance(embedding, llm_embedding(\"%s\")) "+
-			"ASC LIMIT 2;",
+			"ASC LIMIT 3;",
 			llmDatabaseName,
 			llmTableName,
 			llmQuestion)
