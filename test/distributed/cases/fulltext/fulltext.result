@@ -6,7 +6,10 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
 (5, '每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。', '遠東兒童中文'),
 (6, '各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。', '中文短篇小說'),
-(7, '59個簡單的英文和中文短篇小說', '適合初學者');
+(7, '59個簡單的英文和中文短篇小說', '適合初學者'),
+(8, NULL, 'NOT INCLUDED'),
+(9, 'NOT INCLUDED BODY', NULL),
+(10, NULL, NULL);
 create fulltext index ftidx on src (body, title);
 select * from src where match(body) against('red');
 not supported: fulltext_match() not implemented yet.  Please create FULLTEXT INDEX.
@@ -19,10 +22,10 @@ id    body    title
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
-0    color is red    t1    0.4530953
-3    blue is not red    colorful    0.4530953
-1    car is yellow    crazy car    0.09061906
-2    sky is blue    no limit    0.09061906
+0    color is red    t1    0.74115014
+3    blue is not red    colorful    0.74115014
+1    car is yellow    crazy car    0.19301322
+2    sky is blue    no limit    0.19301322
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
@@ -38,11 +41,11 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    3.6247625
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    2.1748574
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    5.4813685
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    3.2622862
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    4.337995
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -72,8 +75,8 @@ id    body    title
 3    blue is not red    colorful
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
-2    sky is blue    no limit    0.36247623
-3    blue is not red    colorful    0.36247623
+2    sky is blue    no limit    0.5481369
+3    blue is not red    colorful    0.5481369
 select count(*) from src where match(title, body) against('red');
 count(*)
 2
