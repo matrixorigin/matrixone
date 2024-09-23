@@ -1387,7 +1387,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_APPLY:
 		internalMap := make(map[[2]int32][2]int32)
 
-		for _, expr := range node.TblFuncExprList {
+		right := builder.qry.Nodes[node.Children[1]]
+		rightTag := right.BindingTags[0]
+
+		for _, expr := range right.TblFuncExprList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
@@ -1420,8 +1423,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-		right := builder.qry.Nodes[node.Children[1]]
-		rightTag := right.BindingTags[0]
 		for i, col := range right.TableDef.Cols {
 			globalRef := [2]int32{rightTag, int32(i)}
 			if colRefCnt[globalRef] == 0 {
@@ -4183,13 +4184,13 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 }
 
 func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *BindContext) (int32, error) {
-	var applyType plan.Node_JoinType
+	var applyType plan.Node_ApplyType
 
 	switch tbl.ApplyType {
 	case tree.APPLY_TYPE_CROSS:
-		applyType = plan.Node_INNER
+		applyType = plan.Node_CROSSAPPLY
 	case tree.APPLY_TYPE_OUTER:
-		applyType = plan.Node_OUTER
+		applyType = plan.Node_OUTERAPPLY
 	}
 
 	leftCtx := NewBindContext(builder, ctx)
@@ -4212,9 +4213,9 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 		return 0, err
 	}
 	nodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_APPLY,
-		Children: []int32{leftChildID, rightChildID},
-		JoinType: applyType,
+		NodeType:  plan.Node_APPLY,
+		Children:  []int32{leftChildID, rightChildID},
+		ApplyType: applyType,
 	}, ctx)
 	return nodeID, nil
 }
