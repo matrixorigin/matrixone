@@ -1489,13 +1489,85 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		remapInfo.tip = "FilterList"
+		remapInfo.tip = "InsertDeleteCols"
 		for idx, expr := range node.InsertDeleteCols {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
 			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
+			}
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		for i, globalRef := range childRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+		if len(node.ProjectList) == 0 {
+			if len(childRemapping.localToGlobal) > 0 {
+				remapping.addColRef(childRemapping.localToGlobal[0])
+			}
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+					},
+				},
+			})
+		}
+
+	case plan.Node_MULTI_UPDATE:
+		for _, updateCtx := range node.UpdateCtxList {
+			for _, expr := range updateCtx.InsertCols {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+
+			for _, expr := range updateCtx.DeleteCols {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+		}
+
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+
+		remapInfo.tip = "UpdateCtxList"
+		for idx, updateCtx := range node.UpdateCtxList {
+			remapInfo.srcExprIdx = idx
+			for _, expr := range updateCtx.InsertCols {
+				increaseRefCnt(expr, -1, colRefCnt)
+				err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			for _, expr := range updateCtx.DeleteCols {
+				increaseRefCnt(expr, -1, colRefCnt)
+				err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 
