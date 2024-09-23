@@ -25,7 +25,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 )
 
-type MergeInterface interface {
+type dataSlice[T any] interface {
+	at(i, j int) T
+	length(i int) int
+	size() int
+}
+
+type fixedDataSlice[T any] struct {
+	cols [][]T
+}
+
+func (f *fixedDataSlice[T]) at(i, j int) T {
+	return f.cols[i][j]
+}
+func (f *fixedDataSlice[T]) length(i int) int {
+	return len(f.cols[i])
+}
+
+func (f *fixedDataSlice[T]) size() int {
+	return len(f.cols)
+}
+
+type varlenaDataSlice struct {
+	cols []struct {
+		data []types.Varlena
+		area []byte
+	}
+}
+
+func (v *varlenaDataSlice) at(i, j int) string {
+	return v.cols[i].data[j].UnsafeGetString(v.cols[i].area)
+}
+
+func (v *varlenaDataSlice) length(i int) int {
+	return len(v.cols[i].data)
+}
+
+func (v *varlenaDataSlice) size() int {
+	return len(v.cols)
+}
+
+type mergeInterface interface {
 	getNextPos() (int, int, int)
 }
 
@@ -36,15 +76,17 @@ type heapElem[T any] struct {
 	rowIndex int
 }
 
-// Merge we will sort by primary key or
+// merge we will sort by primary key or
 // clusterby key, so we just need one
 // vector of every batch.
-type Merge[T any] struct {
+type merge[T comparable] struct {
 	// the number of bacthes
 	size int
-	// convert the vecotrs which need to sort
-	// into cols data
-	cols [][]T
+
+	// convert the vectors which need to sort
+	// into ds data
+	ds dataSlice[T]
+
 	// pointer is used to specify
 	// which position we have gotten.
 	// for example, rowIdx[i] means
@@ -57,39 +99,39 @@ type Merge[T any] struct {
 	heap *heapSlice[T]
 }
 
-func newMerge[T any](compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) *Merge[T] {
-	m := &Merge[T]{
-		size:   len(cols),
-		cols:   cols,
-		rowIdx: make([]int, len(cols)),
+func newMerge[T comparable](compLess sort.LessFunc[T], ds dataSlice[T], nulls []*nulls.Nulls) mergeInterface {
+	m := &merge[T]{
+		size:   ds.size(),
+		ds:     ds,
+		rowIdx: make([]int, ds.size()),
 		nulls:  nulls,
-		heap:   newHeapSlice(len(cols), compLess),
+		heap:   newHeapSlice(ds.size(), compLess),
 	}
 	m.initHeap()
 	return m
 }
 
-func (m *Merge[T]) initHeap() {
-	for i := 0; i < len(m.cols); i++ {
-		if len(m.cols[i]) == 0 {
+func (m *merge[T]) initHeap() {
+	for i := 0; i < m.ds.size(); i++ {
+		if m.ds.length(i) == 0 {
 			m.rowIdx[i] = -1
 			m.size--
 			continue
 		}
 		heapPush(m.heap, heapElem[T]{
-			data:     m.cols[i][m.rowIdx[i]],
+			data:     m.ds.at(i, m.rowIdx[i]),
 			isNull:   m.nulls[i].Contains(uint64(m.rowIdx[i])),
 			batIndex: i,
 			rowIndex: m.rowIdx[i],
 		})
-		if m.rowIdx[i] >= len(m.cols[i]) {
+		if m.rowIdx[i] >= m.ds.length(i) {
 			m.rowIdx[i] = -1
 			m.size--
 		}
 	}
 }
 
-func (m *Merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
+func (m *merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
 	data := m.pushNext()
 	if data == nil {
 		// now, m.size is 0
@@ -98,20 +140,20 @@ func (m *Merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
 	return data.batIndex, data.rowIndex, m.size
 }
 
-func (m *Merge[T]) pushNext() *heapElem[T] {
+func (m *merge[T]) pushNext() *heapElem[T] {
 	if m.size == 0 {
 		return nil
 	}
 	data := heapPop(m.heap)
 	batchIndex := data.batIndex
 	m.rowIdx[batchIndex]++
-	if m.rowIdx[batchIndex] >= len(m.cols[batchIndex]) {
+	if m.rowIdx[batchIndex] >= m.ds.length(batchIndex) {
 		m.rowIdx[batchIndex] = -1
 		m.size--
 	}
 	if m.rowIdx[batchIndex] != -1 {
 		heapPush(m.heap, heapElem[T]{
-			data:     m.cols[batchIndex][m.rowIdx[batchIndex]],
+			data:     m.ds.at(batchIndex, m.rowIdx[batchIndex]),
 			isNull:   m.nulls[batchIndex].Contains(uint64(m.rowIdx[batchIndex])),
 			batIndex: batchIndex,
 			rowIndex: m.rowIdx[batchIndex],
@@ -203,56 +245,78 @@ func MergeSortBatches(
 	sinker SinkerT,
 	mp *mpool.MPool,
 ) error {
-	var merge MergeInterface
+	var merge mergeInterface
 	nulls := make([]*nulls.Nulls, len(batches))
 	for i, b := range batches {
 		nulls[i] = b.Vecs[sortKeyIdx].GetNulls()
 	}
 	switch batches[0].Vecs[sortKeyIdx].GetType().Oid {
 	case types.T_bool:
-		merge = newMerge(sort.BoolLess, getFixedCols[bool](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[bool]{getFixedCols[bool](batches, sortKeyIdx)}
+		merge = newMerge(sort.BoolLess, ds, nulls)
 	case types.T_bit:
-		merge = newMerge(sort.GenericLess[uint64], getFixedCols[uint64](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[uint64]{getFixedCols[uint64](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[uint64], ds, nulls)
 	case types.T_int8:
-		merge = newMerge(sort.GenericLess[int8], getFixedCols[int8](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[int8]{getFixedCols[int8](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[int8], ds, nulls)
 	case types.T_int16:
-		merge = newMerge(sort.GenericLess[int16], getFixedCols[int16](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[int16]{getFixedCols[int16](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[int16], ds, nulls)
 	case types.T_int32:
-		merge = newMerge(sort.GenericLess[int32], getFixedCols[int32](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[int32]{getFixedCols[int32](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[int32], ds, nulls)
 	case types.T_int64:
-		merge = newMerge(sort.GenericLess[int64], getFixedCols[int64](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[int64]{getFixedCols[int64](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[int64], ds, nulls)
 	case types.T_uint8:
-		merge = newMerge(sort.GenericLess[uint8], getFixedCols[uint8](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[uint8]{getFixedCols[uint8](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[uint8], ds, nulls)
 	case types.T_uint16:
-		merge = newMerge(sort.GenericLess[uint16], getFixedCols[uint16](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[uint16]{getFixedCols[uint16](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[uint16], ds, nulls)
 	case types.T_uint32:
-		merge = newMerge(sort.GenericLess[uint32], getFixedCols[uint32](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[uint32]{getFixedCols[uint32](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[uint32], ds, nulls)
 	case types.T_uint64:
-		merge = newMerge(sort.GenericLess[uint64], getFixedCols[uint64](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[uint64]{getFixedCols[uint64](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[uint64], ds, nulls)
 	case types.T_float32:
-		merge = newMerge(sort.GenericLess[float32], getFixedCols[float32](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[float32]{getFixedCols[float32](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[float32], ds, nulls)
 	case types.T_float64:
-		merge = newMerge(sort.GenericLess[float64], getFixedCols[float64](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[float64]{getFixedCols[float64](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[float64], ds, nulls)
 	case types.T_date:
-		merge = newMerge(sort.GenericLess[types.Date], getFixedCols[types.Date](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[types.Date]{getFixedCols[types.Date](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.Date], ds, nulls)
 	case types.T_datetime:
-		merge = newMerge(sort.GenericLess[types.Datetime], getFixedCols[types.Datetime](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[types.Datetime]{getFixedCols[types.Datetime](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.Datetime], ds, nulls)
 	case types.T_time:
-		merge = newMerge(sort.GenericLess[types.Time], getFixedCols[types.Time](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[types.Time]{getFixedCols[types.Time](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.Time], ds, nulls)
 	case types.T_timestamp:
-		merge = newMerge(sort.GenericLess[types.Timestamp], getFixedCols[types.Timestamp](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[types.Timestamp]{getFixedCols[types.Timestamp](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.Timestamp], ds, nulls)
 	case types.T_enum:
-		merge = newMerge(sort.GenericLess[types.Enum], getFixedCols[types.Enum](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[types.Enum]{getFixedCols[types.Enum](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.Enum], ds, nulls)
 	case types.T_decimal64:
-		merge = newMerge(sort.Decimal64Less, getFixedCols[types.Decimal64](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[types.Decimal64]{getFixedCols[types.Decimal64](batches, sortKeyIdx)}
+		merge = newMerge(sort.Decimal64Less, ds, nulls)
 	case types.T_decimal128:
-		merge = newMerge(sort.Decimal128Less, getFixedCols[types.Decimal128](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[types.Decimal128]{getFixedCols[types.Decimal128](batches, sortKeyIdx)}
+		merge = newMerge(sort.Decimal128Less, ds, nulls)
 	case types.T_uuid:
-		merge = newMerge(sort.UuidLess, getFixedCols[types.Uuid](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[types.Uuid]{getFixedCols[types.Uuid](batches, sortKeyIdx)}
+		merge = newMerge(sort.UuidLess, ds, nulls)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
-		merge = newMerge(sort.GenericLess[string], getStrCols(batches, sortKeyIdx), nulls)
+		ds := &varlenaDataSlice{getVarlenaCols(batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[string], ds, nulls)
 	case types.T_Rowid:
-		merge = newMerge(sort.RowidLess, getFixedCols[types.Rowid](batches, sortKeyIdx), nulls)
+		ds := &fixedDataSlice[types.Rowid]{getFixedCols[types.Rowid](batches, sortKeyIdx)}
+		merge = newMerge(sort.RowidLess, ds, nulls)
 	default:
 		panic(fmt.Sprintf("invalid type: %s", batches[0].Vecs[sortKeyIdx].GetType()))
 	}

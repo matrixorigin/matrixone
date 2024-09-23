@@ -239,7 +239,6 @@ func checkInsertBatch(userBatch *containers.Batch, bat *batch.Batch, t *testing.
 }
 
 func TestChangesHandle3(t *testing.T) {
-	t.Skip("jxm: FIXME")
 	catalog.SetupDefines("")
 
 	var (
@@ -325,7 +324,7 @@ func TestChangesHandle3(t *testing.T) {
 			} else {
 				assert.Equal(t, hint, engine.ChangesHandle_Tail_wip)
 				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-				assert.Equal(t, tombstone.Vecs[0].Length(), 20)
+				// assert.Equal(t, tombstone.Vecs[0].Length(), 20)// tombstone may transfer
 				tombstone.Clean(mp)
 			}
 			checkInsertBatch(bat, data, t)

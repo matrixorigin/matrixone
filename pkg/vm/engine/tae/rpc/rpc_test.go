@@ -16,16 +16,16 @@ package rpc
 
 import (
 	"context"
-	"github.com/stretchr/testify/require"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -60,34 +60,14 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	//100 objs, one obj contains 50 blocks, one block contains 10 rows.
 	taeBat := catalog.MockBatch(schema, 100*50*10)
 	defer taeBat.Close()
 	taeBats := taeBat.Split(100 * 50)
 
-	//taeBats[0] = taeBats[0].CloneWindow(0, 10)
-	//taeBats[1] = taeBats[1].CloneWindow(0, 10)
-	//taeBats[2] = taeBats[2].CloneWindow(0, 10)
-	//taeBats[3] = taeBats[3].CloneWindow(0, 10)
-
-	//sort by primary key
-	//_, err = mergesort.SortBlockColumns(taeBats[0].Vecs, 1)
-	//assert.Nil(t, err)
-	//_, err = mergesort.SortBlockColumns(taeBats[1].Vecs, 1)
-	//assert.Nil(t, err)
-	//_, err = mergesort.SortBlockColumns(taeBats[2].Vecs, 1)
-	//assert.Nil(t, err)
-
-	//moBats := make([]*batch.Batch, 4)
-	//moBats[0] = containers.CopyToCNBatch(taeBats[0])
-	//moBats[1] = containers.CopyToCNBatch(taeBats[1])
-	//moBats[2] = containers.CopyToCNBatch(taeBats[2])
-	//moBats[3] = containers.CopyToCNBatch(taeBats[3])
-
 	var objNames []objectio.ObjectName
-	var blkMetas []string
 	var stats []objectio.ObjectStats
 	offset := 0
 	for i := 0; i < 100; i++ {
@@ -95,25 +75,20 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		objNames = append(objNames, name)
 		writer, err := blockio.NewBlockWriterNew(fs, objNames[i], 0, nil)
 		assert.Nil(t, err)
-		for i := 0; i < 50; i++ {
-			_, err := writer.WriteBatch(containers.ToCNBatch(taeBats[offset+i]))
+		for j := 0; j < 50; j++ {
+			_, err = writer.WriteBatch(containers.ToCNBatch(taeBats[offset+j]))
 			assert.Nil(t, err)
-			//offset++
 		}
 		offset += 50
 		blocks, _, err := writer.Sync(context.Background())
 		assert.Nil(t, err)
 		assert.Equal(t, 50, len(blocks))
-		for _, blk := range blocks {
-			metaLoc := blockio.EncodeLocation(
-				writer.GetName(),
-				blk.GetExtent(),
-				uint32(taeBats[0].Vecs[0].Length()),
-				blk.GetID())
-			assert.Nil(t, err)
-			blkMetas = append(blkMetas, metaLoc.String())
-			stats = append(stats, writer.GetObjectStats(objectio.WithCNCreated()))
-		}
+
+		ss := writer.GetObjectStats(objectio.WithCNCreated())
+		stats = append(stats, ss)
+
+		require.Equal(t, int(50), int(ss.BlkCnt()))
+		require.Equal(t, int(50*10), int(ss.Rows()))
 	}
 
 	//create dbtest and tbtest;
@@ -173,19 +148,13 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	entries = append(entries, createTbEntries...)
 
 	//add 100 * 50 blocks from S3 into "tbtest" table
-	attrs := []string{catalog2.BlockMeta_MetaLoc, catalog2.ObjectMeta_ObjectStats}
-	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0), types.New(types.T_varchar, types.MaxVarcharLen, 0)}
+	attrs := []string{catalog2.ObjectMeta_ObjectStats}
+	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
-	offset = 0
-	for _, obj := range objNames {
+	for i, obj := range objNames {
 		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
-		for i := 0; i < 50; i++ {
-			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]), false)
-			//stats[offset+i].SetCNCreated()
-			metaLocBat.Vecs[1].Append([]byte(stats[offset+i][:]), false)
-		}
-		offset += 50
+		metaLocBat.Vecs[0].Append([]byte(stats[i][:]), false)
 		metaLocMoBat := containers.ToCNBatch(metaLocBat)
 		addS3BlkEntry, err := makePBEntry(INSERT, dbTestID,
 			tbTestID, dbName, schema.Name, obj.String(), metaLocMoBat)
@@ -225,10 +194,11 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	taeBat := catalog.MockBatch(schema, 40)
 	defer taeBat.Close()
+
 	taeBats := taeBat.Split(4)
 	taeBats[0] = taeBats[0].CloneWindow(0, 10)
 	taeBats[1] = taeBats[1].CloneWindow(0, 10)
@@ -264,21 +234,9 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	blocks, _, err := writer.Sync(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
-	metaLoc1 := blockio.EncodeLocation(
-		writer.GetName(),
-		blocks[0].GetExtent(),
-		uint32(taeBats[0].Vecs[0].Length()),
-		blocks[0].GetID(),
-	).String()
-	assert.Nil(t, err)
-	metaLoc2 := blockio.EncodeLocation(
-		writer.GetName(),
-		blocks[1].GetExtent(),
-		uint32(taeBats[1].Vecs[0].Length()),
-		blocks[1].GetID(),
-	).String()
-	assert.Nil(t, err)
 	stats1 := writer.GetObjectStats(objectio.WithCNCreated())
+	require.Equal(t, int(2), int(stats1.BlkCnt()))
+	require.Equal(t, int(20), int(stats1.Rows()))
 
 	//write taeBats[3] into file service
 	objName2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
@@ -290,14 +248,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	blocks, _, err = writer.Sync(context.Background())
 	assert.Equal(t, 1, len(blocks))
 	assert.Nil(t, err)
-	metaLoc3 := blockio.EncodeLocation(
-		writer.GetName(),
-		blocks[0].GetExtent(),
-		uint32(taeBats[3].Vecs[0].Length()),
-		blocks[0].GetID(),
-	).String()
+
 	stats3 := writer.GetObjectStats(objectio.WithCNCreated())
-	assert.Nil(t, err)
+	require.Equal(t, int(1), int(stats3.BlkCnt()))
+	require.Equal(t, int(10), int(stats3.Rows()))
 
 	//create db;
 	dbName := "dbtest"
@@ -375,7 +329,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	p.TableFn = func(te *catalog.TableEntry) error {
 		schema := te.GetLastestSchemaLocked(false)
 		if schema.Name == "tbtest" {
-			schema.BlockMaxRows = 10
+			schema.Extra.BlockMaxRows = 10
 		}
 		return nil
 	}
@@ -388,31 +342,25 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	entries = append(entries, insertEntry)
 
 	//add two non-appendable blocks from S3 into "tbtest" table
-	attrs := []string{catalog2.BlockMeta_MetaLoc, catalog2.ObjectMeta_ObjectStats}
-	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0), types.New(types.T_varchar, types.MaxVarcharLen, 0)}
+	attrs := []string{catalog2.ObjectMeta_ObjectStats}
+	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
+
 	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, vecOpts)
-	metaLocBat1.Vecs[0].Append([]byte(metaLoc1), false)
-	metaLocBat1.Vecs[0].Append([]byte(metaLoc2), false)
-	//stats1.SetCNCreated()
-	metaLocBat1.Vecs[1].Append([]byte(stats1[:]), false)
-	metaLocBat1.Vecs[1].Append([]byte(stats1[:]), false)
+	metaLocBat1.Vecs[0].Append([]byte(stats1[:]), false)
+
 	metaLocMoBat1 := containers.ToCNBatch(metaLocBat1)
 	addS3BlkEntry1, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName1.String(), metaLocMoBat1)
 	assert.NoError(t, err)
-	loc1 := vector.InefficientMustStrCol(metaLocMoBat1.GetVector(0))[0]
-	loc2 := vector.InefficientMustStrCol(metaLocMoBat1.GetVector(0))[1]
-	assert.Equal(t, metaLoc1, loc1)
-	assert.Equal(t, metaLoc2, loc2)
+
 	entries = append(entries, addS3BlkEntry1)
 
 	//add one non-appendable block from S3 into "tbtest" table
 	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, vecOpts)
-	metaLocBat2.Vecs[0].Append([]byte(metaLoc3), false)
-	//stats3.SetCNCreated()
-	metaLocBat2.Vecs[1].Append([]byte(stats3[:]), false)
+	metaLocBat2.Vecs[0].Append([]byte(stats3[:]), false)
+
 	metaLocMoBat2 := containers.ToCNBatch(metaLocBat2)
 	addS3BlkEntry2, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName2.String(), metaLocMoBat2)
@@ -485,7 +433,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	writer, err = blockio.NewBlockWriterNew(fs, objName3, 0, nil)
 	assert.Nil(t, err)
 	writer.SetDataType(objectio.SchemaTombstone)
-	writer.SetPrimaryKeyWithType(uint16(catalog.TombstonePrimaryKeyIdx), index.HBF,
+	writer.SetPrimaryKeyWithType(uint16(objectio.TombstonePrimaryKeyIdx), index.HBF,
 		index.ObjectPrefixFn,
 		index.BlockPrefixFn)
 	for _, view := range physicals {
@@ -568,8 +516,8 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	//DDL
 	//create db;
 	dbName := "dbtest"
@@ -817,8 +765,8 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	dbName := "dbtest"
 	ac := AccessInfo{
 		accountId: 0,
@@ -1118,8 +1066,8 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	dbName := "dbtest"
 	ac := AccessInfo{
 		accountId: 0,
@@ -1441,8 +1389,8 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	dbName := "dbtest"
 	ac := AccessInfo{
 		accountId: 0,
@@ -1773,8 +1721,8 @@ func TestApplyDeltaloc(t *testing.T) {
 
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
-	schema.BlockMaxRows = 5
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 2
 	//5 objs, one obj contains 2 blocks, one block contains 10 rows.
 	rowCount := 100 * 2 * 5
 	taeBat := catalog.MockBatch(schema, rowCount)
@@ -1842,7 +1790,7 @@ func TestApplyDeltaloc(t *testing.T) {
 		pkVec := containers.MakeVector(schema.GetPrimaryKey().GetType(), common.DefaultAllocator)
 		pkVec.Append(val, false)
 		bat := containers.NewBatch()
-		bat.AddVector(catalog.AttrRowID, rowIDVec)
+		bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
 		bat.AddVector(schema.GetPrimaryKey().GetName(), pkVec)
 		insertEntry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "", containers.ToCNBatch(bat))
 		assert.NoError(t, err)

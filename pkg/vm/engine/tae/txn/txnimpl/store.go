@@ -854,10 +854,10 @@ func (store *txnStore) CleanUp() {
 		db.CleanUp()
 	}
 }
-func (store *txnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls) error {
+func (store *txnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error {
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
 	}
-	return db.FillInWorkspaceDeletes(id, deletes)
+	return db.FillInWorkspaceDeletes(id, deletes, deleteStartOffset)
 }
