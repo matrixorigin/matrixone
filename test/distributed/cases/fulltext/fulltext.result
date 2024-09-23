@@ -78,7 +78,7 @@ select count(*) from src where match(title, body) against('red');
 count(*)
 2
 explain select match(body, title) against('red') from src where match(body, title) against('red');
-TP QURERY PLAN
+TP QUERY PLAN
 Project
   ->  Sort
         Sort Key: mo_fulltext_alias_0.score DESC

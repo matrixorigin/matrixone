@@ -32,7 +32,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 const (
@@ -141,8 +140,8 @@ func updateTombstoneBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool
 	//bat.Vecs[2].Free(mp) // phyaddr
 	bat.Vecs = []*vector.Vector{bat.Vecs[1], bat.Vecs[2]}
 	bat.Attrs = []string{
-		catalog.AttrPKVal,
-		catalog.AttrCommitTs}
+		objectio.TombstoneAttr_PK_Attr,
+		objectio.DefaultCommitTS_Attr}
 	applyTSFilterForBatch(bat, 1, start, end, mp)
 	sortBatch(bat, 1, mp)
 }
@@ -165,7 +164,7 @@ func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool
 		return
 	}
 	bat.Vecs = []*vector.Vector{pk, commitTS}
-	bat.Attrs = []string{catalog.AttrPKVal, catalog.AttrCommitTs}
+	bat.Attrs = []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 }
 func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 	commitTSVec, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, bat.Vecs[0].Length(), mp)
@@ -452,7 +451,7 @@ func newDataBatchWithBatch(src *batch.Batch) (data *batch.Batch) {
 		newVec := vector.NewVec(*vec.GetType())
 		data.Vecs = append(data.Vecs, newVec)
 	}
-	data.Attrs = append(data.Attrs, catalog.AttrCommitTs)
+	data.Attrs = append(data.Attrs, objectio.DefaultCommitTS_Attr)
 	newVec := vector.NewVec(types.T_TS.ToType())
 	data.Vecs = append(data.Vecs, newVec)
 	return
@@ -540,8 +539,8 @@ func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
 	if *bat == nil {
 		(*bat) = batch.NewWithSize(2)
 		(*bat).SetAttributes([]string{
-			catalog.AttrPKVal,
-			catalog.AttrCommitTs,
+			objectio.TombstoneAttr_PK_Attr,
+			objectio.DefaultCommitTS_Attr,
 		})
 		(*bat).Vecs[0] = vector.NewVec(*pkVec.GetType())
 		(*bat).Vecs[1] = vector.NewVec(types.T_TS.ToType())

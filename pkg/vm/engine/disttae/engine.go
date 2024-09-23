@@ -631,6 +631,16 @@ func (e *Engine) Hints() (h engine.Hints) {
 	return
 }
 
+func determineScanType(relData engine.RelData, readerNum int) (scanType int) {
+	scanType = NORMAL
+	if relData.DataCnt() < readerNum*SMALLSCAN_THRESHOLD || readerNum == 1 {
+		scanType = SMALL
+	} else if (readerNum * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
+		scanType = LARGE
+	}
+	return
+}
+
 func (e *Engine) BuildBlockReaders(
 	ctx context.Context,
 	p any,
@@ -657,6 +667,7 @@ func (e *Engine) BuildBlockReaders(
 		return nil, err
 	}
 
+	scanType := determineScanType(relData, newNum)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
 	for i := 0; i < newNum; i++ {
@@ -683,6 +694,7 @@ func (e *Engine) BuildBlockReaders(
 		if err != nil {
 			return nil, err
 		}
+		rd.scanType = scanType
 		rds = append(rds, rd)
 	}
 	return rds, nil

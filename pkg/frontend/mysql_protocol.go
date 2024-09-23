@@ -167,6 +167,10 @@ const (
 	DefaultMySQLState string = "HY000"
 )
 
+var (
+	gIO = NewIOPackage(true)
+)
+
 var _ MysqlRrWr = &MysqlProtocolImpl{}
 
 type debugStats struct {
@@ -203,7 +207,6 @@ type MysqlProtocolImpl struct {
 
 	sid string
 
-	//TODO: make it global
 	io IOPackage
 
 	tcpConn *Conn
@@ -3055,7 +3058,7 @@ func NewMysqlClientProtocol(sid string, connectionID uint32, tcp *Conn, maxBytes
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
 		sid:              sid,
-		io:               NewIOPackage(true),
+		io:               gIO,
 		tcpConn:          tcp,
 		salt:             salt,
 		connectionID:     connectionID,

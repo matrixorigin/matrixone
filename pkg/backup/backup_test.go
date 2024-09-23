@@ -86,9 +86,19 @@ func TestBackupData(t *testing.T) {
 	}
 	wg.Wait()
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
+
+	deletedRows := 0
 	{
 		txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 		testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
+
+		obj := testutil.GetOneObject(rel)
+		id := obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
+		err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+		require.NoError(t, err)
+		deletedRows = 1
+		testutil.CompactBlocks(t, 0, db.DB, "db", schema, false)
+
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
@@ -137,7 +147,7 @@ func TestBackupData(t *testing.T) {
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100), true)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
