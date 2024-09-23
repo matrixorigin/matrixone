@@ -56,7 +56,9 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 			shuffle.ctr.sels[i] = make([]int64, 0, colexec.DefaultBatchSize)
 		}
 	}
-	shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum))
+	if shuffle.GetShufflePool() == nil {
+		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum))
+	}
 	shuffle.ctr.shufflePool.Hold()
 	shuffle.ctr.ending = false
 	return nil

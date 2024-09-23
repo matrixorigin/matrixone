@@ -82,6 +82,10 @@ func (shuffle *Shuffle) SetShufflePool(sp *ShufflePool) {
 	shuffle.ctr.shufflePool = sp
 }
 
+func (shuffle *Shuffle) GetShufflePool() *ShufflePool {
+	return shuffle.ctr.shufflePool
+}
+
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if shuffle.RuntimeFilterSpec != nil {
 		shuffle.ctr.runtimeFilterHandled = false
