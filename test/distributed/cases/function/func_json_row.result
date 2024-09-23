@@ -187,7 +187,7 @@ null    1    [[1000,null,null,null,null,null]]
 select b, '[' || group_concat(t, t, t, t, t) || ']' as js from jrt group by b;
 b    js
 true    [tttttttttttttttttttttttttttttttttttttttt,tttt""tttttttt""tttttttt""tttttttt""tttttttt""tttt,tttt"""tttttttt"""tttttttt"""tttttttt"""tttttttt"""tttt,tttt""""tttttttt""""tttttttt""""tttttttt""""tttttttt""""tttt,tttt'tttttttt'tttttttt'tttttttt'tttttttt'tttt,tttt''tttttttt''tttttttt''tttttttt''tttttttt''tttt,tttt}tttttttt}tttttttt}tttttttt}tttttttt}tttt,ttt}tttttttt}tttttttt}tttttttt}tttttttt}ttttt,tttttttt[[[[tttttttt[[[[tttttttt[[[[tttttttt[[[[tttttttt[[[[,tttttttt]]]]tttttttt]]]]tttttttt]]]]tttttttt]]]]tttttttt]]]],tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt]
-false    [,tttttttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt]
+false    [ttt"tttttttt"tttttttt"tttttttt"tttttttt"ttttt,tttttttttttttttttttttttttttttttttttttttt]
 null    null
 select json_row(id, cast(vc as varbinary)) from jrt;
 invalid input: binary data not supported json_row: VARBINARY
