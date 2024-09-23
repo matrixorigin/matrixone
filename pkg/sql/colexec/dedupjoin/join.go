@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -69,6 +70,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := dedupJoin.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()
+
 	ctr := &dedupJoin.ctr
 	result := vm.NewCallResult()
 	var err error
@@ -81,6 +83,8 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			ctr.state = Probe
+
+		case Probe:
 			result, err = dedupJoin.Children[0].Call(proc)
 			if err != nil {
 				return result, err
@@ -104,8 +108,6 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			continue
-
 		case SendResult:
 			if dedupJoin.ctr.buf == nil {
 				dedupJoin.ctr.lastPos = 0
@@ -116,8 +118,6 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if setNil {
 					ctr.state = End
 				}
-
-				continue
 			} else {
 				if dedupJoin.ctr.lastPos >= len(dedupJoin.ctr.buf) {
 					ctr.state = End
@@ -126,6 +126,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Batch = dedupJoin.ctr.buf[dedupJoin.ctr.lastPos]
 				dedupJoin.ctr.lastPos++
 				result.Status = vm.ExecHasMore
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
 
@@ -150,6 +151,10 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 	}
 	ctr.batches = ctr.mp.GetBatches()
 	ctr.batchRowCount = ctr.mp.GetRowCount()
+	if ctr.batchRowCount > 0 {
+		ctr.matched = &bitmap.Bitmap{}
+		ctr.matched.InitWithSize(ctr.batchRowCount)
+	}
 	return
 }
 
