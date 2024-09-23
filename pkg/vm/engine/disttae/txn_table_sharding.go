@@ -251,28 +251,34 @@ func (tbl *txnTableDelegate) Ranges(
 		)
 	}
 
-	buf := morpc.NewBuffer()
-	defer buf.Close()
+	var blocks objectio.BlockInfoSlice
 	uncommitted, _ := tbl.origin.collectUnCommittedDataObjs(txnOffset)
-	buf.Mark()
-	for _, v := range uncommitted {
-		buf.EncodeBytes(v[:])
+	err := tbl.origin.rangesOnePart(
+		ctx,
+		nil,
+		tbl.origin.tableDef,
+		exprs,
+		&blocks,
+		tbl.origin.proc.Load(),
+		uncommitted,
+	)
+	if err != nil {
+		return nil, err
 	}
 
-	var rs []engine.RelData
-	err := tbl.forwardRead(
+	var rs engine.RelData
+	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadRanges,
 		func(param *shard.ReadParam) {
 			param.RangesParam.Exprs = exprs
-			param.RangesParam.UncommittedObjects = buf.GetMarkedData()
 		},
 		func(resp []byte) {
 			data, err := UnmarshalRelationData(resp)
 			if err != nil {
 				panic(err)
 			}
-			rs = append(rs, data)
+			rs = data
 		},
 	)
 	if err != nil {
@@ -280,10 +286,8 @@ func (tbl *txnTableDelegate) Ranges(
 	}
 
 	ret := NewBlockListRelationData(0)
-	for _, r := range rs {
-		blks := r.GetBlockInfoSlice()
-		ret.blklist.Append(blks)
-	}
+	ret.blklist.Append(rs.GetBlockInfoSlice())
+	ret.blklist.Append(blocks)
 	return ret, nil
 }
 
@@ -654,9 +658,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		localRelData, remoteRelData := group(shard)
 
 		srd := &shardingLocalReader{
-			//lrd:                   lrd,
-			tblDelegate: tbl,
-			//remoteRelData:         remoteRelData,
+			tblDelegate:           tbl,
 			remoteTombApplyPolicy: engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3,
 			remoteScanType:        scanType,
 		}

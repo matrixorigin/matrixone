@@ -220,18 +220,10 @@ func HandleShardingReadRanges(
 		return nil, err
 	}
 
-	var uncommittedRanges []objectio.ObjectStats
-	n := len(param.RangesParam.UncommittedObjects) / objectio.ObjectStatsLen
-	for i := 0; i < n; i++ {
-		var stat objectio.ObjectStats
-		stat.UnMarshal(param.RangesParam.UncommittedObjects[i*objectio.ObjectStatsLen : (i+1)*objectio.ObjectStatsLen])
-		uncommittedRanges = append(uncommittedRanges, stat)
-	}
-
 	ranges, err := tbl.doRanges(
 		ctx,
 		param.RangesParam.Exprs,
-		uncommittedRanges,
+		nil,
 	)
 	if err != nil {
 		return nil, err

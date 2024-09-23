@@ -1258,20 +1258,11 @@ func Test_ShardingLocalReader(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	//test set orderby
+	//Just for passing UT coverage check only.
 	shardingLRD := disttae.MockShardingLocalReader()
 	shardingLRD.SetOrderBy(nil)
 	shardingLRD.GetOrderBy()
 	shardingLRD.SetFilterZM(nil)
-	//assert.Panics(t, func() {
-	//	shardingLRD.SetOrderBy(nil)
-	//})
-	//assert.Panics(t, func() {
-	//	shardingLRD.GetOrderBy()
-	//})
-	//assert.Panics(t, func() {
-	//	shardingLRD.SetFilterZM(nil)
-	//})
 }
 
 func Test_SimpleReader(t *testing.T) {

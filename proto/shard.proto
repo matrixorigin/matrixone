@@ -253,7 +253,6 @@ message SizeParam {
 
 message RangesParam {
     repeated plan.Expr Exprs = 1;
-    bytes UncommittedObjects = 2;
 }
 
 message CollectTombstonesParam {
