@@ -1746,6 +1746,7 @@ func (tbl *txnTable) BuildReaders(
 		}
 	}
 
+	scanType := determineScanType(relData, newNum)
 	def := tbl.GetTableDef(ctx)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
@@ -1775,6 +1776,8 @@ func (tbl *txnTable) BuildReaders(
 		if err != nil {
 			return nil, err
 		}
+
+		rd.scanType = scanType
 		rds = append(rds, rd)
 	}
 	return rds, nil

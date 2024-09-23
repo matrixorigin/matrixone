@@ -1368,6 +1368,94 @@ func StrictSqlMode(proc *process.Process) (error, bool) {
 	return nil, false
 }
 
+func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternScan, createsql string) (*tree.ExternParam, error) {
+	param := &tree.ExternParam{}
+	if externScan.LoadType == tree.INLINE {
+		param.ScanType = int(externScan.LoadType)
+		param.Data = externScan.Data
+		param.Format = externScan.Format
+		param.Tail = new(tree.TailParameter)
+		param.Tail.IgnoredLines = externScan.IgnoredLines
+		param.Tail.Fields = &tree.Fields{
+			Terminated: &tree.Terminated{
+				Value: externScan.Terminated,
+			},
+			EnclosedBy: &tree.EnclosedBy{
+				Value: externScan.EnclosedBy[0],
+			},
+			EscapedBy: &tree.EscapedBy{
+				Value: externScan.EscapedBy[0],
+			},
+		}
+		param.JsonData = externScan.JsonType
+	} else {
+		if err := json.Unmarshal([]byte(createsql), param); err != nil {
+			return nil, err
+		}
+	}
+	param.ExternType = externScan.Type
+	param.FileService = c.proc.Base.FileService
+	param.Ctx = c.proc.Ctx
+
+	if externScan.Type == int32(plan.ExternType_EXTERNAL_TB) || externScan.Type == int32(plan.ExternType_RESULT_SCAN) {
+		switch param.ScanType {
+		case tree.INFILE:
+			if err := plan2.InitInfileOrStageParam(param, proc); err != nil {
+				return nil, err
+			}
+		case tree.S3:
+			if err := plan2.InitS3Param(param); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return param, nil
+}
+
+func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []string) (readParallel bool, writeParallel bool) {
+	if !param.Parallel {
+		return false, false
+	}
+	if param.Local || external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS {
+		return false, true
+	}
+	return true, true
+}
+
+func (c *Compile) getExternalFileListAndSize(n *plan.Node, param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
+	switch n.ExternScan.Type {
+	case int32(plan.ExternType_EXTERNAL_TB):
+		t := time.Now()
+		_, spanReadDir := trace.Start(c.proc.Ctx, "compileExternScan.ReadDir")
+		fileList, fileSize, err = plan2.ReadDir(param)
+		if err != nil {
+			spanReadDir.End()
+			return nil, nil, err
+		}
+		spanReadDir.End()
+		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, n, c.proc, fileList, fileSize)
+		if err != nil {
+			return nil, nil, err
+		}
+		if time.Since(t) > time.Second {
+			c.proc.Infof(c.proc.Ctx, "read dir cost %v", time.Since(t))
+		}
+	case int32(plan.ExternType_RESULT_SCAN):
+		fileList = strings.Split(param.Filepath, ",")
+		for i := range fileList {
+			fileList[i] = strings.TrimSpace(fileList[i])
+		}
+		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, n, c.proc, fileList, fileSize)
+		if err != nil {
+			return nil, nil, err
+		}
+	case int32(plan.ExternType_LOAD):
+		fileList = []string{param.Filepath}
+		fileSize = []int64{param.FileSize}
+	}
+	return fileList, fileSize, nil
+}
+
 func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
@@ -1381,123 +1469,22 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		}
 	}()
 
-	ID2Addr := make(map[int]int, 0)
-	mcpu := 0
-	for i := 0; i < len(c.cnList); i++ {
-		tmp := mcpu
-		mcpu += c.cnList[i].Mcpu
-		ID2Addr[i] = mcpu - tmp
-	}
-	param := &tree.ExternParam{}
-
-	if n.ExternScan == nil || n.ExternScan.Type != tree.INLINE {
-		err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
-		if err != nil {
-			return nil, err
-		}
-		if n.ExternScan == nil {
-			param.ExtTab = true
-		}
-	} else {
-		param.ScanType = int(n.ExternScan.Type)
-		param.Data = n.ExternScan.Data
-		param.Format = n.ExternScan.Format
-		param.Tail = new(tree.TailParameter)
-		param.Tail.IgnoredLines = n.ExternScan.IgnoredLines
-		param.Tail.Fields = &tree.Fields{
-			Terminated: &tree.Terminated{
-				Value: n.ExternScan.Terminated,
-			},
-			EnclosedBy: &tree.EnclosedBy{
-				Value: n.ExternScan.EnclosedBy[0],
-			},
-			EscapedBy: &tree.EscapedBy{
-				Value: n.ExternScan.EscapedBy[0],
-			},
-		}
-		param.JsonData = n.ExternScan.JsonType
+	param, err := c.getExternParam(c.proc, n.ExternScan, n.TableDef.Createsql)
+	if err != nil {
+		return nil, err
 	}
 
 	err, strictSqlMode := StrictSqlMode(c.proc)
 	if err != nil {
 		return nil, err
 	}
-
-	if param.ScanType == tree.S3 {
-		if !param.Init {
-			if err := plan2.InitS3Param(param); err != nil {
-				return nil, err
-			}
-		}
-		if param.Parallel {
-			mcpu = 0
-			ID2Addr = make(map[int]int, 0)
-			for i := 0; i < len(c.cnList); i++ {
-				tmp := mcpu
-				if c.cnList[i].Mcpu > external.S3ParallelMaxnum {
-					mcpu += external.S3ParallelMaxnum
-				} else {
-					mcpu += c.cnList[i].Mcpu
-				}
-				ID2Addr[i] = mcpu - tmp
-			}
-		}
-	} else if param.ScanType == tree.INLINE {
+	if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(n, param, strictSqlMode)
-	} else {
-		if err := plan2.InitInfileOrStageParam(param, c.proc); err != nil {
-			return nil, err
-		}
-
-		// if filepath is stage URL, ScanType may change to tree.S3.  check param.Parallel again
-		if param.ScanType == tree.S3 && param.Parallel {
-			mcpu = 0
-			ID2Addr = make(map[int]int, 0)
-			for i := 0; i < len(c.cnList); i++ {
-				tmp := mcpu
-				if c.cnList[i].Mcpu > external.S3ParallelMaxnum {
-					mcpu += external.S3ParallelMaxnum
-				} else {
-					mcpu += c.cnList[i].Mcpu
-				}
-				ID2Addr[i] = mcpu - tmp
-			}
-		}
 	}
 
-	t := time.Now()
-	param.FileService = c.proc.Base.FileService
-	param.Ctx = c.proc.Ctx
-	var fileList []string
-	var fileSize []int64
-	if !param.Local && !param.Init {
-		if param.QueryResult {
-			fileList = strings.Split(param.Filepath, ",")
-			for i := range fileList {
-				fileList[i] = strings.TrimSpace(fileList[i])
-			}
-		} else {
-			_, spanReadDir := trace.Start(ctx, "compileExternScan.ReadDir")
-			fileList, fileSize, err = plan2.ReadDir(param)
-			if err != nil {
-				spanReadDir.End()
-				return nil, err
-			}
-			spanReadDir.End()
-		}
-		fileList, fileSize, err = external.FilterFileList(ctx, n, c.proc, fileList, fileSize)
-		if err != nil {
-			return nil, err
-		}
-		if param.LoadFile && len(fileList) == 0 {
-			return nil, moerr.NewInvalidInput(ctx, "the file does not exist in load flow")
-		}
-	} else {
-		fileList = []string{param.Filepath}
-		fileSize = []int64{param.FileSize}
-	}
-	if time.Since(t) > time.Second {
-		c.proc.Infof(ctx, "read dir cost %v", time.Since(t))
+	fileList, fileSize, err := c.getExternalFileListAndSize(n, param)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(fileList) == 0 {
@@ -1515,86 +1502,16 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ret.Proc = c.proc.NewNoContextChildProc(0)
 		return []*Scope{ret}, nil
 	}
-	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
-		return c.compileExternScanParallel(n, param, fileList, fileSize, strictSqlMode)
-	}
 
-	t = time.Now()
-	var fileOffset [][]int64
+	readParallel, writeParallel := c.getReadWriteParallelFlag(param, fileList)
 
-	if param.Parallel {
-		visibleCols := make([]*plan.ColDef, 0)
-		if param.Strict {
-			for _, col := range n.TableDef.Cols {
-				if !col.Hidden {
-					visibleCols = append(visibleCols, col)
-				}
-			}
-		}
-
-		for i := 0; i < len(fileList); i++ {
-			param.Filepath = fileList[i]
-			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], visibleCols)
-			fileOffset = append(fileOffset, arr)
-			if err != nil {
-				return nil, err
-			}
-		}
+	if readParallel && writeParallel {
+		return c.compileExternScanParallelReadWrite(n, param, fileList, fileSize, strictSqlMode)
+	} else if writeParallel {
+		return c.compileExternScanParallelWrite(n, param, fileList, fileSize, strictSqlMode)
 	} else {
-		for i := 0; i < len(fileList); i++ {
-			param.Filepath = fileList[i]
-		}
+		return c.compileExternScanSerialReadWrite(n, param, fileList, fileSize, strictSqlMode)
 	}
-
-	if time.Since(t) > time.Second {
-		c.proc.Infof(ctx, "read file offset cost %v", time.Since(t))
-	}
-
-	var ss []*Scope
-	if param.Parallel {
-		ss = make([]*Scope, len(c.cnList))
-		for i := range ss {
-			ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
-		}
-	} else {
-		ss = make([]*Scope, 1)
-		ss[0] = c.constructScopeForExternal(c.addr, param.Parallel)
-	}
-	pre := 0
-
-	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		ss[i].IsLoad = true
-		count := ID2Addr[i]
-		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
-		for j := range fileOffsetTmp {
-			preIndex := pre
-			fileOffsetTmp[j] = &pipeline.FileOffset{}
-			fileOffsetTmp[j].Offset = make([]int64, 0)
-			if param.Parallel {
-				if param.Strict {
-					if 2*preIndex+2*count < len(fileOffset[j]) {
-						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-					} else if 2*preIndex < len(fileOffset[j]) {
-						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
-					} else {
-						continue
-					}
-				} else {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-				}
-			} else {
-				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{param.FileStartOff, -1}...)
-			}
-		}
-		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
-		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].setRootOperator(op)
-		pre += count
-	}
-	c.anal.isFirst = false
-
-	return ss, nil
 }
 
 func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
@@ -1623,9 +1540,8 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, 
 	return []*Scope{s}, nil
 }
 
-// load data infile, goes here for compressed file or parallel false
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
-func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	param.Parallel = false
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1656,6 +1572,101 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	scope.setRootOperator(dispatchOp)
 
 	ss[0].PreScopes = append(ss[0].PreScopes, scope)
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	visibleCols := make([]*plan.ColDef, 0)
+	if param.Strict {
+		for _, col := range n.TableDef.Cols {
+			if !col.Hidden {
+				visibleCols = append(visibleCols, col)
+			}
+		}
+	}
+
+	var mcpu int
+	var ID2Addr map[int]int = make(map[int]int, 0)
+
+	if param.ScanType == tree.S3 {
+		for i := 0; i < len(c.cnList); i++ {
+			tmp := mcpu
+			if c.cnList[i].Mcpu > external.S3ParallelMaxnum {
+				mcpu += external.S3ParallelMaxnum
+			} else {
+				mcpu += c.cnList[i].Mcpu
+			}
+			ID2Addr[i] = mcpu - tmp
+		}
+	} else {
+		for i := 0; i < len(c.cnList); i++ {
+			tmp := mcpu
+			mcpu += c.cnList[i].Mcpu
+			ID2Addr[i] = mcpu - tmp
+		}
+	}
+
+	var fileOffset [][]int64
+	for i := 0; i < len(fileList); i++ {
+		param.Filepath = fileList[i]
+		arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], visibleCols)
+		fileOffset = append(fileOffset, arr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	ss := make([]*Scope, len(c.cnList))
+	pre := 0
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
+		ss[i].IsLoad = true
+		count := ID2Addr[i]
+		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
+		for j := range fileOffsetTmp {
+			preIndex := pre
+			fileOffsetTmp[j] = &pipeline.FileOffset{}
+			fileOffsetTmp[j].Offset = make([]int64, 0)
+			if param.Parallel {
+				if param.Strict {
+					if 2*preIndex+2*count < len(fileOffset[j]) {
+						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+					} else if 2*preIndex < len(fileOffset[j]) {
+						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+					} else {
+						continue
+					}
+				} else {
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+				}
+			}
+		}
+		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[i].setRootOperator(op)
+		pre += count
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileExternScanSerialReadWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	ss := make([]*Scope, 1)
+	ss[0] = c.constructScopeForExternal(c.addr, param.Parallel)
+
+	currentFirstFlag := c.anal.isFirst
+	ss[0].IsLoad = true
+	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
+	for j := range fileOffsetTmp {
+		fileOffsetTmp[j] = &pipeline.FileOffset{}
+		fileOffsetTmp[j].Offset = make([]int64, 0)
+		fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{param.FileStartOff, -1}...)
+	}
+	op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	ss[0].setRootOperator(op)
 	c.anal.isFirst = false
 	return ss, nil
 }
