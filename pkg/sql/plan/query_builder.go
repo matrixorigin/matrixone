@@ -4202,10 +4202,11 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 	}
 	ctx.views = append(ctx.views, leftCtx.views...)
 
-	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, -leftChildID, leftCtx)
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx)
 	if err != nil {
 		return 0, err
 	}
+	builder.qry.Nodes[rightChildID].Children = nil //ignore the child of table_function in apply
 	ctx.views = append(ctx.views, rightCtx.views...)
 
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
@@ -4235,11 +4236,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		ctx.binder = NewTableBinder(builder, ctx)
 	} else {
 		ctx.binder = NewTableBinder(builder, leftCtx)
-		if preNodeId >= 0 {
-			childId = builder.copyNode(ctx, preNodeId)
-		} else {
-			childId = preNodeId
-		}
+		childId = builder.copyNode(ctx, preNodeId)
 	}
 
 	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
