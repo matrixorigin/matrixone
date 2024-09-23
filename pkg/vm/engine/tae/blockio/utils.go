@@ -229,3 +229,30 @@ func CheckTombstoneFile(
 	}
 	return
 }
+
+// CoarseFilterTombstoneObject It is used to filter out tombstone objects that do not contain any deleted data objects.
+// This is a coarse filter using ZM, so false positives may occur
+func CoarseFilterTombstoneObject(
+	ctx context.Context,
+	nextDeletedDataObject func() *objectio.ObjectId,
+	tombstoneObjects []objectio.ObjectStats,
+	fs fileservice.FileService,
+) (filtered []objectio.ObjectStats, err error) {
+	var bm, b bitmap.Bitmap
+	bm.InitWithSize(int64(len(tombstoneObjects)))
+	var objid *objectio.ObjectId
+	for objid = nextDeletedDataObject(); objid != nil; objid = nextDeletedDataObject() {
+		b, err = FindTombstonesOfObject(ctx, objid, tombstoneObjects, fs)
+		if err != nil {
+			return
+		}
+		bm.Or(&b)
+	}
+	filtered = make([]objectio.ObjectStats, 0, bm.Count())
+	itr := bm.Iterator()
+	for itr.HasNext() {
+		filtered = append(filtered, tombstoneObjects[itr.Next()])
+	}
+
+	return
+}
