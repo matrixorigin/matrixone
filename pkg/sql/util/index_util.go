@@ -73,18 +73,12 @@ func IsIndexTableName(tableName string) bool {
 		// Strip the prefix and check if the remaining part is a valid UUID
 		uuidPart := strings.TrimPrefix(tableName, catalog.UniqueIndexTableNamePrefix)
 		_, err := uuid.Parse(uuidPart)
-		if err != nil {
-			return false
-		}
-		return true
+		return err == nil
 	} else if strings.HasPrefix(tableName, catalog.SecondaryIndexTableNamePrefix) {
 		// Strip the prefix and check if the remaining part is a valid UUID
 		uuidPart := strings.TrimPrefix(tableName, catalog.SecondaryIndexTableNamePrefix)
 		_, err := uuid.Parse(uuidPart)
-		if err != nil {
-			return false
-		}
-		return true
+		return err == nil
 	}
 	return false // Not an index table name
 }
