@@ -307,3 +307,8 @@ drop table if exists t1;
 drop table if exists ex_table_null;
 drop table if exists ex_empty_table;
 drop table if exists join_table;
+
+drop table if exists ex_table_t1;
+create external table ex_table_t1(id int) infile{"filepath"=''}fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select * from ex_table_t1;
+drop table ex_table_t1;

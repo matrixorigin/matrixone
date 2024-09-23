@@ -782,6 +782,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 		data, err := relData.MarshalBinary()
 		require.NoError(t, err)
 		readerBuildParam.ReaderBuildParam.RelData = data
+		readerBuildParam.ReaderBuildParam.ScanType = disttae.SMALL
 		readerBuildParam.ReaderBuildParam.TombstoneApplyPolicy =
 			int32(engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3)
 		res, err := disttae.HandleShardingReadBuildReader(
@@ -1276,7 +1277,6 @@ func Test_SimpleReader(t *testing.T) {
 	proc := testutil3.NewProcessWithMPool("", mp)
 	pkType := types.T_int32.ToType()
 	bat1 := engine_util.NewCNTombstoneBatch(
-		"pk",
 		&pkType,
 	)
 	defer bat1.Clean(mp)
@@ -1340,7 +1340,6 @@ func Test_SimpleReader(t *testing.T) {
 	blockio.Start("")
 	defer blockio.Stop("")
 	bat2 := engine_util.NewCNTombstoneBatch(
-		"pk",
 		&pkType,
 	)
 	defer bat2.Clean(mp)

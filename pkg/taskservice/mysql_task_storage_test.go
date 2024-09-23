@@ -319,6 +319,20 @@ func TestAddCdcTask(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Greater(t, affected, 0)
 
+	mock.ExpectBegin()
+
+	dt.TaskStatus = task.TaskStatus_Paused
+	mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(
+		newDaemonTaskRows(t, dt),
+	)
+
+	_, err = storage.UpdateCdcTask(
+		context.Background(),
+		task.TaskStatus_PauseRequested,
+		callback2,
+	)
+	assert.Error(t, err)
+
 	mock.ExpectClose()
 	require.NoError(t, storage.Close())
 }

@@ -530,6 +530,9 @@ func TestPatternTuples_String(t *testing.T) {
 }
 
 func TestUriInfo_GetEncodedPassword(t *testing.T) {
+	AesKey = "test-aes-key-not-use-it-in-cloud"
+	defer func() { AesKey = "" }()
+
 	type fields struct {
 		SinkTyp       string
 		User          string

@@ -33,7 +33,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 const (
@@ -539,7 +538,7 @@ func newDataBatchWithBatch(src *batch.Batch) (data *batch.Batch) {
 		newVec := vector.NewVec(*vec.GetType())
 		data.Vecs = append(data.Vecs, newVec)
 	}
-	data.Attrs = append(data.Attrs, catalog.AttrCommitTs)
+	data.Attrs = append(data.Attrs, objectio.DefaultCommitTS_Attr)
 	newVec := vector.NewVec(types.T_TS.ToType())
 	data.Vecs = append(data.Vecs, newVec)
 	return
@@ -627,8 +626,8 @@ func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
 	if *bat == nil {
 		(*bat) = batch.NewWithSize(2)
 		(*bat).SetAttributes([]string{
-			catalog.AttrPKVal,
-			catalog.AttrCommitTs,
+			objectio.TombstoneAttr_PK_Attr,
+			objectio.DefaultCommitTS_Attr,
 		})
 		(*bat).Vecs[0] = vector.NewVec(*pkVec.GetType())
 		(*bat).Vecs[1] = vector.NewVec(types.T_TS.ToType())
