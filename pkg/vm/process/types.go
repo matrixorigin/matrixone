@@ -308,9 +308,6 @@ type Process struct {
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
 	Ctx    context.Context
 	Cancel context.CancelFunc
-
-	// TODO: move to dispatch operator.
-	DispatchNotifyCh chan *WrapCs
 }
 
 type sqlHelper interface {
@@ -319,6 +316,7 @@ type sqlHelper interface {
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 
+// WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
 	ReceiverDone bool
@@ -327,6 +325,11 @@ type WrapCs struct {
 	Cs           morpc.ClientSession
 	Err          chan error
 }
+
+// RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
+//
+// remote run Server will use this channel to send information to dispatch operator.
+type RemotePipelineInformationChannel chan *WrapCs
 
 func (proc *Process) GetMessageBoard() *message.MessageBoard {
 	return proc.Base.messageBoard

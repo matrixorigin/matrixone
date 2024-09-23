@@ -25,7 +25,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultScalingInterval = 3 * time.Second
+const defaultScalingInterval = 5 * time.Second
 
 type scaling struct {
 	logger *log.MOLogger

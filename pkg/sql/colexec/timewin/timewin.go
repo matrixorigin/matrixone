@@ -16,18 +16,14 @@ package timewin
 
 import (
 	"bytes"
-	"fmt"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-
-	"golang.org/x/exp/constraints"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -61,6 +57,15 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 				}
 			}
 		}
+		ctr.aggs = make([]aggexec.AggFuncExec, len(timeWin.Aggs))
+		for i, ag := range timeWin.Aggs {
+			ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
+			if config := ag.GetExtraConfig(); config != nil {
+				if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	if ctr.tsExe == nil {
@@ -68,11 +73,35 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 		if err != nil {
 			return err
 		}
+
+		if timeWin.WStart {
+			s, err := newTsExpr(timeWin.TsType, proc.Ctx)
+			if err != nil {
+				return err
+			}
+			ctr.startExe, err = colexec.NewExpressionExecutor(proc, s)
+			if err != nil {
+				return err
+			}
+		}
+
+		if timeWin.WEnd {
+			e := timeWin.EndExpr
+			if e == nil {
+				e, err = newTsExpr(timeWin.TsType, proc.Ctx)
+				if err != nil {
+					return err
+				}
+			}
+			ctr.endExe, err = colexec.NewExpressionExecutor(proc, e)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
-	ctr.status = initTag
-	ctr.tsOid = types.T(timeWin.Ts.Typ.Id)
-	ctr.group = -1
+	ctr.tsOid = types.T(timeWin.TsType.Id)
+	ctr.resetParam(timeWin)
 
 	ctr.colCnt = len(timeWin.Aggs)
 	if timeWin.WStart {
@@ -81,22 +110,6 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	if timeWin.WEnd {
 		ctr.colCnt++
 	}
-
-	switch ctr.tsOid {
-	case types.T_date:
-		ctr.calRes = calRes[types.Date]
-		ctr.eval = eval[types.Date]
-	case types.T_datetime:
-		ctr.calRes = calRes[types.Datetime]
-		ctr.eval = eval[types.Datetime]
-	case types.T_time:
-		ctr.calRes = calRes[types.Time]
-		ctr.eval = eval[types.Time]
-	case types.T_timestamp:
-		ctr.calRes = calRes[types.Timestamp]
-		ctr.eval = eval[types.Timestamp]
-	}
-
 	return nil
 }
 
@@ -115,51 +128,8 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	for {
 		switch ctr.status {
-		case dataTag:
-			result, err := vm.ChildrenCall(timeWin.GetChildren(0), proc, analyzer)
-			if err != nil {
-				return result, err
-			}
-			if result.Batch == nil {
-				if ctr.cur == hasGrow {
-					ctr.status = evalLastCur
-					continue
-				}
-				result.Status = vm.ExecStop
-				return result, nil
-			}
-
-			if len(ctr.bats) > ctr.i {
-				if ctr.bats[ctr.i] != nil {
-					ctr.bats[ctr.i].CleanOnlyData()
-				}
-				ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-				if err != nil {
-					return result, err
-				}
-			} else {
-				appBat, err := result.Batch.Dup(proc.Mp())
-				if err != nil {
-					return result, err
-				}
-				analyzer.Alloc(int64(appBat.Size()))
-				ctr.bats = append(ctr.bats, appBat)
-			}
-			ctr.i++
-
-			if err = ctr.evalVecs(proc); err != nil {
-				return result, err
-			}
-
-			ctr.curIdx = ctr.curIdx - ctr.preIdx
-			ctr.bats = ctr.bats[ctr.preIdx:]
-			ctr.tsVec = ctr.tsVec[ctr.preIdx:]
-			ctr.aggVec = ctr.aggVec[ctr.preIdx:]
-			ctr.preIdx = 0
-
-			ctr.status = evalTag
-		case initTag:
-			result, err := vm.ChildrenCall(timeWin.GetChildren(0), proc, analyzer)
+		case interval:
+			result, err := timeWin.GetChildren(0).Call(proc)
 			if err != nil {
 				return result, err
 			}
@@ -168,260 +138,390 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 
-			if len(ctr.bats) > ctr.i {
-				if ctr.bats[ctr.i] != nil {
-					ctr.bats[ctr.i].CleanOnlyData()
-				}
-				ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-				if err != nil {
-					return result, err
-				}
-			} else {
-				appBat, err := result.Batch.Dup(proc.Mp())
-				if err != nil {
-					return result, err
-				}
-				analyzer.Alloc(int64(appBat.Size()))
-				ctr.bats = append(ctr.bats, appBat)
-			}
-			ctr.i++
-
-			if err = ctr.evalVecs(proc); err != nil {
-				return result, err
-			}
-			if err = ctr.firstWindow(timeWin, proc); err != nil {
-				return result, err
-			}
-			ctr.aggs = make([]aggexec.AggFuncExec, len(timeWin.Aggs))
-			for i, ag := range timeWin.Aggs {
-				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
-				if config := ag.GetExtraConfig(); config != nil {
-					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
-						return result, err
-					}
-				}
-			}
-			ctr.status = evalTag
-		case nextTag:
-			if err = ctr.nextWindow(timeWin, proc); err != nil {
-				return result, err
-			}
-			ctr.status = evalTag
-		case evalTag:
-
-			if err = ctr.eval(ctr, timeWin, proc); err != nil {
+			if err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
 			}
 
-		case resultTag:
+			if err = ctr.calResForInterval(timeWin, proc); err != nil {
+				return result, err
+			}
 
-			ctr.status = nextTag
-			result.Batch = ctr.rbat
+			result.Batch = ctr.bat
 			analyzer.Output(result.Batch)
 			return result, nil
-
-		case evalLastCur:
-
-			if err = ctr.calRes(ctr, timeWin, proc); err != nil {
+		case receive:
+			result, err := timeWin.GetChildren(0).Call(proc)
+			if err != nil {
 				return result, err
 			}
-			if ctr.pre == hasPre {
-				ctr.wstart = nil
-				ctr.wend = nil
-				ctr.status = evalLastPre
+			if result.Batch == nil {
+				result.Status = vm.ExecStop
+				return result, nil
+			}
+
+			if err = ctr.evalVector(result.Batch, proc); err != nil {
+				return result, err
+			}
+
+			if ctr.curVecIdx == 0 && ctr.curRowIdx == 0 {
+				ctr.status = firstWindow
 			} else {
-				ctr.status = endTag
+				ctr.status = nextWindow
 			}
 
-			result.Batch = ctr.rbat
-			analyzer.Output(result.Batch)
-			return result, nil
+		case firstWindow:
 
-		case evalLastPre:
-
-			if err = ctr.nextWindow(timeWin, proc); err != nil {
+			if err = ctr.firstWindow(timeWin); err != nil {
 				return result, err
 			}
-			ctr.aggs = make([]aggexec.AggFuncExec, len(timeWin.Aggs))
-			for i, ag := range timeWin.Aggs {
-				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
-				if config := ag.GetExtraConfig(); config != nil {
-					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
-						return result, err
+			ctr.status = fill
+
+		case nextWindow:
+
+			if err = ctr.nextWindow(timeWin); err != nil {
+				return result, err
+			}
+			ctr.status = fill
+
+		case nextBatch:
+			if ctr.curVecIdx < ctr.i-1 {
+				ctr.curVecIdx++
+				ctr.curRowIdx = 0
+				ctr.status = fill
+				break
+			}
+
+			if ctr.last {
+				ctr.wStart = append(ctr.wStart, ctr.left)
+				ctr.wEnd = append(ctr.wEnd, ctr.right)
+				ctr.status = flush
+				break
+			}
+
+			if ctr.end {
+				if ctr.preVecIdx == ctr.i-1 &&
+					ctr.preRowIdx == ctr.tsVec[ctr.preVecIdx].Length()-1 {
+					ctr.last = true
+					if ctr.lastVal < ctr.nextLeft {
+						ctr.wStart = append(ctr.wStart, ctr.left)
+						ctr.wEnd = append(ctr.wEnd, ctr.right)
+						ctr.status = flush
+						break
 					}
 				}
-			}
-			ctr.wstart = append(ctr.wstart, ctr.start)
-			ctr.wend = append(ctr.wend, ctr.end)
-			for _, ag := range ctr.aggs {
-				if err = ag.GroupGrow(1); err != nil {
-					return result, err
-				}
+				ctr.status = nextWindow
+				break
 			}
 
-			for i := ctr.preIdx; i < len(ctr.bats); i++ {
-				for k := ctr.preRow; k < ctr.bats[i].RowCount(); k++ {
-					for j, agg := range ctr.aggs {
-						if err = agg.Fill(0, k, []*vector.Vector{ctr.aggVec[i][j]}); err != nil {
+			result, err := timeWin.GetChildren(0).Call(proc)
+			if err != nil {
+				return result, err
+			}
+			if result.Batch == nil {
+				ctr.end = true
+				break
+			}
+
+			if err = ctr.evalVector(result.Batch, proc); err != nil {
+				return result, err
+			}
+
+			ctr.curVecIdx++
+			ctr.curRowIdx = 0
+
+			ctr.status = fill
+
+		case fill:
+
+			if err = ctr.fillRows(); err != nil {
+				return result, err
+			}
+
+		case flush:
+
+			if err = ctr.calRes(timeWin, proc); err != nil {
+				return result, err
+			}
+
+			if ctr.last {
+				ctr.status = end
+			} else {
+				ctr.status = nextWindow
+				for i, ag := range timeWin.Aggs {
+					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
+					if config := ag.GetExtraConfig(); config != nil {
+						if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
 							return result, err
 						}
 					}
 				}
-				ctr.preRow = 0
+				ctr.group = 0
+				for _, ag := range ctr.aggs {
+					if err := ag.GroupGrow(1); err != nil {
+						return result, err
+					}
+				}
+				ctr.withoutFill = true
 			}
 
-			if err = ctr.calRes(ctr, timeWin, proc); err != nil {
-				return result, err
-			}
-
-			ctr.status = endTag
-			result.Batch = ctr.rbat
+			result.Batch = ctr.bat
 			analyzer.Output(result.Batch)
 			return result, nil
 
-		case endTag:
+		case end:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			analyzer.Output(result.Batch)
 			return result, nil
+
 		}
 
 	}
 }
 
-const maxTimeWindowRows = 8192
+func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
+	col := &plan.Expr{
+		Typ: plan.Type{},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				ColPos: 0,
+			},
+		},
+	}
 
-func eval[T constraints.Integer](ctr *container, ap *TimeWin, proc *process.Process) (err error) {
-	end := T(ctr.end)
-	ts := vector.MustFixedColNoTypeCheck[T](ctr.tsVec[ctr.curIdx])
-	for ; ctr.curRow < len(ts); ctr.curRow++ {
-		if ts[ctr.curRow] >= T(ctr.nextStart) && ctr.pre == withoutPre {
-			ctr.preRow = ctr.curRow
-			ctr.preIdx = ctr.curIdx
-			ctr.pre = hasPre
-		}
-		if ts[ctr.curRow] < end {
-			if ctr.cur == withoutGrow {
-				ctr.wstart = append(ctr.wstart, ctr.start)
-				ctr.wend = append(ctr.wend, ctr.end)
-				for _, ag := range ctr.aggs {
-					if err = ag.GroupGrow(1); err != nil {
-						return err
-					}
-				}
-				ctr.cur = hasGrow
-				ctr.group++
+	typ.NotNullable = col.Typ.NotNullable
+	argsType := []types.Type{
+		types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale),
+		types.New(types.T(typ.Id), typ.Width, typ.Scale),
+	}
+	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
+				Args: []*plan.Expr{
+					col,
+					{
+						Typ: typ,
+						Expr: &plan.Expr_T{
+							T: &plan.TargetType{},
+						},
+					},
+				},
+			},
+		},
+		Typ: typ,
+	}, nil
+}
+
+func (ctr *container) nextWindow(t *TimeWin) error {
+	if !ctr.withoutFill {
+		ctr.wStart = append(ctr.wStart, ctr.left)
+		ctr.wEnd = append(ctr.wEnd, ctr.right)
+	}
+
+	ctr.left = ctr.nextLeft
+	ctr.right = ctr.nextRight
+
+	ctr.nextLeft = ctr.left + t.Sliding
+	ctr.nextRight = ctr.nextLeft + t.Interval
+
+	ctr.curVecIdx = ctr.preVecIdx
+	ctr.curRowIdx = ctr.preRowIdx
+
+	if !ctr.withoutFill {
+		for _, ag := range ctr.aggs {
+			if err := ag.GroupGrow(1); err != nil {
+				return err
 			}
+		}
+		ctr.group++
+	}
+	return nil
+}
+
+func (ctr *container) firstWindow(t *TimeWin) error {
+	val := vector.MustFixedColWithTypeCheck[types.Datetime](ctr.tsVec[ctr.curVecIdx])[ctr.curRowIdx]
+	ctr.left = val - val%t.Interval
+	ctr.right = ctr.left + t.Interval
+
+	ctr.nextLeft = ctr.left + t.Sliding
+	ctr.nextRight = ctr.nextLeft + t.Interval
+
+	for _, ag := range ctr.aggs {
+		if err := ag.GroupGrow(1); err != nil {
+			return err
+		}
+	}
+	ctr.group++
+	return nil
+}
+
+func (ctr *container) fillRows() error {
+	cnt := ctr.tsVec[ctr.curVecIdx].Length()
+	vals := vector.MustFixedColNoTypeCheck[types.Datetime](ctr.tsVec[ctr.curVecIdx])
+
+	outRange := false
+	ctr.withoutFill = true
+	for ; ctr.curRowIdx < cnt; ctr.curRowIdx++ {
+		if vals[ctr.curRowIdx] <= ctr.nextLeft {
+			ctr.preVecIdx = ctr.curVecIdx
+			ctr.preRowIdx = ctr.curRowIdx
+		}
+
+		if vals[ctr.curRowIdx] >= ctr.left && vals[ctr.curRowIdx] < ctr.right {
 			for j, agg := range ctr.aggs {
-				if err = agg.Fill(ctr.group, ctr.curRow, []*vector.Vector{ctr.aggVec[ctr.curIdx][j]}); err != nil {
+				if err := agg.Fill(ctr.group, ctr.curRowIdx, []*vector.Vector{ctr.aggVec[ctr.curVecIdx][j]}); err != nil {
 					return err
 				}
 			}
-		} else {
+			ctr.withoutFill = false
+		} else if vals[ctr.curRowIdx] >= ctr.right {
+			outRange = true
 			break
 		}
 	}
 
-	if ctr.curRow < len(ts) {
-
-		ctr.cur = withoutGrow
-		ctr.pre = withoutPre
-		ctr.curIdx = ctr.preIdx
-		ctr.curRow = ctr.preRow
-
-		if ctr.cur == hasGrow {
-			if ctr.group > maxTimeWindowRows {
-				if err = calRes[T](ctr, ap, proc); err != nil {
-					return err
-				}
-				ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
-				for i, ag := range ap.Aggs {
-					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
-					if config := ag.GetExtraConfig(); config != nil {
-						if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
-							return err
-						}
-					}
-				}
-				ctr.group = 0
-				ctr.status = resultTag
-				ctr.wstart = nil
-				ctr.wend = nil
-			}
+	if outRange {
+		if ctr.group > maxTimeWindowRows {
+			ctr.wStart = append(ctr.wStart, ctr.left)
+			ctr.wEnd = append(ctr.wEnd, ctr.right)
+			ctr.status = flush
 		} else {
-			ctr.status = nextTag
+			ctr.status = nextWindow
 		}
-
 	} else {
-		ctr.curIdx++
-		ctr.curRow = 0
-		ctr.status = dataTag
+		ctr.lastVal = vals[cnt-1]
+		ctr.status = nextBatch
 	}
-
-	return
+	return nil
 }
 
-func calRes[T constraints.Integer](ctr *container, ap *TimeWin, proc *process.Process) (err error) {
-	ctr.rbat = batch.NewWithSize(ctr.colCnt)
+const maxTimeWindowRows = 8192
+
+func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
+	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
 	for _, agg := range ctr.aggs {
 		vec, err := agg.Flush()
 		if err != nil {
 			return err
 		}
-		ctr.rbat.SetVector(int32(i), vec)
+		ctr.bat.SetVector(int32(i), vec)
 		i++
 	}
-	ctr.aggs = nil
+
+	if !ap.WStart && !ap.WEnd {
+		batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
+		return nil
+	}
+	bat := batch.NewWithSize(1)
 	if ap.WStart {
-		wstart := make([]T, len(ctr.wstart))
-		for t, v := range ctr.wstart {
-			wstart[t] = T(v)
-		}
-		if ctr.rbat.Vecs[int32(i)] != nil {
-			ctr.rbat.Vecs[int32(i)].CleanOnlyData()
+		if ctr.startVec != nil {
+			ctr.startVec.CleanOnlyData()
 		} else {
-			ctr.rbat.Vecs[int32(i)] = vector.NewVec(*ctr.tsTyp)
+			ctr.startVec = vector.NewVec(types.T_datetime.ToType())
 		}
-		err = vector.AppendFixedList(ctr.rbat.Vecs[int32(i)], wstart, nil, proc.Mp())
+		err = vector.AppendFixedList(ctr.startVec, ctr.wStart, nil, proc.Mp())
+		if err != nil {
+			return err
+		}
+
+		bat.SetVector(0, ctr.startVec)
+		batch.SetLength(bat, ctr.startVec.Length())
+		ctr.bat.Vecs[int32(i)], err = ctr.startExe.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
 		}
 		i++
 	}
+
 	if ap.WEnd {
-		wend := make([]T, len(ctr.wend))
-		for t, v := range ctr.wend {
-			wend[t] = T(v)
-		}
-		if ctr.rbat.Vecs[int32(i)] != nil {
-			ctr.rbat.Vecs[int32(i)].CleanOnlyData()
+		if ctr.endVec != nil {
+			ctr.endVec.CleanOnlyData()
 		} else {
-			ctr.rbat.Vecs[int32(i)] = vector.NewVec(*ctr.tsTyp)
+			ctr.endVec = vector.NewVec(types.T_datetime.ToType())
 		}
-		err = vector.AppendFixedList(ctr.rbat.Vecs[int32(i)], wend, nil, proc.Mp())
+		err = vector.AppendFixedList(ctr.endVec, ctr.wEnd, nil, proc.Mp())
+		if err != nil {
+			return err
+		}
+
+		bat.SetVector(0, ctr.endVec)
+		batch.SetLength(bat, ctr.endVec.Length())
+		ctr.bat.Vecs[int32(i)], err = ctr.endExe.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
 		}
 	}
-	batch.SetLength(ctr.rbat, ctr.rbat.Vecs[0].Length())
+
+	batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
+	ctr.wStart = nil
+	ctr.wEnd = nil
 	return nil
 }
 
-func (ctr *container) peekBatch(i int) *batch.Batch {
-	return ctr.bats[i]
+func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {
+	ctr.bat = batch.NewWithSize(ctr.colCnt)
+	i := 0
+	for _, vec := range ctr.aggVec[ctr.i-1] {
+		ctr.bat.SetVector(int32(i), vec)
+		i++
+	}
+
+	if !ap.WStart && !ap.WEnd {
+		batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
+		return nil
+	}
+	bat := batch.NewWithSize(1)
+	if ap.WStart {
+		bat.SetVector(0, ctr.tsVec[ctr.i-1])
+		batch.SetLength(bat, ctr.tsVec[ctr.i-1].Length())
+		ctr.bat.Vecs[int32(i)], err = ctr.startExe.Eval(proc, []*batch.Batch{bat}, nil)
+		if err != nil {
+			return err
+		}
+		i++
+	}
+
+	if ap.WEnd {
+		bat.SetVector(0, ctr.tsVec[ctr.i-1])
+		batch.SetLength(bat, ctr.tsVec[ctr.i-1].Length())
+		ctr.bat.Vecs[int32(i)], err = ctr.endExe.Eval(proc, []*batch.Batch{bat}, nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
+	ctr.wStart = nil
+	ctr.wEnd = nil
+	return nil
 }
 
-func (ctr *container) evalVecs(proc *process.Process) error {
-	vec, err := ctr.tsExe.Eval(proc, []*batch.Batch{ctr.peekBatch(ctr.curIdx)}, nil)
+func (ctr *container) evalVector(bat *batch.Batch, proc *process.Process) error {
+	if err := ctr.evalTsVector(bat, proc); err != nil {
+		return err
+	}
+	if err := ctr.evalAggVector(bat, proc); err != nil {
+		return err
+	}
+	ctr.i++
+	return nil
+}
+
+func (ctr *container) evalTsVector(bat *batch.Batch, proc *process.Process) error {
+	vec, err := ctr.tsExe.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return err
 	}
-	ctr.tsTyp = vec.GetType()
 
-	if len(ctr.tsVec) > ctr.tsIndex {
-		ctr.tsVec[ctr.tsIndex].CleanOnlyData()
-		if err = ctr.tsVec[ctr.tsIndex].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+	if len(ctr.tsVec) > ctr.i {
+		ctr.tsVec[ctr.i].CleanOnlyData()
+		if err = ctr.tsVec[ctr.i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 			return err
 		}
 	} else {
@@ -431,16 +531,12 @@ func (ctr *container) evalVecs(proc *process.Process) error {
 		}
 		ctr.tsVec = append(ctr.tsVec, tv)
 	}
-	ctr.tsIndex++
 
-	if err = ctr.evalAggVector(ctr.peekBatch(ctr.curIdx), proc); err != nil {
-		return err
-	}
 	return nil
 }
 
 func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) error {
-	f := len(ctr.aggVec) > ctr.aggIndex
+	f := len(ctr.aggVec) > ctr.i
 	if !f {
 		ctr.aggVec = append(ctr.aggVec, make([]*vector.Vector, len(ctr.aggExe)))
 	}
@@ -451,12 +547,12 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 				return err
 			}
 			if f {
-				ctr.aggVec[ctr.aggIndex][i].CleanOnlyData()
-				if err = ctr.aggVec[ctr.aggIndex][i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+				ctr.aggVec[ctr.i][i].CleanOnlyData()
+				if err = ctr.aggVec[ctr.i][i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
 				}
 			} else {
-				ctr.aggVec[ctr.aggIndex][i], err = vec.Dup(proc.Mp())
+				ctr.aggVec[ctr.i][i], err = vec.Dup(proc.Mp())
 				if err != nil {
 					return err
 				}
@@ -464,289 +560,5 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 		}
 	}
 
-	ctr.aggIndex++
 	return nil
-}
-
-func (ctr *container) nextWindow(ap *TimeWin, proc *process.Process) error {
-	m := ap.Interval
-	if ap.Sliding != nil {
-		m = ap.Sliding
-	}
-	switch ctr.tsOid {
-	case types.T_date:
-		ctr.start = ctr.nextStart
-
-		nextStart, err := doDateAdd(types.Date(ctr.start), m.Val, m.Typ)
-		if err != nil {
-			return err
-		}
-		ctr.nextStart = int64(nextStart)
-
-		end, err := doDateAdd(types.Date(ctr.start), ap.Interval.Val, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-		ctr.end = int64(end)
-	case types.T_datetime:
-		ctr.start = ctr.nextStart
-
-		nextStart, err := doDatetimeAdd(types.Datetime(ctr.start), m.Val, m.Typ)
-		if err != nil {
-			return err
-		}
-		ctr.nextStart = int64(nextStart)
-
-		end, err := doDatetimeAdd(types.Datetime(ctr.start), ap.Interval.Val, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-		ctr.end = int64(end)
-	case types.T_time:
-		ctr.start = ctr.nextStart
-
-		nextStart, err := doTimeAdd(types.Time(ctr.start), m.Val, m.Typ)
-		if err != nil {
-			return err
-		}
-		ctr.nextStart = int64(nextStart)
-
-		end, err := doTimeAdd(types.Time(ctr.start), ap.Interval.Val, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-		ctr.end = int64(end)
-	case types.T_timestamp:
-		ctr.start = ctr.nextStart
-
-		nextStart, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, types.Timestamp(ctr.start), m.Val, m.Typ)
-		if err != nil {
-			return err
-		}
-		ctr.nextStart = int64(nextStart)
-
-		end, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, types.Timestamp(ctr.start), ap.Interval.Val, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-		ctr.end = int64(end)
-	}
-	return nil
-}
-
-func (ctr *container) firstWindow(ap *TimeWin, proc *process.Process) (err error) {
-	m := ap.Interval
-	if ap.Sliding != nil {
-		m = ap.Sliding
-	}
-
-	vec := ctr.tsVec[ctr.curIdx]
-	switch ctr.tsOid {
-	case types.T_date:
-		ts := vector.MustFixedColNoTypeCheck[types.Date](vec)[0]
-		start, err := doDateSub(ts, ap.Interval.Val/2, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-
-		end, err := doDateSub(start, ap.Interval.Val, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-
-		ctr.start = int64(start)
-		ctr.end = int64(end)
-	case types.T_datetime:
-		ts := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[0]
-		start, err := doDatetimeSub(ts, ap.Interval.Val/2, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-
-		end, err := doDatetimeSub(start, ap.Interval.Val, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-
-		ctr.start = int64(start)
-		ctr.end = int64(end)
-	case types.T_time:
-		ts := vector.MustFixedColNoTypeCheck[types.Time](vec)[0]
-		start, err := doTimeSub(ts, ap.Interval.Val/2, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-
-		end, err := doTimeAdd(start, ap.Interval.Val, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-
-		ctr.start = int64(start)
-		ctr.end = int64(end)
-	case types.T_timestamp:
-		ts := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
-
-		itv, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, ts, ap.Interval.Val, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-		sld, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, ts, m.Val, m.Typ)
-		if err != nil {
-			return err
-		}
-		if sld > itv {
-			return moerr.NewInvalidInput(proc.Ctx, "sliding value should be smaller than the interval value")
-		}
-
-		start, err := roundTimestamp(proc.GetSessionInfo().TimeZone, ts, ap.Interval.Val, ap.Interval.Typ, proc)
-		if err != nil {
-			return err
-		}
-		ctr.start = int64(start)
-
-		nextStart, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, start, m.Val, m.Typ)
-		if err != nil {
-			return err
-		}
-		ctr.nextStart = int64(nextStart)
-
-		end, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, start, ap.Interval.Val, ap.Interval.Typ)
-		if err != nil {
-			return err
-		}
-		ctr.end = int64(end)
-	default:
-		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("%s as ts in time window", vec.GetType().Oid.String()))
-	}
-	return nil
-}
-
-func doTimeAdd(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, error) {
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return 0, err
-	}
-	t, success := start.AddInterval(diff, iTyp)
-	if success {
-		return t, nil
-	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("time", "")
-	}
-}
-
-func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return 0, err
-	}
-	dt, success := start.AddInterval(diff, iTyp, types.DateTimeType)
-	if success {
-		return dt, nil
-	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
-	}
-}
-
-func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return 0, err
-	}
-	dt, success := start.ToDatetime().AddInterval(diff, iTyp, types.DateType)
-	if success {
-		return dt.ToDate(), nil
-	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("date", "")
-	}
-}
-
-func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return 0, err
-	}
-	dt, success := start.ToDatetime(loc).AddInterval(diff, iTyp, types.DateTimeType)
-	if success {
-		return dt.ToTimestamp(loc), nil
-	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
-	}
-}
-
-func roundTimestamp(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType, proc *process.Process) (types.Timestamp, error) {
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return 0, err
-	}
-	dt := start.ToDatetime(loc)
-	var num int64
-	switch iTyp {
-	//case types.MicroSecond:
-	//	num = diff
-	case types.Second:
-		num = diff * types.MicroSecsPerSec
-	case types.Minute:
-		num = diff * types.SecsPerMinute * types.MicroSecsPerSec
-	case types.Hour:
-		num = diff * types.SecsPerHour * types.MicroSecsPerSec
-	case types.Day:
-		num = diff * types.SecsPerDay * types.MicroSecsPerSec
-	default:
-		return 0, moerr.NewNotSupported(proc.Ctx, "Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit")
-	}
-	ts := types.Datetime(int64(dt) - (int64(dt)+num)%num)
-	return ts.ToTimestamp(loc), nil
-}
-
-func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return 0, err
-	}
-	dt, success := start.ToDatetime().AddInterval(-diff, iTyp, types.DateType)
-	if success {
-		return dt.ToDate(), nil
-	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("date", "")
-	}
-}
-
-func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return 0, err
-	}
-	dt, success := start.AddInterval(-diff, iTyp, types.DateTimeType)
-	if success {
-		return dt, nil
-	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
-	}
-}
-
-//func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
-//	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-//	if err != nil {
-//		return 0, err
-//	}
-//	dt, success := start.ToDatetime(loc).AddInterval(-diff, iTyp, types.DateTimeType)
-//	if success {
-//		return dt.ToTimestamp(loc), nil
-//	} else {
-//		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
-//	}
-//}
-
-func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, error) {
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return 0, err
-	}
-	t, success := start.AddInterval(-diff, iTyp)
-	if success {
-		return t, nil
-	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("time", "")
-	}
 }

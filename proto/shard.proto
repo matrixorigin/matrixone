@@ -271,7 +271,8 @@ message KeyParam {
 message ReaderBuildParam {
     bytes relData = 1;
     plan.Expr expr = 2;
-    int32 tombstoneApplyPolicy = 3;
+    int32 scanType = 3;
+    int32 tombstoneApplyPolicy = 4;
 }
 
 message ReaderBuildResult {
