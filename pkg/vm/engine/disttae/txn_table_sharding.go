@@ -107,6 +107,7 @@ func MockTableDelegate(
 
 	tbl.shard.service = service
 	tbl.shard.is = false
+	tbl.isLocal = tbl.isLocalFunc
 
 	if service.Config().Enable &&
 		tbl.origin.db.databaseId != catalog.MO_CATALOG_ID {
