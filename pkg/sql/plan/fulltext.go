@@ -114,7 +114,12 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 		return 0, err
 	}
 
-	scanNode := builder.qry.Nodes[childId]
+	// CROSS APPLY childId is negative
+	newChildId := childId
+	if childId < 0 {
+		newChildId = -1 * childId
+	}
+	scanNode := builder.qry.Nodes[newChildId]
 	if scanNode.NodeType != plan.Node_TABLE_SCAN {
 		return 0, moerr.NewNoConfig(builder.GetContext(), "child node is not a TABLE SCAN")
 	}
@@ -142,7 +147,9 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		TblFuncExprList: exprs,
-		Children:        []int32{childId},
+	}
+	if childId >= 0 {
+		node.Children = []int32{childId}
 	}
 	return builder.appendNode(node, ctx), nil
 }
