@@ -130,8 +130,10 @@ func (tbl *txnTable) getBaseTable(isTombstone bool) *baseTable {
 	}
 	return tbl.dataTable
 }
-func (tbl *txnTable) PrePreareTransfer(phase string, ts types.TS) (err error) {
-	err = tbl.TransferDeletes(ts, phase)
+func (tbl *txnTable) PrePreareTransfer(
+	ctx context.Context, phase string, ts types.TS,
+) (err error) {
+	err = tbl.TransferDeletes(ctx, ts, phase)
 	tbl.transferedTS = ts
 	return
 }
@@ -175,7 +177,11 @@ func (tbl *txnTable) TransferDeleteIntent(
 func (tbl *txnTable) approxSize() int {
 	return tbl.dataTable.approxSize() + tbl.tombstoneTable.approxSize()
 }
-func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
+func (tbl *txnTable) TransferDeletes(
+	ctx context.Context,
+	ts types.TS,
+	phase string,
+) (err error) {
 	if tbl.store.rt.TransferTable == nil {
 		return
 	}
@@ -199,7 +205,9 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 		// transfer deltaloc
 		for _, obj := range softDeleteObjects {
 			tFindTombstone := time.Now()
-			sel, err := blockio.FindTombstonesOfObject(context.TODO(), *obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs.Service)
+			sel, err := blockio.FindTombstonesOfObject(
+				ctx, obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs.Service,
+			)
 			findTombstoneDuration += time.Since(tFindTombstone)
 			if err != nil {
 				return err

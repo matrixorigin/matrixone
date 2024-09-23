@@ -35,7 +35,7 @@ func (store *NoopTxnStore) StartTrace()        {}
 func (store *NoopTxnStore) TriggerTrace(uint8) {}
 func (store *NoopTxnStore) EndTrace()          {}
 
-func (store *NoopTxnStore) Freeze() error                                { return nil }
+func (store *NoopTxnStore) Freeze(_ context.Context) error               { return nil }
 func (store *NoopTxnStore) WaitPrepared(ctx context.Context) (err error) { return }
 func (store *NoopTxnStore) GetLSN() uint64                               { return 0 }
 func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                   {}

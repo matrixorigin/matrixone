@@ -135,7 +135,7 @@ func FindTombstonesOfBlock(
 
 func FindTombstonesOfObject(
 	ctx context.Context,
-	objectId objectio.ObjectId,
+	objectId *objectio.ObjectId,
 	tombstoneObjects []objectio.ObjectStats,
 	fs fileservice.FileService,
 ) (sels bitmap.Bitmap, err error) {

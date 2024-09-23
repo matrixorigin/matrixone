@@ -435,7 +435,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 	return
 }
 
-func (db *txnDB) Freeze() (err error) {
+func (db *txnDB) Freeze(ctx context.Context) (err error) {
 	for _, table := range db.tables {
 		if table.NeedRollback() {
 			if err = table.PrepareRollback(); err != nil {
@@ -445,7 +445,9 @@ func (db *txnDB) Freeze() (err error) {
 		}
 	}
 	for _, table := range db.tables {
-		if err = table.PrePreareTransfer(txnif.FreezePhase, table.store.rt.Now()); err != nil {
+		if err = table.PrePreareTransfer(
+			ctx, txnif.FreezePhase, table.store.rt.Now(),
+		); err != nil {
 			return
 		}
 	}
@@ -462,7 +464,11 @@ func (db *txnDB) approxSize() int {
 
 func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 	for _, table := range db.tables {
-		if err = table.PrePreareTransfer(txnif.PrePreparePhase, table.store.rt.Now()); err != nil {
+		if err = table.PrePreareTransfer(
+			ctx,
+			txnif.PrePreparePhase,
+			table.store.rt.Now(),
+		); err != nil {
 			return
 		}
 	}

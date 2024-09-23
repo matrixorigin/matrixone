@@ -39,7 +39,7 @@ var (
 )
 
 type Txn2PC interface {
-	Freeze() error
+	Freeze(ctx context.Context) error
 	PrepareRollback() error
 	ApplyRollback() error
 	PrePrepare(ctx context.Context) error

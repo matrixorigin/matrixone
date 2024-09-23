@@ -723,7 +723,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 	return
 }
 
-func (store *txnStore) Freeze() (err error) {
+func (store *txnStore) Freeze(ctx context.Context) (err error) {
 	for _, db := range store.dbs {
 		if db.NeedRollback() {
 			if err = db.PrepareRollback(); err != nil {
@@ -731,7 +731,7 @@ func (store *txnStore) Freeze() (err error) {
 			}
 			delete(store.dbs, db.entry.GetID())
 		}
-		if err = db.Freeze(); err != nil {
+		if err = db.Freeze(ctx); err != nil {
 			return
 		}
 	}
