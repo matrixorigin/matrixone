@@ -269,7 +269,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				}
 
 			case JoinSideRight:
-				if node.JoinType == plan.Node_INNER {
+				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_DEDUP {
 					rightPushdown = append(rightPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
