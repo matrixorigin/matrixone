@@ -329,10 +329,12 @@ func (r *aggFuncBytesResult) grows(more int) error {
 }
 
 func (r *aggFuncBytesResult) aggGet() []byte {
-	// todo: we cannot do simple optimization to get bytes here because result was not read-only.
-	//  the set method may change the max length of the vector.
-	//  if we want, we should add a flag to indicate that the vector item's length is <= types.VarlenaInlineSize.
-	return r.res.GetBytesAt(r.groupToSet)
+	// never return the source pointer directly.
+	//
+	// if not, append action outside like `r = append(r, "more")` will cause memory contamination to other row.
+	newr := r.res.GetBytesAt(r.groupToSet)
+	newr = newr[:len(newr):len(newr)]
+	return newr
 }
 
 func (r *aggFuncBytesResult) aggSet(v []byte) error {
