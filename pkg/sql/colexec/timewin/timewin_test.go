@@ -240,6 +240,120 @@ func TestAvgTwCache(t *testing.T) {
 	}
 }
 
+func TestAvgTwCacheDecimal64(t *testing.T) {
+	mg := newTestAggMemoryManager()
+
+	info := singleAggInfo{
+		aggID:     function.AggAvgTwCacheOverloadID,
+		distinct:  false,
+		argType:   types.T_decimal64.ToType(),
+		retType:   types.T_varchar.ToType(),
+		emptyNull: false,
+	}
+	//registerTheTestingCount(info.aggID, info.emptyNull)
+	executor := aggexec.MakeAgg(
+		mg,
+		info.aggID, info.distinct, info.argType)
+
+	inputs := make([]*vector.Vector, 3)
+	{
+		vs := make([]types.Decimal64, 4)
+		vec := vector.NewVec(types.T_decimal64.ToType())
+		require.NoError(t, vector.AppendFixedList(vec, vs, nil, mg.Mp()))
+		inputs[0] = vec
+		inputs[1] = vec
+		inputs[2] = vec
+	}
+	{
+		require.NoError(t, executor.GroupGrow(1))
+		// data Fill.
+		require.NoError(t, executor.Fill(0, 0, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.Fill(0, 1, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[2]}))
+	}
+	{
+		bs, err := aggexec.MarshalAggFuncExec(executor)
+		require.NoError(t, err)
+		ag, err := aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(mg.Mp()), bs)
+		require.NoError(t, err)
+		ag.Free()
+	}
+	{
+		// result check.
+		v, err := executor.Flush()
+		require.NoError(t, err)
+		{
+			require.NotNil(t, v)
+		}
+		v.Free(mg.Mp())
+	}
+	{
+		executor.Free()
+		// memory check.
+		for i := 1; i < len(inputs); i++ {
+			inputs[i].Free(mg.Mp())
+		}
+		require.Equal(t, int64(0), mg.Mp().CurrNB())
+	}
+}
+
+func TestAvgTwCacheDecimal128(t *testing.T) {
+	mg := newTestAggMemoryManager()
+
+	info := singleAggInfo{
+		aggID:     function.AggAvgTwCacheOverloadID,
+		distinct:  false,
+		argType:   types.T_decimal128.ToType(),
+		retType:   types.T_varchar.ToType(),
+		emptyNull: false,
+	}
+	//registerTheTestingCount(info.aggID, info.emptyNull)
+	executor := aggexec.MakeAgg(
+		mg,
+		info.aggID, info.distinct, info.argType)
+
+	inputs := make([]*vector.Vector, 3)
+	{
+		vs := make([]types.Decimal128, 4)
+		vec := vector.NewVec(types.T_decimal128.ToType())
+		require.NoError(t, vector.AppendFixedList(vec, vs, nil, mg.Mp()))
+		inputs[0] = vec
+		inputs[1] = vec
+		inputs[2] = vec
+	}
+	{
+		require.NoError(t, executor.GroupGrow(1))
+		// data Fill.
+		require.NoError(t, executor.Fill(0, 0, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.Fill(0, 1, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[2]}))
+	}
+	{
+		bs, err := aggexec.MarshalAggFuncExec(executor)
+		require.NoError(t, err)
+		ag, err := aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(mg.Mp()), bs)
+		require.NoError(t, err)
+		ag.Free()
+	}
+	{
+		// result check.
+		v, err := executor.Flush()
+		require.NoError(t, err)
+		{
+			require.NotNil(t, v)
+		}
+		v.Free(mg.Mp())
+	}
+	{
+		executor.Free()
+		// memory check.
+		for i := 1; i < len(inputs); i++ {
+			inputs[i].Free(mg.Mp())
+		}
+		require.Equal(t, int64(0), mg.Mp().CurrNB())
+	}
+}
+
 func TestAvgTwResult(t *testing.T) {
 	mg := newTestAggMemoryManager()
 
@@ -279,6 +393,74 @@ func TestAvgTwResult(t *testing.T) {
 		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[2]}))
 		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[3]}))
 		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[4]}))
+	}
+	{
+		bs, err := aggexec.MarshalAggFuncExec(executor)
+		require.NoError(t, err)
+		ag, err := aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(mg.Mp()), bs)
+		require.NoError(t, err)
+		ag.Free()
+	}
+	{
+		// result check.
+		v, err := executor.Flush()
+		require.NoError(t, err)
+		{
+			require.NotNil(t, v)
+		}
+		v.Free(mg.Mp())
+	}
+	{
+		executor.Free()
+		// memory check.
+		for i := 1; i < len(inputs); i++ {
+			inputs[i].Free(mg.Mp())
+		}
+		require.Equal(t, int64(0), mg.Mp().CurrNB())
+	}
+}
+
+func TestAvgTwResultDecimal(t *testing.T) {
+	mg := newTestAggMemoryManager()
+
+	info := singleAggInfo{
+		aggID:     function.AggAvgTwResultOverloadID,
+		distinct:  false,
+		argType:   types.T_varchar.ToType(),
+		retType:   types.T_decimal128.ToType(),
+		emptyNull: false,
+	}
+	//registerTheTestingCount(info.aggID, info.emptyNull)
+	executor := aggexec.MakeAgg(
+		mg,
+		info.aggID, info.distinct, info.argType)
+
+	inputType := info.argType
+	inputs := make([]*vector.Vector, 5)
+	{
+		// prepare the input data.
+		var err error
+
+		str := "agg test str: AppendStringList NewConstBytes AppendStringList"
+
+		vec := vector.NewVec(inputType)
+		require.NoError(t, vector.AppendStringList(vec, []string{str, str, str, str}, []bool{false, true, false, false}, mg.Mp()))
+		inputs[0] = vec
+		inputs[1] = vec
+		inputs[2] = vector.NewConstNull(inputType, 2, mg.Mp())
+		inputs[3], err = vector.NewConstBytes(inputType, []byte(str), 3, mg.Mp())
+		require.NoError(t, err)
+		inputs[4] = vector.NewVec(inputType)
+		require.NoError(t, vector.AppendStringList(inputs[4], []string{str, str, str, str}, nil, mg.Mp()))
+	}
+	{
+		require.NoError(t, executor.GroupGrow(1))
+		// data Fill.
+		require.NoError(t, executor.Fill(0, 0, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.Fill(0, 1, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[2]}))
+		require.Error(t, executor.BulkFill(0, []*vector.Vector{inputs[3]}))
+		require.Error(t, executor.BulkFill(0, []*vector.Vector{inputs[4]}))
 	}
 	{
 		bs, err := aggexec.MarshalAggFuncExec(executor)
