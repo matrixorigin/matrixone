@@ -40,6 +40,21 @@ func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *
 func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	astStr := tree.String(astExpr, dialect.MYSQL)
 
+	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
+		if astStr != TimeWindowEnd && astStr != TimeWindowStart {
+			b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
+		}
+		return &plan.Expr{
+			Typ: b.ctx.times[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.timeTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
 	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
 		return &plan.Expr{
 			Typ: b.ctx.groups[colPos].Typ,
@@ -82,21 +97,6 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.sampleTag,
-					ColPos: colPos,
-				},
-			},
-		}, nil
-	}
-
-	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
-		if astStr != TimeWindowEnd && astStr != TimeWindowStart {
-			b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
-		}
-		return &plan.Expr{
-			Typ: b.ctx.times[colPos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: b.ctx.timeTag,
 					ColPos: colPos,
 				},
 			},

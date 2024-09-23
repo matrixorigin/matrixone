@@ -344,6 +344,8 @@ func (op OpType) String() string {
 		return "ProductL2"
 	case Mock:
 		return "Mock"
+	case Apply:
+		return "Apply"
 	default:
 		return "Unknown"
 	}

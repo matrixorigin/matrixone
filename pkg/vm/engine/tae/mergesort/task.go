@@ -26,14 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
 )
 
@@ -84,36 +81,6 @@ func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*
 		rfs[i] = release
 	}
 	return newBat, releaseF
-}
-
-func GetNewWriter(
-	fs fileservice.FileService,
-	ver uint32, seqnums []uint16,
-	sortkeyPos int, sortkeyIsPK bool, isTombstone bool,
-) *blockio.BlockWriter {
-	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(fs, name, ver, seqnums)
-	if err != nil {
-		panic(err) // it is impossible
-	}
-	// has sortkey
-	if sortkeyPos >= 0 {
-		if sortkeyIsPK {
-			if isTombstone {
-				writer.SetPrimaryKeyWithType(
-					uint16(catalog.TombstonePrimaryKeyIdx),
-					index.HBF,
-					index.ObjectPrefixFn,
-					index.BlockPrefixFn,
-				)
-			} else {
-				writer.SetPrimaryKey(uint16(sortkeyPos))
-			}
-		} else { // cluster by
-			writer.SetSortKey(uint16(sortkeyPos))
-		}
-	}
-	return writer
 }
 
 func DoMergeAndWrite(
