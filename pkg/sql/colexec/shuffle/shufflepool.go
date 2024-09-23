@@ -33,9 +33,9 @@ type ShufflePool struct {
 }
 
 func NewShufflePool(bucketNum int32) *ShufflePool {
-	sp := &ShufflePool{
-		bucketNum: bucketNum,
-		locks:     make([]sync.Mutex, bucketNum)}
+	sp := &ShufflePool{bucketNum: bucketNum}
+	sp.batches = make([]*batch.Batch, sp.bucketNum)
+	sp.locks = make([]sync.Mutex, bucketNum)
 	return sp
 }
 
