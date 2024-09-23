@@ -488,7 +488,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.ShuffleType = t.ShuffleType
 		in.Shuffle.ShuffleColMax = t.ShuffleColMax
 		in.Shuffle.ShuffleColMin = t.ShuffleColMin
-		in.Shuffle.AliveRegCnt = t.AliveRegCnt
+		in.Shuffle.AliveRegCnt = t.BucketNum
 		in.Shuffle.ShuffleRangesUint64 = t.ShuffleRangeUint64
 		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
@@ -926,7 +926,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleType = t.ShuffleType
 		arg.ShuffleColMin = t.ShuffleColMin
 		arg.ShuffleColMax = t.ShuffleColMax
-		arg.AliveRegCnt = t.AliveRegCnt
+		arg.BucketNum = t.AliveRegCnt
 		arg.ShuffleRangeInt64 = t.ShuffleRangesInt64
 		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec

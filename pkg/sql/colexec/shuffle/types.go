@@ -29,7 +29,7 @@ type Shuffle struct {
 	ctr                container
 	ShuffleColIdx      int32
 	ShuffleType        int32
-	AliveRegCnt        int32
+	BucketNum          int32
 	ShuffleColMin      int64
 	ShuffleColMax      int64
 	ShuffleRangeUint64 []uint64
