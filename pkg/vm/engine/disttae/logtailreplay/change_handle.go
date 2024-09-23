@@ -659,8 +659,8 @@ func updateTombstoneBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool
 	//bat.Vecs[2].Free(mp) // phyaddr
 	bat.Vecs = []*vector.Vector{bat.Vecs[1], bat.Vecs[2]}
 	bat.Attrs = []string{
-		catalog.AttrPKVal,
-		catalog.AttrCommitTs}
+		objectio.TombstoneAttr_PK_Attr,
+		objectio.DefaultCommitTS_Attr}
 	applyTSFilterForBatch(bat, 1, start, end)
 	sortBatch(bat, 1, mp)
 }
@@ -683,7 +683,7 @@ func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool
 		return
 	}
 	bat.Vecs = []*vector.Vector{pk, commitTS}
-	bat.Attrs = []string{catalog.AttrPKVal, catalog.AttrCommitTs}
+	bat.Attrs = []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 }
 func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 	commitTSVec, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, bat.Vecs[0].Length(), mp)
