@@ -73,19 +73,19 @@ type container struct {
 }
 
 func (filter *Filter) SetExeExpr(proc *process.Process, exes []*plan.Expr) (err error) {
-	filter.ctr.cleanAppendExecutor()
+	filter.ctr.cleanRuntimeExecutor()
 	filter.ctr.runtimeExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, exes)
 	return
 }
 
 func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	filter.ctr.resetExecutor()
-	filter.ctr.cleanAppendExecutor()
+	filter.ctr.cleanRuntimeExecutor()
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
 	filter.ctr.cleanExecutor()
-	filter.ctr.cleanAppendExecutor()
+	filter.ctr.cleanRuntimeExecutor()
 	filter.ctr.allExecutors = nil
 	if filter.ctr.buf != nil {
 		filter.ctr.buf.Clean(proc.Mp())
@@ -101,7 +101,7 @@ func (ctr *container) cleanExecutor() {
 	ctr.executors = nil
 }
 
-func (ctr *container) cleanAppendExecutor() {
+func (ctr *container) cleanRuntimeExecutor() {
 	for i := range ctr.runtimeExecutors {
 		if ctr.runtimeExecutors[i] != nil {
 			ctr.runtimeExecutors[i].Free()
