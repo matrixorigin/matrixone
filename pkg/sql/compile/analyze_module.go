@@ -470,7 +470,7 @@ func makeExplainPhyPlanBuffer(ss []*Scope, queryResult *util.RunResult, statsInf
 func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption, buffer *bytes.Buffer) {
 	if option.Analyze {
 		gblStats := extractPhyPlanGlbStats(anal.phyPlan)
-		buffer.WriteString(fmt.Sprintf("PhyPlan TimeConsumed:%d ns, MemorySize:%d bytes, S3InputCount: %d, S3OutputCount: %d, AffectRows: %d",
+		buffer.WriteString(fmt.Sprintf("PhyPlan TimeConsumed:%dns, MemorySize:%dbytes, S3InputCount: %d, S3OutputCount: %d, AffectRows: %d",
 			gblStats.TimeConsumed,
 			gblStats.MemorySize,
 			anal.phyPlan.S3IOInputCount,
@@ -485,7 +485,7 @@ func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.St
 					statsInfo.CompileDuration+
 					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
 
-			buffer.WriteString(fmt.Sprintf("StatsInfo：CpuTime(%d ns)=PhyTime(%d)+BuildReaderTime(%d)+ParseTime(%d)+CompileTime(%d)+PlanTime(%d)-IOAccessTime(%d)-IOMergeTime(%d)\n",
+			buffer.WriteString(fmt.Sprintf("StatsInfo：CpuTime(%dns) = PhyTime(%d)+BuildReaderTime(%d)+ParseTime(%d)+CompileTime(%d)+PlanTime(%d)-IOAccessTime(%d)-IOMergeTime(%d)\n",
 				cpuTimeVal,
 				gblStats.TimeConsumed,
 				statsInfo.BuildReaderDuration,
@@ -495,7 +495,7 @@ func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.St
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.IOMergerTimeConsumption()))
 
-			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %d, PlanResolveVariableDuration: %d",
+			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %dns, PlanResolveVariableDuration: %dns",
 				statsInfo.BuildPlanStatsDuration,
 				statsInfo.BuildPlanResolveVarDuration,
 			))
