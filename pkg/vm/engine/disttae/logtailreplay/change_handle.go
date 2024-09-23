@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	goSort "sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -328,20 +329,23 @@ func (p *baseHandle) Close() {
 		p.inMemoryHandle.Close()
 	}
 }
+func (p *baseHandle) less(a, b types.TS) bool {
+	if a.IsEmpty() {
+		return false
+	}
+	if b.IsEmpty() {
+		return true
+	}
+	return a.LessEq(&b)
+}
 func (p *baseHandle) nextTS() (types.TS, int) {
 	inMemoryTS := p.inMemoryHandle.NextTS()
 	aobjTS := p.aobjHandle.NextTS()
 	cnObjTS := p.cnObjectHandle.NextTS()
-	if aobjTS.IsEmpty() && cnObjTS.IsEmpty() {
+	if p.less(inMemoryTS, aobjTS) && p.less(inMemoryTS, cnObjTS) {
 		return inMemoryTS, NextChangeHandle_InMemory
 	}
-	if !inMemoryTS.IsEmpty() && inMemoryTS.LessEq(&aobjTS) && inMemoryTS.LessEq(&cnObjTS) {
-		return inMemoryTS, NextChangeHandle_InMemory
-	}
-	if cnObjTS.IsEmpty() {
-		return aobjTS, NextChangeHandle_AObj
-	}
-	if !aobjTS.IsEmpty() && aobjTS.LessEq(&cnObjTS) {
+	if p.less(aobjTS, cnObjTS) {
 		return aobjTS, NextChangeHandle_AObj
 	}
 	return cnObjTS, NextChangeHandle_CNObj
@@ -410,6 +414,12 @@ func (p *baseHandle) getObjectEntries(objIter btree.IterG[ObjectEntry], start, e
 			cnObj = append(cnObj, &entry)
 		}
 	}
+	goSort.Slice(aobj, func(i, j int) bool {
+		return aobj[i].CreateTime.Less(&aobj[j].CreateTime)
+	})
+	goSort.Slice(cnObj, func(i, j int) bool {
+		return cnObj[i].CreateTime.Less(&cnObj[j].CreateTime)
+	})
 	return
 }
 
