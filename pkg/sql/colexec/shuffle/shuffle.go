@@ -57,7 +57,7 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		}
 	}
 	shuffle.SetShufflePool(NewShufflePool(shuffle.AliveRegCnt))
-	shuffle.ctr.shufflePool.Init()
+	shuffle.ctr.shufflePool.Hold()
 	shuffle.ctr.ending = false
 	return nil
 }
@@ -81,10 +81,6 @@ SENDLAST:
 	if shuffle.ctr.ending {
 		//send shuffle pool
 		result.Batch = shuffle.ctr.shufflePool.GetEndingBatch(shuffle.ctr.buf, proc)
-		//need to wait for runtimefilter_pass before send batch
-		if err := shuffle.handleRuntimeFilter(proc); err != nil {
-			return vm.CancelResult, err
-		}
 		if result.Batch == nil {
 			result.Status = vm.ExecStop
 		} else {
@@ -112,6 +108,7 @@ SENDLAST:
 		bat := result.Batch
 		if bat == nil {
 			shuffle.ctr.ending = true
+			shuffle.ctr.shufflePool.Ending()
 			goto SENDLAST
 		} else if !bat.IsEmpty() {
 			if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
@@ -137,7 +134,6 @@ SENDLAST:
 	if err = shuffle.handleRuntimeFilter(proc); err != nil {
 		return vm.CancelResult, err
 	}
-
 	// send the batch
 	result.Batch = shuffle.ctr.buf
 	analyzer.Output(result.Batch)
