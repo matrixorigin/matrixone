@@ -237,6 +237,12 @@ func (c *checkpointCleaner) Replay() error {
 		}
 		c.updateInputs(table)
 	}
+	if acctFile != "" {
+		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
+		if err != nil {
+			return err
+		}
+	}
 	if snapFile != "" {
 		err = c.snapshotMeta.ReadMeta(c.ctx, GCMetaDir+snapFile, c.fs.Service)
 		if err != nil {
@@ -251,12 +257,7 @@ func (c *checkpointCleaner) Replay() error {
 		ckp = checkpoint.NewCheckpointEntry(c.sid, minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
 		c.updateMinMerged(ckp)
 	}()
-	if acctFile != "" {
-		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
-		if err != nil {
-			return err
-		}
-	} else {
+	if acctFile == "" {
 		//No account table information, it may be a new cluster or an upgraded cluster,
 		//and the table information needs to be initialized from the checkpoint
 		maxConsumed := c.maxConsumed.Load()
@@ -278,7 +279,7 @@ func (c *checkpointCleaner) Replay() error {
 			if entry.GetType() == checkpoint.ET_Global {
 				isConsumedGCkp = true
 			}
-			c.snapshotMeta.InitTableInfo(ckpData)
+			c.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
 		}
 		if !isConsumedGCkp {
 			// The global checkpoint that Specified checkpoint depends on may have been GC,
@@ -294,7 +295,7 @@ func (c *checkpointCleaner) Replay() error {
 				logutil.Warnf("load max global checkpoint data failed, err[%v]", err)
 				return nil
 			}
-			c.snapshotMeta.InitTableInfo(ckpData)
+			c.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
 		}
 		logutil.Infof("table info initialized: %s", c.snapshotMeta.TableInfoString())
 	}
@@ -718,7 +719,12 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		logutil.Errorf("[DiskCleaner] GetSnapshots failed: %v", err.Error())
 		return nil
 	}
-	gc, snapshotList := c.softGC(gcTable, gckp, snapshots)
+	pitrs, err := c.GetPITRs()
+	if err != nil {
+		logutil.Errorf("[DiskCleaner] GetPitrs failed: %v", err.Error())
+		return nil
+	}
+	gc, snapshotList := c.softGC(gcTable, gckp, snapshots, pitrs)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
 	err = c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
@@ -740,6 +746,7 @@ func (c *checkpointCleaner) softGC(
 	t *GCTable,
 	gckp *checkpoint.CheckpointEntry,
 	snapshots map[uint32]containers.Vector,
+	pitrs *logtail.PitrInfo,
 ) ([]string, map[uint32][]types.TS) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
@@ -757,13 +764,13 @@ func (c *checkpointCleaner) softGC(
 	for _, table := range c.inputs.tables {
 		mergeTable.Merge(table)
 	}
-	gc, snapList := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots, c.snapshotMeta)
+	gc, snapList := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots, pitrs, c.snapshotMeta)
 	softCost = time.Since(now)
 	now = time.Now()
 	c.inputs.tables = make([]*GCTable, 0)
 	c.inputs.tables = append(c.inputs.tables, mergeTable)
 	c.updateMaxCompared(gckp)
-	c.snapshotMeta.MergeTableInfo(snapList)
+	c.snapshotMeta.MergeTableInfo(snapList, pitrs)
 	mergeCost = time.Since(now)
 	//logutil.Infof("SoftGC is %v, merge table: %v", v2, mergeTable.String())
 	return gc, snapList
@@ -841,7 +848,12 @@ func (c *checkpointCleaner) CheckGC() error {
 		return moerr.NewInternalErrorNoCtxf("processing clean GetSnapshots %s: %v", debugCandidates[0].String(), err)
 	}
 	defer logtail.CloseSnapshotList(snapshots)
-	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, c.snapshotMeta)
+	pitr, err := c.GetPITRs()
+	if err != nil {
+		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
+		return moerr.NewInternalErrorNoCtxf("processing clean GetPITRs %s: %v", debugCandidates[0].String(), err)
+	}
+	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
 		mergeTable = NewGCTable()
@@ -851,7 +863,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	} else {
 		mergeTable = c.inputs.tables[0]
 	}
-	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, c.snapshotMeta)
+	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
@@ -995,6 +1007,7 @@ func (c *checkpointCleaner) createNewInput(
 	}()
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {
+		startts, endts := candidate.GetStart(), candidate.GetEnd()
 		data, err = c.collectCkpData(candidate)
 		if err != nil {
 			logutil.Errorf("processing clean %s: %v", candidate.String(), err)
@@ -1003,7 +1016,7 @@ func (c *checkpointCleaner) createNewInput(
 		}
 		defer data.Close()
 		input.UpdateTable(data)
-		c.updateSnapshot(data)
+		c.updateSnapshot(c.ctx, c.fs.Service, data, startts, endts)
 	}
 	name := blockio.EncodeSnapshotMetadataFileName(GCMetaDir,
 		PrefixSnapMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
@@ -1033,13 +1046,22 @@ func (c *checkpointCleaner) createNewInput(
 	return
 }
 
-func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
-	c.snapshotMeta.Update(data)
+func (c *checkpointCleaner) updateSnapshot(
+	ctx context.Context,
+	fs fileservice.FileService,
+	data *logtail.CheckpointData,
+	startts, endts types.TS) error {
+	c.snapshotMeta.Update(ctx, fs, data, startts, endts)
 	return nil
 }
 
 func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
 	return c.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mPool)
+}
+
+func (c *checkpointCleaner) GetPITRs() (*logtail.PitrInfo, error) {
+	ts := time.Now()
+	return c.snapshotMeta.GetPITR(c.ctx, c.sid, ts, c.fs.Service, c.mPool)
 }
 
 func isSnapshotCKPRefers(start, end types.TS, snapVec []types.TS) bool {

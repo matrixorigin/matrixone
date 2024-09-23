@@ -277,7 +277,10 @@ func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
 		p := c.ctx.db.MergeScheduler.GetPolicy(c.tbl)
-		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end))
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end, false))
+		b.WriteByte('\n')
+		b.WriteByte('\n')
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end, true))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
 		c.ctx.resp.Payload = b.Bytes()
@@ -824,23 +827,28 @@ func (c *mergePolicyArg) Run() error {
 		common.RuntimeMinCNMergeSize.Store(cnsize)
 		if c.maxMergeObjN == 0 && c.minOsizeQualified == 0 {
 			merge.StopMerge.Store(true)
+			c.ctx.resp.Payload = []byte("auto merge is disabled")
 		} else {
 			merge.StopMerge.Store(false)
+			c.ctx.resp.Payload = []byte("general setting has been refreshed")
 		}
 	} else {
 		txn, err := c.ctx.db.StartTxn(nil)
 		if err != nil {
 			return err
 		}
-		c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
+		err = c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
 			MergeMaxOneRun:    int(c.maxMergeObjN),
 			ObjectMinOsize:    minosize,
 			MaxOsizeMergedObj: maxosize,
 			MinCNMergeSize:    cnsize,
 			MergeHints:        c.hints,
 		})
+		if err != nil {
+			return err
+		}
+		c.ctx.resp.Payload = []byte("success")
 	}
-	c.ctx.resp.Payload = []byte("<empty>")
 	return nil
 }
 
@@ -1036,7 +1044,7 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 	}
 	o.tbl++
 
-	stat, _ := table.ObjectStats(common.PPL0, 0, -1)
+	stat, _ := table.ObjectStats(common.PPL0, 0, -1, false)
 	heap.Push(&o.candidates, mItem{objcnt: stat.ObjectCnt, did: table.GetDB().ID, tid: table.ID})
 	if o.candidates.Len() > o.topk {
 		heap.Pop(&o.candidates)

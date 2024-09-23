@@ -26,7 +26,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func (tbl *txnTable) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
@@ -107,7 +106,7 @@ func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 	rowidVec := data.Vecs[len(data.Vecs)-1]
 	rowidVec.Free(mp)
 	data.Vecs[len(data.Vecs)-1] = committs
-	data.Attrs[len(data.Attrs)-1] = catalog.AttrCommitTs
+	data.Attrs[len(data.Attrs)-1] = objectio.DefaultCommitTS_Attr
 	return
 }
 func (h *CheckpointChangesHandle) Close() error {
