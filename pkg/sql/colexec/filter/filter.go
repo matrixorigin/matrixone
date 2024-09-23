@@ -48,12 +48,14 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	if len(filter.ctr.executors) == 0 && filter.E != nil {
 		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
 	}
-	if filter.ctr.runExecutor == nil {
-		filter.ctr.runExecutor = make([]colexec.ExpressionExecutor, 0, len(filter.ctr.appendExecutor)+len(filter.ctr.executors))
+
+	if filter.ctr.allExecutors == nil {
+		filter.ctr.allExecutors = make([]colexec.ExpressionExecutor, 0, len(filter.ctr.runtimeExecutors)+len(filter.ctr.executors))
+	} else {
+		filter.ctr.allExecutors = filter.ctr.allExecutors[:0]
 	}
-	filter.ctr.runExecutor = filter.ctr.runExecutor[:0]
-	filter.ctr.runExecutor = append(filter.ctr.runExecutor, filter.ctr.appendExecutor...)
-	filter.ctr.runExecutor = append(filter.ctr.runExecutor, filter.ctr.executors...)
+	filter.ctr.allExecutors = append(filter.ctr.allExecutors, filter.ctr.runtimeExecutors...)
+	filter.ctr.allExecutors = append(filter.ctr.allExecutors, filter.ctr.executors...)
 
 	return err
 }
@@ -72,18 +74,18 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, err
 	}
 
-	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.runExecutor) == 0 {
+	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.allExecutors) == 0 {
 		return inputResult, nil
 	}
 
 	filterBat := inputResult.Batch
 	var sels []int64
-	for i := range filter.ctr.runExecutor {
+	for i := range filter.ctr.allExecutors {
 		if filterBat.IsEmpty() {
 			break
 		}
 
-		vec, err := filter.ctr.runExecutor[i].Eval(proc, []*batch.Batch{filterBat}, nil)
+		vec, err := filter.ctr.allExecutors[i].Eval(proc, []*batch.Batch{filterBat}, nil)
 		if err != nil {
 			return vm.CancelResult, err
 		}
