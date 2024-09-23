@@ -139,8 +139,8 @@ func (b *TxnLogtailRespBuilder) visitAppendTombstone(src *containers.BatchWithVe
 
 	mybat := containers.NewBatchWithCapacity(3)
 	mybat.AddVector(
-		catalog.AttrRowID,
-		src.GetVectorByName(catalog.AttrRowID).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+		objectio.TombstoneAttr_Rowid_Attr,
+		src.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
 	)
 	tsType := types.T_TS.ToType()
 	commitVec := b.rt.VectorPool.Small.GetVector(&tsType)
@@ -148,10 +148,10 @@ func (b *TxnLogtailRespBuilder) visitAppendTombstone(src *containers.BatchWithVe
 	for i := 0; i < src.Length(); i++ {
 		commitVec.Append(b.txn.GetPrepareTS(), false)
 	}
-	mybat.AddVector(catalog.AttrCommitTs, commitVec)
+	mybat.AddVector(objectio.DefaultCommitTS_Attr, commitVec)
 	mybat.AddVector(
-		catalog.AttrPKVal,
-		src.GetVectorByName(catalog.AttrPKVal).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+		objectio.TombstoneAttr_PK_Attr,
+		src.GetVectorByName(objectio.TombstoneAttr_PK_Attr).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
 	)
 	mybat.AddVector(
 		catalog.PhyAddrColumnName,
@@ -178,7 +178,7 @@ func (b *TxnLogtailRespBuilder) visitAppendData(src *containers.BatchWithVersion
 	for i := 0; i < src.Length(); i++ {
 		commitVec.Append(b.txn.GetPrepareTS(), false)
 	}
-	mybat.AddVector(catalog.AttrCommitTs, commitVec)
+	mybat.AddVector(objectio.DefaultCommitTS_Attr, commitVec)
 
 	for i, seqnum := range src.Seqnums {
 		if seqnum >= objectio.SEQNUM_UPPER {

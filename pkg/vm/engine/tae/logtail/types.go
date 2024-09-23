@@ -17,6 +17,7 @@ package logtail
 import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -45,7 +46,7 @@ const (
 var (
 	BaseAttr = []string{
 		catalog.PhyAddrColumnName,
-		catalog.AttrCommitTs,
+		objectio.TombstoneAttr_CommitTs_Attr,
 	}
 
 	BaseTypes = []types.Type{

@@ -116,6 +116,8 @@ const (
 			mo_catalog.mo_tables t 
 		on w.table_id = t.rel_id 
 		where w.account_id = %d and w.task_id = '%s'`
+
+	getDataKeyFormat = "select encrypted_key from mo_catalog.mo_data_key where account_id = %d and key_id = '%s'"
 )
 
 var showCdcOutputColumns = [7]Column{
@@ -348,21 +350,6 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		return moerr.NewInternalErrorf(ctx, "unsupported sink type: %s", create.SinkType)
 	}
 
-	var jsonSinkUri string
-	var encodedSinkPwd string
-	var sinkUriInfo cdc2.UriInfo
-	if !useConsole {
-		jsonSinkUri, sinkUriInfo, err = extractUriInfo(ctx, create.SinkUri, cdc2.SinkUriPrefix)
-		if err != nil {
-			return err
-		}
-
-		encodedSinkPwd, err = sinkUriInfo.GetEncodedPassword()
-		if err != nil {
-			return err
-		}
-	}
-
 	noFull := false
 	if cdcTaskOptionsMap["NoFull"] == "true" {
 		noFull = true
@@ -401,6 +388,23 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		jsonTables, err := cdc2.JsonEncode(tablePts)
 		if err != nil {
 			return 0, err
+		}
+
+		var jsonSinkUri string
+		var encodedSinkPwd string
+		var sinkUriInfo cdc2.UriInfo
+		if !useConsole {
+			if jsonSinkUri, sinkUriInfo, err = extractUriInfo(ctx, create.SinkUri, cdc2.SinkUriPrefix); err != nil {
+				return
+			}
+
+			if err = initAesKeyWrapper(ctx, tx, creatorAccInfo.GetTenantID()); err != nil {
+				return
+			}
+
+			if encodedSinkPwd, err = sinkUriInfo.GetEncodedPassword(); err != nil {
+				return
+			}
 		}
 
 		//step 5: create daemon task
@@ -1737,5 +1741,37 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 	}
 
 	s += "}"
+	return
+}
+
+var (
+	queryTableWrapper  = queryTable
+	decrypt            = cdc2.AesCFBDecodeWithKey
+	getGlobalPuWrapper = getGlobalPu
+	initAesKeyWrapper  = initAesKey
+)
+
+func initAesKey(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32) (err error) {
+	if len(cdc2.AesKey) > 0 {
+		return nil
+	}
+
+	var encryptedKey string
+	var ret bool
+	querySql := fmt.Sprintf(getDataKeyFormat, accountId, cdc2.InitKeyId)
+
+	ret, err = queryTableWrapper(ctx, executor, querySql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
+		if err = rows.Scan(&encryptedKey); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+	if err != nil {
+		return
+	} else if !ret {
+		return moerr.NewInternalError(ctx, "no data key")
+	}
+
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper().SV.KeyEncryptionKey))
 	return
 }
