@@ -56,3 +56,8 @@ func getLLMGlobalVariable(proc *process.Process) (string, string, string, error)
 	return "ollama", "http://localhost:11434/api/embed", "llama3", nil
 
 }
+
+func getLLMGenerateGlobalVariable(proc *process.Process) (string, string, error) {
+	return "http://localhost:11434/api/generate", "llama3", nil
+
+}

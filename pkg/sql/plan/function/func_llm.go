@@ -279,7 +279,7 @@ func EmbeddingDatalinkOp(parameters []*vector.Vector, result vector.FunctionResu
 func LLMExtractText(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	input := vector.GenerateFunctionStrParameter(parameters[0])
 	output := vector.GenerateFunctionStrParameter(parameters[1])
-	extractorType := vector.GenerateFunctionStrParameter(parameters[2])
+	//extractorType := vector.GenerateFunctionStrParameter(parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 
 	rowCount := uint64(length)
@@ -301,28 +301,28 @@ func LLMExtractText(parameters []*vector.Vector, result vector.FunctionResultWra
 			continue
 		}
 
-		extractorTypeBytes, nullInput3 := extractorType.GetStrValue(i)
-		if nullInput3 {
-			if err := rs.AppendMustNullForBytesResult(); err != nil {
-				return err
-			}
-			continue
-		}
+		//extractorTypeBytes, nullInput3 := extractorType.GetStrValue(i)
+		//if nullInput3 {
+		//	if err := rs.AppendMustNullForBytesResult(); err != nil {
+		//		return err
+		//	}
+		//	continue
+		//}
 
 		inputPath := util.UnsafeBytesToString(inputBytes)
 		outputPath := util.UnsafeBytesToString(outputBytes)
-		extractorTypeString := util.UnsafeBytesToString(extractorTypeBytes)
+		//extractorTypeString := util.UnsafeBytesToString(extractorTypeBytes)
 
-		moUrl, _, ext, err := types.ParseDatalink(inputPath)
+		moUrl, _, err := ParseDatalink(inputPath, proc)
 		if err != nil {
 			return err
 		}
-		if "."+extractorTypeString != ext {
-			return moerr.NewInvalidInputNoCtxf("File type and extractor type are not equal.")
-		}
-		if ext != ".pdf" {
-			return moerr.NewInvalidInputNoCtxf("Only pdf file supported.")
-		}
+		//if "."+extractorTypeString != ext {
+		//	return moerr.NewInvalidInputNoCtxf("File type and extractor type are not equal.")
+		//}
+		//if ext != ".pdf" {
+		//	return moerr.NewInvalidInputNoCtxf("Only pdf file supported.")
+		//}
 
 		outputPathUrl, _, _, err := types.ParseDatalink(outputPath)
 		if err != nil {
@@ -579,6 +579,11 @@ func LLMAsk3Arguments(parameters []*vector.Vector, result vector.FunctionResultW
 	indexInput := vector.GenerateFunctionStrParameter(parameters[1])
 	questionInput := vector.GenerateFunctionStrParameter(parameters[2])
 
+	proxyStr, llmModelStr, err := getLLMGenerateGlobalVariable(proc)
+	if err != nil {
+		return err
+	}
+
 	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
@@ -608,35 +613,32 @@ func LLMAsk3Arguments(parameters []*vector.Vector, result vector.FunctionResultW
 		return result, nil
 	}
 
-	extractObj := func(tbl *table.Table, llmDatabaseName string, llmTableName string, llmQuestion string) (string, error) {
-		var result string
-		//extractSQL := fmt.Sprintf("SELECT chunk "+
-		//	"FROM `%s` "+
-		//	"ORDER BY l2_distance(embedding, llm_embedding(\"推荐阅读\n从下面的文章中选择一篇，开始您的 MatrixOne 之旅。如果您：\")) "+
-		//	"ASC LIMIT 1;",
-		//	llmTable)
-		//extractSQL := fmt.Sprintf("select b from indextest3.t6;")
+	extractObj := func(tbl *table.Table, llmDatabaseName string, llmTableName string, llmQuestion string) ([]string, error) {
+		var results []string
 		extractSQL := fmt.Sprintf("SELECT chunk "+
 			"FROM `%s`.`%s` "+
 			"ORDER BY l2_distance(embedding, llm_embedding(\"%s\")) "+
-			"ASC LIMIT 1;",
+			"ASC LIMIT 2;",
 			llmDatabaseName,
 			llmTableName,
 			llmQuestion)
 		opts := executor.Options{}.WithDatabase(tbl.Database)
 		res, err := exec.Exec(proc.Ctx, extractSQL, opts)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
-				result += executor.GetStringRows(cols[0])[i]
+				result := executor.GetStringRows(cols[0])[i]
+				results = append(results, result)
 			}
 			return true
 		})
 		res.Close()
-		return result, nil
+		return results, nil
 	}
+
+	// ask question
 
 	for i := uint64(0); i < uint64(length); i++ {
 		tables := table.GetAllTables()
@@ -663,15 +665,39 @@ func LLMAsk3Arguments(parameters []*vector.Vector, result vector.FunctionResultW
 			llmTableNames[i] = llmTableName
 
 		}
+		var context string
 
-		for i, tbl := range tables {
-			llmTableName := llmTableNames[i]
-			result, err := extractObj(tbl, database, llmTableName, question)
-
+		for j, tbl := range tables {
+			llmTableName := llmTableNames[j]
+			results, err := extractObj(tbl, database, llmTableName, question)
 			if err != nil {
 				return err
 			}
-			rs.AppendMustBytesValue(util.UnsafeStringToBytes(result))
+
+			for _, filePath := range results {
+				fs := proc.GetFileService()
+				moUrl, offsetSize, err := ParseDatalink(filePath, proc)
+				if err != nil {
+					return err
+				}
+				r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+				if err != nil {
+					return err
+				}
+
+				defer r.Close()
+
+				fileBytes, err := io.ReadAll(r)
+				if err != nil {
+					return err
+				}
+				context += util.UnsafeBytesToString(fileBytes)
+			}
+
+			prompt := fmt.Sprintf("Please answer the question: [%s], based on the context: [%s]", question, context)
+			response, err := getOllamaGeneratedResponse(prompt, llmModelStr, proxyStr)
+
+			rs.AppendMustBytesValue(util.UnsafeStringToBytes(response))
 		}
 
 	}
