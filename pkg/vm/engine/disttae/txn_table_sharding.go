@@ -435,9 +435,6 @@ type shardingLocalReader struct {
 	remoteRelData         engine.RelData
 	remoteTombApplyPolicy engine.TombstoneApplyPolicy
 	remoteScanType        int
-
-	orderBy  []*plan.OrderBySpec
-	filterZM objectio.ZoneMap
 }
 
 // TODO::
