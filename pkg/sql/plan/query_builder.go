@@ -4202,7 +4202,7 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 	}
 	ctx.views = append(ctx.views, leftCtx.views...)
 
-	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, -2, leftCtx)
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, -leftChildID, leftCtx)
 	if err != nil {
 		return 0, err
 	}
@@ -4238,7 +4238,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		if preNodeId >= 0 {
 			childId = builder.copyNode(ctx, preNodeId)
 		} else {
-			childId = -1
+			childId = preNodeId
 		}
 	}
 
