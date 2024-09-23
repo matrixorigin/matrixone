@@ -79,10 +79,8 @@ func (builder *QueryBuilder) buildCurrentAccount(tbl *tree.TableFunction, ctx *B
 			},
 		},
 		BindingTags:     []int32{builder.genNewTag()},
+		Children:        []int32{childId},
 		TblFuncExprList: exprs,
-	}
-	if childId >= 0 {
-		node.Children = []int32{childId}
 	}
 	return builder.appendNode(node, ctx), nil
 }

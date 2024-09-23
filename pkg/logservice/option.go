@@ -48,6 +48,13 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 	}
 }
 
+// WithDataSync sets the DataSync of service.
+func WithDataSync(ds DataSync) Option {
+	return func(s *Service) {
+		s.dataSync = ds
+	}
+}
+
 // WithConfigData saves the data from the config file
 func WithConfigData(data map[string]*pb.ConfigItem) Option {
 	return func(s *Service) {

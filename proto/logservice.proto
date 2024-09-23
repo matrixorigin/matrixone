@@ -31,6 +31,7 @@ enum UpdateType {
   TruncateLSNUpdate   = 1;
   UserEntryUpdate     = 2;
   TSOUpdate           = 3;
+  RequiredLSNUpdate   = 4;
 }
 
 enum NodeState {
@@ -84,6 +85,7 @@ message LogStore {
 
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
   ConfigData ConfigData = 6;
+  Locality Locality = 7 [(gogoproto.nullable) = false];
 }
 
 // LogShardInfo contains information a log shard.
@@ -92,6 +94,7 @@ message LogShardInfo {
   uint64 ShardID               = 1;
   // Replicas is a map of ReplicaID to LogStore UUID, it describe the member
   // replicas of the shard at the given Epoch.
+  // It only contains normal replicas but no non-voting replicas.
   map<uint64, string> Replicas = 2;
   // Epoch is the epoch value of the Shard, member replicas of the Shard can
   // change across epochs.
@@ -101,6 +104,8 @@ message LogShardInfo {
   uint64 LeaderID              = 4;
   // Term is the Raft term value.
   uint64 Term                  = 5;
+  // NonVotingReplicas is the non-voting replicas belongs to this shard.
+  map<uint64, string> NonVotingReplicas = 6;
 
   // TODO: per shard stats like CPU/memory/network usage can be added here
 };
@@ -110,6 +115,8 @@ message LogReplicaInfo {
   LogShardInfo LogShardInfo = 1 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
   // ReplicaID is the ID of a replica within the Log shard.
   uint64 ReplicaID = 2;
+  // IsNonVoting indicates if the replica is a non-voting replica.
+  bool IsNonVoting = 3;
 }
 
 message Resource {
@@ -162,6 +169,7 @@ message LogStoreHeartbeat {
   bool            TaskServiceCreated    = 6;
 
   ConfigData ConfigData = 7;
+  Locality Locality = 8 [(gogoproto.nullable) = false];
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -203,6 +211,9 @@ message RSMState {
   uint64 LeaseHolderID = 3;
   uint64 TruncatedLsn = 4;
   map<uint64, uint64> LeaseHistory = 5; // log lsn -> truncate lsn
+  // RequiredLsn is the first lsn position of upstream for datasync shard.
+  // The entries before it have been synced.
+  uint64 RequiredLsn = 6;
 }
 
 enum MethodType {
@@ -226,6 +237,12 @@ enum MethodType {
   PATCH_CN_STORE = 17;
   DELETE_CN_STORE = 18;
   PROXY_HEARTBEAT = 19;
+  UPDATE_NON_VOTING_REPLICA_NUM = 20;
+  UPDATE_NON_VOTING_LOCALITY = 21;
+  SET_REQUIRED_LSN = 22;
+  GET_REQUIRED_LSN = 23;
+  GET_LATEST_LSN = 24;
+  GET_LEADER_ID = 25;
 };
 
 enum RecordType {
@@ -300,12 +317,15 @@ message Request {
   CNStateLabel CNStateLabel      = 11;
   DeleteCNStore DeleteCNStore    = 12;
   ProxyHeartbeat ProxyHeartbeat  = 13;
+  uint64 NonVotingReplicaNum     = 14;
+  Locality NonVotingLocality     = 15;
 };
 
 message LogResponse {
   uint64 ShardID      = 1;
   uint64 Lsn          = 2;
   uint64 LastLsn      = 3;
+  uint64 LeaderID     = 4;
 }
 
 message AllocateIDResponse {
@@ -355,6 +375,9 @@ enum HAKeeperUpdateType {
   PatchCNStore = 12;
   RemoveCNStore = 13;
   ProxyHeartbeatUpdate = 14;
+  UpdateNonVotingReplicaNum = 15;
+  UpdateNonVotingLocality = 16;
+  LogShardUpdate = 17;
 }
 
 // HAKeeperState state transition diagram
@@ -425,6 +448,11 @@ enum ConfigChangeType {
   StartReplica  = 2;
   StopReplica   = 3;
   KillZombie    = 4;
+  // for non-voting
+  AddNonVotingReplica = 5;
+  RemoveNonVotingReplica = 6;
+  StartNonVotingReplica = 7;
+  StopNonVotingReplica = 8;
 }
 
 // ConfigChange is the detail of a config change.
@@ -461,6 +489,8 @@ message ScheduleCommand {
   DeleteCNStore     DeleteCNStore     = 7;
   JoinGossipCluster JoinGossipCluster = 8;
   DeleteProxyStore  DeleteProxyStore  = 9;
+  AddLogShard       AddLogShard       = 10;
+  BootstrapShard    BootstrapShard    = 11;
 }
 
 message JoinGossipCluster {
@@ -483,6 +513,19 @@ message DeleteCNStore {
 // DeleteProxyStore deletes Proxy store from ProxyState to save hakeeper's memory.
 message DeleteProxyStore {
   string StoreID = 1;
+}
+
+// AddLogShard adds a new shard to logservice.
+message AddLogShard {
+  uint64 ShardID = 1;
+}
+
+// BootstrapShard bootstraps a new shard.
+message BootstrapShard {
+  uint64 ShardID = 1;
+  uint64 ReplicaID = 2;
+  map<uint64, string> InitialMembers = 3;
+  bool Join = 4;
 }
 
 message CommandBatch {
@@ -582,6 +625,7 @@ message InitialClusterRequest {
   uint64 NumOfLogReplicas = 3;
   uint64 NextID           = 4;
   map<string, uint64> NextIDByKey = 5;
+  map<string, string> NonVotingLocality = 6;
 }
 
 // LogStoreInfo contains information of all replicas found on a Log store.
@@ -594,6 +638,7 @@ message LogStoreInfo {
 
   bool TaskServiceCreated = 6;
   ConfigData ConfigData = 7;
+  Locality Locality = 8 [(gogoproto.nullable) = false];
 }
 
 message LogState {
@@ -623,6 +668,8 @@ message CheckerState {
   map<string, uint64> NextIDByKey       = 10;
   ProxyState ProxyState = 11 [(gogoproto.nullable) = false];
   Resource Resource = 12 [(gogoproto.nullable) = false];
+  uint64 NonVotingReplicaNum = 13;
+  Locality NonVotingLocality = 14 [(gogoproto.nullable) = false];
 }
 
 message DeletedStore {
@@ -654,6 +701,17 @@ message HAKeeperRSMState {
   TaskTableUser TaskTableUser   = 14 [(gogoproto.nullable) = false];
   ProxyState ProxyState         = 15 [(gogoproto.nullable) = false];
   repeated DeletedStore DeletedStores = 16 [(gogoproto.nullable) = false];
+  // NonVotingReplicaNum is the number of non-voting replicas in all shards.
+  // The default value is 0 means there are no non-voting replicas by default.
+  // When set it to non-zero, we will check whether there are enough logservice
+  // stores for the extra non-voting replicas. If not, an error will return
+  // to client setting, and if there are enough stores, hakeeper will choose
+  // the property stores to start the replicas.
+  uint64 NonVotingReplicaNum = 17;
+  // NonVotingLocality is the locality information of non-voting replicas.
+  // If it is set, that is strongly recommended, the non-voting replicas will
+  // be scheduled to the stores which has such localities.
+  Locality NonVotingLocality = 18 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica
@@ -695,4 +753,10 @@ message ConfigItem{
 message ConfigData{
   // Content is the key value of the config
   map<string, ConfigItem> Content = 1;
+}
+
+// Locality defines the locality information of a logservice store.
+message Locality {
+  // Value is the locality content.
+  map<string, string> Value = 1;
 }
