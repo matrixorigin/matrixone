@@ -74,6 +74,13 @@ func init() {
 		newTestCase("select * from R limit 10", new(testing.T)),
 		newTestCase("select count(*) from R group by uid", new(testing.T)),
 		newTestCase("select count(distinct uid) from R", new(testing.T)),
+		newTestCase("select _wstart, _wend, max(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, second) sliding(1, second) fill(prev)", new(testing.T)),
+		newTestCase("select _wstart, sum(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, minute) sliding(1, minute) fill(none)", new(testing.T)),
+		newTestCase("select _wend, avg(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, hour) sliding(1, hour) fill(value, 1.2)", new(testing.T)),
+		newTestCase("select count(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, second) sliding(1, second)", new(testing.T)),
+		newTestCase("select _wstart, _wend, min(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, second)", new(testing.T)),
+		newTestCase("select _wstart, _wend, avg(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, cast(1.222 as decimal(6, 2)) as b) as t interval(ts, 2, second)", new(testing.T)),
+		newTestCase("select _wstart, _wend, avg(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, cast(1.222 as decimal(16, 2)) as b) as t interval(ts, 2, second)", new(testing.T)),
 		// xxx because memEngine can not handle Halloween Problem
 		// newTestCase("insert into R values('991', '992', '993')", new(testing.T)),
 		// newTestCase("insert into R select * from S", new(testing.T)),

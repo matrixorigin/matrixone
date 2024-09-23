@@ -1139,7 +1139,7 @@ func constructFill(n *plan.Node) *fill.Fill {
 	return arg
 }
 
-func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.TimeWin {
+func constructTimeWindow(_ context.Context, n *plan.Node, proc *process.Process) *timewin.TimeWin {
 	var aggregationExpressions []aggexec.AggFuncExecExpression = nil
 	var typs []types.Type
 	var wStart, wEnd bool
@@ -1168,34 +1168,18 @@ func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.TimeWin {
 		i++
 	}
 
-	var err error
-	str := n.Interval.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
-	itr := &timewin.Interval{}
-	itr.Typ, err = types.IntervalTypeOf(str)
+	arg := timewin.NewArgument()
+	err := arg.MakeIntervalAndSliding(n.Interval, n.Sliding)
 	if err != nil {
 		panic(err)
 	}
-	itr.Val = n.Interval.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-
-	var sld *timewin.Interval
-	if n.Sliding != nil {
-		sld = &timewin.Interval{}
-		str = n.Sliding.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
-		sld.Typ, err = types.IntervalTypeOf(str)
-		if err != nil {
-			panic(err)
-		}
-		sld.Val = n.Sliding.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-	}
-
-	arg := timewin.NewArgument()
 	arg.Types = typs
 	arg.Aggs = aggregationExpressions
-	arg.Ts = n.OrderBy[0].Expr
+	arg.Ts = n.GroupBy[0]
 	arg.WStart = wStart
 	arg.WEnd = wEnd
-	arg.Interval = itr
-	arg.Sliding = sld
+	arg.EndExpr = n.WEnd
+	arg.TsType = n.Timestamp.Typ
 	return arg
 }
 
