@@ -161,6 +161,10 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyzer process.Analyzer) (bool, error) {
 	ctr.handledLast = true
 
+	if ctr.matched == nil {
+		return true, nil
+	}
+
 	if ctr.matched.Count() == 0 {
 		ap.ctr.buf = ctr.batches
 		ctr.batches = nil
