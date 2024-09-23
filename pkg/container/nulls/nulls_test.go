@@ -197,6 +197,17 @@ func TestFilter(t *testing.T) {
 		Filter(&n, sels, false)
 		assert.Equal(t, 3, n.Count())
 	})
+
+	t.Run("set test", func(t *testing.T) {
+		var n Nulls
+		for i := uint64(0); i < 16; i++ {
+			n.Add(i)
+		}
+		assert.Equal(t, 16, n.Count())
+		sels := []int64{1, 3, 5}
+		Filter(&n, sels, true)
+		assert.Equal(t, 13, n.Count())
+	})
 }
 
 func TestMerge(t *testing.T) {
@@ -212,5 +223,32 @@ func TestMerge(t *testing.T) {
 		assert.Equal(t, 16, m.Count())
 		n.Merge(&m)
 		assert.Equal(t, 24, n.Count())
+	})
+}
+
+func TestIsSame(t *testing.T) {
+	t.Run("IsSame test", func(t *testing.T) {
+		var n Nulls
+		for i := uint64(0); i < 16; i++ {
+			n.Add(i)
+		}
+		assert.Equal(t, true, n.IsSame(&n))
+	})
+	t.Run("IsSame test", func(t *testing.T) {
+		var n Nulls
+		for i := uint64(0); i < 16; i++ {
+			n.Add(i)
+		}
+		assert.Equal(t, false, n.IsSame(nil))
+	})
+	t.Run("IsSame test", func(t *testing.T) {
+		var n, m Nulls
+		for i := uint64(0); i < 16; i++ {
+			n.Add(i)
+		}
+		for i := uint64(0); i < 16; i++ {
+			m.Add(i)
+		}
+		assert.Equal(t, true, n.IsSame(&m))
 	})
 }

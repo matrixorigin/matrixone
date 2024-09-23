@@ -45,4 +45,3 @@ type = "distributed-tae"
 [cn.frontend]
 port = %d
 unix-socket = "/tmp/mysql%d.sock"
-key-encryption-key = "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y"
