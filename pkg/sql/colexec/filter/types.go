@@ -60,6 +60,7 @@ func NewArgument() *Filter {
 
 func (filter *Filter) Release() {
 	if filter != nil {
+		filter.ctr.cleanRuntimeExecutor()
 		reuse.Free[Filter](filter, nil)
 	}
 }
