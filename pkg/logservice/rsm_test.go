@@ -19,9 +19,8 @@ import (
 	"testing"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
-	"github.com/stretchr/testify/assert"
-
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestGetLeaseHistory(t *testing.T) {
@@ -215,6 +214,7 @@ func TestStateMachineLookup(t *testing.T) {
 	tsm.state.Index = 1234
 	tsm.state.LeaseHolderID = 123456
 	tsm.state.TruncatedLsn = 456789
+	tsm.state.RequiredLsn = 888999
 	v, err := tsm.Lookup(leaseHolderIDQuery{})
 	assert.Nil(t, err)
 	assert.Equal(t, tsm.state.LeaseHolderID, v.(uint64))
@@ -226,6 +226,10 @@ func TestStateMachineLookup(t *testing.T) {
 	v3, err := tsm.Lookup(indexQuery{})
 	assert.Nil(t, err)
 	assert.Equal(t, tsm.state.Index, v3.(uint64))
+
+	v4, err := tsm.Lookup(requiredLsnQuery{})
+	assert.Nil(t, err)
+	assert.Equal(t, tsm.state.RequiredLsn, v4.(uint64))
 }
 
 func TestStateMachineLookupPanicOnUnexpectedInputValue(t *testing.T) {
@@ -248,4 +252,42 @@ func TestStateMachineLookupPanicOnUnexpectedInputType(t *testing.T) {
 	tsm := newStateMachine(1, 2).(*stateMachine)
 	_, err := tsm.Lookup(uint64(1234))
 	assert.NoError(t, err)
+}
+
+func TestRequiredLsnUpdate(t *testing.T) {
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	var i uint64 = 200
+	tsm.state.Index = i
+
+	i++
+	cmd := getSetRequiredLsnCmd(100)
+	e := sm.Entry{Index: i, Cmd: cmd}
+	result, err := tsm.Update(e)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(100), tsm.state.RequiredLsn)
+
+	i++
+	cmd2 := getSetRequiredLsnCmd(180)
+	e2 := sm.Entry{Index: i, Cmd: cmd2}
+	result, err = tsm.Update(e2)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(180), tsm.state.RequiredLsn)
+
+	i++
+	cmd3 := getSetRequiredLsnCmd(300)
+	e3 := sm.Entry{Index: i, Cmd: cmd3}
+	result, err = tsm.Update(e3)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(203), tsm.state.RequiredLsn)
+
+	i++
+	cmd4 := getSetRequiredLsnCmd(90)
+	e4 := sm.Entry{Index: i, Cmd: cmd4}
+	result, err = tsm.Update(e4)
+	assert.Equal(t, sm.Result{Value: 203}, result)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(203), tsm.state.RequiredLsn)
 }

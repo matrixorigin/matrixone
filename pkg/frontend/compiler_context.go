@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -679,6 +680,12 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 }
 
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (varValue interface{}, err error) {
+	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
+	start := time.Now()
+	defer func() {
+		stats.AddBuildPlanResolveVarConsumption(time.Since(start))
+	}()
+
 	ctx := tcc.execCtx.reqCtx
 
 	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
@@ -805,9 +812,11 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string,
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snapshot) (*pb.StatsInfo, error) {
+	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
+		stats.AddBuildPlanStatsConsumption(time.Since(start))
 	}()
 
 	dbName := obj.GetSchemaName()

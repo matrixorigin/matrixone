@@ -31,48 +31,76 @@ import (
 func TestIsFinish(t *testing.T) {
 	logState := pb.LogState{
 		Shards: map[uint64]pb.LogShardInfo{1: {
-			ShardID:  1,
-			Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-			Epoch:    1,
+			ShardID:           1,
+			Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+			Epoch:             1,
+			NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
 		}},
 		Stores: nil,
 	}
+	clusterState := ClusterState{
+		LogState:   logState,
+		CNState:    pb.CNState{},
+		TNState:    pb.TNState{},
+		ProxyState: pb.ProxyState{},
+	}
+	assert.False(t, AddLogService{
+		Replica: Replica{
+			UUID:      "g",
+			ShardID:   1,
+			ReplicaID: 7,
+		}}.IsFinish(clusterState),
+	)
+	assert.True(t, AddLogService{
+		Replica: Replica{
+			UUID:      "c",
+			ShardID:   1,
+			ReplicaID: 3,
+		}}.IsFinish(clusterState),
+	)
+	assert.False(t, RemoveLogService{
+		Replica: Replica{
+			UUID:      "c",
+			ShardID:   1,
+			ReplicaID: 3,
+		}}.IsFinish(clusterState),
+	)
+	assert.True(t, RemoveLogService{
+		Replica: Replica{
+			UUID:      "g",
+			ShardID:   1,
+			ReplicaID: 7,
+		}}.IsFinish(clusterState),
+	)
+	// for non-voting replicas
+	assert.False(t, AddNonVotingLogService{
+		Replica: Replica{
+			UUID:      "g",
+			ShardID:   1,
+			ReplicaID: 7,
+		}}.IsFinish(clusterState),
+	)
+	assert.True(t, AddNonVotingLogService{
+		Replica: Replica{
+			UUID:      "f",
+			ShardID:   1,
+			ReplicaID: 6,
+		}}.IsFinish(clusterState),
+	)
+	assert.False(t, RemoveNonVotingLogService{
+		Replica: Replica{
+			UUID:      "f",
+			ShardID:   1,
+			ReplicaID: 6,
+		}}.IsFinish(clusterState),
+	)
+	assert.True(t, RemoveNonVotingLogService{
+		Replica: Replica{
+			UUID: "g",
 
-	tnState := pb.TNState{}
-	cnState := pb.CNState{}
-	proxyState := pb.ProxyState{}
-
-	assert.False(t, AddLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.
-		IsFinish(ClusterState{
-			LogState:   logState,
-			TNState:    tnState,
-			CNState:    cnState,
-			ProxyState: proxyState,
-		}),
-	)
-	assert.True(t, AddLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.
-		IsFinish(ClusterState{
-			LogState:   logState,
-			TNState:    tnState,
-			CNState:    cnState,
-			ProxyState: proxyState,
-		}),
-	)
-	assert.False(t, RemoveLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.
-		IsFinish(ClusterState{
-			LogState:   logState,
-			TNState:    tnState,
-			CNState:    cnState,
-			ProxyState: proxyState,
-		}),
-	)
-	assert.True(t, RemoveLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.
-		IsFinish(ClusterState{
-			LogState:   logState,
-			TNState:    tnState,
-			CNState:    cnState,
-			ProxyState: proxyState,
-		}),
+			ShardID:   1,
+			ReplicaID: 7,
+		}}.IsFinish(clusterState),
 	)
 }
 
@@ -126,6 +154,62 @@ func TestAddLogService(t *testing.T) {
 	}
 }
 
+func TestAddNonVotingLogService(t *testing.T) {
+	cases := []struct {
+		desc     string
+		command  OpStep
+		state    pb.LogState
+		expected bool
+	}{
+		{
+			desc: "add non-voting log service completed",
+			command: AddNonVotingLogService{
+				Replica: Replica{
+					UUID:      "b",
+					ShardID:   1,
+					ReplicaID: 2},
+			},
+			state: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {
+						ShardID:           1,
+						Replicas:          map[uint64]string{1: "a", 2: "b"},
+						NonVotingReplicas: map[uint64]string{2: "b"},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			desc: "add non-voting log service not completed",
+			command: AddNonVotingLogService{
+				Replica: Replica{
+					UUID:      "b",
+					ShardID:   1,
+					ReplicaID: 2},
+			},
+			state: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {
+						ShardID:  1,
+						Replicas: map[uint64]string{1: "a", 2: "b"},
+					},
+				},
+			},
+			expected: false,
+		},
+	}
+	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   c.state,
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
+	}
+}
+
 func TestRemoveLogService(t *testing.T) {
 	cases := []struct {
 		desc     string
@@ -151,6 +235,61 @@ func TestRemoveLogService(t *testing.T) {
 		{
 			desc: "remove log service completed",
 			command: RemoveLogService{
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1,
+				},
+			},
+			state: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {ShardID: 1, Replicas: map[uint64]string{}},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   c.state,
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
+	}
+}
+
+func TestRemoveNonVotingLogService(t *testing.T) {
+	cases := []struct {
+		desc     string
+		command  OpStep
+		state    pb.LogState
+		expected bool
+	}{
+		{
+			desc: "remove non-voting log service not completed",
+			command: RemoveNonVotingLogService{
+				Replica: Replica{
+					UUID:      "b",
+					ShardID:   1,
+					ReplicaID: 2},
+			},
+			state: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {
+						ShardID:           1,
+						Replicas:          map[uint64]string{1: "a", 2: "b"},
+						NonVotingReplicas: map[uint64]string{2: "b"},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			desc: "remove non-voting log service completed",
+			command: RemoveNonVotingLogService{
 				Replica: Replica{
 					UUID:      "a",
 					ShardID:   1,
@@ -235,6 +374,64 @@ func TestStartLogService(t *testing.T) {
 	}
 }
 
+func TestStartNonVotingLogService(t *testing.T) {
+	cases := []struct {
+		desc     string
+		command  OpStep
+		state    pb.LogState
+		expected bool
+	}{
+		{
+			desc: "start non-voting log service not completed",
+			command: StartNonVotingLogService{
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1,
+				},
+			},
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Replicas: []pb.LogReplicaInfo{{}},
+				}},
+			},
+			expected: false,
+		},
+		{
+			desc: "start non-voting log service completed",
+			command: StartNonVotingLogService{
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1,
+				},
+			},
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  1,
+							Replicas: map[uint64]string{1: "a"},
+						},
+						ReplicaID: 1,
+					}},
+				}},
+			},
+			expected: true,
+		},
+	}
+
+	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   c.state,
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
+	}
+}
+
 func TestStopLogService(t *testing.T) {
 	cases := []struct {
 		desc     string
@@ -260,6 +457,62 @@ func TestStopLogService(t *testing.T) {
 		{
 			desc: "stop log service not completed",
 			command: StopLogService{
+				Replica: Replica{
+					UUID:    "a",
+					ShardID: 1,
+				},
+			},
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  1,
+							Replicas: map[uint64]string{1: "a"},
+						},
+						ReplicaID: 1,
+					}},
+				}},
+			},
+			expected: false,
+		},
+	}
+
+	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   c.state,
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
+	}
+}
+
+func TestStopNonVotingLogService(t *testing.T) {
+	cases := []struct {
+		desc     string
+		command  OpStep
+		state    pb.LogState
+		expected bool
+	}{
+		{
+			desc: "stop non-voting log service completed",
+			command: StopNonVotingLogService{
+				Replica: Replica{
+					UUID:    "a",
+					ShardID: 1,
+				},
+			},
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Replicas: []pb.LogReplicaInfo{{}},
+				}},
+			},
+			expected: true,
+		},
+		{
+			desc: "stop non-voting log service not completed",
+			command: StopNonVotingLogService{
 				Replica: Replica{
 					UUID:    "a",
 					ShardID: 1,

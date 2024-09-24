@@ -56,7 +56,6 @@ func runAllTestCase(t *testing.T) {
 }
 
 func TestAll(t *testing.T) {
-	t.Skip("do not consider compatibility")
 	prepareEnv := os.Getenv("PREPCOMP")
 	execEnv := os.Getenv("EXECCOMP")
 	if prepareEnv == "false" && execEnv == "false" {

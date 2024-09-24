@@ -101,7 +101,7 @@ func (r *replayer) replay() {
 func (r *replayer) readRecords() (readEnd bool) {
 	nextLsn, safeLsn := r.d.readFromLogServiceInReplay(r.nextToReadLsn, r.readMaxSize, func(lsn uint64, record *recordEntry) {
 		r.readCount++
-		if record.meta.metaType == TReplay {
+		if record.Meta.metaType == TReplay {
 			r.internalCount++
 			cmd := NewEmptyReplayCmd()
 			cmd.Unmarshal(record.payload)
@@ -188,7 +188,7 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 	logutil.Infof("skip %v", skipMap)
 	cmd := NewReplayCmd(skipMap)
 	recordEntry := newRecordEntry()
-	recordEntry.meta.metaType = TReplay
+	recordEntry.Meta.metaType = TReplay
 	recordEntry.cmd = cmd
 	size := recordEntry.prepareRecord()
 	c, lsn := r.d.getClient()
