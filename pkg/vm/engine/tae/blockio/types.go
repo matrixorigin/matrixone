@@ -109,7 +109,7 @@ func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 func EncodeLocationFromString(info string) (objectio.Location, error) {
 	location := strings.Split(info, "_")
 	if len(location) < 8 {
-		panic(fmt.Sprintf("info: %v", info))
+		panic(fmt.Sprintf("wrong location format: %v", info))
 	}
 	num, err := strconv.ParseUint(location[1], 10, 32)
 	if err != nil {
