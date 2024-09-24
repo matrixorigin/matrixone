@@ -407,6 +407,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.CleanKillQueueInterval == 0 {
 		fp.CleanKillQueueInterval = defaultCleanKillQueueInterval
 	}
+
+	if len(fp.KeyEncryptionKey) == 0 {
+		fp.KeyEncryptionKey = "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y"
+	}
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {

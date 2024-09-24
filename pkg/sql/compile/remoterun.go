@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
@@ -642,10 +643,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
 	case *filter.Filter:
-		in.Filter = t.GetExeExpr()
-		if in.Filter == nil {
-			in.Filter = t.E
-		}
+		in.Filter = t.E
 	case *semi.SemiJoin:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,
@@ -805,6 +803,22 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *indexbuild.IndexBuild:
 		in.IndexBuild = &pipeline.Indexbuild{
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
+		}
+	case *apply.Apply:
+		relList, colList := getRelColList(t.Result)
+		in.Apply = &pipeline.Apply{
+			ApplyType: int32(t.ApplyType),
+			RelList:   relList,
+			ColList:   colList,
+			Types:     convertToPlanTypes(t.Typs),
+		}
+		in.ProjectList = t.ProjectList
+		in.TableFunction = &pipeline.TableFunction{
+			Attrs:  t.TableFunction.Attrs,
+			Rets:   t.TableFunction.Rets,
+			Args:   t.TableFunction.Args,
+			Params: t.TableFunction.Params,
+			Name:   t.TableFunction.FuncName,
 		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
@@ -1260,6 +1274,20 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
 		arg.RuntimeFilterSpec = opr.GetIndexBuild().RuntimeFilterSpec
+		op = arg
+	case vm.Apply:
+		arg := apply.NewArgument()
+		t := opr.GetApply()
+		arg.ApplyType = int(t.ApplyType)
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Typs = convertToTypes(t.Types)
+		arg.ProjectList = opr.ProjectList
+		arg.TableFunction = table_function.NewArgument()
+		arg.TableFunction.Attrs = opr.TableFunction.Attrs
+		arg.TableFunction.Rets = opr.TableFunction.Rets
+		arg.TableFunction.Args = opr.TableFunction.Args
+		arg.TableFunction.FuncName = opr.TableFunction.Name
+		arg.TableFunction.Params = opr.TableFunction.Params
 		op = arg
 	default:
 		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))

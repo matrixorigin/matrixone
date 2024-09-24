@@ -48,6 +48,9 @@ func TestNodeGossip(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, n1)
 	err = n1.Create()
+	if err != nil {
+		return
+	}
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, n1.Leave(time.Millisecond*300))

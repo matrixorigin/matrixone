@@ -221,19 +221,19 @@ message GetCNReplicasResponse {
 }
 
 message ReadParam {
-    pipeline.ProcessInfo           Process                       = 1 [(gogoproto.nullable) = false];
-    TxnTable                       TxnTable                      = 2 [(gogoproto.nullable) = false];
-    StatsParam                     StatsParam                    = 3 [(gogoproto.nullable) = false];
-    SizeParam                      SizeParam                     = 4 [(gogoproto.nullable) = false];
-    RangesParam                    RangesParam                   = 5 [(gogoproto.nullable) = false];
-    GetColumMetadataScanInfoParam  GetColumMetadataScanInfoParam = 6 [(gogoproto.nullable) = false];
-    MergeObjectsParam              MergeObjectsParam             = 7 [(gogoproto.nullable) = false];
-    KeyParam                       KeyParam                      = 8 [(gogoproto.nullable) = false];
-    ReaderBuildParam               ReaderBuildParam                   = 9 [(gogoproto.nullable) = false];
-    PrimaryKeysMayBeModifiedParam   PrimaryKeysMayBeModifiedParam  = 10 [(gogoproto.nullable) = false];
-    ReadNextParam                  ReadNextParam                 = 11 [(gogoproto.nullable) = false];
-    ReadCloseParam                 ReadCloseParam                = 12 [(gogoproto.nullable) = false];
-    CollectTombstonesParam         CollectTombstonesParam        = 13 [(gogoproto.nullable) = false];
+    pipeline.ProcessInfo           Process                        = 1 [(gogoproto.nullable) = false];
+    TxnTable                       TxnTable                       = 2 [(gogoproto.nullable) = false];
+    StatsParam                     StatsParam                     = 3 [(gogoproto.nullable) = false];
+    SizeParam                      SizeParam                      = 4 [(gogoproto.nullable) = false];
+    RangesParam                    RangesParam                    = 5 [(gogoproto.nullable) = false];
+    GetColumMetadataScanInfoParam  GetColumMetadataScanInfoParam  = 6 [(gogoproto.nullable) = false];
+    MergeObjectsParam              MergeObjectsParam              = 7 [(gogoproto.nullable) = false];
+    KeyParam                       KeyParam                       = 8 [(gogoproto.nullable) = false];
+    ReaderBuildParam               ReaderBuildParam               = 9 [(gogoproto.nullable) = false];
+    PrimaryKeysMayBeModifiedParam  PrimaryKeysMayBeModifiedParam  = 10 [(gogoproto.nullable) = false];
+    ReadNextParam                  ReadNextParam                  = 11 [(gogoproto.nullable) = false];
+    ReadCloseParam                 ReadCloseParam                 = 12 [(gogoproto.nullable) = false];
+    CollectTombstonesParam         CollectTombstonesParam         = 13 [(gogoproto.nullable) = false];
 }
 
 message TxnTable {
@@ -241,6 +241,7 @@ message TxnTable {
     uint64 DatabaseID   = 2;
     string DatabaseName = 3;
     string TableName    = 4;
+    bool   CreatedInTxn = 5;
 }
 
 message StatsParam {

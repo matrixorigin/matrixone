@@ -43,6 +43,7 @@ enum OpCode {
     OpCommitMerge      = 2011;
     OpDiskDiskCleaner   = 2012;
     OpReader = 2013;
+    OpGetLatestCheckpoint = 2014;
 }
 
 // TNPingRequest ping request
@@ -415,4 +416,9 @@ message MergeTaskEntry {
     uint32 account_id = 7;
     uint32 user_id = 8;
     uint32 role_id = 9;
+}
+
+message CheckpointResp {
+    string Location = 1;
+    uint64 truncateLsn = 2;
 }
