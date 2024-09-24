@@ -703,7 +703,7 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	var done bool
 
-	if done, err = TryFastFilterBlocks(
+	if done, err = engine_util.TryFastFilterBlocks(
 		ctx,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
