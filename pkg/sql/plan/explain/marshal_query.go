@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
@@ -725,8 +726,13 @@ func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOp
 }
 
 // GetInputRowsAndInputSize return plan.Node AnalyzeInfo InputRows and InputSize.
+// The method only records the original table's input data, and does not record index table's input data
 // migrate ExplainData.StatisticsRead to here
 func GetInputRowsAndInputSize(ctx context.Context, node *plan.Node, options *ExplainOptions) (rows int64, size int64) {
+	if util.IsIndexTableName(node.TableDef.Name) {
+		return 0, 0
+	}
+
 	if options.Analyze && node.AnalyzeInfo != nil {
 		return node.AnalyzeInfo.InputRows, node.AnalyzeInfo.InputSize
 	}
