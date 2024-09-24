@@ -3011,17 +3011,31 @@ func Test_extractTablePair(t *testing.T) {
 
 var _ ie.InternalExecutor = &mockIe{}
 
-type mockIe struct{}
+type mockIe struct {
+	cnt int
+}
 
 func (*mockIe) Exec(ctx context.Context, s string, options ie.SessionOverrideOptions) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (*mockIe) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+func (e *mockIe) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	e.cnt += 1
+
+	if e.cnt == 1 {
+		return &mockIeResult{
+			err:      nil,
+			rowCount: 1,
+		}
+	} else if e.cnt == 2 {
+		return &mockIeResult{
+			err:      nil,
+			rowCount: 0,
+		}
+	}
 	return &mockIeResult{
-		err:      nil,
-		rowCount: 1,
+		err: moerr.NewInternalErrorNoCtx(""),
 	}
 }
 
@@ -3101,4 +3115,11 @@ func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
 
 	err := initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
 	assert.NoError(t, err)
+	cdc2.AesKey = ""
+
+	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	assert.Error(t, err)
+
+	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	assert.Error(t, err)
 }
