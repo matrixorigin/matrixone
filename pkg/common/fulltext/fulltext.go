@@ -260,10 +260,24 @@ func (p *Pattern) GetWeight() float32 {
 	}
 }
 
+func combine(score map[any]float32, result map[any]float32) map[any]float32 {
+	for k1 := range score {
+		v1 := score[k1]
+		v, ok := result[k1]
+		if ok {
+			// max
+			if v1 > v {
+				result[k1] = v1
+			}
+		} else {
+			result[k1] = v1
+		}
+	}
+	return result
+}
+
 // Eval() function to evaluate the previous result from Eval and the current pattern (with data from datasource)  and return map[doc_id]float32
 func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
-	var err error
-
 	nchild := len(p.Children)
 
 	if nchild == 0 {
@@ -322,16 +336,18 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 		// GROUP, PHRASE
 
 		if p.Operator == GROUP {
-			// TODO: FIXME  use COMBINE instead of OR mode
-			child_result := make(map[any]float32)
+			result := make(map[any]float32)
 			for _, c := range p.Children {
-				child_result, err = c.Eval(accum, weight, child_result)
+				child_result, err := c.Eval(accum, weight, nil)
 				if err != nil {
 					return nil, err
 				}
+
+				// COMBINE results from children
+				result = combine(child_result, result)
 			}
 
-			return child_result, nil
+			return result, nil
 		}
 
 		if p.Operator == PHRASE {

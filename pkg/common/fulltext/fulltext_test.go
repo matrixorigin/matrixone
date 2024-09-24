@@ -753,3 +753,21 @@ func TestFullTextPhrase(t *testing.T) {
 	_, ok = result[0]
 	assert.Equal(t, ok, true)
 }
+
+func TestFullTextCombine(t *testing.T) {
+
+	s1 := make(map[any]float32)
+	s1[0] = 1
+	s1[2] = 2
+	s2 := make(map[any]float32)
+	s2[0] = 2
+	s2[2] = 1
+	s2[1] = 4
+
+	result := combine(s1, s2)
+
+	assert.Equal(t, len(result), 3)
+	assert.Equal(t, result[0], float32(2))
+	assert.Equal(t, result[2], float32(2))
+	assert.Equal(t, result[1], float32(4))
+}
