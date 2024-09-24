@@ -17,7 +17,6 @@ package queryservice
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -149,8 +148,6 @@ func RequestMultipleCn(ctx context.Context,
 	nodesLeft := len(nodes)
 	responseChan := make(chan nodeResponse, nodesLeft)
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
 	var retErr error
 
 	for _, node := range nodes {
