@@ -16,8 +16,10 @@ package util
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -63,6 +65,22 @@ func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	}
 	name += id.String()
 	return name, nil
+}
+
+// IsIndexTableName checks if the given table name is an index table name with a valid UUID.
+func IsIndexTableName(tableName string) bool {
+	if strings.HasPrefix(tableName, catalog.UniqueIndexTableNamePrefix) {
+		// Strip the prefix and check if the remaining part is a valid UUID
+		uuidPart := strings.TrimPrefix(tableName, catalog.UniqueIndexTableNamePrefix)
+		_, err := uuid.Parse(uuidPart)
+		return err == nil
+	} else if strings.HasPrefix(tableName, catalog.SecondaryIndexTableNamePrefix) {
+		// Strip the prefix and check if the remaining part is a valid UUID
+		uuidPart := strings.TrimPrefix(tableName, catalog.SecondaryIndexTableNamePrefix)
+		_, err := uuid.Parse(uuidPart)
+		return err == nil
+	}
+	return false // Not an index table name
 }
 
 // BuildUniqueKeyBatch used in test to validate

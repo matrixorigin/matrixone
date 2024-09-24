@@ -213,12 +213,19 @@ message Expr {
 		TargetType	t		= 11;
 		ExprList	list	= 12;
 		MaxValue	max		= 13;
-		LiteralVec	vec	= 14;
+		LiteralVec	vec		= 14;
+		FoldVal		fold	= 15;
 	}
 
-	int32 aux_id = 15;
-	double ndv = 16;
-	double selectivity = 17;
+	int32 aux_id = 16;
+	double ndv = 17;
+	double selectivity = 18;
+}
+
+message FoldVal {
+	int32 id		= 1;
+	bool is_const 	= 2;
+	bytes data		= 3;
 }
 
 message LiteralVec {
@@ -849,29 +856,28 @@ message Node {
 	PreInsertUkCtx pre_insert_sk_ctx = 46;
 	Expr interval = 47;
 	Expr sliding = 48;
+	Expr timestamp = 49;
+	Expr wEnd = 50;
 
-	FillType fill_type = 49;
-	repeated Expr fill_val = 50;
+	FillType fill_type = 51;
+	repeated Expr fill_val = 52;
 
 	// sample function related.
-	SampleFuncSpec sample_func = 51;
+	SampleFuncSpec sample_func = 53;
 
-	int32 window_idx = 52;
-	repeated Expr onUpdateExprs = 53;
-	OriginTableMessageForFuzzy fuzzymessage = 54;
-	bool ifInsertFromUnique = 55;
+	int32 window_idx = 54;
+	repeated Expr onUpdateExprs = 55;
+	OriginTableMessageForFuzzy fuzzymessage = 56;
+	bool ifInsertFromUnique = 57;
 
 	//for message
-	repeated msgHeader send_msg_list = 56;
-	repeated msgHeader recv_msg_list = 57;
-
-	Snapshot scan_snapshot = 58;
+	repeated msgHeader send_msg_list = 58;
+	repeated msgHeader recv_msg_list = 59;
 	
-	bool recursive_cte = 59;
-	
-	repeated UpdateCtx update_ctx_list = 60;
-
-    ApplyType apply_type = 61;
+	repeated UpdateCtx update_ctx_list = 61;
+	Snapshot scan_snapshot = 62;
+	bool recursive_cte = 63;
+	ApplyType apply_type = 64;
 
 }
 

@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -46,30 +45,19 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 		filter.OpAnalyzer.Reset()
 	}
 
-	if filter.exeExpr == nil && filter.E == nil {
-		return nil
+	if len(filter.ctr.executors) == 0 && filter.E != nil {
+		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
 	}
 
-	var filterExpr *plan.Expr
-	if filter.exeExpr == nil {
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.E), proc, true, true)
+	if filter.ctr.allExecutors == nil {
+		filter.ctr.allExecutors = make([]colexec.ExpressionExecutor, 0, len(filter.ctr.runtimeExecutors)+len(filter.ctr.executors))
 	} else {
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.exeExpr), proc, true, true)
+		filter.ctr.allExecutors = filter.ctr.allExecutors[:0]
 	}
-	if err != nil {
-		return err
-	}
-	filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
-	return err
+	filter.ctr.allExecutors = append(filter.ctr.allExecutors, filter.ctr.runtimeExecutors...)
+	filter.ctr.allExecutors = append(filter.ctr.allExecutors, filter.ctr.executors...)
 
-	// if len(filter.ctr.executors) == 0 {
-	// 	if filter.exeExpr == nil {
-	// 		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
-	// 	} else {
-	// 		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.exeExpr}))
-	// 	}
-	// }
-	// return err
+	return err
 }
 
 func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
@@ -86,18 +74,18 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, err
 	}
 
-	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.executors) == 0 {
+	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.allExecutors) == 0 {
 		return inputResult, nil
 	}
 
 	filterBat := inputResult.Batch
 	var sels []int64
-	for i := range filter.ctr.executors {
+	for i := range filter.ctr.allExecutors {
 		if filterBat.IsEmpty() {
 			break
 		}
 
-		vec, err := filter.ctr.executors[i].Eval(proc, []*batch.Batch{filterBat}, nil)
+		vec, err := filter.ctr.allExecutors[i].Eval(proc, []*batch.Batch{filterBat}, nil)
 		if err != nil {
 			return vm.CancelResult, err
 		}
