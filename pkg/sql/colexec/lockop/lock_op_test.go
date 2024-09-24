@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -322,11 +323,12 @@ func TestLockWithBlocking(t *testing.T) {
 		nil,
 		func(
 			proc *process.Process,
-			arg *LockOp,
+			arg *output.Output,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
-			arg.ctr.hasNewVersionInRange = testFunc
-			arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
+			lockArg := arg.GetChildren(0).(*LockOp)
+			lockArg.ctr.hasNewVersionInRange = testFunc
+			lockArg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     idx,
 				IsFirst: isFirst,
 				IsLast:  isLast,
@@ -337,14 +339,15 @@ func TestLockWithBlocking(t *testing.T) {
 				end.Batch.Clean(proc.GetMPool())
 			}
 			if end.Status == vm.ExecStop {
-				if arg.ctr.parker != nil {
-					arg.ctr.parker.Close()
+				if lockArg.ctr.parker != nil {
+					lockArg.ctr.parker.Close()
 				}
 			}
 			return end.Status == vm.ExecStop, nil
 		},
-		func(arg *LockOp, proc *process.Process) {
+		func(arg *output.Output, proc *process.Process) {
 			arg.Free(proc, false, nil)
+			arg.GetChildren(0).Free(proc, false, nil)
 			proc.Free()
 		},
 	)
@@ -383,21 +386,25 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 		},
 		func(
 			proc *process.Process,
-			arg *LockOp,
+			arg *output.Output,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
-			arg.ctr.hasNewVersionInRange = testFunc
-			arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
+			lockArg := arg.GetChildren(0).(*LockOp)
+			lockArg.ctr.hasNewVersionInRange = testFunc
+			lockArg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     idx,
 				IsFirst: isFirst,
 				IsLast:  isLast,
 			}
+
 			ok, err := arg.Call(proc)
 			return ok.Status == vm.ExecStop, err
 		},
-		func(arg *LockOp, proc *process.Process) {
-			require.True(t, moerr.IsMoErrCode(arg.ctr.retryError, moerr.ErrTxnNeedRetry))
+		func(arg *output.Output, proc *process.Process) {
+			lockArg := arg.GetChildren(0).(*LockOp)
+			require.True(t, moerr.IsMoErrCode(lockArg.ctr.retryError, moerr.ErrTxnNeedRetry))
 			arg.Free(proc, false, nil)
+			arg.GetChildren(0).Free(proc, false, nil)
 			proc.Free()
 		},
 	)
@@ -491,8 +498,8 @@ func runLockBlockingOpTest(
 	table uint64,
 	values [][]int32,
 	beforeFunc func(proc *process.Process),
-	fn func(proc *process.Process, arg *LockOp, idx int, isFirst, isLast bool) (bool, error),
-	checkFunc func(*LockOp, *process.Process),
+	fn func(proc *process.Process, arg *output.Output, idx int, isFirst, isLast bool) (bool, error),
+	checkFunc func(*output.Output, *process.Process),
 	opts ...client.TxnClientCreateOption) {
 	runLockOpTest(
 		t,
@@ -503,7 +510,12 @@ func runLockBlockingOpTest(
 
 			pkType := types.New(types.T_int32, 0, 0)
 			tsType := types.New(types.T_TS, 0, 0)
-			arg := NewArgumentByEngine(nil).SetBlock(true).AddLockTarget(table, 0, pkType, 1)
+
+			arg := output.NewArgument().WithBlock(true).WithFunc(func(b *batch.Batch) error {
+				return nil
+			})
+			lockArg := NewArgumentByEngine(nil).AddLockTarget(table, 0, pkType, 1)
+			arg.AppendChild(lockArg)
 
 			var batches []*batch.Batch
 			var batches2 []*batch.Batch
@@ -522,7 +534,9 @@ func runLockBlockingOpTest(
 				batches2 = append(batches2, bat)
 			}
 			require.NoError(t, arg.Prepare(proc))
-			arg.ctr.batchFetchFunc = func(*process.Process) (vm.CallResult, error) {
+			require.NoError(t, lockArg.Prepare(proc))
+
+			lockArg.ctr.batchFetchFunc = func(*process.Process) (vm.CallResult, error) {
 				if len(batches) == 0 {
 					return vm.NewCallResult(), nil
 				}
