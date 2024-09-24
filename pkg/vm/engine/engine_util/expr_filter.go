@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type FastFilterOp func(*objectio.ObjectStats) (bool, error)
@@ -103,7 +102,6 @@ func isSortedKey(colDef *plan.ColDef) (isPK, isSorted bool) {
 
 func CompileFilterExprs(
 	exprs []*plan.Expr,
-	proc *process.Process,
 	tableDef *plan.TableDef,
 	fs fileservice.FileService,
 ) (
@@ -120,7 +118,7 @@ func CompileFilterExprs(
 		return
 	}
 	if len(exprs) == 1 {
-		return CompileFilterExpr(exprs[0], proc, tableDef, fs)
+		return CompileFilterExpr(exprs[0], tableDef, fs)
 	}
 	ops1 := make([]FastFilterOp, 0, len(exprs))
 	ops2 := make([]LoadOp, 0, len(exprs))
@@ -129,7 +127,7 @@ func CompileFilterExprs(
 	ops5 := make([]SeekFirstBlockOp, 0, len(exprs))
 
 	for _, expr := range exprs {
-		expr_op1, expr_op2, expr_op3, expr_op4, expr_op5, can, hsh := CompileFilterExpr(expr, proc, tableDef, fs)
+		expr_op1, expr_op2, expr_op3, expr_op4, expr_op5, can, hsh := CompileFilterExpr(expr, tableDef, fs)
 		if !can {
 			return nil, nil, nil, nil, nil, false, false
 		}
@@ -217,7 +215,6 @@ func CompileFilterExprs(
 
 func CompileFilterExpr(
 	expr *plan.Expr,
-	proc *process.Process,
 	tableDef *plan.TableDef,
 	fs fileservice.FileService,
 ) (
@@ -247,7 +244,7 @@ func CompileFilterExpr(
 			seekOps := make([]SeekFirstBlockOp, len(exprImpl.F.Args))
 
 			for idx := range exprImpl.F.Args {
-				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], proc, tableDef, fs)
+				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
 				if !can {
 					return nil, nil, nil, nil, nil, false, false
 				}
@@ -340,7 +337,7 @@ func CompileFilterExpr(
 			seekOps := make([]SeekFirstBlockOp, len(exprImpl.F.Args))
 
 			for idx := range exprImpl.F.Args {
-				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], proc, tableDef, fs)
+				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
 				if !can {
 					return nil, nil, nil, nil, nil, false, false
 				}

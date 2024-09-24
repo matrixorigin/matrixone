@@ -705,7 +705,6 @@ func (tbl *txnTable) rangesOnePart(
 
 	if done, err = TryFastFilterBlocks(
 		ctx,
-		tbl,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
 		exprs,
@@ -714,7 +713,6 @@ func (tbl *txnTable) rangesOnePart(
 		uncommittedObjects,
 		outBlocks,
 		tbl.getTxn().engine.fs,
-		tbl.proc.Load(),
 	); err != nil {
 		return err
 	} else if done {
