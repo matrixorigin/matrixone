@@ -45,20 +45,21 @@ func (sp *ShufflePool) Hold() {
 	sp.holders++
 }
 
-func (sp *ShufflePool) Ending() {
+func (sp *ShufflePool) Ending() bool {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
 	sp.holders--
 	if sp.holders < 0 {
 		panic("shuffle pool holders should never be negative")
 	}
+	return sp.holders == 0
 }
 
 func (sp *ShufflePool) Reset(m *mpool.MPool) {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
 	if sp.holders > 0 {
-		return
+		panic("shuffle pool can't reset when holders > 0")
 	}
 	for i := range sp.batches {
 		if sp.batches[i] != nil {
@@ -68,6 +69,12 @@ func (sp *ShufflePool) Reset(m *mpool.MPool) {
 }
 
 func (sp *ShufflePool) Print() { // only for debug
+	sp.lock.Lock()
+	defer sp.lock.Unlock()
+	logutil.Infof("shuffle pool %p holders %v", sp, sp.holders)
+	if sp.holders > 0 {
+		return
+	}
 	for i := range sp.batches {
 		bat := sp.batches[i]
 		if bat == nil {
@@ -90,8 +97,8 @@ func (sp *ShufflePool) GetEndingBatch(buf *batch.Batch, proc *process.Process) *
 	}
 	for i := range sp.batches {
 		bat := sp.batches[i]
+		sp.batches[i] = nil
 		if bat != nil && bat.RowCount() > 0 {
-			sp.batches[i] = nil
 			return bat
 		}
 	}

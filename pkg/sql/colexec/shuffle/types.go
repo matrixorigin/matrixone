@@ -72,6 +72,7 @@ func (shuffle *Shuffle) Release() {
 
 type container struct {
 	ending               bool
+	lastForShufflePool   bool
 	sels                 [][]int64
 	buf                  *batch.Batch
 	shufflePool          *ShufflePool
@@ -93,8 +94,9 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	if shuffle.ctr.buf != nil {
 		shuffle.ctr.buf.Clean(proc.Mp())
 	}
-	if shuffle.ctr.shufflePool != nil {
+	if shuffle.ctr.shufflePool != nil && shuffle.ctr.lastForShufflePool {
 		shuffle.ctr.shufflePool.Reset(proc.Mp())
+		shuffle.ctr.lastForShufflePool = false
 	}
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
