@@ -227,14 +227,16 @@ func (p *Pattern) EvalOR(s *SearchAccum, arg, result map[any]float32) (map[any]f
 // GREATERTHAN is higher the ranking
 // RANKLESS is to discourage the ranking but not delete such as Minus. weight is negative to discourage the ranking.
 func (p *Pattern) GetWeight() float32 {
-	if p.Operator == LESSTHAN {
+	switch p.Operator {
+	case LESSTHAN:
 		return float32(0.9)
-	} else if p.Operator == GREATERTHAN {
+	case GREATERTHAN:
 		return float32(1.1)
-	} else if p.Operator == RANKLESS {
+	case RANKLESS:
 		return float32(-1.0)
+	default:
+		return float32(1.0)
 	}
-	return float32(1.0)
 }
 
 // Eval() function to evaluate the previous result from Eval and the current pattern (with data from datasource)  and return map[doc_id]float32
