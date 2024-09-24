@@ -64,6 +64,12 @@ func MergeCheckpoint(
 			ckpEntry.GetStart(), ckpEntry.GetEnd())
 		deleteFiles = append(deleteFiles, nameMeta)
 	}
+	defer func() {
+		for _, data := range datas {
+			data.Close()
+		}
+		ckpData.Close()
+	}()
 	if len(datas) == 0 {
 		logutil.Infof("no checkpoint data to merge")
 		return nil, "", nil
