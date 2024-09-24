@@ -16,7 +16,10 @@ package gc
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -168,4 +171,69 @@ type Cleaner interface {
 	SetCheckGC(enable bool)
 	GetMPool() *mpool.MPool
 	GetSnapshots() (map[uint32]containers.Vector, error)
+}
+
+var ObjectTableAttrs []string
+var ObjectTableTypes []types.Type
+var ObjectTableSeqnums []uint16
+var ObjectTableMetaAttrs []string
+var ObjectTableMetaTypes []types.Type
+
+const ObjectTablePrimaryKeyIdx = 0
+const ObjectTableVersion = 0
+const (
+	DefaultInMemoryStagedSize = mpool.MB * 32
+)
+
+func init() {
+	ObjectTableAttrs = []string{
+		"stats",
+		"created_ts",
+		"deleted_ts",
+		"db_id",
+		"table_id",
+	}
+	ObjectTableTypes = []types.Type{
+		objectio.VarcharType,
+		objectio.TSType,
+		objectio.TSType,
+		objectio.Uint64Type,
+		objectio.Uint64Type,
+	}
+	ObjectTableSeqnums = []uint16{0, 1, 2, 3, 4}
+
+	ObjectTableMetaAttrs = []string{
+		"stats",
+	}
+
+	ObjectTableMetaTypes = []types.Type{
+		objectio.VarcharType,
+	}
+
+}
+
+func NewObjectTableBatch() *batch.Batch {
+	ret := batch.New(false, ObjectTableAttrs)
+	ret.SetVector(0, vector.NewVec(ObjectTableTypes[0]))
+	ret.SetVector(1, vector.NewVec(ObjectTableTypes[1]))
+	ret.SetVector(2, vector.NewVec(ObjectTableTypes[2]))
+	ret.SetVector(3, vector.NewVec(ObjectTableTypes[3]))
+	ret.SetVector(4, vector.NewVec(ObjectTableTypes[4]))
+	return ret
+}
+
+func addObjectToBatch(
+	bat *batch.Batch,
+	name string,
+	createdTS types.TS,
+	deletedTS types.TS,
+	dbID uint64,
+	tableID uint64,
+	mPool *mpool.MPool,
+) {
+	vector.AppendFixed(bat.Vecs[0], name, false, mPool)
+	vector.AppendFixed[types.TS](bat.Vecs[1], createdTS, false, mPool)
+	vector.AppendFixed[types.TS](bat.Vecs[2], deletedTS, false, mPool)
+	vector.AppendFixed[uint64](bat.Vecs[3], dbID, false, mPool)
+	vector.AppendFixed[uint64](bat.Vecs[4], tableID, false, mPool)
 }

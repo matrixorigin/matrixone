@@ -37,52 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
-var ObjectTableAttrs []string
-var ObjectTableTypes []types.Type
-
-func init() {
-	ObjectTableAttrs = []string{
-		"stats",
-		"created_ts",
-		"deleted_ts",
-		"db_id",
-		"table_id",
-	}
-	ObjectTableTypes = []types.Type{
-		objectio.VarcharType,
-		objectio.TSType,
-		objectio.TSType,
-		objectio.Uint64Type,
-		objectio.Uint64Type,
-	}
-}
-
-func NewObjectTableBatch() *batch.Batch {
-	ret := batch.New(false, ObjectTableAttrs)
-	ret.SetVector(0, vector.NewVec(ObjectTableTypes[0]))
-	ret.SetVector(1, vector.NewVec(ObjectTableTypes[1]))
-	ret.SetVector(2, vector.NewVec(ObjectTableTypes[2]))
-	ret.SetVector(3, vector.NewVec(ObjectTableTypes[3]))
-	ret.SetVector(4, vector.NewVec(ObjectTableTypes[4]))
-	return ret
-}
-
-func addObjectToBatch(
-	bat *batch.Batch,
-	name string,
-	createdTS types.TS,
-	deletedTS types.TS,
-	dbID uint64,
-	tableID uint64,
-	mPool *mpool.MPool,
-) {
-	vector.AppendFixed(bat.Vecs[0], name, false, mPool)
-	vector.AppendFixed[types.TS](bat.Vecs[1], createdTS, false, mPool)
-	vector.AppendFixed[types.TS](bat.Vecs[2], deletedTS, false, mPool)
-	vector.AppendFixed[uint64](bat.Vecs[3], dbID, false, mPool)
-	vector.AppendFixed[uint64](bat.Vecs[4], tableID, false, mPool)
-}
-
 type ObjectEntry struct {
 	createTS types.TS
 	dropTS   types.TS
@@ -250,7 +204,6 @@ func (t *GCTable) collectData() *batch.Batch {
 	bat := NewObjectTableBatch()
 	for name, entry := range t.objects {
 		addObjectToBatch(bat, name, entry.createTS, entry.dropTS, entry.db, entry.table, t.mp)
-
 	}
 	return bat
 }
@@ -259,7 +212,14 @@ func (t *GCTable) collectData() *batch.Batch {
 func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.ObjectStats, error) {
 	bat := t.collectData()
 	defer bat.Clean(t.mp)
-	sinker := engine_util.NewSinker(0, ObjectTableAttrs, ObjectTableTypes, nil, t.mp, fs.Service)
+	factory := engine_util.NewFSinkerImplFactory(
+		ObjectTableSeqnums,
+		ObjectTablePrimaryKeyIdx,
+		true,
+		false,
+		ObjectTableVersion,
+	)
+	sinker := engine_util.NewSinker(ObjectTablePrimaryKeyIdx, ObjectTableAttrs, ObjectTableTypes, factory, t.mp, fs.Service)
 	err := sinker.Write(context.Background(), bat)
 	if err != nil {
 		return nil, err
@@ -268,8 +228,23 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 	if err != nil {
 		return nil, err
 	}
-	//name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
 	blocks, _ := sinker.GetResult()
+
+	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
+	ret := batch.New(false, ObjectTableMetaAttrs)
+	ret.SetVector(0, vector.NewVec(ObjectTableMetaTypes[0]))
+	for _, block := range blocks {
+		vector.AppendBytes(ret.GetVector(0), block[:], false, t.mp)
+	}
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
+		return nil, err
+	}
+
+	_, err = writer.WriteEnd(context.Background())
 	return blocks, err
 }
 
@@ -327,7 +302,6 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch, idx BatchType, objects 
 		name := string(bats[idx].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
 		creatTS := bats[idx].GetVectorByName(GCCreateTS).Get(i).(types.TS)
 		deleteTS := bats[idx].GetVectorByName(GCDeleteTS).Get(i).(types.TS)
-		commitTS := bats[idx].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
 		tid := bats[idx].GetVectorByName(GCAttrTableId).Get(i).(uint64)
 		if t.objects[name] != nil {
 			continue
@@ -335,10 +309,9 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch, idx BatchType, objects 
 		object := &ObjectEntry{
 			createTS: creatTS,
 			dropTS:   deleteTS,
-			commitTS: commitTS,
 			table:    tid,
 		}
-		t.addObjectLocked(name, object, commitTS, objects)
+		t.addObjectLocked(name, object, objects)
 	}
 }
 
@@ -402,7 +375,6 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	}
 	t.Lock()
 	t.rebuildTable(bats, ObjectList, t.objects)
-	t.rebuildTable(bats, TombstoneList, t.tombstones)
 	t.Unlock()
 	return nil
 }
@@ -412,10 +384,6 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 func (t *GCTable) Compare(table *GCTable) bool {
 	if !t.compareObjects(t.objects, table.objects) {
 		logutil.Infof("objects are not equal")
-		return false
-	}
-	if !t.compareObjects(t.tombstones, table.tombstones) {
-		logutil.Infof("tombstones are not equal")
 		return false
 	}
 	return true
