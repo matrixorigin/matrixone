@@ -23,7 +23,8 @@ import (
 )
 
 type PeakInuseTracker struct {
-	ptr atomic.Pointer[peakInuseData]
+	ptr             atomic.Pointer[peakInuseData]
+	updateThreshold uint64
 }
 
 type peakInuseData struct {
@@ -43,8 +44,10 @@ type peakInuseValue struct {
 	Time  time.Time
 }
 
-func NewPeakInuseTracker() *PeakInuseTracker {
-	ret := new(PeakInuseTracker)
+func NewPeakInuseTracker(updateThreshold uint64) *PeakInuseTracker {
+	ret := &PeakInuseTracker{
+		updateThreshold: updateThreshold,
+	}
 	ret.ptr.Store(&peakInuseData{
 		GoMetrics: make(map[string]peakInuseValue),
 	})
@@ -60,13 +63,15 @@ func (p *PeakInuseTracker) MarshalJSON() ([]byte, error) {
 	return json.Marshal(*p.ptr.Load())
 }
 
-var GlobalPeakInuseTracker = NewPeakInuseTracker()
+const defaultPeakInuseUpdateThreshold = 1 << 20
+
+var GlobalPeakInuseTracker = NewPeakInuseTracker(defaultPeakInuseUpdateThreshold)
 
 func (p *PeakInuseTracker) UpdateMalloc(n uint64) {
 	for {
 		// read
 		ptr := p.ptr.Load()
-		if n <= ptr.Malloc.Value {
+		if n <= ptr.Malloc.Value+p.updateThreshold {
 			return
 		}
 		// copy

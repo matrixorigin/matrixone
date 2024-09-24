@@ -25,7 +25,7 @@ import (
 )
 
 func TestPeakInuseTrackerMarshal(t *testing.T) {
-	tracker := NewPeakInuseTracker()
+	tracker := NewPeakInuseTracker(0)
 
 	// json
 	_, err := json.Marshal(tracker)
@@ -52,30 +52,30 @@ func TestPeakInuseTrackerMarshal(t *testing.T) {
 }
 
 func BenchmarkPeakInuseTrackerUpdate(b *testing.B) {
-	tracker := NewPeakInuseTracker()
+	tracker := NewPeakInuseTracker(defaultPeakInuseUpdateThreshold)
 	for i, max := uint64(0), uint64(b.N); i < max; i++ {
-		tracker.UpdateMalloc(i)
+		tracker.UpdateMalloc(i * 1024)
 	}
 }
 
 func BenchmarkPeakInuseTrackerUpdateParallel(b *testing.B) {
-	tracker := NewPeakInuseTracker()
+	tracker := NewPeakInuseTracker(defaultPeakInuseUpdateThreshold)
 	b.RunParallel(func(pb *testing.PB) {
 		for i := uint64(0); pb.Next(); i++ {
-			tracker.UpdateMalloc(i)
+			tracker.UpdateMalloc(i * 1024)
 		}
 	})
 }
 
 func BenchmarkPeakInuseTrackerNoUpdate(b *testing.B) {
-	tracker := NewPeakInuseTracker()
+	tracker := NewPeakInuseTracker(defaultPeakInuseUpdateThreshold)
 	for range b.N {
 		tracker.UpdateMalloc(0)
 	}
 }
 
 func BenchmarkPeakInuseTrackerNoUpdateParallel(b *testing.B) {
-	tracker := NewPeakInuseTracker()
+	tracker := NewPeakInuseTracker(defaultPeakInuseUpdateThreshold)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			tracker.UpdateMalloc(0)
