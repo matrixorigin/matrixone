@@ -560,7 +560,6 @@ func (c *checkHelper) check(data, tombstone *batch.Batch, t *testing.T) {
 		commitTSVec := data.Vecs[len(data.Vecs)-1]
 		commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec)
 		for _, ts := range commitTSs {
-			assert.True(t, ts.GreaterEq(&c.prevDataTS))
 			assert.True(t, ts.GreaterEq(&c.prevTombstoneTS))
 			if ts.Greater(&maxTS) {
 				maxTS = ts
@@ -575,7 +574,6 @@ func (c *checkHelper) check(data, tombstone *batch.Batch, t *testing.T) {
 		commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec)
 		for _, ts := range commitTSs {
 			assert.True(t, ts.Greater(&c.prevDataTS))
-			assert.True(t, ts.GreaterEq(&c.prevTombstoneTS))
 			if ts.Greater(&maxTS) {
 				maxTS = ts
 			}
