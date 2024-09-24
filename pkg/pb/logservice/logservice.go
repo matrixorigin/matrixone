@@ -206,6 +206,7 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	if hb.ConfigData != nil {
 		storeInfo.ConfigData = hb.ConfigData
 	}
+	storeInfo.Locality = hb.Locality
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -214,16 +215,19 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 		recorded, ok := s.Shards[incoming.ShardID]
 		if !ok {
 			recorded = LogShardInfo{
-				ShardID:  incoming.ShardID,
-				Replicas: make(map[uint64]string),
+				ShardID:           incoming.ShardID,
+				Replicas:          make(map[uint64]string),
+				NonVotingReplicas: make(map[uint64]string),
 			}
 		}
 
 		if incoming.Epoch > recorded.Epoch {
 			recorded.Epoch = incoming.Epoch
 			recorded.Replicas = incoming.Replicas
+			recorded.NonVotingReplicas = incoming.NonVotingReplicas
 		} else if incoming.Epoch == recorded.Epoch && incoming.Epoch > 0 {
-			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) {
+			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) ||
+				!reflect.DeepEqual(recorded.NonVotingReplicas, incoming.NonVotingReplicas) {
 				panic(fmt.Sprintf("inconsistent replicas, recorded: %+v, incoming: %+v",
 					recorded, incoming))
 			}
@@ -321,4 +325,23 @@ func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
 		storeInfo.ConfigData = hb.ConfigData
 	}
 	s.Stores[hb.UUID] = storeInfo
+}
+
+func (l *Locality) Format() string {
+	if l == nil || l.Value == nil {
+		return ""
+	}
+	if len(l.Value) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(l.Value))
+	for k := range l.Value {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var s string
+	for _, k := range keys {
+		s += fmt.Sprintf("%s:%s;", k, l.Value[k])
+	}
+	return s[:len(s)-1]
 }

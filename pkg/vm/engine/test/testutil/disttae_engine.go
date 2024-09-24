@@ -619,3 +619,11 @@ func (ha *testHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, error)
 func (ha *testHAKeeperClient) SendCNHeartbeat(ctx context.Context, hb logservice2.CNStoreHeartbeat) (logservice2.CommandBatch, error) {
 	return logservice2.CommandBatch{}, nil
 }
+
+func (ha *testHAKeeperClient) UpdateNonVotingReplicaNum(ctx context.Context, num uint64) error {
+	return nil
+}
+
+func (ha *testHAKeeperClient) UpdateNonVotingLocality(ctx context.Context, locality logservice2.Locality) error {
+	return nil
+}
