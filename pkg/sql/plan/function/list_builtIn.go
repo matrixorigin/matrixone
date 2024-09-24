@@ -5875,7 +5875,7 @@ var supportedOthersBuiltIns = []FuncNew{
 
 	// function `mo_show_col_qunique`
 	{
-		functionId: MO_SHOW_COL_QUNIQUE,
+		functionId: MO_SHOW_COL_UNIQUE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
