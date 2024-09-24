@@ -284,7 +284,7 @@ func moShowColUnique(constraintStr string, colName string) bool {
 		return false
 	}
 
-	contatinsCol := false
+	containsCol := false
 	// get unique constraint
 	for _, ct := range c.Cts {
 		switch k := ct.(type) {
@@ -293,7 +293,7 @@ func moShowColUnique(constraintStr string, colName string) bool {
 				for _, index := range k.Indexes {
 					for _, part := range index.Parts {
 						if part == strings.ToLower(colName) {
-							contatinsCol = true
+							containsCol = true
 							break
 						}
 					}
@@ -302,7 +302,7 @@ func moShowColUnique(constraintStr string, colName string) bool {
 		}
 	}
 
-	if contatinsCol {
+	if containsCol {
 		return true
 	} else {
 		return false
