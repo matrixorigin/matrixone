@@ -69,6 +69,60 @@ func init() {
 				},
 			},
 		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			arg: &Fill{
+				AggIds:   []int32{function.MAX},
+				FillType: plan.Node_PREV,
+				FillVal: []*plan.Expr{
+					{
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_I64Val{
+								I64Val: 1,
+							},
+						}},
+						Typ: plan.Type{
+							Id: int32(types.T_int64),
+						},
+					},
+				},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			arg: &Fill{
+				AggIds:   []int32{function.MAX},
+				FillType: plan.Node_NONE,
+				FillVal: []*plan.Expr{
+					{
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_I64Val{
+								I64Val: 1,
+							},
+						}},
+						Typ: plan.Type{
+							Id: int32(types.T_int64),
+						},
+					},
+				},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
 	}
 }
 
