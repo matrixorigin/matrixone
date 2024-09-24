@@ -215,7 +215,7 @@ func Test_UpgEntry(t *testing.T) {
 				}
 				return executor.Result{}, nil
 			}, txnOperator)
-			upg_information_schemata_schema.Upgrade(executor, uint32(0))
+			upg_information_schema_schemata.Upgrade(executor, uint32(0))
 		},
 	)
 }

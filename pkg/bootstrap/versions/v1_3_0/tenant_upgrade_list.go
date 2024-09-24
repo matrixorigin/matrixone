@@ -29,7 +29,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_mo_snapshots,
 	upg_mo_retention,
 	upg_information_schema_columns,
-	upg_information_schemata_schema,
+	upg_information_schema_schemata,
 }
 
 const viewServerSnapshotUsage = "server_snapshot_usage"
@@ -93,7 +93,7 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "COLUMNS"),
 }
 
-var upg_information_schemata_schema = versions.UpgradeEntry{
+var upg_information_schema_schemata = versions.UpgradeEntry{
 	Schema:    sysview.InformationDBConst,
 	TableName: "SCHEMATA",
 	UpgType:   versions.MODIFY_VIEW,
