@@ -898,6 +898,107 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 	}
 }
 
+func Truncate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	diff, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]).GetValue(0)
+	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	num, err := getIntervalNum(diff, unit, proc)
+	if err != nil {
+		return err
+	}
+	t := types.Datetime(num)
+
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	rs := vector.MustFunctionResult[types.Datetime](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			return moerr.NewNotSupported(proc.Ctx, "now args of MO_WIN_TRUNCATE can not be NULL")
+		}
+		if err = rs.Append(v-v%t, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
+	var num int64
+	iTyp := types.IntervalType(unit)
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
+	if err != nil {
+		return num, err
+	}
+	switch iTyp {
+	case types.Second:
+		num = diff * types.MicroSecsPerSec
+	case types.Minute:
+		num = diff * types.SecsPerMinute * types.MicroSecsPerSec
+	case types.Hour:
+		num = diff * types.SecsPerHour * types.MicroSecsPerSec
+	case types.Day:
+		num = diff * types.SecsPerDay * types.MicroSecsPerSec
+	default:
+		return num, moerr.NewNotSupported(proc.Ctx, "now support SECOND, MINUTE, HOUR, DAY as the time unit")
+	}
+	return num, nil
+}
+
+func getSecondNum(diff, unit int64, proc *process.Process) (int64, error) {
+	var num int64
+	iTyp := types.IntervalType(unit)
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
+	if err != nil {
+		return num, err
+	}
+	switch iTyp {
+	case types.Second:
+		num = diff
+	case types.Minute:
+		num = diff * types.SecsPerMinute
+	case types.Hour:
+		num = diff * types.SecsPerHour
+	case types.Day:
+		num = diff * types.SecsPerDay
+	default:
+		return num, moerr.NewNotSupported(proc.Ctx, "now support SECOND, MINUTE, HOUR, DAY as the time unit")
+	}
+	return num, nil
+}
+
+func Divisor(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	diff1, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0]).GetValue(0)
+	unit1, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]).GetValue(0)
+	num1, err := getSecondNum(diff1, unit1, proc)
+	if err != nil {
+		return err
+	}
+	diff2, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	unit2, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[3]).GetValue(0)
+	num2, err := getSecondNum(diff2, unit2, proc)
+	if err != nil {
+		return err
+	}
+
+	if num2 > num1 {
+		return moerr.NewInvalidInput(proc.Ctx, "sliding value should be smaller than the interval value")
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
+
+	gcd := func(a, b int64) int64 {
+		for b != 0 {
+			a, b = b, a%b
+		}
+		return a
+	}
+	if err = rs.Append(gcd(num1, num2), false); err != nil {
+		return err
+	}
+	return nil
+}
+
 func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
