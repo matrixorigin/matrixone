@@ -23,9 +23,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,11 +32,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 const (
@@ -1703,9 +1702,10 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 
 func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId string) (s string, err error) {
 	var (
-		dbName    string
-		tblName   string
-		watermark string
+		dbName       string
+		tblName      string
+		watermarkStr string
+		watermark    timestamp.Timestamp
 	)
 
 	s = "{\n"
@@ -1729,11 +1729,14 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 			if tblName, err = result.GetString(ctx, i, 1); err != nil {
 				return
 			}
-			if watermark, err = result.GetString(ctx, i, 2); err != nil {
+			if watermarkStr, err = result.GetString(ctx, i, 2); err != nil {
+				return
+			}
+			if watermark, err = timestamp.ParseTimestamp(watermarkStr); err != nil {
 				return
 			}
 
-			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark)
+			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark.ToStdTime().String())
 		}
 	}
 
