@@ -119,4 +119,46 @@ var (
 	TotalSQLLengthHistogram          = sqlLengthHistogram.WithLabelValues("total-sql-length")
 	LoadDataInlineSQLLengthHistogram = sqlLengthHistogram.WithLabelValues("load-data-inline-sql-length")
 	OtherSQLLengthHistogram          = sqlLengthHistogram.WithLabelValues("other-sql-length")
+
+	cdcRecordCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "cdc_record_count",
+			Help:      "Count of records cdc read and sink",
+		}, []string{"type"})
+	CdcReadRecordCounter = cdcRecordCounter.WithLabelValues("read")
+	CdcSinkRecordCounter = cdcRecordCounter.WithLabelValues("sink")
+
+	cdcErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "cdc_error_count",
+			Help:      "Count of error",
+		}, []string{"type"})
+	CdcMysqlConnErrorCounter = cdcErrorCounter.WithLabelValues("mysql-conn")
+	CdcMysqlSinkErrorCounter = cdcErrorCounter.WithLabelValues("mysql-sink")
+
+	cdcProcessingRecordCountGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "cdc_processing_record_count",
+			Help:      "Count of records cdc has read but not sunk",
+		}, []string{"type"})
+	CdcProcessingTotalRecordCountGauge    = cdcProcessingRecordCountGauge.WithLabelValues("total")
+	CdcProcessingSnapshotRecordCountGauge = cdcProcessingRecordCountGauge.WithLabelValues("snapshot")
+	CdcProcessingTailRecordCountGauge     = cdcProcessingRecordCountGauge.WithLabelValues("tail")
+
+	cdcAllocatedBatchBytesGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "cdc_allocated_batch_bytes",
+			Help:      "Bytes allocated by cdc",
+		}, []string{"type"})
+	CdcTotalAllocatedBatchBytesGauge    = cdcAllocatedBatchBytesGauge.WithLabelValues("total")
+	CdcSnapshotAllocatedBatchBytesGauge = cdcAllocatedBatchBytesGauge.WithLabelValues("snapshot")
+	CdcTailAllocatedBatchBytesGauge     = cdcAllocatedBatchBytesGauge.WithLabelValues("tail")
 )
