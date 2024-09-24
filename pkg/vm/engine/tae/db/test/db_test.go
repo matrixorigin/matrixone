@@ -7097,6 +7097,27 @@ func TestMergeGC(t *testing.T) {
 	}
 	snapWG.Wait()
 	wg.Wait()
+	txn, err := db.StartTxn(nil)
+	require.NoError(t, err)
+	db1, err := txn.GetDatabase("db")
+	assert.NoError(t, err)
+	rel, err := db1.GetRelationByName(schema2.Name)
+	assert.NoError(t, err)
+	for i := 0; i < 10; i++ {
+		filter := handle.NewEQFilter(bats[0].Vecs[2].Get(i))
+		id, offset, err := rel.GetByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		_, _, err = rel.GetValue(id, offset, 2, false)
+		assert.NoError(t, err)
+		err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+		if err != nil {
+			t.Logf("range delete %v, rollbacking", err)
+			_ = txn.Rollback(context.Background())
+			return
+		}
+	}
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -7106,38 +7127,9 @@ func TestMergeGC(t *testing.T) {
 	db.DiskCleaner.GetCleaner().EnableGCForTest()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-	txn, err := db.StartTxn(nil)
-	require.NoError(t, err)
-	db1, err := txn.GetDatabase("db")
-	assert.NoError(t, err)
-	rel, err := db1.GetRelationByName(schema1.Name)
-	assert.NoError(t, err)
-	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked(false)
-	pkIdx := schema.GetPrimaryKey().Idx
-	rowIDIdx := schema.GetColIdx(catalog.PhyAddrColumnName)
-	it := rel.MakeObjectIt(false)
-	y := 0
-	for it.Next() {
-		if y > 1 {
-			break
-		}
-		blk := it.GetObject()
-		defer blk.Close()
-		blkCnt := uint16(blk.BlkCnt())
-		for i := uint16(0); i < blkCnt; i++ {
-			var view *containers.Batch
-			err := blk.HybridScan(context.Background(), &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
-			assert.NoError(t, err)
-			defer view.Close()
-			view.Compact()
-			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1], handle.DT_Normal)
-			assert.NoError(t, err)
-		}
-		y++
-	}
-	// CheckAllColRowsByScan(e.t, rel, 0, true)
-	err = txn.Commit(context.Background())
-	assert.NoError(t, err)
+	testutils.WaitExpect(10000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
 	testutils.WaitExpect(5000, func() bool {
 		stage := db.BGCheckpointRunner.GetStage()
 		return !stage.IsEmpty()
