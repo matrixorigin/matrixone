@@ -765,7 +765,7 @@ func (h *Handle) HandleWrite(
 		//check the input batch passed by cn is valid.
 		for i, vec := range req.Batch.Vecs {
 			if vec == nil {
-				logutil.Fatalf(
+				logutil.Fatal(
 					"INVALID-INSERT-BATCH-NIL-VEC",
 					zap.Int("idx", i),
 					zap.Uint64("table-id", req.TableID),
@@ -777,7 +777,7 @@ func (h *Handle) HandleWrite(
 				inMemoryInsertRows = vec.Length()
 			}
 			if vec.Length() != inMemoryInsertRows {
-				logutil.Fatalf(
+				logutil.Fatal(
 					"INVALID-INSERT-BATCH-DIFF-LENGTH",
 					zap.Int("idx", i),
 					zap.Uint64("table-id", req.TableID),
