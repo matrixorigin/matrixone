@@ -226,7 +226,6 @@ func NewService(
 	}
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
-	srv.storeEngine = pu.StorageEngine
 
 	// TODO: global client need to refactor
 	c, err := cnclient.NewPipelineClient(
