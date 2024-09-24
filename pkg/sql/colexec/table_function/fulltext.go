@@ -199,7 +199,7 @@ func run(proc *process.Process, s *fulltext.SearchAccum) error {
 
 			w, ok := s.WordAccums[word]
 			if !ok {
-				s.WordAccums[word] = fulltext.NewWordAccum(int64(i), s.Mode)
+				s.WordAccums[word] = fulltext.NewWordAccum()
 				w = s.WordAccums[word]
 			}
 			_, ok = w.Words[doc_id]

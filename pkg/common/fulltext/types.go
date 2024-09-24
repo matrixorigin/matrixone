@@ -50,22 +50,24 @@ Find rows that contain words such as “apple”, “apples”, “applesauce”
 Find rows that contain the exact phrase “some words” (for example, rows that contain “some words of wisdom” but not “some noise words”). Note that the " characters that enclose the phrase are operator characters that delimit the phrase. They are not the quotation marks that enclose the search string itself.
 */
 
+// Parser parameters
 type FullTextParserParam struct {
 	Parser string `json:"parser"`
 }
 
+// Word is associated with particular DocId (index.doc_id) and could have multiple positions
 type Word struct {
 	DocId    any
 	Position []int64
 	DocCount int32
 }
 
+// Word accumulator accumulate the same word appeared in multiple (index.doc_id).
 type WordAccum struct {
-	Id    int64
-	Mode  int64
 	Words map[any]*Word
 }
 
+// Search accumulator is to parse the search string into list of pattern and each pattern will associate with WordAccum by pattern.Text
 type SearchAccum struct {
 	SrcTblName string
 	TblName    string
@@ -76,6 +78,7 @@ type SearchAccum struct {
 	Nrow       int64
 }
 
+// Boolean mode search string parsing
 type FullTextBooleanOperator int
 
 var (
@@ -115,6 +118,7 @@ func OperatorToString(op int) string {
 	}
 }
 
+// Pattern works on both Natural Language and Boolean mode
 type Pattern struct {
 	Text     string
 	Operator int

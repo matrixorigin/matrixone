@@ -26,43 +26,23 @@ import (
 )
 
 /*
-The following examples demonstrate some search strings that use boolean full-text operators:
+  1. Parse the search string into list of pattern []*Pattern
+  2. With list of pattern, run SQL to get all pattern stats and store in SearchAccum/WordAccum.
+  3. foreach pattern in the list, call Eval() function to compute the rank score based on previous rank score and the accumulate of the current pattern
+     and return rank score as result
 
-'apple banana'
+     i.e.
 
-Find rows that contain at least one of the two words.
-
-'+apple +juice'
-
-Find rows that contain both words.
-
-'+apple macintosh'
-
-Find rows that contain the word “apple”, but rank rows higher if they also contain “macintosh”.
-
-'+apple -macintosh'
-
-Find rows that contain the word “apple” but not “macintosh”.
-
-'+apple ~macintosh'
-
-Find rows that contain the word “apple”, but if the row also contains the word “macintosh”, rate it lower than if row does not. This is “softer” than a search for '+apple -macintosh', for which the presence of “macintosh” causes the row not to be returned at all.
-
-'+apple +(>turnover <strudel)'
-
-Find rows that contain the words “apple” and “turnover”, or “apple” and “strudel” (in any order), but rank “apple turnover” higher than “apple strudel”.
-
-'apple*'
-
-Find rows that contain words such as “apple”, “apples”, “applesauce”, or “applet”.
-
-'"some words"'
-
-Find rows that contain the exact phrase “some words” (for example, rows that contain “some words of wisdom” but not “some noise words”). Note that the " characters that enclose the phrase are operator characters that delimit the phrase. They are not the quotation marks that enclose the search string itself.
+     result := nil
+     for p := range searchAccum.Pattern {
+            wordAccum := searchAccum.WordAccums[p.Text]
+            result = p.Eval(result, wordAccum)
+     }
+   4. return result as answer
 */
 
-func NewWordAccum(id int64, mode int64) *WordAccum {
-	return &WordAccum{Id: id, Mode: mode, Words: make(map[any]*Word)}
+func NewWordAccum() *WordAccum {
+	return &WordAccum{Words: make(map[any]*Word)}
 }
 
 func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
