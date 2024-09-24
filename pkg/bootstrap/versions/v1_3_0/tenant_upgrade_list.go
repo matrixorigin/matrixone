@@ -104,7 +104,7 @@ var upg_information_schemata_schema = versions.UpgradeEntry{
 			return false, err
 		}
 
-		if exists && viewDef == sysview.InformationSchemaColumnsDDL {
+		if exists && viewDef == sysview.InformationSchemaSchemataDDL {
 			return true, nil
 		}
 		return false, nil
