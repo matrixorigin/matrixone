@@ -33,18 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 )
 
-func newColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
-	return &plan.Expr{
-		Typ: typ,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				Name:   name,
-				ColPos: int32(pos),
-			},
-		},
-	}
-}
-
 func genWriteReqs(
 	ctx context.Context,
 	txnCommit *Transaction,
