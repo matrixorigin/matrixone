@@ -94,6 +94,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			TestGossipProbeInterval: cfg.GossipProbeInterval.Duration,
 			LogDB:                   logdb,
 			ExplicitHostname:        cfg.ExplicitHostname,
+			MembershipImmovable:     cfg.MembershipImmovable,
 		},
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddr(),
@@ -139,10 +140,14 @@ type store struct {
 	}
 	shardSnapshotInfo shardSnapshotInfo
 	snapshotMgr       *snapshotManager
+
+	// onReplicaChanged is a called when the replicas on the store changes.
+	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType)
 }
 
 func newLogStore(cfg Config,
 	taskServiceGetter func() taskservice.TaskService,
+	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType),
 	rt runtime.Runtime) (*store, error) {
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
 	if err != nil {
@@ -166,6 +171,7 @@ func newLogStore(cfg Config,
 
 		shardSnapshotInfo: newShardSnapshotInfo(),
 		snapshotMgr:       newSnapshotManager(&cfg),
+		onReplicaChanged:  onReplicaChanged,
 	}
 	ls.mu.metadata = metadata.LogStore{UUID: cfg.UUID}
 	if err := ls.stopper.RunNamedTask("truncation-worker", func(ctx context.Context) {
@@ -198,12 +204,24 @@ func (l *store) startReplicas() error {
 
 	for _, rec := range shards {
 		if rec.ShardID == hakeeper.DefaultHAKeeperShardID {
-			if err := l.startHAKeeperReplica(rec.ReplicaID, nil, false); err != nil {
-				return err
+			if !rec.NonVoting {
+				if err := l.startHAKeeperReplica(rec.ReplicaID, nil, false); err != nil {
+					return err
+				}
+			} else {
+				if err := l.startHAKeeperNonVotingReplica(rec.ReplicaID, nil, false); err != nil {
+					return err
+				}
 			}
 		} else {
-			if err := l.startReplica(rec.ShardID, rec.ReplicaID, nil, false); err != nil {
-				return err
+			if !rec.NonVoting {
+				if err := l.startReplica(rec.ShardID, rec.ReplicaID, nil, false); err != nil {
+					return err
+				}
+			} else {
+				if err := l.startNonVotingReplica(rec.ShardID, rec.ReplicaID, nil, false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -217,7 +235,28 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 		join, hakeeper.NewStateMachine, raftConfig); err != nil {
 		return err
 	}
-	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID)
+	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID, false)
+	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
+	if !l.cfg.DisableWorkers {
+		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
+			l.runtime.SubLogger(runtime.SystemInit).Info("HAKeeper ticker started")
+			l.ticker(ctx)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *store) startHAKeeperNonVotingReplica(replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target, join bool) error {
+	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
+	raftConfig.IsNonVoting = true
+	if err := l.nh.StartReplica(initialReplicas,
+		join, hakeeper.NewStateMachine, raftConfig); err != nil {
+		return err
+	}
+	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID, true)
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
 	if !l.cfg.DisableWorkers {
 		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
@@ -242,7 +281,33 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
 		return err
 	}
-	l.addMetadata(shardID, replicaID)
+	l.addMetadata(shardID, replicaID, false)
+	if l.onReplicaChanged != nil {
+		l.onReplicaChanged(shardID, replicaID, AddReplica)
+	}
+	return nil
+}
+
+func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target, join bool) error {
+	if shardID == hakeeper.DefaultHAKeeperShardID {
+		return moerr.NewInvalidInputNoCtx(fmt.Sprintf(
+			"shardID %d does not match DefaultHAKeeperShardID %d",
+			shardID, hakeeper.DefaultHAKeeperShardID),
+		)
+	}
+	cfg := getRaftConfig(shardID, replicaID)
+	cfg.IsNonVoting = true
+	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
+		panic(err)
+	}
+	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
+		return err
+	}
+	l.addMetadata(shardID, replicaID, true)
+	if l.onReplicaChanged != nil {
+		l.onReplicaChanged(shardID, replicaID, AddReplica)
+	}
 	return nil
 }
 
@@ -252,7 +317,13 @@ func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
 			atomic.StoreUint64(&l.haKeeperReplicaID, 0)
 		}()
 	}
-	return l.nh.StopReplica(shardID, replicaID)
+	if err := l.nh.StopReplica(shardID, replicaID); err != nil {
+		return err
+	}
+	if l.onReplicaChanged != nil {
+		l.onReplicaChanged(shardID, replicaID, DelReplica)
+	}
+	return nil
 }
 
 func (l *store) requestLeaderTransfer(shardID uint64, targetReplicaID uint64) error {
@@ -270,6 +341,31 @@ func (l *store) addReplica(shardID uint64, replicaID uint64,
 	for {
 		count++
 		if err := l.nh.SyncRequestAddReplica(ctx, shardID, replicaID, target, cci); err != nil {
+			if errors.Is(err, dragonboat.ErrShardNotReady) {
+				l.retryWait()
+				continue
+			}
+			if errors.Is(err, dragonboat.ErrTimeoutTooSmall) && count > 1 {
+				return dragonboat.ErrTimeout
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+func (l *store) addNonVotingReplica(
+	shardID uint64,
+	replicaID uint64,
+	target dragonboat.Target,
+	cci uint64,
+) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	count := 0
+	for {
+		count++
+		if err := l.nh.SyncRequestAddNonVoting(ctx, shardID, replicaID, target, cci); err != nil {
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				l.retryWait()
 				continue
@@ -301,8 +397,24 @@ func (l *store) removeReplica(shardID uint64, replicaID uint64, cci uint64) erro
 			return err
 		}
 		l.removeMetadata(shardID, replicaID)
+		if l.onReplicaChanged != nil {
+			l.onReplicaChanged(shardID, replicaID, DelReplica)
+		}
 		return nil
 	}
+}
+
+func (l *store) addLogShard(ctx context.Context, addLogShard pb.AddLogShard) error {
+	cmd := hakeeper.GetAddLogShardCmd(addLogShard)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if _, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose add log shard",
+			zap.Uint64("shard ID", addLogShard.ShardID),
+			zap.Error(err),
+		)
+		return handleNotHAKeeperError(ctx, err)
+	}
+	return nil
 }
 
 func (l *store) retryWait() {
@@ -631,6 +743,60 @@ func (l *store) addProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb
 	}
 }
 
+func (l *store) updateNonVotingReplicaNum(ctx context.Context, num uint64) error {
+	cmd := hakeeper.GetUpdateNonVotingReplicaNumCmd(num)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if _, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose update non-voting-replica-num",
+			zap.Uint64("num", num),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	}
+	return nil
+}
+
+func (l *store) updateNonVotingLocality(ctx context.Context, locality pb.Locality) error {
+	cmd := hakeeper.GetUpdateNonVotingLocality(locality)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if _, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose update non-voting-locality",
+			zap.Any("locality", locality),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	}
+	return nil
+}
+
+func (l *store) getLatestLsn(ctx context.Context, shardID uint64) (uint64, error) {
+	v, err := l.read(ctx, shardID, indexQuery{})
+	if err != nil {
+		return 0, err
+	}
+	return v.(uint64), nil
+}
+
+func (l *store) setRequiredLsn(ctx context.Context, shardID uint64, lsn Lsn) error {
+	session := l.nh.GetNoOPSession(shardID)
+	cmd := getSetRequiredLsnCmd(lsn)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		l.runtime.Logger().Error("propose set required lsn cmd failed", zap.Error(err))
+		return err
+	}
+	if result.Value > 0 {
+		l.runtime.Logger().Warn(fmt.Sprintf("shardID %d already set required to lsn %d", shardID, result.Value))
+	}
+	return nil
+}
+
+func (l *store) getRequiredLsn(ctx context.Context, shardID uint64) (uint64, error) {
+	v, err := l.read(ctx, shardID, requiredLsnQuery{})
+	if err != nil {
+		return 0, err
+	}
+	return v.(uint64), nil
+}
+
 func (l *store) decodeCmd(ctx context.Context, e raftpb.Entry) []byte {
 	if e.Type == raftpb.ApplicationEntry {
 		panic(moerr.NewInvalidState(ctx, "unexpected entry type"))
@@ -680,7 +846,8 @@ func (l *store) markEntries(ctx context.Context,
 			continue
 		}
 		if isUserUpdate(cmd) {
-			if parseLeaseHolderID(cmd) != leaseHolderID {
+			// we only check the leaseholder ID if the leasehold ID is 0.
+			if leaseHolderID != 0 && parseLeaseHolderID(cmd) != leaseHolderID {
 				// lease not match, skip
 				result = append(result, LogRecord{
 					Type: pb.LeaseRejected,
@@ -854,6 +1021,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		ServiceAddress: l.cfg.LogServiceServiceAddr(),
 		GossipAddress:  l.cfg.GossipServiceAddr(),
 		Replicas:       make([]pb.LogReplicaInfo, 0),
+		Locality:       l.cfg.getLocality(),
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,
@@ -872,11 +1040,15 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 			LogShardInfo: pb.LogShardInfo{
 				ShardID:  ci.ShardID,
 				Replicas: ci.Nodes,
-				Epoch:    ci.ConfigChangeIndex,
-				LeaderID: ci.LeaderID,
-				Term:     ci.Term,
+				// NonVotingReplicas are the non-voting replicas.
+				NonVotingReplicas: ci.NonVotingNodes,
+				Epoch:             ci.ConfigChangeIndex,
+				LeaderID:          ci.LeaderID,
+				Term:              ci.Term,
 			},
 			ReplicaID: ci.ReplicaID,
+			// the non-voting role is only known to replica itself.
+			IsNonVoting: ci.IsNonVoting,
 		}
 		// FIXME: why we need this?
 		if replicaInfo.Replicas == nil {
