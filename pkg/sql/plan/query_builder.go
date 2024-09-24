@@ -2509,13 +2509,15 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					}
 				}
 			}
+			ctx.groupingFlag = make([]bool, len(ctx.groups))
 			if clause.GroupBy.Apart {
-				if clause.GroupBy.GroupingSet == nil {
-					ctx.groupingFlag = make([]bool, len(ctx.groups))
-				}
+				ctx.isGroupingSet = true
 				for _, group := range clause.GroupBy.GroupingSet {
-					ctx.isGroupingSet = true
 					_, err = groupBinder.BindExpr(group, 0, true)
+				}
+			} else {
+				for i, _ := range ctx.groupingFlag {
+					ctx.groupingFlag[i] = true
 				}
 			}
 		}

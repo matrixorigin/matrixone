@@ -59,7 +59,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, moerr.NewInternalErrorNoCtx("Invalid GROUP BY NULL")
 	}
 
-	if isRoot {
+	if isRoot && !b.ctx.isGroupingSet {
 		astStr := tree.String(astExpr, dialect.MYSQL)
 		if _, ok := b.ctx.groupByAst[astStr]; ok {
 			return nil, nil
@@ -69,8 +69,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		b.ctx.groups = append(b.ctx.groups, expr)
 	}
 
-	if b.ctx.isGroupingSet && b.ctx.groupingFlag == nil {
-		b.ctx.groupingFlag = make([]bool, len(b.ctx.groups))
+	if b.ctx.isGroupingSet {
 		astStr := tree.String(astExpr, dialect.MYSQL)
 		b.ctx.groupingFlag[b.ctx.groupByAst[astStr]] = true
 	}

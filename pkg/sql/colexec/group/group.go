@@ -126,7 +126,11 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		} else {
 			group.ctr.typ = HStr
 		}
-
+		for _, flag := range group.GroupingFlag {
+			if !flag {
+				group.ctr.typ = HStr
+			}
+		}
 		if err = group.ctr.initResultBat(proc, group); err != nil {
 			return err
 		}
@@ -153,6 +157,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 			return
 		}
 	}
+
 	return group.ctr.initHashMap(proc, group)
 }
 
@@ -210,6 +215,12 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 				batList[0] = bat
 				if err = ctr.evaluateAggAndGroupBy(proc, batList); err != nil {
 					return result, err
+				}
+
+				for i, flag := range ap.GroupingFlag {
+					if !flag {
+						ctr.groupVecs.Vec[i] = vector.NewRollupConst(ctr.groupVecs.Typ[i], ctr.groupVecs.Vec[i].Length(), proc.Mp())
+					}
 				}
 
 				if len(ap.Exprs) == 0 {
