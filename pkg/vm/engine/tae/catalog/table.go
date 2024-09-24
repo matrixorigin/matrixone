@@ -83,7 +83,6 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		db:               db,
 		TableNode:        &TableNode{},
-		Stats:            common.NewTableCompactStat(),
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
 	}
@@ -115,7 +114,6 @@ func NewReplayTableEntry() *TableEntry {
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
-		Stats:            common.NewTableCompactStat(),
 		TableNode:        &TableNode{},
 	}
 	return e
@@ -131,7 +129,6 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		TableNode:        node,
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
-		Stats:            common.NewTableCompactStat(),
 	}
 }
 

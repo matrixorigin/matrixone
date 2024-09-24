@@ -962,11 +962,6 @@ func (r *runner) collectTableMemUsage(entry *logtail.DirtyTreeEntry) (memPressur
 		if err != nil {
 			panic(err)
 		}
-		if !table.Stats.Inited {
-			table.Stats.Lock()
-			table.Stats.InitWithLock(r.options.maxFlushInterval)
-			table.Stats.Unlock()
-		}
 		dirtyTree := entry.GetTree().GetTable(tid)
 		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
 		totalSize += asize + dsize
@@ -1007,7 +1002,7 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 		if force {
 			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				stats.ResetDeadlineWithLock()
+				stats.ResetDeadline()
 			}
 			continue
 		}
@@ -1028,7 +1023,7 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 				return true
 			}
 			// this table is too large, flush it
-			if asize+dsize > stats.FlushMemCapacity {
+			if asize+dsize > int(common.FlushMemCapacity.Load()) {
 				return true
 			}
 			// unflushed data is too large, flush it
@@ -1040,7 +1035,7 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 
 		ready := flushReady()
 
-		if stats.Inited && asize+dsize > 2*1000*1024 {
+		if asize+dsize > 2*1000*1024 {
 			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v, flushReady %v",
 				table.GetLastestSchemaLocked(false).Name,
 				common.HumanReadableBytes(asize+dsize),
@@ -1052,7 +1047,7 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 
 		if ready {
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				stats.ResetDeadlineWithLock()
+				stats.ResetDeadline()
 			}
 		}
 	}
