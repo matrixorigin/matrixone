@@ -1269,7 +1269,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	//test set orderby
+	//Just for passing UT coverage check only.
 	shardingLRD := disttae.MockShardingLocalReader()
 	shardingLRD.SetOrderBy(nil)
 	shardingLRD.GetOrderBy()
