@@ -662,7 +662,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 			}
 			lrd, err := NewReader(
 				ctx,
-				proc,
+				proc.Mp(),
 				tbl.origin.getTxn().engine,
 				tbl.origin.GetTableDef(ctx),
 				tbl.origin.db.op.SnapshotTS(),

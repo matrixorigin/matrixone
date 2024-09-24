@@ -281,7 +281,7 @@ func HandleShardingReadBuildReader(
 
 	rd, err := NewReader(
 		ctx,
-		tbl.proc.Load(),
+		tbl.proc.Load().Mp(),
 		e.(*Engine),
 		tbl.tableDef,
 		tbl.db.op.SnapshotTS(),

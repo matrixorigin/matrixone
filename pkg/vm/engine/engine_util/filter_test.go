@@ -732,7 +732,7 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 	for i, expr := range exprs {
 		plan2.EvalFoldExpr(proc, expr, &exes)
 
-		BasePKFilter, err := ConstructBasePKFilter(expr, tableDef, proc)
+		BasePKFilter, err := ConstructBasePKFilter(expr, tableDef, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, filters[i].Valid, BasePKFilter.Valid, exprStrings[i])
 		if filters[i].Valid {
@@ -931,11 +931,11 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 		left.Oid = ty
 		right.Oid = ty
 
-		ret, err := mergeBaseFilterInKind(left, right, false, proc)
+		ret, err := mergeBaseFilterInKind(left, right, false, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int(1), int(ret.Vec.Length()), ret.Oid.String())
 
-		ret, err = mergeBaseFilterInKind(left, right, true, proc)
+		ret, err = mergeBaseFilterInKind(left, right, true, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int(5), int(ret.Vec.Length()))
 

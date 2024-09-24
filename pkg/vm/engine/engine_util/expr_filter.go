@@ -426,7 +426,7 @@ func CompileFilterExpr(
 			}
 
 		case "<=":
-			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -460,7 +460,7 @@ func CompileFilterExpr(
 				return false, ok, nil
 			}
 		case ">=":
-			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -499,7 +499,7 @@ func CompileFilterExpr(
 				}
 			}
 		case ">":
-			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -538,7 +538,7 @@ func CompileFilterExpr(
 				}
 			}
 		case "<":
-			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -572,7 +572,7 @@ func CompileFilterExpr(
 				return false, ok, nil
 			}
 		case "prefix_eq":
-			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -606,7 +606,7 @@ func CompileFilterExpr(
 			}
 			// TODO: define seekOp
 		case "prefix_between":
-			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -639,7 +639,7 @@ func CompileFilterExpr(
 			// TODO: define seekOp
 			// ok
 		case "between":
-			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -671,7 +671,7 @@ func CompileFilterExpr(
 			}
 			// TODO: define seekOp
 		case "prefix_in":
-			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(proc, exprImpl)
+			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -710,7 +710,7 @@ func CompileFilterExpr(
 			// TODO: define seekOp
 			// ok
 		case "isnull", "is_null":
-			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -731,7 +731,7 @@ func CompileFilterExpr(
 
 			// ok
 		case "isnotnull", "is_not_null":
-			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -751,7 +751,7 @@ func CompileFilterExpr(
 			}
 
 		case "in":
-			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(proc, exprImpl)
+			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -807,7 +807,7 @@ func CompileFilterExpr(
 			}
 			// TODO: define seekOp
 		case "=":
-			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return

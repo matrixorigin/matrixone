@@ -1766,7 +1766,7 @@ func (tbl *txnTable) BuildReaders(
 		}
 		rd, err := NewReader(
 			ctx,
-			proc,
+			proc.Mp(),
 			tbl.getTxn().engine,
 			def,
 			tbl.db.op.SnapshotTS(),
@@ -1949,7 +1949,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		bytes,
 		false)
 
-	basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+	basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load().Mp())
 	if err != nil {
 		return false, err
 	}
