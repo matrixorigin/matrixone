@@ -99,7 +99,7 @@ var upg_information_schemata_schema = versions.UpgradeEntry{
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    sysview.InformationSchemaSchemataDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "SCHEMATA")
 		if err != nil {
 			return false, err
 		}
