@@ -35,10 +35,56 @@ func TestAddReplica(t *testing.T) {
 	assert.Error(t, NewBuilder("", logShard).AddPeer("d", 3).err)
 }
 
+func TestAddNonVotingReplica(t *testing.T) {
+	logShard := logservice.LogShardInfo{
+		ShardID: 1,
+		Replicas: map[uint64]string{
+			1: "a",
+			2: "b",
+			3: "c",
+			4: "d",
+			5: "e",
+			6: "f",
+		},
+		NonVotingReplicas: map[uint64]string{
+			4: "d",
+			5: "e",
+			6: "f",
+		},
+		Epoch: 1,
+	}
+	assert.NoError(t, NewBuilder("", logShard).AddNonVotingPeer("g", 7).err)
+	assert.Error(t, NewBuilder("", logShard).AddNonVotingPeer("", 7).err)
+	assert.Error(t, NewBuilder("", logShard).AddNonVotingPeer("f", 6).err)
+	assert.Error(t, NewBuilder("", logShard).AddNonVotingPeer("g", 6).err)
+}
+
 func TestRemoveReplica(t *testing.T) {
 	logShard := logservice.LogShardInfo{ShardID: 1, Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"}, Epoch: 1}
 	assert.NoError(t, NewBuilder("", logShard).RemovePeer("c").err)
 	assert.Error(t, NewBuilder("", logShard).RemovePeer("d").err)
+}
+
+func TestRemoveNonVotingReplica(t *testing.T) {
+	logShard := logservice.LogShardInfo{
+		ShardID: 1,
+		Replicas: map[uint64]string{
+			1: "a",
+			2: "b",
+			3: "c",
+			4: "d",
+			5: "e",
+			6: "f",
+		},
+		NonVotingReplicas: map[uint64]string{
+			4: "d",
+			5: "e",
+			6: "f",
+		},
+		Epoch: 1,
+	}
+	assert.NoError(t, NewBuilder("", logShard).RemoveNonVotingPeer("f").err)
+	assert.Error(t, NewBuilder("", logShard).RemoveNonVotingPeer("g").err)
 }
 
 func TestAddBuild(t *testing.T) {
@@ -61,6 +107,46 @@ func TestAddBuild(t *testing.T) {
 			UUID:      "d",
 			ShardID:   1,
 			ReplicaID: 4,
+			Epoch:     1,
+		},
+	}, build.steps[0])
+}
+
+func TestAddNonVotingBuild(t *testing.T) {
+	logShard := logservice.LogShardInfo{
+		ShardID: 1,
+		Replicas: map[uint64]string{
+			1: "a",
+			2: "b",
+			3: "c",
+			4: "d",
+			5: "e",
+			6: "f",
+		},
+		NonVotingReplicas: map[uint64]string{
+			4: "d",
+			5: "e",
+			6: "f",
+		},
+		Epoch: 1,
+	}
+	_, err := NewBuilder("", logShard).Build()
+	assert.Error(t, err)
+
+	_, err = NewBuilder("", logShard).AddNonVotingPeer("", 7).Build()
+	assert.Error(t, err)
+
+	build, err := NewBuilder("", logShard).AddNonVotingPeer("g", 7).Build()
+	assert.NoError(t, err)
+	assert.Equal(t, "add non-voting peer: store [g]", build.brief)
+	assert.Equal(t, uint64(1), build.shardID)
+	assert.Equal(t, uint64(1), build.epoch)
+	assert.Equal(t, AddNonVotingLogService{
+		Target: "a",
+		Replica: Replica{
+			UUID:      "g",
+			ShardID:   1,
+			ReplicaID: 7,
 			Epoch:     1,
 		},
 	}, build.steps[0])
@@ -89,6 +175,50 @@ func TestRemoveBuild(t *testing.T) {
 			UUID:      "c",
 			ShardID:   1,
 			ReplicaID: 3,
+			Epoch:     1,
+		},
+	}, build.steps[0])
+}
+
+func TestRemoveNonVotingBuild(t *testing.T) {
+	logShard := logservice.LogShardInfo{
+		ShardID: 1,
+		Replicas: map[uint64]string{
+			1: "a",
+			2: "b",
+			3: "c",
+			4: "d",
+			5: "e",
+			6: "f",
+		},
+		NonVotingReplicas: map[uint64]string{
+			4: "d",
+			5: "e",
+			6: "f",
+		},
+		Epoch: 1,
+	}
+
+	_, err := NewBuilder("", logShard).Build()
+	assert.Error(t, err)
+
+	_, err = NewBuilder("", logShard).RemoveNonVotingPeer("").Build()
+	assert.Error(t, err)
+
+	_, err = NewBuilder("", logShard).RemoveNonVotingPeer("g").Build()
+	assert.Error(t, err)
+
+	build, err := NewBuilder("", logShard).RemoveNonVotingPeer("f").Build()
+	assert.NoError(t, err)
+	assert.Equal(t, "rm non-voting peer: store [f]", build.brief)
+	assert.Equal(t, uint64(1), build.shardID)
+	assert.Equal(t, uint64(1), build.epoch)
+	assert.Equal(t, RemoveNonVotingLogService{
+		Target: "a",
+		Replica: Replica{
+			UUID:      "f",
+			ShardID:   1,
+			ReplicaID: 6,
 			Epoch:     1,
 		},
 	}, build.steps[0])

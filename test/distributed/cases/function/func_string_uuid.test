@@ -3,3 +3,21 @@ insert into t1 values(12124, -4213.413), (12124, -42413.409);
 SELECT length(uuid()) FROM t1;
 SELECT uuid(1) FROM t1;
 drop table t1;
+
+CREATE TABLE namelists (
+    id UUID DEFAULT uuid() PRIMARY KEY, 
+    name VARCHAR NOT NULL 
+);
+INSERT INTO namelists (name) VALUES ('Tom'), ('Jane'), ('Bob');
+-- @ignore:0
+SELECT * from namelists;
+INSERT INTO namelists (id, name) VALUES ('019213b0-d7bd-7271-a681-49e9d979d8d3', 'Jack');
+INSERT INTO namelists (id, name) VALUES ('019213b0-d7bd-7271-a681-49e9d979d8d3', 'Alan');
+-- @ignore:0
+SELECT * from namelists;
+Drop Table namelists;
+
+create table tttt(a int default 0 primary key, b int);
+insert into tttt (b) values(1);
+insert into tttt (b) values(1);
+drop table tttt;

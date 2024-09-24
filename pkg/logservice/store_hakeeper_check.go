@@ -77,10 +77,22 @@ func (a *idAllocator) Capacity() uint64 {
 	return 0
 }
 
-func (l *store) setInitialClusterInfo(numOfLogShards uint64,
-	numOfTNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) error {
-	cmd := hakeeper.GetInitialClusterRequestCmd(numOfLogShards,
-		numOfTNShards, numOfLogReplicas, nextID, nextIDByKey)
+func (l *store) setInitialClusterInfo(
+	numOfLogShards uint64,
+	numOfTNShards uint64,
+	numOfLogReplicas uint64,
+	nextID uint64,
+	nextIDByKey map[string]uint64,
+	nonVotingLocality map[string]string,
+) error {
+	cmd := hakeeper.GetInitialClusterRequestCmd(
+		numOfLogShards,
+		numOfTNShards,
+		numOfLogReplicas,
+		nextID,
+		nextIDByKey,
+		nonVotingLocality,
+	)
 	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
@@ -329,7 +341,7 @@ func (l *store) getScheduleCommand(check bool,
 	}
 
 	if check {
-		return l.checker.Check(l.alloc, *state), nil
+		return l.checker.Check(l.alloc, *state, l.cfg.BootstrapConfig.StandbyEnabled), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
 	return m.Bootstrap(l.cfg.UUID, l.alloc, state.TNState, state.LogState)

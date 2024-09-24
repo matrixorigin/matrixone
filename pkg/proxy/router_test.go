@@ -541,12 +541,18 @@ func TestRouter_Filter(t *testing.T) {
 
 	ru := newRouter(mc, re, newMockSQLWorker(), true)
 
-	cn, err := ru.Route(ctx, "", clientInfo{username: "dump"}, func(s string) bool {
-		return s == addr1
-	})
+	badCNServers := make(map[string]struct{})
+	badCNServers[addr2] = struct{}{}
+	filterFn := func(str string) bool {
+		if _, ok := badCNServers[str]; ok {
+			return true
+		}
+		return false
+	}
+	cn, err := ru.Route(ctx, "", clientInfo{username: "dump"}, filterFn)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
-	require.Equal(t, cn.uuid, "cn2")
+	require.Equal(t, cn.uuid, "cn1")
 }
 
 func TestRouter_RetryableConnect(t *testing.T) {

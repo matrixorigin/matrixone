@@ -69,7 +69,7 @@ var traceFilterExprInterval2 atomic.Uint64
 var _ engine.Relation = new(txnTable)
 
 func (tbl *txnTable) getEngine() engine.Engine {
-	return tbl.getTxn().engine
+	return tbl.eng
 }
 
 func (tbl *txnTable) getTxn() *Transaction {
@@ -83,8 +83,7 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		return nil, err
 	}
 	if !tbl.db.op.IsSnapOp() {
-		e := tbl.getEngine()
-		return e.Stats(ctx, pb.StatsInfoKey{
+		return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
 			AccId:      tbl.accountId,
 			DatabaseID: tbl.db.databaseId,
 			TableID:    tbl.tableId,
@@ -730,10 +729,9 @@ func (tbl *txnTable) rangesOnePart(
 		)
 	}
 
-	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
-	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
-	if err == nil {
-		exprs = newExprs
+	hasFoldExpr := plan2.HasFoldExprForList(exprs)
+	if hasFoldExpr {
+		exprs = nil
 	}
 
 	var (
@@ -1193,6 +1191,10 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 //
 // 2. This check depends on replaying all catalog cache when cn starts.
 func (tbl *txnTable) isCreatedInTxn() bool {
+	if tbl.remoteWorkspace {
+		return tbl.createdInTxn
+	}
+
 	if tbl.db.op.IsSnapOp() {
 		// if the operation is snapshot read, isCreatedInTxn can not be called by AlterTable
 		// So if the snapshot read want to subcribe logtail tail, let it go ahead.
@@ -1829,9 +1831,10 @@ func (tbl *txnTable) getPartitionState(
 }
 
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
+	eng := tbl.eng.(*Engine)
 	defer func() {
 		if err == nil {
-			tbl.getTxn().engine.globalStats.notifyLogtailUpdate(tbl.tableId)
+			eng.globalStats.notifyLogtailUpdate(tbl.tableId)
 		}
 	}()
 
@@ -1839,7 +1842,7 @@ func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.Part
 		return
 	}
 
-	return tbl.getTxn().engine.PushClient().toSubscribeTable(ctx, tbl)
+	return eng.PushClient().toSubscribeTable(ctx, tbl)
 
 }
 

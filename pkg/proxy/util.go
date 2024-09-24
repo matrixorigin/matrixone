@@ -115,7 +115,16 @@ func isErrPacket(p []byte) bool {
 	return false
 }
 
-// isEmptyPacket returns true if []byte is a empty packet.
+// isLoadDataLocalInfileRespPacket returns true if []byte is a packet
+// of load data local infile response.
+func isLoadDataLocalInfileRespPacket(p []byte) bool {
+	if len(p) > 4 && p[4] == 0xFB {
+		return true
+	}
+	return false
+}
+
+// isEmptyPacket returns true if []byte is an empty packet.
 func isEmptyPacket(p []byte) bool {
 	return len(p) == 0
 }
