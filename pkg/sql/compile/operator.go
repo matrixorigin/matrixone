@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -309,10 +308,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Filter:
 		t := sourceOp.(*filter.Filter)
 		op := filter.NewArgument()
-		op.E = t.GetExeExpr()
-		if op.E == nil {
-			op.E = t.E
-		}
+		op.E = t.E
 		op.SetInfo(&info)
 		return op
 	case vm.Semi:
@@ -542,7 +538,17 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Apply:
 		t := sourceOp.(*apply.Apply)
 		op := apply.NewArgument()
+		op.ApplyType = t.ApplyType
+		op.Result = t.Result
+		op.Typs = t.Typs
 		op.ProjectList = t.ProjectList
+		op.TableFunction = table_function.NewArgument()
+		op.TableFunction.FuncName = t.TableFunction.FuncName
+		op.TableFunction.Args = t.TableFunction.Args
+		op.TableFunction.Rets = t.TableFunction.Rets
+		op.TableFunction.Attrs = t.TableFunction.Attrs
+		op.TableFunction.Params = t.TableFunction.Params
+		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
 	}
@@ -1108,7 +1114,7 @@ func constructFill(n *plan.Node) *fill.Fill {
 	return arg
 }
 
-func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.TimeWin {
+func constructTimeWindow(_ context.Context, n *plan.Node, proc *process.Process) *timewin.TimeWin {
 	var aggregationExpressions []aggexec.AggFuncExecExpression = nil
 	var typs []types.Type
 	var wStart, wEnd bool
@@ -1137,34 +1143,18 @@ func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.TimeWin {
 		i++
 	}
 
-	var err error
-	str := n.Interval.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
-	itr := &timewin.Interval{}
-	itr.Typ, err = types.IntervalTypeOf(str)
+	arg := timewin.NewArgument()
+	err := arg.MakeIntervalAndSliding(n.Interval, n.Sliding)
 	if err != nil {
 		panic(err)
 	}
-	itr.Val = n.Interval.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-
-	var sld *timewin.Interval
-	if n.Sliding != nil {
-		sld = &timewin.Interval{}
-		str = n.Sliding.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
-		sld.Typ, err = types.IntervalTypeOf(str)
-		if err != nil {
-			panic(err)
-		}
-		sld.Val = n.Sliding.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-	}
-
-	arg := timewin.NewArgument()
 	arg.Types = typs
 	arg.Aggs = aggregationExpressions
-	arg.Ts = n.OrderBy[0].Expr
+	arg.Ts = n.GroupBy[0]
 	arg.WStart = wStart
 	arg.WEnd = wEnd
-	arg.Interval = itr
-	arg.Sliding = sld
+	arg.EndExpr = n.WEnd
+	arg.TsType = n.Timestamp.Typ
 	return arg
 }
 
@@ -1849,20 +1839,23 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
-/*
-	func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
-		result := make([]colexec.ResultPos, len(n.ProjectList))
-		for i, expr := range n.ProjectList {
-			result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
-		}
-		arg := apply.NewArgument()
-		arg.ApplyType = applyType
-		arg.Result = result
-		arg.Args = plan2.DeepCopyExprList(right.TblFuncExprList)
-		arg.FuncName = right.TableDef.TblFunc.Name
-		return arg
+func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-*/
+	rightTyps := make([]types.Type, len(right.TableDef.Cols))
+	for i, expr := range right.TableDef.Cols {
+		rightTyps[i] = dupType(&expr.Typ)
+	}
+	arg := apply.NewArgument()
+	arg.ApplyType = applyType
+	arg.Result = result
+	arg.Typs = rightTyps
+	arg.TableFunction = constructTableFunction(right)
+	return arg
+}
+
 func constructTableScan(n *plan.Node) *table_scan.TableScan {
 	types := make([]plan.Type, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {

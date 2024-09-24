@@ -223,6 +223,15 @@ func (c *PushClient) IsSubscriberReady() bool {
 	return c.subscriber.ready.Load()
 }
 
+func (c *PushClient) IsSubscribed(tblId uint64) bool {
+	c.subscribed.mutex.Lock()
+	defer c.subscribed.mutex.Unlock()
+	if _, ok := c.subscribed.m[tblId]; ok {
+		return true
+	}
+	return false
+}
+
 type connector struct {
 	first  atomic.Bool
 	signal chan struct{}
@@ -1219,7 +1228,13 @@ func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 		SubState:   SubRspReceived,
 		LatestTime: time.Now(),
 	}
-	logutil.Infof("%s subscribe tbl[db: %d, tbl: %d] resp received", logTag, dbId, tblId)
+	logutil.Infof("%s %s subscribe tbl[db: %d, tbl: %d] resp received, %p",
+		s.eng.service,
+		logTag,
+		dbId,
+		tblId,
+		s,
+	)
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
