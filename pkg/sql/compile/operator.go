@@ -150,6 +150,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := group.NewArgument()
 		op.PreAllocSize = t.PreAllocSize
 		op.NeedEval = t.NeedEval
+		op.GroupingFlag = t.GroupingFlag
 		op.Exprs = t.Exprs
 		op.Aggs = t.Aggs
 		op.ProjectList = t.ProjectList
@@ -1298,6 +1299,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 	arg := group.NewArgument()
 	arg.Aggs = aggregationExpressions
 	arg.NeedEval = needEval
+	arg.GroupingFlag = n.GroupingFlag
 	arg.Exprs = n.GroupBy
 	arg.PreAllocSize = preAllocSize
 	return arg

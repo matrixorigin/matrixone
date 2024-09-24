@@ -101,6 +101,7 @@ type container struct {
 type Group struct {
 	ctr          container
 	NeedEval     bool // need to projection the aggregate column
+	GroupingFlag []bool
 	PreAllocSize uint64
 
 	Exprs []*plan.Expr // group Expressions
