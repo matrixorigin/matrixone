@@ -130,6 +130,12 @@ func (s *taeStorage) Debug(ctx context.Context,
 			ReturnStr: "OK",
 		})
 		return resp, nil
+	case uint32(api.OpCode_OpGetLatestCheckpoint):
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleGetLatestCheckpoint)
+		if err != nil {
+			return nil, err
+		}
+		return resp.Read()
 	default:
 		return nil, moerr.NewNotSupportedNoCtxf("TAEStorage not support ctl method %d", opCode)
 	}

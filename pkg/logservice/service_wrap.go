@@ -63,7 +63,7 @@ func (w *WrappedService) SetInitialClusterInfo(
 	logShardNum, tnShartnum, logReplicaNum uint64,
 ) error {
 	return w.svc.store.setInitialClusterInfo(
-		logShardNum, tnShartnum, logReplicaNum, 0, nil,
+		logShardNum, tnShartnum, logReplicaNum, 0, nil, nil,
 	)
 }
 

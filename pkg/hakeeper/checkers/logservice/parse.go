@@ -22,37 +22,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
+// fixingShard is the replicas of the shardID that required.
 type fixingShard struct {
-	shardID  uint64
+	// shardID is the shard ID.
+	shardID uint64
+	// They are the replicas after calculated. Other replicas need to be removed.
+	// The key of the map is replica ID and the value is store UUID.
 	replicas map[uint64]string
-	toAdd    uint32
+	// toAdd is the normal replica number needs to be added.
+	toAdd uint32
 }
 
-func newFixingShard(origin pb.LogShardInfo) *fixingShard {
+func newFixingShardNormal(origin pb.LogShardInfo) *fixingShard {
 	shard := &fixingShard{
 		shardID:  origin.ShardID,
 		replicas: make(map[uint64]string),
 		toAdd:    0,
 	}
-
 	for replicaID, uuid := range origin.Replicas {
 		shard.replicas[replicaID] = uuid
 	}
-
 	return shard
 }
 
-func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
-	expiredStores []string) *fixingShard {
-	fixing := newFixingShard(info)
-	diff := len(fixing.replicas) - int(record.NumberOfReplicas)
+func newFixingShardNonVoting(origin pb.LogShardInfo) *fixingShard {
+	shard := &fixingShard{
+		shardID:  origin.ShardID,
+		replicas: make(map[uint64]string),
+		toAdd:    0,
+	}
+	for replicaID, uuid := range origin.NonVotingReplicas {
+		shard.replicas[replicaID] = uuid
+	}
+	return shard
+}
 
+func fixedLogShardInfoNormal(
+	record metadata.LogShardRecord,
+	info pb.LogShardInfo,
+	expiredStores []string,
+) *fixingShard {
+	// info.Replicas only contains the normal replicas.
+	// info.NonVotingReplicas only contains the non-voting replicas.
+	fixing := newFixingShardNormal(info)
+	diff := len(fixing.replicas) - int(record.NumberOfReplicas)
 	// The number of replicas is less than expected.
 	// Record how many replicas should be added.
 	if diff < 0 {
 		fixing.toAdd = uint32(-diff)
 	}
 
+	// remove the expired replicas.
 	for replicaID, uuid := range info.Replicas {
 		if contains(expiredStores, uuid) {
 			delete(fixing.replicas, replicaID)
@@ -63,11 +83,9 @@ func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
 		}
 	}
 
-	// The number of replicas is more than expected.
-	// Remove some of them.
+	// The number of replicas is more than expected. Remove some of them.
 	if diff > 0 {
 		idSlice := sortedReplicaID(fixing.replicas, info.LeaderID)
-
 		for i := 0; i < diff; i++ {
 			delete(fixing.replicas, idSlice[i])
 		}
@@ -76,50 +94,124 @@ func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
 	return fixing
 }
 
-// parseLogShards collects stats for further use.
-func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired []string) *stats {
-	collect := newStats()
+func fixedLogShardInfoNonVoting(
+	nonVotingReplicaNum uint64,
+	info pb.LogShardInfo,
+	expiredStores []string,
+) *fixingShard {
+	// info.Replicas only contains the normal replicas.
+	// info.NonVotingReplicas only contains the non-voting replicas.
+	fixing := newFixingShardNonVoting(info)
+	// nonVotingReplicaNum is the number of expected non-voting replicas.
+	// calculate the expected non-voting replicas number.
+	diff := len(fixing.replicas) - int(nonVotingReplicaNum)
+	if diff < 0 {
+		fixing.toAdd = uint32(-diff)
+	}
 
-	for _, shardInfo := range infos.Shards {
-		shardID := shardInfo.ShardID
-		record := getRecord(shardID, cluster.LogShards)
-		fixing := fixedLogShardInfo(record, shardInfo, expired)
-
-		toRemove := make([]replica, 0, len(shardInfo.Replicas)-len(fixing.replicas))
-		for id, uuid := range shardInfo.Replicas {
-			if _, ok := fixing.replicas[id]; ok {
-				continue
+	// remove the expired replicas.
+	for replicaID, uuid := range info.NonVotingReplicas {
+		if contains(expiredStores, uuid) {
+			delete(fixing.replicas, replicaID)
+			if diff > 0 {
+				diff--
 			}
+		}
+	}
+
+	// The number of replicas is more than expected. Remove some of them.
+	if diff > 0 {
+		idSlice := sortedReplicaID(fixing.replicas, info.LeaderID)
+		for i := 0; i < diff; i++ {
+			delete(fixing.replicas, idSlice[i])
+		}
+	}
+
+	return fixing
+}
+
+// fixedLogShardInfo returns the replicas information after fixing for the shard.
+// the first return value is the normal replicas, and the second return value
+// is the non-voting replicas.
+func fixedLogShardInfo(
+	record metadata.LogShardRecord,
+	nonVotingReplicaNum uint64,
+	info pb.LogShardInfo,
+	expiredStores []string,
+) (*fixingShard, *fixingShard) {
+	return fixedLogShardInfoNormal(record, info, expiredStores),
+		fixedLogShardInfoNonVoting(nonVotingReplicaNum, info, expiredStores)
+}
+
+func getReplicasToRemove(shardID uint64, current, left map[uint64]string) []replica {
+	toRemove := make([]replica, 0, len(current)-len(left))
+	for id, uuid := range current {
+		if _, ok := left[id]; ok {
+			continue
+		}
+		rep := replica{
+			uuid:      uuid,
+			shardID:   shardID,
+			replicaID: id,
+		}
+		toRemove = append(toRemove, rep)
+	}
+	return toRemove
+}
+
+func getReplicasToStart(
+	shardID uint64, replicas map[uint64]string, stores map[string]pb.LogStoreInfo,
+) []replica {
+	toStart := make([]replica, 0)
+	for id, uuid := range replicas {
+		store := stores[uuid]
+		if !replicaStarted(shardID, store.Replicas) {
 			rep := replica{
 				uuid:      uuid,
 				shardID:   shardID,
 				replicaID: id,
 			}
-			toRemove = append(toRemove, rep)
+			toStart = append(toStart, rep)
 		}
-
-		toStart := make([]replica, 0)
-		for id, uuid := range fixing.replicas {
-			store := infos.Stores[uuid]
-			// Check dangling
-			if !replicaStarted(shardID, store.Replicas) {
-				rep := replica{
-					uuid:      uuid,
-					shardID:   shardID,
-					replicaID: id,
-				}
-				toStart = append(toStart, rep)
-			}
-		}
-		if fixing.toAdd > 0 {
-			collect.toAdd[shardID] = fixing.toAdd
-		}
-		if len(toRemove) > 0 {
-			collect.toRemove[shardID] = toRemove
-		}
-		collect.toStart = append(collect.toStart, toStart...)
 	}
+	return toStart
+}
 
+// parseLogShards collects stats for further use.
+// It returns two stats, the first is the stats for normal replicas
+// and the second one is for the non-voting replicas.
+func parseLogShards(
+	cluster pb.ClusterInfo, infos pb.LogState, expired []string, nonVotingReplicaNum uint64,
+) (*stats, *stats) {
+	normalStats, nonVotingStats := newStats(false), newStats(true)
+	for _, shardInfo := range infos.Shards {
+		shardID := shardInfo.ShardID
+		record := getRecord(shardID, cluster.LogShards)
+		fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired)
+
+		// cal the toRemove field.
+		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas)
+		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.replicas)
+
+		// cal the toStart field.
+		toStartNormal := getReplicasToStart(shardID, shardInfo.Replicas, infos.Stores)
+		toStartNonVoting := getReplicasToStart(shardID, shardInfo.NonVotingReplicas, infos.Stores)
+
+		if fixingNormal.toAdd > 0 {
+			normalStats.toAdd[shardID] = fixingNormal.toAdd
+		}
+		if fixingNonVoting.toAdd > 0 {
+			nonVotingStats.toAdd[shardID] = fixingNonVoting.toAdd
+		}
+		if len(toRemoveNormal) > 0 {
+			normalStats.toRemove[shardID] = toRemoveNormal
+		}
+		if len(toRemoveNonVoting) > 0 {
+			nonVotingStats.toRemove[shardID] = toRemoveNonVoting
+		}
+		normalStats.toStart = append(normalStats.toStart, toStartNormal...)
+		nonVotingStats.toStart = append(nonVotingStats.toStart, toStartNonVoting...)
+	}
 	// Check zombies
 	for uuid, storeInfo := range infos.Stores {
 		if contains(expired, uuid) {
@@ -131,27 +223,31 @@ func parseLogShards(cluster pb.ClusterInfo, infos pb.LogState, expired []string)
 			if ok || replicaInfo.Epoch >= infos.Shards[replicaInfo.ShardID].Epoch {
 				continue
 			}
+			_, ok = infos.Shards[replicaInfo.ShardID].NonVotingReplicas[replicaInfo.ReplicaID]
+			if ok {
+				continue
+			}
 			zombie = append(zombie, replica{uuid: uuid, shardID: replicaInfo.ShardID,
 				replicaID: replicaInfo.ReplicaID})
 		}
-		collect.zombies = append(collect.zombies, zombie...)
+		normalStats.zombies = append(normalStats.zombies, zombie...)
 	}
-
-	return collect
+	return normalStats, nonVotingStats
 }
 
 // parseLogStores returns all expired stores' ids.
-func parseLogStores(cfg hakeeper.Config, infos pb.LogState, currentTick uint64) ([]string, []string) {
-	working := make([]string, 0)
+// The first return value is working stores, it is a map, key is uuid, value is locality.
+// The second return value is expired stores.
+func parseLogStores(cfg hakeeper.Config, infos pb.LogState, currentTick uint64) (map[string]pb.Locality, []string) {
+	working := make(map[string]pb.Locality, 0)
 	expired := make([]string, 0)
 	for uuid, storeInfo := range infos.Stores {
 		if cfg.LogStoreExpired(storeInfo.Tick, currentTick) {
 			expired = append(expired, uuid)
 		} else {
-			working = append(working, uuid)
+			working[uuid] = storeInfo.Locality
 		}
 	}
-
 	return working, expired
 }
 

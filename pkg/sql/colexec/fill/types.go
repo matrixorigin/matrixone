@@ -51,7 +51,6 @@ type container struct {
 	curRow    int
 	status    int
 	subStatus int
-	colIdx    int
 	idx       int
 	buf       *batch.Batch
 
