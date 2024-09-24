@@ -789,9 +789,6 @@ func extractTablePairs(ctx context.Context, pattern string, defaultAcc string) (
 	pts := &cdc2.PatternTuples{}
 
 	tablePairs := strings.Split(pattern, ",")
-	if len(tablePairs) == 0 {
-		return nil, moerr.NewInternalErrorf(ctx, "invalid pattern format: %s", pattern)
-	}
 
 	//step1 : split pattern by ',' => table pair
 	for _, pair := range tablePairs {
