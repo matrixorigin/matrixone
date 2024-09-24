@@ -593,9 +593,10 @@ func (s *mysqlSink) Send(ctx context.Context, sql string) (err error) {
 	for retry, startTime := 0, time.Now(); needRetry(retry, startTime); retry++ {
 		// return if success
 		if _, err = s.conn.Exec(sql); err == nil {
-			logutil.Errorf("----mysql send sql----, success")
+			//logutil.Errorf("----mysql send sql----, success")
 			return
 		}
+		logutil.Errorf("----mysql send sql----, failed, err: %v", err)
 		v2.CdcMysqlSinkErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}

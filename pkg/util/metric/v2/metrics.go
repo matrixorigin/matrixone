@@ -198,8 +198,9 @@ func initFrontendMetrics() {
 	registry.MustRegister(pubSubDurationHistogram)
 	registry.MustRegister(sqlLengthHistogram)
 	registry.MustRegister(cdcRecordCounter)
-	registry.MustRegister(cdcProcessingRecordCountGauge)
 	registry.MustRegister(cdcErrorCounter)
+	registry.MustRegister(cdcProcessingRecordCountGauge)
+	registry.MustRegister(cdcAllocatedBatchBytesGauge)
 }
 
 func initPipelineMetrics() {

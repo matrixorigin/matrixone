@@ -155,8 +155,8 @@ var (
 		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "frontend",
-			Name:      "cdc_processing_record_count",
-			Help:      "Count of records cdc has read but not sunk",
+			Name:      "cdc_allocated_batch_bytes",
+			Help:      "Bytes allocated by cdc",
 		}, []string{"type"})
 	CdcTotalAllocatedBatchBytesGauge    = cdcAllocatedBatchBytesGauge.WithLabelValues("total")
 	CdcSnapshotAllocatedBatchBytesGauge = cdcAllocatedBatchBytesGauge.WithLabelValues("snapshot")
