@@ -84,7 +84,6 @@ func TestString(t *testing.T) {
 
 func TestDedupJoin(t *testing.T) {
 	for _, tc := range tcs {
-
 		resetChildren(tc.arg)
 		resetHashBuildChildren(tc.barg)
 		err := tc.arg.Prepare(tc.proc)
@@ -122,6 +121,30 @@ func TestDedupJoin(t *testing.T) {
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.barg.Free(tc.proc, false, nil)
+
+		resetChildren(tc.arg)
+		resetHashBuildChildren(tc.barg)
+		tc.proc.GetMessageBoard().Reset()
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.arg.OnDupAction = plan.Node_IGNORE
+		err = tc.barg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.barg.OnDupAction = plan.Node_IGNORE
+
+		res, err = tc.barg.Call(tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch == nil, true)
+		res, err = tc.arg.Call(tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, true, res.Batch == nil)
+
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}

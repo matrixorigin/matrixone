@@ -2229,7 +2229,10 @@ func TestRowToString(t *testing.T) {
 
 	{ // Array Float32
 		v := NewVec(types.T_array_float32.ToType())
-		err := AppendArrayList[float32](v, [][]float32{{1, 1}, {2, 2}, {3, 3}}, nil, mp)
+		err := AppendArrayList(v, [][]float32{{1, 1}}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "[1, 1]", v.RowToString(0))
+		err = AppendArrayList(v, [][]float32{{2, 2}, {3, 3}}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, "[2, 2]", v.RowToString(1))
 		v.Free(mp)
@@ -2237,7 +2240,10 @@ func TestRowToString(t *testing.T) {
 	}
 	{ // Array Float64
 		v := NewVec(types.T_array_float64.ToType())
-		err := AppendArrayList[float64](v, [][]float64{{1, 1}, {2, 2}, {3, 3}}, nil, mp)
+		err := AppendArrayList(v, [][]float64{{1, 1}}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "[1, 1]", v.RowToString(1))
+		err = AppendArrayList(v, [][]float64{{2, 2}, {3, 3}}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, "[2, 2]", v.RowToString(1))
 		v.Free(mp)
@@ -2245,10 +2251,27 @@ func TestRowToString(t *testing.T) {
 	}
 	{ // bool
 		v := NewVec(types.T_bool.ToType())
-		err := AppendFixedList(v, []bool{true, false, true, false}, nil, mp)
+		err := AppendFixed(v, true, false, mp)
 		require.NoError(t, err)
-		require.Equal(t, "false", v.RowToString(1))
+		require.Equal(t, "true", v.RowToString(0))
+		err = AppendFixed(v, false, true, mp)
+		require.NoError(t, err)
+		require.Equal(t, "null", v.RowToString(1))
 		v.Free(mp)
+
+		v0 := NewVec(types.T_bool.ToType())
+		err = AppendFixed(v0, false, true, mp)
+		require.NoError(t, err)
+		require.Equal(t, "null", v0.RowToString(0))
+		err = AppendFixed(v0, true, false, mp)
+		require.NoError(t, err)
+		require.Equal(t, "true", v0.RowToString(1))
+		v0.Free(mp)
+
+		v1 := NewConstNull(types.T_bool.ToType(), 1, mp)
+		require.Equal(t, "null", v1.RowToString(1))
+		v1.Free(mp)
+
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int8

@@ -48,6 +48,7 @@ type HashBuild struct {
 	JoinMapTag        int32
 	JoinMapRefCnt     int32
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
+	OnDupAction       pbplan.Node_OnDuplicateAction
 	vm.OperatorBase
 }
 

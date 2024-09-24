@@ -2447,6 +2447,10 @@ func (v *Vector) String() string {
 }
 
 func implRowToString[T types.FixedSizeT](v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+
 	col := MustFixedColNoTypeCheck[T](v)
 	if len(col) == 1 {
 		if nulls.Contains(v.nsp, 0) {
