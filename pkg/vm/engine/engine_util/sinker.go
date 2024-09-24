@@ -122,9 +122,9 @@ func (s *FSinkerImpl) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
 
 	var ss objectio.ObjectStats
 	if s.sortKeyPos > -1 {
-		ss = s.writer.GetObjectStats(objectio.WithSorted())
+		ss = s.writer.GetObjectStats(objectio.WithSorted(), objectio.WithCNCreated())
 	} else {
-		ss = s.writer.GetObjectStats()
+		ss = s.writer.GetObjectStats(objectio.WithCNCreated())
 	}
 
 	// s.writer.Reset
@@ -551,14 +551,16 @@ func (sinker *Sinker) Write(
 	offset := 0
 	left := data.RowCount()
 	for left > 0 {
-		curr = sinker.popStaged()
 		if curr == nil {
-			curr = sinker.fetchBuffer()
-		} else if curr.RowCount() == objectio.BlockMaxRows {
-			if err = sinker.pushStaged(ctx, curr); err != nil {
-				return
+			curr = sinker.popStaged()
+			if curr == nil {
+				curr = sinker.fetchBuffer()
+			} else if curr.RowCount() == objectio.BlockMaxRows {
+				if err = sinker.pushStaged(ctx, curr); err != nil {
+					return
+				}
+				curr = sinker.fetchBuffer()
 			}
-			curr = sinker.fetchBuffer()
 		}
 
 		toAdd := left
@@ -570,7 +572,6 @@ func (sinker *Sinker) Write(
 			return
 		}
 		if curr.RowCount() == objectio.BlockMaxRows {
-
 			if err = sinker.pushStaged(ctx, curr); err != nil {
 				return
 			}

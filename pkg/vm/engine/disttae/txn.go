@@ -1213,6 +1213,10 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, err
 	}
 
+	if err := txn.transferTombstoneObjects(ctx); err != nil {
+		return nil, err
+	}
+
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
 	}
@@ -1308,7 +1312,71 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 
 type UT_ForceTransCheck struct{}
 
-func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) error {
+func (txn *Transaction) transferTombstoneObjects(
+	ctx context.Context,
+) (err error) {
+
+	var start types.TS
+	if txn.statementID == 1 {
+		start = types.TimestampToTS(txn.timestamps[0])
+	} else {
+		//statementID > 1
+		start = types.TimestampToTS(txn.timestamps[txn.statementID-2])
+	}
+
+	end := types.TimestampToTS(txn.op.SnapshotTS())
+
+	return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
+		flow, err := ConstructCNTombstoneObjectsTransferFlow(
+			start,
+			end,
+			tbl,
+			txn,
+			txn.proc.Mp(),
+			txn.proc.GetFileService())
+		if err != nil {
+			return err
+		}
+
+		if flow != nil {
+			if err = flow.Process(ctx); err != nil {
+				return err
+			}
+
+			statsList, tail := flow.GetResult()
+			if len(tail) > 0 {
+				logutil.Fatal("???", zap.Int("tail", len(tail)))
+			}
+
+			for i := range statsList {
+				fileName := statsList[i].ObjectLocation().String()
+				bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
+				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+				if err = vector.AppendBytes(
+					bat.GetVector(0), statsList[i].Marshal(), false, tbl.proc.Load().GetMPool()); err != nil {
+					return err
+				}
+
+				bat.SetRowCount(bat.Vecs[0].Length())
+
+				txn.WriteFile(
+					DELETE,
+					tbl.accountId,
+					tbl.db.databaseId,
+					tbl.tableId,
+					tbl.db.databaseName,
+					tbl.tableName,
+					fileName,
+					bat,
+					txn.tnStores[0],
+				)
+			}
+		}
+		return nil
+	})
+}
+
+func (txn *Transaction) transferInmemTombstoneLocked(ctx context.Context, commit bool) error {
 	var latestTs timestamp.Timestamp
 	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {

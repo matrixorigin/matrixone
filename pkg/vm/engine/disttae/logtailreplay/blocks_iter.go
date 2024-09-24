@@ -192,6 +192,77 @@ func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
 	return false
 }
 
+func (p *PartitionState) CollectVisibleObjectsBetween(
+	start, end types.TS,
+	isTombstone bool,
+) (stats []objectio.ObjectStats) {
+
+	iter := p.dataObjectTSIndex.Copy().Iter()
+	defer iter.Release()
+
+	if !iter.Seek(ObjectIndexByTSEntry{
+		Time: start,
+	}) {
+		return
+	}
+
+	nameIdx := p.dataObjectsNameIndex.Copy()
+
+	for ok := true; ok; ok = iter.Next() {
+		entry := iter.Item()
+		if entry.Time.GT(&end) {
+			break
+		}
+
+		if entry.IsDelete {
+			continue
+		}
+
+		var ss objectio.ObjectStats
+		objectio.SetObjectStatsShortName(&ss, &entry.ShortObjName)
+
+		val, exist := nameIdx.Get(ObjectEntry{
+			ObjectInfo{
+				ObjectStats: ss,
+			},
+		})
+		if !exist {
+			continue
+		}
+
+		stats = append(stats, val.ObjectStats)
+	}
+
+	return
+}
+
+func (p *PartitionState) IsObjectDeleted(
+	ts types.TS,
+	isTombstone bool,
+	objId *objectio.ObjectId) bool {
+
+	var tree *btree.BTreeG[ObjectEntry]
+	if isTombstone {
+		tree = p.tombstoneObjectsNameIndex.Copy()
+	} else {
+		tree = p.dataObjectsNameIndex.Copy()
+	}
+
+	var stats objectio.ObjectStats
+	objectio.SetObjectStatsShortName(&stats, (*objectio.ObjectNameShort)(objId))
+	val, exist := tree.Get(ObjectEntry{
+		ObjectInfo{
+			ObjectStats: stats,
+		},
+	})
+
+	if !exist {
+		return true
+	}
+
+	return !val.DeleteTime.IsEmpty()
+}
+
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
 	iter := p.dataObjectsNameIndex.Copy().Iter()
 	defer iter.Release()
