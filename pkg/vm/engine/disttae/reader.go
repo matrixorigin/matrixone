@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // -----------------------------------------------------------------
@@ -233,7 +232,7 @@ func (r *mergeReader) Read(
 // -----------------------------------------------------------------
 func NewReader(
 	ctx context.Context,
-	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
+	mp *mpool.MPool,
 	e *Engine,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
@@ -245,7 +244,7 @@ func NewReader(
 	baseFilter, err := engine_util.ConstructBasePKFilter(
 		expr,
 		tableDef,
-		proc,
+		mp,
 	)
 	if err != nil {
 		return nil, err
@@ -293,7 +292,6 @@ func (r *reader) Close() error {
 }
 
 func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	//r.OrderBy = orderby
 	r.source.SetOrderBy(orderby)
 }
 

@@ -1674,7 +1674,7 @@ return serialized uriInfo
 func extractUriInfo(ctx context.Context, uri string, uriPrefix string) (string, cdc.UriInfo, error) {
 	ok, uriInfo := compositedUriInfo(uri, uriPrefix)
 	if !ok {
-		return "", cdc.UriInfo{}, moerr.NewInternalError(ctx, "source uri is invalid format")
+		return "", cdc.UriInfo{}, moerr.NewInternalErrorf(ctx, "invalid uri format: %s", uri)
 	}
 
 	jsonUriInfo, err := cdc.JsonEncode(&uriInfo)

@@ -23,9 +23,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,11 +32,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 const (
@@ -677,7 +676,7 @@ func extractTablePair(ctx context.Context, pattern string, defaultAcc string) (*
 		//Format: account.db.table:db.table
 		splitRes := strings.Split(pattern, ":")
 		if len(splitRes) != 2 {
-			return nil, moerr.NewInternalErrorf(ctx, "must be source : sink. invalid format")
+			return nil, moerr.NewInternalErrorf(ctx, "invalid table format: %s, must be `source:sink`.", pattern)
 		}
 
 		//handle source part
@@ -731,7 +730,7 @@ func extractTablePair(ctx context.Context, pattern string, defaultAcc string) (*
 func extractTableInfo(ctx context.Context, input string, mustBeConcreteTable bool) (account string, db string, table string, isRegexpTable bool, err error) {
 	parts := strings.Split(strings.TrimSpace(input), ".")
 	if len(parts) != 2 && len(parts) != 3 {
-		err = moerr.NewInternalErrorf(ctx, "needs account.database.table or database.table. invalid format.")
+		err = moerr.NewInternalErrorf(ctx, "invalid table format: %s, needs account.database.table or database.table.", input)
 		return
 	}
 
@@ -741,18 +740,18 @@ func extractTableInfo(ctx context.Context, input string, mustBeConcreteTable boo
 		account, db, table = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
 
 		if !accountNameIsLegal(account) {
-			err = moerr.NewInternalErrorf(ctx, "invalid account name")
+			err = moerr.NewInternalErrorf(ctx, "invalid account name: %s", account)
 			return
 		}
 	}
 
 	if !dbNameIsLegal(db) {
-		err = moerr.NewInternalErrorf(ctx, "invalid database name")
+		err = moerr.NewInternalErrorf(ctx, "invalid database name: %s", db)
 		return
 	}
 
 	if !tableNameIsLegal(table) {
-		err = moerr.NewInternalErrorf(ctx, "invalid table name")
+		err = moerr.NewInternalErrorf(ctx, "invalid table name: %s", table)
 		return
 	}
 
@@ -789,9 +788,6 @@ func extractTablePairs(ctx context.Context, pattern string, defaultAcc string) (
 	pts := &cdc2.PatternTuples{}
 
 	tablePairs := strings.Split(pattern, ",")
-	if len(tablePairs) == 0 {
-		return nil, moerr.NewInternalError(ctx, "invalid pattern format")
-	}
 
 	//step1 : split pattern by ',' => table pair
 	for _, pair := range tablePairs {
@@ -832,7 +828,7 @@ func extractRules(ctx context.Context, pattern string) (*cdc2.PatternTuples, err
 
 	tablePairs := strings.Split(pattern, ",")
 	if len(tablePairs) == 0 {
-		return nil, moerr.NewInternalError(ctx, "invalid pattern format")
+		return nil, moerr.NewInternalErrorf(ctx, "invalid pattern format: %s", pattern)
 	}
 	var err error
 	//step1 : split pattern by ',' => table pair
@@ -1706,9 +1702,10 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 
 func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId string) (s string, err error) {
 	var (
-		dbName    string
-		tblName   string
-		watermark string
+		dbName       string
+		tblName      string
+		watermarkStr string
+		watermark    timestamp.Timestamp
 	)
 
 	s = "{\n"
@@ -1732,11 +1729,14 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 			if tblName, err = result.GetString(ctx, i, 1); err != nil {
 				return
 			}
-			if watermark, err = result.GetString(ctx, i, 2); err != nil {
+			if watermarkStr, err = result.GetString(ctx, i, 2); err != nil {
+				return
+			}
+			if watermark, err = timestamp.ParseTimestamp(watermarkStr); err != nil {
 				return
 			}
 
-			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark)
+			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark.ToStdTime().String())
 		}
 	}
 

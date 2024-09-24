@@ -214,6 +214,10 @@ func Test_parseTables(t *testing.T) {
 				table:   "table*",
 			},
 		},
+		{
+			input:   "",
+			wantErr: true,
+		},
 	}
 
 	for _, tkase := range kases {
@@ -582,6 +586,30 @@ func Test_extractTableInfo(t *testing.T) {
 			wantDb:      "",
 			wantTable:   "",
 			wantErr:     assert.Error,
+		},
+		{
+			name: "accountNameIsLegal",
+			args: args{
+				input:               "s:s.db.table",
+				mustBeConcreteTable: false,
+			},
+			wantErr: assert.Error,
+		},
+		{
+			name: "dbNameIsLegal",
+			args: args{
+				input:               "sys.d:b.table",
+				mustBeConcreteTable: false,
+			},
+			wantErr: assert.Error,
+		},
+		{
+			name: "tableNameIsLegal",
+			args: args{
+				input:               "sys.db.ta:le",
+				mustBeConcreteTable: false,
+			},
+			wantErr: assert.Error,
 		},
 	}
 	for _, tt := range tests {
@@ -2251,7 +2279,7 @@ func Test_getTaskCkp(t *testing.T) {
 				accountId: sysAccountID,
 				taskId:    "taskID-1",
 			},
-			wantS: "{\n  \"db1.tb1\": 0-0,\n}",
+			wantS: "{\n  \"db1.tb1\": 1970-01-01 00:00:00 +0000 UTC,\n}",
 		},
 	}
 	for _, tt := range tests {
@@ -2945,5 +2973,38 @@ func Test_initAesKey(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "aesKey", cdc2.AesKey)
 		cdc2.AesKey = ""
+	}
+}
+
+func Test_extractTablePair(t *testing.T) {
+	type args struct {
+		ctx        context.Context
+		pattern    string
+		defaultAcc string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    *cdc2.PatternTuple
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			args: args{
+				ctx:        context.Background(),
+				pattern:    "source:sink:other",
+				defaultAcc: "sys",
+			},
+			wantErr: assert.Error,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := extractTablePair(tt.args.ctx, tt.args.pattern, tt.args.defaultAcc)
+			if !tt.wantErr(t, err, fmt.Sprintf("extractTablePair(%v, %v, %v)", tt.args.ctx, tt.args.pattern, tt.args.defaultAcc)) {
+				return
+			}
+			assert.Equalf(t, tt.want, got, "extractTablePair(%v, %v, %v)", tt.args.ctx, tt.args.pattern, tt.args.defaultAcc)
+		})
 	}
 }
