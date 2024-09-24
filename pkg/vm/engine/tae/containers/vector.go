@@ -265,7 +265,7 @@ func (vec *vectorWrapper) WriteToV1(w io.Writer) (n int64, err error) {
 
 func (vec *vectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 	buf := make([]byte, 8)
-	if _, err = r.Read(buf); err != nil {
+	if _, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 
@@ -273,7 +273,7 @@ func (vec *vectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 
 	// 1. Whole TN Vector
 	buf = make([]byte, types.DecodeInt64(buf[:]))
-	if _, err = r.Read(buf); err != nil {
+	if _, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 

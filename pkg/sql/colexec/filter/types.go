@@ -26,10 +26,9 @@ import (
 var _ vm.Operator = new(Filter)
 
 type Filter struct {
-	ctr     container
-	E       *plan.Expr
-	exeExpr *plan.Expr
-	IsEnd   bool
+	ctr   container
+	E     *plan.Expr
+	IsEnd bool
 
 	vm.OperatorBase
 }
@@ -61,6 +60,7 @@ func NewArgument() *Filter {
 
 func (filter *Filter) Release() {
 	if filter != nil {
+		filter.ctr.cleanRuntimeExecutor()
 		reuse.Free[Filter](filter, nil)
 	}
 }
@@ -68,23 +68,26 @@ func (filter *Filter) Release() {
 type container struct {
 	buf       *batch.Batch
 	executors []colexec.ExpressionExecutor
+
+	runtimeExecutors []colexec.ExpressionExecutor
+	allExecutors     []colexec.ExpressionExecutor // = executors + runtimeExecutor, do not free this executors
 }
 
-func (filter *Filter) SetExeExpr(e *plan.Expr) {
-	filter.exeExpr = e
-}
-
-func (filter *Filter) GetExeExpr() *plan.Expr {
-	return filter.exeExpr
+func (filter *Filter) SetRuntimeExpr(proc *process.Process, exes []*plan.Expr) (err error) {
+	filter.ctr.cleanRuntimeExecutor()
+	filter.ctr.runtimeExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, exes)
+	return
 }
 
 func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	filter.ctr.cleanExecutor() //todo need fix performance issue for executor mem reuse
-	filter.exeExpr = nil
+	filter.ctr.resetExecutor()
+	filter.ctr.cleanRuntimeExecutor()
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
 	filter.ctr.cleanExecutor()
+	filter.ctr.cleanRuntimeExecutor()
+	filter.ctr.allExecutors = nil
 	if filter.ctr.buf != nil {
 		filter.ctr.buf.Clean(proc.Mp())
 	}
@@ -99,11 +102,19 @@ func (ctr *container) cleanExecutor() {
 	ctr.executors = nil
 }
 
-// func (ctr *container) resetExecutor() {
-// 	for i := range ctr.executors {
-// 		if ctr.executors[i] != nil {
-// 			ctr.executors[i].ResetForNextQuery()
-// 		}
-// 	}
-// 	ctr.executors = nil
-// }
+func (ctr *container) cleanRuntimeExecutor() {
+	for i := range ctr.runtimeExecutors {
+		if ctr.runtimeExecutors[i] != nil {
+			ctr.runtimeExecutors[i].Free()
+		}
+	}
+	ctr.runtimeExecutors = nil
+}
+
+func (ctr *container) resetExecutor() {
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].ResetForNextQuery()
+		}
+	}
+}
