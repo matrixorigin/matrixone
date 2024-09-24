@@ -192,6 +192,32 @@ func Test_UpgEntry(t *testing.T) {
 			upg_information_schema_columns.Upgrade(executor, uint32(0))
 		},
 	)
+
+	// test upg_information_schema_schemata update
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if strings.HasPrefix(strings.ToLower(sql), strings.ToLower(indexCheckPrefixMatchSql)) {
+					typs := []types.Type{
+						types.New(types.T_varchar, 64, 0),
+					}
+
+					memRes := executor.NewMemResult(
+						typs,
+						mpool.MustNewZero())
+					memRes.NewBatch()
+					executor.AppendStringRows(memRes, 0, []string{""})
+					return memRes.GetResult(), nil
+				}
+				return executor.Result{}, nil
+			}, txnOperator)
+			upg_information_schemata_schema.Upgrade(executor, uint32(0))
+		},
+	)
 }
 
 func Test_versionHandle_HandleClusterUpgrade_InsertInitDataKey(t *testing.T) {
