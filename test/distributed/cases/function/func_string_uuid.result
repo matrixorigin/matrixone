@@ -7,3 +7,28 @@ length(uuid())
 SELECT uuid(1) FROM t1;
 invalid argument function uuid, bad value [BIGINT]
 drop table t1;
+CREATE TABLE namelists (
+id UUID DEFAULT uuid() PRIMARY KEY,
+name VARCHAR NOT NULL
+);
+INSERT INTO namelists (name) VALUES ('Tom'), ('Jane'), ('Bob');
+SELECT * from namelists;
+id    name
+01921d93-c429-7966-a2f6-23890aee82ce    Tom
+01921d93-c429-796a-ae85-60871fd4579e    Jane
+01921d93-c429-796b-b67f-17b1a953026c    Bob
+INSERT INTO namelists (id, name) VALUES ('019213b0-d7bd-7271-a681-49e9d979d8d3', 'Jack');
+INSERT INTO namelists (id, name) VALUES ('019213b0-d7bd-7271-a681-49e9d979d8d3', 'Alan');
+Duplicate entry '019213b0-d7bd-7271-a681-49e9d979d8d3' for key 'id'
+SELECT * from namelists;
+id    name
+01921d93-c429-7966-a2f6-23890aee82ce    Tom
+01921d93-c429-796a-ae85-60871fd4579e    Jane
+01921d93-c429-796b-b67f-17b1a953026c    Bob
+019213b0-d7bd-7271-a681-49e9d979d8d3    Jack
+Drop Table namelists;
+create table tttt(a int default 0 primary key, b int);
+insert into tttt (b) values(1);
+insert into tttt (b) values(1);
+Duplicate entry '0' for key 'a'
+drop table tttt;
