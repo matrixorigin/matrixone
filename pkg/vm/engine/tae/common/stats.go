@@ -58,10 +58,6 @@ func init() {
 	FlushMemCapacity.Store(20 * Const1MBytes)
 }
 
-///////
-/// statistics component
-///////
-
 ///
 /// Table statistics
 ///
