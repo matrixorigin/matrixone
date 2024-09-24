@@ -15,7 +15,6 @@
 package fulltext
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -334,18 +333,18 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 
 	}
 
-	return nil, moerr.NewInternalError(context.TODO(), "Eval() not handled")
+	return nil, moerr.NewInternalErrorNoCtx("Eval() not handled")
 }
 
 // validate the Pattern
 func (p *Pattern) Validate() error {
 	if p.Operator == PLUS || p.Operator == MINUS {
 		if len(p.Children) == 0 {
-			return moerr.NewInternalError(context.TODO(), "+/- must have children with value")
+			return moerr.NewInternalErrorNoCtx("+/- must have children with value")
 		}
 		for _, c := range p.Children {
 			if c.Operator == PLUS || c.Operator == MINUS || c.Operator == PHRASE {
-				return moerr.NewInternalError(context.TODO(), "double +/- operator")
+				return moerr.NewInternalErrorNoCtx("double +/- operator")
 			}
 		}
 
@@ -358,22 +357,22 @@ func (p *Pattern) Validate() error {
 
 	} else if p.Operator == TEXT || p.Operator == STAR {
 		if len(p.Children) > 0 {
-			return moerr.NewInternalError(context.TODO(), "text Pattern cannot have children")
+			return moerr.NewInternalErrorNoCtx("text Pattern cannot have children")
 		}
 	} else if p.Operator == PHRASE {
 		for _, c := range p.Children {
 			if c.Operator != TEXT {
-				return moerr.NewInternalError(context.TODO(), "PHRASE can only have text Pattern")
+				return moerr.NewInternalErrorNoCtx("PHRASE can only have text Pattern")
 			}
 		}
 	} else if p.Operator == GROUP {
 		if len(p.Children) == 0 {
-			return moerr.NewInternalError(context.TODO(), "sub-query is empty")
+			return moerr.NewInternalErrorNoCtx("sub-query is empty")
 		}
 
 		for _, c := range p.Children {
 			if c.Operator == PLUS || c.Operator == MINUS || c.Operator == PHRASE {
-				return moerr.NewInternalError(context.TODO(), "sub-query cannot have +/-/phrase operator")
+				return moerr.NewInternalErrorNoCtx("sub-query cannot have +/-/phrase operator")
 			}
 		}
 
@@ -388,7 +387,7 @@ func (p *Pattern) Validate() error {
 		// LESSTHAN, GREATERTHAN, RANKLESS
 		for _, c := range p.Children {
 			if c.Operator != GROUP && c.Operator != TEXT && c.Operator != STAR {
-				return moerr.NewInternalError(context.TODO(), "double operator")
+				return moerr.NewInternalErrorNoCtx("double operator")
 			}
 		}
 
@@ -440,7 +439,7 @@ func IsSubExpression(pattern string) bool {
 // first character is a operator
 func CreatePattern(pattern string) (*Pattern, error) {
 	if len(pattern) == 0 {
-		return nil, moerr.NewInternalError(context.TODO(), "pattern is empty")
+		return nil, moerr.NewInternalErrorNoCtx("pattern is empty")
 	}
 	runeSlice := []rune(pattern)
 
@@ -511,7 +510,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 
 			if r != ')' {
 				if i == len(runeSlice)-1 {
-					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
+					return nil, moerr.NewInternalErrorNoCtx("no close bracket found")
 				}
 			} else {
 				bracket -= 1
@@ -543,7 +542,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 				tokens = append(tokens, p)
 			} else if r == '(' {
 				if i == len(runeSlice)-1 {
-					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
+					return nil, moerr.NewInternalErrorNoCtx("no close bracket found")
 				}
 
 				bracket += 1
@@ -576,7 +575,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 		if bracket == 0 {
 			if r == '(' {
 				if i == len(runeSlice)-1 {
-					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
+					return nil, moerr.NewInternalErrorNoCtx("no close bracket found")
 				}
 
 				// open bracket found and find next close bracket
@@ -618,7 +617,7 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 		}
 		return ps, nil
 	} else if mode == int64(tree.FULLTEXT_QUERY_EXPANSION) || mode == int64(tree.FULLTEXT_NL_QUERY_EXPANSION) {
-		return nil, moerr.NewInternalError(context.TODO(), "Query Expansion mode not supported")
+		return nil, moerr.NewInternalErrorNoCtx("Query Expansion mode not supported")
 	} else if mode == int64(tree.FULLTEXT_BOOLEAN) {
 		// BOOLEAN MODE
 
@@ -652,5 +651,5 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 		return finalp, nil
 	}
 
-	return nil, moerr.NewInternalError(context.TODO(), "invalid fulltext search mode")
+	return nil, moerr.NewInternalErrorNoCtx("invalid fulltext search mode")
 }
