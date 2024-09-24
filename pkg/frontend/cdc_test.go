@@ -3033,9 +3033,15 @@ func (e *mockIe) Query(ctx context.Context, s string, options ie.SessionOverride
 			err:      nil,
 			rowCount: 0,
 		}
+	} else if e.cnt == 3 {
+		return &mockIeResult{
+			err: moerr.NewInternalErrorNoCtx(""),
+		}
 	}
 	return &mockIeResult{
-		err: moerr.NewInternalErrorNoCtx(""),
+		err:       nil,
+		rowCount:  1,
+		returnErr: true,
 	}
 }
 
@@ -3047,8 +3053,9 @@ func (*mockIe) ApplySessionOverride(options ie.SessionOverrideOptions) {
 var _ ie.InternalExecResult = &mockIeResult{}
 
 type mockIeResult struct {
-	err      error
-	rowCount uint64
+	err       error
+	rowCount  uint64
+	returnErr bool
 }
 
 func (r *mockIeResult) Error() error {
@@ -3089,7 +3096,10 @@ func (*mockIeResult) GetFloat64(ctx context.Context, u uint64, u2 uint64) (float
 	panic("implement me")
 }
 
-func (*mockIeResult) GetString(ctx context.Context, u uint64, u2 uint64) (string, error) {
+func (r *mockIeResult) GetString(ctx context.Context, u uint64, u2 uint64) (string, error) {
+	if r.returnErr {
+		return "", moerr.NewInternalErrorNoCtx("")
+	}
 	return "", nil
 }
 
@@ -3116,6 +3126,9 @@ func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
 	err := initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
 	assert.NoError(t, err)
 	cdc2.AesKey = ""
+
+	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	assert.Error(t, err)
 
 	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
 	assert.Error(t, err)
