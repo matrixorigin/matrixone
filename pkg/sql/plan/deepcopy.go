@@ -192,7 +192,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		FilterList:      make([]*plan.Expr, len(node.FilterList)),
 		BlockFilterList: make([]*plan.Expr, len(node.BlockFilterList)),
 		GroupBy:         make([]*plan.Expr, len(node.GroupBy)),
-		GroupingSet:     make([]*plan.Expr, len(node.GroupingSet)),
 		AggList:         make([]*plan.Expr, len(node.AggList)),
 		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
 		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
@@ -243,8 +242,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.GroupBy[idx] = DeepCopyExpr(expr)
 	}
 
-	for idx, expr := range node.GroupingSet {
-		newNode.GroupingSet[idx] = DeepCopyExpr(expr)
+	for idx, flag := range node.GroupingFlag {
+		newNode.GroupingFlag[idx] = flag
 	}
 
 	for idx, expr := range node.AggList {
