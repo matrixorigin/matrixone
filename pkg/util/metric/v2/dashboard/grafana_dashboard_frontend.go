@@ -199,7 +199,7 @@ func (c *DashboardCreator) initFrontendSQLLength() dashboard.Option {
 			[]string{
 				c.getMetricWithFilter(`mo_frontend_sql_length_bucket`, `label="total-sql-length"`),
 				c.getMetricWithFilter(`mo_frontend_sql_length_bucket`, `label="load-data-inline-sql-length"`),
-				c.getMetricWithFilter(`mo_frontend_sql_length_bucket`, `label="other-sql-length""`),
+				c.getMetricWithFilter(`mo_frontend_sql_length_bucket`, `label="other-sql-length"`),
 			},
 			[]string{
 				"total-sql-length",
