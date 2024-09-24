@@ -1167,7 +1167,7 @@ func (txn *Transaction) ForEachTableWrites(databaseId uint64, tableId uint64, of
 // Before it gets the cached table, it checks whether the table is deleted by another
 // transaction by go through the delete tables slice, and advance its cachedIndex.
 func (txn *Transaction) getCachedTable(
-	ctx context.Context,
+	_ context.Context,
 	k tableKey,
 ) *txnTableDelegate {
 	var tbl *txnTableDelegate
