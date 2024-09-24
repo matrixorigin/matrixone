@@ -95,6 +95,7 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 		shuffle.ctr.buf.Clean(proc.Mp())
 	}
 	if shuffle.ctr.shufflePool != nil && shuffle.ctr.lastForShufflePool {
+		//shuffle.ctr.shufflePool.Print()
 		shuffle.ctr.shufflePool.Reset(proc.Mp())
 		shuffle.ctr.lastForShufflePool = false
 	}

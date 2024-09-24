@@ -97,8 +97,8 @@ func (sp *ShufflePool) GetEndingBatch(buf *batch.Batch, proc *process.Process) *
 	}
 	for i := range sp.batches {
 		bat := sp.batches[i]
-		sp.batches[i] = nil
 		if bat != nil && bat.RowCount() > 0 {
+			sp.batches[i] = nil
 			return bat
 		}
 	}
