@@ -114,7 +114,7 @@ func ExecSQL(
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 	ctx, cancel := context.WithTimeout(
 		defines.AttachAccountId(context.Background(), 0),
-		10*time.Second,
+		time.Second*60,
 	)
 	defer cancel()
 
@@ -135,7 +135,42 @@ func ExecSQL(
 		executor.Options{}.WithDatabase(db),
 	)
 
-	require.NoError(t, err)
+	require.NoError(t, err, sql)
+	return txnOp.Txn().CommitTS
+}
+
+func ExecSQLWithMinCommittedTS(
+	t *testing.T,
+	db string,
+	cn embed.ServiceOperator,
+	min timestamp.Timestamp,
+	sql ...string,
+) timestamp.Timestamp {
+	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+	ctx, cancel := context.WithTimeout(
+		defines.AttachAccountId(context.Background(), 0),
+		time.Second*60,
+	)
+	defer cancel()
+
+	var txnOp client.TxnOperator
+	err := exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			txnOp = txn.Txn()
+			for _, s := range sql {
+				res, err := txn.Exec(s, executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				res.Close()
+			}
+			return nil
+		},
+		executor.Options{}.WithDatabase(db).WithMinCommittedTS(min),
+	)
+
+	require.NoError(t, err, sql)
 	return txnOp.Txn().CommitTS
 }
 
