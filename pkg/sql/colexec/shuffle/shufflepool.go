@@ -65,7 +65,6 @@ func (sp *ShufflePool) Reset(m *mpool.MPool) {
 			sp.batches[i].Clean(m)
 		}
 	}
-	sp.batches = nil
 }
 
 func (sp *ShufflePool) Print() { // only for debug
