@@ -31,6 +31,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func NewColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				Name:   name,
+				ColPos: int32(pos),
+			},
+		},
+	}
+}
+
+func ConstructInExpr(
+	ctx context.Context,
+	colName string,
+	colVec *vector.Vector,
+) *plan.Expr {
+	data, _ := colVec.MarshalBinary()
+	colExpr := NewColumnExpr(0, plan2.MakePlan2Type(colVec.GetType()), colName)
+	return plan2.MakeInExpr(
+		ctx,
+		colExpr,
+		int32(colVec.Length()),
+		data,
+		false,
+	)
+}
+
 func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
 	idx := strings.Index(name, ".")
 	var pos int32

@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -39,22 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
-
-func ConstructInExpr(
-	ctx context.Context,
-	colName string,
-	colVec *vector.Vector,
-) *plan.Expr {
-	data, _ := colVec.MarshalBinary()
-	colExpr := newColumnExpr(0, plan2.MakePlan2Type(colVec.GetType()), colName)
-	return plan2.MakeInExpr(
-		ctx,
-		colExpr,
-		int32(colVec.Length()),
-		data,
-		false,
-	)
-}
 
 func TransferTombstones(
 	ctx context.Context,
@@ -346,7 +329,7 @@ func doTransferRowids(
 		v2.BatchTransferTombstonesDurationHistogram.Observe(duration.Seconds())
 	}()
 	pkColumName := table.GetTableDef(ctx).Pkey.PkeyColName
-	expr := ConstructInExpr(ctx, pkColumName, searchPKColumn)
+	expr := engine_util.ConstructInExpr(ctx, pkColumName, searchPKColumn)
 
 	var blockList objectio.BlockInfoSlice
 	if _, err = engine_util.TryFastFilterBlocks(
