@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,7 +53,8 @@ func MergeCheckpoint(
 	datas := make([]*logtail.CheckpointData, 0)
 	deleteFiles := make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
-		logutil.Infof("merge checkpoint %v", ckpEntry.String())
+		logutil.Info("[MergeCheckpoint]",
+			zap.String("checkpoint", ckpEntry.String()))
 		_, data, err := logtail.LoadCheckpointEntriesFromKey(context.Background(), sid, fs,
 			ckpEntry.GetLocation(), ckpEntry.GetVersion(), nil, &types.TS{})
 		if err != nil {
@@ -71,7 +73,6 @@ func MergeCheckpoint(
 		ckpData.Close()
 	}()
 	if len(datas) == 0 {
-		logutil.Infof("no checkpoint data to merge")
 		return nil, "", nil
 	}
 	objs := make(map[string]*types.TS)
@@ -116,7 +117,10 @@ func MergeCheckpoint(
 			if objects[objectStats.ObjectName().String()] == nil {
 				continue
 			}
-			if n == len(datas)-1 && objectStats.GetAppendable() && insDropTs[i].IsEmpty() && objs[objectStats.ObjectName().String()].IsEmpty() {
+			if n == len(datas)-1 &&
+				objectStats.GetAppendable() &&
+				insDropTs[i].IsEmpty() &&
+				objs[objectStats.ObjectName().String()].IsEmpty() {
 				ins.GetVectorByName(catalog.EntryNode_DeleteAt).Update(
 					i, ckpEntries[len(ckpEntries)-1].GetEnd(), false)
 			}
@@ -129,7 +133,10 @@ func MergeCheckpoint(
 			if tombstones[objectStats.ObjectName().String()] == nil {
 				continue
 			}
-			if n == len(datas)-1 && objectStats.GetAppendable() && tombstoneDropTs[i].IsEmpty() && objs[objectStats.ObjectName().String()].IsEmpty() {
+			if n == len(datas)-1 &&
+				objectStats.GetAppendable() &&
+				tombstoneDropTs[i].IsEmpty() &&
+				objs[objectStats.ObjectName().String()].IsEmpty() {
 				tombstone.GetVectorByName(catalog.EntryNode_DeleteAt).Update(
 					i, ckpEntries[len(ckpEntries)-1].GetEnd(), false)
 			}
