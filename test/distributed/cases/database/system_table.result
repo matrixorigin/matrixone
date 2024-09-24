@@ -186,12 +186,12 @@ PRIVILEGE_TYPE    VARCHAR(64)    NO        ''
 IS_GRANTABLE    VARCHAR(3)    NO        ''        
 show columns from `SCHEMATA`;
 Field    Type    Null    Key    Default    Extra    Comment
-catalog_name    VARCHAR(3)    YES        null        
+catalog_name    VARCHAR(3)    NO        null        
 schema_name    VARCHAR(5000)    YES        null        
 default_character_set_name    VARCHAR(7)    NO        null        
 default_collation_name    VARCHAR(18)    NO        null        
 sql_path    CHAR(0)    YES        null        
-default_encryption    VARCHAR(3)    NO        null        
+default_encryption    VARCHAR(3)    NO        null          
 show columns from `CHARACTER_SETS`;
 Field    Type    Null    Key    Default    Extra    Comment
 CHARACTER_SET_NAME    VARCHAR(64)    YES        null        
