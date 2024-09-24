@@ -436,7 +436,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(indexes []*IndexDef, node *plan.No
 		}
 	}
 
-	if colPos == pkPos {
+	if colPos == pkPos && pkPos != -1 {
 		return node.NodeId
 	}
 
@@ -918,17 +918,9 @@ func (builder *QueryBuilder) getMostSelectiveIndex(indexes []*IndexDef, node *pl
 		col2filter[col.ColPos] = i
 	}
 
-	filterOnPK := true
-	for _, part := range node.TableDef.Pkey.Names {
-		colIdx := node.TableDef.Name2ColIndex[part]
-		_, ok := col2filter[colIdx]
-		if !ok {
-			filterOnPK = false
-			break
-		}
-	}
-
-	if filterOnPK {
+	firstPkColIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]
+	_, ok := col2filter[firstPkColIdx]
+	if ok { //point select filter on first column of primary key, no need to go index
 		return -1, 0, nil
 	}
 
