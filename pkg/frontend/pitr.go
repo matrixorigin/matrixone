@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -64,6 +65,8 @@ var (
 	getSqlForCheckTableFmt = `select rel_id from mo_catalog.mo_tables {MO_TS = %d} where reldatabase = '%s' and relname = '%s';`
 
 	getSqlForCheckAccountFmt = `select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s';`
+
+	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where database_name = '%s';`
 )
 
 type pitrRecord struct {
@@ -136,6 +139,10 @@ func getSqlForCheckAccountWithPitr(ctx context.Context, ts int64, accountName st
 
 func getSqlForCheckDupPitrFormat(accountId, objId uint64) string {
 	return fmt.Sprintf(checkDupPitrFormat, accountId, objId)
+}
+
+func getPubInfoWithPitr(ts int64, dbName string) string {
+	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, dbName)
 }
 
 func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccountId, objId uint64) (bool, error) {
@@ -1106,7 +1113,7 @@ func restoreToDatabaseOrTableWithPitr(
 	// restore publication record
 	if !restoreToTbl {
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", pitrName, dbName))
-		if err = createPub(ctx, sid, bh, pitrName, dbName, curAccount); err != nil {
+		if err = createPubByPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts); err != nil {
 			return
 		}
 	}
@@ -1618,6 +1625,7 @@ func nanoTimeFormat(ts int64) string {
 // @param pitrRecord: the pitr record
 // if the ts less than the duration of the pitr
 // then return an error
+// if the ts bigger than now(), then return an error
 func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 	// use utc time now sub pitr during time get the minest time
 	// is ts time less than the minest time, then return error
@@ -1631,6 +1639,11 @@ func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 
 	if ts < minTs.UnixNano() {
 		return moerr.NewInternalErrorNoCtxf("ts %v is less than the pitr range minest time %v", nanoTimeFormat(ts), nanoTimeFormat(minTs.UnixNano()))
+	}
+
+	// if the ts bigger than now(), then return an error
+	if ts > time.Now().UTC().UnixNano() {
+		return moerr.NewInternalErrorNoCtxf("ts %v is bigger than now %v", nanoTimeFormat(ts), nanoTimeFormat(time.Now().UTC().UnixNano()))
 	}
 
 	return
@@ -1967,4 +1980,53 @@ func getCreateDatabaseSqlInPitr(ctx context.Context,
 		return "", moerr.NewBadDB(ctx, dbName)
 	}
 	return colsList[0][1], nil
+}
+
+// createPubByPitr create pub after the database is created by pitr
+func createPubByPitr(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	pitrName,
+	dbName string,
+	toAccountId uint32,
+	ts int64) (err error) {
+	// read pub info from mo_pubs
+	sql := getPubInfoWithPitr(ts, dbName)
+	bh.ClearExecResultSet()
+	getLogger(sid).Info(fmt.Sprintf("[%s] create pub: get pub info sql: %s", pitrName, sql))
+
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+	pubInfos, err := extractPubInfosFromExecResult(ctx, erArray)
+	if err != nil {
+		return err
+	}
+
+	// restore pub to toAccount
+	var ast []tree.Statement
+	defer func() {
+		for _, s := range ast {
+			s.Free()
+		}
+	}()
+
+	for _, pubInfo := range pubInfos {
+		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Owner, pubInfo.Creator)
+		if ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1); err != nil {
+			return
+		}
+		getLogger(sid).Info(fmt.Sprintf("[%s] create pub: create pub sql: %s", pitrName, pubInfo.GetCreateSql()))
+
+		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication)); err != nil {
+			return
+		}
+	}
+	return
 }

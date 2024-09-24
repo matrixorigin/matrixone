@@ -1934,6 +1934,8 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 		out.WriteString(fmt.Sprintf("%sExpr_T(%s)", prefix, t.T.String()))
 	case *plan.Expr_Vec:
 		out.WriteString(fmt.Sprintf("%sExpr_Vec(len=%d)", prefix, t.Vec.Len))
+	case *plan.Expr_Fold:
+		out.WriteString(fmt.Sprintf("%sExpr_Fold(id=%d)", prefix, t.Fold.Id))
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
@@ -2334,4 +2336,256 @@ func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 		return true
 	}
 	return false
+}
+
+// a > current_time() + 1 and b < ? + c and d > ? + 2
+// =>
+// a > foldVal1 and b < foldVal2 + c and d > foldVal3
+func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.ExpressionExecutor) (bool, error) {
+	allCanFold := true
+	var err error
+
+	fn := expr.GetF()
+	if fn == nil {
+		switch expr.Expr.(type) {
+		case *plan.Expr_List:
+			return true, nil
+		case *plan.Expr_Col:
+			return false, nil
+		case *plan.Expr_Vec:
+			return false, nil
+		default:
+			return true, nil
+		}
+	}
+
+	overloadID := fn.Func.GetObj()
+	f, exists := function.GetFunctionByIdWithoutError(overloadID)
+	if !exists {
+		panic("ReplaceFoldVal: function not exist")
+	}
+	if f.IsAgg() || f.IsWin() {
+		panic("ReplaceFoldVal: agg or window function")
+	}
+
+	argFold := make([]bool, len(fn.Args))
+	for i := range fn.Args {
+		argFold[i], err = ReplaceFoldExpr(proc, fn.Args[i], exes)
+		if err != nil {
+			return false, err
+		}
+		if !argFold[i] {
+			allCanFold = false
+		}
+	}
+
+	if allCanFold {
+		return true, nil
+	} else {
+		for i, canFold := range argFold {
+			if canFold {
+				fn.Args[i], err = ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				if err != nil {
+					return false, err
+				}
+				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
+					continue
+				}
+
+				exprExecutor, err := colexec.NewExpressionExecutor(proc, fn.Args[i])
+				if err != nil {
+					return false, err
+				}
+				newID := len(*exes)
+				*exes = append(*exes, exprExecutor)
+
+				fn.Args[i] = &plan.Expr{
+					Typ: fn.Args[i].Typ,
+					Expr: &plan.Expr_Fold{
+						Fold: &plan.FoldVal{
+							Id: int32(newID),
+						},
+					},
+					AuxId:       fn.Args[i].AuxId,
+					Ndv:         fn.Args[i].Ndv,
+					Selectivity: fn.Args[i].Selectivity,
+				}
+
+			}
+		}
+		return false, nil
+	}
+}
+
+func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.ExpressionExecutor) (err error) {
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_Fold:
+		var vec *vector.Vector
+		idx := int(ef.Fold.Id)
+		if idx >= len(*executors) {
+			panic("EvalFoldVal: fold id not exist")
+		}
+		exe := (*executors)[idx]
+		vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		if err != nil {
+			return err
+		}
+
+		var data []byte
+		var err error
+		if vec.Length() > 1 {
+			vec.InplaceSortAndCompact()
+			data, err = vec.MarshalBinary()
+			if err != nil {
+				return err
+			}
+			ef.Fold.IsConst = false
+		} else {
+			data, _ = getConstantBytes(vec, false, 0)
+			ef.Fold.IsConst = true
+		}
+		ef.Fold.Data = data
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			err = EvalFoldExpr(proc, ef.F.Args[i], executors)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func HasFoldExprForList(exprs []*Expr) bool {
+	for _, e := range exprs {
+		hasFoldExpr := HasFoldValExpr(e)
+		if hasFoldExpr {
+			return true
+		}
+	}
+	return false
+}
+
+func HasFoldValExpr(expr *Expr) bool {
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_Fold:
+		return true
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			hasFoldExpr := HasFoldValExpr(ef.F.Args[i])
+			if hasFoldExpr {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte, can bool) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
+		return
+	}
+	can = true
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		val := vector.MustFixedColNoTypeCheck[bool](vec)[row]
+		ret = types.EncodeBool(&val)
+
+	case types.T_bit:
+		val := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
+		ret = types.EncodeUint64(&val)
+
+	case types.T_int8:
+		val := vector.MustFixedColNoTypeCheck[int8](vec)[row]
+		ret = types.EncodeInt8(&val)
+
+	case types.T_int16:
+		val := vector.MustFixedColNoTypeCheck[int16](vec)[row]
+		ret = types.EncodeInt16(&val)
+
+	case types.T_int32:
+		val := vector.MustFixedColNoTypeCheck[int32](vec)[row]
+		ret = types.EncodeInt32(&val)
+
+	case types.T_int64:
+		val := vector.MustFixedColNoTypeCheck[int64](vec)[row]
+		ret = types.EncodeInt64(&val)
+
+	case types.T_uint8:
+		val := vector.MustFixedColNoTypeCheck[uint8](vec)[row]
+		ret = types.EncodeUint8(&val)
+
+	case types.T_uint16:
+		val := vector.MustFixedColNoTypeCheck[uint16](vec)[row]
+		ret = types.EncodeUint16(&val)
+
+	case types.T_uint32:
+		val := vector.MustFixedColNoTypeCheck[uint32](vec)[row]
+		ret = types.EncodeUint32(&val)
+
+	case types.T_uint64:
+		val := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
+		ret = types.EncodeUint64(&val)
+
+	case types.T_float32:
+		val := vector.MustFixedColNoTypeCheck[float32](vec)[row]
+		ret = types.EncodeFloat32(&val)
+
+	case types.T_float64:
+		val := vector.MustFixedColNoTypeCheck[float64](vec)[row]
+		ret = types.EncodeFloat64(&val)
+
+	case types.T_varchar, types.T_char,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
+		ret = []byte(vec.GetStringAt(int(row)))
+
+	case types.T_json:
+		if !transAll {
+			can = false
+			return
+		}
+		ret = []byte(vec.GetStringAt(int(row)))
+
+	case types.T_timestamp:
+		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[row]
+		ret = types.EncodeTimestamp(&val)
+
+	case types.T_date:
+		val := vector.MustFixedColNoTypeCheck[types.Date](vec)[row]
+		ret = types.EncodeDate(&val)
+
+	case types.T_time:
+		val := vector.MustFixedColNoTypeCheck[types.Time](vec)[row]
+		ret = types.EncodeTime(&val)
+
+	case types.T_datetime:
+		val := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[row]
+		ret = types.EncodeDatetime(&val)
+
+	case types.T_enum:
+		if !transAll {
+			can = false
+			return
+		}
+		val := vector.MustFixedColNoTypeCheck[types.Enum](vec)[row]
+		ret = types.EncodeEnum(&val)
+
+	case types.T_decimal64:
+		val := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
+		ret = types.EncodeDecimal64(&val)
+
+	case types.T_decimal128:
+		val := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row]
+		ret = types.EncodeDecimal128(&val)
+
+	case types.T_uuid:
+		val := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[row]
+		ret = types.EncodeUuid(&val)
+
+	default:
+		can = false
+	}
+
+	return
 }

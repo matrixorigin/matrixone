@@ -137,7 +137,7 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 		endVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.end, 1, proc.Mp())
 		stepVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.step, 1, proc.Mp())
 
-		err := initStartAndEndNumNoTypeCheck[T](&gs, proc, startVec, endVec, stepVec, 0)
+		err := initStartAndEndNumNoTypeCheck(&gs, proc, startVec, endVec, stepVec, 0)
 		if err != nil {
 			require.True(t, kase.err)
 			continue
