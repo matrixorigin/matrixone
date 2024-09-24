@@ -44,9 +44,9 @@ func (v Vector) TypeName() string {
 }
 
 func NewVecFromReuse() *Vector {
-	//v := reuse.Alloc[Vector](nil)
-	v := new(Vector)
-	v.nsp = &nulls.Nulls{}
+	v := reuse.Alloc[Vector](nil)
+	//v := new(Vector)
+	//v.nsp = &nulls.Nulls{}
 	// if v.OnUsed {
 	// 	panic("alloc onused vector")
 	// }
