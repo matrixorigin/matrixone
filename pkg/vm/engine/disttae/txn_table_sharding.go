@@ -431,6 +431,9 @@ type shardingLocalReader struct {
 	remoteRelData         engine.RelData
 	remoteTombApplyPolicy engine.TombstoneApplyPolicy
 	remoteScanType        int
+
+	orderBy  []*plan.OrderBySpec
+	filterZM objectio.ZoneMap
 }
 
 // TODO::
@@ -476,10 +479,16 @@ func (r *shardingLocalReader) Read(
 				ctx,
 				shardservice.ReadBuildReader,
 				func(param *shard.ReadParam) {
+					zm, err := r.filterZM.Marshal()
+					if err != nil {
+						panic(err)
+					}
 					param.ReaderBuildParam.RelData = relData
 					param.ReaderBuildParam.Expr = expr
 					param.ReaderBuildParam.ScanType = int32(r.remoteScanType)
 					param.ReaderBuildParam.TombstoneApplyPolicy = int32(r.remoteTombApplyPolicy)
+					param.ReaderBuildParam.OrderBy = r.orderBy
+					param.ReaderBuildParam.Zm = zm
 				},
 				func(resp []byte) {
 					r.streamID = types.DecodeUuid(resp)
@@ -553,15 +562,17 @@ func (r *shardingLocalReader) close() error {
 }
 
 func (r *shardingLocalReader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	panic("not implemented")
+	r.lrd.SetOrderBy(orderby)
+	r.orderBy = orderby
 }
 
 func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {
-	panic("not implemented")
+	return r.orderBy
 }
 
 func (r *shardingLocalReader) SetFilterZM(zm objectio.ZoneMap) {
-	panic("not implemented")
+	r.lrd.SetFilterZM(zm)
+	r.filterZM = zm
 }
 
 func (tbl *txnTableDelegate) BuildShardingReaders(
