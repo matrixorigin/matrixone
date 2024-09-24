@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package table_function
+package fulltext
 
 import (
 	"strings"
@@ -181,13 +181,13 @@ func TestFullTextNL(t *testing.T) {
 	// pretend adding records from database
 	// init the word "apple"
 	word := "apple"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "banana"
 	word = "banana"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
@@ -224,13 +224,13 @@ func TestFullTextOr(t *testing.T) {
 	// pretend adding records from database
 	// init the word "apple"
 	word := "apple"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "banana"
 	word = "banana"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
@@ -267,13 +267,13 @@ func TestFullTextPlusPlus(t *testing.T) {
 	// pretend adding records from database
 	// init the word "apple"
 	word := "apple"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "banana"
 	word = "banana"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
@@ -303,13 +303,13 @@ func TestFullTextPlusOr(t *testing.T) {
 	// pretend adding records from database
 	// init the word "apple"
 	word := "apple"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "banana"
 	word = "banana"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
@@ -341,13 +341,13 @@ func TestFullTextMinus(t *testing.T) {
 	// pretend adding records from database
 	// init the word "apple"
 	word := "apple"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "banana"
 	word = "banana"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
@@ -377,13 +377,13 @@ func TestFullTextTilda(t *testing.T) {
 	// pretend adding records from database
 	// init the word "apple"
 	word := "apple"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "banana"
 	word = "banana"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
@@ -415,20 +415,20 @@ func TestFullText1(t *testing.T) {
 	// pretend adding records from database
 	// init the word "we"
 	word := "we"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "are"
 	word = "are"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[10] = &Word{DocId: 10, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	// init the word "so"
 	word = "so"
-	s.WordAccums[word] = &WordAccum{Id: 2, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[20] = &Word{DocId: 20, Position: []int64{0, 4, 6}, DocCount: 5}
 	s.WordAccums[word].Words[21] = &Word{DocId: 21, Position: []int64{0, 4, 6}, DocCount: 6}
 	s.WordAccums[word].Words[22] = &Word{DocId: 22, Position: []int64{0, 4, 6}, DocCount: 7}
@@ -436,7 +436,7 @@ func TestFullText1(t *testing.T) {
 
 	// init the word "happy"
 	word = "happy"
-	s.WordAccums[word] = &WordAccum{Id: 3, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[30] = &Word{DocId: 30, Position: []int64{0, 4, 6}, DocCount: 1}
 	s.WordAccums[word].Words[31] = &Word{DocId: 31, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[32] = &Word{DocId: 32, Position: []int64{0, 4, 6}, DocCount: 3}
@@ -472,20 +472,20 @@ func TestFullText2(t *testing.T) {
 	// pretend adding records from database
 	// init the word "we"
 	word := "we"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "are"
 	word = "are"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	// init the word "so"
 	word = "so"
-	s.WordAccums[word] = &WordAccum{Id: 2, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[21] = &Word{DocId: 21, Position: []int64{0, 4, 6}, DocCount: 6}
 	s.WordAccums[word].Words[22] = &Word{DocId: 22, Position: []int64{0, 4, 6}, DocCount: 7}
@@ -493,7 +493,7 @@ func TestFullText2(t *testing.T) {
 
 	// init the word "happy"
 	word = "happy"
-	s.WordAccums[word] = &WordAccum{Id: 3, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[31] = &Word{DocId: 31, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[32] = &Word{DocId: 32, Position: []int64{0, 4, 6}, DocCount: 3}
@@ -524,20 +524,20 @@ func TestFullText3(t *testing.T) {
 	// pretend adding records from database
 	// init the word "we"
 	word := "we"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "are"
 	word = "are"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	// init the word "so"
 	word = "so"
-	s.WordAccums[word] = &WordAccum{Id: 2, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[20] = &Word{DocId: 20, Position: []int64{0, 4, 6}, DocCount: 5}
 	s.WordAccums[word].Words[21] = &Word{DocId: 21, Position: []int64{0, 4, 6}, DocCount: 6}
 	s.WordAccums[word].Words[22] = &Word{DocId: 22, Position: []int64{0, 4, 6}, DocCount: 7}
@@ -545,7 +545,7 @@ func TestFullText3(t *testing.T) {
 
 	// init the word "happy"
 	word = "happy"
-	s.WordAccums[word] = &WordAccum{Id: 3, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[30] = &Word{DocId: 30, Position: []int64{0, 4, 6}, DocCount: 1}
 	s.WordAccums[word].Words[31] = &Word{DocId: 31, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[32] = &Word{DocId: 32, Position: []int64{0, 4, 6}, DocCount: 3}
@@ -598,13 +598,13 @@ func TestFullText5(t *testing.T) {
 	// pretend adding records from database
 	// init the word "we"
 	word := "we"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "are"
 	word = "are"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[10] = &Word{DocId: 10, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
@@ -636,20 +636,20 @@ func TestFullTextGroup(t *testing.T) {
 	// pretend adding records from database
 	// init the word "we"
 	word := "we"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "are"
 	word = "are"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	// init the word "so"
 	word = "so"
-	s.WordAccums[word] = &WordAccum{Id: 2, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 5}
 	s.WordAccums[word].Words[21] = &Word{DocId: 21, Position: []int64{0, 4, 6}, DocCount: 6}
 	s.WordAccums[word].Words[22] = &Word{DocId: 22, Position: []int64{0, 4, 6}, DocCount: 7}
@@ -682,7 +682,7 @@ func TestFullTextStar(t *testing.T) {
 	// pretend adding records from database
 	// init the word "apple"
 	word := "apple*"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
@@ -713,20 +713,20 @@ func TestFullTextPhrase(t *testing.T) {
 	// pretend adding records from database
 	// init the word "we"
 	word := "we"
-	s.WordAccums[word] = &WordAccum{Id: 0, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 
 	// init the word "are"
 	word = "are"
-	s.WordAccums[word] = &WordAccum{Id: 1, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
 
 	// init the word "so"
 	word = "so"
-	s.WordAccums[word] = &WordAccum{Id: 2, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 5}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 6}
 	s.WordAccums[word].Words[22] = &Word{DocId: 22, Position: []int64{0, 4, 6}, DocCount: 7}
@@ -734,7 +734,7 @@ func TestFullTextPhrase(t *testing.T) {
 
 	// init the word "happy"
 	word = "happy"
-	s.WordAccums[word] = &WordAccum{Id: 3, Mode: 0, Words: make(map[any]*Word)}
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
 	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 1}
 	s.WordAccums[word].Words[31] = &Word{DocId: 31, Position: []int64{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[32] = &Word{DocId: 32, Position: []int64{0, 4, 6}, DocCount: 3}

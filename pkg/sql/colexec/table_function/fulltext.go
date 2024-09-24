@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -102,31 +103,10 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
-// $(IDF) = LOG10(#word in collection/sum(doc_count))
-// $(TF) = number of nword match in record (doc_count)
-// $(rank) = $(TF) * $(IDF) * %(IDF)
-func (s *SearchAccum) score(proc *process.Process) (map[any]float32, error) {
-	var result map[any]float32
-	var err error
-
-	if s.Nrow == 0 {
-		return result, nil
-	}
-
-	for _, p := range s.Pattern {
-		result, err = p.Eval(s, float32(1.0), result)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return result, nil
-}
-
-func (s *SearchAccum) run(proc *process.Process) error {
+func run(proc *process.Process, s *fulltext.SearchAccum) error {
 
 	// count(*) to get number of words in the collection
-	nrow, err := s.runCountStar(proc)
+	nrow, err := runCountStar(proc, s)
 	if err != nil {
 		return err
 	}
@@ -137,7 +117,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 
 	var keywords []string
 	for _, p := range s.Pattern {
-		ssNoOp := p.GetLeafText(TEXT)
+		ssNoOp := p.GetLeafText(fulltext.TEXT)
 		for _, w := range ssNoOp {
 			keywords = append(keywords, "'"+w+"'")
 		}
@@ -150,7 +130,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 
 	sqlfmt := "SELECT doc_id, pos, '%s' FROM %s WHERE prefix_eq(word, '%s')"
 	for _, p := range s.Pattern {
-		ssStar := p.GetLeafText(STAR)
+		ssStar := p.GetLeafText(fulltext.STAR)
 		for _, w := range ssStar {
 			// remove the last character which should be '*' for prefix search
 			slen := len(w)
@@ -198,7 +178,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 
 			w, ok := s.WordAccums[word]
 			if !ok {
-				s.WordAccums[word] = NewWordAccum(int64(i), s.Mode)
+				s.WordAccums[word] = fulltext.NewWordAccum()
 				w = s.WordAccums[word]
 			}
 			_, ok = w.Words[doc_id]
@@ -206,7 +186,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
 				w.Words[doc_id].DocCount += 1
 			} else {
-				w.Words[doc_id] = &Word{DocId: doc_id, Position: []int64{pos}, DocCount: 1}
+				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: []int64{pos}, DocCount: 1}
 			}
 		}
 
@@ -217,7 +197,7 @@ func (s *SearchAccum) run(proc *process.Process) error {
 	return nil
 }
 
-func (s *SearchAccum) runCountStar(proc *process.Process) (int64, error) {
+func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error) {
 	var nrow int64
 	nrow = 0
 	sql := fmt.Sprintf(countstar_sql, s.SrcTblName)
@@ -243,14 +223,15 @@ func (s *SearchAccum) runCountStar(proc *process.Process) (int64, error) {
 
 func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string, mode int64, bat *batch.Batch) (err error) {
 
-	s, err := NewSearchAccum(srctbl, tblname, pattern, mode, "")
+	s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "")
 	if err != nil {
 		return err
 	}
 
-	s.run(proc)
+	run(proc, s)
 
-	scoremap, err := s.score(proc)
+	// compute the ranking
+	scoremap, err := s.Eval()
 	if err != nil {
 		return err
 	}
@@ -261,8 +242,8 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, src
 		// write the batch
 		for key := range scoremap {
 			doc_id := key
-			if s, ok := doc_id.(string); ok {
-				bytes := []byte(s)
+			if str, ok := doc_id.(string); ok {
+				bytes := []byte(str)
 				doc_id = bytes
 			}
 			// type of id follow primary key column
@@ -272,8 +253,8 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, src
 		// doc_id and score returned
 		for key := range scoremap {
 			doc_id := key
-			if s, ok := doc_id.(string); ok {
-				bytes := []byte(s)
+			if str, ok := doc_id.(string); ok {
+				bytes := []byte(str)
 				doc_id = bytes
 			}
 			// type of id follow primary key column

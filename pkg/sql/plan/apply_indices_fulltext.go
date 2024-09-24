@@ -53,10 +53,13 @@ import (
 // |                           ->  Values Scan "*VALUES*"                                     |
 // +------------------------------------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
-	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef, eqmap map[int32]int32,
+	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	ctx := builder.ctxByNode[nodeID]
+
+	// check equal fulltext_match func and only compute once for equal function()
+	eqmap := builder.findEqualFullTextMatchFunc(projNode, scanNode, projids, filterids)
 
 	idxID, filter_node_ids, proj_node_ids := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
 		filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)

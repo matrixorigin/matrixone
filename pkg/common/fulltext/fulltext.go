@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package table_function
+package fulltext
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -26,69 +25,23 @@ import (
 )
 
 /*
-The following examples demonstrate some search strings that use boolean full-text operators:
+  1. Parse the search string into list of pattern []*Pattern
+  2. With list of pattern, run SQL to get all pattern stats and store in SearchAccum/WordAccum.
+  3. foreach pattern in the list, call Eval() function to compute the rank score based on previous rank score and the accumulate of the current pattern
+     and return rank score as result
 
-'apple banana'
+     i.e.
 
-Find rows that contain at least one of the two words.
-
-'+apple +juice'
-
-Find rows that contain both words.
-
-'+apple macintosh'
-
-Find rows that contain the word “apple”, but rank rows higher if they also contain “macintosh”.
-
-'+apple -macintosh'
-
-Find rows that contain the word “apple” but not “macintosh”.
-
-'+apple ~macintosh'
-
-Find rows that contain the word “apple”, but if the row also contains the word “macintosh”, rate it lower than if row does not. This is “softer” than a search for '+apple -macintosh', for which the presence of “macintosh” causes the row not to be returned at all.
-
-'+apple +(>turnover <strudel)'
-
-Find rows that contain the words “apple” and “turnover”, or “apple” and “strudel” (in any order), but rank “apple turnover” higher than “apple strudel”.
-
-'apple*'
-
-Find rows that contain words such as “apple”, “apples”, “applesauce”, or “applet”.
-
-'"some words"'
-
-Find rows that contain the exact phrase “some words” (for example, rows that contain “some words of wisdom” but not “some noise words”). Note that the " characters that enclose the phrase are operator characters that delimit the phrase. They are not the quotation marks that enclose the search string itself.
+     result := nil
+     for p := range searchAccum.Pattern {
+            wordAccum := searchAccum.WordAccums[p.Text]
+            result = p.Eval(result, wordAccum)
+     }
+   4. return result as answer
 */
 
-type FullTextParserParam struct {
-	Parser string `json:"parser"`
-}
-
-type Word struct {
-	DocId    any
-	Position []int64
-	DocCount int32
-}
-
-type WordAccum struct {
-	Id    int64
-	Mode  int64
-	Words map[any]*Word
-}
-
-type SearchAccum struct {
-	SrcTblName string
-	TblName    string
-	Mode       int64
-	Pattern    []*Pattern
-	Params     string
-	WordAccums map[string]*WordAccum
-	Nrow       int64
-}
-
-func NewWordAccum(id int64, mode int64) *WordAccum {
-	return &WordAccum{Id: id, Mode: mode, Words: make(map[any]*Word)}
+func NewWordAccum() *WordAccum {
+	return &WordAccum{Words: make(map[any]*Word)}
 }
 
 func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
@@ -134,51 +87,28 @@ func (s *SearchAccum) PatternAnyPlus() bool {
 	return false
 }
 
-type FullTextBooleanOperator int
+// $(IDF) = LOG10(#word in collection/sum(doc_count))
+// $(TF) = number of nword match in record (doc_count)
+// $(rank) = $(TF) * $(IDF) * %(IDF)
+func (s *SearchAccum) Eval() (map[any]float32, error) {
+	var result map[any]float32
+	var err error
 
-var (
-	TEXT        = 0
-	STAR        = 1
-	PLUS        = 2
-	MINUS       = 3
-	LESSTHAN    = 4
-	GREATERTHAN = 5
-	RANKLESS    = 6
-	GROUP       = 7
-	PHRASE      = 8
-)
-
-func OperatorToString(op int) string {
-	switch op {
-	case TEXT:
-		return "text"
-	case STAR:
-		return "*"
-	case PLUS:
-		return "+"
-	case MINUS:
-		return "-"
-	case LESSTHAN:
-		return "<"
-	case GREATERTHAN:
-		return ">"
-	case RANKLESS:
-		return "~"
-	case GROUP:
-		return "group"
-	case PHRASE:
-		return "phrase"
-	default:
-		return ""
+	if s.Nrow == 0 {
+		return result, nil
 	}
+
+	for _, p := range s.Pattern {
+		result, err = p.Eval(s, float32(1.0), result)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
 }
 
-type Pattern struct {
-	Text     string
-	Operator int
-	Children []*Pattern
-}
-
+// Pattern
 func (p *Pattern) String() string {
 	if p.Operator == TEXT || p.Operator == STAR {
 		return fmt.Sprintf("(%s %s)", OperatorToString(p.Operator), p.Text)
@@ -318,14 +248,16 @@ func (p *Pattern) EvalOR(s *SearchAccum, arg, result map[any]float32) (map[any]f
 // GREATERTHAN is higher the ranking
 // RANKLESS is to discourage the ranking but not delete such as Minus. weight is negative to discourage the ranking.
 func (p *Pattern) GetWeight() float32 {
-	if p.Operator == LESSTHAN {
+	switch p.Operator {
+	case LESSTHAN:
 		return float32(0.9)
-	} else if p.Operator == GREATERTHAN {
+	case GREATERTHAN:
 		return float32(1.1)
-	} else if p.Operator == RANKLESS {
+	case RANKLESS:
 		return float32(-1.0)
+	default:
+		return float32(1.0)
 	}
-	return float32(1.0)
 }
 
 // Eval() function to evaluate the previous result from Eval and the current pattern (with data from datasource)  and return map[doc_id]float32
@@ -367,15 +299,17 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 			}
 
 			// do PLUS (AND) and MINUS operation (REMOVE HASH) and OR operation
-			if p.Operator == PLUS {
+			switch p.Operator {
+			case PLUS:
 				// AND
 				return p.EvalPlusPlus(accum, child_result, result)
-			} else if p.Operator == MINUS {
+			case MINUS:
 				// MINUS
 				return p.EvalMinus(accum, child_result, result)
-			} else if p.Operator == GROUP || p.Operator == LESSTHAN || p.Operator == GREATERTHAN {
+
+			case GROUP, LESSTHAN, GREATERTHAN:
 				return p.EvalOR(accum, child_result, result)
-			} else {
+			default:
 				// OR
 				if accum.PatternAnyPlus() {
 					return p.EvalPlusOR(accum, child_result, result)
@@ -424,18 +358,19 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 
 	}
 
-	return nil, moerr.NewInternalError(context.TODO(), "Eval() not handled")
+	return nil, moerr.NewInternalErrorNoCtx("Eval() not handled")
 }
 
 // validate the Pattern
 func (p *Pattern) Validate() error {
-	if p.Operator == PLUS || p.Operator == MINUS {
+	switch p.Operator {
+	case PLUS, MINUS:
 		if len(p.Children) == 0 {
-			return moerr.NewInternalError(context.TODO(), "+/- must have children with value")
+			return moerr.NewInternalErrorNoCtx("+/- must have children with value")
 		}
 		for _, c := range p.Children {
 			if c.Operator == PLUS || c.Operator == MINUS || c.Operator == PHRASE {
-				return moerr.NewInternalError(context.TODO(), "double +/- operator")
+				return moerr.NewInternalErrorNoCtx("double +/- operator")
 			}
 		}
 
@@ -446,24 +381,24 @@ func (p *Pattern) Validate() error {
 			}
 		}
 
-	} else if p.Operator == TEXT || p.Operator == STAR {
+	case TEXT, STAR:
 		if len(p.Children) > 0 {
-			return moerr.NewInternalError(context.TODO(), "text Pattern cannot have children")
+			return moerr.NewInternalErrorNoCtx("text Pattern cannot have children")
 		}
-	} else if p.Operator == PHRASE {
+	case PHRASE:
 		for _, c := range p.Children {
 			if c.Operator != TEXT {
-				return moerr.NewInternalError(context.TODO(), "PHRASE can only have text Pattern")
+				return moerr.NewInternalErrorNoCtx("PHRASE can only have text Pattern")
 			}
 		}
-	} else if p.Operator == GROUP {
+	case GROUP:
 		if len(p.Children) == 0 {
-			return moerr.NewInternalError(context.TODO(), "sub-query is empty")
+			return moerr.NewInternalErrorNoCtx("sub-query is empty")
 		}
 
 		for _, c := range p.Children {
 			if c.Operator == PLUS || c.Operator == MINUS || c.Operator == PHRASE {
-				return moerr.NewInternalError(context.TODO(), "sub-query cannot have +/-/phrase operator")
+				return moerr.NewInternalErrorNoCtx("sub-query cannot have +/-/phrase operator")
 			}
 		}
 
@@ -473,12 +408,11 @@ func (p *Pattern) Validate() error {
 				return err
 			}
 		}
-
-	} else {
+	default:
 		// LESSTHAN, GREATERTHAN, RANKLESS
 		for _, c := range p.Children {
 			if c.Operator != GROUP && c.Operator != TEXT && c.Operator != STAR {
-				return moerr.NewInternalError(context.TODO(), "double operator")
+				return moerr.NewInternalErrorNoCtx("double operator")
 			}
 		}
 
@@ -530,7 +464,7 @@ func IsSubExpression(pattern string) bool {
 // first character is a operator
 func CreatePattern(pattern string) (*Pattern, error) {
 	if len(pattern) == 0 {
-		return nil, moerr.NewInternalError(context.TODO(), "pattern is empty")
+		return nil, moerr.NewInternalErrorNoCtx("pattern is empty")
 	}
 	runeSlice := []rune(pattern)
 
@@ -601,7 +535,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 
 			if r != ')' {
 				if i == len(runeSlice)-1 {
-					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
+					return nil, moerr.NewInternalErrorNoCtx("no close bracket found")
 				}
 			} else {
 				bracket -= 1
@@ -633,7 +567,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 				tokens = append(tokens, p)
 			} else if r == '(' {
 				if i == len(runeSlice)-1 {
-					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
+					return nil, moerr.NewInternalErrorNoCtx("no close bracket found")
 				}
 
 				bracket += 1
@@ -666,7 +600,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 		if bracket == 0 {
 			if r == '(' {
 				if i == len(runeSlice)-1 {
-					return nil, moerr.NewInternalError(context.TODO(), "no close bracket found")
+					return nil, moerr.NewInternalErrorNoCtx("no close bracket found")
 				}
 
 				// open bracket found and find next close bracket
@@ -700,16 +634,17 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 }
 
 func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
-	if mode == int64(tree.FULLTEXT_NL) || mode == int64(tree.FULLTEXT_DEFAULT) {
+	switch mode {
+	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
 		// Natural Language Mode or default mode
 		ps, err := ParsePatternInNLMode(pattern)
 		if err != nil {
 			return nil, err
 		}
 		return ps, nil
-	} else if mode == int64(tree.FULLTEXT_QUERY_EXPANSION) || mode == int64(tree.FULLTEXT_NL_QUERY_EXPANSION) {
-		return nil, moerr.NewInternalError(context.TODO(), "Query Expansion mode not supported")
-	} else if mode == int64(tree.FULLTEXT_BOOLEAN) {
+	case int64(tree.FULLTEXT_QUERY_EXPANSION), int64(tree.FULLTEXT_NL_QUERY_EXPANSION):
+		return nil, moerr.NewInternalErrorNoCtx("Query Expansion mode not supported")
+	case int64(tree.FULLTEXT_BOOLEAN):
 		// BOOLEAN MODE
 
 		lowerp := strings.ToLower(pattern)
@@ -740,7 +675,8 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 		finalp = append(finalp, minus...)
 
 		return finalp, nil
-	}
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("invalid fulltext search mode")
 
-	return nil, moerr.NewInternalError(context.TODO(), "invalid fulltext search mode")
+	}
 }

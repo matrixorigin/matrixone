@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -42,7 +43,7 @@ type Document struct {
 type tokenizeState struct {
 	inited bool
 	called bool
-	param  FullTextParserParam
+	param  fulltext.FullTextParserParam
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
