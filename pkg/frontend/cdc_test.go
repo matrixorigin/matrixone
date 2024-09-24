@@ -2992,7 +2992,7 @@ func Test_extractTablePair(t *testing.T) {
 			name: "t1",
 			args: args{
 				ctx:        context.Background(),
-				pattern:    "db1.tb1:xxx",
+				pattern:    "source:sink:other",
 				defaultAcc: "sys",
 			},
 			wantErr: assert.Error,
