@@ -16,6 +16,7 @@ package hakeeper
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -36,7 +37,41 @@ type Checker interface {
 	// Check is periodically called by the HAKeeper for checking the cluster
 	// health status, a list of Operator instances will be returned describing
 	// actions required to ensure the high availability of the cluster.
-	Check(alloc util.IDAllocator, state pb.CheckerState) []pb.ScheduleCommand
+	Check(alloc util.IDAllocator, state pb.CheckerState, standbyEnabled bool) []pb.ScheduleCommand
+}
+
+type CheckerCommonFields struct {
+	ServiceID   string
+	Cfg         Config
+	Alloc       util.IDAllocator
+	Cluster     pb.ClusterInfo
+	User        pb.TaskTableUser
+	CurrentTick uint64
+}
+
+func NewCheckerCommonFields(
+	sid string,
+	cfg Config,
+	alloc util.IDAllocator,
+	cluster pb.ClusterInfo,
+	user pb.TaskTableUser,
+	currentTick uint64,
+) CheckerCommonFields {
+	return CheckerCommonFields{
+		ServiceID:   sid,
+		Cfg:         cfg,
+		Alloc:       alloc,
+		Cluster:     cluster,
+		User:        user,
+		CurrentTick: currentTick,
+	}
+}
+
+// ModuleChecker is the interface implemented by all modules that need to check
+// their status and return operators.
+type ModuleChecker interface {
+	// Check checks the status of the module and return operators.
+	Check() []*operator.Operator
 }
 
 // BootstrapManager is the interface suppose to be implemented by HAKeeper's
