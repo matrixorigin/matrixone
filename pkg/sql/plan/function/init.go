@@ -23,6 +23,8 @@ var CastFunctionEncodeID = encodeOverloadID(CAST, 0)
 var SerialFunctionName = "serial"
 var GroupConcatFunctionID = encodeOverloadID(GROUP_CONCAT, 0)
 var AggSumOverloadID = encodeOverloadID(SUM, 0)
+var AggAvgTwCacheOverloadID = encodeOverloadID(AVG_TW_CACHE, 0)
+var AggAvgTwResultOverloadID = encodeOverloadID(AVG_TW_RESULT, 0)
 
 var InFunctionEncodedID = encodeOverloadID(IN, 0)
 var InFunctionName = "in"

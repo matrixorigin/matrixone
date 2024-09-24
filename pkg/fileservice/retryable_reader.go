@@ -59,6 +59,7 @@ func (r *retryableReader) Read(buf []byte) (int, error) {
 				continue
 			} else {
 				// not retryable or EOF
+				r.offset += int64(n)
 				return n, err
 			}
 		}

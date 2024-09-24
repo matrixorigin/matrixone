@@ -497,6 +497,22 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		if err = handleShowCdc(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.ShowLogserviceReplicas:
+		if err = handleShowLogserviceReplicas(execCtx, ses); err != nil {
+			return
+		}
+	case *tree.ShowLogserviceStores:
+		if err = handleShowLogserviceStores(execCtx, ses); err != nil {
+			return
+		}
+	case *tree.ShowLogserviceSettings:
+		if err = handleShowLogserviceSettings(execCtx, ses); err != nil {
+			return
+		}
+	case *tree.SetLogserviceSettings:
+		if err = handleSetLogserviceSettings(execCtx, ses, st); err != nil {
+			return
+		}
 	}
 	return
 }
