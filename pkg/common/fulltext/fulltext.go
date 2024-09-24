@@ -276,15 +276,17 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 			}
 
 			// do PLUS (AND) and MINUS operation (REMOVE HASH) and OR operation
-			if p.Operator == PLUS {
+			switch p.Operator {
+			case PLUS:
 				// AND
 				return p.EvalPlusPlus(accum, child_result, result)
-			} else if p.Operator == MINUS {
+			case MINUS:
 				// MINUS
 				return p.EvalMinus(accum, child_result, result)
-			} else if p.Operator == GROUP || p.Operator == LESSTHAN || p.Operator == GREATERTHAN {
+
+			case GROUP, LESSTHAN, GREATERTHAN:
 				return p.EvalOR(accum, child_result, result)
-			} else {
+			default:
 				// OR
 				if accum.PatternAnyPlus() {
 					return p.EvalPlusOR(accum, child_result, result)
@@ -338,7 +340,8 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 
 // validate the Pattern
 func (p *Pattern) Validate() error {
-	if p.Operator == PLUS || p.Operator == MINUS {
+	switch p.Operator {
+	case PLUS, MINUS:
 		if len(p.Children) == 0 {
 			return moerr.NewInternalErrorNoCtx("+/- must have children with value")
 		}
@@ -355,17 +358,17 @@ func (p *Pattern) Validate() error {
 			}
 		}
 
-	} else if p.Operator == TEXT || p.Operator == STAR {
+	case TEXT, STAR:
 		if len(p.Children) > 0 {
 			return moerr.NewInternalErrorNoCtx("text Pattern cannot have children")
 		}
-	} else if p.Operator == PHRASE {
+	case PHRASE:
 		for _, c := range p.Children {
 			if c.Operator != TEXT {
 				return moerr.NewInternalErrorNoCtx("PHRASE can only have text Pattern")
 			}
 		}
-	} else if p.Operator == GROUP {
+	case GROUP:
 		if len(p.Children) == 0 {
 			return moerr.NewInternalErrorNoCtx("sub-query is empty")
 		}
@@ -382,8 +385,7 @@ func (p *Pattern) Validate() error {
 				return err
 			}
 		}
-
-	} else {
+	default:
 		// LESSTHAN, GREATERTHAN, RANKLESS
 		for _, c := range p.Children {
 			if c.Operator != GROUP && c.Operator != TEXT && c.Operator != STAR {
@@ -609,16 +611,17 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 }
 
 func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
-	if mode == int64(tree.FULLTEXT_NL) || mode == int64(tree.FULLTEXT_DEFAULT) {
+	switch mode {
+	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
 		// Natural Language Mode or default mode
 		ps, err := ParsePatternInNLMode(pattern)
 		if err != nil {
 			return nil, err
 		}
 		return ps, nil
-	} else if mode == int64(tree.FULLTEXT_QUERY_EXPANSION) || mode == int64(tree.FULLTEXT_NL_QUERY_EXPANSION) {
+	case int64(tree.FULLTEXT_QUERY_EXPANSION), int64(tree.FULLTEXT_NL_QUERY_EXPANSION):
 		return nil, moerr.NewInternalErrorNoCtx("Query Expansion mode not supported")
-	} else if mode == int64(tree.FULLTEXT_BOOLEAN) {
+	case int64(tree.FULLTEXT_BOOLEAN):
 		// BOOLEAN MODE
 
 		lowerp := strings.ToLower(pattern)
@@ -649,7 +652,8 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 		finalp = append(finalp, minus...)
 
 		return finalp, nil
-	}
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("invalid fulltext search mode")
 
-	return nil, moerr.NewInternalErrorNoCtx("invalid fulltext search mode")
+	}
 }
