@@ -269,18 +269,23 @@ func (h *AObjectHandle) RowCount() int {
 	return cnt
 }
 func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
-	if h.isEnd() {
-		return
+	for {
+		if h.isEnd() {
+			return
+		}
+		currentObjectStats := h.objects[h.objectOffsetCursor].ObjectStats
+		h.currentBatch, err = readObjects(currentObjectStats, 0, h.fs, h.isTombstone, ctx)
+		if h.isTombstone {
+			updateTombstoneBatch(h.currentBatch, h.start, h.end, !h.quick, h.mp)
+		} else {
+			updateDataBatch(h.currentBatch, h.start, h.end, h.mp)
+		}
+		h.batchLength = h.currentBatch.Vecs[0].Length()
+		if h.batchLength > 0 {
+			return
+		}
+		h.objectOffsetCursor++
 	}
-	currentObjectStats := h.objects[h.objectOffsetCursor].ObjectStats
-	h.currentBatch, err = readObjects(currentObjectStats, 0, h.fs, h.isTombstone, ctx)
-	h.batchLength = h.currentBatch.Vecs[0].Length()
-	if h.isTombstone {
-		updateTombstoneBatch(h.currentBatch, h.start, h.end, !h.quick, h.mp)
-	} else {
-		updateDataBatch(h.currentBatch, h.start, h.end, h.mp)
-	}
-	return
 }
 func (h *AObjectHandle) isEnd() bool {
 	return h.objectOffsetCursor >= len(h.objects)
@@ -298,6 +303,9 @@ func (h *AObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *m
 }
 
 func (h *AObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
+	if h.isEnd() {
+		return moerr.GetOkExpectedEOF()
+	}
 	return h.next(ctx, bat, mp, h.rowOffsetCursor, h.rowOffsetCursor+1)
 }
 func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool, start, end int) (err error) {
