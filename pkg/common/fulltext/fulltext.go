@@ -87,6 +87,27 @@ func (s *SearchAccum) PatternAnyPlus() bool {
 	return false
 }
 
+// $(IDF) = LOG10(#word in collection/sum(doc_count))
+// $(TF) = number of nword match in record (doc_count)
+// $(rank) = $(TF) * $(IDF) * %(IDF)
+func (s *SearchAccum) Eval() (map[any]float32, error) {
+	var result map[any]float32
+	var err error
+
+	if s.Nrow == 0 {
+		return result, nil
+	}
+
+	for _, p := range s.Pattern {
+		result, err = p.Eval(s, float32(1.0), result)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}
+
 // Pattern
 func (p *Pattern) String() string {
 	if p.Operator == TEXT || p.Operator == STAR {
