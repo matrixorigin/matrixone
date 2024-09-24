@@ -1696,6 +1696,8 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.NeedHashMap = true
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
+		ret.IsDedup = true
+		ret.OnDupAction = arg.OnDupAction
 		//ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]

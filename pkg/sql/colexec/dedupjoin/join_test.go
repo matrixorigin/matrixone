@@ -88,6 +88,7 @@ func TestDedupJoin(t *testing.T) {
 		resetHashBuildChildren(tc.barg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+		tc.barg.IsDedup = true
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
 
@@ -106,6 +107,7 @@ func TestDedupJoin(t *testing.T) {
 		tc.proc.GetMessageBoard().Reset()
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+		tc.barg.IsDedup = true
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
 
@@ -125,12 +127,13 @@ func TestDedupJoin(t *testing.T) {
 		resetChildren(tc.arg)
 		resetHashBuildChildren(tc.barg)
 		tc.proc.GetMessageBoard().Reset()
+		tc.arg.OnDupAction = plan.Node_IGNORE
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.arg.OnDupAction = plan.Node_IGNORE
+		tc.barg.IsDedup = true
+		tc.barg.OnDupAction = plan.Node_IGNORE
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.barg.OnDupAction = plan.Node_IGNORE
 
 		res, err = tc.barg.Call(tc.proc)
 		require.NoError(t, err)
