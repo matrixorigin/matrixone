@@ -425,10 +425,8 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int,
 	}
 
 	summary := fmt.Sprintf(
-		"summary: %d total, %d unknown, avgRow %d, avgOsize %s, avgCsize %v\n"+
-			"Update History:\n  rows %v\n  dels %v ",
+		"summary: %d total, %d unknown, avgRow %d, avgOsize %s, avgCsize %v",
 		stat.ObjectCnt, stat.ObjectCnt-stat.Loaded, avgRow, common.HumanReadableBytes(avgOsize), common.HumanReadableBytes(avgCsize),
-		entry.Stats.RowCnt.String(), entry.Stats.RowDel.String(),
 	)
 	detail.WriteString(summary)
 	return detail.String()
