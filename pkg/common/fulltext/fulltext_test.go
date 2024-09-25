@@ -755,6 +755,7 @@ func TestFullTextPhrase(t *testing.T) {
 }
 
 func TestFullTextCombine(t *testing.T) {
+	p := &Pattern{}
 
 	s1 := make(map[any]float32)
 	s1[0] = 1
@@ -764,7 +765,8 @@ func TestFullTextCombine(t *testing.T) {
 	s2[2] = 1
 	s2[1] = 4
 
-	result := combine(s1, s2)
+	result, err := p.Combine(nil, s1, s2)
+	require.Nil(t, err)
 
 	assert.Equal(t, len(result), 3)
 	assert.Equal(t, result[0], float32(2))

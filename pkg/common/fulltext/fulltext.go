@@ -260,9 +260,12 @@ func (p *Pattern) GetWeight() float32 {
 	}
 }
 
-func combine(score map[any]float32, result map[any]float32) map[any]float32 {
-	for k1 := range score {
-		v1 := score[k1]
+func (p *Pattern) Combine(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
+	if result == nil {
+		result = make(map[any]float32)
+	}
+	for k1 := range arg {
+		v1 := arg[k1]
 		v, ok := result[k1]
 		if ok {
 			// max
@@ -273,7 +276,7 @@ func combine(score map[any]float32, result map[any]float32) map[any]float32 {
 			result[k1] = v1
 		}
 	}
-	return result
+	return result, nil
 }
 
 // Eval() function to evaluate the previous result from Eval and the current pattern (with data from datasource)  and return map[doc_id]float32
@@ -344,7 +347,10 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 				}
 
 				// COMBINE results from children
-				result = combine(child_result, result)
+				result, err = p.Combine(accum, child_result, result)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			return result, nil
