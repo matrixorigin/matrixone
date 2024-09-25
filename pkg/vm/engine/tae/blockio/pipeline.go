@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
@@ -237,10 +236,6 @@ type IoPipeline struct {
 	fetchFun     FetchFunc
 	prefetchFunc PrefetchFunc
 
-	sensors struct {
-		prefetchDepth *utils.NumericSensor[int64]
-	}
-
 	stats struct {
 		prefetchDropStats stats.Counter
 	}
@@ -292,26 +287,6 @@ func (p *IoPipeline) fillDefaults() {
 	if p.jobFactory == nil {
 		p.jobFactory = jobFactory
 	}
-
-	if p.sensors.prefetchDepth == nil {
-		name := utils.MakeSensorName("IO", "PrefetchDepth")
-		sensor := utils.NewNumericSensor[int64](
-			name,
-			utils.WithGetStateSensorOption(
-				func(v int64) utils.SensorState {
-					if float64(v) < 0.6*float64(p.options.queueDepth) {
-						return utils.SensorStateGreen
-					} else if float64(v) < 0.8*float64(p.options.queueDepth) {
-						return utils.SensorStateYellow
-					} else {
-						return utils.SensorStateRed
-					}
-				},
-			),
-		)
-		utils.RegisterSensor(sensor)
-		p.sensors.prefetchDepth = sensor
-	}
 }
 
 func (p *IoPipeline) Start() {
@@ -338,10 +313,6 @@ func (p *IoPipeline) Stop() {
 		p.fetch.scheduler.Stop()
 
 		p.waitQ.Stop()
-		if p.sensors.prefetchDepth != nil {
-			utils.UnregisterSensor(p.sensors.prefetchDepth)
-			p.sensors.prefetchDepth = nil
-		}
 	})
 }
 
