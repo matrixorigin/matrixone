@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,13 +44,6 @@ func WithMemorySizeThreshold(size int) FlowOption {
 	return func(flow *InsertFlow) {
 		flow.staged.memorySizeThreshold = size
 	}
-}
-
-type FileSinker interface {
-	Sink(context.Context, *batch.Batch) error
-	Sync(context.Context) (*objectio.ObjectStats, error)
-	Reset()
-	Close() error
 }
 
 func ConsructInsertFlow(
@@ -81,7 +75,7 @@ type InsertFlow struct {
 		persisted           []*objectio.ObjectStats
 		inMemorySize        int
 		memorySizeThreshold int
-		sinker              FileSinker
+		sinker              *engine_util.Sinker
 	}
 	results []*objectio.ObjectStats
 	buffers []*batch.Batch

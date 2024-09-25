@@ -16,7 +16,6 @@ package gc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"sort"
 	"strings"
 	"sync"
@@ -752,8 +751,7 @@ func (c *checkpointCleaner) softGC(
 	for _, table := range c.inputs.tables {
 		mergeTable.Merge(table)
 	}
-	gckpBloomFilter := bloomfilter.New(int64(t.batch.Vecs[0].Length()), 1/10000)
-	gckpBloomFilter.Add(t.batch.Vecs[0])
+	t.bf.Test(mergeTable.batch.Vecs[0], mergeTable.SetBit)
 	gc, snapList := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots, c.snapshotMeta)
 	softCost = time.Since(now)
 	now = time.Now()
@@ -988,7 +986,6 @@ func (c *checkpointCleaner) createNewInput(
 			zap.Uint32("snap meta size :", snapSize),
 			zap.Uint32("table meta size :", tableSize),
 			zap.Int("objects :", len(input.objects)),
-			zap.Int("tombstones :", len(input.tombstones)),
 			zap.String("snapshots", c.snapshotMeta.String()))
 	}()
 	var data *logtail.CheckpointData
@@ -1018,12 +1015,11 @@ func (c *checkpointCleaner) createNewInput(
 		logutil.Errorf("SaveTableInfo is failed")
 		return
 	}
-	files := c.GetAndClearOutputs()
-	_, err = input.SaveTable(
+	err = input.Process(
+		c.ctx,
 		ckps[0].GetStart(),
 		ckps[len(ckps)-1].GetEnd(),
-		c.fs,
-		files,
+		input.CollectMapData,
 	)
 	if err != nil {
 		return

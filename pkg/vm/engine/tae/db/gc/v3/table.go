@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"sync"
 	"time"
 
@@ -56,8 +58,20 @@ type GCTable struct {
 	sync.Mutex
 	objects map[string]*ObjectEntry
 	mp      *mpool.MPool
-	batch   *batch.Batch
-	bf      *bloomfilter.BloomFilter
+	fs      fileservice.FileService
+
+	buffer struct {
+		sync.Mutex
+		bats []*batch.Batch
+	}
+
+	files struct {
+		sync.Mutex
+		bitmap []*roaring64.Bitmap
+		stats  []*objectio.ObjectStats
+	}
+
+	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error)
 }
 
 func (t *GCTable) addObjectLocked(
@@ -73,8 +87,22 @@ func (t *GCTable) addObjectLocked(
 	objects[name] = objEntry
 }
 
-func (t *GCTable) Merge(_ *GCTable) {
+func (t *GCTable) fetchBuffer() *batch.Batch {
+	t.buffer.Lock()
+	defer t.buffer.Unlock()
+	if len(t.buffer.bats) > 0 {
+		bat := t.buffer.bats[len(t.buffer.bats)-1]
+		t.buffer.bats = t.buffer.bats[:len(t.buffer.bats)-1]
+		return bat
+	}
+	return NewObjectTableBatch()
+}
 
+func (t *GCTable) putBuffer(bat *batch.Batch) {
+	t.buffer.Lock()
+	defer t.buffer.Unlock()
+	bat.CleanOnlyData()
+	t.buffer.bats = append(t.buffer.bats, bat)
 }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
@@ -160,17 +188,84 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, name string) bool {
 	return false
 }
 
+func (t *GCTable) Process(
+	ctx context.Context,
+	start, end types.TS,
+	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
+) error {
+	factory := engine_util.NewFSinkerImplFactory(
+		ObjectTableSeqnums,
+		ObjectTablePrimaryKeyIdx,
+		true,
+		false,
+		ObjectTableVersion,
+	)
+	sinker := engine_util.NewSinker(
+		ObjectTablePrimaryKeyIdx,
+		ObjectTableAttrs,
+		ObjectTableTypes,
+		factory, t.mp, t.fs)
+
+	for {
+		bat := t.fetchBuffer()
+		done, err := loadNextBatch(ctx, bat, t.mp)
+		if err != nil || done {
+			t.putBuffer(bat)
+			return err
+		}
+		if err = t.processOneBatch(ctx, sinker, bat); err != nil {
+			t.putBuffer(bat)
+			return err
+		}
+	}
+
+	stats, _ := sinker.GetResult()
+	return t.doneAllBatches(ctx, start, end, stats)
+}
+
+func (t *GCTable) processOneBatch(
+	ctx context.Context,
+	sinker *engine_util.Sinker,
+	data *batch.Batch,
+) error {
+	if err := mergesort.SortColumnsByIndex(
+		data.Vecs,
+		ObjectTablePrimaryKeyIdx,
+		t.mp,
+	); err != nil {
+		return err
+	}
+	return sinker.Write(ctx, data)
+}
+
+func (t *GCTable) doneAllBatches(ctx context.Context, start, end types.TS, stats []objectio.ObjectStats) error {
+	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
+	ret := batch.New(false, ObjectTableMetaAttrs)
+	ret.SetVector(0, vector.NewVec(ObjectTableMetaTypes[0]))
+	for _, s := range stats {
+		vector.AppendBytes(ret.GetVector(0), s[:], false, t.mp)
+	}
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, t.fs)
+	if err != nil {
+		return err
+	}
+	if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
+		return err
+	}
+
+	_, err = writer.WriteEnd(ctx)
+	return err
+}
+
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	ins := data.GetObjectBatchs()
 	t.Lock()
 	defer t.Unlock()
 	t.updateObjectListLocked(ins, t.objects)
-	t.batch = NewObjectTableBatch()
+	bat := t.fetchBuffer()
 	for name, object := range t.objects {
-		addObjectToBatch(t.batch, name, object, t.mp)
+		addObjectToBatch(bat, name, object, t.mp)
 	}
-	t.bf = bloomfilter.New(int64(t.batch.Vecs[0].Length()), 1/10000)
-	t.bf.Add(t.batch.Vecs[0])
 }
 
 func (t *GCTable) updateObjectListLocked(ins *containers.Batch, objects map[string]*ObjectEntry) {
@@ -195,11 +290,20 @@ func (t *GCTable) updateObjectListLocked(ins *containers.Batch, objects map[stri
 	}
 }
 
-func (t *GCTable) makeBatchWithGCTable() []*containers.Batch {
-	bats := make([]*containers.Batch, 2)
-	bats[ObjectList] = containers.NewBatch()
-	bats[TombstoneList] = containers.NewBatch()
-	return bats
+func (t *GCTable) Close() {
+	t.buffer.Lock()
+	defer t.buffer.Unlock()
+	for i, bat := range t.buffer.bats {
+		bat.Clean(t.mp)
+		t.buffer.bats[i] = nil
+	}
+
+	t.files.Lock()
+	defer t.files.Unlock()
+	for i, f := range t.files.bitmap {
+		f.Clear()
+		t.files.bitmap[i] = nil
+	}
 }
 
 func (t *GCTable) closeBatch(bs []*containers.Batch) {
@@ -208,56 +312,21 @@ func (t *GCTable) closeBatch(bs []*containers.Batch) {
 	}
 }
 
-func (t *GCTable) Close() {
-	t.batch.Clean(t.mp)
-}
-
 // collectData collects data from memory that can be written to s3
-func (t *GCTable) collectData() *batch.Batch {
-	bat := NewObjectTableBatch()
-	for name, entry := range t.objects {
-		addObjectToBatch(bat, name, entry, t.mp)
+func (t *GCTable) CollectMapData(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
+	if len(t.objects) == 0 {
+		return true, nil
 	}
-	return bat
+	for name, entry := range t.objects {
+		addObjectToBatch(bat, name, entry, mp)
+	}
+	t.objects = nil
+	return false, nil
 }
 
 // SaveTable is to write data to s3
 func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.ObjectStats, error) {
-	bat := t.collectData()
-	defer bat.Clean(t.mp)
-	factory := engine_util.NewFSinkerImplFactory(
-		ObjectTableSeqnums,
-		ObjectTablePrimaryKeyIdx,
-		true,
-		false,
-		ObjectTableVersion,
-	)
-	sinker := engine_util.NewSinker(ObjectTablePrimaryKeyIdx, ObjectTableAttrs, ObjectTableTypes, factory, t.mp, fs.Service)
-	err := sinker.Write(context.Background(), bat)
-	if err != nil {
-		return nil, err
-	}
-	err = sinker.Sync(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	blocks, _ := sinker.GetResult()
-
-	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
-	ret := batch.New(false, ObjectTableMetaAttrs)
-	ret.SetVector(0, vector.NewVec(ObjectTableMetaTypes[0]))
-	for _, block := range blocks {
-		vector.AppendBytes(ret.GetVector(0), block[:], false, t.mp)
-	}
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
-		return nil, err
-	}
-
-	_, err = writer.WriteEnd(context.Background())
+	t.Process()
 	return blocks, err
 }
 
