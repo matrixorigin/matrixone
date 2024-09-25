@@ -2201,30 +2201,59 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	if selectClause, ok := stmt.Select.(*tree.SelectClause); ok {
-		if selectClause.GroupBy != nil && len(selectClause.GroupBy.GroupByExprsList) > 1 && selectClause.GroupBy.Apart == false {
-			groupingCount := len(selectClause.GroupBy.GroupByExprsList)
-			selectStmts := make([]*tree.SelectClause, groupingCount)
-			if groupingCount > 1 {
-				for i, list := range selectClause.GroupBy.GroupByExprsList {
-					selectStmts[i] = &tree.SelectClause{
-						Distinct: selectClause.Distinct,
-						Exprs:    selectClause.Exprs,
-						From:     selectClause.From,
-						Where:    selectClause.Where,
-						GroupBy:  &tree.GroupByClause{GroupByExprsList: selectClause.GroupBy.GroupByExprsList, GroupingSet: list, Apart: true, Cube: false, Rollup: false},
-						Having:   selectClause.Having,
-						Option:   selectClause.Option,
+		if selectClause.GroupBy != nil {
+			if selectClause.GroupBy.Rollup {
+				for i := len(selectClause.GroupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
+					selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, selectClause.GroupBy.GroupByExprsList[0][0:i])
+				}
+				selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, nil)
+			}
+			if selectClause.GroupBy.Cube {
+				subsets := func(Exprs []tree.Expr) [][]tree.Expr {
+					result := [][]tree.Expr{}
+					var backtrack func(start int, current []tree.Expr)
+					backtrack = func(start int, current []tree.Expr) {
+						result = append(result, append([]tree.Expr{}, current...))
+						for i := start; i < len(Exprs); i++ {
+							current = append(current, Exprs[i])
+							backtrack(i+1, current)
+							current = current[:len(current)-1]
+						}
+					}
+					backtrack(0, []tree.Expr{})
+					return result
+				}
+				Exprs := selectClause.GroupBy.GroupByExprsList[0]
+				selectClause.GroupBy.GroupByExprsList = nil
+				for _, subset := range subsets(Exprs) {
+					selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, subset)
+				}
+			}
+			if len(selectClause.GroupBy.GroupByExprsList) > 1 && selectClause.GroupBy.Apart == false {
+				groupingCount := len(selectClause.GroupBy.GroupByExprsList)
+				selectStmts := make([]*tree.SelectClause, groupingCount)
+				if groupingCount > 1 {
+					for i, list := range selectClause.GroupBy.GroupByExprsList {
+						selectStmts[i] = &tree.SelectClause{
+							Distinct: selectClause.Distinct,
+							Exprs:    selectClause.Exprs,
+							From:     selectClause.From,
+							Where:    selectClause.Where,
+							GroupBy:  &tree.GroupByClause{GroupByExprsList: selectClause.GroupBy.GroupByExprsList, GroupingSet: list, Apart: true, Cube: false, Rollup: false},
+							Having:   selectClause.Having,
+							Option:   selectClause.Option,
+						}
 					}
 				}
-			}
-			leftClause := &tree.UnionClause{Type: tree.UNION, Left: selectStmts[0], Right: selectStmts[1], All: true}
-			for i, stmt := range selectStmts {
-				if i == 0 || i == 1 {
-					continue
+				leftClause := &tree.UnionClause{Type: tree.UNION, Left: selectStmts[0], Right: selectStmts[1], All: true}
+				for i, stmt := range selectStmts {
+					if i == 0 || i == 1 {
+						continue
+					}
+					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
-				leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
+				return builder.buildUnion(leftClause, astOrderBy, astLimit, ctx, isRoot)
 			}
-			return builder.buildUnion(leftClause, astOrderBy, astLimit, ctx, isRoot)
 		}
 	}
 
@@ -2453,6 +2482,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			for _, filter := range newFilterList {
 				if detectedExprWhetherTimeRelated(filter) {
 					notCacheable = true
+				}
+				if err := checkGrouping(ctx.binder.GetContext(), filter); err != nil {
+					return 0, err
 				}
 			}
 

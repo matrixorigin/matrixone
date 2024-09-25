@@ -468,7 +468,7 @@ func (ctr *container) initResultBat(proc *process.Process, config *Group) (err e
 func (ctr *container) initHashMap(proc *process.Process, config *Group) (err error) {
 	// init the hashmap.
 	switch {
-	case ctr.keyWidth <= 8:
+	case ctr.typ == H8:
 		if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVecsNullable); err != nil {
 			return err
 		}
@@ -477,8 +477,7 @@ func (ctr *container) initHashMap(proc *process.Process, config *Group) (err err
 				return err
 			}
 		}
-
-	default:
+	case ctr.typ == HStr:
 		if ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVecsNullable); err != nil {
 			return err
 		}
@@ -487,6 +486,8 @@ func (ctr *container) initHashMap(proc *process.Process, config *Group) (err err
 				return err
 			}
 		}
+	default:
+		err = moerr.NewInternalError(proc.Ctx, "unexpected hashmap typ for group-operator.")
 	}
 	return nil
 }

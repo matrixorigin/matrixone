@@ -6631,9 +6631,9 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
-	// function 'grouping'
+	// function 'grouping_id'
 	{
-		functionId: GROUPING,
+		functionId: GROUPING_ID,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
