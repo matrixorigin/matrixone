@@ -702,9 +702,8 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	var done bool
 
-	if done, err = TryFastFilterBlocks(
+	if done, err = engine_util.TryFastFilterBlocks(
 		ctx,
-		tbl,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
 		exprs,
@@ -713,7 +712,6 @@ func (tbl *txnTable) rangesOnePart(
 		uncommittedObjects,
 		outBlocks,
 		tbl.getTxn().engine.fs,
-		tbl.proc.Load(),
 	); err != nil {
 		return err
 	} else if done {
@@ -1769,7 +1767,7 @@ func (tbl *txnTable) BuildReaders(
 		}
 		rd, err := NewReader(
 			ctx,
-			proc,
+			proc.Mp(),
 			tbl.getTxn().engine,
 			def,
 			tbl.db.op.SnapshotTS(),
@@ -1945,7 +1943,7 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	keys.InplaceSort()
 	bytes, _ := keys.MarshalBinary()
-	colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
+	colExpr := engine_util.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(
 		tbl.proc.Load().Ctx,
 		colExpr,
@@ -1953,7 +1951,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		bytes,
 		false)
 
-	basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+	basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load().Mp())
 	if err != nil {
 		return false, err
 	}
