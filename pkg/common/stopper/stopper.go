@@ -16,6 +16,8 @@ package stopper
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -258,7 +260,7 @@ func (s *Stopper) runningTasks() []string {
 func (s *Stopper) setupTask(id uint64, name string) {
 	s.tasks.Lock()
 	defer s.tasks.Unlock()
-	s.tasks.m[id] = name
+	s.tasks.m[id] = fmt.Sprintf("%s: %s\n", name, debug.Stack())
 }
 
 func (s *Stopper) shutdownTask(id uint64) {

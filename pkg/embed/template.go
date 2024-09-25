@@ -141,6 +141,7 @@ backend = "DISK-ETL"
 [cn]
 uuid = "{{.I}}-cn-{{.ID}}"
 port-base = {{NextBasePort}}
+auto-upgrade = false
 
 [cn.txn.trace]
 dir = "trace{{.I}}"

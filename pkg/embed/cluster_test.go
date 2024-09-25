@@ -42,6 +42,21 @@ func TestBasicCluster(t *testing.T) {
 	require.NoError(t, c.Close())
 }
 
+func TestClusterCanStartNewCNServices(t *testing.T) {
+	c, err := NewCluster(WithCNCount(3))
+	require.NoError(t, err)
+	require.NoError(t, c.Start())
+
+	validCNCanWork(t, c, 0)
+	validCNCanWork(t, c, 1)
+	validCNCanWork(t, c, 2)
+
+	require.NoError(t, c.StartNewCNService(1))
+	validCNCanWork(t, c, 3)
+
+	require.NoError(t, c.Close())
+}
+
 func TestMultiClusterCanWork(t *testing.T) {
 	new := func() Cluster {
 		c, err := NewCluster(WithCNCount(3))

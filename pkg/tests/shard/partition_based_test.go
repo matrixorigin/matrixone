@@ -314,6 +314,57 @@ func TestSelectWithMultiPartition(
 	)
 }
 
+func TestUpdateOnNewCN(
+	t *testing.T,
+) {
+	runShardClusterTestWithReuse(
+		func(c embed.Cluster) {
+			db := testutils.GetDatabaseName(t)
+			tableID := mustCreatePartitionBasedTable(t, c, db, 12)
+			waitReplica(t, c, tableID, []int64{4, 4, 4})
+
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			values := getAllPartitionValues(
+				t,
+				tableID,
+				c,
+			)
+
+			var min timestamp.Timestamp
+			for _, v := range values {
+				ts := testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					fmt.Sprintf("insert into %s(id, value) values (%d, %d)", t.Name(), v, v),
+				)
+				if ts.Greater(min) {
+					min = ts
+				}
+			}
+
+			require.NoError(t, c.StartNewCNService(1))
+			waitReplica(t, c, tableID, []int64{3, 3, 3, 3})
+
+			cn, err = c.GetCNService(3)
+			require.NoError(t, err)
+
+			for _, v := range values {
+				min = testutils.ExecSQLWithMinCommittedTS(
+					t,
+					db,
+					cn,
+					min,
+					fmt.Sprintf("update %s set value = %d where id = %d", t.Name(), v*100, v),
+				)
+			}
+		},
+		false,
+	)
+}
+
 func mustCreatePartitionBasedTable(
 	t *testing.T,
 	c embed.Cluster,

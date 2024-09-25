@@ -82,7 +82,11 @@ func NewCluster(
 	}
 	c.adjust()
 
-	if err := c.createServiceOperators(); err != nil {
+	if err := c.initConfigs(); err != nil {
+		return nil, err
+	}
+
+	if err := c.createServiceOperators(0); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -100,10 +104,19 @@ func (c *cluster) Start() error {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
 
+	if err := c.doStartLocked(0); err != nil {
+		return err
+	}
+
+	c.state = started
+	return nil
+}
+
+func (c *cluster) doStartLocked(from int) error {
 	var wg sync.WaitGroup
 	errC := make(chan error, 1)
 	defer close(errC)
-	for _, s := range c.services {
+	for _, s := range c.services[from:] {
 		if s.serviceType != metadata.ServiceType_CN {
 			if err := s.Start(); err != nil {
 				return err
@@ -131,8 +144,6 @@ func (c *cluster) Start() error {
 		return err
 	default:
 	}
-
-	c.state = started
 	return nil
 }
 
@@ -142,6 +153,7 @@ func (c *cluster) Close() error {
 
 	for i := len(c.services) - 1; i >= 0; i-- {
 		s := c.services[i]
+		fmt.Println(">>>>>>>>>>>> stop: " + s.sid)
 		if err := s.Close(); err != nil {
 			return err
 		}
@@ -211,6 +223,28 @@ func (c *cluster) GetCNService(
 	return v, nil
 }
 
+func (c *cluster) StartNewCNService(n int) error {
+	c.Lock()
+	defer c.Unlock()
+
+	if c.state != started {
+		panic("cannot start cn services in stopped cluster")
+	}
+
+	serviceFrom := len(c.services)
+	cnFrom := c.options.cn
+	c.options.cn += n
+
+	if err := c.initCNConfigs(cnFrom); err != nil {
+		return err
+	}
+	if err := c.createServiceOperators(serviceFrom); err != nil {
+		return err
+	}
+
+	return c.doStartLocked(serviceFrom)
+}
+
 func (c *cluster) adjust() {
 	if c.options.cn == 0 {
 		c.options.cn = 1
@@ -229,12 +263,8 @@ func (c *cluster) adjust() {
 	c.ports.gossipPort = getNextBasePort()
 }
 
-func (c *cluster) createServiceOperators() error {
-	if err := c.initConfigs(); err != nil {
-		return err
-	}
-
-	for i, f := range c.files {
+func (c *cluster) createServiceOperators(from int) error {
+	for i, f := range c.files[from:] {
 		s, err := newService(
 			f,
 			i,
@@ -284,10 +314,29 @@ func (c *cluster) initConfigs() error {
 
 	}
 
-	if err := c.initCNServiceConfig(); err != nil {
-		return err
-	}
+	return c.initCNConfigs(0)
+}
 
+func (c *cluster) initCNConfigs(from int) error {
+	for i := from; i < c.options.cn; i++ {
+		file := filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i))
+		c.files = append(c.files, file)
+		err := genConfig(
+			file,
+			genConfigText(
+				cnConfig,
+				templateArgs{
+					I:           i,
+					ID:          c.id,
+					DataDir:     c.options.dataPath,
+					ServicePort: c.ports.servicePort,
+				},
+			),
+		)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -321,29 +370,6 @@ func (c *cluster) initTNServiceConfig() error {
 			},
 		),
 	)
-}
-
-func (c *cluster) initCNServiceConfig() error {
-	for i := 0; i < c.options.cn; i++ {
-		file := filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i))
-		c.files = append(c.files, file)
-		err := genConfig(
-			file,
-			genConfigText(
-				cnConfig,
-				templateArgs{
-					I:           i,
-					ID:          c.id,
-					DataDir:     c.options.dataPath,
-					ServicePort: c.ports.servicePort,
-				},
-			),
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (c *cluster) initProxyServiceConfig() error {
