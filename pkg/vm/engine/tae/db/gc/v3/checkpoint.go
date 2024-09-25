@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"sort"
 	"strings"
 	"sync"
@@ -712,7 +713,16 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		logutil.Errorf("[DiskCleaner] GetSnapshots failed: %v", err.Error())
 		return nil
 	}
-	gc, snapshotList := c.softGC(gcTable, gckp, snapshots)
+	bat := gcTable.fetchBuffer()
+	_, err = gcTable.CollectMapData(c.ctx, bat, gcTable.mp)
+	if err != nil {
+		logutil.Errorf("[DiskCleaner] CollectMapData failed: %v", err.Error())
+		return nil
+	}
+
+	bf := bloomfilter.New(int64(bat.Vecs[0].Length()), 1/10000)
+
+	gc, snapshotList := c.softGC(bf, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
 	err = c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
@@ -731,7 +741,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 }
 
 func (c *checkpointCleaner) softGC(
-	t *GCTable,
+	gbf *bloomfilter.BloomFilter,
 	gckp *checkpoint.CheckpointEntry,
 	snapshots map[uint32]containers.Vector,
 ) ([]string, map[uint32][]types.TS) {
@@ -747,12 +757,16 @@ func (c *checkpointCleaner) softGC(
 	if len(c.inputs.tables) == 0 {
 		return nil, nil
 	}
-	mergeTable := NewGCTable()
-	for _, table := range c.inputs.tables {
+	mergeTable := c.inputs.tables[0]
+	for i, table := range c.inputs.tables {
+		if i == 0 {
+			continue
+		}
 		mergeTable.Merge(table)
+		table.Close()
+		c.inputs.tables[i] = nil
 	}
-	t.bf.Test(mergeTable.batch.Vecs[0], mergeTable.SetBit)
-	gc, snapList := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots, c.snapshotMeta)
+	gc, snapList := mergeTable.SoftGC(gbf, gckp.GetEnd(), snapshots, c.snapshotMeta)
 	softCost = time.Since(now)
 	now = time.Now()
 	c.inputs.tables = make([]*GCTable, 0)
@@ -1020,6 +1034,7 @@ func (c *checkpointCleaner) createNewInput(
 		ckps[0].GetStart(),
 		ckps[len(ckps)-1].GetEnd(),
 		input.CollectMapData,
+		input.ProcessMapBatch,
 	)
 	if err != nil {
 		return

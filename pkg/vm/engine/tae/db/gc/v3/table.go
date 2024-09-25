@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	bitmap2 "github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -68,7 +70,12 @@ type GCTable struct {
 	files struct {
 		sync.Mutex
 		bitmap []*roaring64.Bitmap
-		stats  []*objectio.ObjectStats
+		stats  []objectio.ObjectStats
+	}
+
+	tsRange struct {
+		start types.TS
+		end   types.TS
 	}
 
 	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error)
@@ -107,11 +114,60 @@ func (t *GCTable) putBuffer(bat *batch.Batch) {
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
 func (t *GCTable) SoftGC(
-	table *GCTable,
+	ctx context.Context,
+	bf *bloomfilter.BloomFilter,
 	ts types.TS,
 	snapShotList map[uint32]containers.Vector,
 	meta *logtail.SnapshotMeta,
 ) ([]string, map[uint32][]types.TS) {
+	processBat := t.fetchBuffer()
+	processSoftGCBatch := func(
+		ctx context.Context,
+		sinker *engine_util.Sinker,
+		data *batch.Batch) error {
+		bitmap := new(bitmap2.Bitmap)
+		bitmap.InitWithSize(int64(data.Vecs[0].Length()))
+		bf.Test(data.Vecs[0], func(exits bool, i int) {
+			if !exits {
+				bitmap.Add(uint64(i))
+			}
+		})
+		pBatch, err := data.Dup(t.mp)
+		if err != nil {
+			return err
+		}
+		deleteMask := bitmap.ToI64Arrary()
+		data.Shrink(deleteMask, true)
+		pBatch.Shrink(deleteMask, false)
+		processBat.Append(ctx, t.mp, pBatch)
+		sinker.Write(ctx, data)
+		return nil
+	}
+	err := t.Process(ctx, t.tsRange.start, t.tsRange.end, t.LoadBatchData, processSoftGCBatch)
+	if err != nil {
+		logutil.Error("GCTable SoftGC Process failed", zap.Error(err))
+		return nil, nil
+	}
+
+	creates := vector.MustFixedColNoTypeCheck[types.TS](processBat.Vecs[1])
+	deletes := vector.MustFixedColNoTypeCheck[types.TS](processBat.Vecs[2])
+	dbs := vector.MustFixedColNoTypeCheck[uint64](processBat.Vecs[3])
+	tids := vector.MustFixedColNoTypeCheck[uint64](processBat.Vecs[4])
+	for i := 0; i < processBat.Vecs[0].Length(); i++ {
+		name := processBat.Vecs[0].GetStringAt(i)
+		creatTS := creates[i]
+		deleteTS := deletes[i]
+		db := dbs[i]
+		tid := tids[i]
+		object := &ObjectEntry{
+			createTS: creatTS,
+			dropTS:   deleteTS,
+			db:       db,
+			table:    tid,
+		}
+		t.addObjectLocked(name, object, t.objects)
+	}
+
 	var gc []string
 	snapList := make(map[uint32][]types.TS)
 	for acct, snap := range snapShotList {
@@ -123,7 +179,7 @@ func (t *GCTable) SoftGC(
 		meta.Unlock()
 		t.Unlock()
 	}()
-	gc = t.objectsComparedAndDeleteLocked(t.objects, table.objects, meta, snapList, ts)
+	gc = t.objectsComparedAndDeleteLocked(t.objects, t.objects, meta, snapList, ts)
 	return gc, snapList
 }
 
@@ -192,6 +248,7 @@ func (t *GCTable) Process(
 	ctx context.Context,
 	start, end types.TS,
 	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
+	processOneBatch func(context.Context, *engine_util.Sinker, *batch.Batch) error,
 ) error {
 	factory := engine_util.NewFSinkerImplFactory(
 		ObjectTableSeqnums,
@@ -213,7 +270,7 @@ func (t *GCTable) Process(
 			t.putBuffer(bat)
 			return err
 		}
-		if err = t.processOneBatch(ctx, sinker, bat); err != nil {
+		if err = processOneBatch(ctx, sinker, bat); err != nil {
 			t.putBuffer(bat)
 			return err
 		}
@@ -223,28 +280,16 @@ func (t *GCTable) Process(
 	return t.doneAllBatches(ctx, start, end, stats)
 }
 
-func (t *GCTable) processOneBatch(
-	ctx context.Context,
-	sinker *engine_util.Sinker,
-	data *batch.Batch,
-) error {
-	if err := mergesort.SortColumnsByIndex(
-		data.Vecs,
-		ObjectTablePrimaryKeyIdx,
-		t.mp,
-	); err != nil {
-		return err
-	}
-	return sinker.Write(ctx, data)
-}
-
 func (t *GCTable) doneAllBatches(ctx context.Context, start, end types.TS, stats []objectio.ObjectStats) error {
 	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
 	ret := batch.New(false, ObjectTableMetaAttrs)
 	ret.SetVector(0, vector.NewVec(ObjectTableMetaTypes[0]))
+	t.files.Lock()
 	for _, s := range stats {
 		vector.AppendBytes(ret.GetVector(0), s[:], false, t.mp)
+		t.files.stats = append(t.files.stats, s)
 	}
+	t.files.Unlock()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, t.fs)
 	if err != nil {
 		return err
@@ -255,6 +300,21 @@ func (t *GCTable) doneAllBatches(ctx context.Context, start, end types.TS, stats
 
 	_, err = writer.WriteEnd(ctx)
 	return err
+}
+
+func (t *GCTable) Merge(table *GCTable) {
+	t.Lock()
+	defer t.Unlock()
+	for _, stats := range table.files.stats {
+		t.files.stats = append(t.files.stats, stats)
+	}
+
+	if t.tsRange.start.Greater(&table.tsRange.start) {
+		t.tsRange.start = table.tsRange.start
+	}
+	if t.tsRange.end.Less(&table.tsRange.end) {
+		t.tsRange.end = table.tsRange.end
+	}
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
@@ -323,11 +383,38 @@ func (t *GCTable) CollectMapData(cxt context.Context, bat *batch.Batch, mp *mpoo
 	t.objects = nil
 	return false, nil
 }
+func (t *GCTable) ProcessMapBatch(
+	ctx context.Context,
+	sinker *engine_util.Sinker,
+	data *batch.Batch,
+) error {
+	if err := mergesort.SortColumnsByIndex(
+		data.Vecs,
+		ObjectTablePrimaryKeyIdx,
+		t.mp,
+	); err != nil {
+		return err
+	}
+	return sinker.Write(ctx, data)
+}
 
-// SaveTable is to write data to s3
-func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.ObjectStats, error) {
-	t.Process()
-	return blocks, err
+// collectData collects data from memory that can be written to s3
+func (t *GCTable) LoadBatchData(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
+	if len(t.files.stats) == 0 {
+		return true, nil
+	}
+	for _, stats := range t.files.stats {
+		for id := uint32(0); id < stats.BlkCnt(); id++ {
+			stats.ObjectLocation().SetID(uint16(id))
+			data, _, err := blockio.LoadOneBlock(cxt, t.fs, stats.ObjectLocation(), objectio.SchemaData)
+			if err != nil {
+				return false, err
+			}
+			bat.Append(cxt, mp, data)
+		}
+	}
+	t.files.stats = t.files.stats[:1]
+	return false, nil
 }
 
 // SaveFullTable is to write data to s3
