@@ -110,9 +110,17 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
-	if node.OnUpdateExprs != nil {
-		for i := range node.OnUpdateExprs {
-			node.OnUpdateExprs[i], err = rule.ApplyExpr(node.OnUpdateExprs[i])
+	// if node.OnUpdateExprs != nil {
+	// 	for i := range node.OnUpdateExprs {
+	// 		node.OnUpdateExprs[i], err = rule.ApplyExpr(node.OnUpdateExprs[i])
+	// 		if err != nil {
+	// 			return err
+	// 		}
+	// 	}
+	// }
+	if node.OnDuplicateKey != nil {
+		for key, _ := range node.OnDuplicateKey.OnDuplicateExpr {
+			node.OnDuplicateKey.OnDuplicateExpr[key], err = rule.ApplyExpr(node.OnDuplicateKey.OnDuplicateExpr[key])
 			if err != nil {
 				return err
 			}
