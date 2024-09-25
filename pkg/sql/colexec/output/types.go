@@ -33,6 +33,7 @@ const (
 // for the case like `select for update`, need to lock whole batches before send it to next operator
 // currently, this is implemented by blocking a output operator below, instead of calling func callBlocking
 type container struct {
+	currentIdx    int
 	blockStep     int
 	block         bool
 	cachedBatches []*batch.Batch
@@ -104,15 +105,18 @@ func (output *Output) Reset(proc *process.Process, pipelineFailed bool, err erro
 	}
 
 	if output.ctr.block {
+		output.ctr.currentIdx = 0
 		output.ctr.blockStep = stepCollect
-		output.ctr.cachedBatches = output.ctr.cachedBatches[:0]
+		output.cleanCachedBatch(proc)
 	}
 }
 
 func (output *Output) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if output.ctr.block {
+		output.ctr.currentIdx = -1
 		output.ctr.blockStep = stepInValid
 		output.cleanCachedBatch(proc)
+		output.ctr.cachedBatches = nil
 	}
 }
 
@@ -120,5 +124,5 @@ func (output *Output) cleanCachedBatch(proc *process.Process) {
 	for _, bat := range output.ctr.cachedBatches {
 		bat.Clean(proc.Mp())
 	}
-	output.ctr.cachedBatches = nil
+	output.ctr.cachedBatches = output.ctr.cachedBatches[:0]
 }

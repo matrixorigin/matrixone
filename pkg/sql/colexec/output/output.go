@@ -109,17 +109,17 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		result := vm.NewCallResult()
 
 		if output.ctr.blockStep == stepSend {
-			if len(output.ctr.cachedBatches) == 0 {
+			if output.ctr.currentIdx == len(output.ctr.cachedBatches) {
 				output.ctr.blockStep = stepEnd
 				return result, nil
 			} else {
-				bat := output.ctr.cachedBatches[0]
+				bat := output.ctr.cachedBatches[output.ctr.currentIdx]
+                output.ctr.currentIdx = output.ctr.currentIdx + 1
 				if err := output.Func(bat); err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
 				result.Batch = bat
-				output.ctr.cachedBatches = output.ctr.cachedBatches[1:]
 				// same as nonBlock
 				// analyzer.Output(result.Batch)
 				return result, nil
