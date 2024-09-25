@@ -3225,7 +3225,6 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		block = n.LockTargets[0].Block
 		if block {
-			ss = []*Scope{c.newMergeScope(ss)}
 			c.needBlock = true
 		}
 	}
