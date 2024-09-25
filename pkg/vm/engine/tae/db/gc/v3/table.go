@@ -48,11 +48,30 @@ type ObjectEntry struct {
 	table    uint64
 }
 
-func NewGCTable(fs fileservice.FileService, mp *mpool.MPool) *GCTable {
+type TableOption func(*GCTable)
+
+func WithBufferSize(size int) TableOption {
+	return func(table *GCTable) {
+		table.buffer.impl = containers.NewOneSchemaBatchBuffer(
+			size,
+			ObjectTableAttrs,
+			ObjectTableTypes,
+		)
+	}
+}
+
+func NewGCTable(
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+	opts ...TableOption,
+) *GCTable {
 	table := GCTable{
 		objects: make(map[string]*ObjectEntry),
 		fs:      fs,
 		mp:      mp,
+	}
+	for _, opt := range opts {
+		opt(&table)
 	}
 	return &table
 }
@@ -65,7 +84,7 @@ type GCTable struct {
 
 	buffer struct {
 		sync.Mutex
-		bats []*batch.Batch
+		impl *containers.OneSchemaBatchBuffer
 	}
 
 	files struct {
@@ -78,8 +97,6 @@ type GCTable struct {
 		start types.TS
 		end   types.TS
 	}
-
-	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error)
 }
 
 func addObjectLocked(
@@ -95,22 +112,26 @@ func addObjectLocked(
 	objects[name] = objEntry
 }
 
+func (t *GCTable) fillDefaults() {
+	if t.buffer.impl == nil {
+		t.buffer.impl = containers.NewOneSchemaBatchBuffer(
+			mpool.MB*32,
+			ObjectTableAttrs,
+			ObjectTableTypes,
+		)
+	}
+}
+
 func (t *GCTable) fetchBuffer() *batch.Batch {
 	t.buffer.Lock()
 	defer t.buffer.Unlock()
-	if len(t.buffer.bats) > 0 {
-		bat := t.buffer.bats[len(t.buffer.bats)-1]
-		t.buffer.bats = t.buffer.bats[:len(t.buffer.bats)-1]
-		return bat
-	}
-	return NewObjectTableBatch()
+	return t.buffer.impl.Fetch()
 }
 
 func (t *GCTable) putBuffer(bat *batch.Batch) {
 	t.buffer.Lock()
 	defer t.buffer.Unlock()
-	bat.CleanOnlyData()
-	t.buffer.bats = append(t.buffer.bats, bat)
+	t.buffer.impl.Putback(bat, t.mp)
 }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
@@ -126,18 +147,8 @@ func (t *GCTable) SoftGC(
 		sels []int64
 	)
 
-	factory := engine_util.NewFSinkerImplFactory(
-		ObjectTableSeqnums,
-		ObjectTablePrimaryKeyIdx,
-		true,
-		false,
-		ObjectTableVersion,
-	)
-	sinker := engine_util.NewSinker(
-		ObjectTablePrimaryKeyIdx,
-		ObjectTableAttrs,
-		ObjectTableTypes,
-		factory, t.mp, t.fs)
+	sinker := t.getSinker()
+	defer sinker.Close()
 
 	processSoftGCBatch := func(
 		ctx context.Context,
@@ -275,24 +286,25 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, name string) bool {
 	return false
 }
 
+func (t *GCTable) getSinker() *engine_util.Sinker {
+	return engine_util.NewSinker(
+		ObjectTablePrimaryKeyIdx,
+		ObjectTableAttrs,
+		ObjectTableTypes,
+		FSinkerFactory,
+		t.mp,
+		t.fs,
+	)
+}
+
 func (t *GCTable) Process(
 	ctx context.Context,
 	start, end types.TS,
 	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
 	processOneBatch func(context.Context, *batch.Batch) error,
 ) error {
-	factory := engine_util.NewFSinkerImplFactory(
-		ObjectTableSeqnums,
-		ObjectTablePrimaryKeyIdx,
-		true,
-		false,
-		ObjectTableVersion,
-	)
-	sinker := engine_util.NewSinker(
-		ObjectTablePrimaryKeyIdx,
-		ObjectTableAttrs,
-		ObjectTableTypes,
-		factory, t.mp, t.fs)
+	sinker := t.getSinker()
+	defer sinker.Close()
 
 	for {
 		bat := t.fetchBuffer()
@@ -387,15 +399,11 @@ func (t *GCTable) updateObjectListLocked(ins *containers.Batch, objects map[stri
 }
 
 func (t *GCTable) Close() {
-	t.buffer.Lock()
-	defer t.buffer.Unlock()
-	for i, bat := range t.buffer.bats {
-		bat.Clean(t.mp)
-		t.buffer.bats[i] = nil
+	if t.buffer.impl != nil {
+		t.buffer.impl.Close()
+		t.buffer.impl = nil
 	}
 
-	t.files.Lock()
-	defer t.files.Unlock()
 	for i, f := range t.files.bitmap {
 		f.Clear()
 		t.files.bitmap[i] = nil
