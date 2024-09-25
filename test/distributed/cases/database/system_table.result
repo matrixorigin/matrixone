@@ -272,6 +272,52 @@ checksum    TEXT(4)    YES        null
 partition_comment    VARCHAR(2048)    NO        null        
 nodegroup    VARCHAR(7)    NO        null        
 tablespace_name    TEXT(4)    YES        null        
+use mo_catalog;
+show columns from `mo_cdc_task`;
+Field    Type    Null    Key    Default    Extra    Comment
+account_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+task_id    UUID(0)    NO    PRI    null        
+task_name    VARCHAR(1000)    YES        null        
+source_uri    TEXT(0)    NO        null        
+source_password    VARCHAR(1000)    YES        null        
+sink_uri    TEXT(0)    NO        null        
+sink_type    VARCHAR(20)    YES        null        
+sink_password    VARCHAR(1000)    YES        null        
+sink_ssl_ca_path    VARCHAR(65535)    YES        null        
+sink_ssl_cert_path    VARCHAR(65535)    YES        null        
+sink_ssl_key_path    VARCHAR(65535)    YES        null        
+tables    TEXT(0)    NO        null        
+filters    TEXT(0)    YES        null        
+opfilters    TEXT(0)    YES        null        
+source_state    VARCHAR(20)    YES        null        
+sink_state    VARCHAR(20)    YES        null        
+start_ts    VARCHAR(1000)    YES        null        
+end_ts    VARCHAR(1000)    YES        null        
+config_file    VARCHAR(65535)    YES        null        
+task_create_time    DATETIME(0)    YES        null        
+state    VARCHAR(20)    YES        null        
+checkpoint    BIGINT UNSIGNED(64)    YES        null        
+checkpoint_str    VARCHAR(1000)    YES        null        
+no_full    BOOL(0)    YES        null        
+incr_config    VARCHAR(1000)    YES        null        
+reserved0    TEXT(0)    YES        null        
+reserved1    TEXT(0)    YES        null        
+reserved2    TEXT(0)    YES        null        
+reserved3    TEXT(0)    YES        null        
+reserved4    TEXT(0)    YES        null        
+show columns from `mo_cdc_watermark`;
+Field    Type    Null    Key    Default    Extra    Comment
+account_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+task_id    UUID(0)    NO    PRI    null        
+table_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+watermark    VARCHAR(128)    YES        null        
+show columns from `mo_data_key`;
+Field    Type    Null    Key    Default    Extra    Comment
+account_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+key_id    UUID(0)    NO    PRI    null        
+encrypted_key    VARCHAR(128)    YES        null        
+create_time    TIMESTAMP(0)    NO        current_timestamp()        
+update_time    TIMESTAMP(0)    NO        current_timestamp()        
 drop database if exists test;
 create database test;
 use test;
