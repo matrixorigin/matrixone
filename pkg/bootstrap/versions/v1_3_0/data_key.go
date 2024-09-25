@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-func InsertInitDataKey(txn executor.TxnExecutor, kek string) (err error) {
+var InsertInitDataKey = func(txn executor.TxnExecutor, kek string) (err error) {
 	sql, err := cdc.GetInitDataKeySql(kek)
 	if err != nil {
 		return
