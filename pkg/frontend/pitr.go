@@ -737,7 +737,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 				return rtnErr
 			}
 			if !accountExist {
-				return moerr.NewInternalErrorf(ctx, "account %s does not exist at timestamp %d", tenantInfo.GetTenant(), ts)
+				return moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 			}
 			// mock snapshot
 			var snapshotName string
@@ -818,7 +818,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		return err
 	}
 	if !accountExist {
-		return moerr.NewInternalErrorf(ctx, "account %s does not exist at timestamp %d", tenantInfo.GetTenant(), ts)
+		return moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 	}
 
 	//drop foreign key related tables first
@@ -902,7 +902,7 @@ func restoreToAccountWithPitr(
 	viewMap map[string]*tableInfo,
 	curAccount uint32,
 ) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account , restore timestamp : %d", pitrName, ts))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account, restore timestamp: %d", pitrName, ts))
 
 	var dbNames []string
 	// delete current dbs
@@ -984,7 +984,7 @@ func restoreToDatabaseWithPitr(
 		return err
 	}
 	if !databaseExist {
-		return moerr.NewInternalErrorf(ctx, "database '%s' not exists at timestamp %d", dbName, ts)
+		return moerr.NewInternalErrorf(ctx, "database '%s' does not exists at timestamp: %v", dbName, nanoTimeFormat(ts))
 	}
 
 	return restoreToDatabaseOrTableWithPitr(
@@ -1019,7 +1019,7 @@ func restoreToTableWithPitr(
 		return err
 	}
 	if !TableExist {
-		return moerr.NewInternalErrorf(ctx, "database '%s' table '%s' not exists at timestamp %d", dbName, tblName, ts)
+		return moerr.NewInternalErrorf(ctx, "database '%s' table '%s' does not exists at timestamp: %v", dbName, tblName, nanoTimeFormat(ts))
 	}
 	return restoreToDatabaseOrTableWithPitr(
 		ctx,
@@ -1630,7 +1630,7 @@ func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 	}
 
 	if ts < minTs.UnixNano() {
-		return moerr.NewInternalErrorNoCtxf("ts %v is less than the pitr range minest time %v", nanoTimeFormat(ts), nanoTimeFormat(minTs.UnixNano()))
+		return moerr.NewInternalErrorNoCtxf("input timestamp %v is less than the pitr range minest timestamp %v", nanoTimeFormat(ts), nanoTimeFormat(minTs.UnixNano()))
 	}
 
 	return
