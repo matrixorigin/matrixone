@@ -114,7 +114,7 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			} else {
 				bat := output.ctr.cachedBatches[output.ctr.currentIdx]
-                output.ctr.currentIdx = output.ctr.currentIdx + 1
+				output.ctr.currentIdx = output.ctr.currentIdx + 1
 				if err := output.Func(bat); err != nil {
 					result.Status = vm.ExecStop
 					return result, err
