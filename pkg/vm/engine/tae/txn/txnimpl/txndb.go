@@ -115,7 +115,7 @@ func (db *txnDB) Append(ctx context.Context, id uint64, bat *containers.Batch) e
 	return table.Append(ctx, bat)
 }
 
-func (db *txnDB) AddObjsWithMetaLoc(
+func (db *txnDB) AddDataFiles(
 	ctx context.Context,
 	tid uint64,
 	stats containers.Vector) error {
@@ -126,7 +126,7 @@ func (db *txnDB) AddObjsWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.AddObjsWithMetaLoc(ctx, stats)
+	return table.AddDataFiles(ctx, stats)
 }
 
 // func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
@@ -168,7 +168,7 @@ func (db *txnDB) DeleteByPhyAddrKeys(
 	return table.DeleteByPhyAddrKeys(rowIDVec, pkVec, dt)
 }
 
-func (db *txnDB) TryDeleteByStats(
+func (db *txnDB) AddPersistedTombstoneFile(
 	id *common.ID,
 	stats objectio.ObjectStats,
 ) (ok bool, err error) {
@@ -179,7 +179,7 @@ func (db *txnDB) TryDeleteByStats(
 	if table.IsDeleted() {
 		return false, moerr.NewNotFoundNoCtx()
 	}
-	return table.TryDeleteByStats(id, stats)
+	return table.AddPersistedTombstoneFile(id, stats)
 }
 
 func (db *txnDB) GetByFilter(ctx context.Context, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
