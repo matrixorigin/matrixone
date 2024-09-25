@@ -23,6 +23,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -120,7 +121,7 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 
 const (
 	NumFixedPool = 5
-	kMemHdrSz    = 16
+	kMemHdrSz    = 24
 	kStripeSize  = 128
 	B            = 1
 	KB           = 1024
@@ -135,10 +136,11 @@ var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
-	poolId       int64
-	allocSz      int32
-	fixedPoolIdx int8
-	guard        [3]uint8
+	poolId            int64
+	allocSz           int32
+	fixedPoolIdx      int8
+	guard             [3]uint8
+	isMallocAllocated bool
 }
 
 func init() {
@@ -326,6 +328,7 @@ type MPool struct {
 	stats      MPoolStats // stats
 	noFixed    bool
 	noLock     bool
+	useMalloc  bool
 	available  int32 // 0: available, 1: unavailable
 	inUseCount int32 // number of in use call
 	pools      [NumFixedPool]fixedPool
@@ -336,8 +339,9 @@ type MPool struct {
 }
 
 const (
-	NoFixed = 1
-	NoLock  = 2
+	NoFixed = 1 << iota
+	NoLock
+	UseMalloc
 )
 
 const (
@@ -424,6 +428,10 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 
 	mp.noFixed = (flag & NoFixed) != 0
 	mp.noLock = (flag & NoFixed) != 0
+	mp.useMalloc = (flag & UseMalloc) != 0
+	if mp.useMalloc {
+		mp.noFixed = true
+	}
 
 	if !mp.noFixed {
 		for i := 0; i < NumFixedPool; i++ {
@@ -640,6 +648,12 @@ func (mp *MPool) Free(bs []byte) {
 		// non fixed pool just mark it freed
 		if !atomic.CompareAndSwapInt32(&pHdr.allocSz, pHdr.allocSz, -1) {
 			panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
+		}
+		if pHdr.isMallocAllocated {
+			allocator().Deallocate(
+				unsafe.Slice((*byte)(hdr), 1),
+				malloc.NoHints,
+			)
 		}
 	}
 }
