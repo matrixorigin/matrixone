@@ -684,7 +684,7 @@ func (e *Engine) BuildBlockReaders(
 			shard)
 		rd, err := NewReader(
 			ctx,
-			proc,
+			proc.Mp(),
 			e,
 			def,
 			ts,
