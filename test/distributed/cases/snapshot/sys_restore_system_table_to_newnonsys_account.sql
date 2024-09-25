@@ -1,4 +1,3 @@
--- @bvt:issue#16709
 set global enable_privilege_cache = off;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
@@ -557,4 +556,3 @@ drop role r5;
 drop snapshot sp03;
 drop account acc01;
 drop account acc02;
--- @bvt:issue
