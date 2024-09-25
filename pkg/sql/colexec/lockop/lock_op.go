@@ -831,26 +831,6 @@ func (lockOp *LockOp) cleanParker() {
 	}
 }
 
-func (lockOp *LockOp) getBatch(
-	proc *process.Process,
-	analyzer process.Analyzer,
-	isFirst bool,
-) (*batch.Batch, error) {
-	fn := lockOp.ctr.batchFetchFunc
-	if fn == nil {
-		fn = lockOp.GetChildren(0).Call
-	}
-
-	beforeChildrenCall := time.Now()
-	input, err := fn(proc)
-	analyzer.ChildrenCallStop(beforeChildrenCall)
-	if err != nil {
-		return nil, err
-	}
-	analyzer.Input(input.Batch)
-	return input.Batch, nil
-}
-
 func getRowsFilter(
 	tableID uint64,
 	partitionTables []uint64) RowsFilter {
