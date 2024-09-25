@@ -9739,11 +9739,11 @@ func TestStartStopTableMerge(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 
 	tbl := rel.GetMeta().(*catalog.TableEntry)
-	scheduler.StopMerge(tbl)
+	scheduler.StopMerge(tbl.GetID())
 
 	require.Equal(t, moerr.GetOkStopCurrRecur(), scheduler.LoopProcessor.OnTable(tbl))
 
-	scheduler.StartMerge(tbl)
+	scheduler.StartMerge(tbl.GetID())
 
 	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
 }

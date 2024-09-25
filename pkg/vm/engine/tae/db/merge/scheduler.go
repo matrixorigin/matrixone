@@ -39,7 +39,7 @@ type Scheduler struct {
 
 	stoppedTables struct {
 		sync.RWMutex
-		m map[*catalog.TableEntry]time.Time
+		m map[uint64]time.Time
 	}
 }
 
@@ -50,8 +50,8 @@ func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
 		executor:      newMergeExecutor(rt, sched),
 		stoppedTables: struct {
 			sync.RWMutex
-			m map[*catalog.TableEntry]time.Time
-		}{m: make(map[*catalog.TableEntry]time.Time)},
+			m map[uint64]time.Time
+		}{m: make(map[uint64]time.Time)},
 	}
 
 	op.DatabaseFn = op.onDataBase
@@ -129,7 +129,7 @@ func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 	}
 
 	s.stoppedTables.RLock()
-	if t, ok := s.stoppedTables.m[tableEntry]; ok {
+	if t, ok := s.stoppedTables.m[tableEntry.GetID()]; ok {
 		if time.Now().After(t.Add(10 * time.Minute)) {
 			logutil.Warnf("table %s has stopped merging for over 10 minutes", tableEntry.GetFullName())
 		}
@@ -181,16 +181,16 @@ func (s *Scheduler) onPostObject(*catalog.ObjectEntry) (err error) {
 	return nil
 }
 
-func (s *Scheduler) StopMerge(tbl *catalog.TableEntry) {
+func (s *Scheduler) StopMerge(tblID uint64) {
 	s.stoppedTables.Lock()
 	defer s.stoppedTables.Unlock()
-	s.stoppedTables.m[tbl] = time.Now()
+	s.stoppedTables.m[tblID] = time.Now()
 }
 
-func (s *Scheduler) StartMerge(tbl *catalog.TableEntry) {
+func (s *Scheduler) StartMerge(tblID uint64) {
 	s.stoppedTables.Lock()
 	defer s.stoppedTables.Unlock()
-	delete(s.stoppedTables.m, tbl)
+	delete(s.stoppedTables.m, tblID)
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
