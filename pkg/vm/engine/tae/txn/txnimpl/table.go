@@ -346,12 +346,15 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 	}
 	deletes := tbl.tombstoneTable.tableSpace.node.data
 	pkVec := deletes.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
+	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](
+		deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+	)
 	var pkType *types.Type
 	for i := 0; i < deletes.Length(); i++ {
-		rowID := deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(i).(types.Rowid)
+		rowID := &rowids[i]
 		id.SetObjectID(rowID.BorrowObjectID())
 		blkID, rowOffset := rowID.Decode()
-		_, blkOffset := blkID.Offsets()
+		blkOffset := blkID.Sequence()
 		id.SetBlockOffset(blkOffset)
 		// search the read set to check wether the delete node relevant
 		// block was deleted.
