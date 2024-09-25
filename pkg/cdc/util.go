@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -381,6 +382,7 @@ var openDbConn = func(
 			// TODO check table existence
 			return
 		}
+		v2.CdcMysqlConnErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
 	logutil.Error("^^^^^ openDbConn failed")

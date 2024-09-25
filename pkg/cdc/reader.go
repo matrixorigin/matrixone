@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -71,7 +72,7 @@ func NewTableReader(
 	}
 
 	// batch columns layout:
-	// 1. data: user defined cols | cpk (if need) | commit-ts
+	// 1. data: user defined cols | cpk (if needed) | commit-ts
 	// 2. tombstone: pk/cpk | commit-ts
 	reader.insTsColIdx, reader.insCompositedPkColIdx = len(tableDef.Cols)-1, len(tableDef.Cols)-2
 	reader.delTsColIdx, reader.delCompositedPkColIdx = 1, 0
@@ -190,12 +191,56 @@ func (reader *tableReader) readTableWithTxn(
 		return atmBatch
 	}
 
-	//batchSize := func(bat *batch.Batch) int {
-	//	if bat == nil {
-	//		return 0
-	//	}
-	//	return bat.Vecs[0].Length()
-	//}
+	recordCount := func(bat *batch.Batch) int {
+		if bat == nil || len(bat.Vecs) == 0 {
+			return 0
+		}
+		return bat.Vecs[0].Length()
+	}
+
+	addSnapshotStartStatistics := func() {
+		count := float64(recordCount(insertData))
+		allocated := float64(insertData.Allocated())
+
+		v2.CdcProcessingTotalRecordCountGauge.Add(count)
+		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
+		v2.CdcProcessingSnapshotRecordCountGauge.Add(count)
+		v2.CdcSnapshotAllocatedBatchBytesGauge.Add(allocated)
+		v2.CdcReadRecordCounter.Add(count)
+	}
+
+	addSnapshotEndStatistics := func() {
+		count := float64(recordCount(insertData))
+		allocated := float64(insertData.Allocated())
+
+		v2.CdcProcessingTotalRecordCountGauge.Sub(count)
+		v2.CdcTotalAllocatedBatchBytesGauge.Sub(allocated)
+		v2.CdcProcessingSnapshotRecordCountGauge.Sub(count)
+		v2.CdcSnapshotAllocatedBatchBytesGauge.Sub(allocated)
+		v2.CdcSinkRecordCounter.Add(count)
+	}
+
+	addTailStartStatistics := func() {
+		count := float64(recordCount(insertData) + recordCount(deleteData))
+		allocated := float64(insertData.Allocated() + deleteData.Allocated())
+
+		v2.CdcProcessingTotalRecordCountGauge.Add(count)
+		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
+		v2.CdcProcessingTailRecordCountGauge.Add(count)
+		v2.CdcTailAllocatedBatchBytesGauge.Add(allocated)
+		v2.CdcReadRecordCounter.Add(count)
+	}
+
+	addTailEndStatistics := func() {
+		count := float64(insertAtmBatch.RowCount() + deleteAtmBatch.RowCount())
+		allocated := float64(insertAtmBatch.Allocated() + deleteAtmBatch.Allocated())
+
+		v2.CdcProcessingTotalRecordCountGauge.Sub(count)
+		v2.CdcTotalAllocatedBatchBytesGauge.Sub(allocated)
+		v2.CdcProcessingTailRecordCountGauge.Sub(count)
+		v2.CdcTailAllocatedBatchBytesGauge.Sub(allocated)
+		v2.CdcSinkRecordCounter.Add(count)
+	}
 
 	var curHint engine.ChangesHandle_Hint
 	for {
@@ -210,14 +255,6 @@ func (reader *tableReader) readTableWithTxn(
 		if insertData, deleteData, curHint, err = changes.Next(ctx, reader.mp); err != nil {
 			return
 		}
-
-		//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Reader: [%s, %s), "+
-		//	"curHint: %v, insertData is nil: %v, deleteData is nil: %v, "+
-		//	"insertDataSize() = %d, deleteDataSize() = %d\n",
-		//	fromTs.ToString(), toTs.ToString(),
-		//	curHint, insertData == nil, deleteData == nil,
-		//	batchSize(insertData), batchSize(deleteData),
-		//)
 
 		//both nil denote no more data
 		if insertData == nil && deleteData == nil {
@@ -235,6 +272,7 @@ func (reader *tableReader) readTableWithTxn(
 					return err
 				}
 
+				addTailEndStatistics()
 				insertAtmBatch = nil
 				deleteAtmBatch = nil
 			}
@@ -251,18 +289,26 @@ func (reader *tableReader) readTableWithTxn(
 		switch curHint {
 		case engine.ChangesHandle_Snapshot:
 			// transform into insert instantly
+			addSnapshotStartStatistics()
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
 				outputTyp:     OutputTypeCheckpoint,
 				checkpointBat: insertData,
 				fromTs:        fromTs,
 				toTs:          toTs,
 			})
+			if err != nil {
+				return
+			}
+
+			addSnapshotEndStatistics()
 		case engine.ChangesHandle_Tail_wip:
+			addTailStartStatistics()
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 			insertAtmBatch.Append(packer, insertData, reader.insTsColIdx, reader.insCompositedPkColIdx)
 			deleteAtmBatch.Append(packer, deleteData, reader.delTsColIdx, reader.delCompositedPkColIdx)
 		case engine.ChangesHandle_Tail_done:
+			addTailStartStatistics()
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 			insertAtmBatch.Append(packer, insertData, reader.insTsColIdx, reader.insCompositedPkColIdx)
@@ -274,12 +320,13 @@ func (reader *tableReader) readTableWithTxn(
 				fromTs:         fromTs,
 				toTs:           toTs,
 			})
+			if err != nil {
+				return
+			}
+
+			addTailEndStatistics()
 			insertAtmBatch = nil
 			deleteAtmBatch = nil
-		}
-
-		if err != nil {
-			return
 		}
 	}
 }
