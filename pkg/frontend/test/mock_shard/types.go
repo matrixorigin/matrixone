@@ -259,7 +259,6 @@ func (m *Mockscheduler) EXPECT() *MockschedulerMockRecorder {
 	return m.recorder
 }
 
-
 // MockEnv is a mock of Env interface.
 type MockEnv struct {
 	ctrl     *gomock.Controller
@@ -359,8 +358,6 @@ func NewMockfilter(ctrl *gomock.Controller) *Mockfilter {
 func (m *Mockfilter) EXPECT() *MockfilterMockRecorder {
 	return m.recorder
 }
-
-
 
 // MockShardStorage is a mock of ShardStorage interface.
 type MockShardStorage struct {

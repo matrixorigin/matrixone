@@ -31,6 +31,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func NewColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				Name:   name,
+				ColPos: int32(pos),
+			},
+		},
+	}
+}
+
+func ConstructInExpr(
+	ctx context.Context,
+	colName string,
+	colVec *vector.Vector,
+) *plan.Expr {
+	data, _ := colVec.MarshalBinary()
+	colExpr := NewColumnExpr(0, plan2.MakePlan2Type(colVec.GetType()), colName)
+	return plan2.MakeInExpr(
+		ctx,
+		colExpr,
+		int32(colVec.Length()),
+		data,
+		false,
+	)
+}
+
 func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
 	idx := strings.Index(name, ".")
 	var pos int32
@@ -54,7 +82,6 @@ func evalValue(
 	tblDef *plan.TableDef,
 	isVec bool,
 	pkName string,
-	proc *process.Process,
 ) (
 	ok bool, oid types.T, vals [][]byte,
 ) {
@@ -62,9 +89,9 @@ func evalValue(
 	var col *plan.Expr_Col
 
 	if !isVec {
-		col, vals, ok = mustColConstValueFromBinaryFuncExpr(exprImpl, tblDef, proc)
+		col, vals, ok = mustColConstValueFromBinaryFuncExpr(exprImpl)
 	} else {
-		col, val, ok = mustColVecValueFromBinaryFuncExpr(proc, exprImpl)
+		col, val, ok = mustColVecValueFromBinaryFuncExpr(exprImpl)
 	}
 
 	if !ok {
@@ -94,7 +121,7 @@ func evalValue(
 }
 
 func mustColConstValueFromBinaryFuncExpr(
-	expr *plan.Expr_F, tableDef *plan.TableDef, proc *process.Process,
+	expr *plan.Expr_F,
 ) (*plan.Expr_Col, [][]byte, bool) {
 	var (
 		colExpr  *plan.Expr_Col
@@ -115,21 +142,15 @@ func mustColConstValueFromBinaryFuncExpr(
 		return nil, nil, false
 	}
 
-	vals, ok := getConstBytesFromExpr(
-		valExprs,
-		tableDef.Cols[colExpr.Col.ColPos],
-		proc,
-	)
+	vals, ok := getConstBytesFromExpr(valExprs)
 	if !ok {
 		return nil, nil, false
 	}
 	return colExpr, vals, true
 }
 
-func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *process.Process) ([][]byte, bool) {
+func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {
 	vals := make([][]byte, len(exprs))
-	_ = colDef
-	_ = proc
 	for idx := range exprs {
 		if fExpr, ok := exprs[idx].Expr.(*plan.Expr_Fold); ok {
 			if len(fExpr.Fold.Data) == 0 {
@@ -165,7 +186,7 @@ func getConstValueByExpr(
 	return rule.GetConstantValue(vec, true, 0)
 }
 
-func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
+func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
 	var (
 		colExpr  *plan.Expr_Col
 		valExpr  *plan.Expr
@@ -193,16 +214,6 @@ func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F)
 
 		logutil.Warnf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
 		return nil, nil, false
-		// foldedExprs, err := plan2.ConstandFoldList([]*plan.Expr{valExpr}, proc, true)
-		// if err != nil {
-		// 	logutil.Errorf("try const fold val expr failed: %s", plan2.FormatExpr(valExpr))
-		// 	return nil, nil, false
-		// }
-
-		// if exprImpl, ok = foldedExprs[0].Expr.(*plan.Expr_Vec); !ok {
-		// 	logutil.Errorf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
-		// 	return nil, nil, false
-		// }
 	}
 
 	return colExpr, exprImpl.Vec.Data, ok

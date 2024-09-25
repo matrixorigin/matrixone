@@ -287,7 +287,7 @@ col18 varchar(255),
 col19 varchar(255),
 col20 varchar(255),
 primary key(col1));
-load data infile '$resources/external_table_file/ex_table_3_6.csv'into table ex_table_1 fields terminated by ',';
+load data infile '$resources/external_table_file/ex_table_3_7.csv' into table ex_table_1 fields terminated by ',';
 select * from ex_table_1;
 drop stage if exists ex_stage01;
 create stage ex_stage01 url = 'file:///$resources/into_outfile' comment = '这是一个基于file system创建的stage';
