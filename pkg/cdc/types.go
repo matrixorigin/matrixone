@@ -105,27 +105,6 @@ type DecoderOutput struct {
 	deleteAtmBatch *AtomicBatch
 }
 
-//func (d *DecoderOutput) ckpBatSize() int {
-//	if d.checkpointBat == nil {
-//		return 0
-//	}
-//	return d.checkpointBat.RowCount()
-//}
-//
-//func (d *DecoderOutput) insertBatSize() int {
-//	if d.insertAtmBatch == nil || d.insertAtmBatch.Rows == nil {
-//		return 0
-//	}
-//	return d.insertAtmBatch.Rows.Len()
-//}
-//
-//func (d *DecoderOutput) deleteBatSize() int {
-//	if d.deleteAtmBatch == nil || d.deleteAtmBatch.Rows == nil {
-//		return 0
-//	}
-//	return d.deleteAtmBatch.Rows.Len()
-//}
-
 type RowType int
 
 const (
@@ -212,6 +191,26 @@ func (row AtomicBatchRow) Less(other AtomicBatchRow) bool {
 	}
 	//pk asc
 	return bytes.Compare(row.Pk, other.Pk) < 0
+}
+
+func (bat *AtomicBatch) RowCount() int {
+	c := 0
+	for _, b := range bat.Batches {
+		rows := 0
+		if b != nil && len(b.Vecs) > 0 {
+			rows = b.Vecs[0].Length()
+		}
+		c += rows
+	}
+	return c
+}
+
+func (bat *AtomicBatch) Allocated() int {
+	size := 0
+	for _, b := range bat.Batches {
+		size += b.Allocated()
+	}
+	return size
 }
 
 func (bat *AtomicBatch) Append(

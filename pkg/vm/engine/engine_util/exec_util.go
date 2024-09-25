@@ -18,10 +18,15 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
 var ErrNoMore = moerr.NewInternalErrorNoCtx("no more")
@@ -171,4 +176,123 @@ func FilterObjects(
 		extraObjects,
 	)
 	return
+}
+
+func TryFastFilterBlocks(
+	ctx context.Context,
+	snapshotTS timestamp.Timestamp,
+	tableDef *plan.TableDef,
+	exprs []*plan.Expr,
+	snapshot *logtailreplay.PartitionState,
+	extraCommittedObjects []objectio.ObjectStats,
+	uncommittedObjects []objectio.ObjectStats,
+	outBlocks *objectio.BlockInfoSlice,
+	fs fileservice.FileService,
+) (ok bool, err error) {
+	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := CompileFilterExprs(exprs, tableDef, fs)
+	if !ok {
+		return false, nil
+	}
+
+	err = FilterTxnObjects(
+		ctx,
+		snapshotTS,
+		fastFilterOp,
+		loadOp,
+		objectFilterOp,
+		blockFilterOp,
+		seekOp,
+		snapshot,
+		extraCommittedObjects,
+		uncommittedObjects,
+		outBlocks,
+		fs,
+		highSelectivityHint,
+	)
+	return true, err
+}
+
+func FilterTxnObjects(
+	ctx context.Context,
+	snapshotTS timestamp.Timestamp,
+	fastFilterOp FastFilterOp,
+	loadOp LoadOp,
+	objectFilterOp ObjectFilterOp,
+	blockFilterOp BlockFilterOp,
+	seekOp SeekFirstBlockOp,
+	snapshot *logtailreplay.PartitionState,
+	extraCommittedObjects []objectio.ObjectStats,
+	uncommittedObjects []objectio.ObjectStats,
+	outBlocks *objectio.BlockInfoSlice,
+	fs fileservice.FileService,
+	highSelectivityHint bool,
+) (err error) {
+
+	var iter logtailreplay.ObjectsIter
+	defer func() {
+		if iter != nil {
+			iter.Close()
+		}
+	}()
+
+	var getNextStats func() (objectio.ObjectStats, error)
+
+	if snapshot != nil {
+		getNextStats = func() (objectio.ObjectStats, error) {
+			if iter == nil {
+				iter, err = snapshot.NewObjectsIter(
+					types.TimestampToTS(snapshotTS),
+					true,
+					false,
+				)
+				if err != nil {
+					return objectio.ZeroObjectStats, err
+				}
+			}
+			if !iter.Next() {
+				return objectio.ZeroObjectStats, ErrNoMore
+			}
+			return iter.Entry().ObjectStats, nil
+		}
+	}
+
+	totalBlocks, loadHit,
+		objFilterTotal, objFilterHit,
+		blkFilterTotal, blkFilterHit,
+		fastFilterTotal, fastFilterHit,
+		err := FilterObjects(
+		ctx,
+		fastFilterOp,
+		loadOp,
+		objectFilterOp,
+		blockFilterOp,
+		seekOp,
+		getNextStats,
+		uncommittedObjects,
+		extraCommittedObjects,
+		outBlocks,
+		highSelectivityHint,
+		fs,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	v2.TxnRangesFastPathLoadObjCntHistogram.Observe(float64(loadHit))
+	v2.TxnRangesFastPathSelectedBlockCntHistogram.Observe(float64(outBlocks.Len() - 1))
+	if fastFilterTotal > 0 {
+		v2.TxnRangesFastPathObjSortKeyZMapSelectivityHistogram.Observe(float64(fastFilterHit) / float64(fastFilterTotal))
+	}
+	if objFilterTotal > 0 {
+		v2.TxnRangesFastPathObjColumnZMapSelectivityHistogram.Observe(float64(objFilterHit) / float64(objFilterTotal))
+	}
+	if blkFilterTotal > 0 {
+		v2.TxnRangesFastPathBlkColumnZMapSelectivityHistogram.Observe(float64(blkFilterHit) / float64(blkFilterTotal))
+	}
+	if totalBlocks > 0 {
+		v2.TxnRangesFastPathBlkTotalSelectivityHistogram.Observe(float64(outBlocks.Len()-1) / float64(totalBlocks))
+	}
+
+	return nil
 }

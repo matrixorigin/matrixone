@@ -247,6 +247,10 @@ func (cmd *EntryCommand[T, N]) GetTs() types.TS {
 	return ts
 }
 
+func (cmd *EntryCommand[T, N]) GetMVCCNode() *MVCCNode[T] {
+	return cmd.mvccNode
+}
+
 func (cmd *EntryCommand[T, N]) IDString() string {
 	s := ""
 	id := cmd.GetID()

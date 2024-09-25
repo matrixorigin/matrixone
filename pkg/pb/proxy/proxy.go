@@ -17,6 +17,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	io "io"
 )
 
 func (i *ExtraInfo) Encode() ([]byte, error) {
@@ -49,20 +50,9 @@ func readData(reader *bufio.Reader) ([]byte, error) {
 	buf := bytes.NewBuffer(s)
 	size := uint16(buf.Bytes()[0]) + uint16(buf.Bytes()[1])<<8 + 2
 	data := make([]byte, size)
-	if reader.Buffered() < int(size) {
-		hr := 0
-		for hr < int(size) {
-			l, err := reader.Read(data[hr:])
-			if err != nil {
-				return nil, err
-			}
-			hr += l
-		}
-	} else {
-		_, err = reader.Read(data)
-		if err != nil {
-			return nil, err
-		}
+	_, err = io.ReadFull(reader, data)
+	if err != nil {
+		return nil, err
 	}
 	return data, nil
 }
