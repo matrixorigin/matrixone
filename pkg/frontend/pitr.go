@@ -67,6 +67,11 @@ var (
 	getSqlForCheckAccountFmt = `select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s';`
 
 	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where database_name = '%s';`
+
+	// update mo_pitr object id
+	updateMoPitrTableObjectIdFmt    = `update mo_catalog.mo_pitr set obj_id = %d where account_id = %d and database_name = '%s' and table_name = '%s';`
+	updateMoPitrDatabaseObjectIdFmt = `update mo_catalog.mo_pitr set obj_id = %d where account_id = %d and database_name = '%s';`
+	updateMoPitrAccountObjectIdFmt  = `update mo_catalog.mo_pitr set obj_id = %d where account_id = %d;`
 )
 
 type pitrRecord struct {
@@ -143,6 +148,18 @@ func getSqlForCheckDupPitrFormat(accountId, objId uint64) string {
 
 func getPubInfoWithPitr(ts int64, dbName string) string {
 	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, dbName)
+}
+
+func getSqlForUpdateMoPitrTableObjectId(accountId uint64, dbName, tblName string, objectId uint64) string {
+	return fmt.Sprintf(updateMoPitrTableObjectIdFmt, objectId, accountId, dbName, tblName)
+}
+
+func getSqlForUpdateMoPitrDatabaseObjectId(accountId uint64, dbName string, objectId uint64) string {
+	return fmt.Sprintf(updateMoPitrDatabaseObjectIdFmt, objectId, accountId, dbName)
+}
+
+func getSqlForUpdateMoPitrAccountObjectId(accountId uint64, objectId uint64) string {
+	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, objectId, accountId)
 }
 
 func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccountId, objId uint64) (bool, error) {
@@ -2028,5 +2045,125 @@ func createPubByPitr(
 			return
 		}
 	}
+	return
+}
+
+// updatePitrTableObjectId
+// if mo_pitr table contains the same dbName and tblName when create table, then update the table_id
+// otherwise, skip it
+func updatePitrTableObjectId(ctx context.Context,
+	ses *Session,
+	stmt *tree.CreateTable) (err error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	var (
+		accountId uint32
+		tableId   uint64
+		erArray   []ExecResult
+		updateSql string
+		dbName    string
+		tblName   string
+	)
+	if len(stmt.Table.SchemaName) == 0 {
+		dbName = ses.GetDatabaseName()
+	} else {
+		dbName = string(stmt.Table.SchemaName)
+	}
+	tblName = string(stmt.Table.ObjectName)
+
+	accountId = ses.GetAccountId()
+	// get table id from mo_tables
+	getTableIdSql := getSqlForGetTable(uint64(accountId), dbName, tblName)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, getTableIdSql); err != nil {
+		return
+	}
+
+	if erArray, err = getResultSet(ctx, bh); err != nil {
+		return
+	}
+
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalErrorf(ctx, "can get new table id %s.%s", dbName, tblName)
+		return
+	}
+
+	for _, er := range erArray {
+		for row := uint64(0); row < er.GetRowCount(); row++ {
+			if tableId, err = er.GetUint64(ctx, row, 0); err != nil {
+				return
+			}
+		}
+	}
+	// update mo_tables
+	var newCtx = ctx
+	if accountId != sysAccountID {
+		newCtx = defines.AttachAccountId(newCtx, sysAccountID)
+	}
+	updateSql = getSqlForUpdateMoPitrTableObjectId(uint64(accountId), dbName, tblName, tableId)
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] update mo_pitr object id for table %s.%s, update sql: %s", ses.GetTenantInfo().Tenant, dbName, tblName, updateSql))
+	if err = bh.Exec(newCtx, updateSql); err != nil {
+		return
+	}
+
+	return
+}
+
+// updatePitrDatabaseObjectId
+// if mo_pitr table contains the same dbName when create database, then update the database_id
+// otherwise, skip it
+func updatePitrDatabaseObjectId(ctx context.Context,
+	ses *Session,
+	stmt *tree.CreateDatabase) (err error) {
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+
+	var (
+		accountId  uint32
+		databaseId uint64
+		erArray    []ExecResult
+		updateSql  string
+		dbName     string
+	)
+	dbName = string(stmt.Name)
+	accountId = ses.GetAccountId()
+	// get database id from mo_catalog.mo_database
+	getDatabaseIdSql, err := getSqlForCheckDatabase(ctx, dbName)
+	if err != nil {
+		return
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, getDatabaseIdSql); err != nil {
+		return
+	}
+
+	if erArray, err = getResultSet(ctx, bh); err != nil {
+		return
+
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return
+	}
+
+	for _, er := range erArray {
+		for row := uint64(0); row < er.GetRowCount(); row++ {
+			if databaseId, err = er.GetUint64(ctx, row, 0); err != nil {
+				return
+			}
+		}
+	}
+	// update mo_catalog.mo_database
+	var newCtx = ctx
+	if accountId != sysAccountID {
+		newCtx = defines.AttachAccountId(newCtx, sysAccountID)
+	}
+	updateSql = getSqlForUpdateMoPitrDatabaseObjectId(uint64(accountId), dbName, databaseId)
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] update mo_pitr object id for database %s, update sql: %s", ses.GetTenantInfo().Tenant, dbName, updateSql))
+	if err = bh.Exec(newCtx, updateSql); err != nil {
+		return
+	}
+
 	return
 }

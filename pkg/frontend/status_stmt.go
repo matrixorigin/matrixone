@@ -226,6 +226,10 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			ses.DeleteSeqValues(execCtx.proc)
 		}
 		_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+		err = updatePitrTableObjectId(execCtx.reqCtx, ses, st)
+		if err != nil {
+			return
+		}
 		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -252,8 +256,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if execCtx.proc.GetLastInsertID() != 0 {
 				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
 			}
-		case *tree.CreateTable:
-			_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
 		case *tree.DropTable:
 			// handle dynamic table drop, cancel all the running daemon task
 			_ = handleDropDynamicTable(execCtx.reqCtx, ses, st)
