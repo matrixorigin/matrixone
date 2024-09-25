@@ -75,17 +75,6 @@ account    2024-09-25 06:29:22    2024-09-25 06:29:22    database    sys    test
 select * from mo_catalog.mo_pitr;
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
 019227de-bfec-7b5a-9a18-6bfa9b3b1599    account    0    2024-09-25 06:29:22    2024-09-25 06:29:22    database    0    sys    test01        283091    4    mo
-show databases;
-Database
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-pitr
-system
-system_metrics
-test01
 drop pitr account;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
