@@ -245,6 +245,12 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 						// cannot find a transferred record. maybe the transferred record was TTL'ed
 						// here we can convert the error back to r-w conflict
 						if err != nil {
+							logutil.Error(
+								"TRANSFER-ERR-TO-RW",
+								zap.Error(err),
+								zap.String("id", id.String()),
+								zap.String("txn", tbl.store.txn.String()),
+							)
 							err = moerr.NewTxnRWConflictNoCtx()
 							return err
 						}
