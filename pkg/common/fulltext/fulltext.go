@@ -87,9 +87,7 @@ func (s *SearchAccum) PatternAnyPlus() bool {
 	return false
 }
 
-// $(IDF) = LOG10(#word in collection/sum(doc_count))
-// $(TF) = number of nword match in record (doc_count)
-// $(rank) = $(TF) * $(IDF) * %(IDF)
+// Evaluate the search string
 func (s *SearchAccum) Eval() (map[any]float32, error) {
 	var result map[any]float32
 	var err error
@@ -126,6 +124,7 @@ func (p *Pattern) String() string {
 	return str
 }
 
+// Get the text of leaf nodes with operator specified. Either TEXT or STAR as operator.
 func (p *Pattern) GetLeafText(operator int) []string {
 	if p.Operator == operator {
 		return []string{p.Text}
@@ -260,6 +259,7 @@ func (p *Pattern) GetWeight() float32 {
 	}
 }
 
+// Combine two score maps into single map. max(float32) will return when same doc_id (key) exists in both arg and result.
 func (p *Pattern) Combine(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
 	if result == nil {
 		result = make(map[any]float32)
@@ -524,6 +524,7 @@ func CreatePattern(pattern string) (*Pattern, error) {
 	return &Pattern{Text: pattern, Operator: operator, Children: p}, nil
 }
 
+// Parse the search string in boolean mode
 func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 
 	if strings.HasPrefix(pattern, "\"") && strings.HasSuffix(pattern, "\"") {
@@ -634,6 +635,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 	return tokens, nil
 }
 
+// Parse search string in natural language mode
 func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 	runeSlice := []rune(pattern)
 	ngram_size := 3
@@ -655,6 +657,7 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 	return list, nil
 }
 
+// Parse search string into list of patterns
 func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 	switch mode {
 	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
