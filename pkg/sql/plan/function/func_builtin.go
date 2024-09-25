@@ -302,11 +302,7 @@ func moShowColUnique(constraintStr string, colName string) bool {
 		}
 	}
 
-	if containsCol {
-		return true
-	} else {
-		return false
-	}
+	return containsCol
 }
 
 func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
