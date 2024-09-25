@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -282,6 +283,14 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 			tbl.store.warChecker.Delete(id)
 		}
 		if transferBatch != nil {
+			bat := containers.ToCNBatch(transferBatch)
+			if err = mergesort.SortColumnsByIndex(
+				bat.Vecs,
+				objectio.TombstonePrimaryKeyIdx,
+				common.WorkspaceAllocator,
+			); err != nil {
+				return
+			}
 			schema := tbl.getSchema(true)
 			seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
 			name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
