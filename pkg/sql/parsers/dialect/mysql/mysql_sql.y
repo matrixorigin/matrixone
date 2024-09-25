@@ -488,7 +488,7 @@ import (
 %token <str> CDC
 
 // ROLLUP
-%token <str> GROUPING SETS CUBE ROLLUP GROUPING_ID
+%token <str> GROUPING SETS CUBE ROLLUP 
 
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
@@ -10239,7 +10239,7 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   GROUPING_ID '(' func_type_opt column_list ')' window_spec_opt
+|   GROUPING '(' func_type_opt column_list ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         var columnList tree.Exprs

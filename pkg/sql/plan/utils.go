@@ -2344,7 +2344,7 @@ func containGrouping(expr *Expr) bool {
 		for _, arg := range exprImpl.F.Args {
 			ret = ret || containGrouping(arg)
 		}
-		ret = ret || (exprImpl.F.Func.ObjName == "grouping_id")
+		ret = ret || (exprImpl.F.Func.ObjName == "grouping")
 	case *plan.Expr_Col:
 		ret = false
 	}
@@ -2354,7 +2354,7 @@ func containGrouping(expr *Expr) bool {
 
 func checkGrouping(ctx context.Context, expr *Expr) error {
 	if containGrouping(expr) {
-		return moerr.NewSyntaxError(ctx, "aggregate function grouping_id not allowed in WHERE clause")
+		return moerr.NewSyntaxError(ctx, "aggregate function grouping not allowed in WHERE clause")
 	}
 	return nil
 }
