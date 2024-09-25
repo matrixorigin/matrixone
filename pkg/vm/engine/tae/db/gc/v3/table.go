@@ -123,7 +123,6 @@ func (t *GCTable) SoftGC(
 	processBat := t.fetchBuffer()
 	processSoftGCBatch := func(
 		ctx context.Context,
-		sinker *engine_util.Sinker,
 		data *batch.Batch) error {
 		bitmap := new(bitmap2.Bitmap)
 		bitmap.InitWithSize(int64(data.Vecs[0].Length()))
@@ -140,7 +139,6 @@ func (t *GCTable) SoftGC(
 		data.Shrink(deleteMask, true)
 		pBatch.Shrink(deleteMask, false)
 		processBat.Append(ctx, t.mp, pBatch)
-		sinker.Write(ctx, data)
 		return nil
 	}
 	err := t.Process(ctx, t.tsRange.start, t.tsRange.end, t.LoadBatchData, processSoftGCBatch)
@@ -249,7 +247,7 @@ func (t *GCTable) Process(
 	ctx context.Context,
 	start, end types.TS,
 	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
-	processOneBatch func(context.Context, *engine_util.Sinker, *batch.Batch) error,
+	processOneBatch func(context.Context, *batch.Batch) error,
 ) error {
 	factory := engine_util.NewFSinkerImplFactory(
 		ObjectTableSeqnums,
@@ -262,7 +260,7 @@ func (t *GCTable) Process(
 		ObjectTablePrimaryKeyIdx,
 		ObjectTableAttrs,
 		ObjectTableTypes,
-		factory, t.mp, t.fs, engine_util.WithBuffer())
+		factory, t.mp, t.fs)
 
 	for {
 		bat := t.fetchBuffer()
@@ -271,7 +269,12 @@ func (t *GCTable) Process(
 			t.putBuffer(bat)
 			return err
 		}
-		if err = processOneBatch(ctx, sinker, bat); err != nil {
+		if err = processOneBatch(ctx, bat); err != nil {
+			t.putBuffer(bat)
+			return err
+		}
+
+		if err = sinker.Write(ctx, bat); err != nil {
 			t.putBuffer(bat)
 			return err
 		}
@@ -396,7 +399,7 @@ func (t *GCTable) ProcessMapBatch(
 	); err != nil {
 		return err
 	}
-	return sinker.Write(ctx, data)
+	return nil
 }
 
 // collectData collects data from memory that can be written to s3
