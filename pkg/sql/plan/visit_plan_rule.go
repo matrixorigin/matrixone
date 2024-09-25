@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -199,6 +200,9 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 		return e, nil
 	case *plan.Expr_P:
+		if int(exprImpl.P.Pos) >= len(rule.params) {
+			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
+		}
 		return &plan.Expr{
 			Typ:  e.Typ,
 			Expr: rule.params[int(exprImpl.P.Pos)].Expr,
