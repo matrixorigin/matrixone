@@ -66,6 +66,26 @@ func (a AddLogService) IsFinish(state ClusterState) bool {
 	return false
 }
 
+type AddNonVotingLogService struct {
+	Target string
+	Replica
+}
+
+func (a AddNonVotingLogService) String() string {
+	return fmt.Sprintf("adding non-voting %v:%v(at epoch %v) to %s",
+		a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
+}
+
+func (a AddNonVotingLogService) IsFinish(state ClusterState) bool {
+	if _, ok := state.LogState.Shards[a.ShardID]; !ok {
+		return true
+	}
+	if _, ok := state.LogState.Shards[a.ShardID].NonVotingReplicas[a.ReplicaID]; ok {
+		return true
+	}
+	return false
+}
+
 type RemoveLogService struct {
 	Target string
 	Replica
@@ -82,6 +102,25 @@ func (a RemoveLogService) IsFinish(state ClusterState) bool {
 		}
 	}
 
+	return true
+}
+
+type RemoveNonVotingLogService struct {
+	Target string
+	Replica
+}
+
+func (a RemoveNonVotingLogService) String() string {
+	return fmt.Sprintf("removing non-voting %v:%v(at epoch %v) on log store %s",
+		a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
+}
+
+func (a RemoveNonVotingLogService) IsFinish(state ClusterState) bool {
+	if shard, ok := state.LogState.Shards[a.ShardID]; ok {
+		if _, ok := shard.NonVotingReplicas[a.ReplicaID]; ok {
+			return false
+		}
+	}
 	return true
 }
 
@@ -106,6 +145,26 @@ func (a StartLogService) IsFinish(state ClusterState) bool {
 	return false
 }
 
+type StartNonVotingLogService struct {
+	Replica
+}
+
+func (a StartNonVotingLogService) String() string {
+	return fmt.Sprintf("starting non-voting %v:%v on %s", a.ShardID, a.ReplicaID, a.UUID)
+}
+
+func (a StartNonVotingLogService) IsFinish(state ClusterState) bool {
+	if _, ok := state.LogState.Stores[a.UUID]; !ok {
+		return true
+	}
+	for _, replicaInfo := range state.LogState.Stores[a.UUID].Replicas {
+		if replicaInfo.ShardID == a.ShardID {
+			return true
+		}
+	}
+	return false
+}
+
 type StopLogService struct {
 	Replica
 }
@@ -123,6 +182,25 @@ func (a StopLogService) IsFinish(state ClusterState) bool {
 		}
 	}
 
+	return true
+}
+
+type StopNonVotingLogService struct {
+	Replica
+}
+
+func (a StopNonVotingLogService) String() string {
+	return fmt.Sprintf("stopping %v on %s", a.ShardID, a.UUID)
+}
+
+func (a StopNonVotingLogService) IsFinish(state ClusterState) bool {
+	if store, ok := state.LogState.Stores[a.UUID]; ok {
+		for _, replicaInfo := range store.Replicas {
+			if replicaInfo.ShardID == a.ShardID {
+				return false
+			}
+		}
+	}
 	return true
 }
 
@@ -290,4 +368,42 @@ func (a DeleteProxyStore) IsFinish(state ClusterState) bool {
 		return false
 	}
 	return true
+}
+
+type AddLogShard struct {
+	UUID    string
+	ShardID uint64
+}
+
+func (a AddLogShard) String() string {
+	return fmt.Sprintf("add shard %d on %s", a.ShardID, a.UUID)
+}
+
+func (a AddLogShard) IsFinish(state ClusterState) bool {
+	_, ok := state.LogState.Shards[a.ShardID]
+	return ok
+}
+
+type BootstrapShard struct {
+	UUID           string
+	ShardID        uint64
+	ReplicaID      uint64
+	InitialMembers map[uint64]string
+	Join           bool
+}
+
+func (a BootstrapShard) String() string {
+	return fmt.Sprintf("boostraping shard %d", a.ShardID)
+}
+
+func (a BootstrapShard) IsFinish(state ClusterState) bool {
+	if _, ok := state.LogState.Stores[a.UUID]; !ok {
+		return true
+	}
+	for _, replicaInfo := range state.LogState.Stores[a.UUID].Replicas {
+		if replicaInfo.ShardID == a.ShardID {
+			return true
+		}
+	}
+	return false
 }

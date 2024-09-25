@@ -49,6 +49,12 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 
 		// no more data
 		if len(i.entries) == 0 {
+			if n > 0 {
+				// although the io.Reader docs says io.EOF may return with n > 0
+				// but to ensure buggy callers can handle this correctly, we will not do this
+				// the next Read call will return 0, io.EOF
+				return
+			}
 			err = io.EOF
 			return
 		}

@@ -117,6 +117,7 @@ func mustCreateShardStorage(
 ) shardservice.ShardStorage {
 	svc := cn.RawService().(cnservice.Service)
 	return shardservice.NewShardStorage(
+		svc.ID(),
 		svc.GetClock(),
 		svc.GetSQLExecutor(),
 		svc.GetTimestampWaiter(),
