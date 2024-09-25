@@ -700,7 +700,7 @@ func (e *Engine) BuildBlockReaders(
 	return rds, nil
 }
 
-func (e *Engine) getTNServices() []DNStore {
+func (e *Engine) GetTNServices() []DNStore {
 	cluster := clusterservice.GetMOCluster(e.service)
 	return cluster.GetAllTNServices()
 }

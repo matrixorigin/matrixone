@@ -210,9 +210,6 @@ func (p *PartitionState) CollectVisibleObjectsBetween(
 
 	for ok := true; ok; ok = iter.Next() {
 		entry := iter.Item()
-		if entry.Time.GT(&end) {
-			break
-		}
 
 		if entry.IsDelete {
 			continue
@@ -226,7 +223,18 @@ func (p *PartitionState) CollectVisibleObjectsBetween(
 				ObjectStats: ss,
 			},
 		})
+
 		if !exist {
+			continue
+		}
+
+		// if deleted before end
+		if !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&end) {
+			continue
+		}
+
+		// if created in [start, end]
+		if val.CreateTime.LT(&start) && val.CreateTime.GT(&end) {
 			continue
 		}
 

@@ -16,13 +16,13 @@ package test
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
-	"math/rand"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
 	"time"
 
@@ -134,18 +134,7 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 	}
 }
 
-func randomVarcharByLength(ll int) string {
-	bb := make([]byte, ll/2)
-	for i := 0; i < ll/2; i++ {
-		bb[i] = byte(rand.Intn(256))
-	}
-
-	str := hex.EncodeToString(bb)
-	fmt.Println(str)
-	return str
-}
-
-func Test_CNTransferTombstoneObjects(t *testing.T) {
+func Test_CNTransferTombstoneObjects2(t *testing.T) {
 	var (
 		opts         testutil.TestOptions
 		tableName    = "test1"
@@ -154,6 +143,8 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
 
 	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
 
@@ -165,44 +156,167 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 	p := testutil.InitEnginePack(opts, t)
 	defer p.Close()
 
-	schema := catalog2.MockSchemaEnhanced(2, 0, 2)
+	schema := catalog2.MockSchemaEnhanced(1, 0, 2)
 	schema.Name = tableName
 
-	txnop := p.StartCNTxn()
-	_, rel := p.CreateDBAndTable(txnop, databaseName, schema)
+	cnTxnOp := p.StartCNTxn()
+	_, rel := p.CreateDBAndTable(cnTxnOp, databaseName, schema)
 	require.NotNil(t, rel)
-	require.NoError(t, txnop.Commit(ctx))
-
-	txnop = p.StartCNTxn()
-	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
-	require.True(t, ok)
-
-	exec := v.(executor.SQLExecutor)
-
-	deletion.SetCNFlushDeletesThreshold(1)
+	require.NoError(t, cnTxnOp.Commit(ctx))
 
 	{
-		res, err := exec.Exec(p.Ctx,
-			fmt.Sprintf("insert into `%s`.`%s` select *,* from generate_series(1, 8192*1000)g;",
-				databaseName, tableName,
-			),
-			executor.Options{}.
-				WithTxn(txnop).
-				WithWaitCommittedLogApplied())
+		_, _, cnTxnOp, err = p.D.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
-		res.Close()
-		require.NoError(t, txnop.Commit(ctx))
+
+		cnTxnOp.GetWorkspace().StartStatement()
+		err = cnTxnOp.GetWorkspace().IncrStatementID(ctx, false)
+		require.NoError(t, err)
 	}
 
+	bat := catalog2.MockBatch(schema, 20)
+	bats := bat.Split(2)
+
+	require.Equal(t, 2, len(bats))
+	require.Equal(t, 10, bats[0].Length())
+
+	// append data
 	{
-		exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-			_, err = txn.Exec("select mo_ctl('dn', 'checkpoint', '');", executor.StatementOption{})
-			_, err := txn.Exec(
-				fmt.Sprintf("delete from `%s`.`%s` where 1=1;", databaseName, tableName),
-				executor.StatementOption{})
+		for i := 0; i < len(bats); i++ {
+			tnTxnOp, err := p.T.GetDB().StartTxn(nil)
 			require.NoError(t, err)
 
-			return nil
-		}, executor.Options{})
+			tnDB, err := tnTxnOp.GetDatabase(databaseName)
+			require.NoError(t, err)
+
+			tnRel, err := tnDB.GetRelationByName(tableName)
+			require.NoError(t, err)
+
+			err = tnRel.Append(ctx, bats[i])
+			require.NoError(t, err)
+
+			require.NoError(t, tnTxnOp.Commit(ctx))
+
+			testutil2.CompactBlocks(t, 0, p.T.GetDB(), databaseName, schema, true)
+		}
+	}
+
+	// read row id and pk data
+	tombstoneBat := batch.NewWithSize(2)
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	{
+		txn, _, reader, err := testutil.GetTableTxnReader(
+			ctx, p.D, databaseName, tableName, nil, p.Mp, t,
+		)
+		require.NoError(t, err)
+
+		ret := testutil.EmptyBatchFromSchema(schema)
+
+		for {
+			done, err := reader.Read(ctx,
+				[]string{schema.GetPrimaryKey().Name, catalog.Row_ID}, nil, p.Mp, ret)
+
+			if done {
+				break
+			}
+
+			require.NoError(t, err)
+			for i := range ret.RowCount() {
+				err = vector.AppendFixed[types.Rowid](
+					tombstoneBat.Vecs[0],
+					vector.GetFixedAtNoTypeCheck[types.Rowid](ret.Vecs[1], i),
+					false, p.Mp)
+				require.NoError(t, err)
+
+				err = vector.AppendFixed[int32](
+					tombstoneBat.Vecs[1],
+					vector.GetFixedAtNoTypeCheck[int32](ret.Vecs[0], i),
+					false, p.Mp)
+				require.NoError(t, err)
+			}
+		}
+
+		require.NoError(t, txn.Commit(ctx))
+
+		tombstoneBat.SetRowCount(tombstoneBat.Vecs[0].Length())
+		require.Equal(t, bat.Length(), tombstoneBat.Vecs[0].Length())
+	}
+
+	// merge data objects
+	{
+		testutil2.MergeBlocks(t, 0, p.T.GetDB(), databaseName, schema, true)
+
+		ss, err := p.D.GetPartitionStateStats(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx))
+		require.NoError(t, err)
+
+		fmt.Println(ss.String())
+		require.Equal(t, 1, ss.DataObjectsVisible.ObjCnt)
+	}
+
+	// mock tombstone object and put it into workspace
+	{
+		w, err := colexec.NewS3TombstoneWriter()
+		require.NoError(t, err)
+
+		w.StashBatch(rel.GetProcess().(*process.Process), tombstoneBat)
+		_, ss, err := w.SortAndSync(rel.GetProcess().(*process.Process))
+		require.NoError(t, err)
+
+		require.Equal(t, bat.Length(), int(ss.Rows()))
+
+		tbat := batch.NewWithSize(1)
+		tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		err = vector.AppendBytes(tbat.Vecs[0], ss.Marshal(), false, p.Mp)
+		require.NoError(t, err)
+
+		tbat.SetRowCount(tbat.Vecs[0].Length())
+
+		transaction := cnTxnOp.GetWorkspace().(*disttae.Transaction)
+		err = transaction.WriteFile(
+			disttae.DELETE,
+			0, rel.GetDBID(ctx), rel.GetTableID(ctx), databaseName, tableName,
+			ss.ObjectLocation().String(),
+			tbat,
+			p.D.Engine.GetTNServices()[0],
+		)
+		require.NoError(t, err)
+
+		err = cnTxnOp.UpdateSnapshot(ctx, p.D.Now())
+		require.NoError(t, err)
+	}
+
+	// check result
+	{
+		expected := 20
+		for i := 0; i < 2; i++ {
+			if i == 1 {
+				expected = 0
+				require.NoError(t, cnTxnOp.Commit(ctx))
+			}
+
+			txnop := p.StartCNTxn()
+			v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+			require.True(t, ok)
+
+			exec := v.(executor.SQLExecutor)
+
+			res, err := exec.Exec(p.Ctx,
+				fmt.Sprintf("select count(*) from `%s`.`%s`;",
+					databaseName, tableName), executor.Options{}.WithTxn(txnop))
+			require.NoError(t, err)
+			require.NoError(t, txnop.Commit(ctx))
+
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				require.Equal(t, 1, rows)
+				require.Equal(t, 1, len(cols))
+
+				result := vector.MustFixedColNoTypeCheck[int64](cols[0])
+				require.Equal(t, expected, int(result[0]))
+				return true
+			})
+
+			res.Close()
+		}
 	}
 }

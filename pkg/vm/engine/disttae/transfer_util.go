@@ -70,6 +70,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	}
 
 	newDataObjects := state.CollectVisibleObjectsBetween(start, end, false)
+
 	if len(newDataObjects) == 0 {
 		return nil, nil
 	}
@@ -132,8 +133,7 @@ type TransferFlow struct {
 	sinker            *engine_util.Sinker
 	mp                *mpool.MPool
 	fs                fileservice.FileService
-
-	Transferred int
+	transferred       int
 }
 
 func (flow *TransferFlow) fillDefaults() {
@@ -224,7 +224,7 @@ func (flow *TransferFlow) processOneBatch(ctx context.Context, buffer *batch.Bat
 		if err := staged.UnionOne(buffer, int64(i), flow.mp); err != nil {
 			return err
 		}
-		flow.Transferred++
+		flow.transferred++
 		if staged.Vecs[0].Length() >= objectio.BlockMaxRows {
 			if err := flow.transferStaged(ctx); err != nil {
 				return err
