@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -306,7 +304,6 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 			return nil
 		}()
 		if err != nil {
-			logutil.Error("failed to update async task:", zap.Error(err))
 			if e := tx.Rollback(); e != nil {
 				return 0, errors.Join(e, err)
 			}
@@ -531,7 +528,6 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		asyncTask.CreateAt,
 		asyncTask.CompletedAt)
 	if err != nil {
-		logutil.Error("failed to update cron task:", zap.Error(err))
 		return 0, err
 	}
 
@@ -548,7 +544,6 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		cronTask.UpdateAt,
 		cronTask.ID)
 	if err != nil {
-		logutil.Error("failed to update cron task:", zap.Error(err))
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -758,7 +753,6 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 
 	n, err := m.RunUpdateDaemonTask(ctx, tasks, tx, condition...)
 	if err != nil {
-		logutil.Error("failed to update daemon task:", zap.Error(err))
 		if e := tx.Rollback(); e != nil {
 			return 0, errors.Join(e, err)
 		}
@@ -1001,7 +995,6 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 			return nil
 		}()
 		if err != nil {
-			logutil.Error("failed to heartbeat daemon task:", zap.Error(err))
 			if e := tx.Rollback(); e != nil {
 				return 0, errors.Join(e, err)
 			}
