@@ -318,7 +318,7 @@ func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 
 func (o *basic) resetForTable(entry *catalog.TableEntry) {
 	o.schema = entry.GetLastestSchemaLocked(false)
-	o.lastMergeTime = entry.Stats.LastMergeTime
+	o.lastMergeTime = entry.Stats.GetLastMergeTime()
 	o.objects = o.objects[:0]
 	o.objectsSize = 0
 }

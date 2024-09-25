@@ -65,10 +65,10 @@ func init() {
 type TableCompactStat struct {
 	sync.RWMutex
 
-	// FlushDeadline is the deadline to flush table tail.
-	FlushDeadline time.Time
-	// LastMergeTime is the last merge time.
-	LastMergeTime time.Time
+	// flushDeadline is the deadline to flush table tail.
+	flushDeadline time.Time
+	// lastMergeTime is the last merge time.
+	lastMergeTime time.Time
 }
 
 func (s *TableCompactStat) ResetDeadline() {
@@ -76,13 +76,25 @@ func (s *TableCompactStat) ResetDeadline() {
 	s.Lock()
 	defer s.Unlock()
 	factor := 1.0 + float64(rand.Intn(21)-10)/100.0
-	s.FlushDeadline = time.Now().Add(time.Duration(factor * float64(FlushGapDuration.Load().(time.Duration))))
+	s.flushDeadline = time.Now().Add(time.Duration(factor * float64(FlushGapDuration.Load().(time.Duration))))
 }
 
-func (s *TableCompactStat) AddMerge() {
+func (s *TableCompactStat) GetFlushDeadline() time.Time {
+	s.RLock()
+	defer s.RUnlock()
+	return s.flushDeadline
+}
+
+func (s *TableCompactStat) SetLastMergeTime() {
 	s.Lock()
 	defer s.Unlock()
-	s.LastMergeTime = time.Now()
+	s.lastMergeTime = time.Now()
+}
+
+func (s *TableCompactStat) GetLastMergeTime() time.Time {
+	s.RLock()
+	defer s.RUnlock()
+	return s.lastMergeTime
 }
 
 ////

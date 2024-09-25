@@ -995,14 +995,10 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 		table, asize, dsize := ticket.tbl, ticket.asize, ticket.dsize
 		dirtyTree := entry.GetTree().GetTable(table.ID)
 
-		stats := table.Stats
-		stats.Lock()
-		defer stats.Unlock()
-
 		if force {
 			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				stats.ResetDeadline()
+				table.Stats.ResetDeadline()
 			}
 			continue
 		}
@@ -1019,7 +1015,7 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 				return false
 			}
 			// time to flush
-			if stats.FlushDeadline.Before(time.Now()) {
+			if table.Stats.GetFlushDeadline().Before(time.Now()) {
 				return true
 			}
 			// this table is too large, flush it
@@ -1040,14 +1036,14 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 				table.GetLastestSchemaLocked(false).Name,
 				common.HumanReadableBytes(asize+dsize),
 				common.HumanReadableBytes(dsize),
-				time.Until(stats.FlushDeadline),
+				time.Until(table.Stats.GetFlushDeadline()),
 				ready,
 			)
 		}
 
 		if ready {
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				stats.ResetDeadline()
+				table.Stats.ResetDeadline()
 			}
 		}
 	}

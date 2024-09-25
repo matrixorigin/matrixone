@@ -45,7 +45,7 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn 
 type TableEntry struct {
 	*BaseEntryImpl[*TableMVCCNode]
 	*TableNode
-	Stats     *common.TableCompactStat
+	Stats     common.TableCompactStat
 	ID        uint64
 	db        *DBEntry
 	tableData data.Table
