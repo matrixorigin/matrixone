@@ -749,7 +749,8 @@ func (s *service) maybeRemoveReadCache(
 	err error,
 ) {
 	if moerr.IsMoErrCode(err, moerr.ErrReplicaNotFound) ||
-		moerr.IsMoErrCode(err, moerr.ErrReplicaNotMatch) {
+		moerr.IsMoErrCode(err, moerr.ErrReplicaNotMatch) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 		s.removeReadCache(table)
 	}
 }
