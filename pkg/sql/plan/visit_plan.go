@@ -111,8 +111,9 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	}
 
 	if node.OnDuplicateKey != nil {
-		for key, _ := range node.OnDuplicateKey.OnDuplicateExpr {
-			node.OnDuplicateKey.OnDuplicateExpr[key], err = rule.ApplyExpr(node.OnDuplicateKey.OnDuplicateExpr[key])
+		for key := range node.OnDuplicateKey.OnDuplicateExpr {
+			oldExpr := node.OnDuplicateKey.OnDuplicateExpr[key]
+			node.OnDuplicateKey.OnDuplicateExpr[key], err = rule.ApplyExpr(oldExpr)
 			if err != nil {
 				return err
 			}
