@@ -668,22 +668,22 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 	return nil
 }
 
-func checkObjectEntry(entry *ObjectEntry, start, end types.TS) bool {
-	if entry.GetAppendable() {
-		if entry.CreateTime.GT(&end) {
-			return false
-		}
-		if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
-			return false
-		}
-		return true
-	} else {
-		if !entry.ObjectStats.GetCNCreated() {
-			return false
-		}
-		return entry.CreateTime.GE(&start) && entry.DeleteTime.LE(&end)
-	}
-}
+//func checkObjectEntry(entry *ObjectEntry, start, end types.TS) bool {
+//	if entry.GetAppendable() {
+//		if entry.CreateTime.GT(&end) {
+//			return false
+//		}
+//		if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
+//			return false
+//		}
+//		return true
+//	} else {
+//		if !entry.ObjectStats.GetCNCreated() {
+//			return false
+//		}
+//		return entry.CreateTime.GE(&start) && entry.DeleteTime.LE(&end)
+//	}
+//}
 
 func newDataBatchWithBatch(src *batch.Batch) (data *batch.Batch) {
 	data = batch.NewWithSize(0)
