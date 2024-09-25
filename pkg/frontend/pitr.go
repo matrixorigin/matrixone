@@ -1643,7 +1643,7 @@ func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 
 	// if the ts bigger than now(), then return an error
 	if ts > time.Now().UTC().UnixNano() {
-		return moerr.NewInternalErrorNoCtxf("ts %v is bigger than now %v", nanoTimeFormat(ts), nanoTimeFormat(time.Now().UTC().UnixNano()))
+		return moerr.NewInternalErrorNoCtxf("input timestamp %v is bigger than now timestamp %v", nanoTimeFormat(ts), nanoTimeFormat(time.Now().UTC().UnixNano()))
 	}
 
 	return
