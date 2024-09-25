@@ -687,7 +687,7 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 			}
 		}
 
-		// re-order the pattern with the precedency PHRASE > PLUS > TEXT,STAR,GROUP,RANKLESS > MINUS
+		// re-order the pattern with the precedency PHRASE, PLUS > TEXT,STAR,GROUP,RANKLESS > MINUS
 		// GROUP can only have LESSTHAN and GREATERTHAN children
 		// PLUS, MINUS, RANKLESS can only have TEXT, STAR and GROUP Children and only have Single Child
 		plus := findPatternByOperator(ps, PLUS)
