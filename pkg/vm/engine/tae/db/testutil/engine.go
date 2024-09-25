@@ -364,7 +364,7 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 	rowIDs.Close()
 	assert.NoError(e.T, err)
 	require.False(e.T, stats.IsZero())
-	ok, err = rel.TryDeleteByStats(firstID, *stats)
+	ok, err = rel.AddPersistedTombstoneFile(firstID, *stats)
 	assert.NoError(e.T, err)
 	if !ok {
 		return ok, err
