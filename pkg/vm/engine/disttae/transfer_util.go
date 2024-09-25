@@ -51,57 +51,44 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	}
 
 	isObjectDeletedFn := func(objId *objectio.ObjectId) bool {
-		return state.IsObjectDeleted(end, false, objId)
+		return state.CheckIfObjectDeletedBeforeTS(end, false, objId)
 	}
 
-	relData := NewBlockListRelationData(0)
-
+	tombstoneObjects := make([]objectio.ObjectStats, 0)
 	txn.ForEachTableWrites(
 		table.db.databaseId, table.tableId,
 		len(txn.writes),
 		func(entry Entry) {
 			if entry.fileName != "" && entry.typ == DELETE {
 				stats := objectio.ObjectStats(entry.bat.Vecs[0].GetBytesAt(0))
-				ForeachBlkInObjStatsList(
-					true,
-					nil,
-					func(blk objectio.BlockInfo,
-						blkMeta objectio.BlockObject) bool {
-						relData.AppendBlockInfo(&blk)
-						return true
-					}, stats)
+				tombstoneObjects = append(tombstoneObjects, stats)
 			}
 		})
 
-	if relData.DataCnt() == 0 {
+	if len(tombstoneObjects) == 0 {
 		return nil, nil
 	}
-
-	readers, err := table.BuildReaders(
-		ctx,
-		table.proc.Load(),
-		nil,
-		relData,
-		1,
-		0,
-		false,
-		engine.Policy_SkipAll,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	defer readers[0].Close()
 
 	newDataObjects := state.CollectVisibleObjectsBetween(start, end, false)
 	if len(newDataObjects) == 0 {
 		return nil, nil
 	}
 
+	pkColIdx := table.tableDef.Name2ColIndex[table.tableDef.Pkey.PkeyColName]
+	pkCol := table.tableDef.Cols[pkColIdx]
+	r := SimpleMultiObjectsReader(
+		ctx, fs,
+		tombstoneObjects,
+		end.ToTimestamp(),
+		WithColumns(
+			[]uint16{0, 1},
+			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)}),
+	)
+
 	return ConstructTransferFlow(
 		table,
 		false,
-		readers[0],
+		r,
 		isObjectDeletedFn,
 		newDataObjects,
 		mp,
@@ -145,6 +132,8 @@ type TransferFlow struct {
 	sinker            *engine_util.Sinker
 	mp                *mpool.MPool
 	fs                fileservice.FileService
+
+	Transferred int
 }
 
 func (flow *TransferFlow) fillDefaults() {
@@ -167,6 +156,7 @@ func (flow *TransferFlow) fillDefaults() {
 			flow.fs,
 			engine_util.WithBuffer(flow.buffer, false),
 			engine_util.WithMemorySizeThreshold(mpool.MB*16),
+			engine_util.WithTailSizeCap(0),
 			// engine_util.WithAllMergeSorted(),
 		)
 	}
@@ -234,7 +224,7 @@ func (flow *TransferFlow) processOneBatch(ctx context.Context, buffer *batch.Bat
 		if err := staged.UnionOne(buffer, int64(i), flow.mp); err != nil {
 			return err
 		}
-
+		flow.Transferred++
 		if staged.Vecs[0].Length() >= objectio.BlockMaxRows {
 			if err := flow.transferStaged(ctx); err != nil {
 				return err

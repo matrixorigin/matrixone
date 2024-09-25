@@ -1326,52 +1326,51 @@ func (txn *Transaction) transferTombstoneObjects(
 
 	end := types.TimestampToTS(txn.op.SnapshotTS())
 
+	var flow *TransferFlow
 	return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
-		flow, err := ConstructCNTombstoneObjectsTransferFlow(
-			start,
-			end,
-			tbl,
-			txn,
-			txn.proc.Mp(),
-			txn.proc.GetFileService())
-		if err != nil {
+		if flow, err = ConstructCNTombstoneObjectsTransferFlow(
+			start, end, tbl, txn, txn.proc.Mp(), txn.proc.GetFileService()); err != nil {
 			return err
+		} else if flow == nil {
+			return nil
 		}
 
-		if flow != nil {
-			if err = flow.Process(ctx); err != nil {
+		s := time.Now()
+		if err = flow.Process(ctx); err != nil {
+			return err
+		}
+		dur := time.Since(s).Milliseconds()
+		logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ",
+			zap.Int("row cnt", flow.Transferred),
+			zap.Int("spend-ms", int(dur)))
+
+		statsList, tail := flow.GetResult()
+		if len(tail) > 0 {
+			logutil.Fatal("tombstone sinker tail size is not zero",
+				zap.Int("tail", len(tail)))
+		}
+
+		for i := range statsList {
+			fileName := statsList[i].ObjectLocation().String()
+			bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
+			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+			if err = vector.AppendBytes(
+				bat.GetVector(0), statsList[i].Marshal(), false, tbl.proc.Load().GetMPool()); err != nil {
 				return err
 			}
 
-			statsList, tail := flow.GetResult()
-			if len(tail) > 0 {
-				logutil.Fatal("???", zap.Int("tail", len(tail)))
-			}
+			bat.SetRowCount(bat.Vecs[0].Length())
 
-			for i := range statsList {
-				fileName := statsList[i].ObjectLocation().String()
-				bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
-				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-				if err = vector.AppendBytes(
-					bat.GetVector(0), statsList[i].Marshal(), false, tbl.proc.Load().GetMPool()); err != nil {
-					return err
-				}
-
-				bat.SetRowCount(bat.Vecs[0].Length())
-
-				txn.WriteFile(
-					DELETE,
-					tbl.accountId,
-					tbl.db.databaseId,
-					tbl.tableId,
-					tbl.db.databaseName,
-					tbl.tableName,
-					fileName,
-					bat,
-					txn.tnStores[0],
-				)
+			if err = txn.WriteFile(
+				DELETE,
+				tbl.accountId, tbl.db.databaseId, tbl.tableId,
+				tbl.db.databaseName, tbl.tableName, fileName,
+				bat, txn.tnStores[0],
+			); err != nil {
+				return err
 			}
 		}
+
 		return nil
 	})
 }

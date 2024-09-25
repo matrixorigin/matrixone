@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"math/rand"
 	"testing"
@@ -166,7 +165,7 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 	p := testutil.InitEnginePack(opts, t)
 	defer p.Close()
 
-	schema := catalog2.MockSchemaEnhanced(1, 0, 3)
+	schema := catalog2.MockSchemaEnhanced(2, 0, 2)
 	schema.Name = tableName
 
 	txnop := p.StartCNTxn()
@@ -184,7 +183,7 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 
 	{
 		res, err := exec.Exec(p.Ctx,
-			fmt.Sprintf("insert into `%s`.`%s` select * from generate_series(1, 100*100*10)g;",
+			fmt.Sprintf("insert into `%s`.`%s` select *,* from generate_series(1, 8192*1000)g;",
 				databaseName, tableName,
 			),
 			executor.Options{}.
@@ -197,15 +196,11 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 
 	{
 		exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-
+			_, err = txn.Exec("select mo_ctl('dn', 'checkpoint', '');", executor.StatementOption{})
 			_, err := txn.Exec(
 				fmt.Sprintf("delete from `%s`.`%s` where 1=1;", databaseName, tableName),
 				executor.StatementOption{})
 			require.NoError(t, err)
-
-			p.D.SubscribeTable(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx), true)
-
-			testutil2.MergeBlocks(t, 0, p.T.GetDB(), databaseName, schema, true)
 
 			return nil
 		}, executor.Options{})

@@ -236,10 +236,11 @@ func (p *PartitionState) CollectVisibleObjectsBetween(
 	return
 }
 
-func (p *PartitionState) IsObjectDeleted(
+func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
 	ts types.TS,
 	isTombstone bool,
-	objId *objectio.ObjectId) bool {
+	objId *objectio.ObjectId,
+) bool {
 
 	var tree *btree.BTreeG[ObjectEntry]
 	if isTombstone {
@@ -260,7 +261,7 @@ func (p *PartitionState) IsObjectDeleted(
 		return true
 	}
 
-	return !val.DeleteTime.IsEmpty()
+	return !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&ts)
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
