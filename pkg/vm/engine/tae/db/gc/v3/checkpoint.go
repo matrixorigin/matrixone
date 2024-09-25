@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"sort"
 	"strings"
 	"sync"
@@ -629,20 +630,13 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 			common.OperationField("MergeCheckpointFiles"),
 			common.OperandField(stage.ToString()),
 			common.OperandField(idx))
-		delFiles, mergeFile, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList)
+		delFiles, _, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList)
 		if err != nil {
 			return err
 		}
 		ckpGC = new(types.TS)
 		deleteFiles = append(deleteFiles, delFiles...)
-		var newName string
-		delFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFile, c.GetInputs(), c.mPool)
-		if err != nil {
-			return err
-		}
-		if newName != "" {
-			c.ckpClient.AddCheckpointMetaFile(newName)
-		}
+
 		deleteFiles = append(deleteFiles, delFiles...)
 	}
 
@@ -758,6 +752,8 @@ func (c *checkpointCleaner) softGC(
 	for _, table := range c.inputs.tables {
 		mergeTable.Merge(table)
 	}
+	gckpBloomFilter := bloomfilter.New(int64(t.batch.Vecs[0].Length()), 1/10000)
+	gckpBloomFilter.Add(t.batch.Vecs[0])
 	gc, snapList := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots, c.snapshotMeta)
 	softCost = time.Since(now)
 	now = time.Now()
@@ -766,7 +762,6 @@ func (c *checkpointCleaner) softGC(
 	c.updateMaxCompared(gckp)
 	c.snapshotMeta.MergeTableInfo(snapList)
 	mergeCost = time.Since(now)
-	//logutil.Infof("SoftGC is %v, merge table: %v", v2, mergeTable.String())
 	return gc, snapList
 }
 
@@ -815,6 +810,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	defer data.Close()
 	gcTable := NewGCTable()
 	gcTable.UpdateTable(data)
+	defer gcTable.Close()
 	for i, ckp := range debugCandidates {
 		maxEnd := maxConsumed.GetEnd()
 		ckpEnd := ckp.GetEnd()
@@ -852,6 +848,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	} else {
 		mergeTable = c.inputs.tables[0]
 	}
+	defer mergeTable.Close()
 	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, c.snapshotMeta)
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())

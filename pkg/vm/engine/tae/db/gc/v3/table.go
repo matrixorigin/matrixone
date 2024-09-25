@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
@@ -55,6 +56,8 @@ type GCTable struct {
 	sync.Mutex
 	objects map[string]*ObjectEntry
 	mp      *mpool.MPool
+	batch   *batch.Batch
+	bf      *bloomfilter.BloomFilter
 }
 
 func (t *GCTable) addObjectLocked(
@@ -162,6 +165,12 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	t.Lock()
 	defer t.Unlock()
 	t.updateObjectListLocked(ins, t.objects)
+	t.batch = NewObjectTableBatch()
+	for name, object := range t.objects {
+		addObjectToBatch(t.batch, name, object, t.mp)
+	}
+	t.bf = bloomfilter.New(int64(t.batch.Vecs[0].Length()), 1/10000)
+	t.bf.Add(t.batch.Vecs[0])
 }
 
 func (t *GCTable) updateObjectListLocked(ins *containers.Batch, objects map[string]*ObjectEntry) {
@@ -199,11 +208,15 @@ func (t *GCTable) closeBatch(bs []*containers.Batch) {
 	}
 }
 
+func (t *GCTable) Close() {
+	t.batch.Clean(t.mp)
+}
+
 // collectData collects data from memory that can be written to s3
 func (t *GCTable) collectData() *batch.Batch {
 	bat := NewObjectTableBatch()
 	for name, entry := range t.objects {
-		addObjectToBatch(bat, name, entry.createTS, entry.dropTS, entry.db, entry.table, t.mp)
+		addObjectToBatch(bat, name, entry, t.mp)
 	}
 	return bat
 }

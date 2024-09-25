@@ -225,15 +225,12 @@ func NewObjectTableBatch() *batch.Batch {
 func addObjectToBatch(
 	bat *batch.Batch,
 	name string,
-	createdTS types.TS,
-	deletedTS types.TS,
-	dbID uint64,
-	tableID uint64,
+	object *ObjectEntry,
 	mPool *mpool.MPool,
 ) {
 	vector.AppendFixed(bat.Vecs[0], name, false, mPool)
-	vector.AppendFixed[types.TS](bat.Vecs[1], createdTS, false, mPool)
-	vector.AppendFixed[types.TS](bat.Vecs[2], deletedTS, false, mPool)
-	vector.AppendFixed[uint64](bat.Vecs[3], dbID, false, mPool)
-	vector.AppendFixed[uint64](bat.Vecs[4], tableID, false, mPool)
+	vector.AppendFixed[types.TS](bat.Vecs[1], object.createTS, false, mPool)
+	vector.AppendFixed[types.TS](bat.Vecs[2], object.dropTS, false, mPool)
+	vector.AppendFixed[uint64](bat.Vecs[3], object.db, false, mPool)
+	vector.AppendFixed[uint64](bat.Vecs[4], object.table, false, mPool)
 }
