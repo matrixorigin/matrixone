@@ -66,7 +66,7 @@ func (vq *VisitPlan) visitNode(ctx context.Context, qry *Query, node *Node, idx 
 	return nil
 }
 
-func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *Node, idx int32) error {
+func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *Node, _ int32) error {
 	var err error
 	if node.Limit != nil {
 		node.Limit, err = rule.ApplyExpr(node.Limit)

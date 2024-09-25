@@ -33,11 +33,6 @@ var (
 	_ VisitPlanRule = &ResetParamOrderRule{}
 	_ VisitPlanRule = &ResetParamRefRule{}
 	_ VisitPlanRule = &ResetVarRefRule{}
-	_ VisitPlanRule = &ConstantFoldRule{}
-)
-
-var (
-	constantFoldRule = rule.NewConstantFold(false)
 )
 
 type GetParamRule struct {
@@ -387,90 +382,4 @@ func GetVarValue(
 		vec.Free(proc.Mp())
 	}
 	return expr, err
-}
-
-type ConstantFoldRule struct {
-	compCtx CompilerContext
-	rule    *rule.ConstantFold
-}
-
-func NewConstantFoldRule(compCtx CompilerContext) *ConstantFoldRule {
-	return &ConstantFoldRule{
-		compCtx: compCtx,
-		rule:    constantFoldRule,
-	}
-}
-
-func (r *ConstantFoldRule) MatchNode(node *Node) bool {
-	return r.rule.Match(node)
-}
-
-func (r *ConstantFoldRule) IsApplyExpr() bool {
-	return false
-}
-
-func (r *ConstantFoldRule) ApplyNode(node *Node) error {
-	r.rule.Apply(node, nil, r.compCtx.GetProcess())
-	return nil
-}
-
-func (r *ConstantFoldRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
-	return e, nil
-}
-
-type RecomputeRealTimeRelatedFuncRule struct {
-	bat  *batch.Batch
-	proc *process.Process
-}
-
-func NewRecomputeRealTimeRelatedFuncRule(proc *process.Process) *RecomputeRealTimeRelatedFuncRule {
-	bat := batch.NewWithSize(0)
-	bat.SetRowCount(1)
-	return &RecomputeRealTimeRelatedFuncRule{bat, proc}
-}
-
-func (r *RecomputeRealTimeRelatedFuncRule) MatchNode(_ *Node) bool {
-	return false
-}
-
-func (r *RecomputeRealTimeRelatedFuncRule) IsApplyExpr() bool {
-	return true
-}
-
-func (r *RecomputeRealTimeRelatedFuncRule) ApplyNode(_ *Node) error {
-	return nil
-}
-
-func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
-	var err error
-	switch exprImpl := e.Expr.(type) {
-	case *plan.Expr_F:
-		for i, arg := range exprImpl.F.Args {
-			exprImpl.F.Args[i], err = r.ApplyExpr(arg)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return e, nil
-	case *plan.Expr_Lit:
-		if exprImpl.Lit.Src != nil {
-			if _, ok := exprImpl.Lit.Src.Expr.(*plan.Expr_F); ok {
-				executor, err := colexec.NewExpressionExecutor(r.proc, exprImpl.Lit.Src)
-				if err != nil {
-					return nil, err
-				}
-				defer executor.Free()
-				vec, err := executor.Eval(r.proc, []*batch.Batch{r.bat}, nil)
-				if err != nil {
-					return nil, err
-				}
-				constValue := rule.GetConstantValue(vec, false, 0)
-				constValue.Src = exprImpl.Lit.Src
-				exprImpl.Lit = constValue
-			}
-		}
-		return e, nil
-	default:
-		return e, nil
-	}
 }
