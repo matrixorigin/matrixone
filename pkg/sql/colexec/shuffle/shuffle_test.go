@@ -50,6 +50,20 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
+				types.T_int16.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Range),
+				BucketNum:     5,
+				ShuffleColMin: 1,
+				ShuffleColMax: 1000000,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
 				types.T_int32.ToType(),
 			},
 			arg: &Shuffle{
@@ -72,7 +86,49 @@ func init() {
 				ShuffleType:   int32(plan.ShuffleType_Range),
 				BucketNum:     8,
 				ShuffleColMin: 1,
-				ShuffleColMax: 10000,
+				ShuffleColMax: 8888888,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint16.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Range),
+				BucketNum:     5,
+				ShuffleColMin: 1,
+				ShuffleColMax: 1000000,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint32.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Range),
+				BucketNum:     3,
+				ShuffleColMin: 1,
+				ShuffleColMax: 1000000,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint64.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Range),
+				BucketNum:     8,
+				ShuffleColMin: 1,
+				ShuffleColMax: 999999,
 			},
 		},
 		{
@@ -85,6 +141,66 @@ func init() {
 				ShuffleColIdx: 0,
 				ShuffleType:   int32(plan.ShuffleType_Hash),
 				BucketNum:     3,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint64.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     4,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int32.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     5,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint32.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     6,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int16.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     7,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint16.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     8,
 			},
 		},
 	}
@@ -143,6 +259,11 @@ func TestReset(t *testing.T) {
 		require.NoError(t, err)
 		tc.arg.Reset(tc.proc, false, nil)
 	}
+}
+
+func TestPrint(t *testing.T) {
+	sp := NewShufflePool(4)
+	sp.Print()
 }
 
 func getInputBats(tc shuffleTestCase) []*batch.Batch {
