@@ -66,7 +66,7 @@ func (vq *VisitPlan) visitNode(ctx context.Context, qry *Query, node *Node, idx 
 	return nil
 }
 
-func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *Node, idx int32) error {
+func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *Node, _ int32) error {
 	var err error
 	if node.Limit != nil {
 		node.Limit, err = rule.ApplyExpr(node.Limit)
@@ -110,7 +110,15 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
-	if node.OnUpdateExprs != nil {
+	if node.OnDuplicateKey != nil {
+		for key := range node.OnDuplicateKey.OnDuplicateExpr {
+			oldExpr := node.OnDuplicateKey.OnDuplicateExpr[key]
+			node.OnDuplicateKey.OnDuplicateExpr[key], err = rule.ApplyExpr(oldExpr)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
 		for i := range node.OnUpdateExprs {
 			node.OnUpdateExprs[i], err = rule.ApplyExpr(node.OnUpdateExprs[i])
 			if err != nil {
