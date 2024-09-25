@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const (
@@ -590,13 +591,13 @@ func (s *mysqlSink) Send(ctx context.Context, sql string) (err error) {
 		return (s.retryTimes == -1 || retry < s.retryTimes) && time.Since(startTime) < s.retryDuration
 	}
 	for retry, startTime := 0, time.Now(); needRetry(retry, startTime); retry++ {
-		//fmt.Fprintf(os.Stderr, "----mysql send sql----, len:%d, sql:%s\n", len(sql), sql[:min(200, len(sql))])
 		// return if success
 		if _, err = s.conn.Exec(sql); err == nil {
-			logutil.Errorf("----mysql send sql----, success")
+			//logutil.Errorf("----mysql send sql----, success")
 			return
 		}
-		//fmt.Fprintf(os.Stderr, "----mysql send sql----, failed, err = %v\n", err)
+		logutil.Errorf("----mysql send sql----, failed, err: %v", err)
+		v2.CdcMysqlSinkErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
 	return moerr.NewInternalError(ctx, "mysql sink retry exceed retryTimes or retryDuration")
