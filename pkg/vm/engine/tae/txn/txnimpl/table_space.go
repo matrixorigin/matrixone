@@ -319,8 +319,8 @@ func (space *tableSpace) Append(data *containers.Batch) (dur float64, err error)
 	return
 }
 
-// AddObjsWithMetaLoc transfers blocks with meta location into non-appendable nodes
-func (space *tableSpace) AddObjsWithMetaLoc(
+// AddDataFiles transfers blocks with meta location into non-appendable nodes
+func (space *tableSpace) AddDataFiles(
 	pkVecs []containers.Vector,
 	stats objectio.ObjectStats,
 ) (err error) {

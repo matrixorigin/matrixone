@@ -43,7 +43,7 @@ func (store *NoopTxnStore) Close() error                                 { retur
 func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
 	return nil
 }
-func (store *NoopTxnStore) AddObjsWithMetaLoc(
+func (store *NoopTxnStore) AddDataFiles(
 	ctx context.Context,
 	dbId, tid uint64,
 	stats containers.Vector,
@@ -134,7 +134,7 @@ func (store *NoopTxnStore) DeleteByPhyAddrKeys(
 	return
 }
 
-func (store *NoopTxnStore) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
+func (store *NoopTxnStore) AddPersistedTombstoneFile(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	return
 }
 
