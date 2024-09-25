@@ -397,7 +397,8 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 				return
 			}
 
-			if err = initAesKeyWrapper(ctx, tx, creatorAccInfo.GetTenantID()); err != nil {
+			// TODO replace with creatorAccountId
+			if err = initAesKeyWrapper(ctx, tx, catalog.System_Account); err != nil {
 				return
 			}
 
@@ -1110,17 +1111,18 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 
+	accId := cdc.cdcTask.Accounts[0].GetId()
 	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	sql := getSqlForRetrievingCdcTask(cdc.cdcTask.Accounts[0].GetId(), cdcTaskId)
+	sql := getSqlForRetrievingCdcTask(accId, cdcTaskId)
 	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return res.Error()
 	}
 
 	if res.RowCount() < 1 {
-		return moerr.NewInternalErrorf(ctx, "none cdc task for %d %s", cdc.cdcTask.Accounts[0].GetId(), cdc.cdcTask.TaskId)
+		return moerr.NewInternalErrorf(ctx, "none cdc task for %d %s", accId, cdc.cdcTask.TaskId)
 	} else if res.RowCount() > 1 {
-		return moerr.NewInternalErrorf(ctx, "duplicate cdc task for %d %s", cdc.cdcTask.Accounts[0].GetId(), cdc.cdcTask.TaskId)
+		return moerr.NewInternalErrorf(ctx, "duplicate cdc task for %d %s", accId, cdc.cdcTask.TaskId)
 	}
 
 	//sink_type
@@ -1145,6 +1147,11 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 		//sink_password
 		sinkPwd, err = res.GetString(ctx, 0, 2)
 		if err != nil {
+			return err
+		}
+
+		// TODO replace with creatorAccountId
+		if err = cdc.initAesKeyByInternalExecutor(ctx, catalog.System_Account); err != nil {
 			return err
 		}
 
@@ -1351,6 +1358,32 @@ func (cdc *CdcTask) ResetWatermarkForTable(info *cdc2.DbTableInfo) (err error) {
 	}
 	cdc.sunkWatermarkUpdater.UpdateMem(tblId, cdc.startTs)
 	return
+}
+
+func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
+	if len(cdc2.AesKey) > 0 {
+		return nil
+	}
+
+	querySql := fmt.Sprintf(getDataKeyFormat, accountId, cdc2.InitKeyId)
+	res := cdc.ie.Query(ctx, querySql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		return res.Error()
+	} else if res.RowCount() < 1 {
+		return moerr.NewInternalErrorf(ctx, "no data key record for account %d", accountId)
+	}
+
+	encryptedKey, err := res.GetString(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper().SV.KeyEncryptionKey))
+	return
+}
+
+var initAesKeyByInternalExecutor = func(ctx context.Context, cdc *CdcTask, accountId uint32) error {
+	return cdc.initAesKeyByInternalExecutor(ctx, accountId)
 }
 
 func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
@@ -1748,10 +1781,10 @@ var (
 	queryTableWrapper  = queryTable
 	decrypt            = cdc2.AesCFBDecodeWithKey
 	getGlobalPuWrapper = getGlobalPu
-	initAesKeyWrapper  = initAesKey
+	initAesKeyWrapper  = initAesKeyBySqlExecutor
 )
 
-func initAesKey(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32) (err error) {
+func initAesKeyBySqlExecutor(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32) (err error) {
 	if len(cdc2.AesKey) > 0 {
 		return nil
 	}
