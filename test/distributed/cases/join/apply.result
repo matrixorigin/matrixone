@@ -29,3 +29,70 @@ a    col    seq    key    path    index    value    this
 2    t.j    0    bar    $.bar    null    22    {"bar": 22, "foo": 11}
 2    t.j    1    foo    $.foo    null    11    {"bar": 22, "foo": 11}
 drop table t;
+drop table if exists jt;
+create table jt (id int, tags json, metrics json);
+insert into jt values (1, '{"tag1": "v1", "tag2": "v2", "tag3": "v3"}', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (2, '{"tag1": "v1", "tag2": "v22", "tag3": "v23"}', '{"m1": 12, "m2": 22, "m3": 32}');
+insert into jt values (3, '{"tag13": "v13", "tag23": "v23", "tag33": "v33"}', '{"m1": 13, "m2": 23, "m3": 33}');
+insert into jt values (4, '{"tag1": "v1", "tag2": "v2", "tag3": "v3"}', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (5, '{"tag1": "v1", "tag2": "v2", "tag3": "v3"}', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (6, '{"tag1": "v1", "tag2": "v2", "tag3": "v3"}', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (7, '{"tag1": "v1", "tag2": "v2", "tag3": "v3"}', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (8, '{"tag1": "v1", "tag2": "v2", "tag3": "v3"}', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (9, '{"tag1": "v1", "tag2": "v2", "tag3": "v3"}', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (10, '{"tag1": "v1", "tag2": "v2", "tag3", "v3"}', '{"m1": 1, "m2": 2, "m3": 3}');
+invalid input: json text {"tag1": "v1", "tag2": "v2", "tag3", "v3"}
+insert into jt values (11, '{"tag1": "v1", "tag2": "v2", "tag3": "v3"}', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (12, '{"tag1": "v1", "tag2": "v22", "tag3": "v23"}', '{"m1": 12, "m2": 22, "m3": 32}');
+insert into jt values (13, '{"tag13": "v13", "tag23": "v23", "tag33": "v33"}', '{"m1": 13, "m2": 23, "m3": 33}');
+insert into jt values (14, '[1, 2, 3]', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (15, '["v1", "v2", "v3"]', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (16, 'null', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (17, '"string"', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (18, '1', '{"m1": 1, "m2": 2, "m3": 3}');
+insert into jt values (20, null, '{"m1": 1, "m2": 2, "m3": 3}');
+select id, u.`key`, u.`index`, u.value from jt cross apply unnest(tags, '$') u where id < 5;
+id    key    index    value
+1    tag1    null    "v1"
+1    tag2    null    "v2"
+1    tag3    null    "v3"
+2    tag1    null    "v1"
+2    tag2    null    "v22"
+2    tag3    null    "v23"
+3    tag13    null    "v13"
+3    tag23    null    "v23"
+3    tag33    null    "v33"
+4    tag1    null    "v1"
+4    tag2    null    "v2"
+4    tag3    null    "v3"
+select id, u.`key`, u.`index`, u.value from jt cross apply unnest(tags, '$') u;
+
+select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u;
+
+select id, u.`key`, u.`index`, u.value from jt cross apply unnest(tags, '$') u where id = 19;
+
+select id, u.`key`, u.`index`, u.value from jt cross apply unnest(tags, '$') u where id = 20;
+
+select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u where u.`key` = 'm2';
+
+select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u
+where u.`key` = 'm2'
+and u.value > 2;
+
+select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u
+where u.`key` = 'm2'
+and json_extract_float64(u.value, '$') > 2;
+
+select count(*) from jt cross apply unnest(tags, '$') u where id < 10;
+count(*)
+27
+select count(*) from jt cross apply unnest(tags, '$') u where id = 2;
+count(*)
+3
+select count(*) from jt cross apply unnest(tags, '$') u;
+
+select count(*) from jt cross apply unnest(tags, '$') u where id = 19;
+
+select count(*) from jt cross apply unnest(tags, '$') u where id = 20;
+
+drop table jt;
