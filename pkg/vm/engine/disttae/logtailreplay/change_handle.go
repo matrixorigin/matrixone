@@ -409,7 +409,7 @@ func (p *baseHandle) less(a, b types.TS) bool {
 	if b.IsEmpty() {
 		return true
 	}
-	return a.LessEq(&b)
+	return a.LE(&b)
 }
 func (p *baseHandle) nextTS() (types.TS, int) {
 	inMemoryTS := p.inMemoryHandle.NextTS()
@@ -498,10 +498,10 @@ func (p *baseHandle) getObjectEntries(objIter btree.IterG[ObjectEntry], start, e
 	for objIter.Next() {
 		entry := objIter.Item()
 		if entry.GetAppendable() {
-			if entry.CreateTime.Greater(&end) {
+			if entry.CreateTime.GT(&end) {
 				continue
 			}
-			if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.Less(&start) {
+			if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
 				continue
 			}
 			aobj = append(aobj, &entry)
@@ -509,17 +509,17 @@ func (p *baseHandle) getObjectEntries(objIter btree.IterG[ObjectEntry], start, e
 			if !entry.ObjectStats.GetCNCreated() {
 				continue
 			}
-			if entry.CreateTime.Less(&start) || entry.CreateTime.Greater(&end) {
+			if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
 				continue
 			}
 			cnObj = append(cnObj, &entry)
 		}
 	}
 	goSort.Slice(aobj, func(i, j int) bool {
-		return aobj[i].CreateTime.Less(&aobj[j].CreateTime)
+		return aobj[i].CreateTime.LT(&aobj[j].CreateTime)
 	})
 	goSort.Slice(cnObj, func(i, j int) bool {
-		return cnObj[i].CreateTime.Less(&cnObj[j].CreateTime)
+		return cnObj[i].CreateTime.LT(&cnObj[j].CreateTime)
 	})
 	return
 }
@@ -582,7 +582,7 @@ func (p *ChangeHandler) decideNextHandle() int {
 	if dataTS.IsEmpty() {
 		return NextChangeHandle_Tombstone
 	}
-	if !tombstoneTS.IsEmpty() && tombstoneTS.LessEq(&dataTS) {
+	if !tombstoneTS.IsEmpty() && tombstoneTS.LE(&dataTS) {
 		return NextChangeHandle_Tombstone
 	}
 	return NextChangeHandle_Data
