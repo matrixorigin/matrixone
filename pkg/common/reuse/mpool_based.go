@@ -46,7 +46,7 @@ func newMpoolBased[T any, P ReusableObject[T]](
 
 func (p *mpoolBased[T, P]) Alloc() P {
 	var t T
-	data, err := p.pool.Alloc(int(unsafe.Sizeof(t)))
+	data, err := p.pool.Alloc(int(unsafe.Sizeof(t)), false)
 	if err != nil {
 		panic(err)
 	}
