@@ -309,10 +309,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Filter:
 		t := sourceOp.(*filter.Filter)
 		op := filter.NewArgument()
-		op.E = t.GetExeExpr()
-		if op.E == nil {
-			op.E = t.E
-		}
+		op.E = t.E
 		op.SetInfo(&info)
 		return op
 	case vm.Semi:

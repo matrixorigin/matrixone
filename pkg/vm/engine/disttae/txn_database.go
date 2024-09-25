@@ -160,6 +160,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		item,
 		p,
 		shardservice.GetService(p.GetService()),
+		txn.engine,
 	)
 	if err != nil {
 		return nil, err
@@ -365,6 +366,7 @@ func (db *txnDatabase) createWithID(
 		return err
 	}
 	tbl := new(txnTable)
+	tbl.eng = txn.engine
 
 	{ // prepare table information
 		// 2.1 prepare basic table information
@@ -520,6 +522,7 @@ func (db *txnDatabase) openSysTable(
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
 		clusterByIdx:  -1,
+		eng:           db.getTxn().engine,
 	}
 	switch name {
 	case catalog.MO_DATABASE:
