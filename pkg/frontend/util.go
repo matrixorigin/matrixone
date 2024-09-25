@@ -1029,6 +1029,11 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_timestamp),
 			}
 			tType = types.New(types.T_timestamp, 0, 0)
+		case defines.MYSQL_TYPE_ENUM:
+			pType = plan.Type{
+				Id: int32(types.T_enum),
+			}
+			tType = types.New(types.T_enum, 0, 0)
 		default:
 			return nil, nil, nil, moerr.NewInternalErrorNoCtxf("unsupported mysql type %d", col.ColumnType())
 		}
