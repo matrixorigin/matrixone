@@ -23,19 +23,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-	"sync"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -83,7 +81,7 @@ type GCTable struct {
 	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error)
 }
 
-func (t *GCTable) addObjectLocked(
+func addObjectLocked(
 	name string,
 	objEntry *ObjectEntry,
 	objects map[string]*ObjectEntry,
@@ -167,9 +165,10 @@ func (t *GCTable) SoftGC(
 			db:       db,
 			table:    tid,
 		}
-		t.addObjectLocked(name, object, t.objects)
+		addObjectLocked(name, object, t.objects)
 	}
 
+	t.putBuffer(processBat)
 	var gc []string
 	snapList := make(map[uint32][]types.TS)
 	for acct, snap := range snapShotList {
@@ -263,7 +262,7 @@ func (t *GCTable) Process(
 		ObjectTablePrimaryKeyIdx,
 		ObjectTableAttrs,
 		ObjectTableTypes,
-		factory, t.mp, t.fs)
+		factory, t.mp, t.fs, engine_util.WithBuffer())
 
 	for {
 		bat := t.fetchBuffer()
@@ -417,55 +416,6 @@ func (t *GCTable) LoadBatchData(cxt context.Context, bat *batch.Batch, mp *mpool
 	}
 	t.files.stats = t.files.stats[:1]
 	return false, nil
-}
-
-// SaveFullTable is to write data to s3
-func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.BlockObject, error) {
-	now := time.Now()
-	var bats []*containers.Batch
-	var blocks []objectio.BlockObject
-	var err error
-	var writer *objectio.ObjectWriter
-	var collectCost, writeCost time.Duration
-	logutil.Info("[DiskCleaner]", zap.String("op", "SaveFullTable-Start"),
-		zap.String("max consumed :", start.ToString()+"-"+end.ToString()))
-	defer func() {
-		size := uint32(0)
-		objectCount := 0
-		tombstoneCount := 0
-		if len(blocks) > 0 && err == nil {
-			ss := writer.GetObjectStats()
-			size = ss.OriginSize()
-		}
-		if bats != nil {
-			objectCount = bats[ObjectList].Length()
-			tombstoneCount = bats[TombstoneList].Length()
-			t.closeBatch(bats)
-		}
-		logutil.Info("[DiskCleaner]", zap.String("op", "SaveFullTable-End"),
-			zap.String("collect cost :", collectCost.String()),
-			zap.String("write cost :", writeCost.String()),
-			zap.Uint32("gc table size :", size),
-			zap.Int("object count :", objectCount),
-			zap.Int("tombstone count :", tombstoneCount))
-	}()
-	bats = t.collectData()
-	collectCost = time.Since(now)
-	now = time.Now()
-	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
-	writer, err = objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
-	if err != nil {
-		return nil, err
-	}
-	for i := range bats {
-		if _, err := writer.WriteWithoutSeqnum(containers.ToCNBatch(bats[i])); err != nil {
-			return nil, err
-		}
-	}
-
-	blocks, err = writer.WriteEnd(context.Background())
-	writeCost = time.Since(now)
-	return blocks, err
 }
 
 func (t *GCTable) rebuildTable(bats []*containers.Batch, idx BatchType, objects map[string]*ObjectEntry) {

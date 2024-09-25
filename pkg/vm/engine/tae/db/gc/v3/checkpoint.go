@@ -479,11 +479,6 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		mergeTable = c.inputs.tables[0]
 	}
 	c.inputs.RUnlock()
-	_, err = mergeTable.SaveFullTable(maxConsumed.GetStart(), maxConsumed.GetEnd(), c.fs, nil)
-	if err != nil {
-		logutil.Errorf("SaveTable failed: %v", err.Error())
-		return err
-	}
 	err = c.fs.DelFiles(c.ctx, deleteFiles)
 	if err != nil {
 		logutil.Errorf("DelFiles failed: %v", err.Error())
