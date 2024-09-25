@@ -350,7 +350,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 		deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
 	)
 	var pkType *types.Type
-	for i := 0; i < deletes.Length(); i++ {
+	for i, end := 0, len(rowids); i < end; i++ {
 		rowID := &rowids[i]
 		id.SetObjectID(rowID.BorrowObjectID())
 		blkID, rowOffset := rowID.Decode()
