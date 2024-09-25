@@ -613,16 +613,15 @@ func (builder *QueryBuilder) tryIndexOnlyScan(indexes []*IndexDef, node *plan.No
 
 func (builder *QueryBuilder) applyIndicesForNonEquiCond(indexes []*IndexDef, node *plan.Node, scanSnapshot *Snapshot) int32 {
 	// Apply single-column unique/secondary indices for non-equi expression
-
 	colPos2Idx := make(map[int32]int)
-
 	for i, idxDef := range indexes {
 		numParts := len(idxDef.Parts)
 		if !idxDef.Unique {
 			numParts--
 		}
-
-		if numParts == 1 {
+		if idxDef.Unique && numParts == 1 {
+			colPos2Idx[node.TableDef.Name2ColIndex[idxDef.Parts[0]]] = i
+		} else if !idxDef.Unique && numParts >= 1 {
 			colPos2Idx[node.TableDef.Name2ColIndex[idxDef.Parts[0]]] = i
 		}
 	}
