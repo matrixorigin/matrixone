@@ -830,7 +830,7 @@ func (tbl *txnTable) GetByFilter(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	rowID := rowIDs.Get(0).(types.Rowid)
+	rowID := vector.GetFixedAtNoTypeCheck[types.Rowid](rowIDs.GetDownstreamVector(), 0)
 	id = tbl.entry.AsCommonID()
 	id.BlockID = *rowID.BorrowBlockID()
 	offset = rowID.GetRowOffset()
@@ -1645,8 +1645,9 @@ func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls
 			if err != nil {
 				return err
 			}
+			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](vectors[0].GetDownstreamVector())
 			for i := 0; i < vectors[0].Length(); i++ {
-				rowID := vectors[0].Get(i).(types.Rowid)
+				rowID := rowids[i]
 				if *rowID.BorrowBlockID() == blkID {
 					_, row := rowID.Decode()
 					if *deletes == nil {
