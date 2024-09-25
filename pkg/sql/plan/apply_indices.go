@@ -651,7 +651,7 @@ func (builder *QueryBuilder) applyIndicesForNonEquiCond(indexes []*IndexDef, nod
 		}
 
 		idxTag := builder.genNewTag()
-		idxDef := node.TableDef.Indexes[idxPos]
+		idxDef := indexes[idxPos]
 		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
 		builder.addNameByColRef(idxTag, idxTableDef)
 
