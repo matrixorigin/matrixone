@@ -103,16 +103,8 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
-func run(proc *process.Process, s *fulltext.SearchAccum) error {
-
-	// count(*) to get number of words in the collection
-	nrow, err := runCountStar(proc, s)
-	if err != nil {
-		return err
-	}
-
-	s.Nrow = nrow
-
+// run SQL to get the (doc_id, pos) of all patterns (words) in the search string
+func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
 	var union []string
 
 	var keywords []string
@@ -197,6 +189,7 @@ func run(proc *process.Process, s *fulltext.SearchAccum) error {
 	return nil
 }
 
+// Run SQL to get number of records in source table
 func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error) {
 	var nrow int64
 	nrow = 0
@@ -223,12 +216,24 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error)
 
 func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string, mode int64, bat *batch.Batch) (err error) {
 
+	// parse the search string to []Pattern and create SearchAccum
 	s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "")
 	if err != nil {
 		return err
 	}
 
-	run(proc, s)
+	// count(*) to get number of records in source table
+	nrow, err := runCountStar(proc, s)
+	if err != nil {
+		return err
+	}
+	s.Nrow = nrow
+
+	// get the statistic of search string ([]Pattern) and store in SearchAccum
+	err = runWordStats(proc, s)
+	if err != nil {
+		return err
+	}
 
 	// compute the ranking
 	scoremap, err := s.Eval()
@@ -236,6 +241,7 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, src
 		return err
 	}
 
+	// return result
 	if bat.VectorCount() == 1 {
 		// only doc_id returned
 
