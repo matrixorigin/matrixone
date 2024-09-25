@@ -262,7 +262,7 @@ func (p *Pattern) GetWeight() float32 {
 // Combine two score maps into single map. max(float32) will return when same doc_id (key) exists in both arg and result.
 func (p *Pattern) Combine(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
 	if result == nil {
-		result = make(map[any]float32)
+		return arg, nil
 	}
 	for k1 := range arg {
 		v1 := arg[k1]
@@ -281,14 +281,8 @@ func (p *Pattern) Combine(s *SearchAccum, arg, result map[any]float32) (map[any]
 
 // Eval() function to evaluate the previous result from Eval and the current pattern (with data from datasource)  and return map[doc_id]float32
 func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
-	nchild := len(p.Children)
-
 	switch p.Operator {
 	case TEXT, STAR:
-		if nchild != 0 {
-			return nil, moerr.NewInternalErrorNoCtx("Eval() TEXT, STAR has more than 0 child")
-		}
-
 		// leaf node: TEXT, STAR
 		// calculate the score with weight
 		if result == nil {
@@ -305,43 +299,66 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 			}
 		}
 
-	case PLUS, MINUS, LESSTHAN, GREATERTHAN, RANKLESS:
-		if nchild != 1 {
-			return nil, moerr.NewInternalErrorNoCtx("Eval() +,-,<,>,~ has more than 1 child.")
-		}
-
-		// PLUS, MINUS, LESSTHAN, GREATERTHAN, RANKLESS
+	case PLUS:
 		// get weight by type
 		weight := p.GetWeight()
-
 		if result == nil {
-			// LESSTHAN, GREATERTHAN and RANKLESS
 			return p.Children[0].Eval(accum, weight, nil)
-
 		} else {
 			child_result, err := p.Children[0].Eval(accum, weight, nil)
 			if err != nil {
 				return nil, err
 			}
 
-			// do PLUS (AND) and MINUS operation (REMOVE HASH) and OR operation
-			switch p.Operator {
-			case PLUS:
-				// AND
-				return p.EvalPlusPlus(accum, child_result, result)
-			case MINUS:
-				// MINUS
-				return p.EvalMinus(accum, child_result, result)
+			return p.EvalPlusPlus(accum, child_result, result)
+		}
+	case MINUS:
+		// get weight by type
+		weight := p.GetWeight()
 
-			case GROUP, LESSTHAN, GREATERTHAN:
+		if result == nil {
+			// return nil when result is nil
+			return nil, nil
+		} else {
+			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			return p.EvalMinus(accum, child_result, result)
+		}
+
+	case LESSTHAN, GREATERTHAN:
+		// get weight by type
+		weight := p.GetWeight()
+
+		if result == nil {
+			return p.Children[0].Eval(accum, weight, nil)
+		} else {
+			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			return p.EvalOR(accum, child_result, result)
+		}
+	case RANKLESS:
+		// get weight by type
+		weight := p.GetWeight()
+
+		if result == nil {
+			return p.Children[0].Eval(accum, weight, nil)
+		} else {
+			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			// OR
+			if accum.PatternAnyPlus() {
+				return p.EvalPlusOR(accum, child_result, result)
+			} else {
 				return p.EvalOR(accum, child_result, result)
-			default:
-				// OR
-				if accum.PatternAnyPlus() {
-					return p.EvalPlusOR(accum, child_result, result)
-				} else {
-					return p.EvalOR(accum, child_result, result)
-				}
 			}
 		}
 	case GROUP:
