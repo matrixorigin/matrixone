@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/RoaringBitmap/roaring/roaring64"
-	bitmap2 "github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -120,53 +121,86 @@ func (t *GCTable) SoftGC(
 	snapShotList map[uint32]containers.Vector,
 	meta *logtail.SnapshotMeta,
 ) ([]string, map[uint32][]types.TS) {
-	processBat := t.fetchBuffer()
+	var (
+		bm   bitmap.Bitmap
+		sels []int64
+	)
+
+	factory := engine_util.NewFSinkerImplFactory(
+		ObjectTableSeqnums,
+		ObjectTablePrimaryKeyIdx,
+		true,
+		false,
+		ObjectTableVersion,
+	)
+	sinker := engine_util.NewSinker(
+		ObjectTablePrimaryKeyIdx,
+		ObjectTableAttrs,
+		ObjectTableTypes,
+		factory, t.mp, t.fs)
+
 	processSoftGCBatch := func(
 		ctx context.Context,
-		data *batch.Batch) error {
-		bitmap := new(bitmap2.Bitmap)
-		bitmap.InitWithSize(int64(data.Vecs[0].Length()))
+		data *batch.Batch,
+	) error {
+		// reset bitmap for each batch
+		bm.Clear()
+		bm.TryExpandWithSize(data.RowCount())
+
 		bf.Test(data.Vecs[0], func(exits bool, i int) {
 			if !exits {
-				bitmap.Add(uint64(i))
+				bm.Add(uint64(i))
 			}
 		})
-		pBatch, err := data.Dup(t.mp)
-		if err != nil {
+
+		// convert bitmap to slice
+		sels = sels[:0]
+		bitmap.ToArray(&bm, &sels)
+
+		tmpBat := t.fetchBuffer()
+		defer t.putBuffer(tmpBat)
+		if err := tmpBat.Union(data, sels, t.mp); err != nil {
 			return err
 		}
-		deleteMask := bitmap.ToI64Arrary()
-		data.Shrink(deleteMask, true)
-		pBatch.Shrink(deleteMask, false)
-		processBat.Append(ctx, t.mp, pBatch)
-		return nil
+
+		// shrink data
+		data.Shrink(sels, true)
+		return sinker.Write(ctx, tmpBat)
 	}
 	err := t.Process(ctx, t.tsRange.start, t.tsRange.end, t.LoadBatchData, processSoftGCBatch)
 	if err != nil {
 		logutil.Error("GCTable SoftGC Process failed", zap.Error(err))
 		return nil, nil
 	}
+	err = sinker.Sync(ctx)
 
-	creates := vector.MustFixedColNoTypeCheck[types.TS](processBat.Vecs[1])
-	deletes := vector.MustFixedColNoTypeCheck[types.TS](processBat.Vecs[2])
-	dbs := vector.MustFixedColNoTypeCheck[uint64](processBat.Vecs[3])
-	tids := vector.MustFixedColNoTypeCheck[uint64](processBat.Vecs[4])
-	for i := 0; i < processBat.Vecs[0].Length(); i++ {
-		name := processBat.Vecs[0].GetStringAt(i)
-		creatTS := creates[i]
-		deleteTS := deletes[i]
-		db := dbs[i]
-		tid := tids[i]
-		object := &ObjectEntry{
-			createTS: creatTS,
-			dropTS:   deleteTS,
-			db:       db,
-			table:    tid,
-		}
-		addObjectLocked(name, object, t.objects)
+	if err != nil {
+		logutil.Error("GCTable SoftGC Sync failed", zap.Error(err))
+		return nil, nil
 	}
 
-	t.putBuffer(processBat)
+	softGCObjects, processBats := sinker.GetResult()
+	for _, bat := range processBats {
+		creates := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+		deletes := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
+		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			name := bat.Vecs[0].GetStringAt(i)
+			creatTS := creates[i]
+			deleteTS := deletes[i]
+			db := dbs[i]
+			tid := tids[i]
+			object := &ObjectEntry{
+				createTS: creatTS,
+				dropTS:   deleteTS,
+				db:       db,
+				table:    tid,
+			}
+			addObjectLocked(name, object, t.objects)
+		}
+	}
+
 	var gc []string
 	snapList := make(map[uint32][]types.TS)
 	for acct, snap := range snapShotList {
@@ -178,30 +212,28 @@ func (t *GCTable) SoftGC(
 		meta.Unlock()
 		t.Unlock()
 	}()
-	gc = t.objectsComparedAndDeleteLocked(t.objects, t.objects, meta, snapList, ts)
+	gc = t.objectsComparedAndDeleteLocked(t.objects, softGCObjects, meta, snapList, ts)
 	return gc, snapList
 }
 
 func (t *GCTable) objectsComparedAndDeleteLocked(
-	objects, comparedObjects map[string]*ObjectEntry,
+	objects map[string]*ObjectEntry,
+	stats []objectio.ObjectStats,
 	meta *logtail.SnapshotMeta,
 	snapList map[uint32][]types.TS,
 	ts types.TS,
 ) []string {
 	gc := make([]string, 0)
 	for name, entry := range objects {
-		objectEntry := comparedObjects[name]
 		tsList := meta.GetSnapshotListLocked(snapList, entry.table)
 		if tsList == nil {
-			if objectEntry == nil &&
-				(entry.createTS.Less(&ts) && entry.dropTS.Less(&ts)) {
+			if entry.createTS.Less(&ts) && entry.dropTS.Less(&ts) {
 				gc = append(gc, name)
 				delete(t.objects, name)
 			}
 			continue
 		}
-		if objectEntry == nil &&
-			entry.createTS.Less(&ts) &&
+		if entry.createTS.Less(&ts) &&
 			entry.dropTS.Less(&ts) &&
 			!isSnapshotRefers(entry, tsList, name) {
 			gc = append(gc, name)
@@ -350,7 +382,7 @@ func (t *GCTable) updateObjectListLocked(ins *containers.Batch, objects map[stri
 			db:       vector.GetFixedAtNoTypeCheck[uint64](dbid, i),
 			table:    vector.GetFixedAtNoTypeCheck[uint64](tid, i),
 		}
-		t.addObjectLocked(objectStats.ObjectName().String(), object, objects)
+		addObjectLocked(objectStats.ObjectName().String(), object, objects)
 	}
 }
 
@@ -435,7 +467,7 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch, idx BatchType, objects 
 			dropTS:   deleteTS,
 			table:    tid,
 		}
-		t.addObjectLocked(name, object, objects)
+		addObjectLocked(name, object, objects)
 	}
 }
 
