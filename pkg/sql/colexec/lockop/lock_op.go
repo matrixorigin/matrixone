@@ -116,11 +116,7 @@ func callNonBlocking(
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	result := vm.NewCallResult()
-	var err error
-
-	// result.Batch, err = lockOp.getBatch(proc, analyzer, lockOp.IsFirst)
-	result, err = vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
