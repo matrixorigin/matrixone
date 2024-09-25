@@ -96,6 +96,25 @@ func ToSlice[T any](vec *Vector, ret *[]T) {
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
+func UnsafeToBytesSlice(vec *Vector) [][]byte {
+	k := vec.typ.Oid.FixedLength()
+	if k < 0 {
+		return nil
+	}
+	ret := make([][]byte, vec.length)
+	for i := 0; i < vec.length; i++ {
+		ret[i] = vec.data[i*k : (i+1)*k]
+	}
+	return ret
+}
+
+func UnsafeSetFromBytesSlice(vec *Vector, by []byte) {
+	vec.length = len(by) / vec.typ.Oid.FixedLength()
+	vec.capacity = vec.length
+	vec.data = by
+	vec.col.setFromVector(vec)
+}
+
 func (v *Vector) GetSorted() bool {
 	return v.sorted
 }
