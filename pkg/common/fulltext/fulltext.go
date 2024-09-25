@@ -285,64 +285,64 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 
 	switch p.Operator {
 	case TEXT, STAR:
-		if nchild == 0 {
-			// leaf node: TEXT, STAR
-			// calculate the score with weight
-			if result == nil {
-				return p.EvalLeaf(accum, weight, result)
+		if nchild != 0 {
+			return nil, moerr.NewInternalErrorNoCtx("Eval() TEXT, STAR has more than 0 child")
+		}
+
+		// leaf node: TEXT, STAR
+		// calculate the score with weight
+		if result == nil {
+			return p.EvalLeaf(accum, weight, result)
+		} else {
+			child_result, err := p.EvalLeaf(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+			if accum.PatternAnyPlus() {
+				return p.EvalPlusOR(accum, child_result, result)
 			} else {
-				child_result, err := p.EvalLeaf(accum, weight, nil)
-				if err != nil {
-					return nil, err
-				}
+				return p.EvalOR(accum, child_result, result)
+			}
+		}
+
+	case PLUS, MINUS, LESSTHAN, GREATERTHAN, RANKLESS:
+		if nchild != 1 {
+			return nil, moerr.NewInternalErrorNoCtx("Eval() +,-,<,>,~ has more than 1 child.")
+		}
+
+		// PLUS, MINUS, LESSTHAN, GREATERTHAN, RANKLESS
+		// get weight by type
+		weight := p.GetWeight()
+
+		if result == nil {
+			// LESSTHAN, GREATERTHAN and RANKLESS
+			return p.Children[0].Eval(accum, weight, nil)
+
+		} else {
+			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			// do PLUS (AND) and MINUS operation (REMOVE HASH) and OR operation
+			switch p.Operator {
+			case PLUS:
+				// AND
+				return p.EvalPlusPlus(accum, child_result, result)
+			case MINUS:
+				// MINUS
+				return p.EvalMinus(accum, child_result, result)
+
+			case GROUP, LESSTHAN, GREATERTHAN:
+				return p.EvalOR(accum, child_result, result)
+			default:
+				// OR
 				if accum.PatternAnyPlus() {
 					return p.EvalPlusOR(accum, child_result, result)
 				} else {
 					return p.EvalOR(accum, child_result, result)
 				}
 			}
-		} else {
-			return nil, moerr.NewInternalErrorNoCtx("Eval() TEXT, STAR has more than 0 child")
-		}
-
-	case PLUS, MINUS, LESSTHAN, GREATERTHAN, RANKLESS:
-		if nchild == 1 {
-			// PLUS, MINUS, LESSTHAN, GREATERTHAN, RANKLESS
-			// get weight by type
-			weight := p.GetWeight()
-
-			if result == nil {
-				// LESSTHAN, GREATERTHAN and RANKLESS
-				return p.Children[0].Eval(accum, weight, nil)
-
-			} else {
-				child_result, err := p.Children[0].Eval(accum, weight, nil)
-				if err != nil {
-					return nil, err
-				}
-
-				// do PLUS (AND) and MINUS operation (REMOVE HASH) and OR operation
-				switch p.Operator {
-				case PLUS:
-					// AND
-					return p.EvalPlusPlus(accum, child_result, result)
-				case MINUS:
-					// MINUS
-					return p.EvalMinus(accum, child_result, result)
-
-				case GROUP, LESSTHAN, GREATERTHAN:
-					return p.EvalOR(accum, child_result, result)
-				default:
-					// OR
-					if accum.PatternAnyPlus() {
-						return p.EvalPlusOR(accum, child_result, result)
-					} else {
-						return p.EvalOR(accum, child_result, result)
-					}
-				}
-			}
-		} else {
-			return nil, moerr.NewInternalErrorNoCtx("Eval() +,-,<,>,~ has more than 1 child.")
 		}
 	case GROUP:
 		result := make(map[any]float32)
