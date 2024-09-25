@@ -671,6 +671,52 @@ func TestFullTextGroup(t *testing.T) {
 	assert.Equal(t, ok, true)
 }
 
+func TestFullTextGroupTilda(t *testing.T) {
+
+	pattern := "+we ~(<are >so)"
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	require.Nil(t, err)
+
+	//fmt.Println(PatternListToString(s.Pattern))
+
+	// pretend adding records from database
+	// init the word "we"
+	word := "we"
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
+	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
+	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 3}
+
+	// init the word "are"
+	word = "are"
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
+	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int64{0, 4, 6}, DocCount: 2}
+	s.WordAccums[word].Words[11] = &Word{DocId: 11, Position: []int64{0, 4, 6}, DocCount: 3}
+	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int64{0, 4, 6}, DocCount: 4}
+
+	// init the word "so"
+	word = "so"
+	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
+	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int64{0, 4, 6}, DocCount: 5}
+	s.WordAccums[word].Words[21] = &Word{DocId: 21, Position: []int64{0, 4, 6}, DocCount: 6}
+	s.WordAccums[word].Words[22] = &Word{DocId: 22, Position: []int64{0, 4, 6}, DocCount: 7}
+	s.WordAccums[word].Words[23] = &Word{DocId: 23, Position: []int64{0, 4, 6}, DocCount: 8}
+
+	s.Nrow = 100
+
+	// eval
+	var result map[any]float32
+	for _, p := range s.Pattern {
+		result, err = p.Eval(s, float32(1.0), result)
+		require.Nil(t, err)
+	}
+
+	var ok bool
+	_, ok = result[0]
+	assert.Equal(t, ok, true)
+	_, ok = result[1]
+	assert.Equal(t, ok, true)
+}
+
 func TestFullTextStar(t *testing.T) {
 
 	pattern := "apple*"

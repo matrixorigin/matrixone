@@ -300,8 +300,6 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 		}
 
 	case PLUS:
-		// get weight by type
-		weight := p.GetWeight()
 		if result == nil {
 			return p.Children[0].Eval(accum, weight, nil)
 		} else {
@@ -313,9 +311,6 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 			return p.EvalPlusPlus(accum, child_result, result)
 		}
 	case MINUS:
-		// get weight by type
-		weight := p.GetWeight()
-
 		if result == nil {
 			// return nil when result is nil
 			return nil, nil
@@ -330,7 +325,7 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 
 	case LESSTHAN, GREATERTHAN:
 		// get weight by type
-		weight := p.GetWeight()
+		weight *= p.GetWeight()
 
 		if result == nil {
 			return p.Children[0].Eval(accum, weight, nil)
@@ -344,7 +339,7 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 		}
 	case RANKLESS:
 		// get weight by type
-		weight := p.GetWeight()
+		weight *= p.GetWeight()
 
 		if result == nil {
 			return p.Children[0].Eval(accum, weight, nil)
