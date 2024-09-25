@@ -33,6 +33,7 @@ type managedAllocatorShard struct {
 }
 
 type managedAllocatorItem struct {
+	//TODO use weak pointer when supported
 	ptr         unsafe.Pointer
 	deallocator Deallocator
 }
