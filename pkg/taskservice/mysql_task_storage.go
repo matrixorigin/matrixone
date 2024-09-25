@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -258,12 +259,11 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 	if err != nil {
 		return 0, err
 	}
+	defer func(tx *sql.Tx) {
+		_ = tx.Rollback()
+	}(tx)
 
-	prepare, err := tx.PrepareContext(ctx, updateAsyncTask+buildWhereClause(newConditions(condition...)))
-	if err != nil {
-		return 0, err
-	}
-	defer prepare.Close()
+	updateSql := updateAsyncTask + buildWhereClause(newConditions(condition...))
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -280,7 +280,7 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 				return err
 			}
 
-			exec, err := prepare.ExecContext(ctx,
+			exec, err := tx.ExecContext(ctx, updateSql,
 				t.Metadata.Executor,
 				t.Metadata.Context,
 				string(j),
@@ -300,12 +300,13 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 			}
 			affected, err := exec.RowsAffected()
 			if err != nil {
-				return nil
+				return err
 			}
 			n += int(affected)
 			return nil
 		}()
 		if err != nil {
+			logutil.Error("failed to update async task:", zap.Error(err))
 			if e := tx.Rollback(); e != nil {
 				return 0, errors.Join(e, err)
 			}
@@ -382,25 +383,13 @@ func (m *mysqlTaskStorage) QueryAsyncTask(ctx context.Context, condition ...Cond
 
 		if codeOption.Valid {
 			t.ExecuteResult = &task.ExecuteResult{}
-			code, err := codeOption.Value()
-			if err != nil {
-				return nil, err
-			}
-			t.ExecuteResult.Code = task.ResultCode(code.(int64))
-
-			msg, err := msgOption.Value()
-			if err != nil {
-				return nil, err
-			}
-			t.ExecuteResult.Error = msg.(string)
+			t.ExecuteResult.Code = task.ResultCode(codeOption.Int32)
+			t.ExecuteResult.Error = msgOption.String
 		}
 
 		tasks = append(tasks, t)
 	}
-	if err := rows.Err(); err != nil {
-		return tasks, err
-	}
-	return tasks, nil
+	return tasks, rows.Err()
 }
 
 func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.CronTask) (int, error) {
@@ -542,6 +531,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		asyncTask.CreateAt,
 		asyncTask.CompletedAt)
 	if err != nil {
+		logutil.Error("failed to update cron task:", zap.Error(err))
 		return 0, err
 	}
 
@@ -558,6 +548,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		cronTask.UpdateAt,
 		cronTask.ID)
 	if err != nil {
+		logutil.Error("failed to update cron task:", zap.Error(err))
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -761,8 +752,13 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 	if err != nil {
 		return 0, err
 	}
+	defer func(tx *sql.Tx) {
+		_ = tx.Rollback()
+	}(tx)
+
 	n, err := m.RunUpdateDaemonTask(ctx, tasks, tx, condition...)
 	if err != nil {
+		logutil.Error("failed to update daemon task:", zap.Error(err))
 		if e := tx.Rollback(); e != nil {
 			return 0, errors.Join(e, err)
 		}
@@ -775,15 +771,7 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 }
 
 func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, db SqlExecutor, condition ...Condition) (int, error) {
-	c := newConditions(condition...)
-	updateSql := updateDaemonTask + buildDaemonTaskWhereClause(c)
-	prepare, err := db.PrepareContext(ctx, updateSql)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = prepare.Close()
-	}()
+	updateSql := updateDaemonTask + buildDaemonTaskWhereClause(newConditions(condition...))
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -810,7 +798,7 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 				lastRun = t.LastRun
 			}
 
-			exec, err := prepare.ExecContext(ctx,
+			exec, err := db.ExecContext(ctx, updateSql,
 				t.Metadata.Executor,
 				t.Metadata.Context,
 				string(j),
@@ -829,7 +817,7 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 			}
 			affected, err := exec.RowsAffected()
 			if err != nil {
-				return nil
+				return err
 			}
 			n += int(affected)
 			return nil
@@ -986,14 +974,10 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 	if err != nil {
 		return 0, err
 	}
+	defer func(tx *sql.Tx) {
+		_ = tx.Rollback()
+	}(tx)
 
-	prepare, err := tx.PrepareContext(ctx, heartbeatDaemonTask)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = prepare.Close()
-	}()
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -1002,7 +986,7 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 				lastHeartbeat = t.LastHeartbeat
 			}
 
-			exec, err := prepare.ExecContext(ctx,
+			exec, err := tx.ExecContext(ctx, heartbeatDaemonTask,
 				lastHeartbeat,
 				t.ID,
 			)
@@ -1011,12 +995,13 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 			}
 			affected, err := exec.RowsAffected()
 			if err != nil {
-				return nil
+				return err
 			}
 			n += int(affected)
 			return nil
 		}()
 		if err != nil {
+			logutil.Error("failed to heartbeat daemon task:", zap.Error(err))
 			if e := tx.Rollback(); e != nil {
 				return 0, errors.Join(e, err)
 			}
