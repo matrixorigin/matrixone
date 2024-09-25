@@ -129,6 +129,5 @@ type state struct {
 	retryError           error
 	defChanged           bool
 	fetchers             []FetchLockRowsFunc
-	batchFetchFunc       func(proc *process.Process) (vm.CallResult, error)
 	hasNewVersionInRange hasNewVersionInRangeFunc
 }

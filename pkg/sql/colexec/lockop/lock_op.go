@@ -120,21 +120,9 @@ func callNonBlocking(
 	var err error
 
 	// result.Batch, err = lockOp.getBatch(proc, analyzer, lockOp.IsFirst)
-	if lockOp.ctr.batchFetchFunc == nil {
-		result, err = vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
-		if err != nil {
-			return result, err
-		}
-	} else {
-		// test for blocking case
-		beforeChildrenCall := time.Now()
-		input, err := lockOp.ctr.batchFetchFunc(proc)
-		analyzer.ChildrenCallStop(beforeChildrenCall)
-		if err != nil {
-			return result, err
-		}
-		analyzer.Input(input.Batch)
-		result.Batch = input.Batch
+	result, err = vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
+	if err != nil {
+		return result, err
 	}
 
 	if result.Batch == nil {

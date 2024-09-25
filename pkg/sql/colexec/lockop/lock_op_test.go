@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -314,102 +313,6 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 	)
 }
 
-func TestLockWithBlocking(t *testing.T) {
-	values := [][]int32{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}}
-	runLockBlockingOpTest(
-		t,
-		1,
-		values,
-		nil,
-		func(
-			proc *process.Process,
-			arg *output.Output,
-			idx int,
-			isFirst, isLast bool) (bool, error) {
-			lockArg := arg.GetChildren(0).(*LockOp)
-			lockArg.ctr.hasNewVersionInRange = testFunc
-			lockArg.OperatorBase.OperatorInfo = vm.OperatorInfo{
-				Idx:     idx,
-				IsFirst: isFirst,
-				IsLast:  isLast,
-			}
-			end, err := arg.Call(proc)
-			require.NoError(t, err)
-			if end.Batch != nil {
-				end.Batch.Clean(proc.GetMPool())
-			}
-			if end.Status == vm.ExecStop {
-				if lockArg.ctr.parker != nil {
-					lockArg.ctr.parker.Close()
-				}
-			}
-			return end.Status == vm.ExecStop, nil
-		},
-		func(arg *output.Output, proc *process.Process) {
-			arg.Free(proc, false, nil)
-			arg.GetChildren(0).Free(proc, false, nil)
-			proc.Free()
-		},
-	)
-}
-
-func TestLockWithBlockingWithConflict(t *testing.T) {
-	tableID := uint64(10)
-	values := [][]int32{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}}
-	runLockBlockingOpTest(
-		t,
-		tableID,
-		values,
-		func(proc *process.Process) {
-			parker := types.NewPacker()
-			defer parker.Close()
-
-			parker.Reset()
-			parker.EncodeInt32(1)
-			conflictRow := parker.Bytes()
-
-			_, err := proc.GetLockService().Lock(
-				proc.Ctx,
-				tableID,
-				[][]byte{conflictRow},
-				[]byte("txn01"),
-				lock.LockOptions{})
-			require.NoError(t, err)
-
-			go func() {
-				require.NoError(t, lockservice.WaitWaiters(proc.GetLockService(), 0, tableID, conflictRow, 1))
-				require.NoError(t, proc.GetLockService().Unlock(
-					proc.Ctx,
-					[]byte("txn01"),
-					timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
-			}()
-		},
-		func(
-			proc *process.Process,
-			arg *output.Output,
-			idx int,
-			isFirst, isLast bool) (bool, error) {
-			lockArg := arg.GetChildren(0).(*LockOp)
-			lockArg.ctr.hasNewVersionInRange = testFunc
-			lockArg.OperatorBase.OperatorInfo = vm.OperatorInfo{
-				Idx:     idx,
-				IsFirst: isFirst,
-				IsLast:  isLast,
-			}
-
-			ok, err := arg.Call(proc)
-			return ok.Status == vm.ExecStop, err
-		},
-		func(arg *output.Output, proc *process.Process) {
-			lockArg := arg.GetChildren(0).(*LockOp)
-			require.True(t, moerr.IsMoErrCode(lockArg.ctr.retryError, moerr.ErrTxnNeedRetry))
-			arg.Free(proc, false, nil)
-			arg.GetChildren(0).Free(proc, false, nil)
-			proc.Free()
-		},
-	)
-}
-
 func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
 	stopper := stopper.NewStopper("")
@@ -489,74 +392,6 @@ func runLockNonBlockingOpTest(
 
 			fn(proc, arg)
 			arg.Free(proc, false, nil)
-		},
-		opts...)
-}
-
-func runLockBlockingOpTest(
-	t *testing.T,
-	table uint64,
-	values [][]int32,
-	beforeFunc func(proc *process.Process),
-	fn func(proc *process.Process, arg *output.Output, idx int, isFirst, isLast bool) (bool, error),
-	checkFunc func(*output.Output, *process.Process),
-	opts ...client.TxnClientCreateOption) {
-	runLockOpTest(
-		t,
-		func(proc *process.Process) {
-			if beforeFunc != nil {
-				beforeFunc(proc)
-			}
-
-			pkType := types.New(types.T_int32, 0, 0)
-			tsType := types.New(types.T_TS, 0, 0)
-
-			arg := output.NewArgument().WithBlock(true).WithFunc(func(b *batch.Batch) error {
-				return nil
-			})
-			lockArg := NewArgumentByEngine(nil).AddLockTarget(table, 0, pkType, 1)
-			arg.AppendChild(lockArg)
-
-			var batches []*batch.Batch
-			var batches2 []*batch.Batch
-			for _, vs := range values {
-				bat := batch.NewWithSize(2)
-				bat.SetRowCount(2)
-
-				vec := vector.NewVec(pkType)
-				vector.AppendFixedList(vec, vs, nil, proc.Mp())
-				bat.Vecs[0] = vec
-
-				vec = vector.NewVec(tsType)
-				bat.Vecs[1] = vec
-
-				batches = append(batches, bat)
-				batches2 = append(batches2, bat)
-			}
-			require.NoError(t, arg.Prepare(proc))
-			require.NoError(t, lockArg.Prepare(proc))
-
-			lockArg.ctr.batchFetchFunc = func(*process.Process) (vm.CallResult, error) {
-				if len(batches) == 0 {
-					return vm.NewCallResult(), nil
-				}
-				bat := batches[0]
-				batches = batches[1:]
-				return vm.CallResult{Batch: bat}, nil
-			}
-
-			var err error
-			var end bool
-			for {
-				end, err = fn(proc, arg, 1, false, false)
-				if err != nil || end {
-					break
-				}
-			}
-			for _, bat := range batches2 {
-				bat.Clean(proc.Mp())
-			}
-			checkFunc(arg, proc)
 		},
 		opts...)
 }
