@@ -139,10 +139,11 @@ func (p *Pattern) GetLeafText(operator int) []string {
 
 // Eval leaf node.  compute the tfidf from the data in WordAccums and return result as map[doc_id]float32
 func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
-
 	key := p.Text
 	acc, ok := s.WordAccums[key]
 	if !ok {
+		// never return nil result
+		result = make(map[any]float32)
 		return result, nil
 	}
 
@@ -164,9 +165,9 @@ func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float3
 // Eval Plus Plus operation.  Basically AND operation between input argument and result from the previous Eval()
 // e.g. (+ (text apple)) (+ (text banana))
 func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
-
 	if result == nil {
-		return nil, nil
+		result = make(map[any]float32)
+		return result, nil
 	}
 
 	keys := make([]any, 0, len(result))
@@ -187,9 +188,9 @@ func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map
 // Eval Plus OR.  The previous result from Eval() is a Plus Operator and current Pattern is a Text or Star.
 // e.g. (+ (text apple)) (text banana)
 func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
-
 	if result == nil {
-		return nil, nil
+		result = make(map[any]float32)
+		return result, nil
 	}
 
 	keys := make([]any, 0, len(result))
@@ -208,8 +209,8 @@ func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[a
 // Minus operation.  Remove the result when doc_id is present in argument
 // e.g. (+ (text apple)) (- (text banana))
 func (p *Pattern) EvalMinus(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
-
 	if result == nil {
+		result = make(map[any]float32)
 		return result, nil
 	}
 
@@ -312,8 +313,8 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 		}
 	case MINUS:
 		if result == nil {
-			// return nil when result is nil
-			return nil, nil
+			result = make(map[any]float32)
+			return result, nil
 		} else {
 			child_result, err := p.Children[0].Eval(accum, weight, nil)
 			if err != nil {

@@ -618,11 +618,7 @@ func TestFullText5(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	var ok bool
-	_, ok = result[0]
-	assert.Equal(t, ok, true)
-	_, ok = result[1]
-	assert.Equal(t, ok, true)
+	assert.Equal(t, len(result), 0)
 }
 
 func TestFullTextGroup(t *testing.T) {
