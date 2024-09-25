@@ -151,3 +151,11 @@ func TestMpoolReAllocate(t *testing.T) {
 	m.Free(d4)
 	require.Equal(t, int64(0), m.CurrNB())
 }
+
+func TestUseMalloc(t *testing.T) {
+	pool, err := NewMPool("test", 1<<20, UseMalloc)
+	require.Nil(t, err)
+	bs, err := pool.Alloc(8)
+	require.Nil(t, err)
+	pool.Free(bs)
+}
