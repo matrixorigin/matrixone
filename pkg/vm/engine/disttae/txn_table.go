@@ -69,7 +69,7 @@ var traceFilterExprInterval2 atomic.Uint64
 var _ engine.Relation = new(txnTable)
 
 func (tbl *txnTable) getEngine() engine.Engine {
-	return tbl.getTxn().engine
+	return tbl.eng
 }
 
 func (tbl *txnTable) getTxn() *Transaction {
@@ -83,8 +83,7 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		return nil, err
 	}
 	if !tbl.db.op.IsSnapOp() {
-		e := tbl.getEngine()
-		return e.Stats(ctx, pb.StatsInfoKey{
+		return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
 			AccId:      tbl.accountId,
 			DatabaseID: tbl.db.databaseId,
 			TableID:    tbl.tableId,
@@ -703,9 +702,8 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	var done bool
 
-	if done, err = TryFastFilterBlocks(
+	if done, err = engine_util.TryFastFilterBlocks(
 		ctx,
-		tbl,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
 		exprs,
@@ -714,7 +712,6 @@ func (tbl *txnTable) rangesOnePart(
 		uncommittedObjects,
 		outBlocks,
 		tbl.getTxn().engine.fs,
-		tbl.proc.Load(),
 	); err != nil {
 		return err
 	} else if done {
@@ -1192,6 +1189,10 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 //
 // 2. This check depends on replaying all catalog cache when cn starts.
 func (tbl *txnTable) isCreatedInTxn() bool {
+	if tbl.remoteWorkspace {
+		return tbl.createdInTxn
+	}
+
 	if tbl.db.op.IsSnapOp() {
 		// if the operation is snapshot read, isCreatedInTxn can not be called by AlterTable
 		// So if the snapshot read want to subcribe logtail tail, let it go ahead.
@@ -1766,7 +1767,7 @@ func (tbl *txnTable) BuildReaders(
 		}
 		rd, err := NewReader(
 			ctx,
-			proc,
+			proc.Mp(),
 			tbl.getTxn().engine,
 			def,
 			tbl.db.op.SnapshotTS(),
@@ -1828,9 +1829,10 @@ func (tbl *txnTable) getPartitionState(
 }
 
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
+	eng := tbl.eng.(*Engine)
 	defer func() {
 		if err == nil {
-			tbl.getTxn().engine.globalStats.notifyLogtailUpdate(tbl.tableId)
+			eng.globalStats.notifyLogtailUpdate(tbl.tableId)
 		}
 	}()
 
@@ -1838,7 +1840,7 @@ func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.Part
 		return
 	}
 
-	return tbl.getTxn().engine.PushClient().toSubscribeTable(ctx, tbl)
+	return eng.PushClient().toSubscribeTable(ctx, tbl)
 
 }
 
@@ -1941,7 +1943,7 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	keys.InplaceSort()
 	bytes, _ := keys.MarshalBinary()
-	colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
+	colExpr := engine_util.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(
 		tbl.proc.Load().Ctx,
 		colExpr,
@@ -1949,7 +1951,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		bytes,
 		false)
 
-	basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+	basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load().Mp())
 	if err != nil {
 		return false, err
 	}

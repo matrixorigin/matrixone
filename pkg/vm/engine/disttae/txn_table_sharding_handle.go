@@ -170,6 +170,9 @@ func HandleShardingReadStatus(
 	if err != nil {
 		return nil, err
 	}
+	if info == nil {
+		return nil, nil
+	}
 
 	bys, err := info.Marshal()
 	if err != nil {
@@ -220,18 +223,10 @@ func HandleShardingReadRanges(
 		return nil, err
 	}
 
-	var uncommittedRanges []objectio.ObjectStats
-	n := len(param.RangesParam.UncommittedObjects) / objectio.ObjectStatsLen
-	for i := 0; i < n; i++ {
-		var stat objectio.ObjectStats
-		stat.UnMarshal(param.RangesParam.UncommittedObjects[i*objectio.ObjectStatsLen : (i+1)*objectio.ObjectStatsLen])
-		uncommittedRanges = append(uncommittedRanges, stat)
-	}
-
 	ranges, err := tbl.doRanges(
 		ctx,
 		param.RangesParam.Exprs,
-		uncommittedRanges,
+		nil,
 	)
 	if err != nil {
 		return nil, err
@@ -281,7 +276,7 @@ func HandleShardingReadBuildReader(
 
 	rd, err := NewReader(
 		ctx,
-		tbl.proc.Load(),
+		tbl.proc.Load().Mp(),
 		e.(*Engine),
 		tbl.tableDef,
 		tbl.db.op.SnapshotTS(),
@@ -633,9 +628,13 @@ func getTxnTable(
 		return nil, err
 	}
 
-	return newTxnTableWithItem(
+	tbl := newTxnTableWithItem(
 		db,
 		item,
 		proc,
-	), nil
+		engine.(*Engine),
+	)
+	tbl.remoteWorkspace = true
+	tbl.createdInTxn = param.TxnTable.CreatedInTxn
+	return tbl, nil
 }

@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1_3_0
+package mpool
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/cdc"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-var InsertInitDataKey = func(txn executor.TxnExecutor, kek string) (err error) {
-	sql, err := cdc.GetInitDataKeySql(kek)
-	if err != nil {
-		return
-	}
-	_, err = txn.Exec(sql, executor.StatementOption{})
-	return
-}
+var allocator = sync.OnceValue(func() *malloc.ManagedAllocator[malloc.Allocator] {
+	// default
+	allocator := malloc.GetDefault(nil)
+	//TODO metrics
+	//TODO peak in-use
+	// managed
+	return malloc.NewManagedAllocator(allocator)
+})
