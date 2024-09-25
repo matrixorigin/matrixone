@@ -70,9 +70,9 @@ func Decode(buf []byte) (any, error) {
 }
 
 // NOTE: hack way to get vector
-func MustVector(vec *vector.Vector, buf []byte) (err error) {
+func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
 	// check if vector is empty
-	if vec.Allocated() > 0 {
+	if toVec.Allocated() > 0 {
 		logutil.Fatal("vector is not empty")
 	}
 	header := DecodeIOEntryHeader(buf)
@@ -80,10 +80,10 @@ func MustVector(vec *vector.Vector, buf []byte) (err error) {
 		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
 	}
 	if header.Version != IOET_ColumnData_V2 {
-		err = vec.UnmarshalBinary(buf[IOEntryHeaderSize:])
+		err = toVec.UnmarshalBinary(buf[IOEntryHeaderSize:])
 		return
 	} else if header.Version != IOET_ColumnData_V1 {
-		err = vec.UnmarshalBinaryV1(buf[IOEntryHeaderSize:])
+		err = toVec.UnmarshalBinaryV1(buf[IOEntryHeaderSize:])
 		return
 	}
 	panic(fmt.Sprintf("invalid column data: %s", header.String()))
