@@ -26,6 +26,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 )
 
 func (tbl *txnTable) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
@@ -126,9 +127,8 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 	}
 
 	var blockList objectio.BlockInfoSlice
-	if _, err = TryFastFilterBlocks(
+	if _, err = engine_util.TryFastFilterBlocks(
 		ctx,
-		h.table,
 		h.end.ToTimestamp(),
 		tblDef,
 		nil,
@@ -137,7 +137,6 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 		nil,
 		&blockList,
 		h.fs,
-		h.table.proc.Load(),
 	); err != nil {
 		return
 	}
