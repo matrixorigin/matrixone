@@ -1059,8 +1059,7 @@ func TestVisitRule(t *testing.T) {
 		makePlan2Int64ConstExprWithType(10),
 	}
 	resetParamRule := NewResetParamRefRule(ctx, params)
-	resetVarRule := NewResetVarRefRule(&mock.ctxt, testutil.NewProc())
-	vp = NewVisitPlan(plan, []VisitPlanRule{resetParamRule, resetVarRule})
+	vp = NewVisitPlan(plan, []VisitPlanRule{resetParamRule})
 	err = vp.Visit(ctx)
 	if err != nil {
 		t.Fatalf("should not error, sql=%s", sql)
