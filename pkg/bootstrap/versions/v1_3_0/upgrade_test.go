@@ -15,11 +15,16 @@
 package v1_3_0
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -190,4 +195,82 @@ func Test_UpgEntry(t *testing.T) {
 			upg_information_schema_columns.Upgrade(executor, uint32(0))
 		},
 	)
+}
+
+func Test_versionHandle_HandleClusterUpgrade_InsertInitDataKey(t *testing.T) {
+	clusterUpgEntries = []versions.UpgradeEntry{}
+
+	v := &versionHandle{
+		metadata: versions.Version{
+			Version: "v1.3.0",
+		},
+	}
+	sid := ""
+	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+	executor1 := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInvalidInputNoCtx("return error")
+	}, txnOperator)
+
+	err := v.HandleClusterUpgrade(
+		context.WithValue(context.Background(), KekKey{}, "kek"),
+		executor1,
+	)
+	assert.Error(t, err)
+}
+
+func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
+	clusterUpgEntries = []versions.UpgradeEntry{}
+
+	v := &versionHandle{
+		metadata: versions.Version{
+			Version: "v1.3.0",
+		},
+	}
+	sid := ""
+	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+	executor2 := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInvalidInputNoCtx("return error")
+	}, txnOperator)
+
+	stub1 := gostub.Stub(&InsertInitDataKey,
+		func(_ executor.TxnExecutor, _ string) (err error) {
+			return nil
+		})
+	defer stub1.Reset()
+
+	err := v.HandleClusterUpgrade(
+		context.WithValue(context.Background(), KekKey{}, "kek"),
+		executor2,
+	)
+	assert.Nil(t, err)
+}
+
+func Test_versionHandle_HandleClusterUpgrade1(t *testing.T) {
+	clusterUpgEntries = []versions.UpgradeEntry{}
+
+	v := &versionHandle{
+		metadata: versions.Version{
+			Version: "v1.3.0",
+		},
+	}
+	sid := ""
+	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+	executor2 := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInvalidInputNoCtx("return error")
+	}, txnOperator)
+
+	stub1 := gostub.Stub(&InsertInitDataKey,
+		func(_ executor.TxnExecutor, _ string) (err error) {
+			return moerr.NewInternalErrorNoCtx("should report error")
+		})
+	defer stub1.Reset()
+
+	err := v.HandleClusterUpgrade(
+		context.WithValue(context.Background(), KekKey{}, "kek"),
+		executor2,
+	)
+	assert.Error(t, err)
 }

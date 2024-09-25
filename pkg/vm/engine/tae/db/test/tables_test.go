@@ -46,8 +46,8 @@ func TestTables1(t *testing.T) {
 	txn, _ := db.StartTxn(nil)
 	database, _ := txn.CreateDatabase("db", "", "")
 	schema := catalog.MockSchema(1, 0)
-	schema.BlockMaxRows = 1000
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 1000
+	schema.Extra.ObjectMaxBlocks = 2
 	rel, _ := database.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
 	dataFactory := tables.NewDataFactory(db.Runtime, db.Dir)
@@ -62,9 +62,9 @@ func TestTables1(t *testing.T) {
 	assert.NotNil(t, appender)
 
 	blkCnt := 3
-	rows := schema.BlockMaxRows * uint32(blkCnt)
+	rows := schema.Extra.BlockMaxRows * uint32(blkCnt)
 	_, _, toAppend, err := appender.PrepareAppend(false, rows, nil)
-	assert.Equal(t, schema.BlockMaxRows, toAppend)
+	assert.Equal(t, schema.Extra.BlockMaxRows, toAppend)
 	assert.Nil(t, err)
 	t.Log(toAppend)
 
@@ -81,7 +81,7 @@ func TestTables1(t *testing.T) {
 
 	_, _, toAppend, err = appender.PrepareAppend(false, rows-toAppend, nil)
 	assert.Nil(t, err)
-	assert.Equal(t, schema.BlockMaxRows, toAppend)
+	assert.Equal(t, schema.Extra.BlockMaxRows, toAppend)
 
 	_, err = handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound))
@@ -92,7 +92,7 @@ func TestTables1(t *testing.T) {
 	appender = handle.SetAppender(id)
 	_, _, toAppend, err = appender.PrepareAppend(false, rows-2*toAppend, nil)
 	assert.Nil(t, err)
-	assert.Equal(t, schema.BlockMaxRows, toAppend)
+	assert.Equal(t, schema.Extra.BlockMaxRows, toAppend)
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	err = txn.Rollback(context.Background())
 	assert.Nil(t, err)
@@ -108,8 +108,8 @@ func TestTxn1(t *testing.T) {
 	defer db.Close()
 
 	schema := catalog.MockSchema(3, 2)
-	schema.BlockMaxRows = 10000
-	batchRows := schema.BlockMaxRows * 2 / 5
+	schema.Extra.BlockMaxRows = 10000
+	batchRows := schema.Extra.BlockMaxRows * 2 / 5
 	cnt := uint32(20)
 	bat := catalog.MockBatch(schema, int(batchRows*cnt))
 	defer bat.Close()
@@ -150,8 +150,8 @@ func TestTxn1(t *testing.T) {
 	wg.Wait()
 
 	t.Logf("Append takes: %s", time.Since(now))
-	// expectBlkCnt := (uint32(batchRows)*uint32(batchCnt)*uint32(loopCnt)-1)/schema.BlockMaxRows + 1
-	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.BlockMaxRows + 1
+	// expectBlkCnt := (uint32(batchRows)*uint32(batchCnt)*uint32(loopCnt)-1)/schema.Extra.BlockMaxRows + 1
+	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.Extra.BlockMaxRows + 1
 	expectObjCnt := expectBlkCnt
 	// t.Log(expectBlkCnt)
 	// t.Log(expectObjCnt)
@@ -215,8 +215,8 @@ func TestTxn4(t *testing.T) {
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
-	schema.BlockMaxRows = 40000
-	schema.ObjectMaxBlocks = 8
+	schema.Extra.BlockMaxRows = 40000
+	schema.Extra.ObjectMaxBlocks = 8
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
@@ -244,10 +244,10 @@ func TestTxn5(t *testing.T) {
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 4
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 4
 	cnt := uint32(10)
-	rows := schema.BlockMaxRows / 2 * cnt
+	rows := schema.Extra.BlockMaxRows / 2 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
 	defer bat.Close()
 	bats := bat.Split(int(cnt))
@@ -317,10 +317,10 @@ func TestTxn6(t *testing.T) {
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 4
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 4
 	cnt := uint32(10)
-	rows := schema.BlockMaxRows / 2 * cnt
+	rows := schema.Extra.BlockMaxRows / 2 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
 	defer bat.Close()
 	bats := bat.Split(int(cnt))
@@ -439,8 +439,8 @@ func TestFlushAblkMerge(t *testing.T) {
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 2)
-	schema.BlockMaxRows = 5
-	schema.ObjectMaxBlocks = 8
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 8
 	col3Data := []int64{10, 8, 1, 6, 15, 7, 3, 12, 11, 4, 9, 5, 14, 13, 2}
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
@@ -458,7 +458,7 @@ func TestFlushAblkMerge(t *testing.T) {
 	provider := containers.NewMockDataProvider()
 	provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
-	bat := containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), int(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
+	bat := containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), int(schema.Extra.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
 	defer bat.Close()
 	{
 		txn, _ := db.StartTxn(nil)
@@ -550,8 +550,8 @@ func TestMergeBlocks2(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(13, 2)
-	schema.BlockMaxRows = 5
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 2
 	col3Data := []int64{10, 8, 1, 6, 15, 7, 3, 12, 11, 4, 9, 5, 14, 13, 2}
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
@@ -568,7 +568,7 @@ func TestMergeBlocks2(t *testing.T) {
 	provider := containers.NewMockDataProvider()
 	provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
-	bat := containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), int(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
+	bat := containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), int(schema.Extra.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
 	{
 		txn, _ := tae.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
@@ -600,10 +600,10 @@ func TestCompaction1(t *testing.T) {
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 4
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 4
 	cnt := uint32(2)
-	rows := schema.BlockMaxRows / 2 * cnt
+	rows := schema.Extra.BlockMaxRows / 2 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
 	defer bat.Close()
 	bats := bat.Split(int(cnt))
@@ -669,10 +669,10 @@ func TestCompaction2(t *testing.T) {
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
-	schema.BlockMaxRows = 21
-	schema.ObjectMaxBlocks = 4
+	schema.Extra.BlockMaxRows = 21
+	schema.Extra.ObjectMaxBlocks = 4
 	cnt := uint32(3)
-	rows := schema.BlockMaxRows
+	rows := schema.Extra.BlockMaxRows
 	bat := catalog.MockBatch(schema, int(rows))
 	defer bat.Close()
 	bats := bat.Split(int(cnt))
@@ -739,11 +739,11 @@ func TestCompaction2(t *testing.T) {
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
-	schema.BlockMaxRows = 21
-	schema.ObjectMaxBlocks = 4
+	schema.Extra.BlockMaxRows = 21
+	schema.Extra.ObjectMaxBlocks = 4
     schema.Name = tables.ForTestBlockRefName
 	cnt := uint32(3)
-	rows := schema.BlockMaxRows / 3 * cnt
+	rows := schema.Extra.BlockMaxRows / 3 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
 	defer bat.Close()
 	bats := bat.Split(int(cnt))

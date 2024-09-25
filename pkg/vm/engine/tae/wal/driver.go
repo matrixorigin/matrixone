@@ -111,3 +111,8 @@ func (driver *walDriver) Close() error {
 	driver.wg.Wait()
 	return nil
 }
+
+// for UT
+func (driver *walDriver) GetTruncated() uint64 {
+	return driver.impl.GetTruncated()
+}

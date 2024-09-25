@@ -584,10 +584,10 @@ func (db *txnDB) CleanUp() {
 	}
 }
 
-func (db *txnDB) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls) error {
+func (db *txnDB) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return err
 	}
-	return table.FillInWorkspaceDeletes(id.BlockID, deletes)
+	return table.FillInWorkspaceDeletes(id.BlockID, deletes, deleteStartOffset)
 }

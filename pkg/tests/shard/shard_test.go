@@ -105,6 +105,7 @@ func getPartitionTableSQL(
 		`
 	CREATE TABLE %s (
 		id          INT             NOT NULL,
+		value       INT             NULL,
 		PRIMARY KEY (id)
 	) PARTITION BY RANGE columns (id)(
 		%s
@@ -113,6 +114,114 @@ func getPartitionTableSQL(
 		tableName,
 		partitionsDDL,
 	)
+}
+
+func getLocalPartitionValue(
+	t *testing.T,
+	table uint64,
+	cnIndex int,
+	c embed.Cluster,
+) int {
+	cn, err := c.GetCNService(cnIndex)
+	require.NoError(t, err)
+
+	s := shardservice.GetService(cn.ServiceID())
+	store := s.GetStorage()
+	_, metadata, err := store.Get(table)
+	require.NoError(t, err)
+
+	_, _, _, err = s.GetShardInfo(table)
+	require.NoError(t, err)
+
+	for i, shardID := range metadata.ShardIDs {
+		has, err := s.HasLocalReplica(table, shardID)
+		require.NoError(t, err)
+
+		if has {
+			return i*10 + 1
+		}
+	}
+	panic("no local shard found")
+}
+
+func getRemotePartitionValue(
+	t *testing.T,
+	table uint64,
+	c embed.Cluster,
+) []int {
+	cn, err := c.GetCNService(0)
+	require.NoError(t, err)
+
+	s := shardservice.GetService(cn.ServiceID())
+	store := s.GetStorage()
+	_, metadata, err := store.Get(table)
+	require.NoError(t, err)
+
+	values := make(map[uint64]int)
+	for i, shardID := range metadata.ShardIDs {
+		values[shardID] = i*10 + 1
+	}
+	shards := make(map[int]uint64)
+
+	for i := 0; i < 3; i++ {
+		id := func(i int) uint64 {
+			cn, err := c.GetCNService(i)
+			require.NoError(t, err)
+			s = shardservice.GetService(cn.ServiceID())
+			for _, shardID := range metadata.ShardIDs {
+				has, err := s.HasLocalReplica(table, shardID)
+				require.NoError(t, err)
+				if has {
+					return shardID
+				}
+			}
+			panic("no local shard found")
+		}(i)
+		shards[i] = id
+	}
+	var result []int
+	info := ""
+	info += fmt.Sprintf(">>>>>>>>> shards-values: %v\n", values)
+	info += fmt.Sprintf(">>>>>>>>> shards: %v\n", shards)
+	selected := make(map[uint64]uint64)
+	for i := 0; i < 3; i++ {
+		local := shards[i]
+		result = append(result,
+			func(local uint64) int {
+				for shard, value := range values {
+					preSelected := selected[shard]
+					if shard != local && local != preSelected {
+						selected[local] = shard
+						delete(values, shard)
+						info += fmt.Sprintf(">>>>>>>>> %d select %d: %v\n", local, value, shards)
+						return value
+					}
+				}
+				panic("no remote shard found\n" + info)
+			}(local),
+		)
+	}
+	return result
+}
+
+func getAllPartitionValues(
+	t *testing.T,
+	table uint64,
+	c embed.Cluster,
+) []int {
+	cn, err := c.GetCNService(0)
+	require.NoError(t, err)
+
+	s := shardservice.GetService(cn.ServiceID())
+	store := s.GetStorage()
+	_, metadata, err := store.Get(table)
+	require.NoError(t, err)
+
+	values := make([]int, 0, len(metadata.ShardIDs))
+	for i := range metadata.ShardIDs {
+		values = append(values, i*10+1)
+	}
+	return values
 }
 
 func waitReplica(

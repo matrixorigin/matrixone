@@ -57,7 +57,7 @@ type Relation interface {
 	CreateNonAppendableObject(isTombstone bool, opt *objectio.CreateObjOpt) (Object, error)
 	GetObject(id *types.Objectid, isTombstone bool) (Object, error)
 	SoftDeleteObject(id *types.Objectid, isTombstone bool) (err error)
-	FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls) error
+	FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls, deleteStartOffset uint64) error
 
 	GetDB() (Database, error)
 }

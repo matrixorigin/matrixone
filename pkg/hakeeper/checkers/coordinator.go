@@ -18,10 +18,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/logservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/proxy"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -53,7 +53,7 @@ func NewCoordinator(
 	}
 }
 
-func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.ScheduleCommand {
+func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, standbyEnabled bool) []pb.ScheduleCommand {
 	logState := state.LogState
 	tnState := state.TNState
 	cnState := state.CNState
@@ -91,12 +91,34 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 
 	// system health, try to keep alive.
 	executing := c.OperatorController.GetExecutingReplicas()
+	executingNonVoting := c.OperatorController.GetNonVotingExecutingReplicas()
 
 	operators := make([]*operator.Operator, 0)
-	operators = append(operators, logservice.Check(c.service, alloc, c.cfg, cluster, logState, executing, user, currentTick)...)
-	operators = append(operators, dnservice.Check(c.service, alloc, c.cfg, cluster, tnState, user, currentTick)...)
-	operators = append(operators, cnservice.Check(c.service, c.cfg, cnState, user, currentTick)...)
-	operators = append(operators, proxy.Check(c.cfg, proxyState, currentTick)...)
-
+	commonFields := hakeeper.NewCheckerCommonFields(
+		c.service,
+		c.cfg,
+		alloc,
+		cluster,
+		user,
+		currentTick,
+	)
+	checkers := []hakeeper.ModuleChecker{
+		logservice.NewLogServiceChecker(
+			commonFields,
+			logState,
+			tnState,
+			executing,
+			executingNonVoting,
+			state.NonVotingReplicaNum,
+			state.NonVotingLocality,
+			standbyEnabled,
+		),
+		tnservice.NewTNServiceChecker(commonFields, tnState),
+		cnservice.NewCNServiceChecker(commonFields, cnState),
+		proxy.NewProxyServiceChecker(commonFields, proxyState),
+	}
+	for _, checker := range checkers {
+		operators = append(operators, checker.Check()...)
+	}
 	return c.OperatorController.Dispatch(operators, logState, tnState, cnState, proxyState)
 }

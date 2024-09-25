@@ -14,7 +14,7 @@
 
 package wal
 
-func (driver *walDriver) RangeCheckpoint(start, end uint64) (e LogEntry, err error) {
-	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end)
+func (driver *walDriver) RangeCheckpoint(start, end uint64, files ...string) (e LogEntry, err error) {
+	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end, files...)
 	return
 }

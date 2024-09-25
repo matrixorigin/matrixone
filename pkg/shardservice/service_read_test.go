@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
@@ -295,6 +296,70 @@ func TestReadWithStaleReplica(t *testing.T) {
 	)
 }
 
+func TestReadWithRemovedReplica(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1,cn2",
+		func(
+			ctx context.Context,
+			server *server,
+			services []*service,
+		) {
+			s1 := services[0]
+			store1 := s1.storage.(*MemShardStorage)
+			s2 := services[1]
+			store2 := s2.storage.(*MemShardStorage)
+
+			table := uint64(1)
+			shards := uint32(2)
+			mustAddTestShards(t, ctx, s1, table, shards, 1, s2)
+			waitReplicaCount(table, s1, 1)
+			waitReplicaCount(table, s2, 1)
+
+			s2Shard := uint64(0)
+			for _, s := range s2.getAllocatedShards() {
+				if s.TableID == table {
+					s2Shard = s.ShardID
+					break
+				}
+				panic("missing s2 shard")
+			}
+
+			k := []byte("k")
+			v := []byte("v")
+
+			store1.set(k, v, newTestTimestamp(1))
+			store2.set(k, v, newTestTimestamp(1))
+			store1.waiter.NotifyLatestCommitTS(newTestTimestamp(3))
+			store2.waiter.NotifyLatestCommitTS(newTestTimestamp(3))
+
+			fn := func() error {
+				return unwrapError(
+					s1.Read(
+						ctx,
+						ReadRequest{
+							TableID: table,
+							Param:   shard.ReadParam{KeyParam: shard.KeyParam{Key: k}},
+							Apply: func(b []byte) {
+							},
+						},
+						DefaultOptions.ReadAt(newTestTimestamp(2)).Shard(s2Shard),
+					),
+				)
+			}
+			require.NoError(t, fn())
+
+			s2.options.disableHeartbeat.Store(true)
+			server.env.UpdateState("cn2", metadata.WorkState_Drained)
+			waitReplicaCount(table, s1, 2)
+
+			// cannot connect to cn2, and cache refreshed, and retry
+			require.NoError(t, fn())
+		},
+		nil,
+	)
+}
+
 func TestReadWithLazyCreateShards(t *testing.T) {
 	runServicesTest(
 		t,
@@ -430,6 +495,10 @@ type joinError interface {
 func unwrapError(
 	err error,
 ) error {
+	if err == nil {
+		return nil
+	}
+
 	if e, ok := err.(joinError); ok {
 		return e.Unwrap()[0]
 	}

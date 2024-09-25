@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"runtime"
 	"sync"
 	"testing"
 
@@ -45,7 +44,7 @@ func TestMemCacheLeak(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	size := int64(4 * runtime.GOMAXPROCS(0))
+	size := int64(128)
 	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "")
 	defer m.Close()
 
@@ -78,9 +77,9 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 	vec.Release()
 
+	assert.Equal(t, int64(1), m.cache.Used())
 	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
-	assert.Equal(t, int64(size), counter.FileService.Cache.Memory.Available.Load())
-	assert.Equal(t, int64(0), counter.FileService.Cache.Memory.Used.Load())
+	assert.Equal(t, int64(size-1), m.cache.Available())
 
 	// read from cache
 	newReadVec = func() *IOVector {
@@ -112,8 +111,8 @@ func TestMemCacheLeak(t *testing.T) {
 	vec.Release()
 
 	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
-	assert.Equal(t, int64(size)-1, counter.FileService.Cache.Memory.Available.Load())
-	assert.Equal(t, int64(1), counter.FileService.Cache.Memory.Used.Load())
+	assert.Equal(t, int64(size)-1, m.cache.Available())
+	assert.Equal(t, int64(1), m.cache.Used())
 
 }
 

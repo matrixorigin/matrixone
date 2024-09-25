@@ -15,11 +15,18 @@
 package mergesort
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 const nullFirst = true
+
+type dataFetcher[T any] interface {
+	mustToCol(*vector.Vector, uint32)
+	at(i, j uint32) T
+	length(i uint32) int
+}
 
 type heapElem[T any] struct {
 	data   T

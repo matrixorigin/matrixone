@@ -18,11 +18,12 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 var (
@@ -36,6 +37,8 @@ var (
 		},
 	}
 )
+
+type KekKey struct{}
 
 type versionHandle struct {
 	metadata versions.Version
@@ -104,6 +107,14 @@ func (v *versionHandle) HandleClusterUpgrade(
 				zap.String("version", v.Metadata().Version))
 			return err
 		}
+	}
+
+	kek := ctx.Value(KekKey{}).(string)
+	if err := InsertInitDataKey(txn, kek); err != nil {
+		getLogger(txn.Txn().TxnOptions().CN).Error("cluster Upgrade InsertInitDataKey error",
+			zap.Error(err),
+			zap.String("version", v.Metadata().Version))
+		return err
 	}
 	return nil
 }

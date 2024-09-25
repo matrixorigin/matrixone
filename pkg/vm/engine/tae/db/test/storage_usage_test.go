@@ -181,10 +181,9 @@ func mockDeletesAndInserts(
 				continue
 			}
 			segDeletes = append(segDeletes,
-				catalog.MockObjEntryWithTbl(
-					catalog.MockTableEntryWithDB(
-						catalog.MockDBEntryWithAccInfo(usages[idx].AccId, usages[idx].DbId),
-						usages[idx].TblId), usages[idx].Size))
+				catalog.MockObjEntryWithTbl(catalog.MockTableEntryWithDB(
+					catalog.MockDBEntryWithAccInfo(usages[idx].AccId, usages[idx].DbId),
+					usages[idx].TblId), usages[idx].Size, false))
 		}
 
 		// segment inserts
@@ -193,10 +192,9 @@ func mockDeletesAndInserts(
 				continue
 			}
 			segInserts = append(segInserts,
-				catalog.MockObjEntryWithTbl(
-					catalog.MockTableEntryWithDB(
-						catalog.MockDBEntryWithAccInfo(usages[idx].AccId, usages[idx].DbId),
-						usages[idx].TblId), usages[idx].Size))
+				catalog.MockObjEntryWithTbl(catalog.MockTableEntryWithDB(
+					catalog.MockDBEntryWithAccInfo(usages[idx].AccId, usages[idx].DbId),
+					usages[idx].TblId), usages[idx].Size, false))
 		}
 	}
 

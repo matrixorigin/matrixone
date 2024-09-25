@@ -571,7 +571,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		seqnums = append(seqnums, def.SeqNum)
 	}
 	if isTombstone {
-		readColIdxs = append(readColIdxs, catalog.COLIDX_COMMITS)
+		readColIdxs = append(readColIdxs, objectio.SEQNUM_COMMITTS)
 		seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
 	}
 
@@ -641,9 +641,9 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	}
 	rowsLeft := totalRowCnt
 	for rowsLeft > 0 {
-		if rowsLeft > int(schema.BlockMaxRows) {
-			toLayout = append(toLayout, schema.BlockMaxRows)
-			rowsLeft -= int(schema.BlockMaxRows)
+		if rowsLeft > int(schema.Extra.BlockMaxRows) {
+			toLayout = append(toLayout, schema.Extra.BlockMaxRows)
+			rowsLeft -= int(schema.Extra.BlockMaxRows)
 		} else {
 			toLayout = append(toLayout, uint32(rowsLeft))
 			break
@@ -683,7 +683,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		if isTombstone {
 			writer.SetDataType(objectio.SchemaTombstone)
 			writer.SetPrimaryKeyWithType(
-				uint16(catalog.TombstonePrimaryKeyIdx),
+				uint16(objectio.TombstonePrimaryKeyIdx),
 				index.HBF,
 				index.ObjectPrefixFn,
 				index.BlockPrefixFn,
@@ -791,7 +791,7 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 
 		// do not close data, leave that to wait phase
 		if isTombstone {
-			_, err = mergesort.SortBlockColumns(dataVer.Vecs, catalog.TombstonePrimaryKeyIdx, task.rt.VectorPool.Transient)
+			_, err = mergesort.SortBlockColumns(dataVer.Vecs, objectio.TombstonePrimaryKeyIdx, task.rt.VectorPool.Transient)
 			if err != nil {
 				logutil.Info(
 					"[FLUSH-AOBJ-ERR]",

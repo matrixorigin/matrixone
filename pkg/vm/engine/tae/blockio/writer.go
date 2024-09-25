@@ -17,6 +17,8 @@ package blockio
 import (
 	"context"
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -25,8 +27,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"math"
 )
+
+// ConstructTombstoneWriter withHidden: true for add hidden columns `commitTs` and `abort`
+// object file created by `CN` with `withHidden` is false
+func ConstructTombstoneWriter(
+	withHidden bool,
+	fs fileservice.FileService,
+) *BlockWriter {
+	var seqnums []uint16
+	if withHidden {
+		seqnums = objectio.TombstoneSeqnums_DN_Created
+	} else {
+		seqnums = objectio.TombstoneSeqnums_CN_Created
+	}
+	sortkeyPos := objectio.TombstonePrimaryKeyIdx
+	sortkeyIsPK := true
+	isTombstone := true
+	return ConstructWriter(
+		0,
+		seqnums,
+		sortkeyPos,
+		sortkeyIsPK,
+		isTombstone,
+		fs,
+	)
+}
+
+func ConstructWriter(
+	ver uint32,
+	seqnums []uint16,
+	sortkeyPos int,
+	sortkeyIsPK bool,
+	isTombstone bool,
+	fs fileservice.FileService,
+) *BlockWriter {
+	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	writer, err := NewBlockWriterNew(fs, name, ver, seqnums)
+	if err != nil {
+		panic(err) // it is impossible
+	}
+	// has sortkey
+	if sortkeyPos >= 0 {
+		if sortkeyIsPK {
+			if isTombstone {
+				writer.SetPrimaryKeyWithType(
+					uint16(objectio.TombstonePrimaryKeyIdx),
+					index.HBF,
+					index.ObjectPrefixFn,
+					index.BlockPrefixFn,
+				)
+			} else {
+				writer.SetPrimaryKey(uint16(sortkeyPos))
+			}
+		} else { // cluster by
+			writer.SetSortKey(uint16(sortkeyPos))
+		}
+	}
+	return writer
+}
 
 type BlockWriter struct {
 	writer         *objectio.ObjectWriter

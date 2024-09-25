@@ -15,7 +15,6 @@
 package engine_util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -23,10 +22,9 @@ import (
 )
 
 func NewCNTombstoneBatch(
-	pkAttr string,
 	pkType *types.Type,
 ) *batch.Batch {
-	ret := batch.New(false, []string{catalog.Row_ID, pkAttr})
+	ret := batch.New(false, objectio.TombstoneAttrs_CN_Created)
 	ret.SetVector(objectio.TombstoneAttr_Rowid_Idx, vector.NewVec(objectio.RowidType))
 	ret.SetVector(objectio.TombstoneAttr_PK_Idx, vector.NewVec(*pkType))
 	return ret

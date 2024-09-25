@@ -30,9 +30,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tidwall/btree"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -60,6 +57,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/tidwall/btree"
+	"golang.org/x/sync/errgroup"
 )
 
 type TenantInfo struct {
@@ -1000,6 +999,7 @@ var (
 		MoCatalogMoCacheDDL,
 		MoCatalogMoCdcTaskDDL,
 		MoCatalogMoCdcWatermarkDDL,
+		MoCatalogMoDataKeyDDL,
 	}
 
 	//drop tables for the tenant
@@ -5377,6 +5377,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
 		canExecInRestricted = true
+	case *tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores,
+		*tree.ShowLogserviceSettings, *tree.SetLogserviceSettings:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt, *tree.ExplainPhyPlan:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -7011,6 +7017,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsAdminRole(), nil
 		}
 
+		checkShowLogservicePrivilege := func() (bool, error) {
+			//only the moAdmin and accountAdmin can execute the show accounts.
+			return tenant.IsAdminRole(), nil
+		}
+
 		checkBackUpStartPrivilege := func() (bool, error) {
 			//only the moAdmin can execute the backup statement
 			return tenant.IsSysTenant(), nil
@@ -7050,6 +7061,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return checkShowAccountsPrivilege()
 		case *tree.ShowAccountUpgrade:
 			return tenant.IsMoAdminRole(), nil
+		case *tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores,
+			*tree.ShowLogserviceSettings, *tree.SetLogserviceSettings:
+			return checkShowLogservicePrivilege()
 		case *tree.UpgradeStatement:
 			return tenant.IsMoAdminRole(), nil
 		case *tree.BackupStart:
@@ -7388,6 +7402,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
 			return true
 		}
 		return false

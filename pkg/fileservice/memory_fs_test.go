@@ -72,8 +72,6 @@ func BenchmarkMemoryFSWithMemoryCache(b *testing.B) {
 	read := counterSet.FileService.Cache.Memory.Read.Load()
 	hit := counterSet.FileService.Cache.Memory.Hit.Load()
 	fmt.Printf("hit rate: %v / %v = %.4v\n", hit, read, float64(hit)/float64(read))
-	fmt.Printf("capacity %+v\n", counterSet.FileService.Cache.Memory.Capacity.Load())
-	fmt.Printf("used %+v\n", counterSet.FileService.Cache.Memory.Used.Load())
 }
 
 func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
@@ -94,6 +92,4 @@ func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
 	read := counterSet.FileService.Cache.Memory.Read.Load()
 	hit := counterSet.FileService.Cache.Memory.Hit.Load()
 	fmt.Printf("hit rate: %v / %v = %.4v\n", hit, read, float64(hit)/float64(read))
-	fmt.Printf("capacity %+v\n", counterSet.FileService.Cache.Memory.Capacity.Load())
-	fmt.Printf("used %+v\n", counterSet.FileService.Cache.Memory.Used.Load())
 }

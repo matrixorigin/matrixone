@@ -15,17 +15,41 @@
 package store
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"go.uber.org/zap"
 )
 
-func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry entry.Entry, err error) {
+func BuildFilesEntry(files []string) (entry.Entry, error) {
+	vec := containers.NewVector(types.T_char.ToType())
+	for _, file := range files {
+		vec.Append([]byte(file), false)
+	}
+	defer vec.Close()
+	buf, err := vec.GetDownstreamVector().MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	filesEntry := entry.GetBase()
+	if err = filesEntry.SetPayload(buf); err != nil {
+		return nil, err
+	}
+	info := &entry.Info{
+		Group: GroupFiles,
+	}
+	filesEntry.SetType(entry.IOET_WALEntry_Checkpoint)
+	filesEntry.SetInfo(info)
+	return filesEntry, nil
+}
+
+func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64, files ...string) (ckpEntry entry.Entry, err error) {
 	logutil.Info("TRACE-WAL-TRUNCATE-RangeCheckpoint", zap.Uint32("group", gid), zap.Uint64("lsn", end))
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
 	drentry, _, err := w.doAppend(GroupCKP, ckpEntry)
@@ -34,6 +58,17 @@ func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry ent
 	}
 	if err != nil {
 		panic(err)
+	}
+	if len(files) > 0 {
+		var fileEntry entry.Entry
+		fileEntry, err = BuildFilesEntry(files)
+		if err != nil {
+			return
+		}
+		_, _, err = w.doAppend(GroupFiles, fileEntry)
+		if err != nil {
+			return
+		}
 	}
 	_, err = w.checkpointQueue.Enqueue(drentry)
 	if err != nil {
@@ -126,7 +161,7 @@ func (w *StoreImpl) onTruncatingQueue(items ...any) {
 
 func (w *StoreImpl) onTruncateQueue(items ...any) {
 	lsn := w.driverCheckpointing.Load()
-	if lsn != w.driverCheckpointed {
+	if lsn != w.driverCheckpointed.Load() {
 		err := w.driver.Truncate(lsn)
 		for err != nil {
 			lsn = w.driverCheckpointing.Load()
@@ -135,6 +170,6 @@ func (w *StoreImpl) onTruncateQueue(items ...any) {
 		t := time.Now()
 		w.gcWalDriverLsnMap(lsn)
 		logutil.Info("TRACE-WAL-TRUNCATE-GC-Store", zap.String("duration", time.Since(t).String()))
-		w.driverCheckpointed = lsn
+		w.driverCheckpointed.Store(lsn)
 	}
 }

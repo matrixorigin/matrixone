@@ -87,7 +87,11 @@ func NewService(
 
 	configKVMap, _ := dumpCnConfig(*cfg)
 	options = append(options, WithConfigData(configKVMap))
-	options = append(options, WithBootstrapOptions(bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize)))
+
+	options = append(options, WithBootstrapOptions(
+		bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize),
+		bootstrap.WithKek(cfg.Frontend.KeyEncryptionKey),
+	))
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
@@ -222,7 +226,6 @@ func NewService(
 	}
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
-	srv.storeEngine = pu.StorageEngine
 
 	// TODO: global client need to refactor
 	c, err := cnclient.NewPipelineClient(
@@ -755,6 +758,7 @@ func (s *service) initShardService() {
 	}
 
 	store := shardservice.NewShardStorage(
+		s.cfg.UUID,
 		runtime.ServiceRuntime(s.cfg.UUID).Clock(),
 		s.sqlExecutor,
 		s.timestampWaiter,

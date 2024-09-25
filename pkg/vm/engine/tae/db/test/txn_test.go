@@ -98,8 +98,8 @@ func init() {
 
 	var err error
 	wareHouse = catalog.NewEmptySchema("WAREHOUSE")
-	wareHouse.BlockMaxRows = 40000
-	wareHouse.ObjectMaxBlocks = 40
+	wareHouse.Extra.BlockMaxRows = 40000
+	wareHouse.Extra.ObjectMaxBlocks = 40
 	_ = wareHouse.AppendPKCol("W_ID", types.T_uint8.ToType(), 0)
 	_ = wareHouse.AppendCol("W_NAME", types.T_varchar.ToType())
 	_ = wareHouse.AppendCol("W_STREET_1", types.T_varchar.ToType())
@@ -114,8 +114,8 @@ func init() {
 	}
 
 	district = catalog.NewEmptySchema("DISTRICT")
-	district.BlockMaxRows = 40000
-	district.ObjectMaxBlocks = 40
+	district.Extra.BlockMaxRows = 40000
+	district.Extra.ObjectMaxBlocks = 40
 	_ = district.AppendPKCol("D_ID", types.T_int16.ToType(), 0)
 	_ = district.AppendCol("D_W_ID", types.T_uint8.ToType())
 	_ = district.AppendCol("D_NAME", types.T_varchar.ToType())
@@ -132,8 +132,8 @@ func init() {
 	}
 
 	balance = catalog.NewEmptySchema("BALANCE")
-	balance.BlockMaxRows = 40000
-	balance.ObjectMaxBlocks = 40
+	balance.Extra.BlockMaxRows = 40000
+	balance.Extra.ObjectMaxBlocks = 40
 	_ = balance.AppendPKCol("ID", types.T_uint64.ToType(), 0)
 	_ = balance.AppendCol("BALANCE", types.T_float64.ToType())
 	// balance.AppendCol("USERID", types.T_uint64.ToType())
@@ -142,8 +142,8 @@ func init() {
 	}
 
 	user = catalog.NewEmptySchema("USER")
-	user.BlockMaxRows = 40000
-	user.ObjectMaxBlocks = 40
+	user.Extra.BlockMaxRows = 40000
+	user.Extra.ObjectMaxBlocks = 40
 	_ = user.AppendPKCol("ID", types.T_uint64.ToType(), 0)
 	_ = user.AppendCol("NAME", types.T_varchar.ToType())
 	_ = user.AppendCol("BIRTH", types.T_date.ToType())
@@ -154,8 +154,8 @@ func init() {
 	}
 
 	goods = catalog.NewEmptySchema("GOODS")
-	goods.BlockMaxRows = 40000
-	goods.ObjectMaxBlocks = 40
+	goods.Extra.BlockMaxRows = 40000
+	goods.Extra.ObjectMaxBlocks = 40
 	_ = goods.AppendPKCol("ID", types.T_uint64.ToType(), 0)
 	_ = goods.AppendCol("NAME", types.T_varchar.ToType())
 	_ = goods.AppendCol("PRICE", types.T_float64.ToType())
@@ -165,8 +165,8 @@ func init() {
 	}
 
 	repertory = catalog.NewEmptySchema("REPERTORY")
-	repertory.BlockMaxRows = 40000
-	repertory.ObjectMaxBlocks = 40
+	repertory.Extra.BlockMaxRows = 40000
+	repertory.Extra.ObjectMaxBlocks = 40
 	_ = repertory.AppendPKCol("ID", types.T_uint64.ToType(), 0)
 	_ = repertory.AppendCol("GOODID", types.T_uint64.ToType())
 	_ = repertory.AppendCol("COUNT", types.T_uint64.ToType())
@@ -175,8 +175,8 @@ func init() {
 	}
 
 	deal = catalog.NewEmptySchema("DEAL")
-	deal.BlockMaxRows = 40000
-	deal.ObjectMaxBlocks = 40
+	deal.Extra.BlockMaxRows = 40000
+	deal.Extra.ObjectMaxBlocks = 40
 	_ = deal.AppendPKCol("ID", types.T_uint64.ToType(), 0)
 	_ = deal.AppendCol("USERID", types.T_uint64.ToType())
 	_ = deal.AppendCol("GOODID", types.T_uint64.ToType())
@@ -567,8 +567,8 @@ func TestTxn7(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 
 	bat := catalog.MockBatch(schema, 20)
 	defer bat.Close()
@@ -606,10 +606,10 @@ func TestTxn8(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchemaAll(13, 2)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*10))
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*10))
 	defer bat.Close()
 	bats := bat.Split(2)
 
@@ -656,9 +656,9 @@ func TestTxn9(t *testing.T) {
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 12)
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 4
-	expectRows := schema.BlockMaxRows * 5 / 2
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 4
+	expectRows := schema.Extra.BlockMaxRows * 5 / 2
 	bat := catalog.MockBatch(schema, int(expectRows))
 	defer bat.Close()
 	bats := bat.Split(5)

@@ -54,7 +54,7 @@ func (appender *objectAppender) GetID() *common.ID {
 }
 
 func (appender *objectAppender) IsAppendable() bool {
-	return appender.rows+appender.placeholder < appender.obj.meta.Load().GetSchema().BlockMaxRows
+	return appender.rows+appender.placeholder < appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows
 }
 
 func (appender *objectAppender) Close() {
@@ -71,7 +71,7 @@ func (appender *objectAppender) PrepareAppend(
 	isMergeCompact bool,
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
-	left := appender.obj.meta.Load().GetSchema().BlockMaxRows - appender.rows - appender.placeholder
+	left := appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows - appender.rows - appender.placeholder
 	if left == 0 {
 		// n = rows
 		return

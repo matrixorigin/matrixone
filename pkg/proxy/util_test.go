@@ -207,6 +207,47 @@ func TestIsCmdQuit(t *testing.T) {
 	require.False(t, isCmdQuit(data))
 }
 
+func TestIsLoadDataLocalInfileRespPacket(t *testing.T) {
+	var data []byte
+	ret := isLoadDataLocalInfileRespPacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 2, 0}
+	ret = isLoadDataLocalInfileRespPacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 0xFB, 0}
+	ret = isLoadDataLocalInfileRespPacket(data)
+	require.True(t, ret)
+}
+
+func TestIsDeallocatePacket(t *testing.T) {
+	var data []byte
+	ret := isDeallocatePacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 2, 0}
+	ret = isDeallocatePacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 25, 0}
+	ret = isDeallocatePacket(data)
+	require.True(t, ret)
+}
+
+func TestIsEmptyPacket(t *testing.T) {
+	ret := isEmptyPacket(nil)
+	require.True(t, ret)
+
+	var data []byte
+	ret = isEmptyPacket(data)
+	require.True(t, ret)
+
+	data = []byte{0, 0}
+	ret = isEmptyPacket(data)
+	require.False(t, ret)
+}
+
 func TestContainIP(t *testing.T) {
 	cidrs := []string{"192.168.20.0/24", "192.168.10.0/24"}
 	ipNetList := make([]*net.IPNet, 0, 2)

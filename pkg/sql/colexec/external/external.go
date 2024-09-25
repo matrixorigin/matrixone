@@ -268,7 +268,6 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 		Cnt:   1,
 	}
 
-	var buf bytes.Buffer
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].GetOriginCaseName()
@@ -281,13 +280,10 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 			}
 
 			for j := 0; j < len(fileList); j++ {
-				buf.WriteString(getAccountCol(fileList[j]))
-				bs := buf.Bytes()
-				if err = vector.SetBytesAt(bat.Vecs[i], j, bs, mp); err != nil {
+				if err = vector.SetStringAt(bat.Vecs[i], j, getAccountCol(fileList[j]), mp); err != nil {
 					bat.Clean(mp)
 					return nil, err
 				}
-				buf.Reset()
 			}
 		} else if bat.Attrs[i] == catalog.ExternalFilePath {
 			typ := types.T_varchar.ToType()
@@ -298,13 +294,10 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 			}
 
 			for j := 0; j < len(fileList); j++ {
-				buf.WriteString(fileList[j])
-				bs := buf.Bytes()
-				if err = vector.SetBytesAt(bat.Vecs[i], j, bs, mp); err != nil {
+				if err = vector.SetStringAt(bat.Vecs[i], j, fileList[j], mp); err != nil {
 					bat.Clean(mp)
 					return nil, err
 				}
-				buf.Reset()
 			}
 		}
 	}
@@ -857,7 +850,7 @@ func checkLineValidRestrictive(param *ExternalParam, proc *process.Process, line
 			return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
 		}
 	} else {
-		if param.Extern.ExtTab {
+		if param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) {
 			if len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
 				return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is less than input columns", rowIdx+1)
 			}
@@ -1177,7 +1170,7 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 
 // scanFileData read batch data from external file
 func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
-	if param.Extern.QueryResult {
+	if param.Extern.ExternType == int32(plan.ExternType_RESULT_SCAN) {
 		return scanZonemapFile(ctx, param, proc, bat)
 	}
 	if param.Extern.Format == tree.PARQUET {
@@ -1318,9 +1311,6 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
-	if param.Extern.ExtTab {
-		return line[param.Name2ColIndex[strings.ToLower(colName)]]
-	}
 	return line[param.TbColToDataCol[strings.ToLower(colName)]]
 }
 
@@ -1368,8 +1358,6 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 }
 
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, colIdx int) error {
-	var buf bytes.Buffer
-
 	colName := param.Attrs[colIdx]
 	vec := bat.Vecs[colIdx]
 
@@ -1393,14 +1381,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		nulls.Add(vec.GetNulls(), uint64(rowIdx))
 		return nil
 	}
+
 	if param.ParallelLoad {
-		buf.WriteString(field.Val)
-		bs := buf.Bytes()
-		err := vector.SetBytesAt(vec, rowIdx, bs, mp)
+		err := vector.SetStringAt(vec, rowIdx, field.Val, mp)
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 		return nil
 	}
 
@@ -1429,7 +1415,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, val); err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_int8:
 		d, err := strconv.ParseInt(field.Val, 10, 8)
 		if err == nil {
@@ -1633,14 +1618,10 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		// XXX Memory accounting?
-		buf.WriteString(field.Val)
-		bs := buf.Bytes()
-		err := vector.SetBytesAt(vec, rowIdx, bs, mp)
+		err := vector.SetStringAt(vec, rowIdx, field.Val, mp)
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_array_float32:
 		arrBytes, err := types.StringToArrayToBytes[float32](field.Val)
 		if err != nil {
@@ -1650,7 +1631,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_array_float64:
 		arrBytes, err := types.StringToArrayToBytes[float64](field.Val)
 		if err != nil {
@@ -1660,7 +1640,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_json:
 		var jsonBytes []byte
 		if param.Extern.Format != tree.CSV {

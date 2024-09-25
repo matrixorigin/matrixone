@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // -----------------------------------------------------------------
@@ -231,10 +230,9 @@ func (r *mergeReader) Read(
 }
 
 // -----------------------------------------------------------------
-
 func NewReader(
 	ctx context.Context,
-	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
+	mp *mpool.MPool,
 	e *Engine,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
@@ -246,7 +244,7 @@ func NewReader(
 	baseFilter, err := engine_util.ConstructBasePKFilter(
 		expr,
 		tableDef,
-		proc,
+		mp,
 	)
 	if err != nil {
 		return nil, err
@@ -276,12 +274,11 @@ func NewReader(
 			ctx:      ctx,
 			fs:       e.fs,
 			ts:       ts,
-			proc:     proc,
 			tableDef: tableDef,
+			name:     tableDef.Name,
 		},
 		memFilter: memFilter,
 		source:    source,
-		ts:        ts,
 	}
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
@@ -295,7 +292,6 @@ func (r *reader) Close() error {
 }
 
 func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	//r.OrderBy = orderby
 	r.source.SetOrderBy(orderby)
 }
 
@@ -314,6 +310,7 @@ func (r *reader) Read(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
+	outBatch.CleanOnlyData()
 
 	var dataState engine.DataState
 
@@ -364,6 +361,7 @@ func (r *reader) Read(
 
 	err = blockio.BlockDataRead(
 		statsCtx,
+		r.isTombstone,
 		blkInfo,
 		r.source,
 		r.columns.seqnums,
@@ -373,7 +371,7 @@ func (r *reader) Read(
 		r.filterState.colTypes,
 		filter,
 		policy,
-		r.tableDef.Name,
+		r.name,
 		outBatch,
 		mp,
 		r.fs,

@@ -234,6 +234,7 @@ type BindContext struct {
 	unionSelect            bool
 	recRecursiveScanNodeId int32
 	isTryBindingCTE        bool
+	sliding                bool
 
 	cteName  string
 	headings []string

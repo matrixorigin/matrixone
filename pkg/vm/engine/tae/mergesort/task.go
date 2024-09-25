@@ -19,20 +19,18 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
 )
 
@@ -85,36 +83,6 @@ func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*
 	return newBat, releaseF
 }
 
-func GetNewWriter(
-	fs fileservice.FileService,
-	ver uint32, seqnums []uint16,
-	sortkeyPos int, sortkeyIsPK bool, isTombstone bool,
-) *blockio.BlockWriter {
-	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(fs, name, ver, seqnums)
-	if err != nil {
-		panic(err) // it is impossible
-	}
-	// has sortkey
-	if sortkeyPos >= 0 {
-		if sortkeyIsPK {
-			if isTombstone {
-				writer.SetPrimaryKeyWithType(
-					uint16(catalog.TombstonePrimaryKeyIdx),
-					index.HBF,
-					index.ObjectPrefixFn,
-					index.BlockPrefixFn,
-				)
-			} else {
-				writer.SetPrimaryKey(uint16(sortkeyPos))
-			}
-		} else { // cluster by
-			writer.SetSortKey(uint16(sortkeyPos))
-		}
-	}
-	return writer
-}
-
 func DoMergeAndWrite(
 	ctx context.Context,
 	txnInfo string,
@@ -126,9 +94,15 @@ func DoMergeAndWrite(
 	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
 	fromObjsDesc := ""
+	fromSize := uint32(0)
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
-		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, obj.ObjectName().ObjectId().ShortStringEx())
+		fromObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
+			obj.ObjectName().ObjectId().ShortStringEx(),
+			obj.BlkCnt(),
+			units.BytesSize(float64(obj.OriginSize())),
+			obj.Rows())
+		fromSize += obj.OriginSize()
 	}
 	logutil.Info(
 		"[MERGE-START]",
@@ -136,7 +110,8 @@ func DoMergeAndWrite(
 		common.AnyField("txn-info", txnInfo),
 		common.AnyField("host", mergehost.HostHintName()),
 		common.AnyField("timestamp", commitEntry.StartTs.DebugString()),
-		common.AnyField("objs", fromObjsDesc),
+		zap.String("from-objs", fromObjsDesc),
+		zap.String("from-size", units.BytesSize(float64(fromSize))),
 	)
 	defer func() {
 		if err != nil {
@@ -164,18 +139,22 @@ func DoMergeAndWrite(
 	}
 
 	toObjsDesc := ""
+	toSize := uint32(0)
 	for _, o := range commitEntry.CreatedObjs {
 		obj := objectio.ObjectStats(o)
-		toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
+		toObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
 			obj.ObjectName().ObjectId().ShortStringEx(),
 			obj.BlkCnt(),
+			units.BytesSize(float64(obj.OriginSize())),
 			obj.Rows())
+		toSize += obj.OriginSize()
 	}
 
 	logutil.Info(
 		"[MERGE-END]",
 		zap.String("task", mergehost.Name()),
 		common.AnyField("to-objs", toObjsDesc),
+		common.AnyField("to-size", units.BytesSize(float64(toSize))),
 		common.DurationField(time.Since(now)),
 	)
 	return nil
