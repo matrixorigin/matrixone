@@ -206,12 +206,12 @@ func init() {
 	}
 }
 
-func runShuffleCase(t *testing.T, tc shuffleTestCase) {
+func runShuffleCase(t *testing.T, tc shuffleTestCase, hasnull bool) {
 	var result vm.CallResult
 	var count int
 	err := tc.arg.Prepare(tc.proc)
 	require.NoError(t, err)
-	resetChildren(tc.arg, getInputBats(tc))
+	resetChildren(tc.arg, getInputBats(tc, hasnull))
 	for {
 		result, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
@@ -229,9 +229,9 @@ func runShuffleCase(t *testing.T, tc shuffleTestCase) {
 func TestShuffle(t *testing.T) {
 
 	for _, tc := range tcs {
-		runShuffleCase(t, tc)
+		runShuffleCase(t, tc, true)
 		// second run
-		runShuffleCase(t, tc)
+		runShuffleCase(t, tc, false)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -266,30 +266,54 @@ func TestPrint(t *testing.T) {
 	sp.Print()
 }
 
-func getInputBats(tc shuffleTestCase) []*batch.Batch {
+func getInputBats(tc shuffleTestCase, hasnull bool) []*batch.Batch {
+	if hasnull {
+		return []*batch.Batch{
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			newBatch(tc.types, tc.proc, Rows, true),
+			batch.EmptyBatch,
+		}
+	}
 	return []*batch.Batch{
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
+		newBatch(tc.types, tc.proc, Rows, false),
 		batch.EmptyBatch,
 	}
 }
 
 // create a new block based on the type information
-func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64, hasNull bool) *batch.Batch {
+	if hasNull {
+		return testutil.NewBatchWithNulls(ts, true, int(rows), proc.Mp())
+	}
 	return testutil.NewBatch(ts, true, int(rows), proc.Mp())
 }
 
