@@ -79,10 +79,10 @@ func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
 	if header.Type != IOET_ColData {
 		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
 	}
-	if header.Version != IOET_ColumnData_V2 {
+	if header.Version == IOET_ColumnData_V2 {
 		err = toVec.UnmarshalBinary(buf[IOEntryHeaderSize:])
 		return
-	} else if header.Version != IOET_ColumnData_V1 {
+	} else if header.Version == IOET_ColumnData_V1 {
 		err = toVec.UnmarshalBinaryV1(buf[IOEntryHeaderSize:])
 		return
 	}
