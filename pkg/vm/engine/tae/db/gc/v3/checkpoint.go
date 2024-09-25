@@ -229,7 +229,7 @@ func (c *checkpointCleaner) Replay() error {
 		return nil
 	}
 	for _, dir := range readDirs {
-		table := NewGCTable()
+		table := NewGCTable(c.fs.Service, c.mPool)
 		_, end, _ := blockio.DecodeGCMetadataFileName(dir.Name)
 		logutil.Infof("Replay GC metadata file %s", dir.Name)
 		err = table.ReadTable(c.ctx, GCMetaDir+dir.Name, dir.Size, c.fs, end)
@@ -471,7 +471,7 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	}
 	// tables[0] has always been a full GCTable
 	if len(c.inputs.tables) > 1 {
-		mergeTable = NewGCTable()
+		mergeTable = NewGCTable(c.fs.Service, c.mPool)
 		for _, table := range c.inputs.tables {
 			mergeTable.Merge(table)
 		}
@@ -706,7 +706,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		}
 		logtail.CloseSnapshotList(snapshots)
 	}()
-	gcTable := NewGCTable()
+	gcTable := NewGCTable(c.fs.Service, c.mPool)
 	gcTable.UpdateTable(data)
 	snapshots, err = c.GetSnapshots()
 	if err != nil {
@@ -766,7 +766,7 @@ func (c *checkpointCleaner) softGC(
 		table.Close()
 		c.inputs.tables[i] = nil
 	}
-	gc, snapList := mergeTable.SoftGC(gbf, gckp.GetEnd(), snapshots, c.snapshotMeta)
+	gc, snapList := mergeTable.SoftGC(c.ctx, gbf, gckp.GetEnd(), snapshots, c.snapshotMeta)
 	softCost = time.Since(now)
 	now = time.Now()
 	c.inputs.tables = make([]*GCTable, 0)
@@ -779,7 +779,7 @@ func (c *checkpointCleaner) softGC(
 
 func (c *checkpointCleaner) createDebugInput(
 	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
-	input = NewGCTable()
+	input = NewGCTable(c.fs.Service, c.mPool)
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {
 		data, err = c.collectCkpData(candidate)
@@ -820,7 +820,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		return err
 	}
 	defer data.Close()
-	gcTable := NewGCTable()
+	gcTable := NewGCTable(c.fs.Service, c.mPool)
 	gcTable.UpdateTable(data)
 	defer gcTable.Close()
 	for i, ckp := range debugCandidates {
@@ -850,10 +850,18 @@ func (c *checkpointCleaner) CheckGC() error {
 		return moerr.NewInternalErrorNoCtxf("processing clean GetSnapshots %s: %v", debugCandidates[0].String(), err)
 	}
 	defer logtail.CloseSnapshotList(snapshots)
-	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, c.snapshotMeta)
+	bat := gcTable.fetchBuffer()
+	_, err = gcTable.CollectMapData(c.ctx, bat, gcTable.mp)
+	if err != nil {
+		logutil.Errorf("[DiskCleaner] CollectMapData failed: %v", err.Error())
+		return nil
+	}
+
+	bf := bloomfilter.New(int64(bat.Vecs[0].Length()), 1/10000)
+	debugTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, c.snapshotMeta)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
-		mergeTable = NewGCTable()
+		mergeTable = NewGCTable(c.fs.Service, c.mPool)
 		for _, table := range c.inputs.tables {
 			mergeTable.Merge(table)
 		}
@@ -861,7 +869,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		mergeTable = c.inputs.tables[0]
 	}
 	defer mergeTable.Close()
-	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, c.snapshotMeta)
+	mergeTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, c.snapshotMeta)
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
@@ -991,7 +999,7 @@ func (c *checkpointCleaner) createNewInput(
 	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
 	now := time.Now()
 	var snapSize, tableSize uint32
-	input = NewGCTable()
+	input = NewGCTable(c.fs.Service, c.mPool)
 	logutil.Info("[DiskCleaner]", zap.String("op", "Consume-Start"),
 		zap.Int("entry count :", len(ckps)))
 	defer func() {

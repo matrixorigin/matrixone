@@ -49,9 +49,11 @@ type ObjectEntry struct {
 	table    uint64
 }
 
-func NewGCTable() *GCTable {
+func NewGCTable(fs fileservice.FileService, mp *mpool.MPool) *GCTable {
 	table := GCTable{
 		objects: make(map[string]*ObjectEntry),
+		fs:      fs,
+		mp:      mp,
 	}
 	return &table
 }
@@ -566,8 +568,8 @@ func (t *GCTable) compareObjects(objects, compareObjects map[string]*ObjectEntry
 				name, entry.createTS.ToString(), entry.dropTS.ToString())
 			return false
 		}
-		if !entry.commitTS.Equal(&object.commitTS) {
-			logutil.Infof("object %s commitTS is not equal", name)
+		if !entry.createTS.Equal(&object.createTS) {
+			logutil.Infof("object %s createTS is not equal", name)
 			return false
 		}
 	}
@@ -582,12 +584,7 @@ func (t *GCTable) String() string {
 	var w bytes.Buffer
 	_, _ = w.WriteString("objects:[\n")
 	for name, entry := range t.objects {
-		_, _ = w.WriteString(fmt.Sprintf("name: %s, commitTS: %v ", name, entry.commitTS.ToString()))
-	}
-	_, _ = w.WriteString("]\n")
-	_, _ = w.WriteString("tombstones:[\n")
-	for name, entry := range t.tombstones {
-		_, _ = w.WriteString(fmt.Sprintf("name: %s, commitTS: %v ", name, entry.commitTS.ToString()))
+		_, _ = w.WriteString(fmt.Sprintf("name: %s, createTS: %v ", name, entry.createTS.ToString()))
 	}
 	_, _ = w.WriteString("]\n")
 	return w.String()
