@@ -46,7 +46,6 @@ var (
 
 	RuntimeOverallFlushMemCap atomic.Uint64
 
-	FlushGapDuration atomic.Value
 	FlushMemCapacity atomic.Int32
 )
 
@@ -54,7 +53,6 @@ func init() {
 	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
 	RuntimeOsizeRowsQualified.Store(DefaultMinOsizeQualifiedMB * Const1MBytes)
 	RuntimeMaxObjOsize.Store(DefaultMaxOsizeObjMB * Const1MBytes)
-	FlushGapDuration.Store(time.Minute)
 	FlushMemCapacity.Store(20 * Const1MBytes)
 }
 
@@ -71,12 +69,24 @@ type TableCompactStat struct {
 	lastMergeTime time.Time
 }
 
-func (s *TableCompactStat) ResetDeadline() {
+func (s *TableCompactStat) Init(maxFlushInterval time.Duration) {
+	s.Lock()
+	defer s.Unlock()
+	if s.flushDeadline.IsZero() {
+		s.resetDeadlineLocked(maxFlushInterval)
+	}
+}
+
+func (s *TableCompactStat) ResetDeadline(maxFlushInterval time.Duration) {
 	// add random +/- 10%
 	s.Lock()
 	defer s.Unlock()
+	s.resetDeadlineLocked(maxFlushInterval)
+}
+
+func (s *TableCompactStat) resetDeadlineLocked(maxFlushInterval time.Duration) {
 	factor := 1.0 + float64(rand.Intn(21)-10)/100.0
-	s.flushDeadline = time.Now().Add(time.Duration(factor * float64(FlushGapDuration.Load().(time.Duration))))
+	s.flushDeadline = time.Now().Add(time.Duration(factor * float64(maxFlushInterval) * 5))
 }
 
 func (s *TableCompactStat) GetFlushDeadline() time.Time {
@@ -102,5 +112,5 @@ func (s *TableCompactStat) GetLastMergeTime() time.Time {
 ////
 
 func HumanReadableBytes(bytes int) string {
-	return units.HumanSize(float64(bytes))
+	return units.BytesSize(float64(bytes))
 }

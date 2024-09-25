@@ -962,6 +962,7 @@ func (r *runner) collectTableMemUsage(entry *logtail.DirtyTreeEntry) (memPressur
 		if err != nil {
 			panic(err)
 		}
+		table.Stats.Init(r.options.maxFlushInterval)
 		dirtyTree := entry.GetTree().GetTable(tid)
 		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
 		totalSize += asize + dsize
@@ -998,7 +999,7 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 		if force {
 			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				table.Stats.ResetDeadline()
+				table.Stats.ResetDeadline(r.options.maxFlushInterval)
 			}
 			continue
 		}
@@ -1043,7 +1044,7 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 
 		if ready {
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				table.Stats.ResetDeadline()
+				table.Stats.ResetDeadline(r.options.maxFlushInterval)
 			}
 		}
 	}

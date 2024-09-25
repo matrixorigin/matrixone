@@ -290,7 +290,7 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry, config *BasicPolicyConfig)
 
 	// avoid frequent small object merge
 	if readyToMergeRows < int(o.schema.Extra.BlockMaxRows) &&
-		o.lastMergeTime.Before(time.Now().Add(-constSmallMergeGap)) &&
+		!o.lastMergeTime.Before(time.Now().Add(-constSmallMergeGap)) &&
 		i < config.MergeMaxOneRun {
 		return nil
 	}
