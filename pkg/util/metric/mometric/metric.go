@@ -452,7 +452,7 @@ var SingleMetricTable = &table.Table{
 	Table:            `metric`,
 	Columns:          []table.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
 	PrimaryKeyColumn: []table.Column{},
-	ClusterBy:        []table.Column{metricAccountColumn, metricCollectTimeColumn},
+	ClusterBy:        []table.Column{metricAccountColumn, metricNameColumn, metricCollectTimeColumn},
 	Engine:           table.NormalTableEngine,
 	Comment:          `metric data` + catalog.MO_COMMENT_NO_DEL_HINT,
 	PathBuilder:      table.NewAccountDatePathBuilder(),

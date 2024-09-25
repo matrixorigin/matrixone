@@ -246,7 +246,7 @@ var upg_rename_system_metrics_metric_120 = versions.UpgradeEntry{
 	},
 }
 
-const CreateSystemMetricsMetric_130 = "CREATE TABLE `metric` (\n  `metric_name` varchar(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n  `collecttime` datetime(6) NOT NULL COMMENT 'metric data collect time',\n  `value` double DEFAULT '0.0' COMMENT 'metric value',\n  `node` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n  `role` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n  `account` varchar(1024) DEFAULT 'sys' COMMENT 'account name',\n  `type` varchar(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) COMMENT='metric data[mo_no_del_hint]' CLUSTER BY (`account`, `collecttime`)"
+const CreateSystemMetricsMetric_130 = "CREATE TABLE `metric` (\n  `metric_name` varchar(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n  `collecttime` datetime(6) NOT NULL COMMENT 'metric data collect time',\n  `value` double DEFAULT '0.0' COMMENT 'metric value',\n  `node` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n  `role` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n  `account` varchar(1024) DEFAULT 'sys' COMMENT 'account name',\n  `type` varchar(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) COMMENT='metric data[mo_no_del_hint]' CLUSTER BY (`account`, `metric_name`, `collecttime`)"
 
 // upg_create_system_stmt_info_130 do create new table
 var upg_create_system_metrics_metric_130 = versions.UpgradeEntry{
