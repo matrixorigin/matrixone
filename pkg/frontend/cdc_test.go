@@ -2279,7 +2279,7 @@ func Test_getTaskCkp(t *testing.T) {
 				accountId: sysAccountID,
 				taskId:    "taskID-1",
 			},
-			wantS: "{\n  \"db1.tb1\": 0-0,\n}",
+			wantS: "{\n  \"db1.tb1\": 1970-01-01 00:00:00 +0000 UTC,\n}",
 		},
 	}
 	for _, tt := range tests {
@@ -2922,7 +2922,7 @@ func Test_getSqlForGetTask(t *testing.T) {
 func Test_initAesKey(t *testing.T) {
 	{
 		cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
-		err := initAesKey(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
 		assert.NoError(t, err)
 
 		cdc2.AesKey = ""
@@ -2935,7 +2935,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer queryTableStub.Reset()
 
-		err := initAesKey(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
 		assert.Equal(t, e, err)
 	}
 
@@ -2945,7 +2945,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer queryTableStub.Reset()
 
-		err := initAesKey(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
 		assert.Error(t, err)
 	}
 
@@ -2969,7 +2969,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer getGlobalPuStub.Reset()
 
-		err := initAesKey(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
 		assert.NoError(t, err)
 		assert.Equal(t, "aesKey", cdc2.AesKey)
 		cdc2.AesKey = ""
@@ -3007,4 +3007,132 @@ func Test_extractTablePair(t *testing.T) {
 			assert.Equalf(t, tt.want, got, "extractTablePair(%v, %v, %v)", tt.args.ctx, tt.args.pattern, tt.args.defaultAcc)
 		})
 	}
+}
+
+var _ ie.InternalExecutor = &mockIe{}
+
+type mockIe struct {
+	cnt int
+}
+
+func (*mockIe) Exec(ctx context.Context, s string, options ie.SessionOverrideOptions) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (e *mockIe) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	e.cnt += 1
+
+	if e.cnt == 1 {
+		return &mockIeResult{
+			err:      nil,
+			rowCount: 1,
+		}
+	} else if e.cnt == 2 {
+		return &mockIeResult{
+			err:      nil,
+			rowCount: 0,
+		}
+	} else if e.cnt == 3 {
+		return &mockIeResult{
+			err: moerr.NewInternalErrorNoCtx(""),
+		}
+	}
+	return &mockIeResult{
+		err:       nil,
+		rowCount:  1,
+		returnErr: true,
+	}
+}
+
+func (*mockIe) ApplySessionOverride(options ie.SessionOverrideOptions) {
+	//TODO implement me
+	panic("implement me")
+}
+
+var _ ie.InternalExecResult = &mockIeResult{}
+
+type mockIeResult struct {
+	err       error
+	rowCount  uint64
+	returnErr bool
+}
+
+func (r *mockIeResult) Error() error {
+	return r.err
+}
+
+func (*mockIeResult) ColumnCount() uint64 {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (*mockIeResult) Column(ctx context.Context, u uint64) (string, uint8, bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (r *mockIeResult) RowCount() uint64 {
+	return r.rowCount
+}
+
+func (*mockIeResult) Row(ctx context.Context, u uint64) ([]interface{}, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (*mockIeResult) Value(ctx context.Context, u uint64, u2 uint64) (interface{}, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (*mockIeResult) GetUint64(ctx context.Context, u uint64, u2 uint64) (uint64, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (*mockIeResult) GetFloat64(ctx context.Context, u uint64, u2 uint64) (float64, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (r *mockIeResult) GetString(ctx context.Context, u uint64, u2 uint64) (string, error) {
+	if r.returnErr {
+		return "", moerr.NewInternalErrorNoCtx("")
+	}
+	return "", nil
+}
+
+func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
+	mie := &mockIe{}
+	cdcTask := &CdcTask{
+		ie: mie,
+	}
+
+	decryptStub := gostub.Stub(&decrypt, func(context.Context, string, []byte) (string, error) {
+		return "aesKey", nil
+	})
+	defer decryptStub.Reset()
+
+	getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func() *config.ParameterUnit {
+		return &config.ParameterUnit{
+			SV: &config.FrontendParameters{
+				KeyEncryptionKey: "kek",
+			},
+		}
+	})
+	defer getGlobalPuStub.Reset()
+
+	err := initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	assert.NoError(t, err)
+	cdc2.AesKey = ""
+
+	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	assert.Error(t, err)
+
+	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	assert.Error(t, err)
+
+	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	assert.Error(t, err)
 }
