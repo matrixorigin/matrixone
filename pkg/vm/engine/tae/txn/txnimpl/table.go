@@ -781,7 +781,7 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 	v2.TxnTNAppendDeduplicateDurationHistogram.Observe(dedupDur)
 	return
 }
-func (tbl *txnTable) AddObjsWithMetaLoc(ctx context.Context, stats containers.Vector) (err error) {
+func (tbl *txnTable) AddDataFiles(ctx context.Context, stats containers.Vector) (err error) {
 	return stats.Foreach(func(v any, isNull bool, row int) error {
 		s := objectio.ObjectStats(v.([]byte))
 		return tbl.addObjsWithMetaLoc(ctx, s, false)
@@ -1589,7 +1589,7 @@ func (tbl *txnTable) createTombstoneBatch(
 	return bat
 }
 
-func (tbl *txnTable) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
+func (tbl *txnTable) AddPersistedTombstoneFile(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	if tbl.tombstoneTable == nil {
 		tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
 	}
