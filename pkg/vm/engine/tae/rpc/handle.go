@@ -756,7 +756,7 @@ func (h *Handle) HandleWrite(
 				}
 				persistedMemoryInsertRows += int(s.Rows())
 			}
-			err = tb.AddObjsWithMetaLoc(
+			err = tb.AddDataFiles(
 				ctx,
 				containers.ToTNVector(statsVec, common.WorkspaceAllocator),
 			)
@@ -841,7 +841,7 @@ func (h *Handle) HandleWrite(
 			persistedTombstoneRows += int(stats.Rows())
 			id := tb.GetMeta().(*catalog.TableEntry).AsCommonID()
 
-			if ok, err = tb.TryDeleteByStats(id, stats); err != nil {
+			if ok, err = tb.AddPersistedTombstoneFile(id, stats); err != nil {
 				logutil.Errorf("try delete by stats faild: %s, %v", stats.String(), err)
 				return
 			} else if ok {
