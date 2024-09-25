@@ -1381,6 +1381,9 @@ func (txn *Transaction) transferTombstoneObjects(
 			}
 
 			logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ",
+				zap.String("table",
+					fmt.Sprintf("%s(%d)-%s(%d)",
+						tbl.db.databaseName, tbl.db.databaseId, tbl.tableName, tbl.tableId)),
 				zap.Duration("time-spent", time.Since(now)),
 				zap.Int("transferred-row-cnt", flow.transferred),
 				zap.String("new-files", strings.Join(obj, "; ")))
