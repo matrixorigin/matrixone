@@ -1,7 +1,9 @@
 drop table if exists t;
-create table t (a int primary key, b int);
+create table t (a int, b int);
 insert into t select *, * from generate_series(1000) tf;
 select t2.a from t as t1 dedup join t as t2 on t1.a = t2.a;
 select t2.a from t as t1 dedup join t as t2 on t1.a + 100 = t2.a;
 select t2.a from t as t1 dedup join t as t2 on t1.a + 100 = t2.a where t2.a < 10;
+insert into t select *, * from generate_series(10, 100) tf;
+select t2.a from t as t1 dedup join t as t2 on t1.a = t2.a;
 drop table t;

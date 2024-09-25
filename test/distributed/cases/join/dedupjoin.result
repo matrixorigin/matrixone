@@ -1,5 +1,5 @@
 drop table if exists t;
-create table t (a int primary key, b int);
+create table t (a int, b int);
 insert into t select *, * from generate_series(1000) tf;
 select t2.a from t as t1 dedup join t as t2 on t1.a = t2.a;
 Duplicate entry '1' for key ''
@@ -16,4 +16,7 @@ a
 7
 8
 9
+insert into t select *, * from generate_series(10, 100) tf;
+select t2.a from t as t1 dedup join t as t2 on t1.a = t2.a;
+Duplicate entry '10' for key ''
 drop table t;

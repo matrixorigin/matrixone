@@ -317,6 +317,11 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		}
 	}
 
+	dmlNode := &plan.Node{
+		NodeType: plan.Node_MULTI_UPDATE,
+		Children: []int32{lastNodeID},
+	}
+
 	for i, tableDef := range tableDefs {
 		insertCols := make([]*plan.Expr, 0, len(tableDef.Cols))
 		for _, col := range tableDef.Cols {
@@ -335,21 +340,27 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			})
 		}
 
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_INSERT,
-			Children: []int32{lastNodeID},
-			ObjRef:   objRefs[i],
-			TableDef: tableDef,
-			InsertCtx: &plan.InsertCtx{
-				Ref:            objRefs[i],
-				IsClusterTable: tableDef.TableType == catalog.SystemClusterRel,
-				TableDef:       tableDef,
-				//PartitionTableIds:   paritionTableIds,
-				//PartitionTableNames: paritionTableNames,
-				//PartitionIdx:        int32(partitionIdx),
-			},
-			InsertDeleteCols: insertCols,
-		}, ctx)
+		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
+			ObjRef:     objRefs[i],
+			TableDef:   tableDef,
+			InsertCols: insertCols,
+		})
+
+		//lastNodeID = builder.appendNode(&plan.Node{
+		//	NodeType: plan.Node_INSERT,
+		//	Children: []int32{lastNodeID},
+		//	ObjRef:   objRefs[i],
+		//	TableDef: tableDef,
+		//	InsertCtx: &plan.InsertCtx{
+		//		Ref:            objRefs[i],
+		//		IsClusterTable: tableDef.TableType == catalog.SystemClusterRel,
+		//		TableDef:       tableDef,
+		//		PartitionTableIds:   paritionTableIds,
+		//		PartitionTableNames: paritionTableNames,
+		//		PartitionIdx:        int32(partitionIdx),
+		//	},
+		//	InsertDeleteCols: insertCols,
+		//}, ctx)
 
 		for j, idxTableDef := range idxTableDefs[i] {
 			idxInsertCols := make([]*plan.Expr, 0, len(idxTableDef.Cols))
@@ -369,25 +380,33 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				})
 			}
 
-			idxObjRef := DeepCopyObjectRef(idxObjRefs[i][j])
-			idxTblDef := DeepCopyTableDef(idxTableDef, true)
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType: plan.Node_INSERT,
-				Children: []int32{lastNodeID},
-				ObjRef:   idxObjRef,
-				TableDef: idxTblDef,
-				InsertCtx: &plan.InsertCtx{
-					Ref:            idxObjRef,
-					IsClusterTable: idxTblDef.TableType == catalog.SystemClusterRel,
-					TableDef:       idxTblDef,
-					//PartitionTableIds:   paritionTableIds,
-					//PartitionTableNames: paritionTableNames,
-					//PartitionIdx:        int32(partitionIdx),
-				},
-				InsertDeleteCols: idxInsertCols,
-			}, ctx)
+			dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
+				ObjRef:     idxObjRefs[i][j],
+				TableDef:   idxTableDef,
+				InsertCols: idxInsertCols,
+			})
+
+			//idxObjRef := DeepCopyObjectRef(idxObjRefs[i][j])
+			//idxTblDef := DeepCopyTableDef(idxTableDef, true)
+			//lastNodeID = builder.appendNode(&plan.Node{
+			//	NodeType: plan.Node_INSERT,
+			//	Children: []int32{lastNodeID},
+			//	ObjRef:   idxObjRef,
+			//	TableDef: idxTblDef,
+			//	InsertCtx: &plan.InsertCtx{
+			//		Ref:            idxObjRef,
+			//		IsClusterTable: idxTblDef.TableType == catalog.SystemClusterRel,
+			//		TableDef:       idxTblDef,
+			//		//PartitionTableIds:   paritionTableIds,
+			//		//PartitionTableNames: paritionTableNames,
+			//		//PartitionIdx:        int32(partitionIdx),
+			//	},
+			//	InsertDeleteCols: idxInsertCols,
+			//}, ctx)
 		}
 	}
+
+	lastNodeID = builder.appendNode(dmlNode, ctx)
 
 	reCheckifNeedLockWholeTable(builder)
 
