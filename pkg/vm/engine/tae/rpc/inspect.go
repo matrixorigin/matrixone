@@ -756,6 +756,8 @@ type mergePolicyArg struct {
 	maxOsizeObject    int32
 	cnMinMergeSize    int32
 	hints             []api.MergeHint
+
+	stopMerge bool
 }
 
 func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
@@ -770,30 +772,53 @@ func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd.Flags().Int32P("maxOsizeObject", "o", common.DefaultMaxOsizeObjMB, "merged objects' osize should be near maxOsizeObject(MB)")
 	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merge task whose memory occupation exceeds minCNMergeSize(MB) will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
+	policyCmd.Flags().BoolP("stopMerge", "s", false, "stop merging the target table")
 	return policyCmd
 }
 
-func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) error {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
-	address, _ := cmd.Flags().GetString("target")
+	address, err := cmd.Flags().GetString("target")
+	if err != nil {
+		return err
+	}
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
 	if err != nil {
 		return err
 	}
-	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
-	c.maxOsizeObject, _ = cmd.Flags().GetInt32("maxOsizeObject")
-	c.minOsizeQualified, _ = cmd.Flags().GetInt32("minOsizeQualified")
-	c.cnMinMergeSize, _ = cmd.Flags().GetInt32("minCNMergeSize")
+	c.maxMergeObjN, err = cmd.Flags().GetInt32("maxMergeObjN")
+	if err != nil {
+		return err
+	}
+	c.maxOsizeObject, err = cmd.Flags().GetInt32("maxOsizeObject")
+	if err != nil {
+		return err
+	}
+	c.minOsizeQualified, err = cmd.Flags().GetInt32("minOsizeQualified")
+	if err != nil {
+		return err
+	}
+	c.cnMinMergeSize, err = cmd.Flags().GetInt32("minCNMergeSize")
+	if err != nil {
+		return err
+	}
 	if c.maxOsizeObject > 2048 || c.minOsizeQualified > 2048 {
 		return moerr.NewInvalidInputNoCtx("maxOsizeObject or minOsizeQualified should be less than 2048")
 	}
-	hints, _ := cmd.Flags().GetInt32Slice("mergeHints")
+	hints, err := cmd.Flags().GetInt32Slice("mergeHints")
+	if err != nil {
+		return err
+	}
 	for _, h := range hints {
 		if _, ok := api.MergeHint_name[h]; !ok {
 			return moerr.NewInvalidArgNoCtx("unspported hint %v", h)
 		}
 		c.hints = append(c.hints, api.MergeHint(h))
+	}
+	c.stopMerge, err = cmd.Flags().GetBool("stopMerge")
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -840,6 +865,14 @@ func (c *mergePolicyArg) Run() error {
 		})
 		if err != nil {
 			return err
+		}
+		if c.stopMerge {
+			err = c.ctx.db.MergeScheduler.StopMerge(c.tbl)
+			if err != nil {
+				return err
+			}
+		} else {
+			c.ctx.db.MergeScheduler.StartMerge(c.tbl.GetID())
 		}
 		c.ctx.resp.Payload = []byte("success")
 	}
