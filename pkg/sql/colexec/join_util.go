@@ -27,6 +27,14 @@ type Batches struct {
 	Buf []*batch.Batch
 }
 
+func (bs *Batches) RowCount() int {
+	var count int
+	for _, b := range bs.Buf {
+		count += b.RowCount()
+	}
+	return count
+}
+
 func (bs *Batches) Clean(mp *mpool.MPool) {
 	for i := range bs.Buf {
 		bs.Buf[i].Clean(mp)
@@ -136,6 +144,9 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) (err 
 		}
 		newBuf[i].SetRowCount(len(newsels))
 	}
+
+	bs.Clean(proc.Mp())
+	bs.Buf = newBuf
 
 	return
 }
