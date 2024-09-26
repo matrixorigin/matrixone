@@ -98,11 +98,11 @@ func TestHandleInspectPolicy(t *testing.T) {
 		Operation:  "policy -t db1.test1 -s true",
 	}, resp)
 	require.NoError(t, err)
-	require.Equal(t, "(1000-test1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
+	require.Equal(t, "run err: internal error: test1 is already locked", resp.Message)
 
 	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &db.InspectTN{
 		AccessInfo: db.AccessInfo{},
-		Operation:  "policy -t db1.test1 -s false",
+		Operation:  "policy -t db1.test1",
 	}, resp)
 	require.NoError(t, err)
 	require.Equal(t, "(1000-test1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)

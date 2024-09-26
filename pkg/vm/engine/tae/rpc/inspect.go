@@ -866,16 +866,13 @@ func (c *mergePolicyArg) Run() error {
 		if err != nil {
 			return err
 		}
-		mergeStopped := c.ctx.db.Runtime.LockMergeService.IsLockedByUser(c.tbl.GetID(), c.tbl.GetLastestSchema(false).Name)
 		if c.stopMerge {
-			if !mergeStopped {
-				err = c.ctx.db.MergeScheduler.StopMerge(c.tbl, false)
-				if err != nil {
-					return err
-				}
+			err = c.ctx.db.MergeScheduler.StopMerge(c.tbl, false)
+			if err != nil {
+				return err
 			}
 		} else {
-			if mergeStopped {
+			if c.ctx.db.Runtime.LockMergeService.IsLockedByUser(c.tbl.GetID(), c.tbl.GetLastestSchema(false).Name) {
 				err = c.ctx.db.MergeScheduler.StartMerge(c.tbl.GetID(), false)
 				if err != nil {
 					return err
