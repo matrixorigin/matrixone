@@ -10,24 +10,6 @@ spec:
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression-proxy: "true"
     overlay:
-      initContainers:
-        - image: ccr.ccs.tencentyun.com/matrixone-dev/matrixone:imagetag
-          command:
-            - sh
-            - -c
-            - |
-              apt update -y;
-              apt install -y iptables conntrack;
-              iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;
-          imagePullPolicy: IfNotPresent
-          terminationMessagePolicy: File
-          securityContext:
-            capabilities:
-              add: ["NET_ADMIN","SYS_ADMIN"]
-          name: enable-conntrack
-      mainContainerSecurityContext:
-        capabilities:
-          add: ["NET_ADMIN","NET_RAW"]
       securityContext:
         sysctls:
           - name: net.ipv4.tcp_fin_timeout
@@ -129,24 +111,6 @@ spec:
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression-log: "true"
     overlay:
-      initContainers:
-        - image: ccr.ccs.tencentyun.com/matrixone-dev/matrixone:imagetag
-          command:
-            - sh
-            - -c
-            - |
-              apt update -y;
-              apt install -y iptables conntrack;
-              iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;
-          imagePullPolicy: IfNotPresent
-          terminationMessagePolicy: File
-          securityContext:
-            capabilities:
-              add: ["NET_ADMIN","SYS_ADMIN"]
-          name: enable-conntrack
-      mainContainerSecurityContext:
-        capabilities:
-          add: ["NET_ADMIN","NET_RAW"]
       envFrom:
         - configMapRef:
             name: proxy-env
