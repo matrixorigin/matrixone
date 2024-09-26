@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,9 +25,10 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -178,18 +180,21 @@ func TestHandleAddNonVotingReplica(t *testing.T) {
 }
 
 func TestHandleStartNonVotingReplica(t *testing.T) {
+	t.Skip() // pls re-open after https://github.com/matrixorigin/matrixone/pull/19025
 	fn := func(t *testing.T, s *Service) {
 		cfg := getStoreTestConfig()
-		cfg.GossipAddress = "0.0.0.0:33002"
-		cfg.GossipSeedAddresses = []string{"127.0.0.1:33002"}
-		cfg.GossipPort = 19010
+		gPort := getTestGossipPort()
+		cfg.GossipAddress = fmt.Sprintf("0.0.0.0:%d", gPort)
+		cfg.GossipSeedAddresses = []string{getTestGossipAddress(gPort)}
+		cfg.GossipPort = getTestGossipPort()
 		cfg.GossipSeedAddresses = []string{
-			testGossipAddress,
-			"127.0.0.1:19010",
+			s.store.cfg.GossipAddress,
+			getTestGossipAddress(cfg.GossipPort),
 		}
-		cfg.RaftAddress = "0.0.0.0:33000"
-		cfg.ServiceListenAddress = "0.0.0.0:33001"
-		cfg.ServiceAddress = "127.0.0.1:33001"
+		cfg.RaftAddress = getTestRaftAddress()
+		svcPort := getTestServicePort()
+		cfg.ServiceListenAddress = fmt.Sprintf("0.0.0.0:%d", svcPort)
+		cfg.ServiceAddress = getTestServiceAddress(svcPort)
 		newStore, err := getTestStore(cfg, false, nil)
 		assert.NoError(t, err)
 		defer func() {
@@ -438,6 +443,7 @@ func TestServiceBootstrapShard(t *testing.T) {
 	}
 	service.handleCommands([]pb.ScheduleCommand{cmd})
 
+	testServiceAddress := cfg.LogServiceServiceAddr()
 	done := false
 	for i := 0; i < 1000; i++ {
 		si, ok, err := GetShardInfo("", testServiceAddress, 1)

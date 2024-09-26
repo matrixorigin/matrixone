@@ -311,6 +311,9 @@ func (bat *Batch) SetAttributes(attrs []string) {
 
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
 	bat.Vecs[pos] = vec
+	if vec != nil {
+		vec.SetOffHeap(bat.offHeap)
+	}
 }
 
 func (bat *Batch) GetVector(pos int32) *vector.Vector {
@@ -322,7 +325,12 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 	for i, attr := range bat.Attrs {
 		mp[attr] = i
 	}
-	rbat := NewWithSize(len(cols))
+	var rbat *Batch
+	if bat.offHeap {
+		rbat = NewOffHeapWithSize(len(cols))
+	} else {
+		rbat = NewWithSize(len(cols))
+	}
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
@@ -583,6 +591,7 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 		if err != nil {
 			return nil, err
 		}
+		b.Vecs[i].SetOffHeap(bat.offHeap)
 	}
 	b.rowCount = end - start
 	return b, nil
