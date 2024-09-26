@@ -133,14 +133,16 @@ func (l *LockMergeService) isLockedByUser(id uint64, tblName string) bool {
 	}
 	return false
 }
-
 func (l *LockMergeService) LockFromUser(id uint64, tblName string, reentrant bool, indexTableNames ...string) error {
+	if strings.HasPrefix(tblName, fcatalog.PrefixIndexTableName) {
+		if reentrant {
+			return nil
+		}
+		return moerr.NewInternalErrorNoCtx("lock on index")
+	}
+
 	l.rwlock.Lock()
 	defer l.rwlock.Unlock()
-
-	if !reentrant && strings.HasPrefix(tblName, fcatalog.PrefixIndexTableName) {
-		return moerr.NewInternalErrorNoCtx("cannot lock merging index table manually")
-	}
 
 	if l.isLockedByUser(id, tblName) {
 		if !reentrant {

@@ -76,9 +76,9 @@ func TestStopStartMerge(t *testing.T) {
 	require.Error(t, scheduler.onTable(tblEntry1))
 	require.Error(t, scheduler.onTable(tblEntry2))
 
-	scheduler.StartMerge(tblEntry1.GetID())
+	scheduler.StartMerge(tblEntry1.GetID(), false)
 	require.Equal(t, 1, len(lockService.LockedInfos()))
-	scheduler.StartMerge(tblEntry2.GetID())
+	scheduler.StartMerge(tblEntry2.GetID(), false)
 	require.Equal(t, 0, len(lockService.LockedInfos()))
 	require.Equal(t, 0, len(lockService.Indexes()))
 }
