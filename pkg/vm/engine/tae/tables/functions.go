@@ -293,12 +293,12 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 						return err
 					}
 				}
-				commitTS := tsVec.Get(row).(types.TS)
+				commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
 				startTS := txn.GetStartTS()
-				if commitTS.Greater(&startTS) {
+				if commitTS.GT(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
-				if skip && commitTS.Less(&startTS) {
+				if skip && commitTS.LT(&startTS) {
 					return nil
 				}
 				rowID := objectio.NewRowid(blkID, uint32(row))
@@ -345,10 +345,10 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 					}
 					commitTS := tsVec.Get(row).(types.TS)
 					startTS := txn.GetStartTS()
-					if commitTS.Greater(&startTS) {
+					if commitTS.GT(&startTS) {
 						return txnif.ErrTxnWWConflict
 					}
-					if skip && commitTS.Less(&startTS) {
+					if skip && commitTS.LT(&startTS) {
 						return nil
 					}
 					rowID := objectio.NewRowid(blkID, uint32(row))
@@ -390,7 +390,7 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 				rowIDs.Update(rowOffset, nil, true)
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
-				if commitTS.Greater(&startTS) {
+				if commitTS.GT(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
 			}
@@ -446,7 +446,7 @@ func dedupABlkClosureFactory(
 				}
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
-				if commitTS.Greater(&startTS) {
+				if commitTS.GT(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(*vec.GetType(), v1, false)

@@ -57,7 +57,7 @@ func (txn *Txn) commit1PC(ctx context.Context, _ bool) (err error) {
 		return moerr.NewTAECommitNoCtxf("invalid txn state %s", txnif.TxnStrState(state))
 	}
 	txn.Add(1)
-	if err = txn.Freeze(); err == nil {
+	if err = txn.Freeze(ctx); err == nil {
 		txn.GetStore().StartTrace()
 		err = txn.Mgr.OnOpTxn(&OpTxn{
 			ctx: ctx,

@@ -1059,12 +1059,61 @@ func TestVisitRule(t *testing.T) {
 		makePlan2Int64ConstExprWithType(10),
 	}
 	resetParamRule := NewResetParamRefRule(ctx, params)
-	resetVarRule := NewResetVarRefRule(&mock.ctxt, testutil.NewProc())
-	constantFoldRule := NewConstantFoldRule(&mock.ctxt)
-	vp = NewVisitPlan(plan, []VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
+	vp = NewVisitPlan(plan, []VisitPlanRule{resetParamRule})
 	err = vp.Visit(ctx)
 	if err != nil {
 		t.Fatalf("should not error, sql=%s", sql)
+	}
+}
+
+func TestVisitRule2(t *testing.T) {
+	sql := "select * from nation where n_nationkey > 10"
+	mock := NewMockOptimizer(false)
+	ctx := context.TODO()
+	queryPlan, err := runOneStmt(mock, t, sql)
+	if err != nil {
+		t.Fatalf("should not error, sql=%s", sql)
+	}
+	getParamRule := NewGetParamRule()
+	vp := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule})
+	err = vp.Visit(context.TODO())
+	if err != nil {
+		t.Fatalf("should not error, sql=%s", sql)
+	}
+	getParamRule.SetParamOrder()
+	args := getParamRule.params
+
+	resetParamOrderRule := NewResetParamOrderRule(args)
+	vp = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamOrderRule})
+	err = vp.Visit(ctx)
+	if err != nil {
+		t.Fatalf("should not error, sql=%s", sql)
+	}
+
+	if qry, ok := queryPlan.Plan.(*Plan_Query); ok {
+		if f, ok := qry.Query.Nodes[1].FilterList[0].Expr.(*plan.Expr_F); ok {
+			f.F.Args[1] = &plan.Expr{
+				Typ: plan.Type{
+					Id:          int32(types.T_int64),
+					NotNullable: true,
+				},
+				Expr: &plan.Expr_P{
+					P: &plan.ParamRef{
+						Pos: 1,
+					},
+				},
+			}
+		}
+
+	}
+	params := []*Expr{
+		makePlan2Int64ConstExprWithType(10),
+	}
+	resetParamRule := NewResetParamRefRule(ctx, params)
+	vp = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
+	err = vp.Visit(ctx)
+	if err == nil {
+		t.Fatalf("param 1 not exist, should error")
 	}
 }
 

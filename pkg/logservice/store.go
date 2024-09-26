@@ -623,24 +623,6 @@ func (l *store) addScheduleCommands(ctx context.Context,
 	return nil
 }
 
-func (l *store) getLeaseHolderID(ctx context.Context,
-	shardID uint64, entries []raftpb.Entry) (uint64, error) {
-	if len(entries) == 0 {
-		panic("empty entries")
-	}
-	// first entry is an update lease cmd
-	e := entries[0]
-	if !isRaftInternalEntry(e) && isSetLeaseHolderUpdate(l.decodeCmd(ctx, e)) {
-		return parseLeaseHolderID(l.decodeCmd(ctx, e)), nil
-	}
-	v, err := l.read(ctx, shardID, leaseHistoryQuery{lsn: e.Index})
-	if err != nil {
-		l.runtime.Logger().Error("failed to read", zap.Error(err))
-		return 0, err
-	}
-	return v.(uint64), nil
-}
-
 func (l *store) updateCNLabel(ctx context.Context, label pb.CNStoreLabel) error {
 	state, err := l.getCheckerState()
 	if err != nil {
@@ -822,10 +804,6 @@ func (l *store) markEntries(ctx context.Context,
 	if len(entries) == 0 {
 		return []pb.LogRecord{}, nil
 	}
-	leaseHolderID, err := l.getLeaseHolderID(ctx, shardID, entries)
-	if err != nil {
-		return nil, err
-	}
 	result := make([]pb.LogRecord, 0)
 	for _, e := range entries {
 		if isRaftInternalEntry(e) {
@@ -838,7 +816,6 @@ func (l *store) markEntries(ctx context.Context,
 		}
 		cmd := l.decodeCmd(ctx, e)
 		if isSetLeaseHolderUpdate(cmd) {
-			leaseHolderID = parseLeaseHolderID(cmd)
 			result = append(result, LogRecord{
 				Type: pb.LeaseUpdate,
 				Lsn:  e.Index,
@@ -846,15 +823,6 @@ func (l *store) markEntries(ctx context.Context,
 			continue
 		}
 		if isUserUpdate(cmd) {
-			// we only check the leaseholder ID if the leasehold ID is 0.
-			if leaseHolderID != 0 && parseLeaseHolderID(cmd) != leaseHolderID {
-				// lease not match, skip
-				result = append(result, LogRecord{
-					Type: pb.LeaseRejected,
-					Lsn:  e.Index,
-				})
-				continue
-			}
 			result = append(result, LogRecord{
 				Data: cmd,
 				Type: pb.UserRecord,
