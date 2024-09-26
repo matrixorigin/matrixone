@@ -409,7 +409,7 @@ func (p *baseHandle) less(a, b types.TS) bool {
 	if b.IsEmpty() {
 		return true
 	}
-	return a.LessEq(&b)
+	return a.LE(&b)
 }
 func (p *baseHandle) nextTS() (types.TS, int) {
 	inMemoryTS := p.inMemoryHandle.NextTS()
@@ -498,10 +498,10 @@ func (p *baseHandle) getObjectEntries(objIter btree.IterG[ObjectEntry], start, e
 	for objIter.Next() {
 		entry := objIter.Item()
 		if entry.GetAppendable() {
-			if entry.CreateTime.Greater(&end) {
+			if entry.CreateTime.GT(&end) {
 				continue
 			}
-			if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.Less(&start) {
+			if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
 				continue
 			}
 			aobj = append(aobj, &entry)
@@ -509,17 +509,17 @@ func (p *baseHandle) getObjectEntries(objIter btree.IterG[ObjectEntry], start, e
 			if !entry.ObjectStats.GetCNCreated() {
 				continue
 			}
-			if entry.CreateTime.Less(&start) || entry.CreateTime.Greater(&end) {
+			if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
 				continue
 			}
 			cnObj = append(cnObj, &entry)
 		}
 	}
 	goSort.Slice(aobj, func(i, j int) bool {
-		return aobj[i].CreateTime.Less(&aobj[j].CreateTime)
+		return aobj[i].CreateTime.LT(&aobj[j].CreateTime)
 	})
 	goSort.Slice(cnObj, func(i, j int) bool {
-		return cnObj[i].CreateTime.Less(&cnObj[j].CreateTime)
+		return cnObj[i].CreateTime.LT(&cnObj[j].CreateTime)
 	})
 	return
 }
@@ -532,7 +532,7 @@ type ChangeHandler struct {
 }
 
 func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (changeHandle *ChangeHandler, err error) {
-	if state.minTS.Greater(&start) {
+	if state.minTS.GT(&start) {
 		return nil, moerr.NewErrStaleReadNoCtx(state.minTS.ToString(), start.ToString())
 	}
 	changeHandle = &ChangeHandler{
@@ -582,7 +582,7 @@ func (p *ChangeHandler) decideNextHandle() int {
 	if dataTS.IsEmpty() {
 		return NextChangeHandle_Tombstone
 	}
-	if !tombstoneTS.IsEmpty() && tombstoneTS.LessEq(&dataTS) {
+	if !tombstoneTS.IsEmpty() && tombstoneTS.LE(&dataTS) {
 		return NextChangeHandle_Tombstone
 	}
 	return NextChangeHandle_Data
@@ -638,7 +638,7 @@ func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, start, end types.TS) e
 	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[sortIdx])
 	deletes := make([]int64, 0)
 	for i, ts := range commitTSs {
-		if ts.Less(&start) || ts.Greater(&end) {
+		if ts.LT(&start) || ts.GT(&end) {
 			deletes = append(deletes, int64(i))
 		}
 	}
@@ -667,6 +667,23 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 	}
 	return nil
 }
+
+//func checkObjectEntry(entry *ObjectEntry, start, end types.TS) bool {
+//	if entry.GetAppendable() {
+//		if entry.CreateTime.GT(&end) {
+//			return false
+//		}
+//		if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
+//			return false
+//		}
+//		return true
+//	} else {
+//		if !entry.ObjectStats.GetCNCreated() {
+//			return false
+//		}
+//		return entry.CreateTime.GE(&start) && entry.DeleteTime.LE(&end)
+//	}
+//}
 
 func newDataBatchWithBatch(src *batch.Batch) (data *batch.Batch) {
 	data = batch.NewWithSize(0)
@@ -776,8 +793,9 @@ func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
 	vector.AppendFixed((*bat).Vecs[1], entry.Time, false, mp)
 }
 
+// PXU TODO
 func checkTS(start, end types.TS, ts types.TS) bool {
-	return ts.LessEq(&end) && ts.GreaterEq(&start)
+	return ts.LE(&end) && ts.GE(&start)
 }
 
 func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.FileService, isTombstone bool, ctx context.Context) (bat *batch.Batch, err error) {

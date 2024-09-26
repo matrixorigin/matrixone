@@ -68,3 +68,9 @@ func TestCreateCloudCtrlPlaneDashboard(t *testing.T) {
 		"Prometheus", defaultMoFolderName)
 	require.NoError(t, c.Create())
 }
+
+func Test_InitFrontendSQLLength(t *testing.T) {
+	c := NewLocalDashboardCreator("http://127.0.0.1", "admin", "admin",
+		localFolderName)
+	c.initFrontendSQLLength()
+}

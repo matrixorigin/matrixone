@@ -122,7 +122,7 @@ func LoadPersistedColumnDatas(
 	if tsForAppendable != nil {
 		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[len(vecs)-1].GetDownstreamVector())
 		for i := 0; i < len(commits); i++ {
-			if commits[i].Greater(tsForAppendable) {
+			if commits[i].GT(tsForAppendable) {
 				deletes.Add(uint64(i))
 			}
 		}
