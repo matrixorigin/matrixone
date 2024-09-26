@@ -509,7 +509,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 					}
 				}
 			} else {
-				return 0, moerr.NewInternalErrorf(ctx, "table %s does not exist", tblName)
+				return 0, moerr.NewInternalErrorf(ctx, "table %s.%s does not exist", dbName, tblName)
 			}
 			return tblId, rtnErr
 		}
