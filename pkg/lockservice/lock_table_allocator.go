@@ -554,7 +554,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 				return true
 			})
 
-			retryCount := math.MaxInt
+			retryCount := math.MaxInt - 1
 
 			for _, sid := range services {
 				for i := 0; i < retryCount+1; i++ {
