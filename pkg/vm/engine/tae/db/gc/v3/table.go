@@ -53,7 +53,7 @@ type TableOption func(*GCTable)
 
 func WithBufferSize(size int) TableOption {
 	return func(table *GCTable) {
-		table.buffer.impl = containers.NewOneSchemaBatchBuffer(
+		table.buffer = containers.NewOneSchemaBatchBuffer(
 			size,
 			ObjectTableAttrs,
 			ObjectTableTypes,

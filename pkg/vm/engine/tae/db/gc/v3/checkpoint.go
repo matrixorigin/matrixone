@@ -860,7 +860,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		return nil
 	}
 
-	bf := bloomfilter.New(int64(bat.Vecs[0].Length()), 1/10000)
+	bf := bloomfilter.New(int64(bat.Vecs[0].Length()), 0.00001)
 	debugTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, c.snapshotMeta)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {

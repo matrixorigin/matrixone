@@ -17,6 +17,7 @@ package ctl
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"strconv"
 	"strings"
 	"time"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -198,7 +198,7 @@ func send2TNAndWaitResp(proc *process.Process,
 			args = args[1:]
 		}
 
-		req := db.TraceSpan{
+		req := cmd_util.TraceSpan{
 			Cmd:       args[0],
 			Spans:     args[1],
 			Threshold: threshold,
