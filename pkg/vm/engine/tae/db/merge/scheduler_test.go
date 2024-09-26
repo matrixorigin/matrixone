@@ -60,7 +60,7 @@ func TestStopStartMerge(t *testing.T) {
 	require.NoError(t, err)
 	catalog.MockSchema(1, 0)
 
-	tblEntry1, err := db.CreateTableEntry(&catalog.Schema{Extra: &api.SchemaExtra{}}, txn1, nil)
+	tblEntry1, err := db.CreateTableEntry(&catalog.Schema{Name: "t1", Extra: &api.SchemaExtra{}}, txn1, nil)
 	require.NoError(t, err)
 	require.NoError(t, txn1.Commit(context.Background()))
 
@@ -77,7 +77,7 @@ func TestStopStartMerge(t *testing.T) {
 	require.NoError(t, err)
 
 	txn2, _ := txnMgr.StartTxn(nil)
-	mockSchema := &catalog.Schema{Extra: &api.SchemaExtra{}, Constraint: marshal}
+	mockSchema := &catalog.Schema{Name: "t2", Extra: &api.SchemaExtra{}, Constraint: marshal}
 	tblEntry2, err := db.CreateTableEntry(mockSchema, txn2, nil)
 	require.NoError(t, err)
 	require.NoError(t, txn2.Commit(context.Background()))
