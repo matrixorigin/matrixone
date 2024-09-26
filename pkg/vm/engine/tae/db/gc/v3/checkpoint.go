@@ -1032,10 +1032,12 @@ func (c *checkpointCleaner) createNewInput(
 		logutil.Errorf("SaveTableInfo is failed")
 		return
 	}
+	start := ckps[0].GetStart()
+	end := ckps[len(ckps)-1].GetEnd()
 	err = input.Process(
 		c.ctx,
-		ckps[0].GetStart(),
-		ckps[len(ckps)-1].GetEnd(),
+		&start,
+		&end,
 		input.CollectMapData,
 		input.ProcessMapBatch,
 	)

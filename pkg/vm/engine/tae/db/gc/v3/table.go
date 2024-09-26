@@ -139,7 +139,7 @@ func (t *GCTable) SoftGC(
 	ts types.TS,
 	snapShotList map[uint32]containers.Vector,
 	meta *logtail.SnapshotMeta,
-) ([]string, map[uint32][]types.TS) {
+) ([]string, map[uint32][]types.TS, error) {
 	var (
 		bm   bitmap.Bitmap
 		sels []int64
@@ -176,18 +176,19 @@ func (t *GCTable) SoftGC(
 		data.Shrink(sels, true)
 		return sinker.Write(ctx, tmpBat)
 	}
-	err := t.Process(ctx, t.tsRange.start, t.tsRange.end, t.LoadBatchData, processSoftGCBatch)
+	softGCSinker := t.getSinker()
+	defer softGCSinker.Close()
+	err := t.insertFlow(ctx, softGCSinker, t.LoadBatchData, processSoftGCBatch)
 	if err != nil {
 		logutil.Error("GCTable SoftGC Process failed", zap.Error(err))
-		return nil, nil
+		return nil, nil, err
 	}
-	err = sinker.Sync(ctx)
 
+	err = sinker.Sync(ctx)
 	if err != nil {
 		logutil.Error("GCTable SoftGC Sync failed", zap.Error(err))
-		return nil, nil
+		return nil, nil, err
 	}
-
 	softGCObjects, processBats := sinker.GetResult()
 
 	snapList := make(map[uint32][]types.TS)
@@ -201,13 +202,15 @@ func (t *GCTable) SoftGC(
 		t.Unlock()
 	}()
 	gc := make([]string, 0)
-	objects := make(map[string]*ObjectEntry)
 	objectsComparedAndDeleteLocked := func(
 		bat *batch.Batch,
 		meta *logtail.SnapshotMeta,
 		snapList map[uint32][]types.TS,
 		ts types.TS,
-	) {
+	) error {
+		bm.Clear()
+		bm.TryExpandWithSize(bat.RowCount())
+
 		creates := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
 		deletes := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
@@ -218,51 +221,87 @@ func (t *GCTable) SoftGC(
 			createTs := creates[i]
 			dropTs := deletes[i]
 
-			if dropTs.IsEmpty() && objects[name] == nil {
+			if dropTs.IsEmpty() && t.objects[name] == nil {
 				object := &ObjectEntry{
 					createTS: createTs,
 					dropTS:   dropTs,
 					db:       dbs[i],
 					table:    tid,
 				}
-				addObjectLocked(name, object, objects)
+				addObjectLocked(name, object, t.objects)
 				continue
 			}
-			if objects[name] != nil && objects[name].dropTS.IsEmpty() {
-				objects[name].dropTS = dropTs
+			if t.objects[name] != nil && t.objects[name].dropTS.IsEmpty() {
+				t.objects[name].dropTS = dropTs
 			}
 			tsList := meta.GetSnapshotListLocked(snapList, tid)
 			if tsList == nil {
-				if createTs.Less(&ts) && dropTs.Less(&ts) {
+				if createTs.LT(&ts) && dropTs.LT(&ts) {
 					gc = append(gc, name)
-					delete(objects, name)
+					delete(t.objects, name)
+					bm.Add(uint64(i))
 				}
 				continue
 			}
-			if createTs.Less(&ts) &&
-				dropTs.Less(&ts) &&
+			if createTs.LT(&ts) &&
+				dropTs.LT(&ts) &&
 				!isSnapshotRefers(&createTs, &dropTs, tsList, name) {
 				gc = append(gc, name)
-				delete(objects, name)
+				delete(t.objects, name)
+				bm.Add(uint64(i))
 			}
 		}
+		// convert bitmap to slice
+		sels = sels[:0]
+		bitmap.ToArray(&bm, &sels)
+		bat.Shrink(sels, true)
+
+		return softGCSinker.Write(ctx, bat)
 	}
+
 	buffer := t.fetchBuffer()
 	defer t.putBuffer(buffer)
 	for _, stats := range softGCObjects {
 		err = loader(ctx, t.fs, &stats, buffer, t.mp)
 		if err != nil {
 			logutil.Error("GCTable SoftGC loader failed", zap.Error(err))
-			return nil, nil
+			return nil, nil, err
 		}
-		objectsComparedAndDeleteLocked(buffer, meta, snapList, ts)
+		err = objectsComparedAndDeleteLocked(buffer, meta, snapList, ts)
+		if err != nil {
+			logutil.Error("GCTable SoftGC objectsComparedAndDeleteLocked failed", zap.Error(err))
+			return nil, nil, err
+		}
 		buffer.CleanOnlyData()
 	}
 
 	for _, bat := range processBats {
-		objectsComparedAndDeleteLocked(bat, meta, snapList, ts)
+		err = objectsComparedAndDeleteLocked(bat, meta, snapList, ts)
+		if err != nil {
+			logutil.Error("GCTable SoftGC objectsComparedAndDeleteLocked failed", zap.Error(err))
+			return nil, nil, err
+		}
 	}
-	return gc, snapList
+
+	_, err = t.CollectMapData(ctx, buffer, t.mp)
+	if err != nil {
+		logutil.Error("GCTable SoftGC CollectMapData failed", zap.Error(err))
+		return nil, nil, err
+	}
+	err = softGCSinker.Write(ctx, buffer)
+	if err != nil {
+		logutil.Error("GCTable SoftGC Write failed", zap.Error(err))
+		return nil, nil, err
+	}
+	err = softGCSinker.Sync(ctx)
+	if err != nil {
+		logutil.Error("GCTable SoftGC Sync failed", zap.Error(err))
+		return nil, nil, err
+	}
+
+	gcStats, _ := softGCSinker.GetResult()
+	err = t.doneAllBatches(ctx, &t.tsRange.start, &t.tsRange.end, gcStats)
+	return gc, snapList, err
 }
 
 func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, name string) bool {
@@ -280,14 +319,14 @@ func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, name strin
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		if snapTS.GreaterEq(createTS) && snapTS.Less(dropTS) {
+		if snapTS.GE(createTS) && snapTS.LT(dropTS) {
 			logutil.Debug("[soft GC]Snapshot Refers",
 				zap.String("name", name),
 				zap.String("snapTS", snapTS.ToString()),
 				zap.String("createTS", createTS.ToString()),
 				zap.String("dropTS", dropTS.ToString()))
 			return true
-		} else if snapTS.Less(createTS) {
+		} else if snapTS.LT(createTS) {
 			left = mid + 1
 		} else {
 			right = mid - 1
@@ -307,21 +346,21 @@ func (t *GCTable) getSinker() *engine_util.Sinker {
 	)
 }
 
-func (t *GCTable) Process(
+func (t *GCTable) insertFlow(
 	ctx context.Context,
-	start, end types.TS,
+	sinker *engine_util.Sinker,
 	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
 	processOneBatch func(context.Context, *batch.Batch) error,
 ) error {
-	sinker := t.getSinker()
-	defer sinker.Close()
-
 	for {
 		bat := t.fetchBuffer()
 		done, err := loadNextBatch(ctx, bat, t.mp)
 		if err != nil || done {
 			t.putBuffer(bat)
-			return err
+			if err != nil {
+				return err
+			}
+			break
 		}
 		if err = processOneBatch(ctx, bat); err != nil {
 			t.putBuffer(bat)
@@ -333,13 +372,31 @@ func (t *GCTable) Process(
 			return err
 		}
 	}
+	return nil
+}
 
+func (t *GCTable) Process(
+	ctx context.Context,
+	start, end *types.TS,
+	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
+	processOneBatch func(context.Context, *batch.Batch) error,
+) error {
+	sinker := t.getSinker()
+	defer sinker.Close()
+	err := t.insertFlow(ctx, sinker, loadNextBatch, processOneBatch)
+	if err != nil {
+		return err
+	}
+
+	if err = sinker.Sync(ctx); err != nil {
+		return err
+	}
 	stats, _ := sinker.GetResult()
 	return t.doneAllBatches(ctx, start, end, stats)
 }
 
-func (t *GCTable) doneAllBatches(ctx context.Context, start, end types.TS, stats []objectio.ObjectStats) error {
-	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
+func (t *GCTable) doneAllBatches(ctx context.Context, start, end *types.TS, stats []objectio.ObjectStats) error {
+	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, *start, *end)
 	ret := batch.New(false, ObjectTableMetaAttrs)
 	ret.SetVector(0, vector.NewVec(ObjectTableMetaTypes[0]))
 	t.files.Lock()
@@ -367,10 +424,10 @@ func (t *GCTable) Merge(table *GCTable) {
 		t.files.stats = append(t.files.stats, stats)
 	}
 
-	if t.tsRange.start.Greater(&table.tsRange.start) {
+	if t.tsRange.start.GT(&table.tsRange.start) {
 		t.tsRange.start = table.tsRange.start
 	}
-	if t.tsRange.end.Less(&table.tsRange.end) {
+	if t.tsRange.end.LT(&table.tsRange.end) {
 		t.tsRange.end = table.tsRange.end
 	}
 }
@@ -380,10 +437,6 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	t.Lock()
 	defer t.Unlock()
 	t.updateObjectListLocked(ins, t.objects)
-	bat := t.fetchBuffer()
-	for name, object := range t.objects {
-		addObjectToBatch(bat, name, object, t.mp)
-	}
 }
 
 func (t *GCTable) updateObjectListLocked(ins *containers.Batch, objects map[string]*ObjectEntry) {
@@ -432,9 +485,9 @@ func (t *GCTable) CollectMapData(cxt context.Context, bat *batch.Batch, mp *mpoo
 	t.objects = nil
 	return false, nil
 }
+
 func (t *GCTable) ProcessMapBatch(
 	ctx context.Context,
-	sinker *engine_util.Sinker,
 	data *batch.Batch,
 ) error {
 	if err := mergesort.SortColumnsByIndex(
