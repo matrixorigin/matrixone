@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"strconv"
 	"strings"
 	"time"
@@ -35,11 +36,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -55,12 +55,12 @@ import (
 func (h *Handle) HandleAddFaultPoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.FaultPoint,
+	req *cmd_util.FaultPoint,
 	resp *api.SyncLogTailResp) (func(), error) {
-	if req.Name == db.EnableFaultInjection {
+	if req.Name == cmd_util.EnableFaultInjection {
 		fault.Enable()
 		return nil, nil
-	} else if req.Name == db.DisableFaultInjection {
+	} else if req.Name == cmd_util.DisableFaultInjection {
 		fault.Disable()
 		return nil, nil
 	}
@@ -69,14 +69,14 @@ func (h *Handle) HandleAddFaultPoint(
 
 func (h *Handle) HandleTraceSpan(ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.TraceSpan,
+	req *cmd_util.TraceSpan,
 	resp *api.SyncLogTailResp) (func(), error) {
 
 	return nil, nil
 }
 
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
-	req *db.StorageUsageReq, resp *db.StorageUsageResp_V2) (func(), error) {
+	req *cmd_util.StorageUsageReq, resp *cmd_util.StorageUsageResp_V2) (func(), error) {
 	memo := h.db.GetUsageMemo()
 
 	start := time.Now()
@@ -159,7 +159,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.FlushTable,
+	req *cmd_util.FlushTable,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	// We use current TS instead of transaction ts.
@@ -180,7 +180,7 @@ func (h *Handle) HandleFlushTable(
 func (h *Handle) HandleForceGlobalCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.Checkpoint,
+	req *cmd_util.Checkpoint,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	timeout := req.FlushDuration
@@ -194,7 +194,7 @@ func (h *Handle) HandleForceGlobalCheckpoint(
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.Checkpoint,
+	req *cmd_util.Checkpoint,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	timeout := req.FlushDuration
@@ -208,7 +208,7 @@ func (h *Handle) HandleForceCheckpoint(
 func (h *Handle) HandleBackup(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.Checkpoint,
+	req *cmd_util.Checkpoint,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	timeout := req.FlushDuration
@@ -236,7 +236,7 @@ func (h *Handle) HandleBackup(
 func (h *Handle) HandleDiskCleaner(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.DiskCleaner,
+	req *cmd_util.DiskCleaner,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	op := req.Op
@@ -302,7 +302,7 @@ func (h *Handle) HandleDiskCleaner(
 func (h *Handle) HandleInterceptCommit(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.InterceptCommit,
+	req *cmd_util.InterceptCommit,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	name := req.TableName
@@ -313,8 +313,8 @@ func (h *Handle) HandleInterceptCommit(
 func (h *Handle) HandleInspectTN(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.InspectTN,
-	resp *db.InspectResp) (cb func(), err error) {
+	req *cmd_util.InspectTN,
+	resp *cmd_util.InspectResp) (cb func(), err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(ctx, e)
@@ -409,7 +409,7 @@ func (h *Handle) HandleCommitMerge(
 func (h *Handle) HandleGetLatestCheckpoint(
 	_ context.Context,
 	_ txn.TxnMeta,
-	_ *db.Checkpoint,
+	_ *cmd_util.Checkpoint,
 	resp *api.CheckpointResp,
 ) (cb func(), err error) {
 	var locations string

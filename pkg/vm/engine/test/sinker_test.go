@@ -126,7 +126,7 @@ func Test_Sinker(t *testing.T) {
 			curr = &rowIds[i]
 			require.True(t, curr.GE(last))
 		}
-		err = bat2.Union(buffer, 0, buffer.RowCount(), mp)
+		err = bat2.UnionWindow(buffer, 0, buffer.RowCount(), mp)
 		require.NoError(t, err)
 	}
 	buffer.Clean(mp)
