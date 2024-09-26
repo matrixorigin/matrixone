@@ -672,6 +672,11 @@ func (c *checkpointCleaner) collectCkpData(
 	return
 }
 
+func (c *checkpointCleaner) GetPITRs() (*logtail.PitrInfo, error) {
+	ts := time.Now()
+	return c.snapshotMeta.GetPITR(c.ctx, c.sid, ts, c.fs.Service, c.mPool)
+}
+
 func (c *checkpointCleaner) TryGC() error {
 	maxGlobalCKP := c.ckpClient.MaxGlobalCheckpoint()
 	if maxGlobalCKP != nil {
@@ -717,7 +722,13 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 
 	bf := bloomfilter.New(int64(bat.Vecs[0].Length()), 0.00001)
 
-	gc, snapshotList, err := c.softGC(bf, gckp, snapshots)
+	pitrs, err := c.GetPITRs()
+	if err != nil {
+		logutil.Errorf("[DiskCleaner] GetPitrs failed: %v", err.Error())
+		return nil
+	}
+
+	gc, snapshotList, err := c.softGC(bf, gckp, snapshots, pitrs)
 	if err != nil {
 		logutil.Errorf("[DiskCleaner] softGC failed: %v", err.Error())
 		return err
@@ -743,6 +754,7 @@ func (c *checkpointCleaner) softGC(
 	gbf *bloomfilter.BloomFilter,
 	gckp *checkpoint.CheckpointEntry,
 	snapshots map[uint32]containers.Vector,
+	pitrs *logtail.PitrInfo,
 ) ([]string, map[uint32][]types.TS, error) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
@@ -765,7 +777,7 @@ func (c *checkpointCleaner) softGC(
 		table.Close()
 		c.inputs.tables[i] = nil
 	}
-	gc, snapList, err := mergeTable.SoftGC(c.ctx, gbf, gckp.GetEnd(), snapshots, c.snapshotMeta)
+	gc, snapList, err := mergeTable.SoftGC(c.ctx, gbf, gckp.GetEnd(), snapshots, pitrs, c.snapshotMeta)
 	if err != nil {
 		logutil.Errorf("softGC failed: %v", err.Error())
 		return nil, nil, err
@@ -775,7 +787,7 @@ func (c *checkpointCleaner) softGC(
 	c.inputs.tables = make([]*GCTable, 0)
 	c.inputs.tables = append(c.inputs.tables, mergeTable)
 	c.updateMaxCompared(gckp)
-	c.snapshotMeta.MergeTableInfo(snapList, nil)
+	c.snapshotMeta.MergeTableInfo(snapList, pitrs)
 	mergeCost = time.Since(now)
 	return gc, snapList, nil
 }
@@ -853,6 +865,11 @@ func (c *checkpointCleaner) CheckGC() error {
 		return moerr.NewInternalErrorNoCtxf("processing clean GetSnapshots %s: %v", debugCandidates[0].String(), err)
 	}
 	defer logtail.CloseSnapshotList(snapshots)
+	pitr, err := c.GetPITRs()
+	if err != nil {
+		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
+		return moerr.NewInternalErrorNoCtxf("processing clean GetPITRs %s: %v", debugCandidates[0].String(), err)
+	}
 	bat := gcTable.fetchBuffer()
 	_, err = gcTable.CollectMapData(c.ctx, bat, gcTable.mp)
 	if err != nil {
@@ -861,7 +878,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	}
 
 	bf := bloomfilter.New(int64(bat.Vecs[0].Length()), 0.00001)
-	debugTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, c.snapshotMeta)
+	debugTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
 		mergeTable = NewGCTable(c.fs.Service, c.mPool)
@@ -872,7 +889,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		mergeTable = c.inputs.tables[0]
 	}
 	defer mergeTable.Close()
-	mergeTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, c.snapshotMeta)
+	mergeTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())

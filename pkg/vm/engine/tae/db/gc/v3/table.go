@@ -134,6 +134,7 @@ func (t *GCTable) SoftGC(
 	bf *bloomfilter.BloomFilter,
 	ts types.TS,
 	snapShotList map[uint32]containers.Vector,
+	pitrs *logtail.PitrInfo,
 	meta *logtail.SnapshotMeta,
 ) ([]string, map[uint32][]types.TS, error) {
 	var (
@@ -202,6 +203,7 @@ func (t *GCTable) SoftGC(
 		bat *batch.Batch,
 		meta *logtail.SnapshotMeta,
 		snapList map[uint32][]types.TS,
+		pitrList *logtail.PitrInfo,
 		ts types.TS,
 	) error {
 		bm.Clear()
@@ -231,7 +233,8 @@ func (t *GCTable) SoftGC(
 				t.objects[name].dropTS = dropTs
 			}
 			tsList := meta.GetSnapshotListLocked(snapList, tid)
-			if tsList == nil {
+			pList := meta.GetPitrLocked(pitrList, dbs[i], tid)
+			if tsList == nil && pList.IsEmpty() {
 				if createTs.LT(&ts) && dropTs.LT(&ts) {
 					gc = append(gc, name)
 					delete(t.objects, name)
@@ -241,7 +244,7 @@ func (t *GCTable) SoftGC(
 			}
 			if createTs.LT(&ts) &&
 				dropTs.LT(&ts) &&
-				!isSnapshotRefers(&createTs, &dropTs, tsList, name) {
+				!isSnapshotRefers(&createTs, &dropTs, tsList, pList, name) {
 				gc = append(gc, name)
 				delete(t.objects, name)
 				bm.Add(uint64(i))
@@ -263,7 +266,7 @@ func (t *GCTable) SoftGC(
 			logutil.Error("GCTable SoftGC loader failed", zap.Error(err))
 			return nil, nil, err
 		}
-		err = objectsComparedAndDeleteLocked(buffer, meta, snapList, ts)
+		err = objectsComparedAndDeleteLocked(buffer, meta, snapList, pitrs, ts)
 		if err != nil {
 			logutil.Error("GCTable SoftGC objectsComparedAndDeleteLocked failed", zap.Error(err))
 			return nil, nil, err
@@ -272,7 +275,7 @@ func (t *GCTable) SoftGC(
 	}
 
 	for _, bat := range processBats {
-		err = objectsComparedAndDeleteLocked(bat, meta, snapList, ts)
+		err = objectsComparedAndDeleteLocked(bat, meta, snapList, pitrs, ts)
 		if err != nil {
 			logutil.Error("GCTable SoftGC objectsComparedAndDeleteLocked failed", zap.Error(err))
 			return nil, nil, err
@@ -302,8 +305,9 @@ func (t *GCTable) SoftGC(
 	return gc, snapList, err
 }
 
-func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, name string) bool {
-	if len(snapVec) == 0 {
+func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, pitrVec types.TS, name string) bool {
+	if len(snapVec) == 0 &&
+		len(pitrVec) == 0 {
 		return false
 	}
 	if dropTS.IsEmpty() {
@@ -313,6 +317,17 @@ func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, name strin
 			zap.String("dropTS", createTS.ToString()))
 		return true
 	}
+	if !pitrVec.IsEmpty() {
+		if dropTS.GT(&pitrVec) {
+			logutil.Info("[soft GC]Pitr Refers",
+				zap.String("name", name),
+				zap.String("snapTS", pitrVec.ToString()),
+				zap.String("createTS", createTS.ToString()),
+				zap.String("dropTS", dropTS.ToString()))
+			return true
+		}
+	}
+
 	left, right := 0, len(snapVec)-1
 	for left <= right {
 		mid := left + (right-left)/2
