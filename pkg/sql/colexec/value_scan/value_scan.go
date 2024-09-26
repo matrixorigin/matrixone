@@ -77,26 +77,28 @@ func evalRowsetData(proc *process.Process,
 	return nil
 }
 
-func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (bat *batch.Batch, err error) {
+func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (bat *batch.Batch, canFreeThis bool, err error) {
 	var exprList []colexec.ExpressionExecutor
 
 	if valueScan.RowsetData == nil { // select 1,2
 		bat = batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
 		bat.SetRowCount(1)
-		return bat, nil
+		return bat, true, nil
 	}
 	// select * from (values row(1,1), row(2,2), row(3,3)) a;
 	var nodeId uuid.UUID
 	copy(nodeId[:], valueScan.Uuid)
 	bat = proc.GetPrepareBatch()
-	if bat == nil {
+	if bat != nil {
+		canFreeThis = false
+	} else {
+		canFreeThis = true
 		bat = proc.GetValueScanBatch(nodeId)
 		if bat == nil {
-			return nil, moerr.NewInfo(proc.Ctx, fmt.Sprintf("makeValueScanBatch failed, node id: %s", nodeId.String()))
+			return nil, true, moerr.NewInfo(proc.Ctx, fmt.Sprintf("makeValueScanBatch failed, node id: %s", nodeId.String()))
 		}
 	}
-
 	colsData := valueScan.RowsetData.Cols
 	params := proc.GetPrepareParams()
 	if len(colsData) > 0 {
@@ -111,20 +113,20 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (bat *batc
 					if row.Pos >= 0 {
 						isNull := params.GetNulls().Contains(uint64(row.Pos - 1))
 						str := vs[row.Pos-1].UnsafeGetString(params.GetArea())
-						if err := util.SetBytesToAnyVector(proc.Ctx, str, int(row.RowPos), isNull, bat.Vecs[i],
+						if err = util.SetBytesToAnyVector(proc.Ctx, str, int(row.RowPos), isNull, bat.Vecs[i],
 							proc); err != nil {
-							return nil, err
+							return nil, canFreeThis, err
 						}
 					}
 				}
 			}
-			if err := evalRowsetData(proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
-				return nil, err
+			if err = evalRowsetData(proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
+				return nil, canFreeThis, err
 			}
 		}
 	}
 
-	return bat, nil
+	return bat, canFreeThis, nil
 }
 
 func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
@@ -138,16 +140,14 @@ func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	if valueScan.NodeType == plan2.Node_VALUE_SCAN && valueScan.Batchs == nil {
-		bat, err := valueScan.makeValueScanBatch(proc)
+
+	if len(valueScan.Batchs) == 0 {
+		valueScan.Batchs = append(valueScan.Batchs, nil, nil)
+		valueScan.Batchs[0], valueScan.ctr.thisValueShouldClean, err = valueScan.makeValueScanBatch(proc)
 		if err != nil {
 			return err
 		}
-		valueScan.Batchs = make([]*batch.Batch, 2)
-		valueScan.Batchs[0] = bat
-		if bat != nil {
-			valueScan.Batchs[1] = nil
-		}
+		valueScan.Batchs[1] = nil
 	}
 
 	return
@@ -167,7 +167,9 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 	if valueScan.ctr.idx < len(valueScan.Batchs) {
 		result.Batch = valueScan.Batchs[valueScan.ctr.idx]
 		if valueScan.ctr.idx > 0 {
-			valueScan.Batchs[valueScan.ctr.idx-1].Clean(proc.GetMPool())
+			if valueScan.ctr.thisValueShouldClean {
+				valueScan.Batchs[valueScan.ctr.idx-1].Clean(proc.GetMPool())
+			}
 			valueScan.Batchs[valueScan.ctr.idx-1] = nil
 		}
 		valueScan.ctr.idx += 1

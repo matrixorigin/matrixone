@@ -17,7 +17,6 @@ package value_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -28,6 +27,10 @@ var _ vm.Operator = new(ValueScan)
 
 type container struct {
 	idx int
+
+	// thisValueShouldClean indicates that whether we should clean the batch after operator done.
+	// for some case like `this value is from session prepared`, we cannot clean that.
+	thisValueShouldClean bool
 }
 type ValueScan struct {
 	ctr        container
@@ -35,7 +38,6 @@ type ValueScan struct {
 	RowsetData *plan.RowsetData
 	ColCount   int
 	Uuid       []byte
-	NodeType   plan2.Node_NodeType
 
 	vm.OperatorBase
 	colexec.Projection
@@ -67,6 +69,11 @@ func NewArgument() *ValueScan {
 }
 
 func (valueScan *ValueScan) Release() {
+	valueScan.ctr.thisValueShouldClean = true
+	if valueScan.Batchs != nil {
+		valueScan.Batchs = valueScan.Batchs[:0]
+	}
+
 	if valueScan != nil {
 		reuse.Free[ValueScan](valueScan, nil)
 	}
@@ -88,10 +95,11 @@ func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err
 }
 
 func (valueScan *ValueScan) cleanBatchs(proc *process.Process) {
-	for _, bat := range valueScan.Batchs {
-		if bat != nil {
-			bat.Clean(proc.Mp())
+	if valueScan.ctr.thisValueShouldClean {
+		for _, bat := range valueScan.Batchs {
+			if bat != nil {
+				bat.Clean(proc.Mp())
+			}
 		}
 	}
-	valueScan.Batchs = nil
 }
