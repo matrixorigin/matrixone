@@ -35,7 +35,7 @@ func (store *NoopTxnStore) StartTrace()        {}
 func (store *NoopTxnStore) TriggerTrace(uint8) {}
 func (store *NoopTxnStore) EndTrace()          {}
 
-func (store *NoopTxnStore) Freeze() error                                { return nil }
+func (store *NoopTxnStore) Freeze(_ context.Context) error               { return nil }
 func (store *NoopTxnStore) WaitPrepared(ctx context.Context) (err error) { return }
 func (store *NoopTxnStore) GetLSN() uint64                               { return 0 }
 func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                   {}
@@ -43,7 +43,7 @@ func (store *NoopTxnStore) Close() error                                 { retur
 func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
 	return nil
 }
-func (store *NoopTxnStore) AddObjsWithMetaLoc(
+func (store *NoopTxnStore) AddDataFiles(
 	ctx context.Context,
 	dbId, tid uint64,
 	stats containers.Vector,
@@ -134,7 +134,7 @@ func (store *NoopTxnStore) DeleteByPhyAddrKeys(
 	return
 }
 
-func (store *NoopTxnStore) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
+func (store *NoopTxnStore) AddPersistedTombstoneFile(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	return
 }
 

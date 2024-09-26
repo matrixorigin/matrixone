@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -119,7 +120,7 @@ func (p *PartitionState) NewObjectsIter(
 	onlyVisible bool,
 	visitTombstone bool) (ObjectsIter, error) {
 
-	if snapshot.Less(&p.minTS) {
+	if snapshot.LT(&p.minTS) {
 		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.minTS.ToString())
 		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}
@@ -157,7 +158,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	}); ok; ok = iter.Next() {
 		entry := iter.Item()
 
-		if entry.Time.Greater(&end) {
+		if entry.Time.GT(&end) {
 			break
 		}
 
@@ -176,19 +177,99 @@ func (p *PartitionState) GetChangedObjsBetween(
 	return
 }
 
-func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
+func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
 	iter := p.dataObjectsNameIndex.Copy().Iter()
 	defer iter.Release()
 
 	pivot := ObjectEntry{}
-	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
+	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(blockID))
 	if ok := iter.Seek(pivot); ok {
 		e := iter.Item()
-		if bytes.Equal(e.ObjectShortName()[:], objectio.ShortName(&blockID)[:]) {
+		if bytes.Equal(e.ObjectShortName()[:], objectio.ShortName(blockID)[:]) {
 			return true
 		}
 	}
 	return false
+}
+
+func (p *PartitionState) CollectVisibleObjectsBetween(
+	start, end types.TS,
+	isTombstone bool,
+) (stats []objectio.ObjectStats) {
+
+	iter := p.dataObjectTSIndex.Copy().Iter()
+	defer iter.Release()
+
+	if !iter.Seek(ObjectIndexByTSEntry{
+		Time: start,
+	}) {
+		return
+	}
+
+	nameIdx := p.dataObjectsNameIndex.Copy()
+
+	for ok := true; ok; ok = iter.Next() {
+		entry := iter.Item()
+
+		if entry.IsDelete {
+			continue
+		}
+
+		var ss objectio.ObjectStats
+		objectio.SetObjectStatsShortName(&ss, &entry.ShortObjName)
+
+		val, exist := nameIdx.Get(ObjectEntry{
+			ObjectInfo{
+				ObjectStats: ss,
+			},
+		})
+
+		if !exist {
+			continue
+		}
+
+		// if deleted before end
+		if !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&end) {
+			continue
+		}
+
+		// if created in [start, end]
+		if val.CreateTime.LT(&start) && val.CreateTime.GT(&end) {
+			continue
+		}
+
+		stats = append(stats, val.ObjectStats)
+	}
+
+	return
+}
+
+func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
+	ts types.TS,
+	isTombstone bool,
+	objId *objectio.ObjectId,
+) bool {
+
+	var tree *btree.BTreeG[ObjectEntry]
+	if isTombstone {
+		tree = p.tombstoneObjectsNameIndex.Copy()
+	} else {
+		tree = p.dataObjectsNameIndex.Copy()
+	}
+
+	var stats objectio.ObjectStats
+	objectio.SetObjectStatsShortName(&stats, (*objectio.ObjectNameShort)(objId))
+	val, exist := tree.Get(ObjectEntry{
+		ObjectInfo{
+			ObjectStats: stats,
+		},
+	})
+
+	if !exist {
+		return true
+	}
+
+	return !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&ts)
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {

@@ -64,6 +64,8 @@ type Vector struct {
 
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
+
+	offHeap bool
 }
 
 type typedSlice struct {
@@ -340,7 +342,18 @@ func NewVec(typ types.Type) *Vector {
 	vec := NewVecFromReuse()
 	vec.typ = typ
 	vec.class = FLAT
+	return vec
+}
 
+func NewOffHeapVecWithType(typ types.Type) *Vector {
+	vec := NewVec(typ)
+	vec.offHeap = true
+	return vec
+}
+
+func NewOffHeapVec() *Vector {
+	vec := NewVecFromReuse()
+	vec.offHeap = true
 	return vec
 }
 
@@ -664,7 +677,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	dataLen := int(types.DecodeUint32(data[:4]))
 	data = data[4:]
 	if dataLen > 0 {
-		v.data, err = mp.Alloc(dataLen)
+		v.data, err = mp.Alloc(dataLen, v.offHeap)
 		if err != nil {
 			return err
 		}
@@ -677,7 +690,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	areaLen := int(types.DecodeUint32(data[:4]))
 	data = data[4:]
 	if areaLen > 0 {
-		v.area, err = mp.Alloc(areaLen)
+		v.area, err = mp.Alloc(areaLen, v.offHeap)
 		if err != nil {
 			return err
 		}
@@ -757,7 +770,7 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 	// grow area
 	var err error
 	oldSz := len(area1)
-	area1, err = mp.Grow(area1, voff+extraAreaSize)
+	area1, err = mp.Grow(area1, voff+extraAreaSize, v.offHeap)
 	if err != nil {
 		return err
 	}
@@ -798,7 +811,7 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
-		if w.area, err = mp.Alloc(len(v.area)); err != nil {
+		if w.area, err = mp.Alloc(len(v.area), v.offHeap); err != nil {
 			return nil, err
 		}
 		copy(w.area, v.area)
@@ -1725,7 +1738,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
-				area, err := mp.Grow(v.area, sz)
+				area, err := mp.Grow(v.area, sz, v.offHeap)
 				if err != nil {
 					return err
 				}
@@ -3053,7 +3066,7 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 			vs[i] = vs[sel]
 		}
 		nulls.Filter(v.gsp, sels, false)
-		nulls.Filter(v.nsp, sels, false)
+		nulls.Filter(v.nsp, sels, v.offHeap)
 		v.length = len(sels)
 	} else if len(sels) > 0 {
 		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < v.length; oldIdx++ {
@@ -3089,7 +3102,7 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate b
 			idx++
 		}
 		nulls.FilterByMask(v.gsp, sels, false)
-		nulls.FilterByMask(v.nsp, sels, false)
+		nulls.FilterByMask(v.nsp, sels, v.offHeap)
 		v.length = length
 	} else if length > 0 {
 		sel := itr.Next()
@@ -3121,7 +3134,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	ns := len(sels)
 	var vs []T
 	ToFixedColNoTypeCheck(v, &vs)
-	data, err := mp.Alloc(ns * v.GetType().TypeSize())
+	data, err := mp.Alloc(ns*v.GetType().TypeSize(), v.offHeap)
 	if err != nil {
 		return err
 	}
@@ -3132,7 +3145,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	ws = ws[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	nulls.Filter(v.gsp, sels, false)
-	nulls.Filter(v.nsp, sels, false)
+	nulls.Filter(v.nsp, sels, v.offHeap)
 	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
 	if v.cantFreeData {
 		v.cantFreeData = false
@@ -3552,10 +3565,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 					minVal, maxVal = col[i], col[i]
 					first = false
 				} else {
-					if col[i].Less(&minVal) {
+					if col[i].LT(&minVal) {
 						minVal = col[i]
 					}
-					if maxVal.Less(&col[i]) {
+					if maxVal.LT(&col[i]) {
 
 						maxVal = col[i]
 					}
@@ -3564,10 +3577,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		} else {
 			minVal, maxVal = col[0], col[0]
 			for i, j := 1, len(col); i < j; i++ {
-				if col[i].Less(&minVal) {
+				if col[i].LT(&minVal) {
 					minVal = col[i]
 				}
-				if maxVal.Less(&col[i]) {
+				if maxVal.LT(&col[i]) {
 					maxVal = col[i]
 				}
 			}
@@ -3909,7 +3922,7 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
 		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(&col[j])
+			return col[i].LT(&col[j])
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.TS) bool {
 			return a.Equal(&b)
@@ -4122,7 +4135,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
 		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(&col[j])
+			return col[i].LT(&col[j])
 		})
 
 	case types.T_uuid:
@@ -4182,7 +4195,7 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 		return nil
 	}
 	var err error
-	area1, err = m.Grow2(area1, *bs, voff+vlen)
+	area1, err = m.Grow2(area1, *bs, voff+vlen, vec.offHeap)
 	if err != nil {
 		return err
 	}
@@ -4200,7 +4213,7 @@ func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 	if voff+vlen > cap(area1) && m != nil {
 		// Pass nil to Grow2, we can grow area1 to voff+vlen without
 		// copy bytejson data.
-		area1, err = m.Grow2(area1, nil, voff+vlen)
+		area1, err = m.Grow2(area1, nil, voff+vlen, vec.offHeap)
 		if err != nil {
 			return err
 		}
