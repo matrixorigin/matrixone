@@ -20,7 +20,6 @@ import (
 	"io"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -318,10 +317,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
-	inlineDataSize := unsafe.Sizeof(stmt.Param.Data)
+	inlineDataSize := strings.Count(stmt.Param.Data, "")
 	builder.qry.LoadWriteS3 = true
 
-	if noCompress && (stmt.Param.FileSize-offset < LoadParallelMinSize || inlineDataSize < LoadParallelMinSize) {
+	if noCompress && ((stmt.Param.ScanType == tree.INLINE && inlineDataSize < LoadParallelMinSize) || (stmt.Param.ScanType != tree.INLINE && stmt.Param.FileSize-offset < LoadParallelMinSize)) {
 		builder.qry.LoadWriteS3 = false
 	}
 
