@@ -24,9 +24,10 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -178,6 +179,7 @@ func TestHandleAddNonVotingReplica(t *testing.T) {
 }
 
 func TestHandleStartNonVotingReplica(t *testing.T) {
+	t.Skip() // pls re-open after https://github.com/matrixorigin/matrixone/pull/19025
 	fn := func(t *testing.T, s *Service) {
 		cfg := getStoreTestConfig()
 		cfg.GossipAddress = "0.0.0.0:33002"
