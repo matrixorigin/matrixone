@@ -41,7 +41,7 @@ func LoadColumnsData(
 ) (dataMeta objectio.ObjectDataMeta, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
-	var ioVectors *fileservice.IOVector
+	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
@@ -50,7 +50,7 @@ func LoadColumnsData(
 		return
 	}
 	release = func() {
-		objectio.ReleaseIOVector(ioVectors)
+		objectio.ReleaseIOVector(&ioVectors)
 		cacheBat.FreeColumns(m)
 	}
 	for i := range cols {
@@ -77,7 +77,7 @@ func LoadColumnsData2(
 ) (vectors []containers.Vector, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
-	var ioVectors *fileservice.IOVector
+	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
@@ -88,11 +88,11 @@ func LoadColumnsData2(
 	vectors = make([]containers.Vector, len(cols))
 	defer func() {
 		if needCopy {
-			objectio.ReleaseIOVector(ioVectors)
+			objectio.ReleaseIOVector(&ioVectors)
 			return
 		}
 		release = func() {
-			objectio.ReleaseIOVector(ioVectors)
+			objectio.ReleaseIOVector(&ioVectors)
 			for _, vec := range vectors {
 				vec.Close()
 			}

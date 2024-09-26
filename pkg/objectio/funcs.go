@@ -124,7 +124,7 @@ func ReadOneBlock(
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	policy fileservice.Policy,
-) (ioVec *fileservice.IOVector, err error) {
+) (ioVec fileservice.IOVector, err error) {
 	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, constructorFactory, policy)
 }
 
@@ -139,8 +139,8 @@ func ReadOneBlockWithMeta(
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 	policy fileservice.Policy,
-) (ioVec *fileservice.IOVector, err error) {
-	ioVec = &fileservice.IOVector{
+) (ioVec fileservice.IOVector, err error) {
+	ioVec = fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
@@ -192,7 +192,7 @@ func ReadOneBlockWithMeta(
 		})
 	}
 	if len(ioVec.Entries) > 0 {
-		err = fs.Read(ctx, ioVec)
+		err = fs.Read(ctx, &ioVec)
 		if err != nil {
 			return
 		}
@@ -280,8 +280,8 @@ func ReadAllBlocksWithMeta(
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
-) (ioVec *fileservice.IOVector, err error) {
-	ioVec = &fileservice.IOVector{
+) (ioVec fileservice.IOVector, err error) {
+	ioVec = fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
 		Policy:   policy,
@@ -304,7 +304,7 @@ func ReadAllBlocksWithMeta(
 		}
 	}
 
-	err = fs.Read(ctx, ioVec)
+	err = fs.Read(ctx, &ioVec)
 	//TODO when to call ioVec.Release?
 	return
 }
