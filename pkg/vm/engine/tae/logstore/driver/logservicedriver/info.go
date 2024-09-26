@@ -31,15 +31,14 @@ var ErrDriverLsnNotFound = moerr.NewInternalErrorNoCtx("driver info: driver lsn 
 var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("driver info: retry time out")
 
 type driverInfo struct {
-	addr        map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
-	validLsn    *roaring64.Bitmap
-	addrMu      sync.RWMutex
-	driverLsn   uint64 //
-	syncing     uint64
-	synced      uint64
-	syncedMu    sync.RWMutex
-	driverLsnMu sync.RWMutex
-
+	addr                   map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
+	validLsn               *roaring64.Bitmap
+	addrMu                 sync.RWMutex
+	driverLsn              uint64 //
+	syncing                uint64
+	synced                 uint64
+	syncedMu               sync.RWMutex
+	driverLsnMu            sync.RWMutex
 	truncating             atomic.Uint64 //
 	truncatedLogserviceLsn uint64        //
 
@@ -96,7 +95,7 @@ func (info *driverInfo) onReplayRecordEntry(lsn uint64, driverLsns *common.Close
 func (info *driverInfo) getNextValidLogserviceLsn(lsn uint64) uint64 {
 	info.addrMu.Lock()
 	defer info.addrMu.Unlock()
-	if info.validLsn.GetCardinality() == 0 {
+	if info.validLsn.IsEmpty() {
 		return 0
 	}
 	max := info.validLsn.Maximum()
@@ -209,6 +208,7 @@ func (info *driverInfo) gcAddr(logserviceLsn uint64) {
 			lsnToDelete = append(lsnToDelete, serviceLsn)
 		}
 	}
+	info.validLsn.RemoveRange(0, logserviceLsn)
 	for _, lsn := range lsnToDelete {
 		delete(info.addr, lsn)
 	}

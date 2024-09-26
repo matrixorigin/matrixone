@@ -495,9 +495,7 @@ func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
 }
 
 func (col *columnCache) close() error {
-	col.Lock()
-	defer col.Unlock()
-	return col.waitPrevAllocatingLocked(context.Background())
+	return nil
 }
 
 func insertAutoValues[T constraints.Integer](

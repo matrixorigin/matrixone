@@ -29,8 +29,8 @@ import (
 )
 
 func TestEventTypeDesc(t *testing.T) {
-	e1 := TypeKillQuery
-	assert.Equal(t, "KillQuery", e1.String())
+	e1 := TypeKill
+	assert.Equal(t, "Kill", e1.String())
 	e1 = TypeSetVar
 	assert.Equal(t, "SetVar", e1.String())
 	e1 = TypeUpgrade
@@ -274,7 +274,7 @@ func runEventTest(t *testing.T,
 	checkFn(res, cn1, errC, cc2)
 }
 
-func TestKillQueryEvent(t *testing.T) {
+func TestKillEvent(t *testing.T) {
 	runEventTest(t,
 		func(connID uint32, client net.Conn, errC chan error) {
 			// client2 send kill query 10, which is on server1.
@@ -326,8 +326,8 @@ func TestEventType_String(t *testing.T) {
 	e1 := baseEvent{}
 	require.Equal(t, "Unknown", e1.eventType().String())
 
-	e2 := killQueryEvent{}
-	require.Equal(t, "KillQuery", e2.eventType().String())
+	e2 := killEvent{}
+	require.Equal(t, "Kill", e2.eventType().String())
 
 	e3 := setVarEvent{}
 	require.Equal(t, "SetVar", e3.eventType().String())

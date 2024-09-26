@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"io"
 	"net/http"
 	"os"
 	"runtime"
@@ -143,4 +144,8 @@ func init() {
 	http.HandleFunc("/debug/malloc", func(w http.ResponseWriter, req *http.Request) {
 		globalProfiler.Write(w)
 	})
+}
+
+func WriteProfileData(w io.Writer) error {
+	return globalProfiler.Write(w)
 }

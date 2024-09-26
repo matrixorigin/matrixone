@@ -296,8 +296,8 @@ func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
 // HandleEvent implements the ClientConn interface.
 func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
 	switch ev := e.(type) {
-	case *killQueryEvent:
-		return c.handleKillQuery(ev, resp)
+	case *killEvent:
+		return c.handleKill(ev, resp)
 	case *setVarEvent:
 		return c.handleSetVar(ev)
 	case *upgradeEvent:
@@ -351,8 +351,8 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 	return nil
 }
 
-// handleKillQuery handles the kill query event.
-func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) error {
+// handleKill handles the kill event.
+func (c *clientConn) handleKill(e *killEvent, resp chan<- []byte) error {
 	cn, err := c.router.SelectByConnID(e.connID)
 	if err != nil {
 		// If no server found, means that the query has been terminated.

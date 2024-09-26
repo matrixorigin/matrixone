@@ -200,6 +200,20 @@ func TestIsErrPacket(t *testing.T) {
 	require.True(t, ret)
 }
 
+func TestIsLoadDataLocalInfileRespPacket(t *testing.T) {
+	var data []byte
+	ret := isLoadDataLocalInfileRespPacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 2, 0}
+	ret = isLoadDataLocalInfileRespPacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 0xFB, 0}
+	ret = isLoadDataLocalInfileRespPacket(data)
+	require.True(t, ret)
+}
+
 func TestIsDeallocatePacket(t *testing.T) {
 	var data []byte
 	ret := isDeallocatePacket(data)
