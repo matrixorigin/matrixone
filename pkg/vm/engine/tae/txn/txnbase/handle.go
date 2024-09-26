@@ -72,7 +72,7 @@ func (rel *TxnRelation) MakeObjectIt(bool) handle.ObjectIt                      
 func (rel *TxnRelation) MakeObjectItOnSnap(bool) handle.ObjectIt                  { return nil }
 func (rel *TxnRelation) BatchDedup(containers.Vector) error                       { return nil }
 func (rel *TxnRelation) Append(ctx context.Context, data *containers.Batch) error { return nil }
-func (rel *TxnRelation) AddObjsWithMetaLoc(context.Context, containers.Vector) error {
+func (rel *TxnRelation) AddDataFiles(context.Context, containers.Vector) error {
 	return nil
 }
 func (rel *TxnRelation) GetMeta() any                    { return nil }
@@ -99,7 +99,7 @@ func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteTyp
 	return
 }
 
-func (rel *TxnRelation) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
+func (rel *TxnRelation) AddPersistedTombstoneFile(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	return
 }
 

@@ -179,7 +179,6 @@ func uuidAscCompare(x, y types.Uuid) int {
 	return x.Compare(y)
 }
 
-// PXU FIXME Done
 func txntsAscCompare(x, y types.TS) int {
 	return x.Compare(&y)
 }
@@ -223,7 +222,6 @@ func uuidDescCompare(x, y types.Uuid) int {
 }
 
 func txntsDescCompare(x, y types.TS) int {
-	// PXU FIXME Done
 	return y.Compare(&x)
 }
 func rowidDescCompare(x, y types.Rowid) int {

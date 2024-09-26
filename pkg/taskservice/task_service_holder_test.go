@@ -138,7 +138,7 @@ func TestRefreshTaskStorageCanClose(t *testing.T) {
 }
 
 func Test_refreshAddCdcTask(t *testing.T) {
-	storage, mock := newMockStorage(t, "sqlmock")
+	storage, mock := newMockStorage(t)
 
 	stores := map[string]TaskStorage{
 		"s1": storage,

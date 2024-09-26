@@ -16,7 +16,7 @@ package rpc
 
 import (
 	"context"
-	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -24,6 +24,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
@@ -66,7 +67,11 @@ func (is *itemSet) Clear() {
 	*is = old[:0]
 }
 
-func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error {
+func (h *Handle) prefetchDeleteRowID(
+	_ context.Context,
+	req *db.WriteReq,
+	txnMeta *txn.TxnMeta,
+) error {
 	if len(req.TombstoneStats) == 0 {
 		return nil
 	}
@@ -80,12 +85,16 @@ func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error 
 		}
 	}
 
-	logCNCommittedObjects(true, req.TableID, req.TableName, req.TombstoneStats)
+	logCNCommittedObjects(txnMeta, true, req.TableID, req.TableName, req.TombstoneStats)
 
 	return nil
 }
 
-func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) error {
+func (h *Handle) prefetchMetadata(
+	_ context.Context,
+	req *db.WriteReq,
+	txnMeta *txn.TxnMeta,
+) error {
 	if len(req.DataObjectStats) == 0 {
 		return nil
 	}
@@ -99,45 +108,52 @@ func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) error {
 		}
 	}
 
-	logCNCommittedObjects(false, req.TableID, req.TableName, req.DataObjectStats)
+	logCNCommittedObjects(txnMeta, false, req.TableID, req.TableName, req.DataObjectStats)
 
 	return nil
 }
 
 func logCNCommittedObjects(
+	txnMeta *txn.TxnMeta,
 	isTombstone bool,
 	tableId uint64,
 	tableName string,
-	statsList []objectio.ObjectStats) {
+	statsList []objectio.ObjectStats,
+) {
 
 	totalBlkCnt := 0
 	totalRowCnt := 0
-	totalOSize := float64(0)
-	totalCSize := float64(0)
-	var objNames = make([]string, 0, len(statsList))
+	totalOSize := 0
+	totalCSize := 0
+	maxPrintObjCnt := 100
+	if len(statsList) < maxPrintObjCnt {
+		maxPrintObjCnt = len(statsList)
+	}
+	var objNames = make([]string, 0, maxPrintObjCnt)
 	for _, stats := range statsList {
 		totalBlkCnt += int(stats.BlkCnt())
 		totalRowCnt += int(stats.Rows())
-		totalCSize += float64(stats.Size())
-		totalOSize += float64(stats.OriginSize())
+		totalCSize += int(stats.Size())
+		totalOSize += int(stats.OriginSize())
+		if len(objNames) >= maxPrintObjCnt {
+			continue
+		}
 		objNames = append(objNames, stats.ObjectName().ObjectId().ShortStringEx())
 	}
 
-	totalCSize /= 1024.0 * 1024.0
-	totalOSize /= 1024.0 * 1024.0
-
-	hint := "CN-COMMIT-S3-Data-Object"
+	hint := "CN-COMMIT-S3-Data"
 	if isTombstone {
-		hint = "CN-COMMIT-S3-Tombstone-Object"
+		hint = "CN-COMMIT-S3-Tombstone"
 	}
 
 	logutil.Info(
 		hint,
+		zap.String("txn-id", txnMeta.DebugString()),
 		zap.Int("table-id", int(tableId)),
 		zap.String("table-name", tableName),
 		zap.Int("obj-cnt", len(statsList)),
-		zap.String("obj-osize", fmt.Sprintf("%.6fmb", totalOSize)),
-		zap.String("obj-csize", fmt.Sprintf("%.6fmb", totalCSize)),
+		zap.String("obj-osize", common.HumanReadableBytes(totalOSize)),
+		zap.String("obj-size", common.HumanReadableBytes(totalCSize)),
 		zap.Int("blk-cnt", totalBlkCnt),
 		zap.Int("row-cnt", totalRowCnt),
 		zap.Strings("names", objNames),
@@ -145,7 +161,7 @@ func logCNCommittedObjects(
 }
 
 // TryPrefetchTxn only prefetch data written by CN, do not change the state machine of TxnEngine.
-func (h *Handle) TryPrefetchTxn(ctx context.Context, meta txn.TxnMeta) error {
+func (h *Handle) TryPrefetchTxn(ctx context.Context, meta *txn.TxnMeta) error {
 	txnCtx, _ := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 
 	metaLocCnt := 0
@@ -166,12 +182,12 @@ func (h *Handle) TryPrefetchTxn(ctx context.Context, meta txn.TxnMeta) error {
 			if r.Type == db.EntryDelete {
 				// start to load deleted row ids
 				deltaLocCnt += len(r.TombstoneStats)
-				if err := h.prefetchDeleteRowID(ctx, r); err != nil {
+				if err := h.prefetchDeleteRowID(ctx, r, meta); err != nil {
 					return err
 				}
 			} else if r.Type == db.EntryInsert {
 				metaLocCnt += len(r.DataObjectStats)
-				if err := h.prefetchMetadata(ctx, r); err != nil {
+				if err := h.prefetchMetadata(ctx, r, meta); err != nil {
 					return err
 				}
 			}
