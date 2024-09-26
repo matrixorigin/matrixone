@@ -25,6 +25,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1067,21 +1069,22 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-// todo: remove this in the future
 func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
-	if tableDef.Pkey != nil {
-		if colName == tableDef.Pkey.PkeyColName {
-			return 0
-		}
-		pkNames := tableDef.Pkey.Names
-		for i := range pkNames {
-			if pkNames[i] == colName {
-				return i
-			}
-		}
-	}
 	if tableDef.ClusterBy != nil {
 		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
+	}
+	if catalog.IsFakePkName(tableDef.Pkey.PkeyColName) {
+		return -1
+	}
+
+	if colName == tableDef.Pkey.PkeyColName {
+		return 0
+	}
+	pkNames := tableDef.Pkey.Names
+	for i := range pkNames {
+		if pkNames[i] == colName {
+			return i
+		}
 	}
 	return -1
 }
@@ -1089,20 +1092,6 @@ func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
 func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	colName := tableDef.Cols[colPos].Name
 	return GetSortOrderByName(tableDef, colName)
-}
-
-func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsConst bool) ([]*plan.Expr, error) {
-	newExprs := DeepCopyExprList(exprs)
-	for i := range newExprs {
-		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst, true)
-		if err != nil {
-			return nil, err
-		}
-		if foldedExpr != nil {
-			newExprs[i] = foldedExpr
-		}
-	}
-	return newExprs, nil
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
@@ -2426,14 +2415,14 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			panic("EvalFoldVal: fold id not exist")
 		}
 		exe := (*executors)[idx]
-		vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-		if err != nil {
-			return err
-		}
-
 		var data []byte
 		var err error
-		if vec.Length() > 1 {
+
+		if _, ok := exe.(*colexec.ListExpressionExecutor); ok {
+			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			if err != nil {
+				return err
+			}
 			vec.InplaceSortAndCompact()
 			data, err = vec.MarshalBinary()
 			if err != nil {
@@ -2441,6 +2430,10 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			}
 			ef.Fold.IsConst = false
 		} else {
+			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			if err != nil {
+				return err
+			}
 			data, _ = getConstantBytes(vec, false, 0)
 			ef.Fold.IsConst = true
 		}

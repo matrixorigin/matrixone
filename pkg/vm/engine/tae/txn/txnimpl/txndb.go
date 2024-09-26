@@ -115,7 +115,7 @@ func (db *txnDB) Append(ctx context.Context, id uint64, bat *containers.Batch) e
 	return table.Append(ctx, bat)
 }
 
-func (db *txnDB) AddObjsWithMetaLoc(
+func (db *txnDB) AddDataFiles(
 	ctx context.Context,
 	tid uint64,
 	stats containers.Vector) error {
@@ -126,7 +126,7 @@ func (db *txnDB) AddObjsWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.AddObjsWithMetaLoc(ctx, stats)
+	return table.AddDataFiles(ctx, stats)
 }
 
 // func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
@@ -168,7 +168,7 @@ func (db *txnDB) DeleteByPhyAddrKeys(
 	return table.DeleteByPhyAddrKeys(rowIDVec, pkVec, dt)
 }
 
-func (db *txnDB) TryDeleteByStats(
+func (db *txnDB) AddPersistedTombstoneFile(
 	id *common.ID,
 	stats objectio.ObjectStats,
 ) (ok bool, err error) {
@@ -179,7 +179,7 @@ func (db *txnDB) TryDeleteByStats(
 	if table.IsDeleted() {
 		return false, moerr.NewNotFoundNoCtx()
 	}
-	return table.TryDeleteByStats(id, stats)
+	return table.AddPersistedTombstoneFile(id, stats)
 }
 
 func (db *txnDB) GetByFilter(ctx context.Context, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
@@ -435,7 +435,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 	return
 }
 
-func (db *txnDB) Freeze() (err error) {
+func (db *txnDB) Freeze(ctx context.Context) (err error) {
 	for _, table := range db.tables {
 		if table.NeedRollback() {
 			if err = table.PrepareRollback(); err != nil {
@@ -445,7 +445,9 @@ func (db *txnDB) Freeze() (err error) {
 		}
 	}
 	for _, table := range db.tables {
-		if err = table.PrePreareTransfer(txnif.FreezePhase, table.store.rt.Now()); err != nil {
+		if err = table.PrePreareTransfer(
+			ctx, txnif.FreezePhase, table.store.rt.Now(),
+		); err != nil {
 			return
 		}
 	}
@@ -462,7 +464,11 @@ func (db *txnDB) approxSize() int {
 
 func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 	for _, table := range db.tables {
-		if err = table.PrePreareTransfer(txnif.PrePreparePhase, table.store.rt.Now()); err != nil {
+		if err = table.PrePreareTransfer(
+			ctx,
+			txnif.PrePreparePhase,
+			table.store.rt.Now(),
+		); err != nil {
 			return
 		}
 	}

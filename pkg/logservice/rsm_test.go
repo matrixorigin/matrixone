@@ -174,14 +174,6 @@ func TestStateMachineUserUpdate(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, e.Index, result.Value)
 	assert.Nil(t, result.Data)
-
-	tsm.state.LeaseHolderID = 2345
-	e = sm.Entry{Cmd: cmd}
-	result, err = tsm.Update(e)
-	assert.Nil(t, err)
-	assert.Equal(t, uint64(0), result.Value)
-	assert.NotNil(t, result.Data)
-	assert.Equal(t, tsm.state.LeaseHolderID, binaryEnc.Uint64(result.Data))
 }
 
 func TestTsoUpdate(t *testing.T) {
