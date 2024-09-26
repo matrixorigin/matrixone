@@ -41,8 +41,7 @@ func AllAfterAndGCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, 
 	prev := &MetaFile{}
 	for i, file := range files {
 		if snapshot.LE(&file.end) &&
-			(prev.end.IsEmpty() || 
-       snapshot.LT(&prev.end)) &&
+			(prev.end.IsEmpty() || snapshot.LT(&prev.end)) &&
 			file.start.IsEmpty() {
 			if prev.end.IsEmpty() {
 				return files, i, nil
