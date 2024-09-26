@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -110,6 +111,7 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 	}
 	return
 }
+
 func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, first bool) (err error) {
 	if first {
 		if preInsert.ctr.compPkExecutor != nil {
@@ -275,6 +277,12 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 	}
 
 	if len(needReCheck) > 0 {
+		if currentTxn.GetWorkspace() == nil {
+			// 
+			ws := disttae.NewTxnWorkSpace(eng.(*disttae.Engine), proc)
+			currentTxn.AddWorkspace(ws)
+			ws.BindTxnOp(currentTxn)
+		}
 		if _, _, rel, err := eng.GetRelationById(proc.Ctx, currentTxn, tableID); err == nil {
 			for col, idx := range needReCheck {
 				vec := bat.GetVector(int32(idx))

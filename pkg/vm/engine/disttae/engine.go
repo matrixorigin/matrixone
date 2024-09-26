@@ -394,6 +394,9 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	// not found in tableOps, try cache
 	if tableName == "" {
 		cache := e.GetLatestCatalogCache()
+		if cache == nil {
+			logutil.Fatal("should no happened")
+		}
 		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
 		if cacheItem != nil {
 			tableName = cacheItem.Name
