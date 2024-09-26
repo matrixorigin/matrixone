@@ -71,6 +71,7 @@ func ConstructWriter(
 	if sortkeyPos >= 0 {
 		if sortkeyIsPK {
 			if isTombstone {
+				writer.SetDataType(objectio.SchemaTombstone)
 				writer.SetPrimaryKeyWithType(
 					uint16(objectio.TombstonePrimaryKeyIdx),
 					index.HBF,

@@ -199,7 +199,7 @@ var NewMysqlSinker = func(
 
 func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error) {
 	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceTblId)
-	if data.toTs.LessEq(&watermark) {
+	if data.toTs.LE(&watermark) {
 		logutil.Errorf("^^^^^ Sinker: unexpected watermark: %s, current watermark: %s",
 			data.toTs.ToString(), watermark.ToString())
 		return

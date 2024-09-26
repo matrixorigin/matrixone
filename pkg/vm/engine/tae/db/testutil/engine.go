@@ -99,7 +99,7 @@ func (e *TestEngine) Restart(ctx context.Context) {
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
-			return !end.GreaterEq(&min)
+			return !end.GE(&min)
 		}, gc.CheckerKeyMinTS)
 	assert.NoError(e.T, err)
 }
@@ -115,7 +115,7 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
-			return !end.GreaterEq(&min)
+			return !end.GE(&min)
 		}, gc.CheckerKeyMinTS)
 	assert.NoError(e.T, err)
 }
@@ -387,7 +387,7 @@ func InitTestDBWithDir(
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
-			return !end.GreaterEq(&min)
+			return !end.GE(&min)
 		}, gc.CheckerKeyMinTS)
 	return db
 }
@@ -408,7 +408,7 @@ func InitTestDB(
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
-			return !end.GreaterEq(&min)
+			return !end.GE(&min)
 		}, gc.CheckerKeyMinTS)
 	return db
 }

@@ -85,7 +85,7 @@ func (un *TxnMVCCNode) CheckConflict(txn txnif.TxnReader) error {
 	// -------+-------------+-------------------->
 	//        ts         CommitTs            time
 	startTS := txn.GetStartTS()
-	if un.End.Greater(&startTS) {
+	if un.End.GT(&startTS) {
 		return txnif.ErrTxnWWConflict
 	}
 	return nil
@@ -106,7 +106,7 @@ func (un *TxnMVCCNode) IsVisible(txn txnif.TxnReader) (visible bool) {
 
 	// Node is visible if the commit ts is le ts
 	startTS := txn.GetStartTS()
-	if un.End.LessEq(&startTS) && !un.Aborted {
+	if un.End.LE(&startTS) && !un.Aborted {
 		return true
 	}
 
@@ -134,7 +134,7 @@ func (un *TxnMVCCNode) IsVisibleByTS(ts types.TS) (visible bool) {
 	}
 
 	// Node is visible if the commit ts is le ts
-	if un.End.LessEq(&ts) && !un.Aborted {
+	if un.End.LE(&ts) && !un.Aborted {
 		return true
 	}
 
@@ -166,7 +166,7 @@ func (un *TxnMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// false: not prepared in range
 	// true: prepared before minTs
-	if un.Prepare.Less(&minTS) {
+	if un.Prepare.LT(&minTS) {
 		return false, true
 	}
 
@@ -176,7 +176,7 @@ func (un *TxnMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// true: prepared in range
 	// false: not prepared before minTs
-	if un.Prepare.GreaterEq(&minTS) && un.Prepare.LessEq(&maxTS) {
+	if un.Prepare.GE(&minTS) && un.Prepare.LE(&maxTS) {
 		return true, false
 	}
 
@@ -210,7 +210,7 @@ func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// false: not committed in range
 	// true: committed before minTs
-	if un.End.Less(&minTS) {
+	if un.End.LT(&minTS) {
 		return false, true
 	}
 
@@ -220,7 +220,7 @@ func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// true: committed in range
 	// false: not committed before minTs
-	if un.End.GreaterEq(&minTS) && un.End.LessEq(&maxTS) {
+	if un.End.GE(&minTS) && un.End.LE(&maxTS) {
 		return true, false
 	}
 
@@ -245,7 +245,7 @@ func (un *TxnMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	//         Ts           PrepareTs                Time
 	// If ts is before the prepare ts. not to wait
 	prepareTS := un.Txn.GetPrepareTS()
-	if prepareTS.GreaterEq(&ts) {
+	if prepareTS.GE(&ts) {
 		return false, nil
 	}
 
@@ -297,7 +297,7 @@ func (un *TxnMVCCNode) GetTxn() txnif.TxnReader {
 }
 
 func (un *TxnMVCCNode) Compare(o *TxnMVCCNode) int {
-	if un.Start.Less(&o.Start) {
+	if un.Start.LT(&o.Start) {
 		return -1
 	}
 	if un.Start.Equal(&o.Start) {
@@ -307,7 +307,7 @@ func (un *TxnMVCCNode) Compare(o *TxnMVCCNode) int {
 }
 
 func (un *TxnMVCCNode) Compare2(o *TxnMVCCNode) int {
-	if un.Prepare.Less(&o.Prepare) {
+	if un.Prepare.LT(&o.Prepare) {
 		return -1
 	}
 	if un.Prepare.Equal(&o.Prepare) {
