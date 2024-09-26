@@ -349,7 +349,7 @@ func (e *Engine) getOrCreateSnapPart(
 
 	start, end := snap.GetDuration()
 	//if has no checkpoints or ts > snap.end, use latest partition.
-	if snap.IsEmpty() || ts.Greater(&end) {
+	if snap.IsEmpty() || ts.GT(&end) {
 		ps, err := tbl.tryToSubscribe(ctx)
 		if err != nil {
 			return nil, err
@@ -359,7 +359,7 @@ func (e *Engine) getOrCreateSnapPart(
 		}
 		return ps, nil
 	}
-	if ts.Less(&start) {
+	if ts.LT(&start) {
 		return nil, moerr.NewInternalErrorNoCtxf(
 			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
 				"snapshot op:%s, start:%s, end:%s",

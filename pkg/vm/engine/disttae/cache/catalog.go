@@ -70,7 +70,7 @@ func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
 func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	if cc.mu.start != types.MaxTs() && ts.Greater(&cc.mu.start) {
+	if cc.mu.start != types.MaxTs() && ts.GT(&cc.mu.start) {
 		cc.mu.start = ts
 		logutil.Info("FIND_TABLE CACHE update serve range (by start)",
 			zap.String("start", cc.mu.start.ToString()),
@@ -81,7 +81,7 @@ func (cc *CatalogCache) UpdateStart(ts types.TS) {
 func (cc *CatalogCache) CanServe(ts types.TS) bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	return ts.GreaterEq(&cc.mu.start) && ts.LessEq(&cc.mu.end)
+	return ts.GE(&cc.mu.start) && ts.LE(&cc.mu.end)
 }
 
 type GCReport struct {

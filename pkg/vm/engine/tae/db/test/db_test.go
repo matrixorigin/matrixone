@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -28,6 +27,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 
@@ -618,7 +619,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 	//read new non-appendable block data and check
 	{
 		txn, rel := testutil.GetRelation(t, 0, db, "db", schema.Name)
-		assert.True(t, newBlockFp2.ObjectID().Eq(*newBlockFp1.ObjectID()))
+		assert.True(t, newBlockFp2.ObjectID().EQ(newBlockFp1.ObjectID()))
 		obj, err := rel.GetObject(newBlockFp1.ObjectID(), false)
 		assert.Nil(t, err)
 		var view *containers.Batch
@@ -646,7 +647,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		vec1 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 		vec1.Append(stats1[:], false)
 		defer vec1.Close()
-		err := rel.AddObjsWithMetaLoc(context.Background(), vec1)
+		err := rel.AddDataFiles(context.Background(), vec1)
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
@@ -654,7 +655,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		vec2 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 		vec2.Append(stats2[:], false)
 		defer vec1.Close()
-		err = rel.AddObjsWithMetaLoc(context.Background(), vec2)
+		err = rel.AddDataFiles(context.Background(), vec2)
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
@@ -679,7 +680,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		vec3.Append(stats1[:], false)
 		vec3.Append(stats2[:], false)
 		defer vec1.Close()
-		err = rel.AddObjsWithMetaLoc(context.Background(), vec3)
+		err = rel.AddDataFiles(context.Background(), vec3)
 		assert.NotNil(t, err)
 
 		//check blk count.
@@ -5037,7 +5038,7 @@ func TestMergeMemsize(t *testing.T) {
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
 		assert.NoError(t, err)
-		assert.NoError(t, tbl.AddObjsWithMetaLoc(context.Background(), statsVec))
+		assert.NoError(t, tbl.AddDataFiles(context.Background(), statsVec))
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	statsVec.Close()
@@ -5108,7 +5109,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 		assert.NoError(t, err)
 		tbl, err := testutil.CreateRelation2(ctx, txn, db, schema)
 		assert.NoError(t, err)
-		assert.NoError(t, tbl.AddObjsWithMetaLoc(context.Background(), statsVec))
+		assert.NoError(t, tbl.AddDataFiles(context.Background(), statsVec))
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -5217,7 +5218,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	tbl, err := db.CreateRelation(schema)
 	// tid = tbl.ID()
 	assert.NoError(t, err)
-	assert.NoError(t, tbl.AddObjsWithMetaLoc(context.Background(), statsVec))
+	assert.NoError(t, tbl.AddDataFiles(context.Background(), statsVec))
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -6416,11 +6417,11 @@ func TestAppendAndGC(t *testing.T) {
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 		minEnd := minMerged.GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd := minMerged.GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 
@@ -6638,11 +6639,11 @@ func TestSnapshotGC(t *testing.T) {
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 		minEnd := minMerged.GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd := minMerged.GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 
@@ -6766,7 +6767,7 @@ func TestSnapshotMeta(t *testing.T) {
 			return true
 		}
 		initMinEnd := initMinMerged.GetEnd()
-		return minEnd.Greater(&initMinEnd)
+		return minEnd.GT(&initMinEnd)
 	})
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	if minMerged == nil {
@@ -6778,7 +6779,7 @@ func TestSnapshotMeta(t *testing.T) {
 	}
 	if initMinMerged != nil {
 		initMinEnd := initMinMerged.GetEnd()
-		if !minEnd.Greater(&initMinEnd) {
+		if !minEnd.GT(&initMinEnd) {
 			return
 		}
 	}
@@ -6805,11 +6806,11 @@ func TestSnapshotMeta(t *testing.T) {
 			return false
 		}
 		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd = db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
 	defer logtail.CloseSnapshotList(snaps)
@@ -6963,7 +6964,7 @@ func TestPitrMeta(t *testing.T) {
 			return true
 		}
 		initMinEnd := initMinMerged.GetEnd()
-		return minEnd.Greater(&initMinEnd)
+		return minEnd.GT(&initMinEnd)
 	})
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	if minMerged == nil {
@@ -6975,7 +6976,7 @@ func TestPitrMeta(t *testing.T) {
 	}
 	if initMinMerged != nil {
 		initMinEnd := initMinMerged.GetEnd()
-		if !minEnd.Greater(&initMinEnd) {
+		if !minEnd.GT(&initMinEnd) {
 			return
 		}
 	}
@@ -6992,11 +6993,11 @@ func TestPitrMeta(t *testing.T) {
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 		minEnd := minMerged.GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd = minMerged.GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 }
@@ -7858,12 +7859,12 @@ func TestCommitS3Blocks(t *testing.T) {
 
 	for _, vec := range statsVecs {
 		txn, rel := tae.GetRelation()
-		rel.AddObjsWithMetaLoc(context.Background(), vec)
+		rel.AddDataFiles(context.Background(), vec)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	for _, vec := range statsVecs {
 		txn, rel := tae.GetRelation()
-		err := rel.AddObjsWithMetaLoc(context.Background(), vec)
+		err := rel.AddDataFiles(context.Background(), vec)
 		assert.Error(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -7944,7 +7945,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	statsVec2.Append(ss[:], false)
 
 	txn, rel := tae.GetRelation()
-	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
+	err = rel.AddDataFiles(context.Background(), statsVec)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7952,7 +7953,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	startTS := txn.GetStartTS()
 	txn.SetSnapshotTS(startTS.Next())
 	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
-	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec2)
+	err = rel.AddDataFiles(context.Background(), statsVec2)
 	assert.NoError(t, err)
 	_ = txn.Commit(context.Background())
 }
@@ -8087,7 +8088,7 @@ func TestDeduplication(t *testing.T) {
 	ObjectIDs[0] = objectio.NewObjectid()
 	ObjectIDs[1] = objectio.NewObjectid()
 	sort.Slice(ObjectIDs, func(i, j int) bool {
-		return ObjectIDs[i].Le(*ObjectIDs[j])
+		return ObjectIDs[i].LE(ObjectIDs[j])
 	})
 
 	blk1Name := objectio.BuildObjectNameWithObjectID(ObjectIDs[1])
@@ -8105,7 +8106,7 @@ func TestDeduplication(t *testing.T) {
 	statsVec.Append(ss[:], false)
 
 	txn, rel := tae.GetRelation()
-	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
+	err = rel.AddDataFiles(context.Background(), statsVec)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -8864,7 +8865,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	txn, rel = tae.GetRelation()
 	blk = testutil.GetOneObject(rel)
 	//ok, err := rel.TryDeleteByDeltaloc(blk.Fingerprint(), deltaLoc)
-	ok, err := rel.TryDeleteByStats(blk.Fingerprint(), stats)
+	ok, err := rel.AddPersistedTombstoneFile(blk.Fingerprint(), stats)
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -9496,8 +9497,7 @@ func TestTryDeleteByDeltaloc2(t *testing.T) {
 	tae.MergeBlocks(true)
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	//ok, err := rel.TryDeleteByDeltaloc(id, deltaLoc)
-	ok, err := rel.TryDeleteByStats(id, stats)
+	ok, err := rel.AddPersistedTombstoneFile(id, stats)
 	assert.NoError(t, err)
 	assert.NoError(t, err)
 	assert.True(t, ok)

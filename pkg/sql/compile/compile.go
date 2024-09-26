@@ -233,6 +233,7 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.isPrepare = false
+	c.needBlock = false
 
 	for _, exe := range c.filterExprExes {
 		exe.Free()
@@ -886,7 +887,8 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
 		rs.setRootOperator(
 			output.NewArgument().
-				WithFunc(c.fill),
+				WithFunc(c.fill).
+				WithBlock(c.needBlock),
 		)
 		return rs, nil
 	}
@@ -3223,7 +3225,7 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		block = n.LockTargets[0].Block
 		if block {
-			ss = []*Scope{c.newMergeScope(ss)}
+			c.needBlock = true
 		}
 	}
 
@@ -3235,10 +3237,8 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		lockOpArg.SetBlock(block)
 		lockOpArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].doSetRootOperator(lockOpArg)
-
 	}
 	c.anal.isFirst = false
 	return ss, nil
@@ -3987,7 +3987,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			)
 			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
-					ctx, blk.BlockID, fs,
+					ctx, &blk.BlockID, fs,
 				); err2 != nil {
 					return false, err2
 				} else if blk.IsAppendable() || hasTombstone {
@@ -4221,7 +4221,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 					case types.T_TS:
 						min := types.DecodeFixed[types.TS](zm.GetMinBuf())
 						ts := partialResults[i].(types.TS)
-						if min.Less(&ts) {
+						if min.LT(&ts) {
 							partialResults[i] = min
 						}
 					case types.T_Rowid:
@@ -4350,7 +4350,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 					case types.T_TS:
 						max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
 						ts := partialResults[i].(types.TS)
-						if max.Greater(&ts) {
+						if max.GT(&ts) {
 							partialResults[i] = max
 						}
 					case types.T_Rowid:

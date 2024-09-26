@@ -301,18 +301,37 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 	//----------------------------------------------------------------------
 
-	var pkPos int32 = -1
-	if len(node.TableDef.Pkey.Names) == 1 {
-		pkPos = node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]
+	for i := range node.FilterList { // if already have filter on first pk column and have a good selectivity, no need to go index
+		expr := node.FilterList[i]
+		fn := expr.GetF()
+		if fn == nil {
+			continue
+		}
+		col := fn.Args[0].GetCol()
+		if col == nil {
+			continue
+		}
+		if GetSortOrder(node.TableDef, col.ColPos) == 0 && node.FilterList[i].Selectivity <= 0.001 {
+			return node.NodeId
+		}
 	}
 
-	indexes := node.TableDef.Indexes
+	var indexes []*IndexDef
+	for i := range node.TableDef.Indexes {
+		if node.TableDef.Indexes[i].TableExist {
+			indexes = append(indexes, node.TableDef.Indexes[i])
+		}
+	}
+	if len(indexes) == 0 {
+		return nodeID
+	}
+
 	sort.Slice(indexes, func(i, j int) bool {
 		return (indexes[i].Unique && !indexes[j].Unique) || (indexes[i].Unique == indexes[j].Unique && len(indexes[i].Parts) > len(indexes[j].Parts))
 	})
 
 	// Apply unique/secondary indices if only indexed column is referenced
-	ret := builder.tryIndexOnlyScan(indexes, node, colRefCnt, pkPos, idxColMap, scanSnapshot)
+	ret := builder.tryIndexOnlyScan(indexes, node, colRefCnt, idxColMap, scanSnapshot)
 	if ret != -1 {
 		return ret
 	}
@@ -333,10 +352,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		return builder.applyIndexForPointSelect(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
 	}
 
-	return builder.applyIndicesForNonEquiCond(indexes, node, pkPos, scanSnapshot)
+	return builder.applyIndicesForNonEquiCond(indexes, node, scanSnapshot)
 }
 
-func (builder *QueryBuilder) tryIndexOnlyScan(indexes []*IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, pkPos int32, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
+func (builder *QueryBuilder) tryIndexOnlyScan(indexes []*IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
 	col2filter := make(map[int32]int)
 	colPos := int32(-1)
 	for i, expr := range node.FilterList {
@@ -375,10 +394,6 @@ func (builder *QueryBuilder) tryIndexOnlyScan(indexes []*IndexDef, node *plan.No
 		}
 	}
 
-	if colPos == pkPos && pkPos != -1 {
-		return node.NodeId
-	}
-
 	if colPos > -1 {
 		for i := range node.TableDef.Cols {
 			if i != int(colPos) && colRefCnt[[2]int32{node.BindingTags[0], int32(i)}] > 0 {
@@ -390,10 +405,6 @@ func (builder *QueryBuilder) tryIndexOnlyScan(indexes []*IndexDef, node *plan.No
 	hitFilterIdx := make([]int, 0, len(col2filter))
 	missFilterIdx := make([]int, 0, len(node.FilterList))
 	for _, idxDef := range indexes {
-		if !idxDef.TableExist {
-			continue
-		}
-
 		numParts := len(idxDef.Parts)
 		if idxDef.Unique {
 			if len(col2filter) > 0 && len(col2filter) < numParts {
@@ -600,22 +611,17 @@ func (builder *QueryBuilder) tryIndexOnlyScan(indexes []*IndexDef, node *plan.No
 	return -1
 }
 
-func (builder *QueryBuilder) applyIndicesForNonEquiCond(indexes []*IndexDef, node *plan.Node, pkPos int32, scanSnapshot *Snapshot) int32 {
+func (builder *QueryBuilder) applyIndicesForNonEquiCond(indexes []*IndexDef, node *plan.Node, scanSnapshot *Snapshot) int32 {
 	// Apply single-column unique/secondary indices for non-equi expression
-
 	colPos2Idx := make(map[int32]int)
-
 	for i, idxDef := range indexes {
-		if !idxDef.TableExist {
-			continue
-		}
-
 		numParts := len(idxDef.Parts)
 		if !idxDef.Unique {
 			numParts--
 		}
-
-		if numParts == 1 {
+		if idxDef.Unique && numParts == 1 {
+			colPos2Idx[node.TableDef.Name2ColIndex[idxDef.Parts[0]]] = i
+		} else if !idxDef.Unique && numParts >= 1 {
 			colPos2Idx[node.TableDef.Name2ColIndex[idxDef.Parts[0]]] = i
 		}
 	}
@@ -632,10 +638,6 @@ func (builder *QueryBuilder) applyIndicesForNonEquiCond(indexes []*IndexDef, nod
 			continue
 		}
 
-		if col.ColPos == pkPos {
-			return node.NodeId
-		}
-
 		switch fn.Func.ObjName {
 		case "between", "in":
 
@@ -649,8 +651,7 @@ func (builder *QueryBuilder) applyIndicesForNonEquiCond(indexes []*IndexDef, nod
 		}
 
 		idxTag := builder.genNewTag()
-		idxDef := node.TableDef.Indexes[idxPos]
-		//idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
+		idxDef := indexes[idxPos]
 		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
 		builder.addNameByColRef(idxTag, idxTableDef)
 
@@ -832,7 +833,7 @@ func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *pl
 func (builder *QueryBuilder) getMostSelectiveIndex(indexes []*IndexDef, node *plan.Node) (int, float64, []int) {
 	currentSel := 1.0
 	currentIdx := -1
-	var savedFilterIdx []int
+	savedFilterIdx := make([]int, 0)
 
 	col2filter := make(map[int32]int)
 	for i, expr := range node.FilterList {
@@ -865,10 +866,6 @@ func (builder *QueryBuilder) getMostSelectiveIndex(indexes []*IndexDef, node *pl
 
 	filterIdx := make([]int, 0, len(col2filter))
 	for i, idxDef := range indexes {
-		if !idxDef.TableExist {
-			continue
-		}
-
 		numParts := len(idxDef.Parts)
 		numKeyParts := numParts
 		if !idxDef.Unique {
@@ -905,7 +902,8 @@ func (builder *QueryBuilder) getMostSelectiveIndex(indexes []*IndexDef, node *pl
 		if compositeFilterSel < currentSel {
 			currentSel = compositeFilterSel
 			currentIdx = i
-			savedFilterIdx = filterIdx
+			savedFilterIdx = savedFilterIdx[:0]
+			savedFilterIdx = append(savedFilterIdx, filterIdx...)
 		}
 	}
 	return currentIdx, currentSel, savedFilterIdx
