@@ -877,6 +877,7 @@ message Node {
 	ApplyType apply_type = 64;
 
 	OnDuplicateAction on_duplicate_action = 65;
+	string dedup_col_name = 66;
 }
 
 // Snapshot Represents a snapshot of the database

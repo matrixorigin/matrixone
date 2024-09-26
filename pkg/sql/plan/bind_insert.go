@@ -170,6 +170,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				JoinType:          plan.Node_DEDUP,
 				OnList:            []*plan.Expr{joinCond},
 				OnDuplicateAction: onDupAction,
+				DedupColName:      pkName,
 			}, ctx)
 		}
 
@@ -263,6 +264,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				JoinType:          plan.Node_DEDUP,
 				OnList:            []*plan.Expr{joinCond},
 				OnDuplicateAction: onDupAction,
+				DedupColName:      catalog.IndexTableIndexColName,
 			}, ctx)
 		}
 	}
