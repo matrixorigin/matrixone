@@ -195,7 +195,7 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 func extend(v *Vector, rows int, m *mpool.MPool) error {
 	if tgtCap := v.length + rows; tgtCap > v.capacity {
 		sz := v.typ.TypeSize()
-		ndata, err := m.Grow(v.data, tgtCap*sz)
+		ndata, err := m.Grow(v.data, tgtCap*sz, v.offHeap)
 		if err != nil {
 			return err
 		}
