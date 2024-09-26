@@ -2066,7 +2066,7 @@ func (tbl *txnTable) MergeObjects(
 	// check object visibility
 	for _, objstat := range objStats {
 		info, exist := state.GetObject(*objstat.ObjectShortName())
-		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
+		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LE(&snapshot)) {
 			logutil.Errorf("object not visible: %s", info.String())
 			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 		}
