@@ -784,7 +784,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				} else {
 					val = fmt.Sprintf("%v", row[colIdx])
 				}
-				if err = vector.AppendBytes(bat.Vecs[colIdx], []byte(val), false, pool); err != nil {
+				err := vector.AppendBytes(bat.Vecs[colIdx], []byte(val), false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -801,7 +802,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				} else {
 					val = fmt.Sprintf("%v", row[colIdx])
 				}
-				if err = vector.AppendBytes(bat.Vecs[colIdx], []byte(val), false, pool); err != nil {
+				err := vector.AppendBytes(bat.Vecs[colIdx], []byte(val), false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -812,7 +814,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				val := row[colIdx].(int8)
-				if err := vector.AppendFixed[int8](bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed[int8](bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -823,7 +826,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				val := row[colIdx].(int16)
-				if err := vector.AppendFixed[int16](bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed[int16](bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -856,7 +860,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				val := row[colIdx].(float64)
-				if err := vector.AppendFixed[float64](bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed[float64](bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -867,7 +872,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				val := row[colIdx].(float32)
-				if err := vector.AppendFixed[float32](bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed[float32](bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -878,7 +884,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				val := row[colIdx].(types.Date)
-				if err := vector.AppendFixed[types.Date](bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed[types.Date](bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -889,7 +896,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				val := row[colIdx].(types.Time)
-				if err := vector.AppendFixed[types.Time](bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed[types.Time](bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -900,7 +908,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				val := row[colIdx].(types.Datetime)
-				if err := vector.AppendFixed[types.Datetime](bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed[types.Datetime](bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -921,7 +930,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				default:
 					return nil, nil, moerr.NewInternalErrorNoCtxf("%v can't convert to timestamp type", v)
 				}
-				if err := vector.AppendFixed(bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed(bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -932,7 +942,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				val := row[colIdx].(types.Enum)
-				if err := vector.AppendFixed(bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed(bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
