@@ -205,7 +205,7 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 		defer func() {
 			s.logger.Info(">>>>> cancel context",
 				zap.String("ctx", fmt.Sprintf("%p", ctx)))
-			request.Cancel()
+			request.Cancel(moerr.NewInfoNoCtx("fn canceled"))
 		}()
 		req, ok := request.Message.(REQ)
 		if !ok {

@@ -64,7 +64,7 @@ type PayloadMessage interface {
 type RPCMessage struct {
 	// Ctx context
 	Ctx    context.Context
-	Cancel context.CancelFunc
+	Cancel context.CancelCauseFunc
 	// Message raw rpc message
 	Message Message
 

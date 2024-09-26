@@ -215,7 +215,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		defer func() {
 			s.logger.Info(">>>>> cancel context 2",
 				zap.String("ctx", fmt.Sprintf("%p", request.Ctx)))
-			request.Cancel()
+			request.Cancel(moerr.NewInfoNoCtx("rpc canceled"))
 		}()
 	}
 	// get requestID here to avoid data race, because the request maybe released in handler

@@ -125,6 +125,10 @@ func (s *service) handleRemoteRead(
 		buffer,
 	)
 	if err != nil {
+		s.logger.Error(">>>>> handleRemoteRead error",
+			zap.Uint32("method", req.ShardRead.Method),
+			zap.String("ctx", fmt.Sprintf("%p", ctx)),
+			zap.Error(context.Cause(ctx)))
 		return err
 	}
 	resp.ShardRead.Payload = value
