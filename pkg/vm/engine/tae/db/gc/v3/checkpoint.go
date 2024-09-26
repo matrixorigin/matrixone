@@ -490,28 +490,19 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		}
 		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		maxEnd := maxConsumed.GetEnd()
-		if end.LE(&maxEnd) {
+		if end.LT(&maxEnd) {
 			deleteFiles = append(deleteFiles, GCMetaDir+dir.Name)
 		}
 	}
 	if len(deleteFiles) < c.getMinMergeCount() {
 		return nil
 	}
-	var mergeTable *GCTable
 	c.inputs.RLock()
 	if len(c.inputs.tables) == 0 {
 		c.inputs.RUnlock()
 		return nil
 	}
 	// tables[0] has always been a full GCTable
-	if len(c.inputs.tables) > 1 {
-		mergeTable = NewGCTable(c.fs.Service, c.mPool)
-		for _, table := range c.inputs.tables {
-			mergeTable.Merge(table)
-		}
-	} else {
-		mergeTable = c.inputs.tables[0]
-	}
 	c.inputs.RUnlock()
 	err = c.fs.DelFiles(c.ctx, deleteFiles)
 	if err != nil {
