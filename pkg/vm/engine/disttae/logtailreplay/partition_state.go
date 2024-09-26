@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"math"
 	"runtime/trace"
 	"sync/atomic"
+
+	"go.uber.org/zap"
 
 	"github.com/tidwall/btree"
 
@@ -131,7 +132,7 @@ func (p *PartitionState) HandleDataObjectList(
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
 		p.shared.Lock()
-		if t := commitTSCol[idx]; t.Greater(&p.shared.lastFlushTimestamp) {
+		if t := commitTSCol[idx]; t.GT(&p.shared.lastFlushTimestamp) {
 			p.shared.lastFlushTimestamp = t
 		}
 		p.shared.Unlock()
@@ -209,7 +210,7 @@ func (p *PartitionState) HandleDataObjectList(
 				// if the inserting block is non-appendable and has delta location, need to delete
 				// the deletes for it.
 				if objEntry.GetAppendable() {
-					if entry.Time.LessEq(&trunctPoint) {
+					if entry.Time.LE(&trunctPoint) {
 						// delete the row
 						p.rows.Delete(entry)
 
@@ -283,7 +284,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
 		p.shared.Lock()
-		if t := commitTSCol[idx]; t.Greater(&p.shared.lastFlushTimestamp) {
+		if t := commitTSCol[idx]; t.GT(&p.shared.lastFlushTimestamp) {
 			p.shared.lastFlushTimestamp = t
 		}
 		p.shared.Unlock()
@@ -333,12 +334,12 @@ func (p *PartitionState) HandleTombstoneObjectList(
 		for ok := tbIter.Seek(&PrimaryIndexEntry{
 			Bytes: objEntry.ObjectName().ObjectId()[:],
 		}); ok; ok = tbIter.Next() {
-			if truncatePoint.Less(&tbIter.Item().Time) {
+			if truncatePoint.LT(&tbIter.Item().Time) {
 				continue
 			}
 
 			current := types.Objectid(tbIter.Item().Bytes)
-			if !objEntry.ObjectName().ObjectId().Eq(current) {
+			if !objEntry.ObjectName().ObjectId().EQ(&current) {
 				break
 			}
 
@@ -626,7 +627,7 @@ func (p *PartitionState) truncateTombstoneObjects(
 
 	for iter.Next() {
 		entry := iter.Item()
-		if entry.DeleteTime.IsEmpty() || entry.DeleteTime.Greater(&ts) {
+		if entry.DeleteTime.IsEmpty() || entry.DeleteTime.GT(&ts) {
 			break
 		}
 
@@ -645,7 +646,7 @@ func (p *PartitionState) truncateTombstoneObjects(
 }
 
 func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
-	if p.minTS.Greater(&ts) {
+	if p.minTS.GT(&ts) {
 		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.ToString(), ts.ToString())
 		return
 	}
@@ -668,7 +669,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 	objectsToDelete := ""
 	for ; ok; ok = iter.Prev() {
 		entry := iter.Item()
-		if entry.Time.Greater(&ts) {
+		if entry.Time.GT(&ts) {
 			continue
 		}
 		if entry.IsDelete {
@@ -688,7 +689,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 	}
 	for ; ok; ok = iter.Prev() {
 		entry := iter.Item()
-		if entry.Time.Greater(&ts) {
+		if entry.Time.GT(&ts) {
 			continue
 		}
 		if _, ok := objIDsToDelete[entry.ShortObjName]; ok {
@@ -717,7 +718,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 
 		objEntry := objIter.Item()
 
-		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(&ts) {
+		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LE(&ts) {
 			p.dataObjectsNameIndex.Delete(objEntry)
 			//p.dataObjectsByCreateTS.Delete(ObjectIndexByCreateTSEntry{
 			//	//CreateTime:   objEntry.CreateTime,
@@ -761,7 +762,7 @@ func (p *PartitionState) PKExistInMemBetween(
 				break
 			}
 
-			if entry.Time.GreaterEq(&from) {
+			if entry.Time.GE(&from) {
 				return true, false
 			}
 
@@ -789,7 +790,7 @@ func (p *PartitionState) PKExistInMemBetween(
 				if !row.RowID.EQ(&entry.RowID) {
 					break
 				}
-				if row.Time.GreaterEq(&from) {
+				if row.Time.GE(&from) {
 					rowIter.Release()
 					return true, false
 				}
@@ -803,7 +804,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	p.shared.Lock()
 	lastFlushTimestamp := p.shared.lastFlushTimestamp
 	p.shared.Unlock()
-	if lastFlushTimestamp.LessEq(&from) {
+	if lastFlushTimestamp.LE(&from) {
 		return false, false
 	}
 	return false, true
@@ -830,7 +831,7 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 		if entry.RowID != rowID {
 			break
 		}
-		if entry.Time.Greater(&ts) {
+		if entry.Time.GT(&ts) {
 			// not visible
 			continue
 		}

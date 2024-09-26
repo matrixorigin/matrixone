@@ -1901,7 +1901,7 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 
 func (collector *BaseCollector) VisitObjForBackup(entry *catalog.ObjectEntry) (err error) {
 	createTS := entry.GetCreatedAt()
-	if createTS.Greater(&collector.start) {
+	if createTS.GT(&collector.start) {
 		return nil
 	}
 	return collector.visitObjectEntry(entry)
@@ -1928,7 +1928,7 @@ func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 // TODO
 // func (collector *BaseCollector) VisitBlkForBackup(entry *catalog.BlockEntry) (err error) {
 // 	entry.RLock()
-// 	if entry.GetCreatedAtLocked().Greater(collector.start) {
+// 	if entry.GetCreatedAtLocked().GT(collector.start) {
 // 		entry.RUnlock()
 // 		return nil
 // 	}

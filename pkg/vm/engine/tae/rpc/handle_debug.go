@@ -264,7 +264,7 @@ func (h *Handle) HandleDiskCleaner(
 				checkpoint := item.(*checkpoint.CheckpointEntry)
 				ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(ttl), 0)
 				endTS := checkpoint.GetEnd()
-				return !endTS.GreaterEq(&ts)
+				return !endTS.GE(&ts)
 			}, gc.CheckerKeyTTL)
 		return
 	case gc.CheckerKeyMinTS:
@@ -291,7 +291,7 @@ func (h *Handle) HandleDiskCleaner(
 			func(item any) bool {
 				ckp := item.(*checkpoint.CheckpointEntry)
 				end := ckp.GetEnd()
-				return !end.GreaterEq(&ts)
+				return !end.GE(&ts)
 			}, gc.CheckerKeyMinTS)
 		return
 	default:

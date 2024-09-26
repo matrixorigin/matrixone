@@ -34,13 +34,13 @@ func TestMPool(t *testing.T) {
 	require.True(t, nfree0 == 0, "bad nfree")
 
 	for i := 1; i <= 10000; i++ {
-		a, err := m.Alloc(i * 10)
+		a, err := m.Alloc(i*10, false)
 		require.True(t, err == nil, "alloc failure, %v", err)
 		require.True(t, len(a) == i*10, "allocation i size error")
 		a[0] = 0xF0
 		require.True(t, a[1] == 0, "allocation result not zeroed.")
 		a[i*10-1] = 0xBA
-		a, err = m.reAlloc(a, i*20)
+		a, err = m.reAlloc(a, i*20, false)
 		require.True(t, err == nil, "realloc failure %v", err)
 		require.True(t, len(a) == i*20, "allocation i size error")
 		require.True(t, a[0] == 0xF0, "reallocation not copied")
@@ -65,7 +65,7 @@ func TestReportMemUsage(t *testing.T) {
 	m.EnableDetailRecording()
 
 	require.True(t, err == nil, "new mpool failed %v", err)
-	mem, err := m.Alloc(1000000)
+	mem, err := m.Alloc(1000000, false)
 	require.True(t, err == nil, "mpool alloc failed %v", err)
 
 	j1 := ReportMemUsage("")
@@ -101,7 +101,7 @@ func TestMP(t *testing.T) {
 	run := func() {
 		defer wg.Done()
 		for i := 0; i < 1000; i++ {
-			buf, err := pool.Alloc(10)
+			buf, err := pool.Alloc(10, false)
 			if err != nil {
 				panic(err)
 			}
@@ -118,30 +118,30 @@ func TestMP(t *testing.T) {
 
 func TestMpoolReAllocate(t *testing.T) {
 	m := MustNewZero()
-	d1, err := m.Alloc(1023)
+	d1, err := m.Alloc(1023, false)
 	require.NoError(t, err)
 	require.Equal(t, int64(cap(d1)+kMemHdrSz), m.CurrNB())
 
-	d2, err := m.reAlloc(d1, cap(d1)-1)
+	d2, err := m.reAlloc(d1, cap(d1)-1, false)
 	require.NoError(t, err)
 	require.Equal(t, cap(d1), cap(d2))
 	require.Equal(t, int64(cap(d1)+kMemHdrSz), m.CurrNB())
 
-	d3, err := m.reAlloc(d2, cap(d2)+1025)
+	d3, err := m.reAlloc(d2, cap(d2)+1025, false)
 	require.NoError(t, err)
 	require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())
 
 	if cap(d3) > 5 {
 		d3 = d3[:cap(d3)-4]
 		var d3_1 []byte
-		d3_1, err = m.Grow(d3, cap(d3)-2)
+		d3_1, err = m.Grow(d3, cap(d3)-2, false)
 		require.NoError(t, err)
 		require.Equal(t, cap(d3), cap(d3_1))
 		require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())
 		d3 = d3_1
 	}
 
-	d4, err := m.Grow(d3, cap(d3)+10)
+	d4, err := m.Grow(d3, cap(d3)+10, false)
 	require.NoError(t, err)
 	require.Equal(t, int64(cap(d4)+kMemHdrSz), m.CurrNB())
 
@@ -153,9 +153,9 @@ func TestMpoolReAllocate(t *testing.T) {
 }
 
 func TestUseMalloc(t *testing.T) {
-	pool, err := NewMPool("test", 1<<20, UseMalloc)
+	pool, err := NewMPool("test", 1<<20, NoFixed)
 	require.Nil(t, err)
-	bs, err := pool.Alloc(8)
+	bs, err := pool.Alloc(8, true)
 	require.Nil(t, err)
 	pool.Free(bs)
 }
