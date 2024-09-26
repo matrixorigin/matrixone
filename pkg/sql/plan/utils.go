@@ -2172,6 +2172,28 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 	}
 }
 
+func MakeSerialExtractExpr(ctx context.Context, fromExpr *Expr, origType Type, serialIdx int64) (*Expr, error) {
+	return BindFuncExprImplByPlanExpr(ctx, "serial_extract", []*plan.Expr{
+		fromExpr,
+		{
+			Typ: plan.Type{
+				Id: int32(types.T_int64),
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_I64Val{I64Val: serialIdx},
+				},
+			},
+		},
+		{
+			Typ: origType,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{},
+			},
+		},
+	})
+}
+
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
 	rightArg := &plan.Expr{
 		Typ: left.Typ,
