@@ -4387,7 +4387,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		t.Log(tae.Catalog.SimplePPString(3))
 
 		txn, _ = tae.GetRelation()
-		task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.DB.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -9739,14 +9739,28 @@ func TestStartStopTableMerge(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 
 	tbl := rel.GetMeta().(*catalog.TableEntry)
-	scheduler.StopMerge(tbl)
+	require.NoError(t, scheduler.StopMerge(tbl, false))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.NoError(t, scheduler.StartMerge(tbl.GetID(), false))
+	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
+	require.Error(t, scheduler.StartMerge(tbl.GetID(), false))
 
-	require.Equal(t, moerr.GetOkStopCurrRecur(), scheduler.LoopProcessor.OnTable(tbl))
+	require.NoError(t, scheduler.StopMerge(tbl, true))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
-	scheduler.StartMerge(tbl.GetID())
+	require.NoError(t, scheduler.StopMerge(tbl, true))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
+	require.Error(t, scheduler.StopMerge(tbl, false))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+
+	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+
+	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
 	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
 }
+
 func TestDeleteByPhyAddrKeys(t *testing.T) {
 	ctx := context.Background()
 
@@ -9796,7 +9810,8 @@ func TestRollbackMergeInQueue(t *testing.T) {
 
 	err = task.OnExec(context.Background())
 	require.NoError(t, err)
-	tae.Runtime.LockMergeService.LockFromUser(rel.ID())
+	err = tae.DB.MergeScheduler.StopMerge(rel.GetMeta().(*catalog.TableEntry), false)
+	require.NoError(t, err)
 	require.Error(t, txn.Commit(ctx)) // rollback
 
 	_, rel = tae.GetRelation()

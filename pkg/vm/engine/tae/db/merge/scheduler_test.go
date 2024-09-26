@@ -24,9 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
-	"sync"
 	"testing"
-	"time"
 )
 
 func TestStopStartMerge(t *testing.T) {
@@ -34,22 +32,9 @@ func TestStopStartMerge(t *testing.T) {
 		executor: newMergeExecutor(&dbutils.Runtime{
 			LockMergeService: dbutils.NewLockMergeService(),
 		}, nil),
-		stoppedTables: struct {
-			sync.RWMutex
-			m map[uint64]struct {
-				time.Time
-				indexes []string
-			}
-			indexes map[string]struct{}
-		}{
-			m: make(map[uint64]struct {
-				time.Time
-				indexes []string
-			}),
-			indexes: make(map[string]struct{}),
-		},
 	}
 
+	lockService := scheduler.executor.rt.LockMergeService
 	cata := catalog.MockCatalog()
 	defer cata.Close()
 	txnMgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(cata), catalog.MockTxnFactory(cata), types.NewMockHLCClock(1))
@@ -64,13 +49,13 @@ func TestStopStartMerge(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, txn1.Commit(context.Background()))
 
-	err = scheduler.StopMerge(tblEntry1)
+	err = scheduler.StopMerge(tblEntry1, false)
 	if err != nil {
 		return
 	}
-	require.Equal(t, 1, len(scheduler.stoppedTables.m))
-	require.Equal(t, 0, len(scheduler.stoppedTables.m[tblEntry1.GetID()].indexes))
-	require.Equal(t, 0, len(scheduler.stoppedTables.indexes))
+	require.Equal(t, 1, len(lockService.LockedInfos()))
+	require.Equal(t, 0, len(lockService.LockedInfos()[tblEntry1.GetID()].Indexes()))
+	require.Equal(t, 0, len(lockService.Indexes()))
 
 	constraintDef := engine.ConstraintDef{Cts: []engine.Constraint{&engine.IndexDef{Indexes: []*plan.IndexDef{{IndexTableName: "__mo_index_test"}}}}}
 	marshal, err := constraintDef.MarshalBinary()
@@ -81,19 +66,19 @@ func TestStopStartMerge(t *testing.T) {
 	tblEntry2, err := db.CreateTableEntry(mockSchema, txn2, nil)
 	require.NoError(t, err)
 	require.NoError(t, txn2.Commit(context.Background()))
-	err = scheduler.StopMerge(tblEntry2)
+	err = scheduler.StopMerge(tblEntry2, false)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(scheduler.stoppedTables.m))
-	require.Equal(t, "__mo_index_test", scheduler.stoppedTables.m[tblEntry2.GetID()].indexes[0])
-	_, ok := scheduler.stoppedTables.indexes["__mo_index_test"]
+	require.Equal(t, 2, len(lockService.LockedInfos()))
+	require.Equal(t, "__mo_index_test", lockService.LockedInfos()[tblEntry2.GetID()].Indexes()[0])
+	_, ok := lockService.Indexes()["__mo_index_test"]
 	require.True(t, ok)
 
 	require.Error(t, scheduler.onTable(tblEntry1))
 	require.Error(t, scheduler.onTable(tblEntry2))
 
 	scheduler.StartMerge(tblEntry1.GetID())
-	require.Equal(t, 1, len(scheduler.stoppedTables.m))
+	require.Equal(t, 1, len(lockService.LockedInfos()))
 	scheduler.StartMerge(tblEntry2.GetID())
-	require.Equal(t, 0, len(scheduler.stoppedTables.m))
-	require.Equal(t, 0, len(scheduler.stoppedTables.indexes))
+	require.Equal(t, 0, len(lockService.LockedInfos()))
+	require.Equal(t, 0, len(lockService.Indexes()))
 }

@@ -867,12 +867,15 @@ func (c *mergePolicyArg) Run() error {
 			return err
 		}
 		if c.stopMerge {
-			err = c.ctx.db.MergeScheduler.StopMerge(c.tbl)
+			err = c.ctx.db.MergeScheduler.StopMerge(c.tbl, false)
 			if err != nil {
 				return err
 			}
 		} else {
-			c.ctx.db.MergeScheduler.StartMerge(c.tbl.GetID())
+			err = c.ctx.db.MergeScheduler.StartMerge(c.tbl.GetID(), false)
+			if err != nil {
+				return err
+			}
 		}
 		c.ctx.resp.Payload = []byte("success")
 	}

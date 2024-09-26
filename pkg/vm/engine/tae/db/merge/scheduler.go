@@ -15,11 +15,6 @@
 package merge
 
 import (
-	"strings"
-	"sync"
-	"time"
-
-	fcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -39,15 +34,6 @@ type Scheduler struct {
 	executor *executor
 
 	skipForTransPageLimit bool
-
-	stoppedTables struct {
-		sync.RWMutex
-		m map[uint64]struct {
-			time.Time
-			indexes []string
-		}
-		indexes map[string]struct{}
-	}
 }
 
 func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
@@ -55,17 +41,6 @@ func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
 		LoopProcessor: new(catalog.LoopProcessor),
 		policies:      newPolicyGroup(newBasicPolicy(), newObjCompactPolicy(rt.Fs.Service), newObjOverlapPolicy(), newTombstonePolicy()),
 		executor:      newMergeExecutor(rt, sched),
-		stoppedTables: struct {
-			sync.RWMutex
-			m map[uint64]struct {
-				time.Time
-				indexes []string
-			}
-			indexes map[string]struct{}
-		}{m: make(map[uint64]struct {
-			time.Time
-			indexes []string
-		}), indexes: make(map[string]struct{})},
 	}
 
 	op.DatabaseFn = op.onDataBase
@@ -133,7 +108,7 @@ func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	if s.executor.rt.LockMergeService.IsLockedByUser(tableEntry.ID) {
+	if s.executor.rt.LockMergeService.IsLockedByUser(tableEntry.ID, tableEntry.GetLastestSchema(false).Name) {
 		logutil.Infof("LockMerge skip table scan due to user lock %d", tableEntry.ID)
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -141,21 +116,6 @@ func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
-
-	s.stoppedTables.RLock()
-	if t, ok := s.stoppedTables.m[tableEntry.GetID()]; ok {
-		if time.Now().After(t.Add(10 * time.Minute)) {
-			logutil.Warnf("table %s has stopped merging for over 10 minutes", tableEntry.GetFullName())
-		}
-		s.stoppedTables.RUnlock()
-		return moerr.GetOkStopCurrRecur()
-	}
-	tableName := tableEntry.GetLastestSchema(false).Name
-	if _, ok := s.stoppedTables.indexes[tableName]; ok {
-		s.stoppedTables.RUnlock()
-		return moerr.GetOkStopCurrRecur()
-	}
-	s.stoppedTables.RUnlock()
 
 	tableEntry.RLock()
 	// this table is creating or altering
@@ -200,50 +160,28 @@ func (s *Scheduler) onPostObject(*catalog.ObjectEntry) (err error) {
 	return nil
 }
 
-func (s *Scheduler) StopMerge(tblEntry *catalog.TableEntry) error {
-	s.stoppedTables.Lock()
-	defer s.stoppedTables.Unlock()
-
-	tblName := tblEntry.GetLastestSchema(false).Name
-	if strings.HasPrefix(tblName, fcatalog.PrefixIndexTableName) {
-		return moerr.NewInternalErrorNoCtx("cannot stop merging index table manually")
-	}
-
-	if _, ok := s.stoppedTables.m[tblEntry.GetID()]; ok {
-		return moerr.NewInternalErrorNoCtxf("%s is already stopped", tblEntry.GetFullName())
-	}
-
+func (s *Scheduler) StopMerge(tblEntry *catalog.TableEntry, reentrant bool) error {
 	c := new(engine.ConstraintDef)
 	binary := tblEntry.GetLastestSchema(false).Constraint
 	err := c.UnmarshalBinary(binary)
 	if err != nil {
 		return err
 	}
-
 	indexTableNames := make([]string, 0, len(c.Cts))
 	for _, constraint := range c.Cts {
 		if indices, ok := constraint.(*engine.IndexDef); ok {
 			for _, index := range indices.Indexes {
 				indexTableNames = append(indexTableNames, index.IndexTableName)
-				s.stoppedTables.indexes[index.IndexTableName] = struct{}{}
 			}
 		}
 	}
 
-	s.stoppedTables.m[tblEntry.GetID()] = struct {
-		time.Time
-		indexes []string
-	}{Time: time.Now(), indexes: indexTableNames}
-	return nil
+	tblName := tblEntry.GetLastestSchema(false).Name
+	return s.executor.rt.LockMergeService.LockFromUser(tblEntry.GetID(), tblName, reentrant, indexTableNames...)
 }
 
-func (s *Scheduler) StartMerge(tblID uint64) {
-	s.stoppedTables.Lock()
-	defer s.stoppedTables.Unlock()
-	for _, index := range s.stoppedTables.m[tblID].indexes {
-		delete(s.stoppedTables.indexes, index)
-	}
-	delete(s.stoppedTables.m, tblID)
+func (s *Scheduler) StartMerge(tblID uint64, reentrant bool) error {
+	return s.executor.rt.LockMergeService.UnlockFromUser(tblID, reentrant)
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {

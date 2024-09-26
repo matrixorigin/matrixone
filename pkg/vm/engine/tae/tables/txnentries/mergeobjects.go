@@ -417,7 +417,7 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		return nil
 	}
 
-	if entry.rt.LockMergeService.IsLockedByUser(entry.relation.ID()) {
+	if entry.rt.LockMergeService.IsLockedByUser(entry.relation.ID(), entry.relation.Schema(false).(*catalog.Schema).Name) {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in queue %v", entry.taskName)
 	}
 	inst1 := time.Now()
