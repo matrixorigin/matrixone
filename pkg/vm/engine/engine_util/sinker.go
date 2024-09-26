@@ -568,7 +568,7 @@ func (sinker *Sinker) Write(
 		if currPos+toAdd > objectio.BlockMaxRows {
 			toAdd = objectio.BlockMaxRows - currPos
 		}
-		if err = curr.Union(data, offset, toAdd, sinker.mp); err != nil {
+		if err = curr.UnionWindow(data, offset, toAdd, sinker.mp); err != nil {
 			return
 		}
 		if curr.RowCount() == objectio.BlockMaxRows {
