@@ -27,12 +27,12 @@ var _ vm.Operator = new(MultiUpdate)
 
 const opName = "MultiUpdate"
 
-type updateTableType int
+type UpdateTableType int
 
 const (
-	updateMainTable updateTableType = iota
-	updateUniqueIndexTable
-	updateSecondaryIndexTable
+	UpdateMainTable UpdateTableType = iota
+	UpdateUniqueIndexTable
+	UpdateSecondaryIndexTable
 )
 
 type actionType int
@@ -82,7 +82,7 @@ type MultiUpdateCtx struct {
 	ObjRef   *plan.ObjectRef
 	TableDef *plan.TableDef
 
-	TableType updateTableType
+	TableType UpdateTableType
 
 	InsertCols []int
 	DeleteCols []int

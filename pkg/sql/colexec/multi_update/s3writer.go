@@ -77,13 +77,13 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 	var thisUpdateCtxs []*MultiUpdateCtx
 	var mainUpdateCtx *MultiUpdateCtx
 	for _, updateCtx := range update.MultiUpdateCtx {
-		if updateCtx.TableType == updateMainTable {
+		if updateCtx.TableType == UpdateMainTable {
 			mainUpdateCtx = updateCtx
 			break
 		}
 	}
 	for _, updateCtx := range update.MultiUpdateCtx {
-		if updateCtx.TableType != updateMainTable {
+		if updateCtx.TableType != UpdateMainTable {
 			thisUpdateCtxs = append(thisUpdateCtxs, updateCtx)
 			appendCfgToWriter(writer, updateCtx.TableDef)
 		}
@@ -139,7 +139,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 		if len(updateCtx.DeleteCols) > 0 {
 			if parititionCount == 0 {
 				// normal table
-				if onlyDelete && updateCtx.TableType == updateMainTable {
+				if onlyDelete && updateCtx.TableType == UpdateMainTable {
 					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols)
 				} else {
 					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols)
@@ -155,7 +155,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 				// partition table
 				lastIdx := parititionCount - 1
 				for getPartitionIdx := range parititionCount {
-					if onlyDelete && updateCtx.TableType == updateMainTable && getPartitionIdx == lastIdx {
+					if onlyDelete && updateCtx.TableType == UpdateMainTable && getPartitionIdx == lastIdx {
 						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.PartitionIdx, getPartitionIdx, updateCtx.DeleteCols)
 					} else {
 						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.PartitionIdx, getPartitionIdx, updateCtx.DeleteCols)
@@ -175,7 +175,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 		if len(updateCtx.InsertCols) > 0 {
 			if parititionCount == 0 {
 				// normal table
-				if updateCtx.TableType == updateMainTable {
+				if updateCtx.TableType == UpdateMainTable {
 					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.InsertCols)
 				} else {
 					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.InsertCols)
@@ -191,7 +191,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 				// partition table
 				lastIdx := parititionCount - 1
 				for getPartitionIdx := range parititionCount {
-					if updateCtx.TableType == updateMainTable && getPartitionIdx == lastIdx {
+					if updateCtx.TableType == UpdateMainTable && getPartitionIdx == lastIdx {
 						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.PartitionIdx, getPartitionIdx, updateCtx.InsertCols)
 					} else {
 						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.PartitionIdx, getPartitionIdx, updateCtx.InsertCols)

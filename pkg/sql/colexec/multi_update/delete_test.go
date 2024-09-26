@@ -169,7 +169,7 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	updateCtx := &MultiUpdateCtx{
 		ObjRef:     objRef,
 		TableDef:   tableDef,
-		TableType:  updateMainTable,
+		TableType:  UpdateMainTable,
 		DeleteCols: []int{0, 1}, //row_id & pk
 	}
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
@@ -193,7 +193,7 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
 			ObjRef:     uniqueObjRef,
 			TableDef:   uniqueTableDef,
-			TableType:  updateUniqueIndexTable,
+			TableType:  UpdateUniqueIndexTable,
 			DeleteCols: []int{2, 3}, //row_id & pk
 		})
 		colCount += 2
@@ -222,7 +222,7 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
 			ObjRef:     secondaryIdxObjRef,
 			TableDef:   secondaryIdxTableDef,
-			TableType:  updateSecondaryIndexTable,
+			TableType:  UpdateSecondaryIndexTable,
 			DeleteCols: secondaryPkPos,
 		})
 	}

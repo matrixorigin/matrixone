@@ -280,7 +280,7 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	updateCtx := &MultiUpdateCtx{
 		ObjRef:     objRef,
 		TableDef:   tableDef,
-		TableType:  updateMainTable,
+		TableType:  UpdateMainTable,
 		InsertCols: []int{0, 1, 2, 3}, //a, b, new_c, d
 		DeleteCols: []int{4, 0},       //row_id, a
 	}
@@ -306,7 +306,7 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
 			ObjRef:     uniqueObjRef,
 			TableDef:   uniqueTableDef,
-			TableType:  updateUniqueIndexTable,
+			TableType:  UpdateUniqueIndexTable,
 			InsertCols: []int{7, 0}, //uk_pk & main_tbl_pk
 			DeleteCols: []int{5, 6}, //del_row_id & del_pk
 		})
@@ -339,7 +339,7 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
 			ObjRef:     secondaryIdxObjRef,
 			TableDef:   secondaryIdxTableDef,
-			TableType:  updateSecondaryIndexTable,
+			TableType:  UpdateSecondaryIndexTable,
 			InsertCols: insertCols,
 			DeleteCols: deleteCols,
 		})

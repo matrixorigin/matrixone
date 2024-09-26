@@ -193,11 +193,11 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batc
 		// insert rows
 		if len(updateCtx.InsertCols) > 0 {
 			switch updateCtx.TableType {
-			case updateMainTable:
+			case UpdateMainTable:
 				err = update.insert_main_table(proc, i, bat)
-			case updateUniqueIndexTable:
+			case UpdateUniqueIndexTable:
 				err = update.insert_uniuqe_index_table(proc, i, bat)
-			case updateSecondaryIndexTable:
+			case UpdateSecondaryIndexTable:
 				err = update.insert_secondary_index_table(proc, i, bat)
 			}
 			if err != nil {

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -755,9 +756,17 @@ func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpd
 			deleteCols[j] = int(col.GetCol().ColPos)
 		}
 
+		tableType := multi_update.UpdateMainTable
+		if strings.HasPrefix(updateCtx.TableDef.Name, catalog.UniqueIndexTableNamePrefix) {
+			tableType = multi_update.UpdateUniqueIndexTable
+		} else if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+			tableType = multi_update.UpdateSecondaryIndexTable
+		}
+
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 			ObjRef:              updateCtx.ObjRef,
 			TableDef:            updateCtx.TableDef,
+			TableType:           tableType,
 			InsertCols:          insertCols,
 			DeleteCols:          deleteCols,
 			PartitionTableIDs:   updateCtx.PartitionTableIds,
