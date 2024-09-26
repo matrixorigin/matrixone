@@ -94,6 +94,7 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 			if ctr.inbat.IsEmpty() {
+				ctr.inbat = nil
 				continue
 			}
 			ctr.batIdx = 0

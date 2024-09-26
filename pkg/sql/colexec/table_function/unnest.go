@@ -193,6 +193,9 @@ func handle(bat *batch.Batch, jsonVec *vector.Vector, nthRow int,
 	path *bytejson.Path, outer bool, param *unnestParam, arg *TableFunction,
 	proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) error {
 	// nthRow is the row number in the input batch, const batch is handled correctly in GetBytesAt
+	if jsonVec.GetNulls().Contains(uint64(nthRow)) {
+		return nil
+	}
 	json, err := fn(jsonVec.GetBytesAt(nthRow))
 	if err != nil {
 		return err
