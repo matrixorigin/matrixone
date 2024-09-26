@@ -61,6 +61,12 @@ func WithBufferSize(size int) TableOption {
 	}
 }
 
+func WithMetaPrefix(prefix string) TableOption {
+	return func(table *GCTable) {
+		table.metaDir = prefix
+	}
+}
+
 func NewGCTable(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
@@ -75,6 +81,9 @@ func NewGCTable(
 		opt(&table)
 	}
 	WithBufferSize(64 * mpool.MB)(&table)
+	if table.metaDir == "" {
+		table.metaDir = GCMetaDir
+	}
 	return &table
 }
 
@@ -95,6 +104,8 @@ type GCTable struct {
 		start types.TS
 		end   types.TS
 	}
+
+	metaDir string
 }
 
 func addObjectLocked(
@@ -224,7 +235,6 @@ func (t *GCTable) SoftGC(
 	// canGCObjects is a list of files of object entries that can be gc'ed
 	// canGCMemTable is batches of object entries that can be gc'ed in memory
 	canGCObjects, canGCMemTable := canGCSinker.GetResult()
-
 	snapList := make(map[uint32][]types.TS)
 	for accountId, snapshot := range snapShotList {
 		snapList[accountId] = vector.MustFixedColWithTypeCheck[types.TS](snapshot.GetDownstreamVector())
@@ -273,8 +283,8 @@ func (t *GCTable) SoftGC(
 				t.objects[name].dropTS = dropTs
 			}
 			tsList := meta.GetSnapshotListLocked(snapList, tid)
-			pList := meta.GetPitrLocked(pitrList, dbs[i], tid)
-			if tsList == nil && pList.IsEmpty() {
+			pitr := meta.GetPitrLocked(pitrList, dbs[i], tid)
+			if tsList == nil && pitr.IsEmpty() {
 				if createTs.LT(&ts) && dropTs.LT(&ts) {
 					gcFiles = append(gcFiles, name)
 					delete(t.objects, name)
@@ -284,7 +294,7 @@ func (t *GCTable) SoftGC(
 			}
 			if createTs.LT(&ts) &&
 				dropTs.LT(&ts) &&
-				!isSnapshotRefers(&createTs, &dropTs, tsList, pList, name) {
+				!isSnapshotRefers(&createTs, &dropTs, tsList, &pitr, name) {
 				gcFiles = append(gcFiles, name)
 				delete(t.objects, name)
 				bm.Add(uint64(i))
@@ -363,9 +373,9 @@ func (t *GCTable) SoftGC(
 	return gcFiles, snapList, err
 }
 
-func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, pitrVec types.TS, name string) bool {
+func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, pitr *types.TS, name string) bool {
 	if len(snapVec) == 0 &&
-		len(pitrVec) == 0 {
+		pitr.IsEmpty() {
 		return false
 	}
 	if dropTS.IsEmpty() {
@@ -375,11 +385,11 @@ func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, pitrVec ty
 			zap.String("dropTS", createTS.ToString()))
 		return true
 	}
-	if !pitrVec.IsEmpty() {
-		if dropTS.GT(&pitrVec) {
+	if !pitr.IsEmpty() {
+		if dropTS.GT(pitr) {
 			logutil.Info("[soft GC]Pitr Refers",
 				zap.String("name", name),
-				zap.String("snapTS", pitrVec.ToString()),
+				zap.String("snapTS", pitr.ToString()),
 				zap.String("createTS", createTS.ToString()),
 				zap.String("dropTS", dropTS.ToString()))
 			return true
@@ -425,6 +435,10 @@ func (t *GCTable) Process(
 	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
 	processOneBatch func(context.Context, *batch.Batch, *mpool.MPool) error,
 ) error {
+
+	t.tsRange.start = *start
+	t.tsRange.end = *end
+
 	sinker := t.getSinker(0)
 	defer sinker.Close()
 	if err := engine_util.StreamBatchProcess(
@@ -446,7 +460,7 @@ func (t *GCTable) Process(
 }
 
 func (t *GCTable) doneAllBatches(ctx context.Context, start, end *types.TS, stats []objectio.ObjectStats) error {
-	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, *start, *end)
+	name := blockio.EncodeCheckpointMetadataFileName(t.metaDir, PrefixGCMeta, *start, *end)
 	ret := batch.New(false, ObjectTableMetaAttrs)
 	ret.SetVector(0, vector.NewVec(ObjectTableMetaTypes[0]))
 	t.files.Lock()
@@ -535,7 +549,6 @@ func (t *GCTable) ProcessMapBatch(
 	data *batch.Batch,
 	mp *mpool.MPool,
 ) error {
-	logutil.Infof("start to sort data %v", data.String())
 	if err := mergesort.SortColumnsByIndex(
 		data.Vecs,
 		ObjectTablePrimaryKeyIdx,
@@ -611,6 +624,9 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 			release1()
 		}
 	}()
+	start, end, _ := blockio.DecodeGCMetadataFileName(name)
+	t.tsRange.start = start
+	t.tsRange.end = end
 	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
 	if err != nil {
 		return err

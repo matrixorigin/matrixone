@@ -822,7 +822,7 @@ func (c *checkpointCleaner) softGC(
 
 func (c *checkpointCleaner) createDebugInput(
 	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
-	input = NewGCTable(c.fs.Service, c.mPool)
+	input = NewGCTable(c.fs.Service, c.mPool, WithMetaPrefix("debug/"))
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {
 		data, err = c.collectCkpData(candidate)
@@ -834,6 +834,15 @@ func (c *checkpointCleaner) createDebugInput(
 		defer data.Close()
 		input.UpdateTable(data)
 	}
+	start := ckps[0].GetStart()
+	end := ckps[len(ckps)-1].GetEnd()
+	err = input.Process(
+		c.ctx,
+		&start,
+		&end,
+		input.CollectMapData,
+		input.ProcessMapBatch,
+	)
 
 	return
 }
