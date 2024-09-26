@@ -795,7 +795,7 @@ func (l *lockTableAllocator) initHandler() {
 
 func (l *lockTableAllocator) handleGetBind(
 	ctx context.Context,
-	cancel context.CancelFunc,
+	cancel context.CancelCauseFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -814,7 +814,7 @@ func (l *lockTableAllocator) handleGetBind(
 
 func (l *lockTableAllocator) handleKeepLockTableBind(
 	ctx context.Context,
-	cancel context.CancelFunc,
+	cancel context.CancelCauseFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -856,7 +856,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 
 func (l *lockTableAllocator) handleSetRestartService(
 	ctx context.Context,
-	cancel context.CancelFunc,
+	cancel context.CancelCauseFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -867,7 +867,7 @@ func (l *lockTableAllocator) handleSetRestartService(
 
 func (l *lockTableAllocator) handleCanRestartService(
 	ctx context.Context,
-	cancel context.CancelFunc,
+	cancel context.CancelCauseFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -877,7 +877,7 @@ func (l *lockTableAllocator) handleCanRestartService(
 
 func (l *lockTableAllocator) handleRemainTxnInService(
 	ctx context.Context,
-	cancel context.CancelFunc,
+	cancel context.CancelCauseFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -897,7 +897,7 @@ func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.Loc
 
 func (l *lockTableAllocator) handleCannotCommit(
 	ctx context.Context,
-	cancel context.CancelFunc,
+	cancel context.CancelCauseFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -908,7 +908,7 @@ func (l *lockTableAllocator) handleCannotCommit(
 
 func (l *lockTableAllocator) handleCheckOrphan(
 	ctx context.Context,
-	cancel context.CancelFunc,
+	cancel context.CancelCauseFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {

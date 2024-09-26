@@ -41,7 +41,7 @@ func TestRPCSend(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
@@ -69,7 +69,7 @@ func TestSetRestartServiceRPCSend(t *testing.T) {
 				lock.Method_SetRestartService,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
@@ -99,7 +99,7 @@ func TestCanRestartServiceRPCSend(t *testing.T) {
 				lock.Method_CanRestartService,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
@@ -129,7 +129,7 @@ func TestRemainTxnServiceRPCSend(t *testing.T) {
 				lock.Method_RemainTxnInService,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
@@ -159,7 +159,7 @@ func TestRPCSendErrBackendCannotConnect(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
@@ -203,7 +203,7 @@ func TestMOErrorCanHandled(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
@@ -230,7 +230,7 @@ func TestRequestCanBeFilter(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
@@ -258,7 +258,7 @@ func TestRetryValidateService(t *testing.T) {
 				lock.Method_ValidateService,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
@@ -280,7 +280,7 @@ func TestValidateService(t *testing.T) {
 				lock.Method_ValidateService,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
@@ -307,7 +307,7 @@ func TestLockTableBindChanged(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {

@@ -98,7 +98,7 @@ func Test_InitServer(t *testing.T) {
 		ctx,
 		morpc.RPCMessage{
 			Ctx:     ctx,
-			Cancel:  func() {},
+			Cancel:  func(err error) {},
 			Message: msg,
 		},
 		0,
@@ -111,7 +111,7 @@ func Test_InitServer(t *testing.T) {
 		ctx,
 		morpc.RPCMessage{
 			Ctx:     ctx,
-			Cancel:  func() {},
+			Cancel:  func(err error) {},
 			Message: msg,
 		},
 		0,

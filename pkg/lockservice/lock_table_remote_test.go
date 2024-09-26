@@ -37,7 +37,7 @@ func TestLockRemote(t *testing.T) {
 				pb.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -70,7 +70,7 @@ func TestUnlockRemote(t *testing.T) {
 				pb.Method_Unlock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -99,7 +99,7 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 				pb.Method_Unlock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -116,7 +116,7 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 				pb.Method_GetBind,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -156,7 +156,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 				pb.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -169,7 +169,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 				pb.Method_Unlock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -182,7 +182,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 				pb.Method_GetTxnLock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {

@@ -38,7 +38,7 @@ func TestKeeper(t *testing.T) {
 				pb.Method_KeepLockTableBind,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -52,7 +52,7 @@ func TestKeeper(t *testing.T) {
 				pb.Method_KeepRemoteLock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -114,7 +114,7 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 				pb.Method_KeepLockTableBind,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -126,7 +126,7 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 				pb.Method_KeepRemoteLock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
+					cancel context.CancelCauseFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {

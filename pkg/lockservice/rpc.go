@@ -332,7 +332,7 @@ func (s *server) onMessage(
 				zap.String("request", req.DebugString()))
 		}
 		if msg.Cancel != nil {
-			msg.Cancel()
+			msg.Cancel(moerr.NewInfoNoCtx("lock service onMessage canceled"))
 		}
 		releaseRequest(req)
 		return nil
@@ -412,13 +412,13 @@ func getResponse(req *pb.Request) *pb.Response {
 func writeResponse(
 	ctx context.Context,
 	logger *log.MOLogger,
-	cancel context.CancelFunc,
+	cancel context.CancelCauseFunc,
 	resp *pb.Response,
 	err error,
 	cs morpc.ClientSession,
 ) {
 	if cancel != nil {
-		defer cancel()
+		defer cancel(moerr.NewInfoNoCtx("lock service writeResponse canceled"))
 	}
 
 	if err != nil {
@@ -443,5 +443,5 @@ type requestCtx struct {
 	handler RequestHandleFunc
 	cs      morpc.ClientSession
 	ctx     context.Context
-	cancel  context.CancelFunc
+	cancel  context.CancelCauseFunc
 }
