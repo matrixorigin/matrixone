@@ -79,6 +79,7 @@ func TestStopStartMerge(t *testing.T) {
 	txn2, _ := txnMgr.StartTxn(nil)
 	mockSchema := &catalog.Schema{Extra: &api.SchemaExtra{}, Constraint: marshal}
 	tblEntry2, err := db.CreateTableEntry(mockSchema, txn2, nil)
+	require.NoError(t, err)
 	require.NoError(t, txn2.Commit(context.Background()))
 	err = scheduler.StopMerge(tblEntry2)
 	require.NoError(t, err)
