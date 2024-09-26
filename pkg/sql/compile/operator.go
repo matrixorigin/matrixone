@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -448,13 +447,11 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		return op
 	case vm.Shuffle:
 		sourceArg := sourceOp.(*shuffle.Shuffle)
-		op := shuffle.NewArgument()
-
-		if index%8 == 0 { // 8 shuffle operator share one shufflepool
+		if sourceArg.GetShufflePool() == nil {
 			sourceArg.SetShufflePool(shuffle.NewShufflePool(sourceArg.BucketNum))
 		}
+		op := shuffle.NewArgument()
 		op.SetShufflePool(sourceArg.GetShufflePool())
-
 		op.ShuffleType = sourceArg.ShuffleType
 		op.ShuffleColIdx = sourceArg.ShuffleColIdx
 		op.ShuffleColMax = sourceArg.ShuffleColMax
