@@ -289,7 +289,7 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 	rid := key.(types.Rowid)
 	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
-	id.BlockID = bid
+	id.BlockID = *bid
 	schema := h.table.GetLocalSchema(false)
 	pkDef := schema.GetPrimaryKey()
 	pkVec := makeWorkspaceVector(pkDef.Type)
@@ -330,7 +330,7 @@ func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, bool, error) 
 	rid := key.(types.Rowid)
 	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
-	id.BlockID = bid
+	id.BlockID = *bid
 	return h.Txn.GetStore().GetValue(id, row, uint16(col), false)
 }
 
