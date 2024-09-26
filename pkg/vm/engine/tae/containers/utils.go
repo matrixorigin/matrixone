@@ -75,7 +75,7 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 		}
 	}
 	if len(bb.buffer) == 0 {
-		return batch.NewWithSchema(false, bb.attrs, bb.typs)
+		return batch.NewWithSchema(false, false, bb.attrs, bb.typs)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -85,7 +85,7 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 
 func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
 	if len(bb.buffer) == 0 {
-		return batch.NewWithSchema(false, bb.attrs, bb.typs)
+		return batch.NewWithSchema(false, false, bb.attrs, bb.typs)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
