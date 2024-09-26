@@ -191,10 +191,10 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	objRef, tableDef := getTestMainTable(isPartition)
 
 	updateCtx := &MultiUpdateCtx{
-		ref:        objRef,
-		tableDef:   tableDef,
-		tableType:  updateMainTable,
-		insertCols: []int{0, 1, 2, 3},
+		ObjRef:     objRef,
+		TableDef:   tableDef,
+		TableType:  updateMainTable,
+		InsertCols: []int{0, 1, 2, 3},
 	}
 	colCount := 4
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
@@ -215,10 +215,10 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName, isPartition)
 
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        uniqueObjRef,
-			tableDef:   uniqueTableDef,
-			tableType:  updateUniqueIndexTable,
-			insertCols: []int{4, 0},
+			ObjRef:     uniqueObjRef,
+			TableDef:   uniqueTableDef,
+			TableType:  updateUniqueIndexTable,
+			InsertCols: []int{4, 0},
 		})
 		colCount += 1
 	}
@@ -242,10 +242,10 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			secondaryPkPos += 1
 		}
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        secondaryIdxObjRef,
-			tableDef:   secondaryIdxTableDef,
-			tableType:  updateSecondaryIndexTable,
-			insertCols: []int{secondaryPkPos, 0},
+			ObjRef:     secondaryIdxObjRef,
+			TableDef:   secondaryIdxTableDef,
+			TableType:  updateSecondaryIndexTable,
+			InsertCols: []int{secondaryPkPos, 0},
 		})
 		colCount += 1
 	}
@@ -256,9 +256,9 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			for j := range tableDef.Partition.PartitionTableNames {
 				partTblIDs[j] = int32(i*1000 + j)
 			}
-			updateCtx.partitionIdx = colCount
-			updateCtx.partitionTableIDs = partTblIDs
-			updateCtx.partitionTableNames = tableDef.Partition.PartitionTableNames
+			updateCtx.PartitionIdx = colCount
+			updateCtx.PartitionTableIDs = partTblIDs
+			updateCtx.PartitionTableNames = tableDef.Partition.PartitionTableNames
 		}
 	}
 

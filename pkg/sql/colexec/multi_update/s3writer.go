@@ -77,38 +77,38 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 	var thisUpdateCtxs []*MultiUpdateCtx
 	var mainUpdateCtx *MultiUpdateCtx
 	for _, updateCtx := range update.MultiUpdateCtx {
-		if updateCtx.tableType == updateMainTable {
+		if updateCtx.TableType == updateMainTable {
 			mainUpdateCtx = updateCtx
 			break
 		}
 	}
 	for _, updateCtx := range update.MultiUpdateCtx {
-		if updateCtx.tableType != updateMainTable {
+		if updateCtx.TableType != updateMainTable {
 			thisUpdateCtxs = append(thisUpdateCtxs, updateCtx)
-			appendCfgToWriter(writer, updateCtx.tableDef)
+			appendCfgToWriter(writer, updateCtx.TableDef)
 		}
 	}
 	// main table allways at the end for s3writer.updateCtxs
 	// because main table will write to s3 at last
 	thisUpdateCtxs = append(thisUpdateCtxs, mainUpdateCtx)
-	appendCfgToWriter(writer, mainUpdateCtx.tableDef)
+	appendCfgToWriter(writer, mainUpdateCtx.TableDef)
 	writer.updateCtxs = thisUpdateCtxs
 
-	if len(mainUpdateCtx.deleteCols) > 0 && len(mainUpdateCtx.insertCols) > 0 {
+	if len(mainUpdateCtx.DeleteCols) > 0 && len(mainUpdateCtx.InsertCols) > 0 {
 		//update
 		writer.action = actionUpdate
 		writer.flushThreshold = InsertWriteS3Threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, mainUpdateCtx.insertCols...)
-	} else if len(mainUpdateCtx.insertCols) > 0 {
+		writer.checkSizeCols = append(writer.checkSizeCols, mainUpdateCtx.InsertCols...)
+	} else if len(mainUpdateCtx.InsertCols) > 0 {
 		//insert
 		writer.action = actionInsert
 		writer.flushThreshold = InsertWriteS3Threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, mainUpdateCtx.insertCols...)
+		writer.checkSizeCols = append(writer.checkSizeCols, mainUpdateCtx.InsertCols...)
 	} else {
 		//delete
 		writer.action = actionDelete
 		writer.flushThreshold = DeleteWriteS3Threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, mainUpdateCtx.deleteCols...)
+		writer.checkSizeCols = append(writer.checkSizeCols, mainUpdateCtx.DeleteCols...)
 	}
 
 	return writer, nil
@@ -133,16 +133,16 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 	var bats []*batch.Batch
 	onlyDelete := writer.action == actionDelete
 	for i, updateCtx := range writer.updateCtxs {
-		parititionCount := len(updateCtx.partitionTableIDs)
+		parititionCount := len(updateCtx.PartitionTableIDs)
 
 		// delete s3
-		if len(updateCtx.deleteCols) > 0 {
+		if len(updateCtx.DeleteCols) > 0 {
 			if parititionCount == 0 {
 				// normal table
-				if onlyDelete && updateCtx.tableType == updateMainTable {
-					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.deleteCols)
+				if onlyDelete && updateCtx.TableType == updateMainTable {
+					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols)
 				} else {
-					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.deleteCols)
+					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols)
 				}
 				if err != nil {
 					return
@@ -155,10 +155,10 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 				// partition table
 				lastIdx := parititionCount - 1
 				for getPartitionIdx := range parititionCount {
-					if onlyDelete && updateCtx.tableType == updateMainTable && getPartitionIdx == lastIdx {
-						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.partitionIdx, getPartitionIdx, updateCtx.deleteCols)
+					if onlyDelete && updateCtx.TableType == updateMainTable && getPartitionIdx == lastIdx {
+						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.PartitionIdx, getPartitionIdx, updateCtx.DeleteCols)
 					} else {
-						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.partitionIdx, getPartitionIdx, updateCtx.deleteCols)
+						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.PartitionIdx, getPartitionIdx, updateCtx.DeleteCols)
 					}
 					if err != nil {
 						return
@@ -172,13 +172,13 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 		}
 
 		// insert s3
-		if len(updateCtx.insertCols) > 0 {
+		if len(updateCtx.InsertCols) > 0 {
 			if parititionCount == 0 {
 				// normal table
-				if updateCtx.tableType == updateMainTable {
-					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.insertCols)
+				if updateCtx.TableType == updateMainTable {
+					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.InsertCols)
 				} else {
-					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.insertCols)
+					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.InsertCols)
 				}
 				if err != nil {
 					return
@@ -191,10 +191,10 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 				// partition table
 				lastIdx := parititionCount - 1
 				for getPartitionIdx := range parititionCount {
-					if updateCtx.tableType == updateMainTable && getPartitionIdx == lastIdx {
-						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.partitionIdx, getPartitionIdx, updateCtx.insertCols)
+					if updateCtx.TableType == updateMainTable && getPartitionIdx == lastIdx {
+						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.PartitionIdx, getPartitionIdx, updateCtx.InsertCols)
 					} else {
-						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.partitionIdx, getPartitionIdx, updateCtx.insertCols)
+						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.PartitionIdx, getPartitionIdx, updateCtx.InsertCols)
 					}
 					if err != nil {
 						return
@@ -376,7 +376,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 		if len(bats) == 1 {
 			// normal table
 			if bats[0] != nil && bats[0].RowCount() > 0 {
-				err = writer.updateCtxs[i].source.Write(proc.Ctx, bats[0])
+				err = writer.updateCtxs[i].Source.Write(proc.Ctx, bats[0])
 				if err != nil {
 					return
 				}
@@ -385,7 +385,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// partition table
 			for partIdx, bat := range bats {
 				if bat != nil && bat.RowCount() > 0 {
-					err = writer.updateCtxs[i].partitionSources[partIdx].Write(proc.Ctx, bat)
+					err = writer.updateCtxs[i].PartitionSources[partIdx].Write(proc.Ctx, bat)
 					if err != nil {
 						return
 					}
@@ -397,7 +397,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 		if len(bats) == 1 {
 			// normal table
 			if bats[0] != nil && bats[0].RowCount() > 0 {
-				err = writer.updateCtxs[i].source.Write(proc.Ctx, bats[0])
+				err = writer.updateCtxs[i].Source.Write(proc.Ctx, bats[0])
 				if err != nil {
 					return
 				}
@@ -406,7 +406,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// partition table
 			for partIdx, bat := range bats {
 				if bat != nil && bat.RowCount() > 0 {
-					err = writer.updateCtxs[i].partitionSources[partIdx].Write(proc.Ctx, bat)
+					err = writer.updateCtxs[i].PartitionSources[partIdx].Write(proc.Ctx, bat)
 					if err != nil {
 						return
 					}

@@ -612,13 +612,15 @@ message OnDuplicateKeyCtx {
 }
 
 message UpdateCtx {
-	ObjectRef obj_ref		= 1;
-	TableDef table_def		= 2;
-	repeated Expr insert_cols		= 3;
-	repeated Expr delete_cols		= 4;
-	repeated uint64 partition_table_ids = 5;
-	repeated string partition_table_names = 6;
-	int32 partition_idx = 7;
+	ObjectRef obj_ref	= 1;
+	TableDef table_def	= 2;
+
+	repeated Expr insert_cols	= 3;
+	repeated Expr delete_cols	= 4;
+
+	repeated int32 partition_table_ids		= 5;
+	repeated string partition_table_names	= 6;
+	int32 partition_idx						= 7;
 }
 
 message InsertCtx {

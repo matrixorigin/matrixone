@@ -63,25 +63,25 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 
 		writer := update.ctr.s3Writer
 		for _, updateCtx := range writer.updateCtxs {
-			ref := updateCtx.ref
-			partitionNames := updateCtx.partitionTableNames
+			ref := updateCtx.ObjRef
+			partitionNames := updateCtx.PartitionTableNames
 			rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
 			if err != nil {
 				return err
 			}
-			updateCtx.source = rel
-			updateCtx.partitionSources = partitionRels
+			updateCtx.Source = rel
+			updateCtx.PartitionSources = partitionRels
 		}
 	} else {
 		for _, updateCtx := range update.MultiUpdateCtx {
-			ref := updateCtx.ref
-			partitionNames := updateCtx.partitionTableNames
+			ref := updateCtx.ObjRef
+			partitionNames := updateCtx.PartitionTableNames
 			rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
 			if err != nil {
 				return err
 			}
-			updateCtx.source = rel
-			updateCtx.partitionSources = partitionRels
+			updateCtx.Source = rel
+			updateCtx.PartitionSources = partitionRels
 		}
 	}
 
@@ -175,10 +175,10 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batc
 	ctr := &update.ctr
 	for i, updateCtx := range update.MultiUpdateCtx {
 		// delete rows
-		if len(updateCtx.deleteCols) > 0 {
+		if len(updateCtx.DeleteCols) > 0 {
 			// init buf
 			if ctr.deleteBuf[i] == nil {
-				mainPkIdx := updateCtx.deleteCols[1]
+				mainPkIdx := updateCtx.DeleteCols[1]
 				buf := batch.New(false, []string{catalog.Row_ID, "pk"})
 				buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
 				buf.SetVector(1, vector.NewVec(*bat.Vecs[mainPkIdx].GetType()))
@@ -191,8 +191,8 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batc
 		}
 
 		// insert rows
-		if len(updateCtx.insertCols) > 0 {
-			switch updateCtx.tableType {
+		if len(updateCtx.InsertCols) > 0 {
+			switch updateCtx.TableType {
 			case updateMainTable:
 				err = update.insert_main_table(proc, i, bat)
 			case updateUniqueIndexTable:

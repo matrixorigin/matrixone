@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -736,6 +737,36 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 		}
 	}
 	return arg, nil
+}
+
+func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpdate {
+	arg := multi_update.NewArgument()
+	arg.Engine = eg
+
+	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(n.UpdateCtxList))
+	for i, updateCtx := range n.UpdateCtxList {
+		insertCols := make([]int, len(updateCtx.InsertCols))
+		for j, col := range updateCtx.InsertCols {
+			insertCols[j] = int(col.GetCol().ColPos)
+		}
+
+		deleteCols := make([]int, len(updateCtx.DeleteCols))
+		for j, col := range updateCtx.DeleteCols {
+			deleteCols[j] = int(col.GetCol().ColPos)
+		}
+
+		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
+			ObjRef:              updateCtx.ObjRef,
+			TableDef:            updateCtx.TableDef,
+			InsertCols:          insertCols,
+			DeleteCols:          deleteCols,
+			PartitionTableIDs:   updateCtx.PartitionTableIds,
+			PartitionTableNames: updateCtx.PartitionTableNames,
+			PartitionIdx:        int(updateCtx.PartitionIdx),
+		}
+	}
+
+	return arg
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {

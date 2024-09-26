@@ -1195,6 +1195,16 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		n.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileInsert(ns, n, ss)
+	case plan.Node_MULTI_UPDATE:
+		c.appendMetaTables(n.ObjRef)
+		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+
+		n.NotCacheable = true
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		return c.compileMultiUpdate(ns, n, ss)
 	case plan.Node_LOCK_OP:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
@@ -3145,6 +3155,23 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 	mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeInsertArg)
 	ss = []*Scope{rs}
+	return ss, nil
+}
+
+func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Determine whether to Write S3
+	toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
+		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
+
+	currentFirstFlag := c.anal.isFirst
+	// Not write S3
+	for i := range ss {
+		multiUpdateArg := constructMultiUpdate(n, c.e)
+		multiUpdateArg.ToWriteS3 = toWriteS3
+		multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[i].setRootOperator(multiUpdateArg)
+	}
+	c.anal.isFirst = false
 	return ss, nil
 }
 

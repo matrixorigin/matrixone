@@ -68,7 +68,7 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, true)
+	builder := NewQueryBuilder(plan.Query_INSERT, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()

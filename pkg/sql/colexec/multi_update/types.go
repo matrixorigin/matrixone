@@ -79,20 +79,20 @@ type container struct {
 }
 
 type MultiUpdateCtx struct {
-	ref      *plan.ObjectRef
-	tableDef *plan.TableDef
+	ObjRef   *plan.ObjectRef
+	TableDef *plan.TableDef
 
-	tableType updateTableType
+	TableType updateTableType
 
-	insertCols []int
-	deleteCols []int
+	InsertCols []int
+	DeleteCols []int
 
-	partitionTableIDs   []int32  // Align array index with the partition number
-	partitionTableNames []string // Align array index with the partition number
-	partitionIdx        int      // The array index position of the partition expression column
+	PartitionTableIDs   []int32  // Align array index with the partition number
+	PartitionTableNames []string // Align array index with the partition number
+	PartitionIdx        int      // The array index position of the partition expression column
 
-	source           engine.Relation
-	partitionSources []engine.Relation // Align array index with the partition number
+	Source           engine.Relation
+	PartitionSources []engine.Relation // Align array index with the partition number
 }
 
 func (update MultiUpdate) TypeName() string {

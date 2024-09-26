@@ -167,10 +167,10 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	objRef, tableDef := getTestMainTable(isPartition)
 
 	updateCtx := &MultiUpdateCtx{
-		ref:        objRef,
-		tableDef:   tableDef,
-		tableType:  updateMainTable,
-		deleteCols: []int{0, 1}, //row_id & pk
+		ObjRef:     objRef,
+		TableDef:   tableDef,
+		TableType:  updateMainTable,
+		DeleteCols: []int{0, 1}, //row_id & pk
 	}
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
 	colCount := 2
@@ -191,10 +191,10 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName, isPartition)
 
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        uniqueObjRef,
-			tableDef:   uniqueTableDef,
-			tableType:  updateUniqueIndexTable,
-			deleteCols: []int{2, 3}, //row_id & pk
+			ObjRef:     uniqueObjRef,
+			TableDef:   uniqueTableDef,
+			TableType:  updateUniqueIndexTable,
+			DeleteCols: []int{2, 3}, //row_id & pk
 		})
 		colCount += 2
 	}
@@ -220,10 +220,10 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		}
 		colCount += 2
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        secondaryIdxObjRef,
-			tableDef:   secondaryIdxTableDef,
-			tableType:  updateSecondaryIndexTable,
-			deleteCols: secondaryPkPos,
+			ObjRef:     secondaryIdxObjRef,
+			TableDef:   secondaryIdxTableDef,
+			TableType:  updateSecondaryIndexTable,
+			DeleteCols: secondaryPkPos,
 		})
 	}
 
@@ -233,9 +233,9 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			for j := range tableDef.Partition.PartitionTableNames {
 				partTblIDs[j] = int32(i*1000 + j)
 			}
-			updateCtx.partitionIdx = colCount
-			updateCtx.partitionTableIDs = partTblIDs
-			updateCtx.partitionTableNames = tableDef.Partition.PartitionTableNames
+			updateCtx.PartitionIdx = colCount
+			updateCtx.PartitionTableIDs = partTblIDs
+			updateCtx.PartitionTableNames = tableDef.Partition.PartitionTableNames
 		}
 	}
 

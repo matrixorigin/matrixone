@@ -278,11 +278,11 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 
 	// if only update main table, attrs = ["a","b","new_c","d","row_id"]
 	updateCtx := &MultiUpdateCtx{
-		ref:        objRef,
-		tableDef:   tableDef,
-		tableType:  updateMainTable,
-		insertCols: []int{0, 1, 2, 3}, //a, b, new_c, d
-		deleteCols: []int{4, 0},       //row_id, a
+		ObjRef:     objRef,
+		TableDef:   tableDef,
+		TableType:  updateMainTable,
+		InsertCols: []int{0, 1, 2, 3}, //a, b, new_c, d
+		DeleteCols: []int{4, 0},       //row_id, a
 	}
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
 	colCount := 5
@@ -304,11 +304,11 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 
 		// if update main table with uk, attrs = ["a","b","new_c","d","row_id","uk_del_rowid","uk_del_pk","uk_new_pk"]
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        uniqueObjRef,
-			tableDef:   uniqueTableDef,
-			tableType:  updateUniqueIndexTable,
-			insertCols: []int{7, 0}, //uk_pk & main_tbl_pk
-			deleteCols: []int{5, 6}, //del_row_id & del_pk
+			ObjRef:     uniqueObjRef,
+			TableDef:   uniqueTableDef,
+			TableType:  updateUniqueIndexTable,
+			InsertCols: []int{7, 0}, //uk_pk & main_tbl_pk
+			DeleteCols: []int{5, 6}, //del_row_id & del_pk
 		})
 		colCount += 3
 	}
@@ -337,11 +337,11 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		}
 		colCount += 3
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        secondaryIdxObjRef,
-			tableDef:   secondaryIdxTableDef,
-			tableType:  updateSecondaryIndexTable,
-			insertCols: insertCols,
-			deleteCols: deleteCols,
+			ObjRef:     secondaryIdxObjRef,
+			TableDef:   secondaryIdxTableDef,
+			TableType:  updateSecondaryIndexTable,
+			InsertCols: insertCols,
+			DeleteCols: deleteCols,
 		})
 	}
 
@@ -351,9 +351,9 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			for j := range tableDef.Partition.PartitionTableNames {
 				partTblIDs[j] = int32(i*1000 + j)
 			}
-			updateCtx.partitionIdx = colCount
-			updateCtx.partitionTableIDs = partTblIDs
-			updateCtx.partitionTableNames = tableDef.Partition.PartitionTableNames
+			updateCtx.PartitionIdx = colCount
+			updateCtx.PartitionTableIDs = partTblIDs
+			updateCtx.PartitionTableNames = tableDef.Partition.PartitionTableNames
 		}
 	}
 

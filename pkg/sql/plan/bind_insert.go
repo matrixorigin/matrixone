@@ -533,47 +533,6 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		return 0, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 	}
 
-	var findTableDefFromSource func(node *plan.Node) *plan.TableDef
-	findTableDefFromSource = func(node *plan.Node) *plan.TableDef {
-		if node == nil {
-			return nil
-		}
-		if node.NodeType == plan.Node_TABLE_SCAN {
-			return node.TableDef
-		} else {
-			if len(node.Children) == 0 {
-				return nil
-			}
-			return findTableDefFromSource(builder.qry.Nodes[node.Children[0]])
-		}
-	}
-
-	//getUniqueColMap := func(tableDef *plan.TableDef) map[string]struct{} {
-	//	result := make(map[string]struct{})
-	//	if tableDef != nil {
-	//		if tableDef.Pkey != nil {
-	//			for _, name := range tableDef.Pkey.Names {
-	//				if name != catalog.FakePrimaryKeyColName {
-	//					result[name] = struct{}{}
-	//				}
-	//			}
-	//		}
-	//		for _, index := range tableDef.Indexes {
-	//			if index.Unique {
-	//				for _, name := range index.Parts {
-	//					result[name] = struct{}{}
-	//				}
-	//			}
-	//		}
-	//	}
-	//	return result
-	//}
-	//var fromUniqueCols map[string]struct{}
-	//if ifInsertFromUniqueColMap != nil {
-	//	tableDef := findTableDefFromSource(lastNode)
-	//	fromUniqueCols = getUniqueColMap(tableDef)
-	//}
-
 	tag := lastNode.BindingTags[0]
 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
@@ -601,14 +560,6 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 			}
 		}
 		insertColToExpr[column] = projExpr
-		//if ifInsertFromUniqueColMap != nil {
-		//	col := lastNode.ProjectList[i].GetCol()
-		//	if col != nil {
-		//		if _, ok := fromUniqueCols[col.Name]; ok {
-		//			ifInsertFromUniqueColMap[column] = true
-		//		}
-		//	}
-		//}
 	}
 
 	// have tables : t1(a default 0, b int, pk(a,b)) ,  t2(j int,k int)
