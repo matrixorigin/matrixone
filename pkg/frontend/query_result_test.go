@@ -24,6 +24,9 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -41,8 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
 )
 
 func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
@@ -54,8 +55,6 @@ func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
 
 func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
 	go startConsumeRead(clientConn)
 
 	var err error
@@ -73,6 +72,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	//file service
 	pu.FileService = newLocalETLFS(t, defines.SharedFileServiceName)
 	setGlobalPu(pu)
+	setGlobalSessionAlloc(newLeakCheckAllocator())
 	//io session
 
 	ioses, err := NewIOSession(serverConn, pu)

@@ -35,6 +35,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2846,6 +2847,11 @@ type testMysqlWriter struct {
 	username string
 	database string
 	ioses    *Conn
+	mod      int
+}
+
+func (fp *testMysqlWriter) FreeLoadLocal() {
+
 }
 
 func (fp *testMysqlWriter) GetStr(PropertyID) string {
@@ -2906,8 +2912,10 @@ func (fp *testMysqlWriter) WriteEOFOrOK(warnings uint16, status uint16) error {
 }
 
 func (fp *testMysqlWriter) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
-	//TODO implement me
-	panic("implement me")
+	if fp.mod == 1 {
+		return moerr.NewInternalErrorNoCtx("writeErr returns err")
+	}
+	return nil
 }
 
 func (fp *testMysqlWriter) WriteLengthEncodedNumber(u uint64) error {

@@ -246,6 +246,9 @@ type internalProtocol struct {
 	username    string
 }
 
+func (ip *internalProtocol) FreeLoadLocal() {
+}
+
 func (ip *internalProtocol) GetStr(id PropertyID) string {
 	switch id {
 	case USERNAME:
