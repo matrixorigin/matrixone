@@ -238,7 +238,7 @@ func addObjectToBatch(
 	object *ObjectEntry,
 	mPool *mpool.MPool,
 ) {
-	vector.AppendFixed(bat.Vecs[0], name, false, mPool)
+	vector.AppendBytes(bat.Vecs[0], []byte(name), false, mPool)
 	vector.AppendFixed[types.TS](bat.Vecs[1], object.createTS, false, mPool)
 	vector.AppendFixed[types.TS](bat.Vecs[2], object.dropTS, false, mPool)
 	vector.AppendFixed[uint64](bat.Vecs[3], object.db, false, mPool)
