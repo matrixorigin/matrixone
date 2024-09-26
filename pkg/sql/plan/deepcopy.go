@@ -244,10 +244,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	copy(newNode.GroupingFlag, node.GroupingFlag)
 
-	for idx, flag := range node.GroupingFlag {
-		newNode.GroupingFlag[idx] = flag
-	}
-
 	for idx, expr := range node.AggList {
 		newNode.AggList[idx] = DeepCopyExpr(expr)
 	}
