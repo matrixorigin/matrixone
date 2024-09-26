@@ -290,8 +290,10 @@ func moShowColUnique(constraintStr string, colName string) bool {
 		switch k := ct.(type) {
 		case *engine.IndexDef:
 			if k.Indexes != nil {
-				for _, index := range k.Indexes {
-					for _, part := range index.Parts {
+				indexs := k.Indexes
+				for _, index := range indexs {
+					parts := index.Parts
+					for _, part := range parts {
 						if part == strings.ToLower(colName) {
 							containsCol = true
 							break
