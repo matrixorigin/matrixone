@@ -148,6 +148,7 @@ func (t *GCTable) SoftGC(
 	processSoftGCBatch := func(
 		ctx context.Context,
 		data *batch.Batch,
+		mp *mpool.MPool,
 	) error {
 		// reset bitmap for each batch
 		bm.Clear()
@@ -165,7 +166,7 @@ func (t *GCTable) SoftGC(
 
 		tmpBat := t.fetchBuffer()
 		defer t.putBuffer(tmpBat)
-		if err := tmpBat.Union(data, sels, t.mp); err != nil {
+		if err := tmpBat.Union(data, sels, mp); err != nil {
 			return err
 		}
 
@@ -175,15 +176,26 @@ func (t *GCTable) SoftGC(
 	}
 	softGCSinker := t.getSinker(0)
 	defer softGCSinker.Close()
-	err := t.insertFlow(ctx, softGCSinker, t.LoadBatchData, processSoftGCBatch)
-	if err != nil {
-		logutil.Error("GCTable SoftGC Process failed", zap.Error(err))
+	if err := engine_util.StreamBatchProcess(
+		ctx,
+		t.LoadBatchData,
+		processSoftGCBatch,
+		softGCSinker.Write,
+		t.buffer,
+		t.mp,
+	); err != nil {
+		logutil.Error(
+			"GCTable-SoftGC-SINK-ERROR",
+			zap.Error(err),
+		)
 		return nil, nil, err
 	}
 
-	err = sinker.Sync(ctx)
-	if err != nil {
-		logutil.Error("GCTable SoftGC Sync failed", zap.Error(err))
+	if err := sinker.Sync(ctx); err != nil {
+		logutil.Error(
+			"GCTable-SoftGC-Sync-ERROR",
+			zap.Error(err),
+		)
 		return nil, nil, err
 	}
 	softGCObjects, processBats := sinker.GetResult()
@@ -261,45 +273,63 @@ func (t *GCTable) SoftGC(
 	buffer := t.fetchBuffer()
 	defer t.putBuffer(buffer)
 	for _, stats := range softGCObjects {
-		err = loader(ctx, t.fs, &stats, buffer, t.mp)
-		if err != nil {
-			logutil.Error("GCTable SoftGC loader failed", zap.Error(err))
+		if err := loader(
+			ctx, t.fs, &stats, buffer, t.mp,
+		); err != nil {
+			logutil.Error(
+				"GCTable-SoftGC-LOAD-ERROR",
+				zap.Error(err),
+			)
 			return nil, nil, err
 		}
-		err = objectsComparedAndDeleteLocked(buffer, meta, snapList, pitrs, ts)
-		if err != nil {
-			logutil.Error("GCTable SoftGC objectsComparedAndDeleteLocked failed", zap.Error(err))
+		if err := objectsComparedAndDeleteLocked(
+			buffer, meta, snapList, pitrs, ts,
+		); err != nil {
+			logutil.Error(
+				"GCTable-SoftGC-CMP-DEL-ERROR",
+				zap.Error(err),
+			)
 			return nil, nil, err
 		}
 		buffer.CleanOnlyData()
 	}
 
 	for _, bat := range processBats {
-		err = objectsComparedAndDeleteLocked(bat, meta, snapList, pitrs, ts)
-		if err != nil {
-			logutil.Error("GCTable SoftGC objectsComparedAndDeleteLocked failed", zap.Error(err))
+		if err := objectsComparedAndDeleteLocked(
+			bat, meta, snapList, pitrs, ts,
+		); err != nil {
+			logutil.Error(
+				"GCTable-SoftGC-CMP-DEL-2-ERROR",
+				zap.Error(err),
+			)
 			return nil, nil, err
 		}
 	}
 
-	_, err = t.CollectMapData(ctx, buffer, t.mp)
-	if err != nil {
-		logutil.Error("GCTable SoftGC CollectMapData failed", zap.Error(err))
+	if _, err := t.CollectMapData(ctx, buffer, t.mp); err != nil {
+		logutil.Error(
+			"GCTable-SoftGC-COLLECT-ERROR",
+			zap.Error(err),
+		)
 		return nil, nil, err
 	}
-	err = softGCSinker.Write(ctx, buffer)
-	if err != nil {
-		logutil.Error("GCTable SoftGC Write failed", zap.Error(err))
+	if err := softGCSinker.Write(ctx, buffer); err != nil {
+		logutil.Error(
+			"GCTable-SoftGC-Write-ERROR",
+			zap.Error(err),
+		)
 		return nil, nil, err
 	}
-	err = softGCSinker.Sync(ctx)
-	if err != nil {
-		logutil.Error("GCTable SoftGC Sync failed", zap.Error(err))
+	if err := softGCSinker.Sync(ctx); err != nil {
+		logutil.Error(
+			"GCTable-SoftGC-Sync-ERROR",
+			zap.Error(err),
+		)
 		return nil, nil, err
 	}
 
 	gcStats, _ := softGCSinker.GetResult()
-	err = t.doneAllBatches(ctx, &t.tsRange.start, &t.tsRange.end, gcStats)
+	err := t.doneAllBatches(ctx, &t.tsRange.start, &t.tsRange.end, gcStats)
 	t.files.stats = t.files.stats[0:]
 	t.files.stats = append(t.files.stats, gcStats...)
 	return gc, snapList, err
@@ -359,36 +389,6 @@ func (t *GCTable) getSinker(tailSize int) *engine_util.Sinker {
 		engine_util.WithTailSizeCap(tailSize),
 		engine_util.WithBuffer(t.buffer, false),
 	)
-}
-
-func (t *GCTable) insertFlow(
-	ctx context.Context,
-	sinker *engine_util.Sinker,
-	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
-	processOneBatch func(context.Context, *batch.Batch) error,
-) error {
-	for {
-		bat := t.fetchBuffer()
-		done, err := loadNextBatch(ctx, bat, t.mp)
-		if err != nil || done {
-			t.putBuffer(bat)
-			if err != nil {
-				return err
-			}
-			break
-		}
-		logutil.Infof("GCTable insertFlow: batch size %d", bat.Size())
-		if err = processOneBatch(ctx, bat); err != nil {
-			t.putBuffer(bat)
-			return err
-		}
-
-		if err = sinker.Write(ctx, bat); err != nil {
-			t.putBuffer(bat)
-			return err
-		}
-	}
-	return nil
 }
 
 func (t *GCTable) Process(
