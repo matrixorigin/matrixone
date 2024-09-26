@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,27 +31,58 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func getRandomPort() int {
-	rand.New(rand.NewSource(time.Now().UnixNano()))
-	return rand.Intn(65535-1024) + 1024
+type allocatedPorts struct {
+	sync.Mutex
+	ports map[int]struct{}
 }
 
-var (
-	testServicePort        = getRandomPort()
-	testGossipPort         = getRandomPort()
-	testServiceAddress     = fmt.Sprintf("127.0.0.1:%d", testServicePort)
-	testGossipAddress      = fmt.Sprintf("127.0.0.1:%d", testGossipPort)
-	dummyGossipSeedAddress = fmt.Sprintf("127.0.0.1:%d", getRandomPort())
-	testServerMaxMsgSize   = 1000
-	testRaftAddress        = fmt.Sprintf("0.0.0.0:%d", getRandomPort())
-)
+var randomPorts = allocatedPorts{
+	ports: map[int]struct{}{},
+}
 
-var getClientConfig = func(readOnly bool) ClientConfig {
+func getAvailablePort() int {
+	genPort := func() int {
+		rand.New(rand.NewSource(time.Now().UnixNano()))
+		return rand.Intn(65535-21024) + 21024
+	}
+	checkPort := func(p int) bool {
+		randomPorts.Lock()
+		defer randomPorts.Unlock()
+		_, ok := randomPorts.ports[p]
+		if ok {
+			return false
+		}
+		ports := listAllPorts()
+		if len(ports) != 0 {
+			_, occupied := ports[uint16(p)]
+			if occupied {
+				return false
+			} else {
+				randomPorts.ports[p] = struct{}{}
+				return true
+			}
+		}
+		randomPorts.ports[p] = struct{}{}
+		return true
+	}
+	for {
+		p := genPort()
+		if checkPort(p) {
+			return p
+		}
+	}
+}
+
+var getClientConfig = func(readOnly bool, svcAddress ...string) ClientConfig {
+	var addr string
+	if len(svcAddress) > 0 {
+		addr = svcAddress[0]
+	}
 	return ClientConfig{
 		ReadOnly:         readOnly,
 		LogShardID:       1,
 		TNReplicaID:      2,
-		ServiceAddresses: []string{testServiceAddress},
+		ServiceAddresses: []string{addr},
 		MaxMessageSize:   defaultMaxMessageSize,
 	}
 }
@@ -59,15 +91,18 @@ func getServiceTestConfig() Config {
 	c := DefaultConfig()
 	c.UUID = uuid.New().String()
 	c.RTTMillisecond = 10
-	c.RaftAddress = testRaftAddress
-	c.GossipPort = testGossipPort
-	c.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
+	c.RaftAddress = getTestRaftAddress()
+	c.GossipPort = getTestGossipPort()
+	c.GossipSeedAddresses = []string{
+		getTestGossipAddress(c.GossipPort),
+		getDummyGossipSeedAddress(),
+	}
 	c.DeploymentID = 1
 	c.FS = vfs.NewStrictMem()
-	c.LogServicePort = testServicePort
+	c.LogServicePort = getTestServicePort()
 	c.DisableWorkers = true
 	c.UseTeeLogDB = true
-	c.RPC.MaxMessageSize = toml.ByteSize(testServerMaxMsgSize)
+	c.RPC.MaxMessageSize = toml.ByteSize(getTestServerMaxMsgSize())
 
 	rt := runtime.ServiceRuntime("")
 	runtime.SetupServiceBasedRuntime(c.UUID, rt)
@@ -78,7 +113,7 @@ func getServiceTestConfig() Config {
 func RunClientTest(
 	t *testing.T,
 	readOnly bool,
-	cCfgFn func(bool) ClientConfig,
+	cCfgFn func(bool, ...string) ClientConfig,
 	fn func(*testing.T, *Service, ClientConfig, Client)) {
 
 	sid := ""
@@ -107,7 +142,7 @@ func RunClientTest(
 			if cCfgFn == nil {
 				cCfgFn = getClientConfig
 			}
-			scfg := cCfgFn(readOnly)
+			scfg := cCfgFn(readOnly, cfg.LogServiceServiceAddr())
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 			defer cancel()
@@ -120,4 +155,32 @@ func RunClientTest(
 			fn(t, service, scfg, c)
 		},
 	)
+}
+
+func getTestServicePort() int {
+	return getAvailablePort()
+}
+
+func getTestGossipPort() int {
+	return getAvailablePort()
+}
+
+func getTestServiceAddress(port int) string {
+	return fmt.Sprintf("127.0.0.1:%d", port)
+}
+
+func getTestGossipAddress(port int) string {
+	return fmt.Sprintf("127.0.0.1:%d", port)
+}
+
+func getDummyGossipSeedAddress() string {
+	return fmt.Sprintf("127.0.0.1:%d", getAvailablePort())
+}
+
+func getTestRaftAddress() string {
+	return fmt.Sprintf("127.0.0.1:%d", getAvailablePort())
+}
+
+func getTestServerMaxMsgSize() int {
+	return 1000
 }
