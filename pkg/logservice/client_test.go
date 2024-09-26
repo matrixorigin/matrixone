@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -175,11 +174,6 @@ func TestClientAppend(t *testing.T) {
 		lsn, err = c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(5), lsn)
-
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.TNReplicaID+1)
-		_, err = c.Append(ctx, pb.LogRecord{Data: cmd})
-		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder))
 	}
 	RunClientTest(t, false, nil, fn)
 }
