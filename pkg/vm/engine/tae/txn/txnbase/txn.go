@@ -377,8 +377,8 @@ func (txn *Txn) PrePrepare(ctx context.Context) error {
 	return txn.Store.PrePrepare(ctx)
 }
 
-func (txn *Txn) Freeze() error {
-	return txn.Store.Freeze()
+func (txn *Txn) Freeze(ctx context.Context) error {
+	return txn.Store.Freeze(ctx)
 }
 
 func (txn *Txn) PrepareRollback() (err error) {

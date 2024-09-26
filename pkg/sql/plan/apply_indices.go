@@ -799,7 +799,7 @@ func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *pl
 func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node) (int, float64, []int) {
 	currentSel := 1.0
 	currentIdx := -1
-	var savedFilterIdx []int
+	savedFilterIdx := make([]int, 0)
 
 	col2filter := make(map[int32]int)
 	for i, expr := range node.FilterList {
@@ -868,7 +868,8 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 		if compositeFilterSel < currentSel {
 			currentSel = compositeFilterSel
 			currentIdx = i
-			savedFilterIdx = filterIdx
+			savedFilterIdx = savedFilterIdx[:0]
+			savedFilterIdx = append(savedFilterIdx, filterIdx...)
 		}
 	}
 	return currentIdx, currentSel, savedFilterIdx

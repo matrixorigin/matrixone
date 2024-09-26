@@ -148,7 +148,7 @@ func (tomb *tombstoneData) HasAnyTombstoneFile() bool {
 // false positive check
 func (tomb *tombstoneData) HasBlockTombstone(
 	ctx context.Context,
-	blockId objectio.Blockid,
+	blockId *objectio.Blockid,
 	fs fileservice.FileService,
 ) (bool, error) {
 	if tomb == nil {
@@ -156,7 +156,7 @@ func (tomb *tombstoneData) HasBlockTombstone(
 	}
 	if len(tomb.rowids) > 0 {
 		// TODO: optimize binary search once
-		start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, &blockId)
+		start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, blockId)
 		if end > start {
 			return true, nil
 		}
@@ -223,7 +223,7 @@ func (tomb *tombstoneData) PrefetchTombstones(
 }
 
 func (tomb *tombstoneData) ApplyInMemTombstones(
-	bid types.Blockid,
+	bid *types.Blockid,
 	rowsOffset []int64,
 	deleted *nulls.Nulls,
 ) (left []int64) {
@@ -234,7 +234,7 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 		return
 	}
 
-	start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, &bid)
+	start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, bid)
 
 	for i := start; i < end; i++ {
 		offset := tomb.rowids[i].GetRowOffset()
@@ -247,8 +247,8 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 func (tomb *tombstoneData) ApplyPersistedTombstones(
 	ctx context.Context,
 	fs fileservice.FileService,
-	snapshot types.TS,
-	bid types.Blockid,
+	snapshot *types.TS,
+	bid *types.Blockid,
 	rowsOffset []int64,
 	deletedMask *nulls.Nulls,
 ) (left []int64, err error) {
@@ -316,7 +316,7 @@ func rowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 	case int32:
 		var ret []int32
 		for _, rowId := range rowIds {
-			_, offset := rowId.Decode()
+			offset := rowId.GetRowOffset()
 			ret = append(ret, int32(offset))
 		}
 		return ret
@@ -324,7 +324,7 @@ func rowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 	case uint32:
 		var ret []uint32
 		for _, rowId := range rowIds {
-			_, offset := rowId.Decode()
+			offset := rowId.GetRowOffset()
 			ret = append(ret, uint32(offset))
 		}
 		return ret
@@ -332,7 +332,7 @@ func rowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 	case uint64:
 		var ret []uint64
 		for _, rowId := range rowIds {
-			_, offset := rowId.Decode()
+			offset := rowId.GetRowOffset()
 			ret = append(ret, uint64(offset))
 		}
 		return ret
@@ -340,7 +340,7 @@ func rowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 	case int64:
 		var ret []int64
 		for _, rowId := range rowIds {
-			_, offset := rowId.Decode()
+			offset := rowId.GetRowOffset()
 			ret = append(ret, int64(offset))
 		}
 		return ret

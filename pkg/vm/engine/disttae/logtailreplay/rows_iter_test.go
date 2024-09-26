@@ -195,8 +195,9 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 		{
 			// deleted rows iter
-			blockID, _ := buildRowID(i + 1).Decode()
-			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i+1), 0), &blockID, true)
+			rowid := buildRowID(i + 1)
+			blockID := rowid.BorrowBlockID()
+			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i+1), 0), blockID, true)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
 			for iter.Next() {
@@ -262,8 +263,9 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	for i := 0; i < num; i++ {
 		{
-			blockID, _ := buildRowID(i + 1).Decode()
-			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0), &blockID, true)
+			rowid := buildRowID(i + 1)
+			blockID := rowid.BorrowBlockID()
+			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0), blockID, true)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
 			for iter.Next() {
