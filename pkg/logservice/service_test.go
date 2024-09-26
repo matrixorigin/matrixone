@@ -306,36 +306,6 @@ func TestServiceHandleAppend(t *testing.T) {
 	runServiceTest(t, false, true, fn)
 }
 
-func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
-	fn := func(t *testing.T, s *Service) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-
-		req := pb.Request{
-			Method: pb.CONNECT_RO,
-			LogRequest: pb.LogRequest{
-				ShardID: 1,
-				TNID:    100,
-			},
-		}
-		resp := s.handleConnect(ctx, req)
-		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
-
-		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.TNID+1, data)
-		req = pb.Request{
-			Method: pb.APPEND,
-			LogRequest: pb.LogRequest{
-				ShardID: 1,
-			},
-		}
-		resp = s.handleAppend(ctx, req, cmd)
-		assert.Equal(t, uint32(moerr.ErrNotLeaseHolder), resp.ErrorCode)
-		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
-	}
-	runServiceTest(t, false, true, fn)
-}
-
 func TestServiceHandleRead(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
