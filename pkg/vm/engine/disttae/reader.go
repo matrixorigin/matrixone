@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // -----------------------------------------------------------------
@@ -51,6 +51,27 @@ func (mixin *withFilterMixin) reset() {
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
 	mixin.columns.colTypes = nil
+}
+
+func (mixin *withFilterMixin) tryUpdateTombstoneColumns(cols []string) {
+	pkColIdx := mixin.tableDef.Name2ColIndex[mixin.tableDef.Pkey.PkeyColName]
+	pkCol := mixin.tableDef.Cols[pkColIdx]
+
+	mixin.columns.seqnums = []uint16{0, 1}
+	mixin.columns.colTypes = []types.Type{
+		types.T_Rowid.ToType(),
+		plan2.ExprType2Type(&pkCol.Typ)}
+
+	mixin.columns.colTypes[1].Scale = pkCol.Typ.Scale
+	mixin.columns.colTypes[1].Width = pkCol.Typ.Width
+
+	if len(cols) == len(objectio.TombstoneAttrs_TN_Created) {
+		mixin.columns.seqnums = append(mixin.columns.seqnums, 2)
+		mixin.columns.colTypes = append(mixin.columns.colTypes, types.T_TS.ToType())
+	}
+
+	mixin.filterState.seqnums = mixin.columns.seqnums[:]
+	mixin.filterState.colTypes = mixin.columns.colTypes[:]
 }
 
 // when the reader.Read is called for a new block, it will always
@@ -69,13 +90,21 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	// record the column selectivity
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
 	v2.TaskSelColumnTotal.Add(float64(ctotal))
-	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+	if ctotal >= chit {
+		v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+	}
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
 	// mixin.columns.colNulls = make([]bool, len(cols))
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
+
+	if slices.Equal(cols, objectio.TombstoneAttrs_CN_Created) ||
+		slices.Equal(cols, objectio.TombstoneAttrs_TN_Created) {
+		mixin.tryUpdateTombstoneColumns(cols)
+		return
+	}
 
 	for i, column := range cols {
 		column = strings.ToLower(column)
@@ -231,10 +260,9 @@ func (r *mergeReader) Read(
 }
 
 // -----------------------------------------------------------------
-
 func NewReader(
 	ctx context.Context,
-	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
+	mp *mpool.MPool,
 	e *Engine,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
@@ -246,7 +274,7 @@ func NewReader(
 	baseFilter, err := engine_util.ConstructBasePKFilter(
 		expr,
 		tableDef,
-		proc,
+		mp,
 	)
 	if err != nil {
 		return nil, err
@@ -276,12 +304,11 @@ func NewReader(
 			ctx:      ctx,
 			fs:       e.fs,
 			ts:       ts,
-			proc:     proc,
 			tableDef: tableDef,
+			name:     tableDef.Name,
 		},
 		memFilter: memFilter,
 		source:    source,
-		ts:        ts,
 	}
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
@@ -295,7 +322,6 @@ func (r *reader) Close() error {
 }
 
 func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	//r.OrderBy = orderby
 	r.source.SetOrderBy(orderby)
 }
 
@@ -314,6 +340,7 @@ func (r *reader) Read(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
+	outBatch.CleanOnlyData()
 
 	var dataState engine.DataState
 
@@ -364,6 +391,7 @@ func (r *reader) Read(
 
 	err = blockio.BlockDataRead(
 		statsCtx,
+		r.isTombstone,
 		blkInfo,
 		r.source,
 		r.columns.seqnums,
@@ -373,7 +401,7 @@ func (r *reader) Read(
 		r.filterState.colTypes,
 		filter,
 		policy,
-		r.tableDef.Name,
+		r.name,
 		outBatch,
 		mp,
 		r.fs,

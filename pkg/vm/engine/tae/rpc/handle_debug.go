@@ -264,7 +264,7 @@ func (h *Handle) HandleDiskCleaner(
 				checkpoint := item.(*checkpoint.CheckpointEntry)
 				ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(ttl), 0)
 				endTS := checkpoint.GetEnd()
-				return !endTS.GreaterEq(&ts)
+				return !endTS.GE(&ts)
 			}, gc.CheckerKeyTTL)
 		return
 	case gc.CheckerKeyMinTS:
@@ -291,7 +291,7 @@ func (h *Handle) HandleDiskCleaner(
 			func(item any) bool {
 				ckp := item.(*checkpoint.CheckpointEntry)
 				end := ckp.GetEnd()
-				return !end.GreaterEq(&ts)
+				return !end.GE(&ts)
 			}, gc.CheckerKeyMinTS)
 		return
 	default:
@@ -404,6 +404,27 @@ func (h *Handle) HandleCommitMerge(
 	}
 	resp.ReturnStr = b.String()
 	return
+}
+
+func (h *Handle) HandleGetLatestCheckpoint(
+	_ context.Context,
+	_ txn.TxnMeta,
+	_ *db.Checkpoint,
+	resp *api.CheckpointResp,
+) (cb func(), err error) {
+	var locations string
+	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
+	for i := range data {
+		locations += data[i].GetLocation().String()
+		locations += ":"
+		locations += fmt.Sprintf("%d", data[i].GetVersion())
+		locations += ";"
+		if resp.TruncateLsn < data[i].GetTruncateLsn() {
+			resp.TruncateLsn = data[i].GetTruncateLsn()
+		}
+	}
+	resp.Location = locations
+	return nil, err
 }
 
 func marshalTransferMaps(

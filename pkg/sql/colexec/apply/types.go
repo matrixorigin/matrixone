@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -38,18 +39,21 @@ const (
 )
 
 type container struct {
-	state int
+	rbat  *batch.Batch
+	inbat *batch.Batch
 
-	batchRowCount int64
-	rbat          *batch.Batch
+	batIdx   int
+	tfFinish bool
+	sels     []int32
 }
 
 type Apply struct {
 	ctr       container
 	ApplyType int
 	Result    []colexec.ResultPos
+	Typs      []types.Type
 
-	table_function.TableFunction
+	TableFunction *table_function.TableFunction
 	vm.OperatorBase
 	colexec.Projection
 }
@@ -81,6 +85,9 @@ func NewArgument() *Apply {
 
 func (apply *Apply) Release() {
 	if apply != nil {
+		if apply.TableFunction != nil {
+			reuse.Free[table_function.TableFunction](apply.TableFunction, nil)
+		}
 		reuse.Free[Apply](apply, nil)
 	}
 }
@@ -88,14 +95,14 @@ func (apply *Apply) Release() {
 func (apply *Apply) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &apply.ctr
 
-	ctr.state = Build
+	ctr.inbat = nil
+	apply.TableFunction.Reset(proc, pipelineFailed, err)
 
-	/*
-		if apply.ProjectList != nil {
-			apply.OpAnalyzer.Alloc(apply.ProjectAllocSize)
-			apply.ResetProjection(proc)
-		}
-	*/
+	if apply.ProjectList != nil {
+		apply.OpAnalyzer.Alloc(apply.ProjectAllocSize)
+		apply.ResetProjection(proc)
+	}
+
 }
 
 func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -103,11 +110,12 @@ func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) 
 
 	ctr.cleanBatch(proc.Mp())
 
-	/*
-		if apply.ProjectList != nil {
-				apply.FreeProjection(proc)
-			}
-	*/
+	apply.TableFunction.Free(proc, pipelineFailed, err)
+
+	if apply.ProjectList != nil {
+		apply.FreeProjection(proc)
+	}
+
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

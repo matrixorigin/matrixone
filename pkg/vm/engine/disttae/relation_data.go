@@ -47,6 +47,17 @@ func NewBlockListRelationData(emptyCnt int) *blockListRelData {
 	}
 }
 
+func NewBlockListRelationDataOfObject(
+	obj *objectio.ObjectStats, withInMemory bool,
+) *blockListRelData {
+	slice := objectio.ObjectStatsToBlockInfoSlice(
+		obj, withInMemory,
+	)
+	return &blockListRelData{
+		blklist: slice,
+	}
+}
+
 type blockListRelData struct {
 	// blkList[0] is a empty block info
 	blklist objectio.BlockInfoSlice
@@ -94,6 +105,10 @@ func (relData *blockListRelData) GetBlockInfo(i int) objectio.BlockInfo {
 
 func (relData *blockListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 	relData.blklist.Set(i, blk)
+}
+
+func (relData *blockListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
+	relData.blklist = slice
 }
 
 func (relData *blockListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {

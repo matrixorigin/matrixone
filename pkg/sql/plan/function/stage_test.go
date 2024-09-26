@@ -17,7 +17,25 @@ package function
 import (
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestS3ServiceProvider(t *testing.T) {
+	protocol, err := getS3ServiceFromProvider("cos")
+	require.Nil(t, err)
+	assert.Equal(t, protocol, "s3")
+
+	protocol, err = getS3ServiceFromProvider("amazon")
+	require.Nil(t, err)
+	assert.Equal(t, protocol, "s3")
+
+	protocol, err = getS3ServiceFromProvider("minio")
+	require.Nil(t, err)
+	assert.Equal(t, protocol, "minio")
+
+}
 
 func TestParseDatalink(t *testing.T) {
 

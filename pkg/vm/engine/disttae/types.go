@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -379,7 +380,7 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		proc:               proc,
 		engine:             eng,
 		idGen:              eng.idGen,
-		tnStores:           eng.getTNServices(),
+		tnStores:           eng.GetTNServices(),
 		tableCache:         new(sync.Map),
 		databaseMap:        new(sync.Map),
 		deletedDatabaseMap: new(sync.Map),
@@ -751,7 +752,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		txn.resetSnapshot()
 	}
 	//Transfer row ids for deletes in RC isolation
-	return txn.transferDeletesLocked(ctx, commit)
+	return txn.transferInmemTombstoneLocked(ctx, commit)
 }
 
 // Entry represents a delete/insert
@@ -865,31 +866,28 @@ type txnTable struct {
 	relKind       string
 	createSql     string
 	constraint    []byte
+	extraInfo     *api.SchemaExtra
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
-
-	// this should be the statement id
-	// but seems that we're not maintaining it at the moment
-	// localTS timestamp.Timestamp
-	//rowid in mo_tables
-	rowid types.Rowid
-	//rowids in mo_columns
-	rowids []types.Rowid
 
 	// process for statement
 	//proc *process.Process
 	proc atomic.Pointer[process.Process]
 
 	enableLogFilterExpr atomic.Bool
+
+	remoteWorkspace bool
+	createdInTxn    bool
+	eng             engine.Engine
 }
 
 type withFilterMixin struct {
 	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
-	proc     *process.Process
 	tableDef *plan.TableDef
+	name     string
 
 	// columns used for reading
 	columns struct {
@@ -918,8 +916,8 @@ type blockSortHelper struct {
 type reader struct {
 	withFilterMixin
 
-	source engine.DataSource
-	ts     timestamp.Timestamp
+	isTombstone bool
+	source      engine.DataSource
 
 	memFilter MemPKFilter
 

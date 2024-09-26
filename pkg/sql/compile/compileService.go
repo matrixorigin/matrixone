@@ -109,6 +109,7 @@ func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error
 		runningCompile.queryStatus.clear()
 	}
 
+	runningCompile.proc.SetBaseProcessRunningStatus(true)
 	queryCtx, queryCancel := process.GetQueryCtxFromProc(runningCompile.proc)
 
 	srv.Lock()

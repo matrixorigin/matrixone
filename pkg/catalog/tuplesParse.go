@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDef {
+func newAttributeDef(name string, typ types.Type, isPrimary, isHidden bool) engine.TableDef {
 	return &engine.AttributeDef{
 		Attr: engine.Attribute{
 			Type:     typ,
@@ -34,7 +34,7 @@ func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDe
 			Primary:  isPrimary,
 			Alg:      compress.Lz4,
 			Default:  &plan.Default{NullAbility: true},
-			IsHidden: name == CPrimaryKeyColName,
+			IsHidden: isHidden,
 		},
 	}
 }
@@ -235,6 +235,7 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
 		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT_IDX].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
+		cmds[i].ExtraInfo = row[MO_TABLES_EXTRA_INFO_IDX].([]byte)
 	}
 
 	for i := range cmds {
@@ -270,6 +271,10 @@ func genCreateTables(rows [][]any) []CreateTable {
 		pro.Properties = append(pro.Properties, engine.Property{
 			Key:   SystemRelAttr_CreateSQL,
 			Value: cmds[i].CreateSql,
+		})
+		pro.Properties = append(pro.Properties, engine.Property{
+			Key:   PropSchemaExtra,
+			Value: string(cmds[i].ExtraInfo),
 		})
 		cmds[i].Defs = append(cmds[i].Defs, pro)
 	}
@@ -327,6 +332,7 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 	attr.Primary = string(row[MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX].([]byte)) == "p"
 	attr.ClusterBy = row[MO_COLUMNS_ATT_IS_CLUSTERBY].(int8) == 1
 	attr.EnumVlaues = string(row[MO_COLUMNS_ATT_ENUM_IDX].([]byte))
+	attr.Seqnum = row[MO_COLUMNS_ATT_SEQNUM_IDX].(uint16)
 	return &engine.AttributeDef{Attr: attr}, nil
 }
 

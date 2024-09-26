@@ -39,12 +39,36 @@ func New(ro bool, attrs []string) *Batch {
 	}
 }
 
+func NewOffHeap(ro bool, attrs []string) *Batch {
+	ret := New(ro, attrs)
+	ret.offHeap = true
+	return ret
+}
+
 func NewWithSize(n int) *Batch {
 	return &Batch{
 		Cnt:      1,
 		Vecs:     make([]*vector.Vector, n),
 		rowCount: 0,
 	}
+}
+
+func NewOffHeapWithSize(n int) *Batch {
+	ret := NewWithSize(n)
+	ret.offHeap = true
+	return ret
+}
+
+func NewWithSchema(ro bool, offHeap bool, attrs []string, attTypes []types.Type) *Batch {
+	bat := New(ro, attrs)
+	for i, t := range attTypes {
+		if offHeap {
+			bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
+		} else {
+			bat.Vecs[i] = vector.NewVec(t)
+		}
+	}
+	return bat
 }
 
 func SetLength(bat *Batch, n int) {
@@ -127,7 +151,11 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	if firstTime {
 		bat.Vecs = make([]*vector.Vector, l)
 		for i := range bat.Vecs {
-			bat.Vecs[i] = vector.NewVecFromReuse()
+			if bat.offHeap {
+				bat.Vecs[i] = vector.NewOffHeapVec()
+			} else {
+				bat.Vecs[i] = vector.NewVecFromReuse()
+			}
 		}
 	}
 	vecs := bat.Vecs
@@ -344,7 +372,12 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	rbat.Recursive = bat.Recursive
 	for j, vec := range bat.Vecs {
 		typ := *bat.GetVector(int32(j)).GetType()
-		rvec := vector.NewVec(typ)
+		var rvec *vector.Vector
+		if bat.offHeap {
+			rvec = vector.NewOffHeapVecWithType(typ)
+		} else {
+			rvec = vector.NewVec(typ)
+		}
 		if err = vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
 			rbat.Clean(mp)
 			return nil, err
@@ -369,6 +402,26 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	//}
 
 	return rbat, nil
+}
+
+func (bat *Batch) Union(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
+	for i, vec := range bat.Vecs {
+		if err := vec.UnionBatch(bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
+			return err
+		}
+	}
+	bat.rowCount += cnt
+	return nil
+}
+
+func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
+	for i, vec := range bat.Vecs {
+		if err := vec.UnionOne(bat2.Vecs[i], pos, m); err != nil {
+			return err
+		}
+	}
+	bat.rowCount++
+	return nil
 }
 
 func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
@@ -490,5 +543,6 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 			return nil, err
 		}
 	}
+	b.rowCount = end - start
 	return b, nil
 }

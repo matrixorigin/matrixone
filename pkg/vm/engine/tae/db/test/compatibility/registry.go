@@ -94,8 +94,8 @@ func (pc PrepareCase) GetEngine(t *testing.T) *testutil.TestEngine {
 
 func (pc PrepareCase) GetSchema(t *testing.T) *catalog.Schema {
 	schema := catalog.MockSchemaAll(pc.schemaCfg.colCnt, pc.schemaCfg.pkIdx)
-	schema.BlockMaxRows = pc.schemaCfg.blockMaxRows
-	schema.ObjectMaxBlocks = pc.schemaCfg.ObjectMaxBlocks
+	schema.Extra.BlockMaxRows = pc.schemaCfg.blockMaxRows
+	schema.Extra.ObjectMaxBlocks = uint32(pc.schemaCfg.ObjectMaxBlocks)
 	ver, err := ReadPrepareVersion()
 	if err != nil {
 		t.Error(err)

@@ -29,12 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -158,6 +160,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		item,
 		p,
 		shardservice.GetService(p.GetService()),
+		txn.engine,
 	)
 	if err != nil {
 		return nil, err
@@ -363,6 +366,7 @@ func (db *txnDatabase) createWithID(
 		return err
 	}
 	tbl := new(txnTable)
+	tbl.eng = txn.engine
 
 	{ // prepare table information
 		// 2.1 prepare basic table information
@@ -370,7 +374,7 @@ func (db *txnDatabase) createWithID(
 		tbl.tableName = name
 		tbl.tableId = tableId
 		tbl.accountId = accountId
-		tbl.rowid = types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{tableId}))
+		tbl.extraInfo = &api.SchemaExtra{}
 		for _, def := range defs {
 			switch defVal := def.(type) {
 			case *engine.PropertiesDef:
@@ -382,6 +386,8 @@ func (db *txnDatabase) createWithID(
 						tbl.relKind = property.Value
 					case catalog.SystemRelAttr_CreateSQL:
 						tbl.createSql = property.Value
+					case catalog.PropSchemaExtra:
+						tbl.extraInfo = api.MustUnmarshalTblExtra([]byte(property.Value))
 					default:
 					}
 				}
@@ -398,6 +404,13 @@ func (db *txnDatabase) createWithID(
 					return err
 				}
 			}
+		}
+		tbl.extraInfo.NextColSeqnum = uint32(len(cols) - 1 /*rowid doesn't occupy seqnum*/)
+		if tbl.extraInfo.BlockMaxRows == 0 {
+			tbl.extraInfo.BlockMaxRows = options.DefaultBlockMaxRows
+		}
+		if tbl.extraInfo.ObjectMaxBlocks == 0 {
+			tbl.extraInfo.ObjectMaxBlocks = uint32(options.DefaultBlocksPerObject)
 		}
 		// 2.2 prepare columns related information
 		tbl.primaryIdx = -1
@@ -440,6 +453,7 @@ func (db *txnDatabase) createWithID(
 			Viewdef:       tbl.viewdef,
 			Constraint:    tbl.constraint,
 			Version:       tbl.version,
+			ExtraInfo:     api.MustMarshalTblExtra(tbl.extraInfo),
 		}
 		bat, err := catalog.GenCreateTableTuple(arg, m, packer)
 		if err != nil {
@@ -449,13 +463,12 @@ func (db *txnDatabase) createWithID(
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		rowidVec, err := txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		_, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0])
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
-		tbl.rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](rowidVec, 0)
 	}
 
 	{ // 4. Write create column batch
@@ -467,15 +480,12 @@ func (db *txnDatabase) createWithID(
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		rowidVec, err := txn.WriteBatch(
+		_, err = txn.WriteBatch(
 			INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0])
 		if err != nil {
 			bat.Clean(m)
 			return err
-		}
-		for i := 0; i < rowidVec.Length(); i++ {
-			tbl.rowids = append(tbl.rowids, vector.GetFixedAtNoTypeCheck[types.Rowid](rowidVec, i))
 		}
 	}
 
@@ -512,6 +522,7 @@ func (db *txnDatabase) openSysTable(
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
 		clusterByIdx:  -1,
+		eng:           db.getTxn().engine,
 	}
 	switch name {
 	case catalog.MO_DATABASE:

@@ -264,7 +264,7 @@ func (c *TxnStateCmd) Close() {
 func NewTxnCmd(maxMessageSize uint64) *TxnCmd {
 	return &TxnCmd{
 		ComposedCmd: NewComposedCmd(maxMessageSize),
-		TxnCtx:      &TxnCtx{},
+		TxnCtx:      NewEmptyTxnCtx(),
 	}
 }
 func NewEmptyTxnCmd() *TxnCmd {

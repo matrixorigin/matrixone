@@ -51,7 +51,7 @@ const (
 	DefaultScanGCInterval = time.Minute * 30
 	DefaultGCTTL          = time.Hour
 
-	DefaultCatalogGCInterval = time.Minute * 30
+	DefaultCatalogGCInterval = time.Minute * 3
 
 	DefaultIOWorkers    = int(16)
 	DefaultAsyncWorkers = int(16)

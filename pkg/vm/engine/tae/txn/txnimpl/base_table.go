@@ -105,7 +105,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	metaLocs := make([]objectio.Location, 0)
 	blkCount := stats.BlkCnt()
 	totalRow := stats.Rows()
-	blkMaxRows := tbl.schema.BlockMaxRows
+	blkMaxRows := tbl.schema.Extra.BlockMaxRows
 	for i := uint16(0); i < uint16(blkCount); i++ {
 		var blkRow uint32
 		if totalRow > blkMaxRows {
@@ -150,7 +150,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	if tbl.tableSpace == nil {
 		tbl.tableSpace = newTableSpace(tbl.txnTable, tbl.isTombstone)
 	}
-	return tbl.tableSpace.AddObjsWithMetaLoc(pkVecs, stats)
+	return tbl.tableSpace.AddDataFiles(pkVecs, stats)
 }
 func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, dedupAfterSnapshotTS bool, checkWW bool) (rowIDs containers.Vector, err error) {
 	it := newObjectItOnSnap(tbl.txnTable, tbl.isTombstone, true)
@@ -183,7 +183,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 				maxNAObjectHint = objectHint
 			}
 		}
-		if obj.DeletedAt.Less(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
+		if obj.DeletedAt.LT(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
 			continue
 		}
 		objData := obj.GetObjectData()

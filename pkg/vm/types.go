@@ -67,6 +67,7 @@ const (
 	Insert
 	External
 	Source
+	MultiUpdate
 
 	Minus
 	Intersect
@@ -291,6 +292,8 @@ func (op OpType) String() string {
 		return "Deletion"
 	case Insert:
 		return "Insert"
+	case MultiUpdate:
+		return "MultiUpdate"
 	case External:
 		return "External"
 	case Source:
@@ -341,6 +344,8 @@ func (op OpType) String() string {
 		return "ProductL2"
 	case Mock:
 		return "Mock"
+	case Apply:
+		return "Apply"
 	default:
 		return "Unknown"
 	}

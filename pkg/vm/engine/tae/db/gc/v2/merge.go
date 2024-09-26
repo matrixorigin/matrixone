@@ -82,14 +82,6 @@ func MergeCheckpoint(
 			}
 			appendValToBatch(tombstone, ckpData.GetTombstoneObjectBatchs(), i)
 		}
-		for i := logtail.DBInsertIDX; i <= logtail.TBLColDeleteIDX; i++ {
-			if data.GetOneBatch(i).Vecs[2].Length() > 0 {
-				err := ckpData.GetOneBatch(i).Append(data.GetOneBatch(i))
-				if err != nil {
-					return nil, "", err
-				}
-			}
-		}
 	}
 	cnLocation, tnLocation, _, err := ckpData.WriteTo(
 		fs, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize,

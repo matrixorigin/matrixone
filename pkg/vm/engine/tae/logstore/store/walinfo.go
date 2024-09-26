@@ -17,7 +17,6 @@ package store
 import (
 	"bytes"
 	"io"
-	"math"
 	"sync"
 	"sync/atomic"
 
@@ -41,7 +40,7 @@ type StoreInfo struct {
 	walDriverLsnMap     map[uint32]map[uint64]uint64
 	lsnMu               sync.RWMutex
 	driverCheckpointing atomic.Uint64
-	driverCheckpointed  uint64
+	driverCheckpointed  atomic.Uint64
 	walCurrentLsn       map[uint32]uint64 //todo
 	lsnmu               sync.RWMutex
 	syncing             map[uint32]uint64 //todo
@@ -264,7 +263,9 @@ func (w *StoreInfo) onCheckpoint() {
 	}
 	w.ckpcntMu.Unlock()
 }
-
+func (w *StoreInfo) GetTruncated() uint64 {
+	return w.driverCheckpointed.Load()
+}
 func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	groups := make(map[uint32]uint64, 0)
 	w.lsnmu.Lock()
@@ -278,31 +279,21 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	if len(w.checkpointed) == 0 {
 		return
 	}
-	driverLsn = math.MaxInt64
-	for g, maxLsn := range groups {
-		lsn := w.checkpointed[g]
-		var drLsn uint64
-		var err error
-		if lsn < maxLsn {
-			drLsn, err = w.retryGetDriverLsn(g, lsn+1)
-			if err != nil {
-				if err == ErrLsnTooSmall {
-					logutil.Debugf("%d-%d too small", g, lsn)
-					return g, 0
-				}
-				logutil.Debugf("%d-%d", g, lsn)
-				panic(err)
+	maxLsn := groups[entry.GTCustomized]
+	lsn := w.checkpointed[entry.GTCustomized]
+	if lsn < maxLsn {
+		drLsn, err := w.retryGetDriverLsn(entry.GTCustomized, lsn+1)
+		if err != nil {
+			if err == ErrLsnTooSmall {
+				return entry.GTCustomized, 0
 			}
-			drLsn--
-		} else {
-			continue
+			panic(err)
 		}
-		if drLsn < driverLsn {
-			gid = g
-			driverLsn = drLsn
-		}
+		drLsn--
+		return entry.GTCustomized, drLsn
+	} else {
+		return entry.GTCustomized, maxLsn
 	}
-	return
 }
 
 func (w *StoreInfo) makeInternalCheckpointEntry() (e entry.Entry) {

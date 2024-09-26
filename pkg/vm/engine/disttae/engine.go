@@ -631,11 +631,11 @@ func (e *Engine) Hints() (h engine.Hints) {
 	return
 }
 
-func determineScanType(relData engine.RelData, num int) (scanType int) {
+func determineScanType(relData engine.RelData, readerNum int) (scanType int) {
 	scanType = NORMAL
-	if relData.DataCnt() < num*SMALLSCAN_THRESHOLD {
+	if relData.DataCnt() < readerNum*SMALLSCAN_THRESHOLD || readerNum == 1 {
 		scanType = SMALL
-	} else if (num * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
+	} else if (readerNum * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
 		scanType = LARGE
 	}
 	return
@@ -684,7 +684,7 @@ func (e *Engine) BuildBlockReaders(
 			shard)
 		rd, err := NewReader(
 			ctx,
-			proc,
+			proc.Mp(),
 			e,
 			def,
 			ts,
@@ -700,7 +700,7 @@ func (e *Engine) BuildBlockReaders(
 	return rds, nil
 }
 
-func (e *Engine) getTNServices() []DNStore {
+func (e *Engine) GetTNServices() []DNStore {
 	cluster := clusterservice.GetMOCluster(e.service)
 	return cluster.GetAllTNServices()
 }

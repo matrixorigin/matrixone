@@ -992,6 +992,9 @@ func (m *MockCompilerContext) GetQueryingSubscription() *SubscriptionMeta {
 func (m *MockCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return false, nil
 }
+func (m *MockCompilerContext) BuildTableDefByMoColumns(dbName, table string) (*TableDef, error) {
+	return nil, nil
+}
 
 func (m *MockCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*Snapshot, error) {
 	return nil, nil

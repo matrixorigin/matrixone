@@ -55,6 +55,7 @@ func removeIf[T any](data []T, pred func(t T) bool) []T {
 // ReadDataByFilter only read block data from storage by filter, don't apply deletes.
 func ReadDataByFilter(
 	ctx context.Context,
+	isTombstone bool,
 	tableName string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
@@ -65,7 +66,9 @@ func ReadDataByFilter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (sels []int64, err error) {
-	bat, rowidIdx, deleteMask, release, err := readBlockData(ctx, columns, colTypes, info, ts, fileservice.Policy(0), mp, fs)
+	bat, rowidIdx, deleteMask, release, err := readBlockData(
+		ctx, isTombstone, columns, colTypes, info, ts, fileservice.Policy(0), mp, fs,
+	)
 	if err != nil {
 		return
 	}
@@ -83,7 +86,7 @@ func ReadDataByFilter(
 	if len(sels) == 0 {
 		return
 	}
-	sels, err = ds.ApplyTombstones(ctx, info.BlockID, sels, engine.Policy_CheckAll)
+	sels, err = ds.ApplyTombstones(ctx, &info.BlockID, sels, engine.Policy_CheckAll)
 	return
 }
 
@@ -121,11 +124,11 @@ func BlockDataReadNoCopy(
 
 	// read block data from storage specified by meta location
 	if loaded, rowidPos, deleteMask, release, err = readBlockData(
-		ctx, columns, colTypes, info, ts, policy, mp, fs,
+		ctx, false, columns, colTypes, info, ts, policy, mp, fs,
 	); err != nil {
 		return nil, nil, nil, err
 	}
-	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -153,6 +156,7 @@ func BlockDataReadNoCopy(
 // BlockDataRead only read block data from storage, don't apply deletes.
 func BlockDataRead(
 	ctx context.Context,
+	isTombstone bool,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	columns []uint16,
@@ -180,7 +184,7 @@ func BlockDataRead(
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
-			ctx, tableName, info, ds, filterSeqnums, filterColTypes,
+			ctx, isTombstone, tableName, info, ds, filterSeqnums, filterColTypes,
 			types.TimestampToTS(ts), searchFunc, mp, fs,
 		); err != nil {
 			return err
@@ -196,7 +200,7 @@ func BlockDataRead(
 	}
 
 	err = BlockDataReadInner(
-		ctx, info, ds, columns, colTypes,
+		ctx, isTombstone, info, ds, columns, colTypes,
 		types.TimestampToTS(ts), sels, policy, bat, mp, fs,
 	)
 	if err != nil {
@@ -262,11 +266,16 @@ func BlockDataReadBackup(
 	ctx context.Context,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
+	idxes []uint16,
 	ts types.TS,
 	fs fileservice.FileService,
 ) (loaded *batch.Batch, sortKey uint16, err error) {
+	if len(idxes) == 0 {
+		loaded, sortKey, err = LoadOneBlock(ctx, fs, info.MetaLocation(), objectio.SchemaData)
+	} else {
+		loaded, sortKey, err = LoadOneBlockWithIndex(ctx, fs, idxes, info.MetaLocation(), objectio.SchemaData)
+	}
 	// read block data from storage specified by meta location
-	loaded, sortKey, err = LoadOneBlock(ctx, fs, info.MetaLocation(), objectio.SchemaData)
 	if err != nil {
 		return
 	}
@@ -277,7 +286,7 @@ func BlockDataReadBackup(
 			if err != nil {
 				return
 			}
-			if commitTs.Greater(&ts) {
+			if commitTs.GT(&ts) {
 				err = windowCNBatch(loaded, 0, uint64(v))
 				if err != nil {
 					return
@@ -290,7 +299,7 @@ func BlockDataReadBackup(
 			}
 		}
 	}
-	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
 	if err != nil {
 		return
 	}
@@ -304,6 +313,7 @@ func BlockDataReadBackup(
 // BlockDataReadInner only read data,don't apply deletes.
 func BlockDataReadInner(
 	ctx context.Context,
+	isTombstone bool,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	columns []uint16,
@@ -325,7 +335,7 @@ func BlockDataReadInner(
 
 	// read block data from storage specified by meta location
 	if loaded, rowidPos, deleteMask, release, err = readBlockData(
-		ctx, columns, colTypes, info, ts, policy, mp, fs,
+		ctx, isTombstone, columns, colTypes, info, ts, policy, mp, fs,
 	); err != nil {
 		return
 	}
@@ -350,26 +360,37 @@ func BlockDataReadInner(
 		}
 
 		// assemble result batch only with selected rows
-		for i, col := range loaded.Vecs {
-			typ := *col.GetType()
-			if typ.Oid == types.T_Rowid {
-				err = bat.Vecs[i].UnionBatch(col, 0, col.Length(), nil, mp)
-				if err != nil {
-					return
+		if !isTombstone {
+			for i, col := range loaded.Vecs {
+				typ := *col.GetType()
+				if typ.Oid == types.T_Rowid {
+					err = bat.Vecs[i].UnionBatch(col, 0, col.Length(), nil, mp)
+					if err != nil {
+						return
+					}
+					continue
 				}
-				continue
+				if err = bat.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
+					break
+				}
+				if err = bat.Vecs[i].Union(col, selectRows, mp); err != nil {
+					break
+				}
 			}
-			if err = bat.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
-				break
-			}
-			if err = bat.Vecs[i].Union(col, selectRows, mp); err != nil {
-				break
+		} else {
+			for i, col := range loaded.Vecs {
+				if err = bat.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
+					break
+				}
+				if err = bat.Vecs[i].Union(col, selectRows, mp); err != nil {
+					break
+				}
 			}
 		}
 		return
 	}
 
-	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
 	if err != nil {
 		return
 	}
@@ -466,6 +487,7 @@ func buildRowidColumn(
 
 func readBlockData(
 	ctx context.Context,
+	isTombstone bool,
 	colIndexes []uint16,
 	colTypes []types.Type,
 	info *objectio.BlockInfo,
@@ -474,7 +496,17 @@ func readBlockData(
 	m *mpool.MPool,
 	fs fileservice.FileService,
 ) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, release func(), err error) {
-	rowidPos, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
+	var (
+		idxes []uint16
+		typs  []types.Type
+	)
+	if isTombstone {
+		rowidPos = -1
+		idxes = colIndexes
+		typs = colTypes
+	} else {
+		rowidPos, idxes, typs = getRowsIdIndex(colIndexes, colTypes)
+	}
 
 	readColumns := func(cols []uint16) (result *batch.Batch, loaded *batch.Batch, err error) {
 		if len(cols) == 0 && rowidPos >= 0 {
@@ -490,8 +522,15 @@ func readBlockData(
 		}
 		colPos := 0
 		result = batch.NewWithSize(len(colTypes))
-		for i, typ := range colTypes {
-			if typ.Oid != types.T_Rowid {
+		if !isTombstone {
+			for i, typ := range colTypes {
+				if typ.Oid != types.T_Rowid {
+					result.Vecs[i] = loaded.Vecs[colPos]
+					colPos++
+				}
+			}
+		} else {
+			for i := range colTypes {
 				result.Vecs[i] = loaded.Vecs[colPos]
 				colPos++
 			}
@@ -514,7 +553,7 @@ func readBlockData(
 		//aborts := vector.MustFixedColWithTypeCheck[bool](loaded.Vecs[len(loaded.Vecs)-1])
 		commits := vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[len(loaded.Vecs)-1])
 		for i := 0; i < len(commits); i++ {
-			if commits[i].Greater(&ts) {
+			if commits[i].GT(&ts) {
 				deletes.Add(uint64(i))
 			}
 		}
@@ -558,7 +597,7 @@ func ReadDeletes(
 func EvalDeleteMaskFromDNCreatedTombstones(
 	deletes *batch.Batch,
 	meta objectio.BlockObject,
-	ts types.TS,
+	ts *types.TS,
 	blockid *types.Blockid,
 ) (rows *nulls.Bitmap) {
 	if deletes == nil {
@@ -585,7 +624,7 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	} else {
 		tss := vector.MustFixedColWithTypeCheck[types.TS](deletes.Vecs[1])
 		for i := end - 1; i >= start; i-- {
-			if tss[i].Greater(&ts) {
+			if tss[i].GT(ts) {
 				continue
 			}
 			row := rowids[i].GetRowOffset()
@@ -600,7 +639,7 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 }
 
 func EvalDeleteMaskFromCNCreatedTombstones(
-	bid types.Blockid,
+	bid *types.Blockid,
 	deletes *batch.Batch,
 ) (rows *nulls.Bitmap) {
 	if deletes == nil {
@@ -608,7 +647,7 @@ func EvalDeleteMaskFromCNCreatedTombstones(
 	}
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0])
 
-	start, end := FindStartEndOfBlockFromSortedRowids(rowids, &bid)
+	start, end := FindStartEndOfBlockFromSortedRowids(rowids, bid)
 	for i := end - 1; i >= start; i-- {
 		row := rowids[i].GetRowOffset()
 		if rows == nil {
@@ -677,7 +716,7 @@ func IsRowDeletedByLocation(
 			if !rowids[i].EQ(row) {
 				break
 			}
-			if tss[i].LessEq(snapshotTS) {
+			if tss[i].LE(snapshotTS) {
 				deleted = true
 				break
 			}
@@ -688,8 +727,8 @@ func IsRowDeletedByLocation(
 
 func FillBlockDeleteMask(
 	ctx context.Context,
-	snapshotTS types.TS,
-	blockId types.Blockid,
+	snapshotTS *types.TS,
+	blockId *types.Blockid,
 	location objectio.Location,
 	fs fileservice.FileService,
 	createdByCN bool,
@@ -711,7 +750,7 @@ func FillBlockDeleteMask(
 			rows = EvalDeleteMaskFromCNCreatedTombstones(blockId, persistedDeletes)
 		} else {
 			rows = EvalDeleteMaskFromDNCreatedTombstones(
-				persistedDeletes, meta.GetBlockMeta(uint32(location.ID())), snapshotTS, &blockId,
+				persistedDeletes, meta.GetBlockMeta(uint32(location.ID())), snapshotTS, blockId,
 			)
 		}
 

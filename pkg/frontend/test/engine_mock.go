@@ -215,7 +215,7 @@ func (m *MockTombstoner) EXPECT() *MockTombstonerMockRecorder {
 }
 
 // ApplyInMemTombstones mocks base method.
-func (m *MockTombstoner) ApplyInMemTombstones(bid types.Blockid, rowsOffset []int64, deleted *nulls.Nulls) []int64 {
+func (m *MockTombstoner) ApplyInMemTombstones(bid *types.Blockid, rowsOffset []int64, deleted *nulls.Nulls) []int64 {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ApplyInMemTombstones", bid, rowsOffset, deleted)
 	ret0, _ := ret[0].([]int64)

@@ -68,6 +68,7 @@ type Table struct {
 	Viewdef       string
 	Constraint    []byte
 	Version       uint32
+	ExtraInfo     []byte
 }
 
 // genColumnsFromDefs generates column struct from TableDef.
@@ -451,6 +452,11 @@ func GenCreateTableTuple(tbl Table, m *mpool.MPool, packer *types.Packer) (*batc
 		packer.EncodeStringType([]byte(tbl.DatabaseName))
 		packer.EncodeStringType([]byte(tbl.TableName))
 		if err = vector.AppendBytes(bat.Vecs[idx], packer.Bytes(), false, m); err != nil {
+			return nil, err
+		}
+		idx = MO_TABLES_EXTRA_INFO_IDX
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // extra_info
+		if err = vector.AppendBytes(bat.Vecs[idx], tbl.ExtraInfo, false, m); err != nil {
 			return nil, err
 		}
 	}

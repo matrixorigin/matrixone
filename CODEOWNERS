@@ -168,6 +168,7 @@
 /pkg/sql/colexec/left @aunjgr @badboynt1
 /pkg/sql/colexec/shuffle @badboynt1
 /pkg/sql/colexec/shufflebuild @badboynt1
+/pkg/sql/colexec/multi_update @ouyuanning
 
 # pkg/taskservice
 /pkg/taskservice @zhangxu19830126

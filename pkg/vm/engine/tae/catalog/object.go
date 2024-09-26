@@ -122,7 +122,7 @@ func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
 	if deleteTS.IsEmpty() {
 		return false
 	}
-	return deleteTS.Less(&ts)
+	return deleteTS.LT(&ts)
 }
 func (entry *ObjectEntry) GetLatestNode() *ObjectEntry {
 	return entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.SortHint)
@@ -475,10 +475,14 @@ func (entry *ObjectEntry) HasDropIntent() bool {
 	return !entry.DeletedAt.IsEmpty()
 }
 
+func (entry *ObjectEntry) IsForcePNode() bool {
+	return entry.forcePNode
+}
+
 // for old flushed objects, stats may be empty
 func (entry *ObjectEntry) ObjectPersisted() bool {
 	if entry.IsAppendable() {
-		return entry.HasDropIntent()
+		return entry.IsForcePNode() || entry.HasDropIntent()
 	} else {
 		return true
 	}
@@ -529,7 +533,7 @@ func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
 	logutil.Info(s)
 }
 
-func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
+func MockObjEntryWithTbl(tbl *TableEntry, size uint64, isTombstone bool) *ObjectEntry {
 	stats := objectio.NewObjectStats()
 	objectio.SetObjectStatsSize(stats, uint32(size))
 	// to make sure pass the stats empty check
@@ -537,7 +541,7 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
 	ts := types.BuildTS(time.Now().UnixNano(), 0)
 	e := &ObjectEntry{
 		table:      tbl,
-		ObjectNode: ObjectNode{},
+		ObjectNode: ObjectNode{IsTombstone: isTombstone},
 		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: ts,
 		},

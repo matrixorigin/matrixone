@@ -68,6 +68,7 @@ func RunLockServicesForTest(
 				},
 			}))
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, cluster)
+	defer cluster.Close()
 
 	var removeDisconnectDuration time.Duration
 	for _, cfg := range configs {

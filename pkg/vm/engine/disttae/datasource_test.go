@@ -56,7 +56,6 @@ func TestTombstoneData1(t *testing.T) {
 		writer, err := colexec.NewS3TombstoneWriter()
 		require.NoError(t, err)
 		bat := engine_util.NewCNTombstoneBatch(
-			"pkey",
 			&int32Type,
 		)
 		for j := 0; j < 10; j++ {
@@ -113,12 +112,13 @@ func TestTombstoneData1(t *testing.T) {
 		}
 
 		bid := tombstoneRowIds[i].BorrowBlockID()
-		exist, err := tombstones1.HasBlockTombstone(ctx, *bid, fs)
+		exist, err := tombstones1.HasBlockTombstone(ctx, bid, fs)
 		require.NoError(t, err)
 		require.True(t, exist)
 
+		maxTS := types.MaxTs()
 		left, err := tombstones1.ApplyPersistedTombstones(
-			ctx, fs, types.MaxTs(), *bid,
+			ctx, fs, &maxTS, bid,
 			[]int64{int64(tombstoneRowIds[i].GetRowOffset())},
 			&deleteMask)
 
@@ -183,7 +183,7 @@ func TestTombstoneData1(t *testing.T) {
 	target := types.NewBlockidWithObjectID(obj1, 3)
 	rowsOffset := []int64{0, 1, 2, 3}
 	left := tombstones1.ApplyInMemTombstones(
-		*target,
+		target,
 		rowsOffset,
 		nil,
 	)
@@ -194,7 +194,7 @@ func TestTombstoneData1(t *testing.T) {
 	deleted := nulls.NewWithSize(0)
 	deleted.Add(5)
 	left = tombstones1.ApplyInMemTombstones(
-		*target,
+		target,
 		nil,
 		deleted,
 	)
@@ -207,7 +207,7 @@ func TestTombstoneData1(t *testing.T) {
 	target = types.NewBlockidWithObjectID(obj2, 0)
 	rowsOffset = []int64{2, 3, 4}
 	left = tombstones1.ApplyInMemTombstones(
-		*target,
+		target,
 		rowsOffset,
 		nil,
 	)
@@ -219,7 +219,7 @@ func TestTombstoneData1(t *testing.T) {
 	deleted = nulls.NewWithSize(0)
 	deleted.Add(4)
 	left = tombstones1.ApplyInMemTombstones(
-		*target,
+		target,
 		nil,
 		deleted,
 	)
@@ -310,7 +310,6 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		require.NoError(t, err)
 
 		bat := engine_util.NewCNTombstoneBatch(
-			"pkey",
 			&int32Type,
 		)
 
@@ -336,7 +335,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	deletedMask := &nulls.Nulls{}
 	for i := range tombstoneRowIds {
 		bid := tombstoneRowIds[i].BorrowBlockID()
-		left, err := ls.applyWorkspaceFlushedS3Deletes(*bid, nil, deletedMask)
+		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, deletedMask)
 		require.NoError(t, err)
 		require.Zero(t, len(left))
 

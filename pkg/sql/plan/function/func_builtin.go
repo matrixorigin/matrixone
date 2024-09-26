@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -261,6 +262,51 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 	}
 
 	return nil
+}
+
+func builtInMoShowColUnique(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrStrToFixed[bool](
+		parameters,
+		result,
+		proc,
+		length,
+		moShowColUnique,
+		selectList,
+	)
+}
+
+// p1: constrain
+// p2: column name
+func moShowColUnique(constraintStr string, colName string) bool {
+	c := &engine.ConstraintDef{}
+	err := c.UnmarshalBinary([]byte(constraintStr))
+	if err != nil {
+		return false
+	}
+
+	contatinsCol := false
+	// get unique constraint
+	for _, ct := range c.Cts {
+		switch k := ct.(type) {
+		case *engine.IndexDef:
+			if k.Indexes != nil {
+				for _, index := range k.Indexes {
+					for _, part := range index.Parts {
+						if part == strings.ToLower(colName) {
+							contatinsCol = true
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if contatinsCol {
+		return true
+	} else {
+		return false
+	}
 }
 
 func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {

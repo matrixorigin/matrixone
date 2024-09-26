@@ -231,7 +231,7 @@ func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.Object
 			}
 		}
 
-		if len(objs) > 1 {
+		if len(objs) > 0 {
 			e.scheduleMergeObjects(objScopes, objs, objectBlkCnt, entry, false)
 		}
 		if len(tombstones) > 1 {

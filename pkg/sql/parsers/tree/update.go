@@ -137,6 +137,7 @@ const (
 )
 
 const (
+	INFILE = 0
 	S3     = 1
 	INLINE = 2
 )
@@ -149,7 +150,6 @@ type ExternParam struct {
 }
 
 type ExParamConst struct {
-	Init         bool
 	ScanType     int
 	FileSize     int64
 	FileStartOff int64
@@ -163,17 +163,15 @@ type ExParamConst struct {
 }
 
 type ExParam struct {
+	ExternType  int32
 	JsonData    string
 	FileService fileservice.FileService
 	NullMap     map[string]([]string)
 	S3Param     *S3Parameter
 	Ctx         context.Context
-	LoadFile    bool
 	Local       bool
-	QueryResult bool
 	Parallel    bool
 	Strict      bool
-	ExtTab      bool // means table is created by syntax, create external table
 }
 
 type S3Parameter struct {

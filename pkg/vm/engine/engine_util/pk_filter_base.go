@@ -17,11 +17,11 @@ package engine_util
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -62,7 +62,7 @@ func (b *BasePKFilter) String() string {
 func ConstructBasePKFilter(
 	expr *plan.Expr,
 	tblDef *plan.TableDef,
-	proc *process.Process,
+	mp *mpool.MPool,
 ) (filter BasePKFilter, err error) {
 	if expr == nil {
 		return
@@ -80,7 +80,7 @@ func ConstructBasePKFilter(
 		case "and":
 			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
-				ff, err := ConstructBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
+				ff, err := ConstructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
@@ -96,7 +96,7 @@ func ConstructBasePKFilter(
 			for idx := 0; idx < len(filters)-1; {
 				f1 := &filters[idx]
 				f2 := &filters[idx+1]
-				ff, err := mergeFilters(f1, f2, function.AND, proc)
+				ff, err := mergeFilters(f1, f2, function.AND, mp)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
@@ -111,7 +111,7 @@ func ConstructBasePKFilter(
 
 			for idx := 0; idx < len(filters)-1; idx++ {
 				if filters[idx].Vec != nil {
-					filters[idx].Vec.Free(proc.Mp())
+					filters[idx].Vec.Free(mp)
 				}
 			}
 
@@ -121,7 +121,7 @@ func ConstructBasePKFilter(
 		case "or":
 			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
-				ff, err := ConstructBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
+				ff, err := ConstructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
@@ -139,7 +139,7 @@ func ConstructBasePKFilter(
 			for idx := 0; idx < len(filters)-1; {
 				f1 := &filters[idx]
 				f2 := &filters[idx+1]
-				ff, err := mergeFilters(f1, f2, function.OR, proc)
+				ff, err := mergeFilters(f1, f2, function.OR, mp)
 				if err != nil {
 					return BasePKFilter{}, nil
 				}
@@ -154,7 +154,7 @@ func ConstructBasePKFilter(
 
 			for idx := 0; idx < len(filters)-1; idx++ {
 				if filters[idx].Vec != nil {
-					filters[idx].Vec.Free(proc.Mp())
+					filters[idx].Vec.Free(mp)
 				}
 			}
 
@@ -163,7 +163,7 @@ func ConstructBasePKFilter(
 
 		case ">=":
 			//a >= ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -174,7 +174,7 @@ func ConstructBasePKFilter(
 
 		case "<=":
 			//a <= ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -185,7 +185,7 @@ func ConstructBasePKFilter(
 
 		case ">":
 			//a > ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -196,7 +196,7 @@ func ConstructBasePKFilter(
 
 		case "<":
 			//a < ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -207,7 +207,7 @@ func ConstructBasePKFilter(
 
 		case "=":
 			// a = ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -217,7 +217,7 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_eq":
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -227,7 +227,7 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "in":
-			ok, oid, vals := evalValue(exprImpl, tblDef, true, tblDef.Pkey.PkeyColName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, true, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -243,7 +243,7 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_in":
-			ok, oid, vals := evalValue(exprImpl, tblDef, true, tblDef.Pkey.PkeyColName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, true, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -259,7 +259,7 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "between":
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -270,7 +270,7 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_between":
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}

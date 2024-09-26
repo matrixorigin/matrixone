@@ -44,9 +44,9 @@ func TestHiddenWithPK1(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 2)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*4))
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*4))
 	defer bat.Close()
 	bats := bat.Split(10)
 
@@ -65,7 +65,7 @@ func TestHiddenWithPK1(t *testing.T) {
 				rid := v.(types.Rowid)
 				bid, offset := rid.Decode()
 				t.Logf("bid=%s,offset=%d", bid.String(), offset)
-				assert.Equal(t, fp.BlockID, bid)
+				assert.Equal(t, fp.BlockID, *bid)
 				offsets = append(offsets, offset)
 				return
 			}, nil)
@@ -91,7 +91,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			rid := v.(types.Rowid)
 			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
-			assert.Equal(t, fp.BlockID, bid)
+			assert.Equal(t, fp.BlockID, *bid)
 			offsets = append(offsets, offset)
 			return
 		}, nil)
@@ -136,7 +136,7 @@ func TestHiddenWithPK1(t *testing.T) {
 					bid, offset := rid.Decode()
 					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 					expectedBid := objectio.NewBlockidWithObjectID(meta.ID(), uint16(j))
-					assert.Equal(t, *expectedBid, bid, "expect %v, get %v", expectedBid.String(), bid.String())
+					assert.Equal(t, *expectedBid, *bid, "expect %v, get %v", expectedBid.String(), bid.String())
 					offsets = append(offsets, offset)
 					return
 				}, nil)
@@ -180,7 +180,7 @@ func TestHiddenWithPK1(t *testing.T) {
 					rid := v.(types.Rowid)
 					bid, offset := rid.Decode()
 					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-					assert.Equal(t, *objectio.NewBlockidWithObjectID(meta.ID(), uint16(j)), bid)
+					assert.Equal(t, *objectio.NewBlockidWithObjectID(meta.ID(), uint16(j)), *bid)
 					offsets = append(offsets, offset)
 					return
 				}, nil)
@@ -214,9 +214,9 @@ func TestHidden2(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, -1)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*4))
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*4))
 	defer bat.Close()
 	bats := bat.Split(10)
 

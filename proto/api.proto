@@ -43,6 +43,7 @@ enum OpCode {
     OpCommitMerge      = 2011;
     OpDiskDiskCleaner   = 2012;
     OpReader = 2013;
+    OpGetLatestCheckpoint = 2014;
 }
 
 // TNPingRequest ping request
@@ -368,6 +369,8 @@ message SchemaExtra {
     uint32 max_osize_merged_obj = 7;
     repeated MergeHint hints = 8;
     uint64 min_cn_merge_size = 9;
+    uint32 block_max_rows = 10;
+    uint32 object_max_blocks = 11;
 }
 
 // Int64Map mainly used in unit test
@@ -413,4 +416,9 @@ message MergeTaskEntry {
     uint32 account_id = 7;
     uint32 user_id = 8;
     uint32 role_id = 9;
+}
+
+message CheckpointResp {
+    string Location = 1;
+    uint64 truncateLsn = 2;
 }

@@ -35,6 +35,28 @@ var (
 	}
 )
 
+func MustMarshalTblExtra(info *SchemaExtra) []byte {
+	if info == nil {
+		return []byte{}
+	}
+	data, err := info.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+func MustUnmarshalTblExtra(data []byte) *SchemaExtra {
+	info := &SchemaExtra{}
+	if len(data) == 0 {
+		return info
+	}
+	if err := info.Unmarshal(data); err != nil {
+		panic(err)
+	}
+	return info
+}
+
 func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,
@@ -169,6 +191,14 @@ func (m *MergeCommitEntry) MarshalBinary() ([]byte, error) {
 }
 
 func (m *MergeCommitEntry) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+func (m *CheckpointResp) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *CheckpointResp) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
