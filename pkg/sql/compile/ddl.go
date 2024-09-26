@@ -73,15 +73,12 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
 	if err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator()); err != nil {
-		c.proc.Info(c.proc.Ctx,
-			"create database failed", zap.Error(err))
 		return err
 	}
 
 	if !needSkipDbs[dbName] {
 		newDb, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator())
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "get database failed", zap.Error(err))
 			return err
 		}
 
@@ -92,7 +89,6 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 			catalog.MO_PITR_DB_NAME, dbName)
 
 		if err := c.runSqlWithSystemTenant(updatePitrSql); err != nil {
-			c.proc.Info(c.proc.Ctx, "update pitr failed", zap.Error(err))
 			return err
 		}
 	}
@@ -1308,11 +1304,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if !needSkipDbs[dbName] {
 		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
+			c.proc.Info(c.proc.Ctx, "createTable", zap.String("databaseName", c.db), zap.String("tableName", qry.GetTableDef().GetName()), zap.Error(err))
 			return err
 		}
 		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = '%s' where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
@@ -1325,11 +1317,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		// change ctx
 		err = c.runSqlWithSystemTenant(updatePitrSql)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
+			c.proc.Info(c.proc.Ctx, "createTable", zap.String("databaseName", c.db), zap.String("tableName", qry.GetTableDef().GetName()), zap.Error(err))
 			return err
 		}
 	}

@@ -923,7 +923,6 @@ func restoreToAccountWithPitr(
 	curAccount uint32,
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account, restore timestamp: %d", pitrName, ts))
-
 	var dbNames []string
 	// delete current dbs
 	if dbNames, err = showDatabases(ctx, sid, bh, ""); err != nil {
