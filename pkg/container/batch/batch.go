@@ -385,7 +385,6 @@ func (bat *Batch) FreeColumns(m *mpool.MPool) {
 			vec.Free(m)
 		}
 	}
-	return
 }
 
 func (bat *Batch) String() string {
