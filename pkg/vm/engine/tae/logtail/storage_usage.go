@@ -1368,7 +1368,7 @@ func EliminateErrorsOnCache(c *catalog.Catalog, end types.TS) int {
 		}
 
 		createTS := entry.GetCreatedAt()
-		if createTS.GreaterEq(&end) {
+		if createTS.GE(&end) {
 			return nil
 		}
 

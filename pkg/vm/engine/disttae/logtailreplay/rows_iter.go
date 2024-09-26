@@ -70,7 +70,7 @@ func (p *rowsIter) Next() bool {
 			// no more
 			return false
 		}
-		if entry.Time.Greater(&p.ts) {
+		if entry.Time.GT(&p.ts) {
 			// not visible
 			continue
 		}
@@ -414,7 +414,7 @@ func (p *primaryKeyIter) Next() bool {
 				// no more
 				break
 			}
-			if row.Time.Greater(&p.ts) {
+			if row.Time.GT(&p.ts) {
 				// not visible
 				continue
 			}
@@ -483,7 +483,7 @@ func (p *primaryKeyDelIter) Next() bool {
 				// no more
 				break
 			}
-			if row.Time.Greater(&p.ts) {
+			if row.Time.GT(&p.ts) {
 				// not visible
 				continue
 			}
@@ -541,19 +541,19 @@ func (p *PartitionState) NewPrimaryKeyIter(
 //}
 
 func (p *PartitionState) NewPrimaryKeyDelIter(
-	ts types.TS,
+	ts *types.TS,
 	spec PrimaryKeyMatchSpec,
-	bid types.Blockid,
+	bid *types.Blockid,
 ) *primaryKeyDelIter {
 	index := p.rowPrimaryKeyIndex.Copy()
 	return &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
-			ts:           ts,
+			ts:           *ts,
 			spec:         spec,
 			primaryIndex: index,
 			iter:         index.Iter(),
 			rows:         p.rows.Copy(),
 		},
-		bid: bid,
+		bid: *bid,
 	}
 }
