@@ -1381,6 +1381,7 @@ func (txn *Transaction) transferTombstoneObjects(
 			}
 
 			logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ",
+				zap.String("txn-id", txn.op.Txn().DebugString()),
 				zap.String("table",
 					fmt.Sprintf("%s(%d)-%s(%d)",
 						tbl.db.databaseName, tbl.db.databaseId, tbl.tableName, tbl.tableId)),
