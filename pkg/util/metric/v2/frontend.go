@@ -99,7 +99,7 @@ var (
 			Subsystem: "frontend",
 			Name:      "input_sql_length",
 			Help:      "Bucketed histogram of Input SQL Length",
-			Buckets:   getDurationBuckets(),
+			Buckets:   prometheus.ExponentialBuckets(64, 2, 20), //from 64, to 64 * 2 ^20
 		}, []string{"label"})
 
 	TotalSQLLengthHistogram          = sqlLengthHistogram.WithLabelValues("total-sql-length")
