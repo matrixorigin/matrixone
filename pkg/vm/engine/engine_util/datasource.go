@@ -200,7 +200,6 @@ func (rs *RemoteDataSource) SetFilterZM(_ objectio.ZoneMap) {
 
 func NewRemoteDataSource(
 	ctx context.Context,
-	proc *process.Process,
 	fs fileservice.FileService,
 	snapshotTS timestamp.Timestamp,
 	relData engine.RelData,

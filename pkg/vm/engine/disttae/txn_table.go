@@ -504,14 +504,14 @@ func (tbl *txnTable) CollectTombstones(
 			})
 
 		//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row types.Rowid) {
-			tombstone.AppendInMemory(row)
+		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row *types.Rowid) {
+			tombstone.AppendInMemory(*row)
 		})
 
 		//collect uncommitted persisted tombstones.
 		if err := tbl.getTxn().getUncommittedS3Tombstone(
-			func(stats objectio.ObjectStats) {
-				tombstone.AppendFiles(stats)
+			func(stats *objectio.ObjectStats) {
+				tombstone.AppendFiles(*stats)
 			}); err != nil {
 			return nil, err
 		}
@@ -541,8 +541,8 @@ func (tbl *txnTable) CollectTombstones(
 		//collect committed persisted tombstones from partition state.
 		snapshot := types.TimestampToTS(tbl.db.op.Txn().SnapshotTS)
 		err = state.CollectTombstoneObjects(snapshot,
-			func(stats objectio.ObjectStats) {
-				tombstone.AppendFiles(stats)
+			func(stats *objectio.ObjectStats) {
+				tombstone.AppendFiles(*stats)
 			})
 		if err != nil {
 			return nil, err
@@ -1633,7 +1633,6 @@ func buildRemoteDS(
 
 	source = engine_util.NewRemoteDataSource(
 		ctx,
-		tbl.proc.Load(),
 		tbl.getTxn().engine.fs,
 		tbl.db.op.SnapshotTS(),
 		newRelData,

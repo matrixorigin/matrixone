@@ -1101,13 +1101,13 @@ func (txn *Transaction) compactionBlksLocked() error {
 
 // TODO::remove it after workspace refactor.
 func (txn *Transaction) getUncommittedS3Tombstone(
-	appendTo func(stats objectio.ObjectStats),
+	appendTo func(stats *objectio.ObjectStats),
 ) (err error) {
 	txn.cn_flushed_s3_tombstone_object_stats_list.RLock()
 	defer txn.cn_flushed_s3_tombstone_object_stats_list.RUnlock()
 
 	for _, stats := range txn.cn_flushed_s3_tombstone_object_stats_list.data {
-		appendTo(stats)
+		appendTo(&stats)
 	}
 
 	return nil

@@ -677,7 +677,6 @@ func (e *Engine) BuildBlockReaders(
 		}
 		ds := engine_util.NewRemoteDataSource(
 			ctx,
-			proc,
 			fs,
 			ts,
 			shard)
