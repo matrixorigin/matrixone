@@ -20,11 +20,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
+func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool, offHeap bool) []byte {
 	allocateSize := requiredSpaceWithoutHeader + kMemHdrSz
 	var bs []byte
 	var err error
-	if mp.useMalloc {
+	if offHeap {
 		bs, err = allocator().Allocate(uint64(allocateSize), malloc.NoHints)
 		if err != nil {
 			panic(err)
@@ -42,8 +42,6 @@ func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
 	if mp.details != nil {
 		mp.details.recordAlloc(int64(pHdr.allocSz))
 	}
-	if mp.useMalloc {
-		pHdr.isMallocAllocated = true
-	}
+	pHdr.offHeap = offHeap
 	return pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
 }
