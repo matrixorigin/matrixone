@@ -293,7 +293,7 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 
 func (p *PartitionState) CollectTombstoneObjects(
 	snapshot types.TS,
-	statsSlice *objectio.ObjectStatsSlice,
+	appendTo func(stats objectio.ObjectStats),
 ) (err error) {
 
 	if p.ApproxTombstoneObjectsNum() == 0 {
@@ -308,7 +308,7 @@ func (p *PartitionState) CollectTombstoneObjects(
 
 	for iter.Next() {
 		item := iter.Entry()
-		(*statsSlice).Append(item.ObjectStats[:])
+		appendTo(item.ObjectStats)
 	}
 
 	return nil

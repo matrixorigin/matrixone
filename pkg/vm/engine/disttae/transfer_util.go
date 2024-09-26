@@ -93,11 +93,11 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	pkColIdx := table.tableDef.Name2ColIndex[table.tableDef.Pkey.PkeyColName]
 	pkCol := table.tableDef.Cols[pkColIdx]
-	r := SimpleMultiObjectsReader(
+	r := engine_util.SimpleMultiObjectsReader(
 		ctx, fs,
 		tombstoneObjects,
 		end.ToTimestamp(),
-		WithColumns(
+		engine_util.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)}),
 	)
