@@ -16,12 +16,14 @@ package shardservice
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"go.uber.org/zap"
 )
 
 func (s *service) initRemote() {
@@ -112,6 +114,8 @@ func (s *service) handleRemoteRead(
 	resp *pb.Response,
 	buffer *morpc.Buffer,
 ) error {
+	s.logger.Info(">>>>> handleRemoteRead",
+		zap.String("ctx", fmt.Sprintf("%p", ctx)))
 	value, err := s.doRead(
 		ctx,
 		req.ShardRead.Shard,

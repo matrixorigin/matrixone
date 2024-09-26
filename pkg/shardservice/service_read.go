@@ -17,11 +17,13 @@ package shardservice
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 func (s *service) Read(
@@ -195,6 +197,8 @@ func (s *service) doRead(
 		ctx,
 		readAt,
 	); err != nil {
+		s.logger.Info(">>>>> WaitLogAppliedAt error",
+			zap.String("ctx", fmt.Sprintf("%p", ctx)))
 		return nil, err
 	}
 
