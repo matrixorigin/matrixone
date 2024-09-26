@@ -1292,6 +1292,19 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	// deal with some special function
 	switch name {
+	case "serial":
+		if len(args) == 1 {
+			if listExpr, ok := args[0].Expr.(*plan.Expr_List); ok {
+				for i, subExpr := range listExpr.List.List {
+					newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*Expr{subExpr})
+					if err != nil {
+						return nil, err
+					}
+					listExpr.List.List[i] = newSubExpr
+				}
+				return args[0], nil
+			}
+		}
 	case "interval":
 		// rewrite interval function to ListExpr, and return directly
 		return &plan.Expr{
