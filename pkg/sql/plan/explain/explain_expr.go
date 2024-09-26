@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"strconv"
 	"strings"
 
@@ -42,7 +43,7 @@ func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
 func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions, buf *bytes.Buffer) error {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if len(exprImpl.Col.Name) > 0 {
+		if len(exprImpl.Col.Name) > 0 && !strings.HasPrefix(exprImpl.Col.Name, catalog.PrefixIndexTableName) {
 			buf.WriteString(exprImpl.Col.Name)
 		} else {
 			buf.WriteString("#[")
