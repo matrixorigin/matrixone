@@ -53,6 +53,8 @@ func init() {
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_V1}, nil, DecodeObjectMetaV1)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_V2}, nil, DecodeObjectMetaV2)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_V3}, nil, DecodeObjectMetaV3)
+	// NOTE:
+	// Break by MustVector. Need to update MustVector to support new version.
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V1}, EncodeColumnDataV1, DecodeColumnDataV1)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V2}, EncodeColumnDataV1, DecodeColumnDataV2)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_BF, IOET_BloomFilter_V1}, nil, nil)
@@ -64,6 +66,8 @@ func EncodeColumnDataV1(ioe any) (buf []byte, err error) {
 	return ioe.(*vector.Vector).MarshalBinary()
 }
 
+// NOTE:
+// Break by MustVector. Need to update MustVector to support new version.
 func DecodeColumnDataV1(buf []byte) (ioe any, err error) {
 	vec := vector.NewVec(types.Type{})
 	if err = vec.UnmarshalBinaryV1(buf); err != nil {
@@ -72,6 +76,8 @@ func DecodeColumnDataV1(buf []byte) (ioe any, err error) {
 	return vec, err
 }
 
+// NOTE:
+// Break by MustVector. Need to update MustVector to support new version.
 func DecodeColumnDataV2(buf []byte) (ioe any, err error) {
 	vec := vector.NewVec(types.Type{})
 	if err = vec.UnmarshalBinary(buf); err != nil {
