@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
@@ -83,10 +84,7 @@ type GCTable struct {
 	mp      *mpool.MPool
 	fs      fileservice.FileService
 
-	buffer struct {
-		sync.Mutex
-		impl *containers.OneSchemaBatchBuffer
-	}
+	buffer *containers.OneSchemaBatchBuffer
 
 	files struct {
 		sync.Mutex
@@ -113,8 +111,8 @@ func addObjectLocked(
 }
 
 func (t *GCTable) fillDefaults() {
-	if t.buffer.impl == nil {
-		t.buffer.impl = containers.NewOneSchemaBatchBuffer(
+	if t.buffer == nil {
+		t.buffer = containers.NewOneSchemaBatchBuffer(
 			mpool.MB*32,
 			ObjectTableAttrs,
 			ObjectTableTypes,
@@ -123,15 +121,11 @@ func (t *GCTable) fillDefaults() {
 }
 
 func (t *GCTable) fetchBuffer() *batch.Batch {
-	t.buffer.Lock()
-	defer t.buffer.Unlock()
-	return t.buffer.impl.Fetch()
+	return t.buffer.Fetch()
 }
 
 func (t *GCTable) putBuffer(bat *batch.Batch) {
-	t.buffer.Lock()
-	defer t.buffer.Unlock()
-	t.buffer.impl.Putback(bat, t.mp)
+	t.buffer.Putback(bat, t.mp)
 }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
@@ -348,6 +342,7 @@ func (t *GCTable) getSinker(tailSize int) *engine_util.Sinker {
 		t.mp,
 		t.fs,
 		engine_util.WithTailSizeCap(tailSize),
+		engine_util.WithBuffer(t.buffer, false),
 	)
 }
 
@@ -468,9 +463,9 @@ func (t *GCTable) updateObjectListLocked(ins *containers.Batch, objects map[stri
 }
 
 func (t *GCTable) Close() {
-	if t.buffer.impl != nil {
-		t.buffer.impl.Close(t.mp)
-		t.buffer.impl = nil
+	if t.buffer != nil {
+		t.buffer.Close(t.mp)
+		t.buffer = nil
 	}
 }
 

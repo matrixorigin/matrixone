@@ -17,6 +17,7 @@ package containers
 import (
 	"bytes"
 	"fmt"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,11 +35,13 @@ type IBatchBuffer interface {
 }
 
 type OneSchemaBatchBuffer struct {
-	sizeCap  int
-	currSize int
-	attrs    []string
-	typs     []types.Type
-	buffer   []*batch.Batch
+	sync.Mutex
+	sizeCap   int
+	currSize  int
+	highWater int
+	attrs     []string
+	typs      []types.Type
+	buffer    []*batch.Batch
 }
 
 func NewOneSchemaBatchBuffer(
@@ -58,10 +61,14 @@ func NewOneSchemaBatchBuffer(
 }
 
 func (bb *OneSchemaBatchBuffer) Len() int {
+	bb.Lock()
+	defer bb.Unlock()
 	return len(bb.buffer)
 }
 
 func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
+	bb.Lock()
+	defer bb.Unlock()
 	if len(attrs) != len(bb.attrs) || len(types) != len(bb.typs) {
 		panic(fmt.Sprintf("the length of attrs or types not match: bb.attrs=%v, bb.types=%v, attrs=%v, types=%v",
 			bb.attrs, bb.typs, attrs, types))
@@ -84,6 +91,8 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 }
 
 func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
+	bb.Lock()
+	defer bb.Unlock()
 	if len(bb.buffer) == 0 {
 		return batch.NewWithSchema(false, false, bb.attrs, bb.typs)
 	}
@@ -94,6 +103,8 @@ func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
 }
 
 func (bb *OneSchemaBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
+	bb.Lock()
+	defer bb.Unlock()
 	if bat == nil || bat.Vecs == nil {
 		return
 	}
@@ -107,12 +118,25 @@ func (bb *OneSchemaBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
 
 	bb.buffer = append(bb.buffer, bat)
 	bb.currSize = newSize
+	if newSize > bb.highWater {
+		bb.highWater = newSize
+	}
+}
+
+func (bb *OneSchemaBatchBuffer) Usage() (int, int) {
+	bb.Lock()
+	defer bb.Unlock()
+	return bb.currSize, bb.highWater
 }
 
 func (bb *OneSchemaBatchBuffer) Close(mp *mpool.MPool) {
-	for i, bat := range bb.buffer {
-		bat.Clean(mp)
-		bb.buffer[i] = nil
+	bb.Lock()
+	defer bb.Unlock()
+	for i := range bb.buffer {
+		if bb.buffer[i] != nil {
+			bb.buffer[i].Clean(mp)
+			bb.buffer[i] = nil
+		}
 	}
 	bb.buffer = nil
 }
