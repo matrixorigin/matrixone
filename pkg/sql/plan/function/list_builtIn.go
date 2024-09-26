@@ -1548,6 +1548,16 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newImplPrefixIn().doPrefixIn
+				},
+			},
+			{
+				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_tuple},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
