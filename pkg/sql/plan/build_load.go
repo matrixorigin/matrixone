@@ -26,13 +26,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const (
-	LoadParallelMinSize = 1 << 20
+	LoadParallelMinSize = int(colexec.WriteS3Threshold)
+	LoadWriteS3MinSize  = 1 << 20
 )
 
 func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
@@ -250,7 +252,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		stmt.Param.FileStartOff = offset
 	}
 
-	if stmt.Param.FileSize-offset < LoadParallelMinSize {
+	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
 		stmt.Param.Parallel = false
 	}
 
@@ -320,7 +322,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	inlineDataSize := strings.Count(stmt.Param.Data, "")
 	builder.qry.LoadWriteS3 = true
 
-	if noCompress && ((stmt.Param.ScanType == tree.INLINE && inlineDataSize < LoadParallelMinSize) || (stmt.Param.ScanType != tree.INLINE && stmt.Param.FileSize-offset < LoadParallelMinSize)) {
+	if noCompress && ((stmt.Param.ScanType == tree.INLINE && inlineDataSize < LoadWriteS3MinSize) || (stmt.Param.ScanType != tree.INLINE && stmt.Param.FileSize-offset < int64(LoadWriteS3MinSize))) {
 		builder.qry.LoadWriteS3 = false
 	}
 
