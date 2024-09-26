@@ -78,7 +78,7 @@ func BuildVarlena(bs []byte, area []byte, m *mpool.MPool) (Varlena, []byte, erro
 		if voff+vlen < cap(area) || m == nil {
 			area = append(area, bs...)
 		} else {
-			area, err = m.Grow2(area, bs, voff+vlen)
+			area, err = m.Grow2(area, bs, voff+vlen, false)
 			if err != nil {
 				return v, nil, err
 			}

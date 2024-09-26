@@ -777,7 +777,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				c.pause(false)
 				time.Sleep(time.Second)
 
-				tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+				tnLogTailServerBackend := e.GetTNServices()[0].LogTailServiceAddress
 				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 					logutil.Errorf("%s init push client failed: %v", logTag, err)
 					continue
@@ -809,7 +809,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 			return
 		}
 
-		tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+		tnLogTailServerBackend := e.GetTNServices()[0].LogTailServiceAddress
 		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 			logutil.Errorf("%s rebuild the cn log tail client failed, reason: %s", logTag, err)
 			time.Sleep(retryReconnect)
@@ -1495,7 +1495,7 @@ func waitServerReady(addr string) {
 }
 
 func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
-	tnStores := e.getTNServices()
+	tnStores := e.GetTNServices()
 	if len(tnStores) == 0 {
 		return moerr.NewInternalError(ctx, "no TN store found")
 	}

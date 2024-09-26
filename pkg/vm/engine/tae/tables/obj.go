@@ -73,7 +73,7 @@ func (obj *object) Pin() *common.PinnedItem[*object] {
 
 func (obj *object) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	creatTS := obj.meta.Load().GetCreatedAt()
-	return creatTS.Less(&ts)
+	return creatTS.LT(&ts)
 }
 
 func (obj *object) GetDuplicatedRows(

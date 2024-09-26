@@ -122,7 +122,7 @@ func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
 	if deleteTS.IsEmpty() {
 		return false
 	}
-	return deleteTS.Less(&ts)
+	return deleteTS.LT(&ts)
 }
 func (entry *ObjectEntry) GetLatestNode() *ObjectEntry {
 	return entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.SortHint)

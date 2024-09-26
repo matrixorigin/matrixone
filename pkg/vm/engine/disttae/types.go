@@ -380,7 +380,7 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		proc:               proc,
 		engine:             eng,
 		idGen:              eng.idGen,
-		tnStores:           eng.getTNServices(),
+		tnStores:           eng.GetTNServices(),
 		tableCache:         new(sync.Map),
 		databaseMap:        new(sync.Map),
 		deletedDatabaseMap: new(sync.Map),
@@ -752,7 +752,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		txn.resetSnapshot()
 	}
 	//Transfer row ids for deletes in RC isolation
-	return txn.transferDeletesLocked(ctx, commit)
+	return txn.transferInmemTombstoneLocked(ctx, commit)
 }
 
 // Entry represents a delete/insert
