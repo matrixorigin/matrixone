@@ -150,7 +150,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	if tbl.tableSpace == nil {
 		tbl.tableSpace = newTableSpace(tbl.txnTable, tbl.isTombstone)
 	}
-	return tbl.tableSpace.AddObjsWithMetaLoc(pkVecs, stats)
+	return tbl.tableSpace.AddDataFiles(pkVecs, stats)
 }
 func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, dedupAfterSnapshotTS bool, checkWW bool) (rowIDs containers.Vector, err error) {
 	it := newObjectItOnSnap(tbl.txnTable, tbl.isTombstone, true)

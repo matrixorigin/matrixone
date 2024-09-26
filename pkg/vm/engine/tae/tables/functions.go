@@ -293,7 +293,7 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 						return err
 					}
 				}
-				commitTS := tsVec.Get(row).(types.TS)
+				commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
 				startTS := txn.GetStartTS()
 				if commitTS.Greater(&startTS) {
 					return txnif.ErrTxnWWConflict
