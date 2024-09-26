@@ -183,13 +183,13 @@ func (r *Rowid) CloneSegmentID() Segmentid {
 	return *(*Segmentid)(unsafe.Pointer(&r[0]))
 }
 
-func (r Rowid) Decode() (Blockid, uint32) {
-	b := *(*Blockid)(r[:BlockidSize])
+func (r *Rowid) Decode() (*Blockid, uint32) {
+	b := (*Blockid)(r[:BlockidSize])
 	s := DecodeUint32(r[BlockidSize:])
 	return b, s
 }
 
-func (r Rowid) GetObject() ObjectBytes {
+func (r *Rowid) GetObject() ObjectBytes {
 	return *(*ObjectBytes)(r[:ObjectBytesSize])
 }
 
@@ -200,15 +200,15 @@ func (r *Rowid) SetRowOffset(offset uint32) {
 	copy(r[BlockidSize:], EncodeUint32(&offset))
 }
 
-func (r Rowid) GetRowOffset() uint32 {
+func (r *Rowid) GetRowOffset() uint32 {
 	return DecodeUint32(r[BlockidSize:])
 }
 
-func (r Rowid) GetBlockOffset() uint16 {
+func (r *Rowid) GetBlockOffset() uint16 {
 	return DecodeUint16(r[ObjectBytesSize:BlockidSize])
 }
 
-func (r Rowid) GetObjectString() string {
+func (r *Rowid) GetObjectString() string {
 	uuid := (*uuid.UUID)(r[:UuidSize])
 	s := DecodeUint16(r[UuidSize:ObjectBytesSize])
 	return fmt.Sprintf("%s-%d", uuid.String(), s)
@@ -224,6 +224,10 @@ func (r *Rowid) ShortStringEx() string {
 	b := (*Blockid)(unsafe.Pointer(&r[0]))
 	s := DecodeUint32(r[BlockidSize:])
 	return fmt.Sprintf("%s-%d", b.ShortStringEx(), s)
+}
+
+func (b *Blockid) EQ(than *Blockid) bool {
+	return b.Compare(than) == 0
 }
 
 func (b *Blockid) LT(than *Blockid) bool {
@@ -341,19 +345,19 @@ func (o *Objectid) Compare(other *Objectid) int {
 	return 0
 }
 
-func (o *Objectid) Eq(other Objectid) bool {
-	return o.Compare(&other) == 0
+func (o *Objectid) EQ(other *Objectid) bool {
+	return o.Compare(other) == 0
 }
 
-func (o *Objectid) Le(other Objectid) bool {
-	return o.Compare(&other) <= 0
+func (o *Objectid) LE(other *Objectid) bool {
+	return o.Compare(other) <= 0
 }
-func (o *Objectid) Ge(other Objectid) bool {
-	return o.Compare(&other) >= 0
+func (o *Objectid) GE(other *Objectid) bool {
+	return o.Compare(other) >= 0
 }
-func (o *Objectid) Lt(other Objectid) bool {
-	return o.Compare(&other) < 0
+func (o *Objectid) LT(other *Objectid) bool {
+	return o.Compare(other) < 0
 }
-func (o *Objectid) Gt(other Objectid) bool {
-	return o.Compare(&other) > 0
+func (o *Objectid) GT(other *Objectid) bool {
+	return o.Compare(other) > 0
 }

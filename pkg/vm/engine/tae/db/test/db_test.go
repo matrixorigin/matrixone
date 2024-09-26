@@ -619,7 +619,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 	//read new non-appendable block data and check
 	{
 		txn, rel := testutil.GetRelation(t, 0, db, "db", schema.Name)
-		assert.True(t, newBlockFp2.ObjectID().Eq(*newBlockFp1.ObjectID()))
+		assert.True(t, newBlockFp2.ObjectID().EQ(newBlockFp1.ObjectID()))
 		obj, err := rel.GetObject(newBlockFp1.ObjectID(), false)
 		assert.Nil(t, err)
 		var view *containers.Batch
@@ -6417,11 +6417,11 @@ func TestAppendAndGC(t *testing.T) {
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 		minEnd := minMerged.GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd := minMerged.GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 
@@ -6639,11 +6639,11 @@ func TestSnapshotGC(t *testing.T) {
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 		minEnd := minMerged.GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd := minMerged.GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 
@@ -6767,7 +6767,7 @@ func TestSnapshotMeta(t *testing.T) {
 			return true
 		}
 		initMinEnd := initMinMerged.GetEnd()
-		return minEnd.Greater(&initMinEnd)
+		return minEnd.GT(&initMinEnd)
 	})
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	if minMerged == nil {
@@ -6779,7 +6779,7 @@ func TestSnapshotMeta(t *testing.T) {
 	}
 	if initMinMerged != nil {
 		initMinEnd := initMinMerged.GetEnd()
-		if !minEnd.Greater(&initMinEnd) {
+		if !minEnd.GT(&initMinEnd) {
 			return
 		}
 	}
@@ -6806,11 +6806,11 @@ func TestSnapshotMeta(t *testing.T) {
 			return false
 		}
 		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd = db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
 	defer logtail.CloseSnapshotList(snaps)
@@ -6964,7 +6964,7 @@ func TestPitrMeta(t *testing.T) {
 			return true
 		}
 		initMinEnd := initMinMerged.GetEnd()
-		return minEnd.Greater(&initMinEnd)
+		return minEnd.GT(&initMinEnd)
 	})
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	if minMerged == nil {
@@ -6976,7 +6976,7 @@ func TestPitrMeta(t *testing.T) {
 	}
 	if initMinMerged != nil {
 		initMinEnd := initMinMerged.GetEnd()
-		if !minEnd.Greater(&initMinEnd) {
+		if !minEnd.GT(&initMinEnd) {
 			return
 		}
 	}
@@ -6993,11 +6993,11 @@ func TestPitrMeta(t *testing.T) {
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 		minEnd := minMerged.GetEnd()
-		return end.GreaterEq(&minEnd)
+		return end.GE(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
 	minEnd = minMerged.GetEnd()
-	assert.True(t, end.GreaterEq(&minEnd))
+	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 }
@@ -8088,7 +8088,7 @@ func TestDeduplication(t *testing.T) {
 	ObjectIDs[0] = objectio.NewObjectid()
 	ObjectIDs[1] = objectio.NewObjectid()
 	sort.Slice(ObjectIDs, func(i, j int) bool {
-		return ObjectIDs[i].Le(*ObjectIDs[j])
+		return ObjectIDs[i].LE(ObjectIDs[j])
 	})
 
 	blk1Name := objectio.BuildObjectNameWithObjectID(ObjectIDs[1])
