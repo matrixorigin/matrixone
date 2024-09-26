@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -195,6 +196,32 @@ func Test_UpgEntry(t *testing.T) {
 			upg_information_schema_columns.Upgrade(executor, uint32(0))
 		},
 	)
+
+	// test upg_information_schema_schemata update
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if strings.HasPrefix(strings.ToLower(sql), strings.ToLower(indexCheckPrefixMatchSql)) {
+					typs := []types.Type{
+						types.New(types.T_varchar, 64, 0),
+					}
+
+					memRes := executor.NewMemResult(
+						typs,
+						mpool.MustNewZero())
+					memRes.NewBatch()
+					executor.AppendStringRows(memRes, 0, []string{""})
+					return memRes.GetResult(), nil
+				}
+				return executor.Result{}, nil
+			}, txnOperator)
+			upg_information_schema_schemata.Upgrade(executor, uint32(0))
+		},
+	)
 }
 
 func Test_versionHandle_HandleClusterUpgrade_InsertInitDataKey(t *testing.T) {
@@ -273,4 +300,153 @@ func Test_versionHandle_HandleClusterUpgrade1(t *testing.T) {
 		executor2,
 	)
 	assert.Error(t, err)
+}
+
+func Test_HandleClusterUpgrade_upg_system_metrics_schema(t *testing.T) {
+	sid := ""
+
+	// test upg_rename_system_stmt_info_120
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			executor := MockExecutor_CheckTableDefinitionExist(txnOperator)
+			upg_rename_system_stmt_info_120.Upgrade(executor, uint32(0))
+		},
+	)
+
+	// test upg_create_system_stmt_info_130
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			executor := MockExecutor_CheckTableDefinitionExist(txnOperator)
+			upg_create_system_stmt_info_130.Upgrade(executor, uint32(0))
+		},
+	)
+
+	// test upg_rename_system_metrics_metric_120
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			executor := MockExecutor_CheckTableDefinitionExist(txnOperator)
+			upg_rename_system_metrics_metric_120.Upgrade(executor, uint32(0))
+		},
+	)
+
+	// test upg_create_system_metrics_metric_130
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			executor := MockExecutor_CheckTableDefinitionExist(txnOperator)
+			upg_create_system_metrics_metric_130.Upgrade(executor, uint32(0))
+		},
+	)
+
+	// test upg_system_metrics_sql_stmt_cu_comment
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			executor := MockExecutor_CheckTableComment(txnOperator, systemMetricSqlStmtCuComment121)
+			upg_system_metrics_sql_stmt_cu_comment.Upgrade(executor, uint32(0))
+		},
+	)
+
+	// test upg_system_metrics_sql_stmt_cu_comment
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			err := moerr.GetOkExpectedEOF()
+			executor := MockExecutor_CheckTableComment_Error(txnOperator, systemMetricSqlStmtCuComment121, err)
+			got := upg_system_metrics_sql_stmt_cu_comment.Upgrade(executor, uint32(0))
+			require.Equal(t, err, got)
+		},
+	)
+
+}
+
+func MockExecutor_CheckTableDefinitionExist(txnOperator *mock_frontend.MockTxnOperator) executor.TxnExecutor {
+	const checkTableDefinitionPrefix = "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl"
+
+	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		if strings.HasPrefix(strings.ToLower(sql), strings.ToLower(checkTableDefinitionPrefix)) {
+			typs := []types.Type{
+				types.New(types.T_varchar, 64, 0), // reldatabase
+				types.New(types.T_varchar, 64, 0), // relname
+				types.New(types.T_uint64, 0, 0),   // account_id
+			}
+
+			memRes := executor.NewMemResult(
+				typs,
+				mpool.MustNewZero())
+			memRes.NewBatch()
+			executor.AppendStringRows(memRes, 0, []string{"db_name"})
+			executor.AppendStringRows(memRes, 1, []string{"tbl_name"})
+			executor.AppendFixedRows(memRes, 2, []uint64{0})
+			return memRes.GetResult(), nil
+		}
+		return executor.Result{}, nil
+	}, txnOperator)
+}
+
+func MockExecutor_CheckTableComment(txnOperator *mock_frontend.MockTxnOperator, comment string) executor.TxnExecutor {
+	const checkTableCommentPrefix = "SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl"
+
+	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		if strings.HasPrefix(strings.ToLower(sql), strings.ToLower(checkTableCommentPrefix)) {
+			typs := []types.Type{
+				types.New(types.T_varchar, 64, 0),   // reldatabase
+				types.New(types.T_varchar, 64, 0),   // relname
+				types.New(types.T_uint64, 0, 0),     // account_id
+				types.New(types.T_varchar, 1024, 0), // rel_comment
+			}
+
+			memRes := executor.NewMemResult(
+				typs,
+				mpool.MustNewZero())
+			memRes.NewBatch()
+			executor.AppendStringRows(memRes, 0, []string{"db_name"})
+			executor.AppendStringRows(memRes, 1, []string{"tbl_name"})
+			executor.AppendFixedRows(memRes, 2, []uint64{0})
+			executor.AppendStringRows(memRes, 3, []string{comment})
+			return memRes.GetResult(), nil
+		}
+		return executor.Result{}, nil
+	}, txnOperator)
+}
+
+func MockExecutor_CheckTableComment_Error(txnOperator *mock_frontend.MockTxnOperator, comment string, err error) executor.TxnExecutor {
+	const checkTableCommentPrefix = "SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl"
+
+	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		if strings.HasPrefix(strings.ToLower(sql), strings.ToLower(checkTableCommentPrefix)) {
+			typs := []types.Type{
+				types.New(types.T_varchar, 64, 0),   // reldatabase
+				types.New(types.T_varchar, 64, 0),   // relname
+				types.New(types.T_uint64, 0, 0),     // account_id
+				types.New(types.T_varchar, 1024, 0), // rel_comment
+			}
+
+			memRes := executor.NewMemResult(
+				typs,
+				mpool.MustNewZero())
+			memRes.NewBatch()
+			executor.AppendStringRows(memRes, 0, []string{"db_name"})
+			executor.AppendStringRows(memRes, 1, []string{"tbl_name"})
+			executor.AppendFixedRows(memRes, 2, []uint64{0})
+			executor.AppendStringRows(memRes, 3, []string{comment})
+			return memRes.GetResult(), err
+		}
+		return executor.Result{}, nil
+	}, txnOperator)
 }

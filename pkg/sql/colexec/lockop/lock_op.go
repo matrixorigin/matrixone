@@ -104,12 +104,9 @@ func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 		return lockOp.GetChildren(0).Call(proc)
 	}
 
-	if !lockOp.block {
-		return callNonBlocking(proc, lockOp)
-	}
-
-	// Waring: callBlocking only for `select for update` statement
-	return callBlocking(proc, lockOp, lockOp.GetIsFirst(), lockOp.GetIsLast())
+	// for the case like `select for update`, need to lock whole batches before send it to next operator
+	// currently, this is implemented by blocking a output operator below, instead of calling func callBlocking
+	return callNonBlocking(proc, lockOp)
 }
 
 func callNonBlocking(
@@ -127,95 +124,17 @@ func callNonBlocking(
 	if result.Batch == nil {
 		return result, lockOp.ctr.retryError
 	}
-	bat := result.Batch
-	if bat.IsEmpty() {
+	if result.Batch.IsEmpty() {
 		analyzer.Output(result.Batch)
 		return result, err
 	}
 
-	if err = performLock(bat, proc, lockOp, analyzer); err != nil {
+	if err = performLock(result.Batch, proc, lockOp, analyzer); err != nil {
 		return result, err
 	}
 
 	analyzer.Output(result.Batch)
 	return result, nil
-}
-
-func callBlocking(
-	proc *process.Process,
-	lockOp *LockOp,
-	isFirst bool,
-	_ bool) (vm.CallResult, error) {
-	analyzer := lockOp.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
-
-	result := vm.NewCallResult()
-	if lockOp.ctr.step == stepLock {
-		for {
-			bat, err := lockOp.getBatch(proc, analyzer, isFirst)
-			if err != nil {
-				return result, err
-			}
-
-			// no input batch any more, means all lock performed.
-			if bat == nil {
-				lockOp.ctr.step = stepDownstream
-				if len(lockOp.ctr.cachedBatches) == 0 {
-					lockOp.ctr.step = stepEnd
-				}
-				break
-			}
-
-			// skip empty batch
-			if bat.IsEmpty() {
-				continue
-			}
-
-			if err = performLock(bat, proc, lockOp, analyzer); err != nil {
-				return result, err
-			}
-
-			// blocking lock node. Never pass the input batch into downstream operators before
-			// all lock are performed.
-			appendBat, err := bat.Dup(proc.GetMPool())
-			if err != nil {
-				return result, err
-			}
-			analyzer.Alloc(int64(appendBat.Size()))
-			lockOp.ctr.cachedBatches = append(lockOp.ctr.cachedBatches, appendBat)
-		}
-	}
-
-	if lockOp.ctr.step == stepDownstream {
-		if lockOp.ctr.retryError != nil {
-			lockOp.ctr.step = stepEnd
-			return result, lockOp.ctr.retryError
-		}
-
-		if len(lockOp.ctr.cachedBatches) == 0 {
-			lockOp.ctr.step = stepEnd
-		} else {
-			if lockOp.ctr.buf != nil {
-				lockOp.ctr.buf.Clean(proc.Mp())
-				lockOp.ctr.buf = nil
-			}
-			lockOp.ctr.buf = lockOp.ctr.cachedBatches[0]
-			lockOp.ctr.cachedBatches = lockOp.ctr.cachedBatches[1:]
-			result.Batch = lockOp.ctr.buf
-			analyzer.Output(result.Batch)
-			return result, nil
-		}
-	}
-
-	if lockOp.ctr.step == stepEnd {
-		result.Status = vm.ExecStop
-		lockOp.cleanCachedBatch(proc)
-		analyzer.Output(result.Batch)
-		return result, lockOp.ctr.retryError
-	}
-
-	panic("BUG")
 }
 
 func performLock(
@@ -440,7 +359,7 @@ func doLock(
 		0,
 		nil)
 
-	//in this case:
+	// in this case:
 	// create table t1 (a int primary key, b int ,c int, unique key(b,c));
 	// insert into t1 values (1,1,null);
 	// update t1 set b = b+1 where a = 1;
@@ -736,20 +655,6 @@ func NewArgumentByEngine(engine engine.Engine) *LockOp {
 	return lock
 }
 
-// Block return if lock operator is a blocked node.
-func (lockOp *LockOp) Block() bool {
-	return lockOp.block
-}
-
-// SetBlock set the lock op is blocked. If true lock op will block the current pipeline, and cache
-// all input batches. And wait for all the input's batch to be locked before outputting the cached batch
-// to the downstream operator. E.g. select for update, only we get all lock result, then select can be
-// performed, otherwise, if we need retry in RC mode, we may get wrong result.
-func (lockOp *LockOp) SetBlock(block bool) *LockOp {
-	lockOp.block = block
-	return lockOp
-}
-
 // AddLockTarget add lock targets
 func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 	targets := make([]*pipeline.LockTarget, len(lockOp.targets))
@@ -888,27 +793,13 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.resetParker()
-	lockOp.cleanCachedBatch(proc)
 	lockOp.ctr.retryError = nil
-	lockOp.ctr.step = stepLock
 	lockOp.ctr.defChanged = false
 }
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanParker()
-	lockOp.cleanCachedBatch(proc)
-}
-
-func (lockOp *LockOp) cleanCachedBatch(proc *process.Process) {
-	for _, bat := range lockOp.ctr.cachedBatches {
-		bat.Clean(proc.Mp())
-	}
-	lockOp.ctr.cachedBatches = nil
-	if lockOp.ctr.buf != nil {
-		lockOp.ctr.buf.Clean(proc.Mp())
-		lockOp.ctr.buf = nil
-	}
 }
 
 func (lockOp *LockOp) resetParker() {
@@ -922,25 +813,6 @@ func (lockOp *LockOp) cleanParker() {
 		lockOp.ctr.parker.Close()
 		lockOp.ctr.parker = nil
 	}
-}
-
-func (lockOp *LockOp) getBatch(
-	proc *process.Process,
-	analyzer process.Analyzer,
-	isFirst bool) (*batch.Batch, error) {
-	fn := lockOp.ctr.batchFetchFunc
-	if fn == nil {
-		fn = lockOp.GetChildren(0).Call
-	}
-
-	beforeChildrenCall := time.Now()
-	input, err := fn(proc)
-	analyzer.ChildrenCallStop(beforeChildrenCall)
-	if err != nil {
-		return nil, err
-	}
-	analyzer.Input(input.Batch)
-	return input.Batch, nil
 }
 
 func getRowsFilter(

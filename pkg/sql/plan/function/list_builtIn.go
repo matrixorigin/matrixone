@@ -1556,6 +1556,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return newImplPrefixIn().doPrefixIn
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newImplPrefixIn().doPrefixIn
+				},
+			},
 		},
 	},
 
@@ -5875,7 +5885,7 @@ var supportedOthersBuiltIns = []FuncNew{
 
 	// function `mo_show_col_qunique`
 	{
-		functionId: MO_SHOW_COL_QUNIQUE,
+		functionId: MO_SHOW_COL_UNIQUE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
