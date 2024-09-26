@@ -920,7 +920,8 @@ type reader struct {
 
 	memFilter MemPKFilter
 
-	scanType int
+	scanType   int
+	cacheBatch *batch.Batch
 }
 
 type mergeReader struct {
