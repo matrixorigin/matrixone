@@ -395,16 +395,22 @@ func (t *GCTable) Process(
 	ctx context.Context,
 	start, end *types.TS,
 	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
-	processOneBatch func(context.Context, *batch.Batch) error,
+	processOneBatch func(context.Context, *batch.Batch, *mpool.MPool) error,
 ) error {
 	sinker := t.getSinker(0)
 	defer sinker.Close()
-	err := t.insertFlow(ctx, sinker, loadNextBatch, processOneBatch)
-	if err != nil {
+	if err := engine_util.StreamBatchProcess(
+		ctx,
+		loadNextBatch,
+		processOneBatch,
+		sinker.Write,
+		t.buffer,
+		t.mp,
+	); err != nil {
 		return err
 	}
 
-	if err = sinker.Sync(ctx); err != nil {
+	if err := sinker.Sync(ctx); err != nil {
 		return err
 	}
 	stats, _ := sinker.GetResult()
@@ -499,12 +505,13 @@ func (t *GCTable) CollectMapData(cxt context.Context, bat *batch.Batch, mp *mpoo
 func (t *GCTable) ProcessMapBatch(
 	ctx context.Context,
 	data *batch.Batch,
+	mp *mpool.MPool,
 ) error {
 	logutil.Infof("start to sort data %v", data.String())
 	if err := mergesort.SortColumnsByIndex(
 		data.Vecs,
 		ObjectTablePrimaryKeyIdx,
-		t.mp,
+		mp,
 	); err != nil {
 		return err
 	}

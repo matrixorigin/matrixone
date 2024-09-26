@@ -16,12 +16,13 @@ package gc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -228,11 +229,21 @@ func (c *checkpointCleaner) Replay() error {
 	if len(readDirs) == 0 {
 		return nil
 	}
+	logger := logutil.Info
 	for _, dir := range readDirs {
+		start := time.Now()
 		table := NewGCTable(c.fs.Service, c.mPool)
 		_, end, _ := blockio.DecodeGCMetadataFileName(dir.Name)
-		logutil.Infof("Replay GC metadata file %s", dir.Name)
 		err = table.ReadTable(c.ctx, GCMetaDir+dir.Name, dir.Size, c.fs, end)
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Replay-GC-Metadata-File",
+			zap.String("name", dir.Name),
+			zap.Duration("cost", time.Since(start)),
+			zap.Error(err),
+		)
 		if err != nil {
 			return err
 		}
@@ -265,7 +276,11 @@ func (c *checkpointCleaner) Replay() error {
 		isConsumedGCkp := false
 		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.sid, c.fs.Service, maxConsumed.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
 		if err != nil {
-			logutil.Warnf("list checkpoint failed, err[%v]", err)
+			// TODO: why only warn???
+			logutil.Warn(
+				"Replay-GC-List-Error",
+				zap.Error(err),
+			)
 		}
 		if len(checkpointEntries) == 0 {
 			return nil
@@ -274,7 +289,11 @@ func (c *checkpointCleaner) Replay() error {
 			logutil.Infof("load checkpoint: %s, consumedEnd: %s", entry.String(), maxConsumed.String())
 			ckpData, err := c.collectCkpData(entry)
 			if err != nil {
-				logutil.Warnf("load checkpoint data failed, err[%v]", err)
+				// TODO: why only warn???
+				logutil.Warn(
+					"Replay-GC-Collect-Error",
+					zap.Error(err),
+				)
 				continue
 			}
 			if entry.GetType() == checkpoint.ET_Global {
@@ -287,18 +306,29 @@ func (c *checkpointCleaner) Replay() error {
 			// so we need to load a latest global checkpoint
 			entry := c.ckpClient.MaxGlobalCheckpoint()
 			if entry == nil {
-				logutil.Warnf("not found max global checkpoint!")
+				logutil.Warn("not found max global checkpoint!")
 				return nil
 			}
-			logutil.Infof("load max global checkpoint: %s, consumedEnd: %s", entry.String(), maxConsumed.String())
+			logutil.Info(
+				"Replay-GC-Load-Global-Checkpoint",
+				zap.String("max-gloabl", entry.String()),
+				zap.String("max-consumed", maxConsumed.String()),
+			)
 			ckpData, err := c.collectCkpData(entry)
 			if err != nil {
-				logutil.Warnf("load max global checkpoint data failed, err[%v]", err)
+				// TODO: why only warn???
+				logutil.Warn(
+					"Replay-GC-Collect-Global-Error",
+					zap.Error(err),
+				)
 				return nil
 			}
 			c.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
 		}
-		logutil.Infof("table info initialized: %s", c.snapshotMeta.TableInfoString())
+		logutil.Info(
+			"Replay-GC-Init-Table-Info",
+			zap.String("info", c.snapshotMeta.TableInfoString()),
+		)
 	}
 	return nil
 
@@ -434,7 +464,11 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		} else {
 			*file = GCMetaDir + name
 			max = ts
-			logutil.Infof("mergeSnapAcctFile: %v, max: %v", name, max.ToString())
+			logutil.Info(
+				"Merging-GC-File-SnapAcct-File",
+				zap.String("name", name),
+				zap.String("max", max.ToString()),
+			)
 		}
 		return nil
 	}
@@ -481,7 +515,10 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	c.inputs.RUnlock()
 	err = c.fs.DelFiles(c.ctx, deleteFiles)
 	if err != nil {
-		logutil.Errorf("DelFiles failed: %v", err.Error())
+		logutil.Error(
+			"Merging-GC-File-Error",
+			zap.Error(err),
+		)
 		return err
 	}
 	c.updateMinMerged(maxConsumed)
@@ -910,9 +947,10 @@ func (c *checkpointCleaner) Process() {
 
 	now := time.Now()
 	defer func() {
-		logutil.Info("[DiskCleaner]",
-			zap.String("Process costs", time.Since(now).String()))
-
+		logutil.Info(
+			"DiskCleaner-Process-End",
+			zap.Duration("duration", time.Since(now)),
+		)
 	}()
 	maxConsumed := c.maxConsumed.Load()
 	if maxConsumed != nil {
@@ -922,7 +960,10 @@ func (c *checkpointCleaner) Process() {
 	checkpoints := c.ckpClient.ICKPSeekLT(ts, 10)
 
 	if len(checkpoints) == 0 {
-		logutil.Infof("[DiskCleaner] no checkpoint to clean ,%v", ts.ToString())
+		logutil.Info(
+			"DiskCleaner-Process-NoCheckpoint",
+			zap.String("ts", ts.ToString()),
+		)
 		return
 	}
 	candidates := make([]*checkpoint.CheckpointEntry, 0)
@@ -939,7 +980,11 @@ func (c *checkpointCleaner) Process() {
 	var input *GCTable
 	var err error
 	if input, err = c.createNewInput(candidates); err != nil {
-		logutil.Errorf("[DiskCleaner] processing clean %s: %v", candidates[0].String(), err)
+		logutil.Error(
+			"DiskCleaner-Process-CreateNewInput-Error",
+			zap.Error(err),
+			zap.String("checkpoint", candidates[0].String()),
+		)
 		// TODO
 		return
 	}
@@ -957,19 +1002,29 @@ func (c *checkpointCleaner) Process() {
 	}
 	maxEnd := maxGlobalCKP.GetEnd()
 	if compareTS.LT(&maxEnd) {
-		logutil.Info("[DiskCleaner]", common.OperationField("Try GC"),
-			common.AnyField("maxGlobalCKP :", maxGlobalCKP.String()),
-			common.AnyField("compareTS :", compareTS.ToString()))
+		logutil.Info(
+			"DiskCleaner-Process-TryGC",
+			zap.String("max-global :", maxGlobalCKP.String()),
+			zap.String("ts", compareTS.ToString()),
+		)
 		data, err := c.collectGlobalCkpData(maxGlobalCKP)
 		if err != nil {
 			c.inputs.RUnlock()
-			logutil.Errorf("[DiskCleaner] processing clean %s: %v", candidates[0].String(), err)
+			logutil.Error(
+				"DiskCleaner-Process-CollectGlobalCkpData-Error",
+				zap.Error(err),
+				zap.String("checkpoint", candidates[0].String()),
+			)
 			return
 		}
 		defer data.Close()
 		err = c.tryGC(data, maxGlobalCKP)
 		if err != nil {
-			logutil.Errorf("[DiskCleaner] processing clean %s: %v", candidates[0].String(), err)
+			logutil.Error(
+				"DiskCleaner-Process-TryGC-Error",
+				zap.Error(err),
+				zap.String("checkpoint", candidates[0].String()),
+			)
 			return
 		}
 	}
@@ -1016,26 +1071,33 @@ func (c *checkpointCleaner) RemoveChecker(key string) error {
 }
 
 func (c *checkpointCleaner) createNewInput(
-	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
+	ckps []*checkpoint.CheckpointEntry,
+) (input *GCTable, err error) {
 	now := time.Now()
 	var snapSize, tableSize uint32
 	input = NewGCTable(c.fs.Service, c.mPool)
-	logutil.Info("[DiskCleaner]", zap.String("op", "Consume-Start"),
-		zap.Int("entry count :", len(ckps)))
+	logutil.Info(
+		"DiskCleaner-Consume-Start",
+		zap.Int("entry-count :", len(ckps)),
+	)
 	defer func() {
-		logutil.Info("[DiskCleaner]", zap.String("op", "Consume-End"),
-			zap.String("cost :", time.Since(now).String()),
-			zap.Uint32("snap meta size :", snapSize),
-			zap.Uint32("table meta size :", tableSize),
-			zap.Int("objects :", len(input.objects)),
-			zap.String("snapshots", c.snapshotMeta.String()))
+		logutil.Info("DiskCleaner-Consume-End",
+			zap.Duration("duration", time.Since(now)),
+			zap.Uint32("snap-meta-size :", snapSize),
+			zap.Uint32("table-meta-size :", tableSize),
+			zap.Int("object-cnt", len(input.objects)),
+			zap.String("snapshot-detail", c.snapshotMeta.String()))
 	}()
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {
 		startts, endts := candidate.GetStart(), candidate.GetEnd()
 		data, err = c.collectCkpData(candidate)
 		if err != nil {
-			logutil.Errorf("processing clean %s: %v", candidate.String(), err)
+			logutil.Error(
+				"DiskCleaner-Error-Collect",
+				zap.Error(err),
+				zap.String("checkpoint", candidate.String()),
+			)
 			// TODO
 			return
 		}
@@ -1047,14 +1109,20 @@ func (c *checkpointCleaner) createNewInput(
 		PrefixSnapMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
 	snapSize, err = c.snapshotMeta.SaveMeta(name, c.fs.Service)
 	if err != nil {
-		logutil.Errorf("SaveMeta is failed")
+		logutil.Error(
+			"DiskCleaner-Error-SaveMeta",
+			zap.Error(err),
+		)
 		return
 	}
 	name = blockio.EncodeTableMetadataFileName(GCMetaDir,
 		PrefixAcctMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
 	tableSize, err = c.snapshotMeta.SaveTableInfo(name, c.fs.Service)
 	if err != nil {
-		logutil.Errorf("SaveTableInfo is failed")
+		logutil.Error(
+			"DiskCleaner-Error-SaveTableInfo",
+			zap.Error(err),
+		)
 		return
 	}
 	start := ckps[0].GetStart()
@@ -1066,10 +1134,6 @@ func (c *checkpointCleaner) createNewInput(
 		input.CollectMapData,
 		input.ProcessMapBatch,
 	)
-	if err != nil {
-		return
-	}
-
 	return
 }
 
