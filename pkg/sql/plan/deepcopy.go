@@ -242,6 +242,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.GroupBy[idx] = DeepCopyExpr(expr)
 	}
 
+	copy(newNode.GroupingFlag, node.GroupingFlag)
+
 	for idx, flag := range node.GroupingFlag {
 		newNode.GroupingFlag[idx] = flag
 	}

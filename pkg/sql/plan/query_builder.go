@@ -2256,7 +2256,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, subset)
 				}
 			}
-			if len(selectClause.GroupBy.GroupByExprsList) > 1 && selectClause.GroupBy.Apart == false {
+			if len(selectClause.GroupBy.GroupByExprsList) > 1 && !selectClause.GroupBy.Apart {
 				groupingCount := len(selectClause.GroupBy.GroupByExprsList)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
@@ -2585,9 +2585,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					ctx.isGroupingSet = true
 					for _, group := range clause.GroupBy.GroupingSet {
 						_, err = groupBinder.BindExpr(group, 0, true)
+						if err != nil {
+							return 0, err
+						}
 					}
 				} else {
-					for i, _ := range ctx.groupingFlag {
+					for i := range ctx.groupingFlag {
 						ctx.groupingFlag[i] = true
 					}
 				}
@@ -3406,23 +3409,6 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
 	ReCalcNodeStats(nodeID, builder, false, true, true)
 	return nodeID
-}
-
-func (builder *QueryBuilder) insertNode(node *plan.Node, ctx *BindContext, ind int32) int32 {
-	builder.qry.Nodes = append(builder.qry.Nodes, node)
-	builder.ctxByNode = append(builder.ctxByNode, ctx)
-	for i := int32(len(builder.qry.Nodes)) - 1; i >= ind; i-- {
-		nodeID := i + 1
-		node.NodeId = nodeID
-		for i, child := range builder.qry.Nodes[i].Children {
-			if child >= ind {
-				builder.qry.Nodes[i].Children[i]++
-			}
-		}
-		builder.qry.Nodes[i+1] = builder.qry.Nodes[i]
-		builder.ctxByNode[i+1] = builder.ctxByNode[i]
-	}
-	return ind + 1
 }
 
 func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {

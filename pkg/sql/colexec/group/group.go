@@ -487,7 +487,7 @@ func (ctr *container) initHashMap(proc *process.Process, config *Group) (err err
 			}
 		}
 	default:
-		err = moerr.NewInternalError(proc.Ctx, "unexpected hashmap typ for group-operator.")
+		return moerr.NewInternalError(proc.Ctx, "unexpected hashmap typ for group-operator.")
 	}
 	return nil
 }

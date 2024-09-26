@@ -2427,7 +2427,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
-					err = BuildVarlenaFromVarlena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 					if w.gsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.gsp, uint64(v.length))
 					}
