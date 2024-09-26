@@ -662,7 +662,7 @@ func ConvertGoError(ctx context.Context, err error) error {
 		return NewUnexpectedEOF(ctx, err.Error())
 	}
 
-	return NewInternalErrorf(ctx, "convert go error to mo error %v, stack: %+v", err, debug.Stack())
+	return NewInternalErrorf(ctx, "convert go error to mo error %v, stack: %s", err, debug.Stack())
 }
 
 func (e *Error) Succeeded() bool {
