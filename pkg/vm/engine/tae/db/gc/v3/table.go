@@ -128,24 +128,13 @@ func (t *GCTable) putBuffer(bat *batch.Batch) {
 	t.buffer.Putback(bat, t.mp)
 }
 
-// SoftGC is to remove objectentry that can be deleted from GCTable
-func (t *GCTable) SoftGC(
-	ctx context.Context,
+func (t *GCTable) makeSoftGCProcessor(
+	bm *bitmap.Bitmap,
+	sels *[]int64,
 	bf *bloomfilter.BloomFilter,
-	ts types.TS,
-	snapShotList map[uint32]containers.Vector,
-	pitrs *logtail.PitrInfo,
-	meta *logtail.SnapshotMeta,
-) ([]string, map[uint32][]types.TS, error) {
-	var (
-		bm   bitmap.Bitmap
-		sels []int64
-	)
-
-	sinker := t.getSinker(64 * malloc.MB)
-	defer sinker.Close()
-
-	processSoftGCBatch := func(
+	sinker *engine_util.Sinker,
+) func(context.Context, *batch.Batch, *mpool.MPool) error {
+	return func(
 		ctx context.Context,
 		data *batch.Batch,
 		mp *mpool.MPool,
@@ -161,26 +150,55 @@ func (t *GCTable) SoftGC(
 		})
 
 		// convert bitmap to slice
-		sels = sels[:0]
-		bitmap.ToArray(&bm, &sels)
+		*sels = (*sels)[:0]
+		bitmap.ToArray(bm, sels)
 
 		tmpBat := t.fetchBuffer()
 		defer t.putBuffer(tmpBat)
-		if err := tmpBat.Union(data, sels, mp); err != nil {
+		if err := tmpBat.Union(data, *sels, mp); err != nil {
 			return err
 		}
 
 		// shrink data
-		data.Shrink(sels, true)
+		data.Shrink(*sels, true)
 		return sinker.Write(ctx, tmpBat)
 	}
-	softGCSinker := t.getSinker(0)
-	defer softGCSinker.Close()
+}
+
+// SoftGC is to remove objectentry that can be deleted from GCTable
+func (t *GCTable) SoftGC(
+	ctx context.Context,
+	bf *bloomfilter.BloomFilter,
+	ts types.TS,
+	snapShotList map[uint32]containers.Vector,
+	pitrs *logtail.PitrInfo,
+	meta *logtail.SnapshotMeta,
+) ([]string, map[uint32][]types.TS, error) {
+	var (
+		bm   bitmap.Bitmap
+		sels []int64
+	)
+
+	// toGCSinker is used to store the data that may be gc'ed
+	toGCSinker := t.getSinker(64 * malloc.MB)
+	defer toGCSinker.Close()
+
+	// notGCSinker is used to store the data that can not be deleted
+	notGCSinker := t.getSinker(0)
+	defer notGCSinker.Close()
+
+	softGCProcessor := t.makeSoftGCProcessor(
+		&bm,
+		&sels,
+		bf,
+		toGCSinker,
+	)
+
 	if err := engine_util.StreamBatchProcess(
 		ctx,
 		t.LoadBatchData,
-		processSoftGCBatch,
-		softGCSinker.Write,
+		softGCProcessor,
+		notGCSinker.Write,
 		t.buffer,
 		t.mp,
 	); err != nil {
@@ -191,14 +209,14 @@ func (t *GCTable) SoftGC(
 		return nil, nil, err
 	}
 
-	if err := sinker.Sync(ctx); err != nil {
+	if err := toGCSinker.Sync(ctx); err != nil {
 		logutil.Error(
 			"GCTable-SoftGC-Sync-ERROR",
 			zap.Error(err),
 		)
 		return nil, nil, err
 	}
-	softGCObjects, processBats := sinker.GetResult()
+	softGCObjects, processBats := toGCSinker.GetResult()
 
 	snapList := make(map[uint32][]types.TS)
 	for acct, snap := range snapShotList {
@@ -267,7 +285,7 @@ func (t *GCTable) SoftGC(
 		bitmap.ToArray(&bm, &sels)
 		bat.Shrink(sels, true)
 
-		return softGCSinker.Write(ctx, bat)
+		return notGCSinker.Write(ctx, bat)
 	}
 
 	buffer := t.fetchBuffer()
@@ -313,14 +331,14 @@ func (t *GCTable) SoftGC(
 		)
 		return nil, nil, err
 	}
-	if err := softGCSinker.Write(ctx, buffer); err != nil {
+	if err := notGCSinker.Write(ctx, buffer); err != nil {
 		logutil.Error(
 			"GCTable-SoftGC-Write-ERROR",
 			zap.Error(err),
 		)
 		return nil, nil, err
 	}
-	if err := softGCSinker.Sync(ctx); err != nil {
+	if err := notGCSinker.Sync(ctx); err != nil {
 		logutil.Error(
 			"GCTable-SoftGC-Sync-ERROR",
 			zap.Error(err),
@@ -328,7 +346,7 @@ func (t *GCTable) SoftGC(
 		return nil, nil, err
 	}
 
-	gcStats, _ := softGCSinker.GetResult()
+	gcStats, _ := notGCSinker.GetResult()
 	err := t.doneAllBatches(ctx, &t.tsRange.start, &t.tsRange.end, gcStats)
 	t.files.stats = t.files.stats[0:]
 	t.files.stats = append(t.files.stats, gcStats...)
