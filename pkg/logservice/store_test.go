@@ -72,7 +72,9 @@ func getStoreTestConfig() Config {
 	cfg := DefaultConfig()
 	cfg.UUID = uuid.New().String()
 	cfg.RTTMillisecond = 10
-	cfg.GossipPort = testGossipPort
+	cfg.GossipPort = getAvailablePort()
+	testGossipAddress := getTestGossipAddress(cfg.GossipPort)
+	dummyGossipSeedAddress := getDummyGossipSeedAddress()
 	cfg.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
 	cfg.DeploymentID = 1
 	cfg.FS = vfs.NewStrictMem()

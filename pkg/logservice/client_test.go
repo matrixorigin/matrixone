@@ -106,16 +106,17 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	init[2] = service.ID()
 	assert.NoError(t, service.store.startReplica(1, 2, init, false))
 
+	svcAddress := cfg.LogServiceServiceAddr()
 	scfg := ClientConfig{
 		LogShardID:       1,
 		TNReplicaID:      2,
 		ServiceAddresses: []string{"localhost:53032"}, // unreachable
-		DiscoveryAddress: testServiceAddress,
+		DiscoveryAddress: svcAddress,
 	}
 
 	done := false
 	for i := 0; i < 1000; i++ {
-		si, ok, err := GetShardInfo("", testServiceAddress, 1)
+		si, ok, err := GetShardInfo("", svcAddress, 1)
 		if err != nil || !ok {
 			time.Sleep(10 * time.Millisecond)
 			continue
@@ -126,7 +127,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 		assert.Equal(t, uint64(2), si.ReplicaID)
 		addr, ok := si.Replicas[si.ReplicaID]
 		assert.True(t, ok)
-		assert.Equal(t, testServiceAddress, addr)
+		assert.Equal(t, svcAddress, addr)
 		break
 	}
 	if !done {
@@ -265,18 +266,22 @@ func TestReadOnlyClientRejectWriteRequests(t *testing.T) {
 }
 
 func TestClientSendWithMsgSize(t *testing.T) {
-	cFn := func(readOnly bool) ClientConfig {
+	cFn := func(readOnly bool, svcAddress ...string) ClientConfig {
+		var addr string
+		if len(svcAddress) > 0 {
+			addr = svcAddress[0]
+		}
 		return ClientConfig{
 			ReadOnly:         readOnly,
 			LogShardID:       1,
 			TNReplicaID:      2,
-			ServiceAddresses: []string{testServiceAddress},
-			MaxMessageSize:   testServerMaxMsgSize,
+			ServiceAddresses: []string{addr},
+			MaxMessageSize:   getTestServerMaxMsgSize(),
 		}
 	}
 
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
-		rec := c.GetLogRecord(testServerMaxMsgSize + 80)
+		rec := c.GetLogRecord(getTestServerMaxMsgSize() + 80)
 		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
