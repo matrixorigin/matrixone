@@ -1259,7 +1259,11 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			case defines.MYSQL_TYPE_ENUM:
 				row[j] = types.Enum(1)
 			case defines.MYSQL_TYPE_TEXT:
-				row[j] = "abc"
+				if j%2 == 0 {
+					row[j] = "abc"
+				} else {
+					row[j] = int16(math.MaxInt16)
+				}
 			case defines.MYSQL_TYPE_TINY:
 				row[j] = int8(math.MaxInt8)
 
@@ -1303,7 +1307,11 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 				assert.Equal(t, mrs.Data[i][j].(types.Enum), row[j])
 				continue
 			case types.T_text:
-				row[j] = string(row[j].([]uint8))
+				if j%2 == 0 {
+					row[j] = string(row[j].([]uint8))
+				} else {
+					row[j] = int16(math.MaxInt16)
+				}
 			}
 			assert.Equal(t, mrs.Data[i][j], row[j])
 		}
