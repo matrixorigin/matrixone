@@ -3,7 +3,9 @@ select mo_memory("total") >= mo_memory("available");
 select * from information_schema.files limit 1;
 
 use system;
+-- @bvt:issue#14293
 show tables;
+-- @bvt:issue
 select * from statement_info limit 0;
 select * from span_info limit 0;
 select * from rawlog limit 0;

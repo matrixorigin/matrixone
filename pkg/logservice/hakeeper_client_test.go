@@ -50,7 +50,7 @@ func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -70,7 +70,7 @@ func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 func TestHAKeeperClientsCanBeCreatedWithRetry(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		c := NewLogHAKeeperClientWithRetry(context.Background(), "", cfg)
 		assert.NoError(t, c.Close())
@@ -81,7 +81,7 @@ func TestHAKeeperClientsCanBeCreatedWithRetry(t *testing.T) {
 func TestHAKeeperClientCanNotConnectToNonHAKeeperNode(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -97,6 +97,7 @@ func TestHAKeeperClientCanNotConnectToNonHAKeeperNode(t *testing.T) {
 
 func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		testServiceAddress := s.cfg.LogServiceServiceAddr()
 		done := false
 		for i := 0; i < 1000; i++ {
 			si, ok, err := GetShardInfo("", testServiceAddress, hakeeper.DefaultHAKeeperShardID)
@@ -153,7 +154,7 @@ func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -224,7 +225,7 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 func TestHAKeeperClientSendTNHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -259,7 +260,7 @@ func TestHAKeeperClientSendTNHeartbeat(t *testing.T) {
 func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -441,7 +442,7 @@ func TestSendLogHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
 func TestHAKeeperClientUpdateCNLabel(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -517,7 +518,7 @@ func TestHAKeeperClientUpdateCNLabel(t *testing.T) {
 func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -589,7 +590,7 @@ func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {
 func TestHAKeeperClientPatchCNStore(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -687,7 +688,7 @@ func TestHAKeeperClientPatchCNStore(t *testing.T) {
 func TestHAKeeperClientDeleteCNStore(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -728,7 +729,7 @@ func TestHAKeeperClientDeleteCNStore(t *testing.T) {
 func TestHAKeeperClientSendProxyHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
-			ServiceAddresses: []string{testServiceAddress},
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
