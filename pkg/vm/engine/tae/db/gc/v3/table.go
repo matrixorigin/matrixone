@@ -128,11 +128,11 @@ func (t *GCTable) putBuffer(bat *batch.Batch) {
 	t.buffer.Putback(bat, t.mp)
 }
 
-func (t *GCTable) makeSoftGCProcessor(
+func (t *GCTable) filterGCProcessor(
 	bm *bitmap.Bitmap,
 	sels *[]int64,
 	bf *bloomfilter.BloomFilter,
-	sinker *engine_util.Sinker,
+	canGCSinker *engine_util.Sinker,
 ) func(context.Context, *batch.Batch, *mpool.MPool) error {
 	return func(
 		ctx context.Context,
@@ -161,7 +161,7 @@ func (t *GCTable) makeSoftGCProcessor(
 
 		// shrink data
 		data.Shrink(*sels, true)
-		return sinker.Write(ctx, tmpBat)
+		return canGCSinker.Write(ctx, tmpBat)
 	}
 }
 
@@ -179,26 +179,29 @@ func (t *GCTable) SoftGC(
 		sels []int64
 	)
 
-	// toGCSinker is used to store the data that may be gc'ed
-	toGCSinker := t.getSinker(64 * malloc.MB)
-	defer toGCSinker.Close()
+	// canGCSinker is used to store the data that can be gc'ed
+	canGCSinker := t.getSinker(64 * malloc.MB)
+	defer canGCSinker.Close()
 
-	// notGCSinker is used to store the data that can not be deleted
-	notGCSinker := t.getSinker(0)
-	defer notGCSinker.Close()
+	// cannotGCSinker is used to store the data that can not be deleted
+	cannotGCSinker := t.getSinker(0)
+	defer cannotGCSinker.Close()
 
-	softGCProcessor := t.makeSoftGCProcessor(
+	gcFilter := t.filterGCProcessor(
 		&bm,
 		&sels,
 		bf,
-		toGCSinker,
+		canGCSinker,
 	)
 
+	// this process is to filter out the data that can be gc'ed into
+	// two sinkers, one is to store the data that can be gc'ed, the other
+	// is to store the data that can not be gc'ed
 	if err := engine_util.StreamBatchProcess(
 		ctx,
 		t.LoadBatchData,
-		softGCProcessor,
-		notGCSinker.Write,
+		gcFilter,
+		cannotGCSinker.Write,
 		t.buffer,
 		t.mp,
 	); err != nil {
@@ -209,26 +212,32 @@ func (t *GCTable) SoftGC(
 		return nil, nil, err
 	}
 
-	if err := toGCSinker.Sync(ctx); err != nil {
+	// sync the data that can be gc'ed to get persisted
+	// files and tail batch
+	if err := canGCSinker.Sync(ctx); err != nil {
 		logutil.Error(
 			"GCTable-SoftGC-Sync-ERROR",
 			zap.Error(err),
 		)
 		return nil, nil, err
 	}
-	softGCObjects, processBats := toGCSinker.GetResult()
+	// canGCObjects is a list of files of object entries that can be gc'ed
+	// canGCMemTable is batches of object entries that can be gc'ed in memory
+	canGCObjects, canGCMemTable := canGCSinker.GetResult()
 
 	snapList := make(map[uint32][]types.TS)
-	for acct, snap := range snapShotList {
-		snapList[acct] = vector.MustFixedColWithTypeCheck[types.TS](snap.GetDownstreamVector())
+	for accountId, snapshot := range snapShotList {
+		snapList[accountId] = vector.MustFixedColWithTypeCheck[types.TS](snapshot.GetDownstreamVector())
 	}
+
 	t.Lock()
 	meta.Lock()
 	defer func() {
 		meta.Unlock()
 		t.Unlock()
 	}()
-	gc := make([]string, 0)
+
+	var gcFiles []string
 	objectsComparedAndDeleteLocked := func(
 		bat *batch.Batch,
 		meta *logtail.SnapshotMeta,
@@ -243,6 +252,7 @@ func (t *GCTable) SoftGC(
 		deletes := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
 		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
+
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			name := bat.Vecs[0].GetStringAt(i)
 			tid := tids[i]
@@ -256,7 +266,7 @@ func (t *GCTable) SoftGC(
 					db:       dbs[i],
 					table:    tid,
 				}
-				addObjectLocked(name, object, t.objects)
+				t.objects[name] = object
 				continue
 			}
 			if t.objects[name] != nil && t.objects[name].dropTS.IsEmpty() {
@@ -266,7 +276,7 @@ func (t *GCTable) SoftGC(
 			pList := meta.GetPitrLocked(pitrList, dbs[i], tid)
 			if tsList == nil && pList.IsEmpty() {
 				if createTs.LT(&ts) && dropTs.LT(&ts) {
-					gc = append(gc, name)
+					gcFiles = append(gcFiles, name)
 					delete(t.objects, name)
 					bm.Add(uint64(i))
 				}
@@ -275,7 +285,7 @@ func (t *GCTable) SoftGC(
 			if createTs.LT(&ts) &&
 				dropTs.LT(&ts) &&
 				!isSnapshotRefers(&createTs, &dropTs, tsList, pList, name) {
-				gc = append(gc, name)
+				gcFiles = append(gcFiles, name)
 				delete(t.objects, name)
 				bm.Add(uint64(i))
 			}
@@ -285,12 +295,12 @@ func (t *GCTable) SoftGC(
 		bitmap.ToArray(&bm, &sels)
 		bat.Shrink(sels, true)
 
-		return notGCSinker.Write(ctx, bat)
+		return cannotGCSinker.Write(ctx, bat)
 	}
 
 	buffer := t.fetchBuffer()
 	defer t.putBuffer(buffer)
-	for _, stats := range softGCObjects {
+	for _, stats := range canGCObjects {
 		if err := loader(
 			ctx, t.fs, &stats, buffer, t.mp,
 		); err != nil {
@@ -312,7 +322,7 @@ func (t *GCTable) SoftGC(
 		buffer.CleanOnlyData()
 	}
 
-	for _, bat := range processBats {
+	for _, bat := range canGCMemTable {
 		if err := objectsComparedAndDeleteLocked(
 			bat, meta, snapList, pitrs, ts,
 		); err != nil {
@@ -331,14 +341,14 @@ func (t *GCTable) SoftGC(
 		)
 		return nil, nil, err
 	}
-	if err := notGCSinker.Write(ctx, buffer); err != nil {
+	if err := cannotGCSinker.Write(ctx, buffer); err != nil {
 		logutil.Error(
 			"GCTable-SoftGC-Write-ERROR",
 			zap.Error(err),
 		)
 		return nil, nil, err
 	}
-	if err := notGCSinker.Sync(ctx); err != nil {
+	if err := cannotGCSinker.Sync(ctx); err != nil {
 		logutil.Error(
 			"GCTable-SoftGC-Sync-ERROR",
 			zap.Error(err),
@@ -346,11 +356,11 @@ func (t *GCTable) SoftGC(
 		return nil, nil, err
 	}
 
-	gcStats, _ := notGCSinker.GetResult()
+	gcStats, _ := cannotGCSinker.GetResult()
 	err := t.doneAllBatches(ctx, &t.tsRange.start, &t.tsRange.end, gcStats)
 	t.files.stats = t.files.stats[0:]
 	t.files.stats = append(t.files.stats, gcStats...)
-	return gc, snapList, err
+	return gcFiles, snapList, err
 }
 
 func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, pitrVec types.TS, name string) bool {
@@ -497,7 +507,7 @@ func (t *GCTable) updateObjectListLocked(ins *containers.Batch, objects map[stri
 			db:       vector.GetFixedAtNoTypeCheck[uint64](dbid, i),
 			table:    vector.GetFixedAtNoTypeCheck[uint64](tid, i),
 		}
-		addObjectLocked(objectStats.ObjectName().String(), object, objects)
+		objects[objectStats.ObjectName().String()] = object
 	}
 }
 
