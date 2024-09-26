@@ -2437,14 +2437,14 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			panic("EvalFoldVal: fold id not exist")
 		}
 		exe := (*executors)[idx]
-		vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-		if err != nil {
-			return err
-		}
-
 		var data []byte
 		var err error
-		if vec.Length() > 1 {
+
+		if _, ok := exe.(*colexec.ListExpressionExecutor); ok {
+			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			if err != nil {
+				return err
+			}
 			vec.InplaceSortAndCompact()
 			data, err = vec.MarshalBinary()
 			if err != nil {
@@ -2452,6 +2452,10 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			}
 			ef.Fold.IsConst = false
 		} else {
+			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			if err != nil {
+				return err
+			}
 			data, _ = getConstantBytes(vec, false, 0)
 			ef.Fold.IsConst = true
 		}
