@@ -16,8 +16,9 @@ package merge
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -64,7 +65,7 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	sels, err := blockio.FindTombstonesOfObject(ctx, *entry.ID(), o.tombstoneStats, o.fs)
+	sels, err := blockio.FindTombstonesOfObject(ctx, entry.ID(), o.tombstoneStats, o.fs)
 	cancel()
 	if err != nil {
 		return false

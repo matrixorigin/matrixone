@@ -350,7 +350,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAtLocked()
-		if tblCreatedAt.Greater(&txnNode.End) {
+		if tblCreatedAt.GT(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		// alter table

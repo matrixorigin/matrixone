@@ -109,9 +109,9 @@ func (t Tuple) Less(than Tuple) bool {
 
 		case types.TS:
 			b := b.(types.TS)
-			if a.Less(&b) {
+			if a.LT(&b) {
 				return true
-			} else if b.Less(&a) {
+			} else if b.LT(&a) {
 				return false
 			}
 

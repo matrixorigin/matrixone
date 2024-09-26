@@ -63,7 +63,7 @@ func TestNewSinker(t *testing.T) {
 		WithAllMergeSorted(),
 		WithDedupAll(),
 		WithTailSizeCap(1),
-		WithBuffer(buffer),
+		WithBuffer(buffer, false),
 	)
 
 	bat := catalog.MockBatch(schema, 1000)

@@ -172,13 +172,13 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 	var startTS types.TS
 	if !node.object.meta.Load().IsAppendable() {
 		startTS = node.object.meta.Load().GetCreatedAt()
-		if startTS.Less(&start) || startTS.Greater(&end) {
+		if startTS.LT(&start) || startTS.GT(&end) {
 			return
 		}
 	} else {
 		createAt := node.object.meta.Load().GetCreatedAt()
 		deleteAt := node.object.meta.Load().GetDeleteAt()
-		if deleteAt.Less(&start) || createAt.Greater(&end) {
+		if deleteAt.LT(&start) || createAt.GT(&end) {
 			return
 		}
 	}
@@ -235,7 +235,7 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 			for i := 0; i < len(commitTSs); i++ {
 				commitTS := commitTSs[i]
-				if commitTS.GreaterEq(&start) && commitTS.LessEq(&end) &&
+				if commitTS.GE(&start) && commitTS.LE(&end) &&
 					types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
 						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
@@ -278,7 +278,7 @@ func (node *persistedNode) FillBlockTombstones(
 		node.object.RLock()
 		createAt := node.object.meta.Load().GetCreatedAt()
 		node.object.RUnlock()
-		if createAt.Greater(&startTS) {
+		if createAt.GT(&startTS) {
 			return nil
 		}
 	}
@@ -339,7 +339,7 @@ func (node *persistedNode) FillBlockTombstones(
 		// TODO: biselect, check visibility
 		for i := 0; i < len(rowIDs); i++ {
 			if node.object.meta.Load().IsAppendable() {
-				if commitTSs[i].Greater(&startTS) {
+				if commitTSs[i].GT(&startTS) {
 					continue
 				}
 			}

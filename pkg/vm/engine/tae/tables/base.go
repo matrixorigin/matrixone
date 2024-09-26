@@ -145,7 +145,7 @@ func (obj *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
 	obj.RLock()
 	defer obj.RUnlock()
 	x := obj.appendMVCC.GetLatestAppendPrepareTSLocked()
-	return x.Greater(&startts)
+	return x.GT(&startts)
 }
 func (obj *baseObject) GetFs() *objectio.ObjectFS { return obj.rt.Fs }
 func (obj *baseObject) GetID() *common.ID         { return obj.meta.Load().AsCommonID() }
