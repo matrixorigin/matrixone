@@ -72,7 +72,8 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		}
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	if err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator()); err != nil {
+	err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
 		return err
 	}
 
@@ -88,7 +89,8 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
 			catalog.MO_PITR_DB_NAME, dbName)
 
-		if err := c.runSqlWithSystemTenant(updatePitrSql); err != nil {
+		err = c.runSqlWithSystemTenant(updatePitrSql)
+		if err != nil {
 			return err
 		}
 	}

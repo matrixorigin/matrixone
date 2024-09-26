@@ -922,7 +922,8 @@ func restoreToAccountWithPitr(
 	viewMap map[string]*tableInfo,
 	curAccount uint32,
 ) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account, restore timestamp: %d", pitrName, ts))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account , restore timestamp : %d", pitrName, ts))
+
 	var dbNames []string
 	// delete current dbs
 	if dbNames, err = showDatabases(ctx, sid, bh, ""); err != nil {
@@ -2050,8 +2051,12 @@ func updatePitrObjectId(ctx context.Context,
 	bh BackgroundExec,
 	accountName string,
 	objId uint64) (err error) {
-	sql := getSqlForUpdateMoPitrAccountObjectId(accountName, objId, types.CurrentTimestamp().String2(time.UTC, 0))
-	if err = bh.Exec(ctx, sql); err != nil {
+	sql := getSqlForUpdateMoPitrAccountObjectId(
+		accountName,
+		objId,
+		types.CurrentTimestamp().String2(time.UTC, 0))
+	err = bh.Exec(ctx, sql)
+	if err != nil {
 		return
 	}
 	return
