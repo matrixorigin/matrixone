@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,7 +72,32 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		}
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
+	if err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator()); err != nil {
+		c.proc.Info(c.proc.Ctx,
+			"create database failed", zap.Error(err))
+		return err
+	}
+
+	if !needSkipDbs[dbName] {
+		newDb, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator())
+		if err != nil {
+			c.proc.Info(c.proc.Ctx, "get database failed", zap.Error(err))
+			return err
+		}
+
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = '%s', `%s` = '%s' where `%s` = %d and `%s` = '%s'",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newDb.GetDatabaseId(ctx),
+			catalog.MO_PITR_MODIFIED_TIME, types.CurrentTimestamp().String2(time.UTC, 0),
+			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_DB_NAME, dbName)
+
+		if err := c.runSqlWithSystemTenant(updatePitrSql); err != nil {
+			c.proc.Info(c.proc.Ctx, "update pitr failed", zap.Error(err))
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -1276,6 +1302,38 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
+	// update mo_pitr table
+	// if mo_pitr table contains the same dbName and tblName, then update the table_id and modified_time
+	// otherwise, skip it
+	if !needSkipDbs[dbName] {
+		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
+		if err != nil {
+			c.proc.Info(c.proc.Ctx, "createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = '%s' where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newRelation.GetTableID(c.proc.Ctx),
+			catalog.MO_PITR_MODIFIED_TIME, types.CurrentTimestamp().String2(time.UTC, 0),
+			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_DB_NAME, dbName,
+			catalog.MO_PITR_TABLE_NAME, tblName)
+
+		// change ctx
+		err = c.runSqlWithSystemTenant(updatePitrSql)
+		if err != nil {
+			c.proc.Info(c.proc.Ctx, "createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+	}
+
 	if len(partitionTables) == 0 {
 		return nil
 	}
@@ -1285,6 +1343,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		qry.GetTableDef().TblId,
 		c.proc.GetTxnOperator(),
 	)
+}
+
+func (c *Compile) runSqlWithSystemTenant(sql string) error {
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = context.WithValue(oldCtx, defines.TenantIDKey{}, uint32(0))
+	defer func() {
+		c.proc.Ctx = oldCtx
+	}()
+	return c.runSql(sql)
 }
 
 func (s *Scope) CreateView(c *Compile) error {

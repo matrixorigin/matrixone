@@ -226,7 +226,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			ses.DeleteSeqValues(execCtx.proc)
 		}
 		_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
-		err = updatePitrTableObjectId(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
 		}
