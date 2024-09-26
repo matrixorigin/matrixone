@@ -299,6 +299,7 @@ type Compile struct {
 	fuzzys []*fuzzyCheck
 
 	needLockMeta bool
+	needBlock    bool
 	metaTables   map[string]struct{}
 	lockTables   map[uint64]*plan.LockTarget
 	disableRetry bool

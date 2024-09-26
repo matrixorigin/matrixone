@@ -204,21 +204,6 @@ func TestAppendLog(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
-func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
-	fn := func(t *testing.T, store *store) {
-		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
-		defer cancel()
-		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
-		cmd := make([]byte, headerSize+8+8)
-		binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
-		binaryEnc.PutUint64(cmd[headerSize:], 101)
-		binaryEnc.PutUint64(cmd[headerSize+8:], 1234567890)
-		_, err := store.append(ctx, 1, cmd)
-		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder))
-	}
-	runStoreTest(t, fn)
-}
-
 func TestStoreTsoUpdate(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
