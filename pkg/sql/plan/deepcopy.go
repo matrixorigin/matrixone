@@ -223,6 +223,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.LockTargets[idx] = DeepCopyLockTarget(target)
 	}
 
+	copy(newNode.GroupingFlag, node.GroupingFlag)
+
 	for idx, orderBy := range node.OrderBy {
 		newNode.OrderBy[idx] = DeepCopyOrderBy(orderBy)
 	}

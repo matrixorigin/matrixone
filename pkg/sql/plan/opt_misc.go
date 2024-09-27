@@ -31,7 +31,6 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
 	increaseRefCntForExprList(node.FilterList, 1, colRefCnt)
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
-	increaseRefCntForExprList(node.GroupingSet, 1, colRefCnt)
 	increaseRefCntForExprList(node.AggList, 1, colRefCnt)
 	increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
 	increaseRefCntForExprList(node.InsertDeleteCols, 2, colRefCnt)
@@ -121,6 +120,9 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 
 func increaseRefCntForExprList(exprs []*plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 	for _, expr := range exprs {
+		if expr == nil {
+			continue
+		}
 		increaseRefCnt(expr, inc, colRefCnt)
 	}
 }
@@ -175,7 +177,6 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.OnList, projMap)
 	replaceColumnsForExprList(node.FilterList, projMap)
 	replaceColumnsForExprList(node.GroupBy, projMap)
-	replaceColumnsForExprList(node.GroupingSet, projMap)
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
 	replaceColumnsForExprList(node.InsertDeleteCols, projMap)
@@ -190,6 +191,9 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 
 func replaceColumnsForExprList(exprList []*plan.Expr, projMap map[[2]int32]*plan.Expr) {
 	for i, expr := range exprList {
+		if expr == nil {
+			continue
+		}
 		exprList[i] = replaceColumnsForExpr(expr, projMap)
 	}
 }
@@ -355,7 +359,6 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	increaseTagCntForExprList(node.OnList, 1, tagCnt)
 	increaseTagCntForExprList(node.FilterList, 1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
-	increaseTagCntForExprList(node.GroupingSet, 1, tagCnt)
 	increaseTagCntForExprList(node.AggList, 1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, 1, tagCnt)
 	increaseTagCntForExprList(node.InsertDeleteCols, 2, tagCnt)
@@ -394,7 +397,6 @@ END:
 	increaseTagCntForExprList(node.ProjectList, -1, tagCnt)
 	increaseTagCntForExprList(node.FilterList, -1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
-	increaseTagCntForExprList(node.GroupingSet, -1, tagCnt)
 	increaseTagCntForExprList(node.AggList, -1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, -1, tagCnt)
 	increaseTagCntForExprList(node.InsertDeleteCols, -2, tagCnt)
@@ -411,6 +413,9 @@ END:
 
 func increaseTagCntForExprList(exprs []*plan.Expr, inc int, tagCnt map[int32]int) {
 	for _, expr := range exprs {
+		if expr == nil {
+			continue
+		}
 		increaseTagCnt(expr, inc, tagCnt)
 	}
 }
