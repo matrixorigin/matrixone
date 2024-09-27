@@ -1306,7 +1306,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if !needSkipDbs[dbName] {
 		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable", zap.String("databaseName", c.db), zap.String("tableName", qry.GetTableDef().GetName()), zap.Error(err))
 			return err
 		}
 		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = '%s' where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
@@ -1319,7 +1318,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		// change ctx
 		err = c.runSqlWithSystemTenant(updatePitrSql)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable", zap.String("databaseName", c.db), zap.String("tableName", qry.GetTableDef().GetName()), zap.Error(err))
 			return err
 		}
 	}
