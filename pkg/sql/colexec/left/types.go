@@ -15,6 +15,7 @@
 package left
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,8 +36,8 @@ const (
 )
 
 type container struct {
-	state int
-
+	state         int
+	itr           hashmap.Iterator
 	batchRowCount int64
 	lastrow       int
 	inbat         *batch.Batch
@@ -108,7 +109,7 @@ func (leftJoin *LeftJoin) Release() {
 
 func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &leftJoin.ctr
-
+	ctr.itr = nil
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()

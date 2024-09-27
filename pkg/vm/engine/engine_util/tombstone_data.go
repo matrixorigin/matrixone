@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package engine_util
 
 import (
 	"bytes"
@@ -238,7 +238,7 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 
 	for i := start; i < end; i++ {
 		offset := tomb.rowids[i].GetRowOffset()
-		left = fastApplyDeletedRows(left, deleted, offset)
+		left = FastApplyDeletedRows(left, deleted, offset)
 	}
 
 	return
@@ -285,7 +285,7 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 	}
 
 	if len(rowsOffset) != 0 {
-		left = removeIf(rowsOffset, func(t int64) bool {
+		left = RemoveIf(rowsOffset, func(t int64) bool {
 			return deletedMask.Contains(uint64(t))
 		})
 	}
@@ -311,7 +311,7 @@ func (tomb *tombstoneData) Merge(other engine.Tombstoner) error {
 	)
 }
 
-func rowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
+func RowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 	switch wantedType.(type) {
 	case int32:
 		var ret []int32
