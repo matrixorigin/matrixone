@@ -341,15 +341,15 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	// Apply unique/secondary indices for point select
 	idxToChoose, idxSel, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node)
 	if idxToChoose != -1 {
-		retID := builder.applyIndexForPointSelect(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
-		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, filterIdx)
+		retID, idxTableNodeID := builder.applyIndexForPointSelect(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
+		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 		return retID
 	}
 
 	idxToChoose, idxSel, filterIdx = builder.getIndexForNonEquiCond(indexes, node)
 	if idxToChoose != -1 {
-		retID := builder.applyIndexForNonEquiCond(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
-		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, filterIdx)
+		retID, idxTableNodeID := builder.applyIndexForNonEquiCond(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
+		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 		return retID
 	}
 
@@ -357,7 +357,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	return nodeID
 }
 
-func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, filterIdx []int) {
+func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int) {
 	for i := range node.FilterList {
 		// if already in filterIdx, continue
 		applied := false
@@ -370,8 +370,30 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			continue
 		}
 
+		fn := node.FilterList[i].GetF()
+		col := fn.Args[0].GetCol()
+		if col == nil {
+			continue
+		}
 		for k := range idxDef.Parts {
 			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[k]]
+			if colIdx != col.ColPos {
+				continue
+			}
+			// it's an extra filter and can be applied on index
+			newFilter := DeepCopyExpr(node.FilterList[i])
+			idxColExpr := &plan.Expr{
+				Typ: idxTableNode.TableDef.Cols[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTableNode.BindingTags[0],
+						ColPos: 0,
+					},
+				},
+			}
+			deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[0].Typ, int64(k))
+			newFilter.GetF().Args[0] = deserialExpr
+			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 		}
 	}
 }
@@ -633,7 +655,7 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 	return -1, 1, nil
 }
 
-func (builder *QueryBuilder) applyIndexForNonEquiCond(idxDef *IndexDef, node *plan.Node, filterIdx []int, idxSel float64, scanSnapshot *Snapshot) int32 {
+func (builder *QueryBuilder) applyIndexForNonEquiCond(idxDef *IndexDef, node *plan.Node, filterIdx []int, idxSel float64, scanSnapshot *Snapshot) (int32, int32) {
 	idxTag := builder.genNewTag()
 	idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
 	builder.addNameByColRef(idxTag, idxTableDef)
@@ -711,10 +733,10 @@ func (builder *QueryBuilder) applyIndexForNonEquiCond(idxDef *IndexDef, node *pl
 	}
 	node.Limit, node.Offset = nil, nil
 
-	return joinNodeID
+	return joinNodeID, idxTableNodeID
 }
 
-func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *plan.Node, filterIdx []int, idxSel float64, scanSnapshot *Snapshot) int32 {
+func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *plan.Node, filterIdx []int, idxSel float64, scanSnapshot *Snapshot) (int32, int32) {
 
 	numParts := len(idxDef.Parts)
 	idxTag := builder.genNewTag()
@@ -808,8 +830,7 @@ func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *pl
 	}
 	node.Limit, node.Offset = nil, nil
 
-	return joinNodeID
-
+	return joinNodeID, idxTableNodeID
 }
 
 func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node) (int, float64, []int) {
