@@ -15,6 +15,10 @@
 package valueScan2
 
 import (
+    "fmt"
+    "github.com/google/uuid"
+    "github.com/matrixorigin/matrixone/pkg/common/moerr"
+    "github.com/matrixorigin/matrixone/pkg/container/batch"
     "github.com/matrixorigin/matrixone/pkg/vm"
     "github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -25,6 +29,29 @@ func (valueScan *ValueScan) Prepare(proc *process.Process) error {
 
 func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
     return vm.CallResult{}, nil
+}
+
+func (valueScan *ValueScan) getReadOnlyBatchFromProcess(proc *process.Process) (bat *batch.Batch, err error) {
+    // if this is a select without source table.
+    // for example, select 1.
+    if valueScan.RowsetData == nil {
+        return batch.EmptyForConstFoldBatch, nil
+    }
+
+    // if this is an execute sql for prepared-stmt.
+    // for example, execute s1 and s1 is `insert into t select 1.`
+    // or
+    // this is simple value_scan.
+    if bat = proc.GetPrepareBatch(); bat == nil {
+        if bat = proc.GetValueScanBatch(uuid.UUID(valueScan.Uuid)); bat == nil {
+            return nil, moerr.NewInfo(proc.Ctx, fmt.Sprintf("makeValueScanBatch failed, node id: %s", uuid.UUID(valueScan.Uuid).String()))
+        }
+    }
+
+    // refer to old makeValueScanBatch.
+    // todo: 下周再弄.
+
+    return bat, nil
 }
 
 func (ValueScan *ValueScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
