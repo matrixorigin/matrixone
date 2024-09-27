@@ -49,6 +49,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	if len(update.ctr.deleteBuf) == 0 {
 		update.ctr.deleteBuf = make([]*batch.Batch, len(update.MultiUpdateCtx))
 	}
+	update.ctr.affectedRows = 0
 
 	eng := update.Engine
 

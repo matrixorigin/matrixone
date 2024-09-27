@@ -139,6 +139,7 @@ func (update *MultiUpdate) insert_table(
 				}
 			}
 
+			insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
 			err = updateCtx.PartitionSources[partIdx].Write(proc.Ctx, insertBatch)
 			if err != nil {
 				return err
@@ -152,6 +153,7 @@ func (update *MultiUpdate) insert_table(
 				return err
 			}
 		}
+		insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
 		err = updateCtx.Source.Write(proc.Ctx, insertBatch)
 	}
 	return
