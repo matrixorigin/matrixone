@@ -72,8 +72,8 @@ func Decode(buf []byte) (any, error) {
 // NOTE: hack way to get vector
 func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
 	// check if vector cannot be freed
-	if !toVec.NeedDup() {
-		logutil.Warn("input vector should be readonly")
+	if !toVec.NeedDup() && toVec.Allocated() > 0 {
+		logutil.Warn("input vector should be readonly or empty")
 	}
 	header := DecodeIOEntryHeader(buf)
 	if header.Type != IOET_ColData {
