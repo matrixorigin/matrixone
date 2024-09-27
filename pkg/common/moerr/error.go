@@ -20,7 +20,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"runtime/debug"
 	"sync/atomic"
 
 	moerrpb "github.com/matrixorigin/matrixone/pkg/pb/moerr"
@@ -662,7 +661,7 @@ func ConvertGoError(ctx context.Context, err error) error {
 		return NewUnexpectedEOF(ctx, err.Error())
 	}
 
-	return NewInternalErrorf(ctx, "convert go error to mo error %v, stack: %s", err, debug.Stack())
+	return NewInternalErrorf(ctx, "convert go error to mo error %v", err)
 }
 
 func (e *Error) Succeeded() bool {
