@@ -125,6 +125,7 @@ func (rightJoin *RightJoin) Release() {
 
 func (rightJoin *RightJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightJoin.ctr
+	ctr.itr = nil
 	if !ctr.handledLast && rightJoin.NumCPU > 1 && !rightJoin.IsMerger {
 		rightJoin.Channel <- nil
 	}

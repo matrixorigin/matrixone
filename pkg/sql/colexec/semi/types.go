@@ -104,7 +104,7 @@ func (semiJoin *SemiJoin) Release() {
 
 func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &semiJoin.ctr
-
+	ctr.itr = nil
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()

@@ -127,6 +127,7 @@ func (rightSemi *RightSemi) Release() {
 
 func (rightSemi *RightSemi) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightSemi.ctr
+	ctr.itr = nil
 	if !ctr.handledLast && rightSemi.NumCPU > 1 && !rightSemi.IsMerger {
 		rightSemi.Channel <- nil
 	}

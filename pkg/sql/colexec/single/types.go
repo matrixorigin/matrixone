@@ -103,7 +103,7 @@ func (singleJoin *SingleJoin) Release() {
 
 func (singleJoin *SingleJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &singleJoin.ctr
-
+	ctr.itr = nil
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()

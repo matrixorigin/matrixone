@@ -105,7 +105,7 @@ func (antiJoin *AntiJoin) Release() {
 
 func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &antiJoin.ctr
-
+	ctr.itr = nil
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()

@@ -109,7 +109,7 @@ func (leftJoin *LeftJoin) Release() {
 
 func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &leftJoin.ctr
-
+	ctr.itr = nil
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()

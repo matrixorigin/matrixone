@@ -126,6 +126,7 @@ func (rightAnti *RightAnti) Release() {
 
 func (rightAnti *RightAnti) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightAnti.ctr
+	ctr.itr = nil
 	if !ctr.handledLast && rightAnti.NumCPU > 1 && !rightAnti.IsMerger {
 		rightAnti.Channel <- nil
 	}

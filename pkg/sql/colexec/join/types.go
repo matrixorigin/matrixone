@@ -121,7 +121,7 @@ func (innerJoin *InnerJoin) Release() {
 
 func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &innerJoin.ctr
-
+	ctr.itr = nil
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()
