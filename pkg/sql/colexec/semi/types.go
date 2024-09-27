@@ -15,6 +15,7 @@
 package semi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -35,8 +36,8 @@ const (
 
 type container struct {
 	state int
-
-	rbat *batch.Batch
+	itr   hashmap.Iterator
+	rbat  *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
