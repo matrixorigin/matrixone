@@ -525,6 +525,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Agg = &pipeline.Group{
 			PreAllocSize: t.PreAllocSize,
 			NeedEval:     t.NeedEval,
+			GroupingFlag: t.GroupingFlag,
 			Exprs:        t.Exprs,
 			Aggs:         convertToPipelineAggregates(t.Aggs),
 		}
@@ -987,6 +988,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := group.NewArgument()
 		arg.PreAllocSize = t.PreAllocSize
 		arg.NeedEval = t.NeedEval
+		arg.GroupingFlag = t.GroupingFlag
 		arg.Exprs = t.Exprs
 		arg.Aggs = convertToAggregates(t.Aggs)
 		arg.ProjectList = opr.ProjectList
@@ -1236,7 +1238,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = value_scan.NewArgument()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
 		if len(opr.ValueScan.BatchBlock) > 0 {
-			bat := new(batch.Batch)
+			bat := batch.NewOffHeapEmpty()
 			if err := types.Decode([]byte(opr.ValueScan.BatchBlock), bat); err != nil {
 				return nil, err
 			}
@@ -1368,7 +1370,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
-	bat := new(batch.Batch)
+	bat := batch.NewOffHeapEmpty()
 	if err := bat.UnmarshalBinaryWithAnyMp(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err

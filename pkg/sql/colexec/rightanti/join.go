@@ -263,7 +263,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 	}
 	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+	itr := ctr.itr
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {

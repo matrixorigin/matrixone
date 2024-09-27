@@ -164,7 +164,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_SOURCE_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
-				if ndesc.Node.ParentObjRef == nil { // original table
+				if ndesc.Node.ParentObjRef == nil || options.CmpContext == nil { // original table
 					buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
 				} else { // index table, need to get index table name
 					scanSnapshot := ndesc.Node.ScanSnapshot

@@ -7279,6 +7279,12 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 		if rtnErr != nil {
 			return rtnErr
 		}
+
+		rtnErr = updatePitrObjectId(ctx, bh, newTenant.GetTenant(), uint64(newTenant.GetTenantID()))
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		return rtnErr
 	}
 
