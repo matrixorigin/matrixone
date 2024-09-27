@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package engine_util
 
 import (
 	"bytes"
@@ -24,13 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-var _ engine.RelData = new(blockListRelData)
+var _ engine.RelData = new(BlockListRelData)
 
 func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	typ := engine.RelDataType(data[0])
 	switch typ {
 	case engine.RelDataBlockList:
-		relData := new(blockListRelData)
+		relData := new(BlockListRelData)
 		if err := relData.UnmarshalBinary(data); err != nil {
 			return nil, err
 		}
@@ -41,24 +41,24 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 }
 
 // emptyCnt is the number of empty blocks preserved
-func NewBlockListRelationData(emptyCnt int) *blockListRelData {
-	return &blockListRelData{
+func NewBlockListRelationData(emptyCnt int) *BlockListRelData {
+	return &BlockListRelData{
 		blklist: objectio.MakeBlockInfoSlice(emptyCnt),
 	}
 }
 
 func NewBlockListRelationDataOfObject(
 	obj *objectio.ObjectStats, withInMemory bool,
-) *blockListRelData {
+) *BlockListRelData {
 	slice := objectio.ObjectStatsToBlockInfoSlice(
 		obj, withInMemory,
 	)
-	return &blockListRelData{
+	return &BlockListRelData{
 		blklist: slice,
 	}
 }
 
-type blockListRelData struct {
+type BlockListRelData struct {
 	// blkList[0] is a empty block info
 	blklist objectio.BlockInfoSlice
 
@@ -66,7 +66,7 @@ type blockListRelData struct {
 	tombstones engine.Tombstoner
 }
 
-func (relData *blockListRelData) String() string {
+func (relData *BlockListRelData) String() string {
 	var w bytes.Buffer
 	w.WriteString(fmt.Sprintf("RelData[%d]<\n", relData.GetType()))
 	if relData.blklist != nil {
@@ -82,40 +82,40 @@ func (relData *blockListRelData) String() string {
 	return w.String()
 }
 
-func (relData *blockListRelData) GetShardIDList() []uint64 {
+func (relData *BlockListRelData) GetShardIDList() []uint64 {
 	panic("not supported")
 }
-func (relData *blockListRelData) GetShardID(i int) uint64 {
+func (relData *BlockListRelData) GetShardID(i int) uint64 {
 	panic("not supported")
 }
-func (relData *blockListRelData) SetShardID(i int, id uint64) {
+func (relData *BlockListRelData) SetShardID(i int, id uint64) {
 	panic("not supported")
 }
-func (relData *blockListRelData) AppendShardID(id uint64) {
+func (relData *BlockListRelData) AppendShardID(id uint64) {
 	panic("not supported")
 }
 
-func (relData *blockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	return relData.blklist.GetAllBytes()
 }
 
-func (relData *blockListRelData) GetBlockInfo(i int) objectio.BlockInfo {
+func (relData *BlockListRelData) GetBlockInfo(i int) objectio.BlockInfo {
 	return *relData.blklist.Get(i)
 }
 
-func (relData *blockListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
+func (relData *BlockListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 	relData.blklist.Set(i, blk)
 }
 
-func (relData *blockListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
+func (relData *BlockListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
 	relData.blklist = slice
 }
 
-func (relData *blockListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
+func (relData *BlockListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
 	relData.blklist.AppendBlockInfo(blk)
 }
 
-func (relData *blockListRelData) UnmarshalBinary(data []byte) (err error) {
+func (relData *BlockListRelData) UnmarshalBinary(data []byte) (err error) {
 	typ := engine.RelDataType(types.DecodeUint8(data))
 	if typ != engine.RelDataBlockList {
 		return moerr.NewInternalErrorNoCtxf("UnmarshalBinary RelDataBlockList with %v", typ)
@@ -139,7 +139,7 @@ func (relData *blockListRelData) UnmarshalBinary(data []byte) (err error) {
 	return
 }
 
-func (relData *blockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err error) {
+func (relData *BlockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err error) {
 	typ := uint8(relData.GetType())
 	if _, err = w.Write(types.EncodeUint8(&typ)); err != nil {
 		return
@@ -172,11 +172,11 @@ func (relData *blockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err e
 	return
 }
 
-func (relData *blockListRelData) GetType() engine.RelDataType {
+func (relData *BlockListRelData) GetType() engine.RelDataType {
 	return engine.RelDataBlockList
 }
 
-func (relData *blockListRelData) MarshalBinary() ([]byte, error) {
+func (relData *BlockListRelData) MarshalBinary() ([]byte, error) {
 	var w bytes.Buffer
 	if err := relData.MarshalBinaryWithBuffer(&w); err != nil {
 		return nil, err
@@ -185,24 +185,24 @@ func (relData *blockListRelData) MarshalBinary() ([]byte, error) {
 	return buf, nil
 }
 
-func (relData *blockListRelData) AttachTombstones(tombstones engine.Tombstoner) error {
+func (relData *BlockListRelData) AttachTombstones(tombstones engine.Tombstoner) error {
 	relData.tombstones = tombstones
 	return nil
 }
 
-func (relData *blockListRelData) GetTombstones() engine.Tombstoner {
+func (relData *BlockListRelData) GetTombstones() engine.Tombstoner {
 	return relData.tombstones
 }
 
-func (relData *blockListRelData) DataSlice(i, j int) engine.RelData {
+func (relData *BlockListRelData) DataSlice(i, j int) engine.RelData {
 	blist := objectio.BlockInfoSlice(relData.blklist.Slice(i, j))
-	return &blockListRelData{
+	return &BlockListRelData{
 		blklist:    blist,
 		tombstones: relData.tombstones,
 	}
 }
 
-func (relData *blockListRelData) GroupByPartitionNum() map[int16]engine.RelData {
+func (relData *BlockListRelData) GroupByPartitionNum() map[int16]engine.RelData {
 	ret := make(map[int16]engine.RelData)
 
 	blks := relData.GetBlockInfoSlice()
@@ -214,7 +214,7 @@ func (relData *blockListRelData) GroupByPartitionNum() map[int16]engine.RelData 
 		}
 		partitionNum := blkInfo.PartitionNum
 		if _, ok := ret[partitionNum]; !ok {
-			ret[partitionNum] = &blockListRelData{
+			ret[partitionNum] = &BlockListRelData{
 				tombstones: relData.tombstones,
 			}
 			ret[partitionNum].AppendBlockInfo(&objectio.EmptyBlockInfo)
@@ -225,12 +225,12 @@ func (relData *blockListRelData) GroupByPartitionNum() map[int16]engine.RelData 
 	return ret
 }
 
-func (relData *blockListRelData) BuildEmptyRelData() engine.RelData {
-	return &blockListRelData{
+func (relData *BlockListRelData) BuildEmptyRelData() engine.RelData {
+	return &BlockListRelData{
 		blklist: objectio.BlockInfoSlice{},
 	}
 }
 
-func (relData *blockListRelData) DataCnt() int {
+func (relData *BlockListRelData) DataCnt() int {
 	return relData.blklist.Len()
 }

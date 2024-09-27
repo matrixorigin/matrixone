@@ -25,6 +25,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
@@ -42,7 +43,8 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	table *txnTable,
 	txn *Transaction,
 	mp *mpool.MPool,
-	fs fileservice.FileService) (*TransferFlow, error) {
+	fs fileservice.FileService,
+) (*TransferFlow, error) {
 
 	ctx := table.proc.Load().Ctx
 	state, err := table.getPartitionState(ctx)
@@ -52,6 +54,17 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	isObjectDeletedFn := func(objId *objectio.ObjectId) bool {
 		return state.CheckIfObjectDeletedBeforeTS(end, false, objId)
+	}
+
+	deletedObjects := state.CollectObjectsBetween(start, end, true)
+	deletedObjectsIter := func() *types.Objectid {
+		if len(deletedObjects) == 0 {
+			return nil
+		}
+
+		id := deletedObjects[0].ObjectName().ObjectId()
+		deletedObjects = deletedObjects[1:]
+		return id
 	}
 
 	tombstoneObjects := make([]objectio.ObjectStats, 0)
@@ -65,11 +78,14 @@ func ConstructCNTombstoneObjectsTransferFlow(
 			}
 		})
 
-	if len(tombstoneObjects) == 0 {
+	if tombstoneObjects, err = blockio.CoarseFilterTombstoneObject(
+		ctx, deletedObjectsIter, tombstoneObjects, fs); err != nil {
+		return nil, err
+	} else if len(tombstoneObjects) == 0 {
 		return nil, nil
 	}
 
-	newDataObjects := state.CollectVisibleObjectsBetween(start, end, false)
+	newDataObjects := state.CollectObjectsBetween(start, end, false)
 
 	if len(newDataObjects) == 0 {
 		return nil, nil
@@ -77,11 +93,11 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	pkColIdx := table.tableDef.Name2ColIndex[table.tableDef.Pkey.PkeyColName]
 	pkCol := table.tableDef.Cols[pkColIdx]
-	r := SimpleMultiObjectsReader(
+	r := engine_util.SimpleMultiObjectsReader(
 		ctx, fs,
 		tombstoneObjects,
 		end.ToTimestamp(),
-		WithColumns(
+		engine_util.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)}),
 	)

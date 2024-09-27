@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package engine_util
 
 import (
 	"context"
@@ -86,7 +86,7 @@ func SimpleObjectReader(
 ) engine.Reader {
 	relData := NewBlockListRelationDataOfObject(obj, false)
 	ds := NewRemoteDataSource(
-		ctx, nil, fs, ts, relData,
+		ctx, fs, ts, relData,
 	)
 	return NewSimpleReader(
 		ctx, ds, fs, ts, opts...,
@@ -118,7 +118,7 @@ func SimpleMultiObjectsReader(
 	relData := NewBlockListRelationData(0)
 	relData.SetBlockList(slice)
 	ds := NewRemoteDataSource(
-		ctx, nil, fs, ts, relData,
+		ctx, fs, ts, relData,
 	)
 	return NewSimpleReader(
 		ctx, ds, fs, ts, opts...,

@@ -17,6 +17,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -216,10 +217,11 @@ func NewDefaultTableReader(
 		return nil, err
 	}
 
-	return disttae.NewReader(
+	return engine_util.NewReader(
 		ctx,
 		mp,
-		e,
+		e.PackerPool(),
+		e.FS(),
 		rel.GetTableDef(ctx),
 		snapshotTS,
 		expr,

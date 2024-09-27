@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -96,13 +95,13 @@ func Test_Sinker(t *testing.T) {
 
 	require.Equal(t, bat1.RowCount(), rows)
 
-	r := disttae.SimpleMultiObjectsReader(
+	r := engine_util.SimpleMultiObjectsReader(
 		ctx, fs, objs, timestamp.Timestamp{},
-		disttae.WithColumns(
+		engine_util.WithColumns(
 			objectio.TombstoneSeqnums_CN_Created,
 			objectio.GetTombstoneTypes(pkType, false),
 		),
-		disttae.WithTombstone(),
+		engine_util.WithTombstone(),
 	)
 	blockio.Start("")
 	defer blockio.Stop("")
