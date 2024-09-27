@@ -325,21 +325,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 	}
 
 	for i, tableDef := range tableDefs {
-		insertCols := make([]*plan.Expr, 0, len(tableDef.Cols))
-		for _, col := range tableDef.Cols {
+		insertCols := make([]plan.ColRef, len(tableDef.Cols))
+		for k, col := range tableDef.Cols {
 			if col.Name == catalog.Row_ID {
 				continue
 			}
 
-			insertCols = append(insertCols, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectNode.BindingTags[0],
-						ColPos: int32(colName2Idx[tableDef.Name+"."+col.Name]),
-					},
-				},
-			})
+			insertCols[k].RelPos = selectNode.BindingTags[0]
+			insertCols[k].ColPos = int32(colName2Idx[tableDef.Name+"."+col.Name])
 		}
 
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
@@ -365,21 +358,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		//}, ctx)
 
 		for j, idxTableDef := range idxTableDefs[i] {
-			idxInsertCols := make([]*plan.Expr, 0, len(idxTableDef.Cols))
-			for _, col := range idxTableDef.Cols {
+			idxInsertCols := make([]plan.ColRef, len(idxTableDef.Cols))
+			for k, col := range idxTableDef.Cols {
 				if col.Name == catalog.Row_ID {
 					continue
 				}
 
-				idxInsertCols = append(idxInsertCols, &plan.Expr{
-					Typ: col.Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: selectNode.BindingTags[0],
-							ColPos: int32(colName2Idx[idxTableDef.Name+"."+col.Name]),
-						},
-					},
-				})
+				idxInsertCols[k].RelPos = selectNode.BindingTags[0]
+				idxInsertCols[k].ColPos = int32(colName2Idx[idxTableDef.Name+"."+col.Name])
 			}
 
 			dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{

@@ -136,7 +136,7 @@ message MultiUpdate {
   uint32 IBucket = 3;
   uint32 NBucket = 4;
   map<string,int32> SegmentMap = 5;
-  repeated plan.UpdateCtx update_ctx = 6;
+  repeated plan.UpdateCtx update_ctx_list = 6;
 }
 
 message Array{
@@ -512,6 +512,7 @@ message Instruction{
   Shufflebuild shuffle_build = 49;
   Indexbuild index_build = 50;
   Apply apply = 51;
+  MultiUpdate multi_update = 52;
 }
 
 message AnalysisList {

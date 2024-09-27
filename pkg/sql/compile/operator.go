@@ -748,12 +748,12 @@ func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpd
 	for i, updateCtx := range n.UpdateCtxList {
 		insertCols := make([]int, len(updateCtx.InsertCols))
 		for j, col := range updateCtx.InsertCols {
-			insertCols[j] = int(col.GetCol().ColPos)
+			insertCols[j] = int(col.ColPos)
 		}
 
 		deleteCols := make([]int, len(updateCtx.DeleteCols))
 		for j, col := range updateCtx.DeleteCols {
-			deleteCols[j] = int(col.GetCol().ColPos)
+			deleteCols[j] = int(col.ColPos)
 		}
 
 		tableType := multi_update.UpdateMainTable

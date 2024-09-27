@@ -588,29 +588,23 @@ func (ndesc *NodeDescribeImpl) GetUpdateCtxInfo(ctx context.Context, options *Ex
 			if len(updateCtx.InsertCols) > 0 {
 				buf.WriteString(" Insert Columns: ")
 				first := true
-				for _, v := range updateCtx.InsertCols {
+				for i := range updateCtx.InsertCols {
 					if !first {
 						buf.WriteString(", ")
 					}
 					first = false
-					err := describeExpr(ctx, v, options, buf)
-					if err != nil {
-						return nil, err
-					}
+					describeColRef(&updateCtx.InsertCols[i], buf)
 				}
 			}
 			if len(updateCtx.DeleteCols) > 0 {
 				buf.WriteString(" Delete Columns: ")
 				first := true
-				for _, v := range updateCtx.DeleteCols {
+				for i := range updateCtx.DeleteCols {
 					if !first {
 						buf.WriteString(", ")
 					}
 					first = false
-					err := describeExpr(ctx, v, options, buf)
-					if err != nil {
-						return nil, err
-					}
+					describeColRef(&updateCtx.DeleteCols[i], buf)
 				}
 			}
 			lines = append(lines, buf.String())

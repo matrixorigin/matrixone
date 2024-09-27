@@ -68,22 +68,27 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	}
 }
 
+func (builder *QueryBuilder) remapSingleColRef(col *plan.ColRef, colMap map[[2]int32][2]int32, remapInfo *RemapInfo) error {
+	mapID := [2]int32{col.RelPos, col.ColPos}
+	if ids, ok := colMap[mapID]; ok {
+		col.RelPos = ids[0]
+		col.ColPos = ids[1]
+		col.Name = builder.nameByColRef[mapID]
+	} else {
+		var keys []string
+		for k := range colMap {
+			keys = append(keys, fmt.Sprintf("%v", k))
+		}
+		mapKeys := fmt.Sprintf("{ %s }", strings.Join(keys, ", "))
+		return moerr.NewParseErrorf(builder.GetContext(), "remapInfo %s ; can't find column %v in context's map %s", remapInfo.String(), mapID, mapKeys)
+	}
+	return nil
+}
+
 func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32][2]int32, remapInfo *RemapInfo) error {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
-		if ids, ok := colMap[mapID]; ok {
-			ne.Col.RelPos = ids[0]
-			ne.Col.ColPos = ids[1]
-			ne.Col.Name = builder.nameByColRef[mapID]
-		} else {
-			var keys []string
-			for k := range colMap {
-				keys = append(keys, fmt.Sprintf("%v", k))
-			}
-			mapKeys := fmt.Sprintf("{ %s }", strings.Join(keys, ", "))
-			return moerr.NewParseErrorf(builder.GetContext(), "remapInfo %s ; can't find column %v in context's map %s", remapInfo.String(), mapID, mapKeys)
-		}
+		return builder.remapSingleColRef(ne.Col, colMap, remapInfo)
 
 	case *plan.Expr_F:
 		for _, arg := range ne.F.GetArgs() {
@@ -1563,12 +1568,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	case plan.Node_MULTI_UPDATE:
 		for _, updateCtx := range node.UpdateCtxList {
-			for _, expr := range updateCtx.InsertCols {
-				increaseRefCnt(expr, 1, colRefCnt)
+			for _, col := range updateCtx.InsertCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
 			}
 
-			for _, expr := range updateCtx.DeleteCols {
-				increaseRefCnt(expr, 1, colRefCnt)
+			for _, col := range updateCtx.DeleteCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
 			}
 		}
 
@@ -1580,17 +1585,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		remapInfo.tip = "UpdateCtxList"
 		for idx, updateCtx := range node.UpdateCtxList {
 			remapInfo.srcExprIdx = idx
-			for _, expr := range updateCtx.InsertCols {
-				increaseRefCnt(expr, -1, colRefCnt)
-				err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
+			for i, col := range updateCtx.InsertCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				err := builder.remapSingleColRef(&updateCtx.InsertCols[i], childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
 					return nil, err
 				}
 			}
 
-			for _, expr := range updateCtx.DeleteCols {
-				increaseRefCnt(expr, -1, colRefCnt)
-				err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
+			for i, col := range updateCtx.DeleteCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				err := builder.remapSingleColRef(&updateCtx.DeleteCols[i], childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
 					return nil, err
 				}

@@ -92,7 +92,7 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 			continue
 		}
 		require.NoError(t, err)
-		require.Equal(t, tc.op.AffectedRows(), tc.affectedRows)
+		require.Equal(t, tc.op.GetAffectedRows(), tc.affectedRows)
 
 		tc.op.Children[0].Reset(proc, false, nil)
 		tc.op.Reset(proc, false, nil)
@@ -107,7 +107,7 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 			}
 		}
 		require.NoError(t, err)
-		require.Equal(t, tc.op.AffectedRows(), tc.affectedRows)
+		require.Equal(t, tc.op.GetAffectedRows(), tc.affectedRows)
 
 		tc.op.Children[0].Free(proc, false, nil)
 		tc.op.Free(proc, false, nil)

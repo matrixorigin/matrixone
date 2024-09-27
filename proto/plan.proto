@@ -615,8 +615,8 @@ message UpdateCtx {
 	ObjectRef obj_ref	= 1;
 	TableDef table_def	= 2;
 
-	repeated Expr insert_cols	= 3;
-	repeated Expr delete_cols	= 4;
+	repeated ColRef insert_cols	= 3 [(gogoproto.nullable) = false];
+	repeated ColRef delete_cols	= 4 [(gogoproto.nullable) = false];
 
 	repeated int32 partition_table_ids		= 5;
 	repeated string partition_table_names	= 6;

@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -828,6 +829,32 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Params: t.TableFunction.Params,
 			Name:   t.TableFunction.FuncName,
 		}
+	case *multi_update.MultiUpdate:
+		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
+		for i, muCtx := range t.MultiUpdateCtx {
+			updateCtxList[i] = &plan.UpdateCtx{
+				ObjRef:              muCtx.ObjRef,
+				TableDef:            muCtx.TableDef,
+				PartitionTableIds:   muCtx.PartitionTableIDs,
+				PartitionTableNames: muCtx.PartitionTableNames,
+				PartitionIdx:        int32(muCtx.PartitionIdx),
+			}
+
+			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
+			for j, pos := range muCtx.InsertCols {
+				updateCtxList[i].InsertCols[j].ColPos = int32(pos)
+			}
+
+			updateCtxList[i].DeleteCols = make([]plan.ColRef, len(muCtx.DeleteCols))
+			for j, pos := range muCtx.DeleteCols {
+				updateCtxList[i].DeleteCols[j].ColPos = int32(pos)
+			}
+		}
+		in.MultiUpdate = &pipeline.MultiUpdate{
+			AffectedRows:  t.GetAffectedRows(),
+			ToWriteS3:     t.ToWriteS3,
+			UpdateCtxList: updateCtxList,
+		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
 	}
@@ -1305,6 +1332,34 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.Args = opr.TableFunction.Args
 		arg.TableFunction.FuncName = opr.TableFunction.Name
 		arg.TableFunction.Params = opr.TableFunction.Params
+		op = arg
+	case vm.MultiUpdate:
+		arg := multi_update.NewArgument()
+		t := opr.GetMultiUpdate()
+		arg.SetAffectedRows(t.AffectedRows)
+		arg.ToWriteS3 = t.ToWriteS3
+
+		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
+		for i, muCtx := range t.UpdateCtxList {
+			arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
+				ObjRef:              muCtx.ObjRef,
+				TableDef:            muCtx.TableDef,
+				PartitionTableIDs:   muCtx.PartitionTableIds,
+				PartitionTableNames: muCtx.PartitionTableNames,
+				PartitionIdx:        int(muCtx.PartitionIdx),
+			}
+
+			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
+			for j, pos := range muCtx.InsertCols {
+				arg.MultiUpdateCtx[i].InsertCols[j] = int(pos.ColPos)
+			}
+
+			arg.MultiUpdateCtx[i].DeleteCols = make([]int, len(muCtx.DeleteCols))
+			for j, pos := range muCtx.DeleteCols {
+				arg.MultiUpdateCtx[i].DeleteCols[j] = int(pos.ColPos)
+			}
+		}
+
 		op = arg
 	default:
 		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))

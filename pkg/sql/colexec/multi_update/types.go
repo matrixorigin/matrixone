@@ -153,6 +153,10 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 	}
 }
 
-func (update *MultiUpdate) AffectedRows() uint64 {
+func (update *MultiUpdate) GetAffectedRows() uint64 {
 	return update.ctr.affectedRows
+}
+
+func (update *MultiUpdate) SetAffectedRows(affectedRows uint64) {
+	update.ctr.affectedRows = affectedRows
 }
