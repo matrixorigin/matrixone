@@ -71,11 +71,44 @@ func NewWithSchema(ro bool, offHeap bool, attrs []string, attTypes []types.Type)
 	return bat
 }
 
+func EmptyBatchWithSize(n int) Batch {
+	bat := Batch{
+		Vecs: make([]*vector.Vector, n),
+	}
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.NewVec(types.T_any.ToType())
+	}
+	return bat
+}
+
+func EmptyBatchWithAttrs(attrs []string) Batch {
+	bat := Batch{
+		Attrs: attrs,
+		Vecs:  make([]*vector.Vector, len(attrs)),
+	}
+	for i := range attrs {
+		bat.Vecs[i] = vector.NewVec(types.T_any.ToType())
+	}
+
+	return bat
+}
+
 func SetLength(bat *Batch, n int) {
 	for _, vec := range bat.Vecs {
 		vec.SetLength(n)
 	}
 	bat.rowCount = n
+}
+
+func (bat *Batch) Slice(from, to int) *Batch {
+	return &Batch{
+		Ro:       bat.Ro,
+		Attrs:    bat.Attrs[from:to],
+		Vecs:     bat.Vecs[from:to],
+		rowCount: bat.rowCount,
+		Cnt:      1,
+	}
+
 }
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
@@ -352,6 +385,14 @@ func (bat *Batch) CleanOnlyData() {
 		}
 	}
 	bat.rowCount = 0
+}
+
+func (bat *Batch) FreeColumns(m *mpool.MPool) {
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(m)
+		}
+	}
 }
 
 func (bat *Batch) String() string {
