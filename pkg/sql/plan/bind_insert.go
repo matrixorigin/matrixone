@@ -43,6 +43,9 @@ func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.Objec
 		if len(dbName) == 0 {
 			dbName = builder.compCtx.DefaultDatabase()
 		}
+		if dbName == catalog.MO_CATALOG || dbName == catalog.MO_DATABASE || dbName == catalog.MO_TABLES || dbName == catalog.MO_COLUMNS {
+			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from catalog")
+		}
 
 		objRefs[i], tableDefs[i] = builder.compCtx.Resolve(dbName, tblName, nil)
 		if tableDefs[i] == nil {
@@ -325,7 +328,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 	}
 
 	for i, tableDef := range tableDefs {
-		insertCols := make([]plan.ColRef, len(tableDef.Cols))
+		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
 		for k, col := range tableDef.Cols {
 			if col.Name == catalog.Row_ID {
 				continue
@@ -358,7 +361,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		//}, ctx)
 
 		for j, idxTableDef := range idxTableDefs[i] {
-			idxInsertCols := make([]plan.ColRef, len(idxTableDef.Cols))
+			idxInsertCols := make([]plan.ColRef, len(idxTableDef.Cols)-1)
 			for k, col := range idxTableDef.Cols {
 				if col.Name == catalog.Row_ID {
 					continue
@@ -554,7 +557,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 	// --------
 	// rewrite 'insert into t1(b) values (1)' to
 	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
-	projectList := make([]*Expr, 0, len(tableDef.Cols))
+	projectList := make([]*Expr, 0, len(tableDef.Cols)-1)
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projectList))
@@ -594,6 +597,10 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 			pkExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
 			projectList = append(projectList, pkExpr)
 		} else {
+			// TODO: handle auto-increment column
+			if col.Typ.AutoIncr {
+				return 0, nil, moerr.NewUnsupportedDML(builder.GetContext(), "no given value for auto increment column")
+			}
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
 				return 0, nil, err

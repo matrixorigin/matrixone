@@ -76,10 +76,10 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
-			return buildInsert(stmt, ctx, false, isPrepareStmt)
-		}
-		return nil, err
+		//if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		return buildInsert(stmt, ctx, false, isPrepareStmt)
+		//}
+		//return nil, err
 	}
 	ctx.SetViews(bindCtx.views)
 

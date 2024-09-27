@@ -81,6 +81,15 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			}
 		}
 
+	case plan.Node_MULTI_UPDATE:
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
+		}
+
 	default:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
@@ -202,7 +211,7 @@ func replaceColumnsForColRefList(cols []plan.ColRef, projMap map[[2]int32]*plan.
 	for i := range cols {
 		mapID := [2]int32{cols[i].RelPos, cols[i].ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
-			newCol := projExpr.GetCol()
+			newCol := projExpr.Expr.(*plan.Expr_Col).Col
 			cols[i].RelPos = newCol.RelPos
 			cols[i].ColPos = newCol.ColPos
 		}
