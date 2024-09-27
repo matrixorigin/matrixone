@@ -314,6 +314,7 @@ import (
 
 %token <str> OUT INOUT
 
+
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT
 %token <str> CHAIN NO RELEASE PRIORITY QUICK
@@ -487,7 +488,7 @@ import (
 %token <str> CDC
 
 // ROLLUP
-%token <str> ROLLUP
+%token <str> GROUPING SETS CUBE ROLLUP 
 
 // Logservice
 %token <str> LOGSERVICE REPLICAS STORES SETTINGS
@@ -526,7 +527,7 @@ import (
 %type <statement> kill_stmt
 %type <statement> backup_stmt snapshot_restore_stmt
 %type <statement> create_cdc_stmt show_cdc_stmt pause_cdc_stmt drop_cdc_stmt resume_cdc_stmt restart_cdc_stmt
-%type <rowsExprs> row_constructor_list
+%type <rowsExprs> row_constructor_list grouping_sets 
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
@@ -5677,10 +5678,50 @@ group_by_opt:
     }
 |   GROUP BY expression_list rollup_opt
     {
+        exprsList := []tree.Exprs{$3}
         $$ = &tree.GroupByClause{
-            GroupByExprs: $3,
-            RollUp:       $4,
+            GroupByExprsList: exprsList,
+            Apart: false,
+            Cube :      false,
+            Rollup:       $4,
         }
+    }
+|   GROUP BY GROUPING SETS '(' grouping_sets ')'
+    {
+        $$ = &tree.GroupByClause{
+            GroupByExprsList: $6,
+            Apart: false,
+            Cube :      false,
+            Rollup:       false,
+        }
+    }
+|   GROUP BY CUBE '('  expression_list ')'
+    {
+        $$ = &tree.GroupByClause{
+            GroupByExprsList: []tree.Exprs{$5},
+            Apart: false,
+            Cube :      true,
+            Rollup:       false,
+        }
+    }
+|   GROUP BY ROLLUP '(' expression_list ')'
+    {
+        $$ = &tree.GroupByClause{
+            GroupByExprsList: []tree.Exprs{$5},
+            Apart: false,
+            Cube :      false,
+            Rollup:       true,
+        }
+    }
+
+grouping_sets:
+    '(' expression_list_opt ')'
+    {
+        $$ = []tree.Exprs{$2}
+    }
+|   grouping_sets ',' '(' expression_list_opt ')'
+    {
+        $$ = append($1, $4)
     }
 
 rollup_opt:
@@ -5878,6 +5919,7 @@ values_stmt:
             Limit: $4,
         }
     }
+
 
 row_constructor_list:
     row_constructor
@@ -10231,6 +10273,23 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
+|   GROUPING '(' func_type_opt column_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        var columnList tree.Exprs
+        for _, columnStr := range $4{
+            column := tree.NewUnresolvedColName(string(columnStr))
+            columnList = append(columnList, column)
+        }
+
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: columnList,
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
 
 std_dev_pop:
     STD
@@ -12503,6 +12562,10 @@ non_reserved_keyword:
 |	OWNERSHIP
 |   MO_TS
 |   ROLLUP
+|   GROUPING
+|   SETS
+|   CUBE
+
 
 func_not_keyword:
     DATE_ADD
