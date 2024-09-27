@@ -296,6 +296,7 @@ func Test_doRestorePitr(t *testing.T) {
 		assert.Error(t, err)
 	})
 
+	// sys account
 	convey.Convey("doRestorePitr fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -376,6 +377,7 @@ func Test_doRestorePitr(t *testing.T) {
 		assert.Error(t, err)
 	})
 
+	// normal account
 	convey.Convey("doRestorePitr fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -456,6 +458,7 @@ func Test_doRestorePitr(t *testing.T) {
 		assert.Error(t, err)
 	})
 
+	// db
 	convey.Convey("doRestorePitr fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -551,6 +554,7 @@ func Test_doRestorePitr(t *testing.T) {
 		assert.Error(t, err)
 	})
 
+	// table
 	convey.Convey("doRestorePitr fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
