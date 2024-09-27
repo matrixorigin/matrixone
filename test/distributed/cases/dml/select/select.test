@@ -268,3 +268,8 @@ drop table if exists t1;
 create table t1 (a int, b varchar, c int, primary key (c,a), key idx_b(b));
 insert into t1 select result, result || "_a",result+100000000 from generate_series(1,10000) g;
 select * from t1 where b in ("11_a","21_a");
+
+drop table if exists t1;
+create table t1(a int primary key, b int, c varchar(200));
+insert into t1 select result, result, "aabbccddeeffgghhii_"||result from generate_series (1, 100000)g;
+select a from t1 where c in ("123456789012345678901234567890","123456789012345678901234567890","aabbccddeeffgghhii_100000");

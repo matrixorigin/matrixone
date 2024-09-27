@@ -3819,50 +3819,81 @@ func (v *Vector) InplaceSortAndCompact() {
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
 			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
+
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			if len(area) == 0 {
+				v.CleanOnlyData()
+				v.SetSorted(true)
+				appendList(v, newCol, nil, nil)
+			} else {
+				newColList := make([][]byte, len(newCol))
+				for i, varCol := range newCol {
+					newColList[i] = varCol.GetByteSlice(area)
+				}
+				v.CleanOnlyData()
+				v.SetSorted(true)
+				appendBytesList(v, newColList, nil, nil)
+			}
 		}
 
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float32](
+			return moarray.Compare(
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare[float32](
+			return moarray.Compare(
 				types.GetArray[float32](&a, area),
 				types.GetArray[float32](&b, area),
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			if len(area) == 0 {
+				v.CleanOnlyData()
+				v.SetSorted(true)
+				appendList(v, newCol, nil, nil)
+			} else {
+				newColList := make([][]byte, len(newCol))
+				for i, varCol := range newCol {
+					newColList[i] = varCol.GetByteSlice(area)
+				}
+				v.CleanOnlyData()
+				v.SetSorted(true)
+				appendBytesList(v, newColList, nil, nil)
+			}
 		}
 
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float64](
+			return moarray.Compare(
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare[float64](
+			return moarray.Compare(
 				types.GetArray[float64](&a, area),
 				types.GetArray[float64](&b, area),
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			if len(area) == 0 {
+				v.CleanOnlyData()
+				v.SetSorted(true)
+				appendList(v, newCol, nil, nil)
+			} else {
+				newColList := make([][]byte, len(newCol))
+				for i, varCol := range newCol {
+					newColList[i] = varCol.GetByteSlice(area)
+				}
+				v.CleanOnlyData()
+				v.SetSorted(true)
+				appendBytesList(v, newColList, nil, nil)
+			}
 		}
 	}
 }

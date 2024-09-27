@@ -495,3 +495,9 @@ select * from t1 where b in ("11_a","21_a");
 a    b    c
 11    11_a    100000011
 21    21_a    100000021
+drop table if exists t1;
+create table t1(a int primary key, b int, c varchar(200));
+insert into t1 select result, result, "aabbccddeeffgghhii_"||result from generate_series (1, 100000)g;
+select a from t1 where c in ("123456789012345678901234567890","123456789012345678901234567890","aabbccddeeffgghhii_100000");
+a
+100000
