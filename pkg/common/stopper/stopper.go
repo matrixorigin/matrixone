@@ -178,7 +178,11 @@ func (s *Stopper) RunNamedTask(name string, task func(context.Context)) error {
 	return nil
 }
 
-func (s *Stopper) RunNamedRetryTask(name string, accountId int32, retryLimit uint32, task func(context.Context, int32) error) error {
+func (s *Stopper) RunNamedRetryTask(
+	name string,
+	retryLimit uint32,
+	task func(context.Context) error,
+) error {
 	// we use read lock here for avoid race
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -188,7 +192,13 @@ func (s *Stopper) RunNamedRetryTask(name string, accountId int32, retryLimit uin
 	}
 
 	id, ctx := s.allocate()
-	s.doRunCancelableRetryTask(ctx, id, name, accountId, retryLimit, task)
+	s.doRunCancelableRetryTask(
+		ctx,
+		id,
+		name,
+		retryLimit,
+		task,
+	)
 	return nil
 }
 
@@ -280,13 +290,14 @@ func (s *Stopper) doRunCancelableTask(ctx context.Context, taskID uint64, name s
 	}()
 }
 
-// doRunCancelableRetryTask Canceleable and able to retry execute asynchronous tasks
-func (s *Stopper) doRunCancelableRetryTask(ctx context.Context,
+// doRunCancelableRetryTask cancelable and able to retry execute asynchronous tasks
+func (s *Stopper) doRunCancelableRetryTask(
+	ctx context.Context,
 	taskID uint64,
 	name string,
-	accountId int32,
 	retryLimit uint32,
-	task func(context.Context, int32) error) {
+	task func(context.Context) error,
+) {
 	s.setupTask(taskID, name)
 	go func() {
 		defer func() {
@@ -296,7 +307,7 @@ func (s *Stopper) doRunCancelableRetryTask(ctx context.Context,
 		wait := time.Second
 		maxWait := time.Second * 10
 		for i := 0; i < int(retryLimit); i++ {
-			if err := task(ctx, accountId); err == nil {
+			if err := task(ctx); err == nil {
 				return
 			}
 			time.Sleep(wait)
