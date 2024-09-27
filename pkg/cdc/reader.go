@@ -170,7 +170,6 @@ func (reader *tableReader) readTableWithTxn(
 	//  to = txn operator snapshot ts
 	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblId)
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
-	//fmt.Fprintln(os.Stderr, reader.info, "from", fromTs.ToString(), "to", toTs.ToString())
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
 	if err != nil {
 		return
@@ -273,7 +272,9 @@ func (reader *tableReader) readTableWithTxn(
 				}
 
 				addTailEndStatistics()
+				insertAtmBatch.Close()
 				insertAtmBatch = nil
+				deleteAtmBatch.Close()
 				deleteAtmBatch = nil
 			}
 
@@ -325,7 +326,9 @@ func (reader *tableReader) readTableWithTxn(
 			}
 
 			addTailEndStatistics()
+			insertAtmBatch.Close()
 			insertAtmBatch = nil
+			deleteAtmBatch.Close()
 			deleteAtmBatch = nil
 		}
 	}
