@@ -21,12 +21,11 @@ import (
 )
 
 func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
-	defer func() {
-		for i := 0; i < count; i++ {
-			itr.keys[i] = itr.keys[i][:0]
-		}
-	}()
+	for i := 0; i < count; i++ {
+		itr.keys[i] = itr.keys[i][:0]
+	}
 	copy(itr.zValues[:count], OneInt64s[:count])
+	copy(itr.values[:count], zeroUint64[:count])
 	itr.encodeHashKeys(vecs, start, count)
 	itr.mp.hashMap.FindStringBatch(itr.strHashStates, itr.keys[:count], itr.values)
 	return itr.values[:count], itr.zValues[:count]
@@ -70,13 +69,12 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 }
 
 func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
-	defer func() {
-		for i := 0; i < count; i++ {
-			itr.keys[i] = 0
-		}
-		copy(itr.keyOffs[:count], zeroUint32)
-	}()
+	for i := 0; i < count; i++ {
+		itr.keys[i] = 0
+	}
+	copy(itr.keyOffs[:count], zeroUint32)
 	copy(itr.zValues[:count], OneInt64s[:count])
+	copy(itr.values[:count], zeroUint64[:count])
 	itr.encodeHashKeys(vecs, start, count)
 	copy(itr.hashes[:count], zeroUint64[:count])
 	itr.mp.hashMap.FindBatch(count, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values[:count])

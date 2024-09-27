@@ -570,7 +570,7 @@ func Test_ShardingHandler(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		tombstones, err := disttae.UnmarshalTombstoneData(res)
+		tombstones, err := engine_util.UnmarshalTombstoneData(res)
 		require.NoError(t, err)
 
 		require.True(t, tombstones.HasAnyInMemoryTombstone())
@@ -792,7 +792,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 		data, err := relData.MarshalBinary()
 		require.NoError(t, err)
 		readerBuildParam.ReaderBuildParam.RelData = data
-		readerBuildParam.ReaderBuildParam.ScanType = disttae.SMALL
+		readerBuildParam.ReaderBuildParam.ScanType = engine_util.SMALL
 		readerBuildParam.ReaderBuildParam.TombstoneApplyPolicy =
 			int32(engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3)
 		res, err := disttae.HandleShardingReadBuildReader(
@@ -1334,9 +1334,9 @@ func Test_SimpleReader(t *testing.T) {
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	r := disttae.SimpleTombstoneObjectReader(
+	r := engine_util.SimpleTombstoneObjectReader(
 		context.Background(), fs, &stats, timestamp.Timestamp{},
-		disttae.WithColumns(
+		engine_util.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
 		),
@@ -1363,14 +1363,14 @@ func Test_SimpleReader(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, done)
 
-	r = disttae.SimpleMultiObjectsReader(
+	r = engine_util.SimpleMultiObjectsReader(
 		context.Background(), fs,
 		[]objectio.ObjectStats{stats, stats}, timestamp.Timestamp{},
-		disttae.WithColumns(
+		engine_util.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
 		),
-		disttae.WithTombstone(),
+		engine_util.WithTombstone(),
 	)
 
 	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
