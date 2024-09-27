@@ -145,7 +145,7 @@ func HandleSyncLogTailReq(
 		return
 	}
 
-	if checkpointed.GreaterEq(&end) {
+	if checkpointed.GE(&end) {
 		return api.SyncLogTailResp{
 			CkpLocation: ckpLoc,
 		}, nil, err
