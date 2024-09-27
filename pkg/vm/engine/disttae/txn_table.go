@@ -1977,19 +1977,17 @@ func (tbl *txnTable) PKPersistedBetween(
 		return getNonSortedPKSearchFuncByPKVec(keys)
 	}
 
-	cacheBat := batch.EmptyBatchWithSize(1)
 	//read block ,check if keys exist in the block.
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
 	for _, blk := range candidateBlks {
-		release, err := blockio.LoadColumns(
+		bat, release, err := blockio.LoadColumns(
 			ctx,
 			[]uint16{uint16(pkSeq)},
 			[]types.Type{pkType},
 			fs,
 			blk.MetaLocation(),
-			&cacheBat,
 			tbl.proc.Load().GetMPool(),
 			fileservice.Policy(0),
 		)
@@ -2003,7 +2001,7 @@ func (tbl *txnTable) PKPersistedBetween(
 			searchFunc = buildUnsortedFilter()
 		}
 
-		sels := searchFunc(cacheBat.Vecs)
+		sels := searchFunc(bat.Vecs)
 		if len(sels) > 0 {
 			return true, nil
 		}

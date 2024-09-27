@@ -35,10 +35,9 @@ func LoadColumnsData(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	cacheBat *batch.Batch,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (dataMeta objectio.ObjectDataMeta, release func(), err error) {
+) (bat *batch.Batch, dataMeta objectio.ObjectDataMeta, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
@@ -49,18 +48,21 @@ func LoadColumnsData(
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
 		return
 	}
+	bat = batch.NewWithSize(len(cols))
 	release = func() {
 		objectio.ReleaseIOVector(ioVectors)
-		cacheBat.FreeColumns(m)
+		bat.Clean(m)
 	}
+	var obj any
 	for i := range cols {
-		if err = objectio.MustVectorTo(cacheBat.Vecs[i], ioVectors.Entries[i].CachedData.Bytes()); err != nil {
-			release()
-			release = nil
+		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
+		if err != nil {
 			return
 		}
+		bat.Vecs[i] = obj.(*vector.Vector)
+		bat.SetRowCount(bat.Vecs[i].Length())
 	}
-	cacheBat.SetRowCount(cacheBat.Vecs[0].Length())
+	//TODO call CachedData.Release
 	return
 }
 
@@ -136,13 +138,10 @@ func LoadTombstoneColumns(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	cacheBat *batch.Batch, // cacheBat.Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (meta objectio.ObjectDataMeta, release func(), err error) {
-	return LoadColumnsData(
-		ctx, objectio.SchemaTombstone, cols, typs, fs, location, cacheBat, m, policy,
-	)
+) (bat *batch.Batch, meta objectio.ObjectDataMeta, release func(), err error) {
+	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, policy)
 }
 
 func LoadColumns(
@@ -151,13 +150,10 @@ func LoadColumns(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	cacheBat *batch.Batch, // fillBatch.Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (release func(), err error) {
-	_, release, err = LoadColumnsData(
-		ctx, objectio.SchemaData, cols, typs, fs, location, cacheBat, m, policy,
-	)
+) (bat *batch.Batch, release func(), err error) {
+	bat, _, release, err = LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy)
 	return
 }
 
