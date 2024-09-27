@@ -83,7 +83,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -337,7 +337,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		bs := []byte(p.Node.Payload)
 		var relData engine.RelData
 		if len(bs) > 0 {
-			rd, err := disttae.UnmarshalRelationData(bs)
+			rd, err := engine_util.UnmarshalRelationData(bs)
 			if err != nil {
 				return nil, err
 			}

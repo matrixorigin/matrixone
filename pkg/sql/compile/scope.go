@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"strings"
 	"sync"
 	"time"
@@ -40,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -939,7 +939,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		newReaders := make([]engine.Reader, 0, s.NodeInfo.Mcpu)
 		step := len(readers) / s.NodeInfo.Mcpu
 		for i := 0; i < len(readers); i += step {
-			newReaders = append(newReaders, disttae.NewMergeReader(readers[i:i+step]))
+			newReaders = append(newReaders, engine_util.NewMergeReader(readers[i:i+step]))
 		}
 		readers = newReaders
 	}
