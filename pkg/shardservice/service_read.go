@@ -197,9 +197,8 @@ func (s *service) doRead(
 		ctx,
 		readAt,
 	); err != nil {
-		s.logger.Error(">>>>> WaitLogAppliedAt error",
-			zap.String("ctx", fmt.Sprintf("%p", ctx)),
-			zap.Error(context.Cause(ctx)))
+		s.logger.Info(">>>>> WaitLogAppliedAt error",
+			zap.String("ctx", fmt.Sprintf("%p", ctx)))
 		return nil, err
 	}
 
