@@ -370,6 +370,12 @@ func NewReader(
 func (r *reader) Close() error {
 	r.source.Close()
 	r.withFilterMixin.reset()
+	if r.cacheBatch != nil {
+		if r.cacheBatch.Allocated() > 0 {
+			logutil.Fatal("cache batch is not empty")
+		}
+		r.cacheBatch = nil
+	}
 	return nil
 }
 
@@ -441,6 +447,11 @@ func (r *reader) Read(
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 
+	if r.cacheBatch == nil {
+		cacheBatch := batch.EmptyBatchWithSize(len(r.columns.seqnums) + 1)
+		r.cacheBatch = &cacheBatch
+	}
+
 	err = blockio.BlockDataRead(
 		statsCtx,
 		r.isTombstone,
@@ -455,6 +466,7 @@ func (r *reader) Read(
 		policy,
 		r.name,
 		outBatch,
+		r.cacheBatch,
 		mp,
 		r.fs,
 	)
