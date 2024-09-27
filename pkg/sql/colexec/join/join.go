@@ -197,7 +197,10 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 
 	mSels := ctr.mp.Sels()
 	count := ap.ctr.inbat.RowCount()
-	itr := ctr.mp.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+	itr := ctr.itr
 	rowCount := 0
 	for i := ap.ctr.lastrow; i < count; i += hashmap.UnitLimit {
 		if rowCount >= colexec.DefaultBatchSize {
