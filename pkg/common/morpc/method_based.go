@@ -202,11 +202,7 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 	}
 
 	fn := func(request RPCMessage) error {
-		defer func() {
-			s.logger.Info(">>>>> cancel context",
-				zap.String("ctx", fmt.Sprintf("%p", ctx)))
-			request.Cancel()
-		}()
+		defer request.Cancel()
 		req, ok := request.Message.(REQ)
 		if !ok {
 			s.logger.Fatal("received invalid message",

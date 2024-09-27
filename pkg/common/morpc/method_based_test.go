@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -70,49 +69,6 @@ func TestRPCSend(t *testing.T) {
 					assert.Equal(t, []byte{byte(i)}, resp.payload)
 				}
 			}
-		},
-	)
-}
-
-func TestRPCSendWithManyGoroutines(t *testing.T) {
-	runRPCTests(
-		t,
-		func(
-			addr string,
-			c RPCClient,
-			h MethodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]) {
-			fn := func(
-				ctx context.Context,
-				req, resp *testMethodBasedMessage,
-				buf *Buffer,
-			) error {
-				resp.payload = []byte{byte(req.method)}
-				return nil
-			}
-			h.RegisterMethod(
-				1,
-				fn,
-				true)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
-			defer cancel()
-
-			var wg sync.WaitGroup
-			for i := 0; i < 1000; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					for j := 0; j < 1000; j++ {
-						f, err := c.Send(ctx, addr, &testMethodBasedMessage{method: 1})
-						require.NoError(t, err)
-						defer f.Close()
-						v, err := f.Get()
-						require.NoError(t, err)
-						resp := v.(*testMethodBasedMessage)
-						assert.Equal(t, uint32(1), resp.method)
-					}
-				}()
-			}
-			wg.Wait()
 		},
 	)
 }

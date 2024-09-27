@@ -153,7 +153,6 @@ func (c *cluster) Close() error {
 
 	for i := len(c.services) - 1; i >= 0; i-- {
 		s := c.services[i]
-		fmt.Println(">>>>>>>>>>>> stop: " + s.sid)
 		if err := s.Close(); err != nil {
 			return err
 		}
