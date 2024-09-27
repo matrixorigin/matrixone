@@ -341,16 +341,39 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	// Apply unique/secondary indices for point select
 	idxToChoose, idxSel, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node)
 	if idxToChoose != -1 {
-		return builder.applyIndexForPointSelect(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
+		retID := builder.applyIndexForPointSelect(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
+		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, filterIdx)
+		return retID
 	}
 
 	idxToChoose, idxSel, filterIdx = builder.getIndexForNonEquiCond(indexes, node)
 	if idxToChoose != -1 {
-		return builder.applyIndexForNonEquiCond(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
+		retID := builder.applyIndexForNonEquiCond(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
+		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, filterIdx)
+		return retID
 	}
 
 	//no index applied
 	return nodeID
+}
+
+func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, filterIdx []int) {
+	for i := range node.FilterList {
+		// if already in filterIdx, continue
+		applied := false
+		for j := range filterIdx {
+			if i == j {
+				applied = true
+			}
+		}
+		if applied {
+			continue
+		}
+
+		for k := range idxDef.Parts {
+			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[k]]
+		}
+	}
 }
 
 func (builder *QueryBuilder) tryIndexOnlyScan(indexes []*IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
