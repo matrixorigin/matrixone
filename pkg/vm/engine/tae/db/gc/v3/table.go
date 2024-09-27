@@ -108,19 +108,6 @@ type GCTable struct {
 	metaDir string
 }
 
-func addObjectLocked(
-	name string,
-	objEntry *ObjectEntry,
-	objects map[string]*ObjectEntry,
-) {
-	object := objects[name]
-	if object == nil {
-		objects[name] = objEntry
-		return
-	}
-	objects[name] = objEntry
-}
-
 func (t *GCTable) fillDefaults() {
 	if t.buffer == nil {
 		t.buffer = containers.NewOneSchemaBatchBuffer(
@@ -246,7 +233,7 @@ func (t *GCTable) SoftGC(
 		meta.Unlock()
 		t.Unlock()
 	}()
-
+	objects := make(map[string]*ObjectEntry)
 	var gcFiles []string
 	objectsComparedAndDeleteLocked := func(
 		bat *batch.Batch,
@@ -262,7 +249,6 @@ func (t *GCTable) SoftGC(
 		deletes := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
 		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
-
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			name := bat.Vecs[0].GetStringAt(i)
 			tid := tids[i]
@@ -276,18 +262,18 @@ func (t *GCTable) SoftGC(
 					db:       dbs[i],
 					table:    tid,
 				}
-				t.objects[name] = object
+				objects[name] = object
 				continue
 			}
-			if t.objects[name] != nil && t.objects[name].dropTS.IsEmpty() {
-				t.objects[name].dropTS = dropTs
+			if objects[name] != nil && objects[name].dropTS.IsEmpty() {
+				objects[name].dropTS = dropTs
 			}
 			tsList := meta.GetSnapshotListLocked(snapList, tid)
 			pitr := meta.GetPitrLocked(pitrList, dbs[i], tid)
 			if tsList == nil && pitr.IsEmpty() {
 				if createTs.LT(&ts) && dropTs.LT(&ts) {
 					gcFiles = append(gcFiles, name)
-					delete(t.objects, name)
+					delete(objects, name)
 					bm.Add(uint64(i))
 				}
 				continue
@@ -296,7 +282,7 @@ func (t *GCTable) SoftGC(
 				dropTs.LT(&ts) &&
 				!isSnapshotRefers(&createTs, &dropTs, tsList, &pitr, name) {
 				gcFiles = append(gcFiles, name)
-				delete(t.objects, name)
+				delete(objects, name)
 				bm.Add(uint64(i))
 			}
 		}
@@ -343,7 +329,7 @@ func (t *GCTable) SoftGC(
 			return nil, nil, err
 		}
 	}
-
+	t.objects = objects
 	if _, err := t.CollectMapData(ctx, buffer, t.mp); err != nil {
 		logutil.Error(
 			"GCTable-SoftGC-COLLECT-ERROR",
@@ -540,6 +526,7 @@ func (t *GCTable) CollectMapData(cxt context.Context, bat *batch.Batch, mp *mpoo
 	for name, entry := range t.objects {
 		addObjectToBatch(bat, name, entry, mp)
 	}
+	batch.SetLength(bat, len(t.objects))
 	t.objects = nil
 	return false, nil
 }
@@ -568,7 +555,7 @@ func (t *GCTable) LoadBatchData(cxt context.Context, bat *batch.Batch, mp *mpool
 	if err != nil {
 		return false, err
 	}
-	t.files.stats = t.files.stats[:1]
+	t.files.stats = t.files.stats[1:]
 	return false, nil
 }
 

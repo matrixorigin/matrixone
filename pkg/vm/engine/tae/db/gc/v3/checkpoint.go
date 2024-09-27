@@ -125,7 +125,7 @@ func NewCheckpointCleaner(
 	cleaner.minMergeCount.count = MinMergeCount
 	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
-	cleaner.mPool = common.DebugAllocator
+	cleaner.mPool = common.CheckpointAllocator
 	cleaner.checker.extras = make(map[string]func(item any) bool)
 	return cleaner
 }
@@ -735,6 +735,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		logtail.CloseSnapshotList(snapshots)
 	}()
 	gcTable := NewGCTable(c.fs.Service, c.mPool)
+	defer gcTable.Close()
 	gcTable.UpdateTable(data)
 	snapshots, err = c.GetSnapshots()
 	if err != nil {
@@ -793,7 +794,7 @@ func (c *checkpointCleaner) softGC(
 			zap.String("soft-gc cost", softCost.String()),
 			zap.String("merge-table cost", mergeCost.String()))
 	}()
-	if len(c.inputs.tables) == 0 {
+	if len(c.inputs.tables) < 2 {
 		return nil, nil, nil
 	}
 	mergeTable := c.inputs.tables[0]
@@ -916,14 +917,9 @@ func (c *checkpointCleaner) CheckGC() error {
 
 	bf := bloomfilter.New(int64(bat.Vecs[0].Length()), 0.00001)
 	debugTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
-	var mergeTable *GCTable
-	if len(c.inputs.tables) > 1 {
-		mergeTable = NewGCTable(c.fs.Service, c.mPool)
-		for _, table := range c.inputs.tables {
-			mergeTable.Merge(table)
-		}
-	} else {
-		mergeTable = c.inputs.tables[0]
+	mergeTable := NewGCTable(c.fs.Service, c.mPool)
+	for _, table := range c.inputs.tables {
+		mergeTable.Merge(table)
 	}
 	defer mergeTable.Close()
 	mergeTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
