@@ -725,7 +725,6 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	// check if the database can be restore
 	if len(dbName) != 0 && needSkipDb(dbName) {
 		return moerr.NewInternalErrorf(ctx, "database %s can not be restore", dbName)
-
 	}
 
 	// get pitr Record
