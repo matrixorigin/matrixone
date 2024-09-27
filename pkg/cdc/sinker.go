@@ -596,6 +596,8 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sql string) (er
 	}
 	for retry, startTime := 0, time.Now(); needRetry(retry, startTime); retry++ {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ar.Cancel:
 			return
 		default:
