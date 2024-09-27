@@ -426,7 +426,7 @@ func (c *objectPruneArg) Run() error {
 		total++
 
 		createTs := obj.GetCreatedAt()
-		if createTs.GreaterEq(&ago) {
+		if createTs.GE(&ago) {
 			continue
 		}
 		stale++

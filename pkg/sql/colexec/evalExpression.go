@@ -639,25 +639,9 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	// deal with: col1 prefix_in serial([?,?,?,?,?])
-	paramRowCount := 1
-	if len(expr.parameterResults) > 0 {
-		if !expr.parameterResults[0].IsConst() {
-			paramRowCount = expr.parameterResults[0].Length()
-		}
-	}
-	if paramRowCount > 1 && batches[0].RowCount() == 1 {
-		if err = expr.resultVector.PreExtendAndReset(paramRowCount); err != nil {
-			return nil, err
-		}
-		if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, paramRowCount, nil); err != nil {
-			return nil, err
-		}
-	} else {
-		if err = expr.evalFn(
-			expr.parameterResults, expr.resultVector, proc, batches[0].RowCount(), &expr.selectList); err != nil {
-			return nil, err
-		}
+	if err = expr.evalFn(
+		expr.parameterResults, expr.resultVector, proc, batches[0].RowCount(), &expr.selectList); err != nil {
+		return nil, err
 	}
 
 	return expr.resultVector.GetResultVector(), nil

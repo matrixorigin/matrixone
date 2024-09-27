@@ -168,7 +168,7 @@ func InitTxnHandle(ctx context.Context, moduleName string, t *testing.T, opts *o
 			minTS := handle.GetDB().TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
 			end := ckp.GetEnd()
-			return !end.GreaterEq(&minTS)
+			return !end.GE(&minTS)
 		}, "testdb")
 
 	return handle

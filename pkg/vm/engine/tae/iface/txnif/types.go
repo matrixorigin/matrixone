@@ -39,7 +39,7 @@ var (
 )
 
 type Txn2PC interface {
-	Freeze() error
+	Freeze(ctx context.Context) error
 	PrepareRollback() error
 	ApplyRollback() error
 	PrePrepare(ctx context.Context) error
@@ -264,7 +264,7 @@ type TxnStore interface {
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
 	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error
-	AddObjsWithMetaLoc(ctx context.Context, dbId, id uint64, stats containers.Vector) error
+	AddDataFiles(ctx context.Context, dbId, id uint64, stats containers.Vector) error
 
 	RangeDelete(
 		id *common.ID, start, end uint32, pkVec containers.Vector, dt handle.DeleteType,
@@ -273,8 +273,7 @@ type TxnStore interface {
 		id *common.ID,
 		rowIDVec, pkVec containers.Vector, dt handle.DeleteType,
 	) (err error)
-	TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error)
-	//TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
+	AddPersistedTombstoneFile(id *common.ID, stats objectio.ObjectStats) (ok bool, err error)
 	GetByFilter(
 		ctx context.Context, dbId uint64, id uint64, filter *handle.Filter,
 	) (*common.ID, uint32, error)

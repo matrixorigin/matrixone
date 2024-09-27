@@ -30,7 +30,7 @@ type GetCheckpointRange = func(snapshot types.TS, files []*MetaFile) ([]*MetaFil
 
 func SpecifiedCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error) {
 	for i, file := range files {
-		if snapshot.LessEq(&file.end) {
+		if snapshot.LE(&file.end) {
 			return files, i, nil
 		}
 	}
@@ -40,9 +40,12 @@ func SpecifiedCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int
 func AllAfterAndGCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error) {
 	prev := &MetaFile{}
 	for i, file := range files {
-		if snapshot.LessEq(&file.end) &&
-			snapshot.Less(&prev.end) &&
+		if snapshot.LE(&file.end) &&
+			(prev.end.IsEmpty() || snapshot.LT(&prev.end)) &&
 			file.start.IsEmpty() {
+			if prev.end.IsEmpty() {
+				return files, i, nil
+			}
 			return files, i - 1, nil
 		}
 		prev = file
@@ -92,7 +95,7 @@ func ListSnapshotMeta(
 		})
 	}
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.Less(&metaFiles[j].end)
+		return metaFiles[i].end.LT(&metaFiles[j].end)
 	})
 
 	for i, file := range metaFiles {
@@ -127,7 +130,7 @@ func ListSnapshotMetaWithDiskCleaner(
 		idx++
 	}
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.Less(&metaFiles[j].end)
+		return metaFiles[i].end.LT(&metaFiles[j].end)
 	})
 
 	mergeMetaFiles := make([]*MetaFile, 0)
@@ -205,21 +208,21 @@ func ListSnapshotCheckpointWithMeta(
 
 	entries, maxGlobalEnd := ReplayCheckpointEntries(bat, checkpointVersion)
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].end.Less(&entries[j].end)
+		return entries[i].end.LT(&entries[j].end)
 	})
 	if isAll && gcStage.IsEmpty() {
 		return entries, nil
 	}
 	for i := range entries {
 		if !gcStage.IsEmpty() {
-			if entries[i].end.Less(&gcStage) {
+			if entries[i].end.LT(&gcStage) {
 				continue
 			}
 			return entries[i:], nil
 		}
-
-		if entries[i].end.Equal(&maxGlobalEnd) &&
-			entries[i].entryType == ET_Global {
+		p := maxGlobalEnd.Prev()
+		if entries[i].end.Equal(&p) || (entries[i].end.Equal(&maxGlobalEnd) &&
+			entries[i].entryType == ET_Global) {
 			return entries[i:], nil
 		}
 
