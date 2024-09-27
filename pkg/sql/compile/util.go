@@ -54,6 +54,17 @@ const (
 )
 
 var (
+	needSkipDbs = map[string]bool{
+		"mysql":              true,
+		"system":             true,
+		"system_metrics":     true,
+		"mo_task":            true,
+		"mo_debug":           true,
+		"information_schema": true,
+		catalog.MO_CATALOG:   true,
+	}
+)
+var (
 	// see the comment in fuzzyCheck func genCondition for the reason why has to be two SQLs
 	fuzzyNonCompoundCheck = "select %s from `%s`.`%s` where %s in (%s) group by %s having count(*) > 1 limit 1;"
 	fuzzyCompoundCheck    = "select serial(%s) from `%s`.`%s` where %s group by serial(%s) having count(*) > 1 limit 1;"
