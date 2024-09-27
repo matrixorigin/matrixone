@@ -441,7 +441,7 @@ func (ctr *container) getAggResult() ([]*vector.Vector, error) {
 // init the container.bat to store the final result of group-operator
 func (ctr *container) initResultBat(proc *process.Process, config *Group) (err error) {
 	// init the batch to store the group-by.
-	ctr.bat = batch.NewWithSize(len(config.Exprs))
+	ctr.bat = batch.NewOffHeapWithSize(len(config.Exprs))
 	for i := range ctr.groupVecs.Typ {
 		ctr.bat.Vecs[i] = vector.NewVec(ctr.groupVecs.Typ[i])
 	}
@@ -488,7 +488,7 @@ func (ctr *container) aggWithoutGroupByCannotEmptySet(proc *process.Process, con
 	// if this was a query like `select agg(a) from t`, and t is empty.
 	// agg(a) should return 0 for count, and return null for other agg.
 	if ctr.bat == nil {
-		ctr.bat = batch.NewWithSize(0)
+		ctr.bat = batch.NewOffHeapWithSize(0)
 	}
 	if len(ctr.bat.Aggs) == 0 {
 		// init the agg.
