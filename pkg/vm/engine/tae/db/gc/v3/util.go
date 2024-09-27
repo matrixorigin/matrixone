@@ -15,40 +15,55 @@
 package gc
 
 import (
-	"bytes"
+	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
-func DedupSortedBatches(
-	uniqueIdx int,
-	batches []*batch.Batch,
-) error {
-	if len(batches) == 0 {
-		return nil
-	}
+func MakeLoadFunc(
+	ctx context.Context,
+	tail []*batch.Batch,
+	objects []objectio.ObjectStats,
+	fs fileservice.FileService,
+	ts timestamp.Timestamp,
+	opts ...disttae.ReaderOption,
+) (
+	func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
+	func(),
+) {
 	var (
-		curr, last []byte
+		cursor int
+		reader engine.Reader
 	)
-	var sels []int64
-	for i := 0; i < len(batches); i++ {
-		uniqueKey := batches[uniqueIdx].Vecs[uniqueIdx]
-		for j := 0; j < uniqueKey.Length(); j++ {
-			if i == 0 && j == 0 {
-				last = uniqueKey.GetRawBytesAt(j)
-			} else {
-				curr = uniqueKey.GetRawBytesAt(j)
-				if bytes.Compare(curr, last) == 0 {
-					sels = append(sels, int64(j))
-				} else {
-					last = curr
-				}
-			}
-		}
-		if len(sels) > 0 {
-			batches[i].Shrink(sels, true)
-			sels = sels[:0]
+	if len(objects) > 0 {
+		reader = disttae.SimpleMultiObjectsReader(
+			ctx, fs, objects, ts, opts...,
+		)
+	}
+	releaseFn := func() {
+		if reader != nil {
+			reader.Close()
 		}
 	}
-	return nil
+	return func(
+		ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
+	) (bool, error) {
+		if cursor < len(tail) {
+			if _, err := bat.AppendWithCopy(ctx, mp, bat); err != nil {
+				return false, err
+			}
+			cursor++
+			return false, nil
+		}
+		if reader != nil {
+			return reader.Read(ctx, bat.Attrs, nil, mp, bat)
+		}
+		return true, nil
+	}, releaseFn
 }
