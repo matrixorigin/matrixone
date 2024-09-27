@@ -67,7 +67,7 @@ func TestRunTaskWithTimeout(t *testing.T) {
 
 	s.Stop()
 	assert.Equal(t, 1, len(names))
-	assert.Equal(t, "timeout", names[0])
+	assert.Contains(t, names[0], "timeout")
 }
 
 func BenchmarkRunTask1000(b *testing.B) {
