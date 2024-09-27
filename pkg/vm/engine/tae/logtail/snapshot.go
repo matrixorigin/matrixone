@@ -1081,7 +1081,7 @@ func (sm *SnapshotMeta) Rebuild(
 		createTS := insCreateTSs[i]
 		tid := insTides[i]
 		if tid == sm.pitr.tid {
-			if (*objects)[tid][objectStats.ObjectName().SegmentId()] == nil {
+			if (*objects2)[objectStats.ObjectName().SegmentId()] == nil {
 				(*objects2)[objectStats.ObjectName().SegmentId()] = &objectInfo{
 					stats:    objectStats,
 					createAt: createTS,
@@ -1089,8 +1089,8 @@ func (sm *SnapshotMeta) Rebuild(
 				logutil.Info("[RebuildPITR] Add object2",
 					zap.String("object name", objectStats.ObjectName().String()),
 					zap.String("create at", createTS.ToString()))
-				continue
 			}
+			continue
 		}
 		if _, ok := sm.tides[tid]; !ok {
 			sm.tides[tid] = struct{}{}
