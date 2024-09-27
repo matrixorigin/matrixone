@@ -200,7 +200,10 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 
 	count := inbat.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+	itr := ctr.itr
 	eligible := make([]int64, 0, hashmap.UnitLimit)
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i

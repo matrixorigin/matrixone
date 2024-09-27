@@ -126,7 +126,7 @@ const (
 	FIRST_VALUE
 	FLOOR
 	GREATEST
-	GROUPING_ID
+	GROUPING
 	HASH
 	HASH_AGG
 	HEX_DECODE
@@ -460,6 +460,7 @@ var functionIdRegister = map[string]int32{
 	"min":                   MIN,
 	"sum":                   SUM,
 	"group_concat":          GROUP_CONCAT,
+	"grouping":              GROUPING,
 	"avg":                   AVG,
 	"avg_tw_cache":          AVG_TW_CACHE,
 	"avg_tw_result":         AVG_TW_RESULT,
