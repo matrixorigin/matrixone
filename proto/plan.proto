@@ -615,12 +615,12 @@ message UpdateCtx {
 	ObjectRef obj_ref	= 1;
 	TableDef table_def	= 2;
 
-	repeated ColRef insert_cols	= 3 [(gogoproto.nullable) = false];
-	repeated ColRef delete_cols	= 4 [(gogoproto.nullable) = false];
+	repeated int32 partition_table_ids		= 3;
+	repeated string partition_table_names	= 4;
+	int32 partition_idx						= 5;
 
-	repeated int32 partition_table_ids		= 5;
-	repeated string partition_table_names	= 6;
-	int32 partition_idx						= 7;
+	repeated ColRef insert_cols	= 6 [(gogoproto.nullable) = false];
+	repeated ColRef delete_cols	= 7 [(gogoproto.nullable) = false];
 }
 
 message InsertCtx {
