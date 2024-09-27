@@ -969,6 +969,7 @@ type CdcTask struct {
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
 	sunkWatermarkUpdater *cdc2.WatermarkUpdater
+	holdCh               chan int
 }
 
 func NewCdcTask(
@@ -1055,11 +1056,11 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 
 	if firstTime {
 		// hold
-		ch := make(chan int, 1)
+		cdc.holdCh = make(chan int, 1)
 		select {
 		case <-ctx.Done():
 			break
-		case <-ch:
+		case <-cdc.holdCh:
 			break
 		}
 	}
@@ -1295,7 +1296,13 @@ func (cdc *CdcTask) Cancel() error {
 	if cdc.activeRoutine.Cancel != nil {
 		close(cdc.activeRoutine.Cancel)
 	}
-	return cdc.sunkWatermarkUpdater.DeleteAllFromDb()
+
+	if err := cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
+		return err
+	}
+
+	cdc.holdCh <- 1
+	return nil
 }
 
 func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client.TxnOperator) error {

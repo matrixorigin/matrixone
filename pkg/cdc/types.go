@@ -22,13 +22,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tidwall/btree"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/tidwall/btree"
 )
 
 const (
@@ -143,12 +143,6 @@ func (info DbTableInfo) String() string {
 	)
 }
 
-// Batches denotes all rows have been read.
-type Batches struct {
-	Inserts []*AtomicBatch
-	Deletes []*AtomicBatch
-}
-
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].
 // These batches have atomicity
 type AtomicBatch struct {
@@ -245,6 +239,12 @@ func (bat *AtomicBatch) Append(
 }
 
 func (bat *AtomicBatch) Close() {
+	count := float64(bat.RowCount())
+	allocated := float64(bat.Allocated())
+	v2.CdcTotalProcessingRecordCountGauge.Sub(count)
+	v2.CdcTotalAllocatedBatchBytesGauge.Sub(allocated)
+	v2.CdcSinkRecordCounter.Add(count)
+
 	for _, oneBat := range bat.Batches {
 		oneBat.Clean(bat.Mp)
 	}
@@ -256,6 +256,7 @@ func (bat *AtomicBatch) Close() {
 
 func (bat *AtomicBatch) GetRowIterator() RowIterator {
 	return &atomicBatchRowIter{
+		bat:      bat,
 		iter:     bat.Rows.Iter(),
 		initIter: bat.Rows.Iter(),
 	}
@@ -264,6 +265,7 @@ func (bat *AtomicBatch) GetRowIterator() RowIterator {
 var _ RowIterator = new(atomicBatchRowIter)
 
 type atomicBatchRowIter struct {
+	bat      *AtomicBatch
 	iter     btree.IterG[AtomicBatchRow]
 	initIter btree.IterG[AtomicBatchRow]
 }
@@ -296,6 +298,8 @@ func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
 
 func (iter *atomicBatchRowIter) Close() error {
 	iter.iter.Release()
+	iter.initIter.Release()
+	iter.bat.Close()
 	return nil
 }
 

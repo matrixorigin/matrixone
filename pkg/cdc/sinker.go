@@ -325,6 +325,7 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 
 		// iterator reach the end, remove it
 		if !insertIterHasNext {
+			_ = insertIter.Close()
 			s.insertIters = s.insertIters[1:]
 		} else {
 			// did an extra Next() before, need to move back here
@@ -333,6 +334,7 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 			}
 		}
 		if !deleteIterHasNext {
+			_ = deleteIter.Close()
 			s.deleteIters = s.deleteIters[1:]
 		} else {
 			if !deleteIter.Prev() {
@@ -425,6 +427,7 @@ func (s *mysqlSinker) sinkRemain(ctx context.Context) (err error) {
 		}
 
 		// iterator reach the end, remove it
+		_ = insertIter.Close()
 		s.insertIters = s.insertIters[1:]
 	}
 
@@ -443,6 +446,7 @@ func (s *mysqlSinker) sinkRemain(ctx context.Context) (err error) {
 		}
 
 		// iterator reach the end, remove it
+		_ = deleteIter.Close()
 		s.deleteIters = s.deleteIters[1:]
 	}
 
