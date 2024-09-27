@@ -597,7 +597,7 @@ func (c *checkpointCleaner) getDeleteFile(
 	return deleteFiles, mergeFiles, nil
 }
 
-func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS) error {
+func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS, pitrs *logtail.PitrInfo) error {
 	if stage.IsEmpty() ||
 		(c.GeteCkpStage() != nil && c.GeteCkpStage().GE(&stage)) {
 		return nil
@@ -621,6 +621,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 	for _, ts := range snapshotList {
 		ckpSnapList = append(ckpSnapList, ts...)
 	}
+	ckpSnapList = append(ckpSnapList, pitrs.ToTsList()...)
 	sort.Slice(ckpSnapList, func(i, j int) bool {
 		return ckpSnapList[i].LT(&ckpSnapList[j])
 	})
@@ -732,7 +733,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		logutil.Infof("[DiskCleaner] ExecDelete failed: %v", err.Error())
 		return err
 	}
-	err = c.mergeCheckpointFiles(c.ckpClient.GetStage(), snapshotList)
+	err = c.mergeCheckpointFiles(c.ckpClient.GetStage(), snapshotList, pitrs)
 
 	if err != nil {
 		// TODO: Error handle
