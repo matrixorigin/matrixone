@@ -2911,6 +2911,23 @@ func TestRemoteLockFailedInRollingRestartCN(t *testing.T) {
 	)
 }
 
+func TestCannotCommit(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			orphanTxn := pb.OrphanTxn{
+				Service: "s1",
+				Txn:     [][]byte{[]byte("testTxn")},
+			}
+			alloc.AddCannotCommit([]pb.OrphanTxn{orphanTxn})
+
+			_, err := alloc.Valid("s1", []byte("testTxn"), nil)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
+		},
+	)
+}
+
 func TestRemoteLockSuccInRollingRestartCN(t *testing.T) {
 	runLockServiceTests(
 		t,
