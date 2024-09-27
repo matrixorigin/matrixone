@@ -3542,6 +3542,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			v.length = 0
 		}
 		v.nsp.Reset()
+		v.sorted = true
 	}
 
 	switch v.GetType().Oid {
