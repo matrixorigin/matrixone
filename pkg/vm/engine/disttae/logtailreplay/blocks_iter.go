@@ -192,9 +192,9 @@ func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
 	return false
 }
 
-func (p *PartitionState) CollectVisibleObjectsBetween(
+func (p *PartitionState) CollectObjectsBetween(
 	start, end types.TS,
-	isTombstone bool,
+	collectDeleted bool,
 ) (stats []objectio.ObjectStats) {
 
 	iter := p.dataObjectTSIndex.Copy().Iter()
@@ -211,10 +211,6 @@ func (p *PartitionState) CollectVisibleObjectsBetween(
 	for ok := true; ok; ok = iter.Next() {
 		entry := iter.Item()
 
-		if entry.IsDelete {
-			continue
-		}
-
 		var ss objectio.ObjectStats
 		objectio.SetObjectStatsShortName(&ss, &entry.ShortObjName)
 
@@ -228,12 +224,20 @@ func (p *PartitionState) CollectVisibleObjectsBetween(
 			continue
 		}
 
-		// if deleted before end
-		if !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&end) {
-			continue
+		if !collectDeleted {
+			// if deleted before end
+			if !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&end) {
+				continue
+			}
+		} else {
+			// only collect deletes
+			// if not delete or delete after end
+			if val.DeleteTime.IsEmpty() || val.DeleteTime.GT(&end) {
+				continue
+			}
 		}
 
-		// if created in [start, end]
+		// if created not in [start, end]
 		if val.CreateTime.LT(&start) && val.CreateTime.GT(&end) {
 			continue
 		}
@@ -289,7 +293,7 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 
 func (p *PartitionState) CollectTombstoneObjects(
 	snapshot types.TS,
-	statsSlice *objectio.ObjectStatsSlice,
+	appendTo func(stats *objectio.ObjectStats),
 ) (err error) {
 
 	if p.ApproxTombstoneObjectsNum() == 0 {
@@ -304,7 +308,7 @@ func (p *PartitionState) CollectTombstoneObjects(
 
 	for iter.Next() {
 		item := iter.Entry()
-		(*statsSlice).Append(item.ObjectStats[:])
+		appendTo(&item.ObjectStats)
 	}
 
 	return nil
