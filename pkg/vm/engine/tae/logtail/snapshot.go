@@ -813,7 +813,7 @@ func (sm *SnapshotMeta) SetTid(tid uint64) {
 }
 
 func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint32, error) {
-	if len(sm.objects) == 0 {
+	if len(sm.objects) == 0 && len(sm.pitr.objects) == 0 {
 		return 0, nil
 	}
 	bat := containers.NewBatch()
@@ -1081,7 +1081,7 @@ func (sm *SnapshotMeta) Rebuild(
 		createTS := insCreateTSs[i]
 		tid := insTides[i]
 		if tid == sm.pitr.tid {
-			if (*objects2)[objectStats.ObjectName().SegmentId()] == nil {
+			if (*objects)[tid][objectStats.ObjectName().SegmentId()] == nil {
 				(*objects2)[objectStats.ObjectName().SegmentId()] = &objectInfo{
 					stats:    objectStats,
 					createAt: createTS,
@@ -1089,8 +1089,8 @@ func (sm *SnapshotMeta) Rebuild(
 				logutil.Info("[RebuildPITR] Add object2",
 					zap.String("object name", objectStats.ObjectName().String()),
 					zap.String("create at", createTS.ToString()))
+				continue
 			}
-			continue
 		}
 		if _, ok := sm.tides[tid]; !ok {
 			sm.tides[tid] = struct{}{}
@@ -1100,6 +1100,7 @@ func (sm *SnapshotMeta) Rebuild(
 			(*objects)[tid] = make(map[objectio.Segmentid]*objectInfo)
 		}
 		if (*objects)[tid][objectStats.ObjectName().SegmentId()] == nil {
+
 			(*objects)[tid][objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
