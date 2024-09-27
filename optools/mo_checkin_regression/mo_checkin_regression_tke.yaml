@@ -4,6 +4,7 @@ metadata:
   name: mo-checkin-regression
   namespace: nsformocheckin
 spec:
+  semanticVersion: 1.3.0
   proxy:
     exportToPrometheus: true
     nodeSelector:
@@ -192,6 +193,24 @@ spec:
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression: "true"
     overlay:
+      initContainers:
+        - image: ccr.ccs.tencentyun.com/matrixone-dev/matrixone:imagetag
+          command:
+            - sh
+            - -c
+            - |
+              apt update -y;
+              apt install -y iptables conntrack;
+              iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;
+          imagePullPolicy: IfNotPresent
+          terminationMessagePolicy: File
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN","SYS_ADMIN"]
+          name: enable-conntrack
+      mainContainerSecurityContext:
+        capabilities:
+          add: ["NET_ADMIN","NET_RAW"]
       tolerations:
       - effect: NoSchedule
         key: node-role.kubernetes.io/mo-checkin-regression
