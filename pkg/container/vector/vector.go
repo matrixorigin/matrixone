@@ -197,6 +197,10 @@ func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
 }
 
+func (v *Vector) SetOffHeap(offHeap bool) {
+	v.offHeap = offHeap
+}
+
 func (v *Vector) SetTypeScale(scale int32) {
 	v.typ.Scale = scale
 }
