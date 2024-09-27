@@ -19,12 +19,14 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func TestPartitionStateRowsIter(t *testing.T) {
@@ -526,4 +528,37 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 		require.True(t, modified)
 	}
 
+}
+
+func TestPrefixIn(t *testing.T) {
+	pkTree := btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, btree.Options{
+		Degree: 64,
+	})
+
+	for i := 0; i < 10; i++ {
+		pkTree.Set(&PrimaryIndexEntry{
+			Bytes: []byte{byte(i)},
+		})
+	}
+
+	var encodes = [][]byte{{0}, {2}, {4}}
+
+	for i := 10; i < 150; i++ {
+		encodes = append(encodes, []byte{byte(i)})
+	}
+
+	// len(encodes) >> len(pkTree) to trigger Scan all
+	spec := InKind(encodes, function.PREFIX_IN)
+
+	pkIter := &primaryKeyIter{
+		primaryIndex: pkTree,
+		iter:         pkTree.Iter(),
+	}
+
+	spec.Move(pkIter)
+	require.Equal(t, []byte{0}, pkIter.iter.Item().Bytes)
+	spec.Move(pkIter)
+	require.Equal(t, []byte{2}, pkIter.iter.Item().Bytes)
+	spec.Move(pkIter)
+	require.Equal(t, []byte{4}, pkIter.iter.Item().Bytes)
 }
