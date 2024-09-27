@@ -45,6 +45,12 @@ func NewOffHeap(ro bool, attrs []string) *Batch {
 	return ret
 }
 
+func NewOffHeapEmpty() *Batch {
+	return &Batch{
+		offHeap: true,
+	}
+}
+
 func NewWithSize(n int) *Batch {
 	return &Batch{
 		Cnt:      1,

@@ -27,6 +27,13 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 	}
 
 	if node.NodeType == plan.Node_AGG {
+
+		for _, flag := range node.GroupingFlag {
+			if !flag {
+				return
+			}
+		}
+
 		if len(node.AggList) != 1 {
 			return
 		}
