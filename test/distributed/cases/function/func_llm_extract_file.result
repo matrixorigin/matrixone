@@ -1,0 +1,6 @@
+select llm_extract_text(cast('file://$resources/llm_test/extract_text/MODocs1.pdf?offset=0&size=4' as datalink), cast('file://$resources/llm_test/extract_text/MODocs1.txt' as datalink), "pdf");
+llm_extract_text(cast(file:///Users/charles/Desktop/codes/matrixone/matrixone/test/distributed/resources/llm_test/extract_text/MODocs1.pdf?offset=0&size=4 as datalink), cast(file:///Users/charles/Desktop/codes/matrixone/matrixone/test/distributed/resources/llm_test/extract_text/MODocs1.txt as datalink), pdf)
+true
+select llm_extract_text(cast('file://$resources/llm_test/extract_text/example.pdf?offset=0&size=4' as datalink), cast('file://$resources/llm_test/extract_text/example.txt' as datalink), "pdf");
+llm_extract_text(cast(file:///Users/charles/Desktop/codes/matrixone/matrixone/test/distributed/resources/llm_test/extract_text/example.pdf?offset=0&size=4 as datalink), cast(file:///Users/charles/Desktop/codes/matrixone/matrixone/test/distributed/resources/llm_test/extract_text/example.txt as datalink), pdf)
+true
