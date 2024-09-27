@@ -91,6 +91,7 @@ var (
 	RuntimeCNTakeOverAll       atomic.Bool
 	IsStandaloneBoost          atomic.Bool
 	ShouldStandaloneCNTakeOver atomic.Bool
+	RuntimeDisableZMBasedMerge atomic.Bool
 	Epsilon                    float64
 
 	RuntimeOverallFlushMemCap atomic.Uint64
