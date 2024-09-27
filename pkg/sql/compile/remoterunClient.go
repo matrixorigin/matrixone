@@ -355,7 +355,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 
 		bat, err = decodeBatch(sender.mp, dataBuffer)
-		/* 		bat := new(batch.Batch)
+		/* 		bat := batch.NewOffHeapEmpty()
 		   		if err := bat.UnmarshalBinary(dataBuffer); err != nil {
 		   			bat.Clean(sender.mp)
 		   			return bat, false, err
