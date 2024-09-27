@@ -57,6 +57,7 @@ func TestPartitionBasedTableCanBeCreated(
 
 			rows, err := database.Query(fmt.Sprintf("select mo_ctl('cn', 'get-table-shards', '%d')",
 				tableID))
+			require.NoError(t, rows.Err())
 			require.NoError(t, err)
 			defer func() {
 				require.NoError(t, rows.Close())
