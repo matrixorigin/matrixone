@@ -662,10 +662,10 @@ func (builder *QueryBuilder) buildValueScan(
 		col := tableDef.Cols[tableDef.Name2ColIndex[colName]]
 		colTyp := makeTypeByPlan2Type(col.Typ)
 		vec := vector.NewVec(colTyp)
-		if err := vector.AppendMultiBytes(vec, nil, true, len(stmt.Rows), proc.Mp()); err != nil {
-			bat.Clean(proc.Mp())
-			return 0, err
-		}
+		// if err := vector.AppendMultiBytes(vec, nil, true, len(stmt.Rows), proc.Mp()); err != nil {
+		// 	bat.Clean(proc.Mp())
+		// 	return 0, err
+		// }
 		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
 			Typ: col.Typ,

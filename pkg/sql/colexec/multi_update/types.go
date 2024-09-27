@@ -129,7 +129,6 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 		update.ctr.s3Writer.reset(proc)
 	}
 	update.ctr.state = vm.Build
-	update.ctr.affectedRows = 0
 }
 
 func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -154,6 +153,6 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 	}
 }
 
-func (update *MultiUpdate) GetAffectedRows() uint64 {
+func (update *MultiUpdate) AffectedRows() uint64 {
 	return update.ctr.affectedRows
 }
