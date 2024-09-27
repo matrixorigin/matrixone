@@ -1538,12 +1538,18 @@ func updateCdcTask(
 		_ = rows.Close()
 	}()
 
+	empty := true
 	for rows.Next() {
+		empty = false
 		if err = rows.Scan(&taskId); err != nil {
 			return 0, err
 		}
 		tInfo := taskservice.CdcTaskKey{AccountId: accountId, TaskId: taskId}
 		taskKeyMap[tInfo] = struct{}{}
+	}
+
+	if empty {
+		return 0, moerr.NewInternalErrorf(ctx, "no cdc task found, task name: %s", taskName)
 	}
 
 	var prepare *sql.Stmt
