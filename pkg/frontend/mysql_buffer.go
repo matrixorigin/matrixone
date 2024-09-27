@@ -383,6 +383,7 @@ func (c *Conn) Read() (_ []byte, err error) {
 			firstPayload = nil
 			finalPayload = nil
 			payload = nil
+			c.fixBuf.ResetIndices()
 		}
 	}()
 	payloadLength, headerPrepared = c.GetPayloadLength()
@@ -424,7 +425,7 @@ func (c *Conn) Read() (_ []byte, err error) {
 		// CASE 3: packet length > 1MB, c.fixBuf.writeIndex < HeaderLengthOfTheProtocol + payloadLength
 		// NOTE: only read the remaining bytes of the current packet, do not read the next packet
 		hasPayloadLen := c.fixBuf.AvailableDataLen() - HeaderLengthOfTheProtocol
-		err = c.ReadNBytesIntoBuf(firstPayload[hasPayloadLen:], payloadLength-hasPayloadLen)
+		err = ReadNBytesIntoBuf(c, firstPayload[hasPayloadLen:], payloadLength-hasPayloadLen)
 		if err != nil {
 			return nil, err
 		}
@@ -438,7 +439,7 @@ func (c *Conn) Read() (_ []byte, err error) {
 	// ======================== Packet > 16MB ========================
 	for {
 		// If total package length > 16MB, only one package will be read each iter
-		err = c.ReadNBytesIntoBuf(c.header[:], HeaderLengthOfTheProtocol)
+		err = ReadNBytesIntoBuf(c, c.header[:], HeaderLengthOfTheProtocol)
 		if err != nil {
 			return nil, err
 		}
@@ -526,6 +527,10 @@ func (c *Conn) ReadOnePayload(payloadLength int) (payload []byte, err error) {
 	}
 
 	return payload, nil
+}
+
+var ReadNBytesIntoBuf = func(c *Conn, buf []byte, n int) error {
+	return c.ReadNBytesIntoBuf(buf, n)
 }
 
 // ReadNBytesIntoBuf reads specified bytes from the network

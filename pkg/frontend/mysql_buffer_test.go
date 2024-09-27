@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -26,6 +27,7 @@ import (
 	"unsafe"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 
@@ -1115,7 +1117,7 @@ func Test_ListBlock(t *testing.T) {
 	mem1.IncReadIndex(HeaderLengthOfTheProtocol)
 	mem1.Adjust()
 	assert.Equal(t, mem1.AvailableDataLen(), len(src1)-HeaderLengthOfTheProtocol)
-	assert.Equal(t, mem1.AvailableData(), src1[HeaderLengthOfTheProtocol:])
+	assert.True(t, bytes.Equal(mem1.AvailableData(), src1[HeaderLengthOfTheProtocol:]))
 
 	mem1.freeBuffUnsafe(leakAlloc)
 	assert.Equal(t, mem1.BufferLen(), 0)
@@ -1210,11 +1212,15 @@ func TestConn_CheckAllowedPacketSize(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-func makePacket(data []byte, seq uint8) []byte {
+func makeHead(dlen int, seq uint8) []byte {
 	var head [4]byte
-	binary.LittleEndian.PutUint32(head[:], uint32(len(data)))
+	binary.LittleEndian.PutUint32(head[:], uint32(dlen))
 	head[3] = seq
-	return append(head[:], data...)
+	return head[:]
+}
+
+func makePacket(data []byte, seq uint8) []byte {
+	return append(makeHead(len(data), seq), data...)
 }
 
 func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
@@ -1222,8 +1228,6 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 	var err error
 	var conn *Conn
 	var read []byte
-	var head [4]byte
-	var n int
 	payload1Len := 10
 
 	payload1 := make([]byte, payload1Len)
@@ -1237,10 +1241,8 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 		payload2[i] = byte(1)
 	}
 
-	tConn := &testConn{
-		mod: testConnModSetReadDeadlineReturnErr,
-	}
-	_, _ = tConn.Write(makePacket(payload1, 1))
+	tConn := &testConn{}
+
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	if err != nil {
@@ -1252,211 +1254,208 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, conn)
 
-	{
-		conn.timeout = time.Second * 2
-		read, err = conn.ReadLoadLocalPacket()
-		assert.NotNil(t, err)
-		assert.Nil(t, read)
-		assert.True(t, !leakAlloc.CheckBalance())
-		conn.freeNoFixBuffUnsafe()
-		assert.True(t, !leakAlloc.CheckBalance())
-	}
-
-	{
-		//allocate mem first failed
-		tConn.mod = 0
-		leakAlloc.mod = leakCheckAllocatorModeAllocReturnErr
-		n, err = tConn.Write(head[:])
-		assert.Nil(t, err)
-		assert.Equal(t, len(head), n)
-		read, err = conn.ReadLoadLocalPacket()
-		assert.NotNil(t, err)
-		assert.Nil(t, read)
-		conn.freeNoFixBuffUnsafe()
-		assert.True(t, !leakAlloc.CheckBalance())
-	}
-
-	{
-		//allocate mem first success, second failed.
-		tConn.mod = 0
+	resetFunc := func() {
 		leakAlloc.mod = 0
+		tConn.mod = 0
 		tConn.data = nil
-		_, _ = tConn.Write(makePacket(payload1, 2))
-		_, _ = tConn.Write(makePacket(payload2, 3))
-
-		for i := 0; i < 2; i++ {
-			if i == 1 {
-				leakAlloc.mod = leakCheckAllocatorModeAllocReturnErr
-			}
-			read, err = conn.ReadLoadLocalPacket()
-			if i == 0 {
-				assert.Nil(t, err)
-				assert.Equal(t, read, payload1)
-			} else if i == 1 {
-				assert.NotNil(t, err)
-				assert.Nil(t, read)
-				assert.Nil(t, conn.loadLocalBuf.data)
-			}
-
-		}
-		conn.freeNoFixBuffUnsafe()
-		assert.True(t, !leakAlloc.CheckBalance())
 	}
 
-	{
-		//allocate mem first success, second failed.
-		tConn.mod = 0
-		leakAlloc.mod = 0
-		tConn.data = nil
-		_, _ = tConn.Write(makePacket(payload1, 2))
-
-		_, _ = tConn.Write(makePacket(payload2, 3))
-
-		for i := 0; i < 2; i++ {
-			if i == 1 {
-				tConn.mod = testConnModReadReturnErr
-			}
+	for loop := 0; loop < 2; loop++ {
+		{
+			resetFunc()
+			tConn.mod = testConnModSetReadDeadlineReturnErr
+			conn.timeout = time.Second * 2
+			_, _ = tConn.Write(makePacket(payload1, 1))
 			read, err = conn.ReadLoadLocalPacket()
-			if i == 0 {
-				assert.Nil(t, err)
-				assert.Equal(t, read, payload1)
-			} else if i == 1 {
-				assert.NotNil(t, err)
-				assert.Nil(t, read)
-				assert.Nil(t, conn.loadLocalBuf.data)
-			}
-
+			assert.NotNil(t, err)
+			assert.Nil(t, read)
+			assert.True(t, !leakAlloc.CheckBalance())
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
 		}
 
-		conn.freeNoFixBuffUnsafe()
-		assert.True(t, !leakAlloc.CheckBalance())
-	}
-
-	{
-		//panic recover release memory
-		//first allocate mem panic
-		tConn.mod = 0
-		leakAlloc.mod = 0
-		tConn.data = nil
-		_, _ = tConn.Write(makePacket(payload1, 2))
-
-		_, _ = tConn.Write(makePacket(payload2, 3))
-
-		for i := 0; i < 2; i++ {
-			if i == 0 {
-				leakAlloc.mod = leakCheckAllocatorModeAllocPanic
-			} else {
-				leakAlloc.mod = 0
-			}
+		{
+			//allocate mem first failed
+			resetFunc()
+			leakAlloc.mod = leakCheckAllocatorModeAllocReturnErr
+			_, _ = tConn.Write(makePacket(payload1, 1))
 			read, err = conn.ReadLoadLocalPacket()
-			if i == 0 {
-				assert.NotNil(t, err)
-				assert.Nil(t, read)
-				assert.Nil(t, conn.loadLocalBuf.data)
-				//skip payload1 data
-				buf := make([]byte, payload1Len)
-				_, _ = tConn.Read(buf)
-			} else if i == 1 {
-				assert.Nil(t, err)
-				assert.Equal(t, payload2, read)
-				assert.NotNil(t, conn.loadLocalBuf.data)
-			}
-
+			assert.NotNil(t, err)
+			assert.Nil(t, read)
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
 		}
-		conn.freeNoFixBuffUnsafe()
-		assert.True(t, !leakAlloc.CheckBalance())
-	}
 
-	{
-		//panic recover release memory
-		//second allocate mem panic
-		tConn.mod = 0
-		leakAlloc.mod = 0
-		tConn.data = nil
-		_, _ = tConn.Write(makePacket(payload1, 2))
+		{
+			//allocate mem first success, second failed.
+			resetFunc()
+			_, _ = tConn.Write(makePacket(payload1, 2))
+			_, _ = tConn.Write(makePacket(payload2, 3))
 
-		_, _ = tConn.Write(makePacket(payload2, 3))
+			for i := 0; i < 2; i++ {
+				if i == 1 {
+					leakAlloc.mod = leakCheckAllocatorModeAllocReturnErr
+				}
+				read, err = conn.ReadLoadLocalPacket()
+				if i == 0 {
+					assert.Nil(t, err)
+					assert.True(t, bytes.Equal(read, payload1))
+				} else if i == 1 {
+					assert.NotNil(t, err)
+					assert.Nil(t, read)
+					assert.Nil(t, conn.loadLocalBuf.data)
+				}
 
-		for i := 0; i < 2; i++ {
-			if i == 1 {
-				leakAlloc.mod = leakCheckAllocatorModeAllocPanic
 			}
-			read, err = conn.ReadLoadLocalPacket()
-			if i == 0 {
-				assert.Nil(t, err)
-				assert.Equal(t, payload1, read)
-				assert.NotNil(t, conn.loadLocalBuf.data)
-			} else if i == 1 {
-				assert.NotNil(t, err)
-				assert.Nil(t, read)
-				assert.Nil(t, conn.loadLocalBuf.data)
-			}
-
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
 		}
-		conn.freeNoFixBuffUnsafe()
-		assert.True(t, !leakAlloc.CheckBalance())
-	}
 
-	{
-		//panic recover release memory
-		//read second packet panic
-		tConn.mod = 0
-		leakAlloc.mod = 0
-		tConn.data = nil
-		_, _ = tConn.Write(makePacket(payload1, 2))
+		{
+			//allocate mem first success, second failed.
+			resetFunc()
+			_, _ = tConn.Write(makePacket(payload1, 2))
 
-		_, _ = tConn.Write(makePacket(payload2, 3))
+			_, _ = tConn.Write(makePacket(payload2, 3))
 
-		for i := 0; i < 2; i++ {
-			if i == 1 {
-				tConn.mod = testConnModReadPanic
-			}
-			read, err = conn.ReadLoadLocalPacket()
-			if i == 0 {
-				assert.Nil(t, err)
-				assert.Equal(t, payload1, read)
-				assert.NotNil(t, conn.loadLocalBuf.data)
-			} else if i == 1 {
-				assert.NotNil(t, err)
-				assert.Nil(t, read)
-				assert.Nil(t, conn.loadLocalBuf.data)
+			for i := 0; i < 2; i++ {
+				if i == 1 {
+					tConn.mod = testConnModReadReturnErr
+				}
+				read, err = conn.ReadLoadLocalPacket()
+				if i == 0 {
+					assert.Nil(t, err)
+					assert.True(t, bytes.Equal(read, payload1))
+				} else if i == 1 {
+					assert.NotNil(t, err)
+					assert.Nil(t, read)
+					assert.Nil(t, conn.loadLocalBuf.data)
+				}
+
 			}
 
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
 		}
-		conn.freeNoFixBuffUnsafe()
-		assert.True(t, !leakAlloc.CheckBalance())
-	}
 
-	{
-		//allocate mem both success
-		tConn.mod = 0
-		leakAlloc.mod = 0
-		tConn.data = nil
+		{
+			//panic recover release memory
+			//first allocate mem panic
+			resetFunc()
+			_, _ = tConn.Write(makePacket(payload1, 2))
 
-		_, _ = tConn.Write(makePacket(payload1, 2))
-		_, _ = tConn.Write(makePacket(payload2, 3))
+			_, _ = tConn.Write(makePacket(payload2, 3))
 
-		for i := 0; i < 2; i++ {
-			read, err = conn.ReadLoadLocalPacket()
+			for i := 0; i < 2; i++ {
+				if i == 0 {
+					leakAlloc.mod = leakCheckAllocatorModeAllocPanic
+				} else {
+					leakAlloc.mod = 0
+				}
+				read, err = conn.ReadLoadLocalPacket()
+				if i == 0 {
+					assert.NotNil(t, err)
+					assert.Nil(t, read)
+					assert.Nil(t, conn.loadLocalBuf.data)
+					//skip payload1 data
+					buf := make([]byte, payload1Len)
+					_, _ = tConn.Read(buf)
+				} else if i == 1 {
+					assert.Nil(t, err)
+					assert.True(t, bytes.Equal(payload2, read))
+					assert.NotNil(t, conn.loadLocalBuf.data)
+				}
 
-			if i == 0 {
-				assert.Nil(t, err)
-				assert.Equal(t, read, payload1)
-			} else if i == 1 {
-				assert.Nil(t, err)
-				assert.Equal(t, read, payload2)
 			}
-
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
 		}
-		conn.freeNoFixBuffUnsafe()
-		assert.True(t, !leakAlloc.CheckBalance())
+
+		{
+			//panic recover release memory
+			//second allocate mem panic
+			resetFunc()
+			_, _ = tConn.Write(makePacket(payload1, 2))
+
+			_, _ = tConn.Write(makePacket(payload2, 3))
+
+			for i := 0; i < 2; i++ {
+				if i == 1 {
+					leakAlloc.mod = leakCheckAllocatorModeAllocPanic
+				}
+				read, err = conn.ReadLoadLocalPacket()
+				if i == 0 {
+					assert.Nil(t, err)
+					assert.True(t, bytes.Equal(payload1, read))
+					assert.NotNil(t, conn.loadLocalBuf.data)
+				} else if i == 1 {
+					assert.NotNil(t, err)
+					assert.Nil(t, read)
+					assert.Nil(t, conn.loadLocalBuf.data)
+				}
+
+			}
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
+		}
+
+		{
+			//panic recover release memory
+			//read second packet panic
+			resetFunc()
+			_, _ = tConn.Write(makePacket(payload1, 2))
+
+			_, _ = tConn.Write(makePacket(payload2, 3))
+
+			for i := 0; i < 2; i++ {
+				if i == 1 {
+					tConn.mod = testConnModReadPanic
+				}
+				read, err = conn.ReadLoadLocalPacket()
+				if i == 0 {
+					assert.Nil(t, err)
+					assert.True(t, bytes.Equal(payload1, read))
+					assert.NotNil(t, conn.loadLocalBuf.data)
+				} else if i == 1 {
+					assert.NotNil(t, err)
+					assert.Nil(t, read)
+					assert.Nil(t, conn.loadLocalBuf.data)
+				}
+
+			}
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
+		}
+
+		{
+			//allocate mem both success
+			resetFunc()
+
+			_, _ = tConn.Write(makePacket(payload1, 2))
+			_, _ = tConn.Write(makePacket(payload2, 3))
+
+			for i := 0; i < 2; i++ {
+				read, err = conn.ReadLoadLocalPacket()
+
+				if i == 0 {
+					assert.Nil(t, err)
+					assert.True(t, bytes.Equal(read, payload1))
+				} else if i == 1 {
+					assert.Nil(t, err)
+					assert.True(t, bytes.Equal(read, payload2))
+				}
+
+			}
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
+		}
 	}
 
 	_ = conn.Close()
 	assert.True(t, leakAlloc.CheckBalance())
 }
 
-func Test_ReadErr(t *testing.T) {
+func TestConn_ReadErr(t *testing.T) {
 	leakAlloc := newLeakCheckAllocator()
 	var err error
 	var conn *Conn
@@ -1482,6 +1481,14 @@ func Test_ReadErr(t *testing.T) {
 		xVal++
 	}
 
+	payload4Len := int(MaxPayloadSize)
+	payload4 := make([]byte, payload4Len)
+	xVal = 0
+	for i := 0; i < payload4Len; i++ {
+		payload4[i] = xVal
+		xVal++
+	}
+
 	tConn := &testConn{}
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	sv.SessionTimeout.Duration = 5 * time.Minute
@@ -1494,72 +1501,174 @@ func Test_ReadErr(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, conn)
 
-	{
-		tConn.mod = 0
+	resetFunc := func() {
 		leakAlloc.mod = 0
+		tConn.mod = 0
 		tConn.data = nil
-		conn.Reset()
-
-		//success
-		_, _ = tConn.Write(makePacket(payload1, 1))
-		_, _ = tConn.Write(makePacket(payload2, 2))
-		read, err = conn.Read()
-		assert.Nil(t, err)
-		assert.Equal(t, payload1, read)
-		assert.NotNil(t, conn.fixBuf.data)
-		assert.Zero(t, conn.dynamicWrBuf.Len())
-
-		conn.freeNoFixBuffUnsafe()
-		assert.True(t, !leakAlloc.CheckBalance())
 	}
+	runCaseFunc := func() {
+		{
+			resetFunc()
+			conn.Reset()
 
-	{
-		tConn.mod = 0
-		leakAlloc.mod = 0
-		tConn.data = nil
-		conn.Reset()
-		//success
-		_, _ = tConn.Write(makePacket(payload1, 1))
-		_, _ = tConn.Write(makePacket(payload2, 2))
-		_, _ = tConn.Write(makePacket(payload3, 3))
-		read, err = conn.Read()
-		assert.Nil(t, err)
-		assert.Equal(t, payload1, read)
-		assert.NotNil(t, conn.fixBuf.data)
-		assert.Zero(t, conn.dynamicWrBuf.Len())
+			//success
+			_, _ = tConn.Write(makePacket(payload1, 1))
+			_, _ = tConn.Write(makePacket(payload2, 2))
+			read, err = conn.Read()
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload1, read))
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
 
-		read, err = conn.Read()
-		assert.Nil(t, err)
-		assert.Equal(t, payload2, read)
-		assert.NotNil(t, conn.fixBuf.data)
-		assert.Zero(t, conn.dynamicWrBuf.Len())
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
+		}
 
-		read, err = conn.Read()
-		assert.Nil(t, err)
-		assert.Equal(t, payload3, read)
-		assert.NotNil(t, conn.fixBuf.data)
-		assert.Zero(t, conn.dynamicWrBuf.Len())
-
-		conn.freeNoFixBuffUnsafe()
-		assert.True(t, !leakAlloc.CheckBalance())
-	}
-
-	{
-		//success
-		//test cases:
-		//just 16MB
-		//more than 16MB but less than 64MB
-		//more than 64MB
-		tConn.mod = 0
-		leakAlloc.mod = 0
-		tConn.data = nil
-		conn.Reset()
-		//16MB
-		for i := 0; i < 8; i++ {
+		{
+			resetFunc()
+			conn.Reset()
+			//success
+			_, _ = tConn.Write(makePacket(payload1, 1))
+			_, _ = tConn.Write(makePacket(payload2, 2))
 			_, _ = tConn.Write(makePacket(payload3, 3))
+			read, err = conn.Read()
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload1, read))
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
+
+			read, err = conn.Read()
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload2, read))
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
+
+			read, err = conn.Read()
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload3, read))
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
+
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
+		}
+
+		{
+			//success
+			//test cases:
+			//just 16MB
+			//more than 16MB but less than 64MB
+			//more than 64MB
+			resetFunc()
+			conn.Reset()
+
+			//16MB
+			_, _ = tConn.Write(makePacket(payload4, 4))
+			_, _ = tConn.Write(makePacket([]byte{}, 5))
+			read, err = conn.Read()
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload4, read))
+
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
+
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
+		}
+
+		{
+			//success
+			//test cases:
+			//more than 16MB but less than 64MB
+			//more than 64MB
+			resetFunc()
+			conn.Reset()
+
+			conn.allowedPacketSize = int(MaxPayloadSize) * 2
+
+			//32MB
+			_, _ = tConn.Write(makePacket(payload4, 4))
+			_, _ = tConn.Write(makePacket(payload4, 5))
+			_, _ = tConn.Write(makePacket([]byte{}, 6))
+			read, err = conn.Read()
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload4, read[:MaxPayloadSize]))
+			assert.True(t, bytes.Equal(payload4, read[MaxPayloadSize:]))
+
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
+
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
+		}
+
+		{
+			//success
+			//test cases:
+			//just 16MB
+			//more than 16MB but less than 64MB
+			//more than 64MB
+			resetFunc()
+			conn.Reset()
+
+			readCnt := 0
+			stub1 := gostub.Stub(&ReadNBytesIntoBuf,
+				func(c *Conn, buf []byte, n int) error {
+					if readCnt == 2 {
+						return moerr.NewInternalErrorNoCtx("ReadNBytesIntoBuf returns err")
+					}
+					readCnt++
+					return c.ReadNBytesIntoBuf(buf, n)
+				})
+			defer stub1.Reset()
+
+			//32MB second read returns error
+			_, _ = tConn.Write(makePacket(payload4, 4))
+			_, _ = tConn.Write(makePacket(payload4, 5))
+			_, _ = tConn.Write(makePacket([]byte{}, 6))
+			read, err = conn.Read()
+			assert.NotNil(t, err)
+			assert.Nil(t, read)
+
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
+		}
+
+		{
+			//success
+			//test cases:
+			//just 16MB
+			//more than 16MB but less than 64MB
+			resetFunc()
+			conn.Reset()
+
+			readCnt := 0
+
+			stub1 := gostub.Stub(&ReadNBytesIntoBuf,
+				func(c *Conn, buf []byte, n int) error {
+					if readCnt == 2 {
+						panic("ReadNBytesIntoBuf panics")
+					}
+					readCnt++
+					return c.ReadNBytesIntoBuf(buf, n)
+				})
+			defer stub1.Reset()
+
+			//32MB second read panic
+			_, _ = tConn.Write(makePacket(payload4, 4))
+			_, _ = tConn.Write(makePacket(payload4, 5))
+			_, _ = tConn.Write(makePacket([]byte{}, 6))
+			read, err = conn.Read()
+			assert.NotNil(t, err)
+			assert.Nil(t, read)
+
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
 		}
 	}
-
+	for loop := 0; loop < 2; loop++ {
+		runCaseFunc()
+	}
 	_ = conn.Close()
 	assert.True(t, leakAlloc.CheckBalance())
 }
