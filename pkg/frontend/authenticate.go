@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -8739,10 +8740,11 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, currentRole)
 	}
 
-	bh := ses.GetBackgroundExec(tenantCtx)
-	defer bh.Close()
-
-	err = bh.Exec(tenantCtx, sql)
+	rp, err := mysql.Parse(tenantCtx, sql, 1)
+	if err != nil {
+		return err
+	}
+	err = doGrantPrivilege(tenantCtx, ses, &rp[0].(*tree.Grant).GrantPrivilege)
 	if err != nil {
 		return err
 	}
@@ -8789,10 +8791,11 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, currentRole)
 	}
 
-	bh := ses.GetBackgroundExec(tenantCtx)
-	defer bh.Close()
-
-	err = bh.Exec(tenantCtx, sql)
+	rp, err := mysql.Parse(tenantCtx, sql, 1)
+	if err != nil {
+		return err
+	}
+	err = doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege)
 	if err != nil {
 		return err
 	}
