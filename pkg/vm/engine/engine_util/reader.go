@@ -199,7 +199,6 @@ func gatherStats(lastNumRead, lastNumHit int64) {
 // -----------------------------------------------------------------
 
 type withFilterMixin struct {
-	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
