@@ -66,9 +66,8 @@ func NewSimpleReader(
 ) *reader {
 	r := &reader{
 		withFilterMixin: withFilterMixin{
-			ctx: ctx,
-			fs:  fs,
-			ts:  ts,
+			fs: fs,
+			ts: ts,
 		},
 		source: ds,
 	}
