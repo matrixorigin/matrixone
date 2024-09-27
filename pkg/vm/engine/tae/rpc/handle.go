@@ -195,32 +195,61 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
-func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (releaseF []func()) {
-	delM := make(map[uint64]uint64)
+func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (releaseF []func(), err error) {
+	delM := make(map[uint64]*struct {
+		dbID uint64
+		rows uint64
+	})
 	for _, e := range reqs {
 		if req, ok := e.(*db.WriteReq); ok && req.Type == db.EntryDelete {
+			if req.FileName == "" && req.Batch == nil {
+				continue
+			}
+
+			delM[req.TableID] = &struct {
+				dbID uint64
+				rows uint64
+			}{dbID: req.DatabaseId, rows: 0}
+
 			if req.FileName != "" {
 				for _, stats := range req.TombstoneStats {
-					delM[req.TableID] += uint64(stats.Rows())
+					delM[req.TableID].rows += uint64(stats.Rows())
 				}
 			}
 			if req.Batch != nil {
-				delM[req.TableID] += uint64(req.Batch.RowCount())
+				delM[req.TableID].rows += uint64(req.Batch.RowCount())
 			}
 		}
 	}
 
-	for id, rows := range delM {
-		if rows <= h.db.Opts.BulkTomestoneTxnThreshold {
+	for id, info := range delM {
+		if info.rows <= h.db.Opts.BulkTomestoneTxnThreshold {
 			continue
 		}
-		h.db.Runtime.LockMergeService.LockFromUser(id)
+
+		dbHandle, err := txn.GetDatabaseByID(info.dbID)
+		if err != nil {
+			return nil, err
+		}
+
+		relation, err := dbHandle.GetRelationByID(id)
+		if err != nil {
+			return nil, err
+		}
+
+		err = h.db.MergeScheduler.StopMerge(relation.GetMeta().(*catalog.TableEntry), true)
+		if err != nil {
+			return nil, err
+		}
 		logutil.Info("LockMerge Bulk Delete",
-			zap.Uint64("tid", id), zap.Uint64("rows", rows), zap.String("txn", txn.String()))
+			zap.Uint64("tid", id), zap.Uint64("rows", info.rows), zap.String("txn", txn.String()))
 		release := func() {
-			h.db.Runtime.LockMergeService.UnlockFromUser(id)
+			err = h.db.MergeScheduler.StartMerge(id, true)
+			if err != nil {
+				return
+			}
 			logutil.Info("LockMerge Bulk Delete Committed",
-				zap.Uint64("tid", id), zap.Uint64("rows", rows), zap.String("txn", txn.String()))
+				zap.Uint64("tid", id), zap.Uint64("rows", info.rows), zap.String("txn", txn.String()))
 		}
 		releaseF = append(releaseF, release)
 	}
@@ -239,7 +268,10 @@ func (h *Handle) handleRequests(
 		inMemoryTombstoneRows     int
 		persistedTombstoneRows    int
 	)
-	releaseF = h.tryLockMergeForBulkDelete(txnCtx.reqs, txn)
+	releaseF, err = h.tryLockMergeForBulkDelete(txnCtx.reqs, txn)
+	if err != nil {
+		logutil.Warn("failed to lock merging", zap.Error(err))
+	}
 	for _, e := range txnCtx.reqs {
 		switch req := e.(type) {
 		case *pkgcatalog.CreateDatabaseReq:
