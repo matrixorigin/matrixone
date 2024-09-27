@@ -879,10 +879,3 @@ type blockSortHelper struct {
 	blk *objectio.BlockInfo
 	zm  index.ZM
 }
-
-type mergeReader struct {
-	rds []engine.Reader
-}
-
-type emptyReader struct {
-}
