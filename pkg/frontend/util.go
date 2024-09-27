@@ -779,7 +779,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				var val string
-				if strVal, ok := row[colIdx].(string); ok {
+				strVal, ok := row[colIdx].(string)
+				if ok {
 					val = strVal
 				} else {
 					val = fmt.Sprintf("%v", row[colIdx])
@@ -797,7 +798,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				var val string
-				if strVal, ok := row[colIdx].(string); ok {
+				strVal, ok := row[colIdx].(string)
+				if ok {
 					val = strVal
 				} else {
 					val = fmt.Sprintf("%v", row[colIdx])
@@ -920,11 +922,13 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				var val types.Timestamp
-				switch v := row[colIdx].(type) {
+				timeStampRowVal := row[colIdx]
+				switch v := timeStampRowVal.(type) {
 				case types.Timestamp:
 					val = v
 				case string:
-					if val, err = types.ParseTimestamp(time.Local, v, typ.Scale); err != nil {
+					val, err = types.ParseTimestamp(time.Local, v, typ.Scale)
+					if err != nil {
 						return nil, nil, err
 					}
 				default:
