@@ -3542,7 +3542,6 @@ func (v *Vector) InplaceSortAndCompact() {
 			v.length = 0
 		}
 		v.nsp.Reset()
-		v.sorted = false
 	}
 
 	switch v.GetType().Oid {
@@ -3830,7 +3829,6 @@ func (v *Vector) InplaceSortAndCompact() {
 
 		if len(newCol) != len(col) {
 			cleanDataNotResetArea()
-			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3850,7 +3848,6 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		if len(newCol) != len(col) {
 			cleanDataNotResetArea()
-			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3870,7 +3867,6 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		if len(newCol) != len(col) {
 			cleanDataNotResetArea()
-			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 	}
