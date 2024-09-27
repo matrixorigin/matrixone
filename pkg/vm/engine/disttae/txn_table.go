@@ -1987,7 +1987,6 @@ func (tbl *txnTable) PKPersistedBetween(
 		if err != nil {
 			return true, err
 		}
-		defer release()
 
 		searchFunc := filter.DecideSearchFunc(blk.IsSorted())
 		if searchFunc == nil {
@@ -1995,6 +1994,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 
 		sels := searchFunc(cacheBat.Vecs)
+		release()
 		if len(sels) > 0 {
 			return true, nil
 		}
