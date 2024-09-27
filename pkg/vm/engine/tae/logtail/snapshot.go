@@ -181,6 +181,23 @@ func (p *PitrInfo) IsEmpty() bool {
 		len(p.tables) == 0
 }
 
+func (p *PitrInfo) ToTsList() []types.TS {
+	tsList := make([]types.TS, 0, len(p.account)+len(p.database)+len(p.tables)+1)
+	for _, ts := range p.account {
+		tsList = append(tsList, ts)
+	}
+	for _, ts := range p.database {
+		tsList = append(tsList, ts)
+	}
+	for _, ts := range p.tables {
+		tsList = append(tsList, ts)
+	}
+	if !p.cluster.IsEmpty() {
+		tsList = append(tsList, p.cluster)
+	}
+	return tsList
+}
+
 type SnapshotMeta struct {
 	sync.RWMutex
 

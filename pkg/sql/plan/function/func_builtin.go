@@ -284,16 +284,18 @@ func moShowColUnique(constraintStr string, colName string) bool {
 		return false
 	}
 
-	contatinsCol := false
+	containsCol := false
 	// get unique constraint
 	for _, ct := range c.Cts {
 		switch k := ct.(type) {
 		case *engine.IndexDef:
 			if k.Indexes != nil {
-				for _, index := range k.Indexes {
-					for _, part := range index.Parts {
+				indexs := k.Indexes
+				for _, index := range indexs {
+					parts := index.Parts
+					for _, part := range parts {
 						if part == strings.ToLower(colName) {
-							contatinsCol = true
+							containsCol = true
 							break
 						}
 					}
@@ -302,11 +304,7 @@ func moShowColUnique(constraintStr string, colName string) bool {
 		}
 	}
 
-	if contatinsCol {
-		return true
-	} else {
-		return false
-	}
+	return containsCol
 }
 
 func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
