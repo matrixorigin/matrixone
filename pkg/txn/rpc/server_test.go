@@ -250,7 +250,7 @@ func newTestRuntime(clock clock.Clock, logger *zap.Logger) runtime.Runtime {
 }
 
 func newMessage(req morpc.Message) morpc.RPCMessage {
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	return morpc.RPCMessage{
 		Ctx:     ctx,
 		Cancel:  cancel,

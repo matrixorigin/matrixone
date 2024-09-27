@@ -201,12 +201,12 @@ func (s *server) onMessage(
 	}
 	if s.options.filter != nil && !s.options.filter(m) {
 		s.releaseRequest(m)
-		msg.Cancel(moerr.NewInfoNoCtx("txn onMessage canceled"))
+		msg.Cancel()
 		return nil
 	}
 	if err := checkMethodVersion(ctx, s.rt, m); err != nil {
 		s.releaseRequest(m)
-		msg.Cancel(moerr.NewInfoNoCtx("txn onMessage canceled"))
+		msg.Cancel()
 		return err
 	}
 	handler, ok := s.handlers[m.Method]
@@ -217,7 +217,7 @@ func (s *server) onMessage(
 	select {
 	case <-ctx.Done():
 		s.releaseRequest(m)
-		msg.Cancel(moerr.NewInfoNoCtx("txn onMessage canceled"))
+		msg.Cancel()
 		return nil
 	default:
 	}
@@ -280,7 +280,7 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 type executor struct {
 	t       time.Time
 	ctx     context.Context
-	cancel  context.CancelCauseFunc
+	cancel  context.CancelFunc
 	req     *txn.TxnRequest
 	cs      morpc.ClientSession
 	handler TxnRequestHandleFunc
@@ -288,7 +288,7 @@ type executor struct {
 }
 
 func (r executor) exec() ([]byte, error) {
-	defer r.cancel(moerr.NewInfoNoCtx("txn executor canceled"))
+	defer r.cancel()
 	defer r.s.releaseRequest(r.req)
 	resp := r.s.acquireResponse()
 	if err := r.handler(r.ctx, r.req, resp); err != nil {

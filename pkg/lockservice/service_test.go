@@ -3842,7 +3842,7 @@ func TestIssue14008(t *testing.T) {
 			alloc.server.RegisterMethodHandler(pb.Method_GetBind,
 				func(
 					ctx context.Context,
-					cf context.CancelCauseFunc,
+					cf context.CancelFunc,
 					r1 *pb.Request,
 					r2 *pb.Response,
 					cs morpc.ClientSession) {

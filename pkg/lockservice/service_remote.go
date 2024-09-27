@@ -174,7 +174,7 @@ func (s *service) initRemoteHandler() {
 
 func (s *service) handleRemoteLock(
 	ctx context.Context,
-	cancel context.CancelCauseFunc,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -231,7 +231,7 @@ func (s *service) handleRemoteLock(
 
 func (s *service) handleForwardLock(
 	ctx context.Context,
-	cancel context.CancelCauseFunc,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -292,7 +292,7 @@ func (s *service) handleForwardLock(
 
 func (s *service) handleRemoteUnlock(
 	ctx context.Context,
-	cancel context.CancelCauseFunc,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -310,7 +310,7 @@ func (s *service) handleRemoteUnlock(
 
 func (s *service) handleValidateService(
 	ctx context.Context,
-	cancel context.CancelCauseFunc,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -322,7 +322,7 @@ func (s *service) handleValidateService(
 
 func (s *service) handleGetActiveTxn(
 	ctx context.Context,
-	cancel context.CancelCauseFunc,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -338,7 +338,7 @@ func (s *service) handleGetActiveTxn(
 
 func (s *service) handleRemoteGetLock(
 	ctx context.Context,
-	cancel context.CancelCauseFunc,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -368,7 +368,7 @@ func (s *service) handleRemoteGetLock(
 
 func (s *service) handleRemoteGetWaitingList(
 	ctx context.Context,
-	cancel context.CancelCauseFunc,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -382,7 +382,7 @@ func (s *service) handleRemoteGetWaitingList(
 
 func (s *service) handleKeepRemoteLock(
 	ctx context.Context,
-	cancel context.CancelCauseFunc,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -538,7 +538,7 @@ func getLockTableBind(
 
 type who struct {
 	ctx    context.Context
-	cancel context.CancelCauseFunc
+	cancel context.CancelFunc
 	resp   *pb.Response
 	cs     morpc.ClientSession
 	txnID  []byte

@@ -430,7 +430,7 @@ func (s *service) handleRequest(
 
 	// start a goroutine to handle one received message.
 	go func() {
-		defer value.Cancel(moerr.NewInfoNoCtx("handleRequest canceled"))
+		defer value.Cancel()
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
 
