@@ -291,14 +291,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
-	//----------------------------------------------------------------------
-	//ts1 := node.GetScanTS()
-
-	scanSnapshot := node.ScanSnapshot
-	if scanSnapshot == nil {
-		scanSnapshot = &Snapshot{}
-	}
-	//----------------------------------------------------------------------
 
 	for i := range node.FilterList { // if already have filter on first pk column and have a good selectivity, no need to go index
 		expr := node.FilterList[i]
@@ -325,9 +317,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		return nodeID
 	}
 
-	sort.Slice(indexes, func(i, j int) bool {
-		return (indexes[i].Unique && !indexes[j].Unique) || (indexes[i].Unique == indexes[j].Unique && len(indexes[i].Parts) > len(indexes[j].Parts))
-	})
+	scanSnapshot := node.ScanSnapshot
+	if scanSnapshot == nil {
+		scanSnapshot = &Snapshot{}
+	}
 
 	// Apply unique/secondary indices if only indexed column is referenced
 	ret := builder.tryIndexOnlyScan(indexes, node, colRefCnt, idxColMap, scanSnapshot)
