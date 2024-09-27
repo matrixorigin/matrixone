@@ -1,0 +1,169 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+create table t1(c1 int, c2 int, c3 int, c4 int, c5 int, primary key(c1,c2));
+insert into t1 select result,result*3, result%10000, result%5+1, result%10-1 from generate_series(1,100000)g;
+create index t1i1 on t1(c3,c4,c5);
+create unique index t1i2 on t1(c2,c5);
+select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(1);
+Sleep(1)
+0
+explain select c3,c4,c5 from t1 where c3=1;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d1.t1i1(index)
+        Filter Cond: prefix_eq(#[0,0], ':')
+        Block Filter Cond: prefix_eq(#[0,0], ':')
+select c3,c4,c5 from t1 where c3=1;
+c3    c4    c5
+1    2    0
+1    2    0
+1    2    0
+1    2    0
+1    2    0
+1    2    0
+1    2    0
+1    2    0
+1    2    0
+1    2    0
+explain select count(*) from t1 where c3 <30;
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Table Scan on d1.t1
+              Filter Cond: (t1.c3 < 30)
+              Block Filter Cond: (t1.c3 < 30)
+select count(*) from t1 where c3<30;
+count(*)
+300
+explain select c3,c4,c5 from t1 where c3 in (1,5,10,20);
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.__mo_cpkey_col = #[1,0])
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: t1.c3 in ([1 5 10 20])
+              Block Filter Cond: t1.c3 in ([1 5 10 20])
+              Runtime Filter Probe: t1.__mo_cpkey_col
+        ->  Table Scan on d1.t1i1(index) [ForceOneCN]
+              Filter Cond: prefix_in(#[0,0], [: : :\n :])
+              Block Filter Cond: prefix_in(#[0,0], [: : :\n :])
+select c3,c4,c5 from t1 where c3 in (1,5,10,20);
+c3    c4    c5
+1    2    0
+5    1    4
+10    1    -1
+20    1    -1
+1    2    0
+5    1    4
+10    1    -1
+20    1    -1
+1    2    0
+5    1    4
+10    1    -1
+20    1    -1
+1    2    0
+5    1    4
+10    1    -1
+20    1    -1
+1    2    0
+5    1    4
+10    1    -1
+20    1    -1
+1    2    0
+5    1    4
+10    1    -1
+20    1    -1
+1    2    0
+5    1    4
+10    1    -1
+20    1    -1
+1    2    0
+5    1    4
+10    1    -1
+20    1    -1
+1    2    0
+5    1    4
+10    1    -1
+20    1    -1
+1    2    0
+5    1    4
+10    1    -1
+20    1    -1
+explain select c3,c4,c5 from t1 where c3 between 4 and 7 and c5=5;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.__mo_cpkey_col = #[1,0])
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: t1.c3 BETWEEN 4 AND 7, (t1.c5 = 5)
+              Block Filter Cond: t1.c3 BETWEEN 4 AND 7
+              Runtime Filter Probe: t1.__mo_cpkey_col
+        ->  Table Scan on d1.t1i1(index) [ForceOneCN]
+              Filter Cond: prefix_between(#[0,0], ':', ':')
+              Block Filter Cond: prefix_between(#[0,0], ':', ':')
+select c3,c4,c5 from t1 where c3 between 4 and 7 and c5=5;
+c3    c4    c5
+6    2    5
+6    2    5
+6    2    5
+6    2    5
+6    2    5
+6    2    5
+6    2    5
+6    2    5
+6    2    5
+6    2    5
+explain select c2,c5 from t1 where c2=6;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c2 = 6)
+        Block Filter Cond: (t1.c2 = 6)
+select c2,c5 from t1 where c2=6;
+c2    c5
+6    1
+explain select c2,c5 from t1 where c2 <10;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c2 < 10)
+        Block Filter Cond: (t1.c2 < 10)
+select c2,c5 from t1 where c2<10;
+c2    c5
+3    0
+6    1
+9    2
+explain select c2,c5 from t1 where c2 in(11,15,110,210);
+TP QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: t1.c2 in ([11 15 110 210])
+        Block Filter Cond: t1.c2 in ([11 15 110 210])
+select c2,c5 from t1 where c2 in(11,15,110,210);
+c2    c5
+15    4
+210    -1
+explain select c2,c5 from t1 where c2 between 1 and 17;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: t1.c2 BETWEEN 1 AND 17
+        Block Filter Cond: t1.c2 BETWEEN 1 AND 17
+select c2,c5 from t1 where c2 between 1 and 17;
+c2    c5
+3    0
+6    1
+9    2
+12    3
+15    4
+drop database d1;
