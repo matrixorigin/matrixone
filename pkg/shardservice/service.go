@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,6 +33,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 type Option func(*service)
@@ -327,6 +326,28 @@ func (s *service) GetShardInfo(
 	return 0, 0, false, nil
 }
 
+func (s *service) GetTableShards(table uint64) (pb.ShardsMetadata, []pb.TableShard, error) {
+	_, metadata, err := s.storage.Get(table)
+	if err != nil {
+		return pb.ShardsMetadata{}, nil, err
+	}
+	if metadata.Policy == pb.Policy_None {
+		return pb.ShardsMetadata{}, nil, moerr.NewNotSupportedNoCtx("none policy cannot call GetTableShards")
+	}
+
+	req := s.remote.pool.AcquireRequest()
+	req.RPCMethod = pb.Method_GetShards
+	req.GetShards.ID = table
+	req.GetShards.Metadata = metadata
+
+	resp, err := s.send(req)
+	if err != nil {
+		return pb.ShardsMetadata{}, nil, err
+	}
+	defer s.remote.pool.ReleaseResponse(resp)
+	return metadata, resp.GetShards.Shards, nil
+}
+
 func (s *service) ReplicaCount() int64 {
 	return int64(s.cache.allocate.Load().replicasCount(nil))
 }
@@ -364,28 +385,6 @@ func (s *service) getShards(
 	s.cache.Lock()
 	defer s.cache.Unlock()
 
-	fn := func() (pb.ShardsMetadata, []pb.TableShard, error) {
-		_, metadata, err := s.storage.Get(table)
-		if err != nil {
-			return pb.ShardsMetadata{}, nil, err
-		}
-		if metadata.Policy == pb.Policy_None {
-			panic("none policy cannot call GetShards")
-		}
-
-		req := s.remote.pool.AcquireRequest()
-		req.RPCMethod = pb.Method_GetShards
-		req.GetShards.ID = table
-		req.GetShards.Metadata = metadata
-
-		resp, err := s.send(req)
-		if err != nil {
-			return pb.ShardsMetadata{}, nil, err
-		}
-		defer s.remote.pool.ReleaseResponse(resp)
-		return metadata, resp.GetShards.Shards, nil
-	}
-
 OUT:
 	for {
 		cache := s.getReadCache()
@@ -393,7 +392,7 @@ OUT:
 			return cache, nil
 		}
 
-		metadata, shards, err := fn()
+		metadata, shards, err := s.GetTableShards(table)
 		if err != nil || len(shards) == 0 {
 			s.logger.Error("failed to get table shards",
 				zap.Error(err),

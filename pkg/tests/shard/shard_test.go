@@ -52,8 +52,9 @@ func runShardClusterTestWithReuse(
 
 	var err error
 	var cluster embed.Cluster
+	var c embed.Cluster
 	createFunc := func() {
-		c, err := embed.NewCluster(
+		c, err = embed.NewCluster(
 			embed.WithCNCount(3),
 			embed.WithTesting(),
 			embed.WithPreStart(

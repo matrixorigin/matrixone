@@ -16,6 +16,7 @@ package shard
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"testing"
@@ -42,6 +43,28 @@ func TestPartitionBasedTableCanBeCreated(
 			db := testutils.GetDatabaseName(t)
 			tableID := mustCreatePartitionBasedTable(t, c, db, 3)
 			waitReplica(t, c, tableID, []int64{1, 1, 1})
+
+			cn0, err := c.GetCNService(0)
+			require.NoError(t, err)
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",
+				cn0.GetServiceConfig().CN.Frontend.Port,
+			)
+			database, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, database.Close())
+			}()
+
+			rows, err := database.Query(fmt.Sprintf("select mo_ctl('cn', 'get-table-shards', '%d')",
+				tableID))
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, rows.Close())
+			}()
+			require.True(t, rows.Next())
+			var info string
+			require.NoError(t, rows.Scan(&info))
+			require.NotEmpty(t, info)
 		},
 	)
 }
@@ -66,6 +89,7 @@ func TestPartitionBasedTableCanBeDeleted(
 			)
 
 			waitReplica(t, c, tableID, []int64{0, 0, 0})
+
 		},
 	)
 }
