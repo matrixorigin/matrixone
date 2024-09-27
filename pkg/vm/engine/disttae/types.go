@@ -880,18 +880,6 @@ type blockSortHelper struct {
 	zm  index.ZM
 }
 
-type reader struct {
-	withFilterMixin
-
-	isTombstone bool
-	source      engine.DataSource
-
-	memFilter MemPKFilter
-
-	scanType   int
-	cacheBatch *batch.Batch
-}
-
 type mergeReader struct {
 	rds []engine.Reader
 }

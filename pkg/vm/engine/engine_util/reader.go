@@ -231,7 +231,8 @@ type reader struct {
 
 	memFilter MemPKFilter
 
-	scanType int
+	scanType   int
+	cacheBatch *batch.Batch
 }
 
 func (r *reader) SetScanType(typ int) {
