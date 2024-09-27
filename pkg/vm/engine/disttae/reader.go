@@ -301,7 +301,6 @@ func NewReader(
 
 	r := &reader{
 		withFilterMixin: withFilterMixin{
-			ctx:      ctx,
 			fs:       e.fs,
 			ts:       ts,
 			tableDef: tableDef,
@@ -377,11 +376,11 @@ func (r *reader) Read(
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
-	statsCtx, numRead, numHit := r.ctx, int64(0), int64(0)
+	statsCtx, numRead, numHit := ctx, int64(0), int64(0)
 	if filter.Valid {
 		// try to store the blkReadStats CounterSet into ctx, so that
 		// it can record the mem cache hit stats when call MemCache.Read() later soon.
-		statsCtx, numRead, numHit = prepareGatherStats(r.ctx)
+		statsCtx, numRead, numHit = prepareGatherStats(ctx)
 	}
 
 	var policy fileservice.Policy
