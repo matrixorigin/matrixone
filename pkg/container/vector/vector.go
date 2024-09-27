@@ -3537,6 +3537,14 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 
 // InplaceSortAndCompact @todo optimization in the future
 func (v *Vector) InplaceSortAndCompact() {
+	cleanDataNotResetArea := func() {
+		if v.data != nil {
+			v.length = 0
+		}
+		v.nsp.Reset()
+		v.sorted = false
+	}
+
 	switch v.GetType().Oid {
 	case types.T_bool:
 		col := MustFixedColNoTypeCheck[bool](v)
@@ -3821,19 +3829,9 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 
 		if len(newCol) != len(col) {
-			if len(area) == 0 {
-				v.CleanOnlyData()
-				v.SetSorted(true)
-				appendList(v, newCol, nil, nil)
-			} else {
-				newColList := make([][]byte, len(newCol))
-				for i, varCol := range newCol {
-					newColList[i] = varCol.GetByteSlice(area)
-				}
-				v.CleanOnlyData()
-				v.SetSorted(true)
-				appendBytesList(v, newColList, nil, nil)
-			}
+			cleanDataNotResetArea()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
 		}
 
 	case types.T_array_float32:
@@ -3851,19 +3849,9 @@ func (v *Vector) InplaceSortAndCompact() {
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			if len(area) == 0 {
-				v.CleanOnlyData()
-				v.SetSorted(true)
-				appendList(v, newCol, nil, nil)
-			} else {
-				newColList := make([][]byte, len(newCol))
-				for i, varCol := range newCol {
-					newColList[i] = varCol.GetByteSlice(area)
-				}
-				v.CleanOnlyData()
-				v.SetSorted(true)
-				appendBytesList(v, newColList, nil, nil)
-			}
+			cleanDataNotResetArea()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
 		}
 
 	case types.T_array_float64:
@@ -3881,19 +3869,9 @@ func (v *Vector) InplaceSortAndCompact() {
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			if len(area) == 0 {
-				v.CleanOnlyData()
-				v.SetSorted(true)
-				appendList(v, newCol, nil, nil)
-			} else {
-				newColList := make([][]byte, len(newCol))
-				for i, varCol := range newCol {
-					newColList[i] = varCol.GetByteSlice(area)
-				}
-				v.CleanOnlyData()
-				v.SetSorted(true)
-				appendBytesList(v, newColList, nil, nil)
-			}
+			cleanDataNotResetArea()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
 		}
 	}
 }
