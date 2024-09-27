@@ -883,7 +883,6 @@ type txnTable struct {
 }
 
 type withFilterMixin struct {
-	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
