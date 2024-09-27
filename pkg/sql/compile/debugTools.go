@@ -87,6 +87,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.OnDuplicateKey:          "on duplicate key",
 	vm.DedupJoin:               "dedup join",
 	vm.Apply:                   "apply",
+	vm.MultiUpdate:             "multi update",
 }
 
 var debugMagicNames = map[magicType]string{

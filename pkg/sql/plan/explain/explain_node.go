@@ -434,6 +434,17 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			lines = append(lines, msgInfo)
 		}
 	}
+
+	if len(ndesc.Node.UpdateCtxList) > 0 {
+		msgInfo, err := ndesc.GetUpdateCtxInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		if len(msgInfo) > 0 {
+			lines = append(lines, msgInfo...)
+		}
+	}
+
 	return lines, nil
 }
 
@@ -552,6 +563,50 @@ func (ndesc *NodeDescribeImpl) GetInsertDeleteColsInfo(ctx context.Context, opti
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetUpdateCtxInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
+	var lines []string
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		for _, updateCtx := range ndesc.Node.UpdateCtxList {
+			buf := bytes.NewBuffer(make([]byte, 0, 512))
+			buf.WriteString("Table: " + updateCtx.TableDef.Name)
+			if len(updateCtx.InsertCols) > 0 {
+				buf.WriteString(" Insert Columns: ")
+				first := true
+				for _, v := range updateCtx.InsertCols {
+					if !first {
+						buf.WriteString(", ")
+					}
+					first = false
+					err := describeExpr(ctx, v, options, buf)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+			if len(updateCtx.DeleteCols) > 0 {
+				buf.WriteString(" Delete Columns: ")
+				first := true
+				for _, v := range updateCtx.DeleteCols {
+					if !first {
+						buf.WriteString(", ")
+					}
+					first = false
+					err := describeExpr(ctx, v, options, buf)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+			lines = append(lines, buf.String())
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return nil, moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return nil, moerr.NewNYI(ctx, "explain format dot")
+	}
+	return lines, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {

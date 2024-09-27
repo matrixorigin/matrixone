@@ -1196,7 +1196,9 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileInsert(ns, n, ss)
 	case plan.Node_MULTI_UPDATE:
-		c.appendMetaTables(n.ObjRef)
+		for _, updateCtx := range n.UpdateCtxList {
+			c.appendMetaTables(updateCtx.ObjRef)
+		}
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err

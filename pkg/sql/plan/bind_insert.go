@@ -268,38 +268,16 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			}, ctx)
 		}
 	}
+	/*
+		for i, tableDef := range tableDefs {
+			if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+				continue
+			}
 
-	for i, tableDef := range tableDefs {
-		if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-			continue
-		}
-
-		pkPos, pkTyp := getPkPos(tableDef, false)
-
-		lockTarget := &plan.LockTarget{
-			TableId:            tableDef.TblId,
-			PrimaryColIdxInBat: int32(pkPos),
-			PrimaryColTyp:      pkTyp,
-			RefreshTsIdxInBat:  -1, //unsupported now
-		}
-
-		//if tableDef.Partition != nil {
-		//	lockTarget.IsPartitionTable = true
-		//	lockTarget.FilterColIdxInBat = int32(partitionIdx)
-		//	lockTarget.PartitionTableIds = partTableIDs
-		//}
-
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{lastNodeID},
-			LockTargets: []*plan.LockTarget{lockTarget},
-		}, ctx)
-
-		for _, idxTableDef := range idxTableDefs[i] {
-			pkPos, pkTyp := getPkPos(idxTableDef, false)
+			pkPos, pkTyp := getPkPos(tableDef, false)
 
 			lockTarget := &plan.LockTarget{
-				TableId:            idxTableDef.TblId,
+				TableId:            tableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
 				PrimaryColTyp:      pkTyp,
 				RefreshTsIdxInBat:  -1, //unsupported now
@@ -316,9 +294,31 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				Children:    []int32{lastNodeID},
 				LockTargets: []*plan.LockTarget{lockTarget},
 			}, ctx)
-		}
-	}
 
+			for _, idxTableDef := range idxTableDefs[i] {
+				pkPos, pkTyp := getPkPos(idxTableDef, false)
+
+				lockTarget := &plan.LockTarget{
+					TableId:            idxTableDef.TblId,
+					PrimaryColIdxInBat: int32(pkPos),
+					PrimaryColTyp:      pkTyp,
+					RefreshTsIdxInBat:  -1, //unsupported now
+				}
+
+				//if tableDef.Partition != nil {
+				//	lockTarget.IsPartitionTable = true
+				//	lockTarget.FilterColIdxInBat = int32(partitionIdx)
+				//	lockTarget.PartitionTableIds = partTableIDs
+				//}
+
+				lastNodeID = builder.appendNode(&plan.Node{
+					NodeType:    plan.Node_LOCK_OP,
+					Children:    []int32{lastNodeID},
+					LockTargets: []*plan.LockTarget{lockTarget},
+				}, ctx)
+			}
+		}
+	*/
 	dmlNode := &plan.Node{
 		NodeType: plan.Node_MULTI_UPDATE,
 		Children: []int32{lastNodeID},

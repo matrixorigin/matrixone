@@ -126,7 +126,6 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Batch = dedupJoin.ctr.buf[dedupJoin.ctr.lastPos]
 				dedupJoin.ctr.lastPos++
 				result.Status = vm.ExecHasMore
-				analyzer.Output(result.Batch)
 				return result, nil
 			}
 
