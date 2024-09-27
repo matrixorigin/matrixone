@@ -4265,10 +4265,9 @@ func TestBlockRead(t *testing.T) {
 				return bat
 			}
 			b1 := buildBatch(colTyps)
-			cacheBat := batch.EmptyBatchWithSize(len(colIdxs) + 1)
 			err = blockio.BlockDataReadInner(
 				context.Background(), false, info, ds, colIdxs, colTyps,
-				beforeDel, nil, fileservice.Policy(0), b1, &cacheBat, pool, fs,
+				beforeDel, nil, fileservice.Policy(0), b1, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4279,7 +4278,7 @@ func TestBlockRead(t *testing.T) {
 			b2 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
 				context.Background(), false, info, ds, colIdxs, colTyps,
-				afterFirstDel, nil, fileservice.Policy(0), b2, &cacheBat, pool, fs,
+				afterFirstDel, nil, fileservice.Policy(0), b2, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 19, b2.Vecs[0].Length())
@@ -4289,7 +4288,7 @@ func TestBlockRead(t *testing.T) {
 			b3 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
 				context.Background(), false, info, ds, colIdxs, colTyps,
-				afterSecondDel, nil, fileservice.Policy(0), b3, &cacheBat, pool, fs,
+				afterSecondDel, nil, fileservice.Policy(0), b3, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b2.Vecs))
@@ -4301,7 +4300,7 @@ func TestBlockRead(t *testing.T) {
 				ds,
 				[]uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
-				afterSecondDel, nil, fileservice.Policy(0), b4, &cacheBat, pool, fs,
+				afterSecondDel, nil, fileservice.Policy(0), b4, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b4.Vecs))
@@ -4314,7 +4313,7 @@ func TestBlockRead(t *testing.T) {
 				context.Background(), false, info,
 				ds, []uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
-				afterSecondDel, nil, fileservice.Policy(0), b5, &cacheBat, pool, fs,
+				afterSecondDel, nil, fileservice.Policy(0), b5, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b5.Vecs))
@@ -4389,7 +4388,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		t.Log(tae.Catalog.SimplePPString(3))
 
 		txn, _ = tae.GetRelation()
-		task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.DB.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -9887,14 +9886,28 @@ func TestStartStopTableMerge(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 
 	tbl := rel.GetMeta().(*catalog.TableEntry)
-	scheduler.StopMerge(tbl)
+	require.NoError(t, scheduler.StopMerge(tbl, false))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.NoError(t, scheduler.StartMerge(tbl.GetID(), false))
+	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
+	require.Error(t, scheduler.StartMerge(tbl.GetID(), false))
 
-	require.Equal(t, moerr.GetOkStopCurrRecur(), scheduler.LoopProcessor.OnTable(tbl))
+	require.NoError(t, scheduler.StopMerge(tbl, true))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
-	scheduler.StartMerge(tbl)
+	require.NoError(t, scheduler.StopMerge(tbl, true))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
+	require.Error(t, scheduler.StopMerge(tbl, false))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+
+	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+
+	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
 	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
 }
+
 func TestDeleteByPhyAddrKeys(t *testing.T) {
 	ctx := context.Background()
 
@@ -9944,7 +9957,8 @@ func TestRollbackMergeInQueue(t *testing.T) {
 
 	err = task.OnExec(context.Background())
 	require.NoError(t, err)
-	tae.Runtime.LockMergeService.LockFromUser(rel.ID())
+	err = tae.DB.MergeScheduler.StopMerge(rel.GetMeta().(*catalog.TableEntry), false)
+	require.NoError(t, err)
 	require.Error(t, txn.Commit(ctx)) // rollback
 
 	_, rel = tae.GetRelation()
