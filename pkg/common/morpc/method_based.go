@@ -16,7 +16,6 @@ package morpc
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -69,8 +68,6 @@ func (c *handleFuncCtx[REQ, RESP]) call(
 	buf *Buffer,
 ) {
 	if err := c.handleFunc(ctx, req, resp, buf); err != nil {
-		c.logger.Info(">>>>> handle error",
-			zap.String("ctx", fmt.Sprintf("%p", ctx)))
 		resp.WrapError(err)
 	}
 	if c.logger.Enabled(zap.DebugLevel) {
