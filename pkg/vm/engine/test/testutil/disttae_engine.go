@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservice2 "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -581,6 +582,10 @@ func (ms *mockShardService) TableReplicaCount(tableID uint64) int64 {
 
 func (ms *mockShardService) Close() error {
 	return nil
+}
+
+func (ms *mockShardService) GetTableShards(tableID uint64) (shard.ShardsMetadata, []shard.TableShard, error) {
+	return shard.ShardsMetadata{}, nil, nil
 }
 
 var _ logservice.CNHAKeeperClient = new(testHAKeeperClient)
