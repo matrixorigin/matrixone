@@ -1322,6 +1322,7 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		tableDef,
 		cdc2.DefaultRetryTimes,
 		cdc2.DefaultRetryDuration,
+		cdc.activeRoutine,
 	)
 	if err != nil {
 		return err
@@ -1673,7 +1674,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	defer func() {
 		cdc2.FinishTxnOp(ctx, err, txnOp, pu.StorageEngine)
 	}()
-	timestamp := txnOp.SnapshotTS().ToStdTime().String()
+	timestamp := txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
 
 	// get from task table
 	sql := getSqlForGetTask(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
@@ -1769,7 +1770,7 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 				return
 			}
 
-			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark.ToStdTime().String())
+			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark.ToStdTime().In(time.Local).String())
 		}
 	}
 

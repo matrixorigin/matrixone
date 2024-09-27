@@ -61,7 +61,7 @@ type Sinker interface {
 
 // Sink represents the destination mysql or matrixone
 type Sink interface {
-	Send(ctx context.Context, sql string) error
+	Send(ctx context.Context, ar *ActiveRoutine, sql string) error
 	Close()
 }
 
