@@ -16,8 +16,8 @@ explain select c3,c4,c5 from t1 where c3=1;
 TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1i1(index)
-        Filter Cond: prefix_eq(#[0,0], ':')
-        Block Filter Cond: prefix_eq(#[0,0], ':')
+        Filter Cond: prefix_eq(#[0,0])
+        Block Filter Cond: prefix_eq(#[0,0])
 select c3,c4,c5 from t1 where c3=1;
 c3    c4    c5
 1    2    0
@@ -53,8 +53,8 @@ Project
               Block Filter Cond: t1.c3 in ([1 5 10 20])
               Runtime Filter Probe: t1.__mo_cpkey_col
         ->  Table Scan on d1.t1i1(index) [ForceOneCN]
-              Filter Cond: prefix_in(#[0,0], [: : :\n :])
-              Block Filter Cond: prefix_in(#[0,0], [: : :\n :])
+              Filter Cond: prefix_in(#[0,0])
+              Block Filter Cond: prefix_in(#[0,0])
 select c3,c4,c5 from t1 where c3 in (1,5,10,20);
 c3    c4    c5
 1    2    0
@@ -109,8 +109,8 @@ Project
               Block Filter Cond: t1.c3 BETWEEN 4 AND 7
               Runtime Filter Probe: t1.__mo_cpkey_col
         ->  Table Scan on d1.t1i1(index) [ForceOneCN]
-              Filter Cond: prefix_between(#[0,0], ':', ':')
-              Block Filter Cond: prefix_between(#[0,0], ':', ':')
+              Filter Cond: prefix_between(#[0,0])
+              Block Filter Cond: prefix_between(#[0,0])
 select c3,c4,c5 from t1 where c3 between 4 and 7 and c5=5;
 c3    c4    c5
 6    2    5
@@ -166,4 +166,71 @@ c2    c5
 9    2
 12    3
 15    4
+explain select * from t1 where c3=1;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.__mo_cpkey_col = #[1,0])
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.c3 = 1)
+              Block Filter Cond: (t1.c3 = 1)
+              Runtime Filter Probe: t1.__mo_cpkey_col
+        ->  Table Scan on d1.t1i1(index) [ForceOneCN]
+              Filter Cond: prefix_eq(#[0,0])
+              Block Filter Cond: prefix_eq(#[0,0])
+select * from t1 where c3=1;
+c1    c2    c3    c4    c5
+1    3    1    2    0
+10001    30003    1    2    0
+20001    60003    1    2    0
+30001    90003    1    2    0
+40001    120003    1    2    0
+50001    150003    1    2    0
+60001    180003    1    2    0
+70001    210003    1    2    0
+80001    240003    1    2    0
+90001    270003    1    2    0
+explain select * from t1 where c2=12;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c2 = 12)
+        Block Filter Cond: (t1.c2 = 12)
+select * from t1 where c2=12;
+c1    c2    c3    c4    c5
+4    12    4    5    3
+explain select count(*) from t1 where c3 between 100 and 200;
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Table Scan on d1.t1i1(index)
+              Filter Cond: prefix_between(#[0,0])
+              Block Filter Cond: prefix_between(#[0,0])
+select count(*) from t1 where c3 between 100 and 200;
+count(*)
+1010
+explain select count(*) from t1 where c3 <500;
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Table Scan on d1.t1
+              Filter Cond: (t1.c3 < 500)
+select count(*) from t1 where c3 <500;
+count(*)
+5000
+explain select count(*) from t1 where c3 in(1,13,15,90,99);
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Table Scan on d1.t1i1(index)
+              Filter Cond: prefix_in(#[0,0])
+              Block Filter Cond: prefix_in(#[0,0])
+select count(*) from t1 where c3 in(1,13,15,90,99);
+count(*)
+50
 drop database d1;

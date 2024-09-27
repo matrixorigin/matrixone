@@ -33,4 +33,19 @@ select c2,c5 from t1 where c2 in(11,15,110,210);
 -- @separator:table
 explain select c2,c5 from t1 where c2 between 1 and 17;
 select c2,c5 from t1 where c2 between 1 and 17;
+-- @separator:table
+explain select * from t1 where c3=1;
+select * from t1 where c3=1;
+-- @separator:table
+explain select * from t1 where c2=12;
+select * from t1 where c2=12;
+-- @separator:table
+explain select count(*) from t1 where c3 between 100 and 200;
+select count(*) from t1 where c3 between 100 and 200;
+-- @separator:table
+explain select count(*) from t1 where c3 <500;
+select count(*) from t1 where c3 <500;
+-- @separator:table
+explain select count(*) from t1 where c3 in(1,13,15,90,99);
+select count(*) from t1 where c3 in(1,13,15,90,99);
 drop database d1;

@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -209,7 +210,13 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 	switch layout {
 	case function.STANDARD_FUNCTION:
 		buf.WriteString(funcExpr.Func.GetObjName() + "(")
-		if len(funcExpr.Args) > 0 {
+		if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" {
+			//contains invisible character, need special handling
+			err = describeExpr(ctx, funcExpr.Args[0], options, buf)
+			if err != nil {
+				return err
+			}
+		} else if len(funcExpr.Args) > 0 {
 			var first = true
 			for _, v := range funcExpr.Args {
 				if !first {
