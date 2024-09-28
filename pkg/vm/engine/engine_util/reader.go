@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package engine_util
 
 import (
 	"context"
@@ -37,8 +37,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+)
+
+const (
+	SMALL = iota
+	NORMAL
+	LARGE
 )
 
 // -----------------------------------------------------------------
@@ -143,21 +148,21 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 // ------------------------ emptyReader ----------------------------
 // -----------------------------------------------------------------
 
-func (r *emptyReader) SetFilterZM(objectio.ZoneMap) {
+func (r *EmptyReader) SetFilterZM(objectio.ZoneMap) {
 }
 
-func (r *emptyReader) GetOrderBy() []*plan.OrderBySpec {
+func (r *EmptyReader) GetOrderBy() []*plan.OrderBySpec {
 	return nil
 }
 
-func (r *emptyReader) SetOrderBy([]*plan.OrderBySpec) {
+func (r *EmptyReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
-func (r *emptyReader) Close() error {
+func (r *EmptyReader) Close() error {
 	return nil
 }
 
-func (r *emptyReader) Read(
+func (r *EmptyReader) Read(
 	_ context.Context,
 	_ []string,
 	_ *plan.Expr,
@@ -192,6 +197,53 @@ func gatherStats(lastNumRead, lastNumHit int64) {
 // -----------------------------------------------------------------
 // ------------------------ mergeReader ----------------------------
 // -----------------------------------------------------------------
+
+type withFilterMixin struct {
+	fs       fileservice.FileService
+	ts       timestamp.Timestamp
+	tableDef *plan.TableDef
+	name     string
+
+	// columns used for reading
+	columns struct {
+		seqnums  []uint16
+		colTypes []types.Type
+
+		pkPos                    int // -1 means no primary key in columns
+		indexOfFirstSortedColumn int
+	}
+
+	filterState struct {
+		//point select for primary key
+		expr     *plan.Expr
+		filter   objectio.BlockReadFilter
+		seqnums  []uint16 // seqnums of the columns in the filter
+		colTypes []types.Type
+	}
+}
+
+type reader struct {
+	withFilterMixin
+
+	isTombstone bool
+	source      engine.DataSource
+
+	memFilter MemPKFilter
+
+	scanType   int
+	cacheBatch *batch.Batch
+}
+
+func (r *reader) SetScanType(typ int) {
+	r.scanType = typ
+}
+
+type mergeReader struct {
+	rds []engine.Reader
+}
+
+type EmptyReader struct {
+}
 
 func NewMergeReader(readers []engine.Reader) *mergeReader {
 	return &mergeReader{
@@ -263,7 +315,8 @@ func (r *mergeReader) Read(
 func NewReader(
 	ctx context.Context,
 	mp *mpool.MPool,
-	e *Engine,
+	packerPool *fileservice.Pool[*types.Packer],
+	fs fileservice.FileService,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	expr *plan.Expr,
@@ -271,7 +324,7 @@ func NewReader(
 	source engine.DataSource,
 ) (*reader, error) {
 
-	baseFilter, err := engine_util.ConstructBasePKFilter(
+	baseFilter, err := ConstructBasePKFilter(
 		expr,
 		tableDef,
 		mp,
@@ -280,8 +333,7 @@ func NewReader(
 		return nil, err
 	}
 
-	packerPool := e.packerPool
-	memFilter, err := newMemPKFilter(
+	memFilter, err := NewMemPKFilter(
 		tableDef,
 		ts,
 		packerPool,
@@ -291,7 +343,7 @@ func NewReader(
 		return nil, err
 	}
 
-	blockFilter, err := engine_util.ConstructBlockPKFilter(
+	blockFilter, err := ConstructBlockPKFilter(
 		catalog.IsFakePkName(tableDef.Pkey.PkeyColName),
 		baseFilter,
 	)
@@ -301,7 +353,7 @@ func NewReader(
 
 	r := &reader{
 		withFilterMixin: withFilterMixin{
-			fs:       e.fs,
+			fs:       fs,
 			ts:       ts,
 			tableDef: tableDef,
 			name:     tableDef.Name,

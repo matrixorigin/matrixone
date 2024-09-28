@@ -48,4 +48,10 @@ select count(*) from t1 where c3 <500;
 -- @separator:table
 explain select count(*) from t1 where c3 in(1,13,15,90,99);
 select count(*) from t1 where c3 in(1,13,15,90,99);
+-- @separator:table
+explain select count(*) from t1 where c3 between 1 and 100 and c5 <100;
+select count(*) from t1 where c3 between 1 and 100 and c5 <100;
+-- @separator:table
+explain select count(*) from t1 where c3 between 100 and 200 and c5 =-1;
+select count(*) from t1 where c3 between 100 and 200 and c5 =-1;
 drop database d1;
