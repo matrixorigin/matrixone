@@ -73,9 +73,8 @@ func NewGCTable(
 	opts ...TableOption,
 ) *GCTable {
 	table := GCTable{
-		objects: make(map[string]*ObjectEntry),
-		fs:      fs,
-		mp:      mp,
+		fs: fs,
+		mp: mp,
 	}
 	for _, opt := range opts {
 		opt(&table)
@@ -89,9 +88,8 @@ func NewGCTable(
 
 type GCTable struct {
 	sync.Mutex
-	objects map[string]*ObjectEntry
-	mp      *mpool.MPool
-	fs      fileservice.FileService
+	mp *mpool.MPool
+	fs fileservice.FileService
 
 	buffer *containers.OneSchemaBatchBuffer
 
@@ -255,7 +253,7 @@ func (t *GCTable) SoftGC(
 			createTs := creates[i]
 			dropTs := deletes[i]
 
-			if dropTs.IsEmpty() && t.objects[name] == nil {
+			if dropTs.IsEmpty() && objects[name] == nil {
 				object := &ObjectEntry{
 					createTS: createTs,
 					dropTS:   dropTs,
@@ -329,8 +327,7 @@ func (t *GCTable) SoftGC(
 			return nil, nil, err
 		}
 	}
-	t.objects = objects
-	if _, err := t.CollectMapData(ctx, buffer, t.mp); err != nil {
+	if _, err := collectMapData(objects, buffer, t.mp); err != nil {
 		logutil.Error(
 			"GCTable-SoftGC-COLLECT-ERROR",
 			zap.Error(err),
@@ -519,15 +516,18 @@ func (t *GCTable) Close() {
 }
 
 // collectData collects data from memory that can be written to s3
-func (t *GCTable) CollectMapData(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
-	if len(t.objects) == 0 {
+func collectMapData(
+	objects map[string]*ObjectEntry,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) (bool, error) {
+	if len(objects) == 0 {
 		return true, nil
 	}
-	for name, entry := range t.objects {
+	for name, entry := range objects {
 		addObjectToBatch(bat, name, entry, mp)
 	}
-	batch.SetLength(bat, len(t.objects))
-	t.objects = nil
+	batch.SetLength(bat, len(objects))
 	return false, nil
 }
 

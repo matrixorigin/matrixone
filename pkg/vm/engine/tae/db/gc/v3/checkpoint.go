@@ -1081,7 +1081,6 @@ func (c *checkpointCleaner) createNewInput(
 			zap.Duration("duration", time.Since(now)),
 			zap.Uint32("snap-meta-size :", snapSize),
 			zap.Uint32("table-meta-size :", tableSize),
-			zap.Int("object-cnt", len(input.objects)),
 			zap.String("snapshot-detail", c.snapshotMeta.String()))
 	}()
 	var data *logtail.CheckpointData
