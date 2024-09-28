@@ -16,11 +16,13 @@ package table_scan
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -71,6 +73,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		seq = txnOp.NextSequence()
 	}
 
+	stats := statistic.StatsInfoFromContext(proc.GetTopContext())
+	fmt.Printf("----------------wuxiliang3-------------->StatsInfo address: %p, tableScanStarttime:%v, %s\n", stats, start, stats.String())
+
 	trace.GetService(proc.GetService()).AddTxnDurationAction(
 		txnOp,
 		client.TableScanEvent,
@@ -85,6 +90,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		analyzer.Stop()
 
 		cost := time.Since(start)
+		fmt.Printf("----------------wuxiliang4-------------->StatsInfo address: %p, tableScanEndtime time:%v, %s\n", stats, time.Now(), stats.String())
 
 		trace.GetService(proc.GetService()).AddTxnDurationAction(
 			txnOp,

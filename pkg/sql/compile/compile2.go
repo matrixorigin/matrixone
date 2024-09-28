@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -189,6 +190,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	stats := statistic.StatsInfoFromContext(execTopContext)
 	stats.ExecutionStart()
+
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, seq)
 	defer func() {
 		task.End()
@@ -218,6 +220,11 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Before compile.runOnce, reset `StatsInfo` IO resources which in sql context
 		stats.ResetIOAccessTimeConsumption()
 		stats.ResetIOMergerTimeConsumption()
+		stats.ResetBuildReaderTimeConsumption()
+
+		if strings.EqualFold(c.sql, "select c from t1 where a = 3") {
+			fmt.Printf("----------------wuxiliang1-------------->StatsInfo address: %p, start run time:%v, %s\n", stats, time.Now(), stats.String())
+		}
 
 		// build query context and pipeline contexts for the current run.
 		runC.InitPipelineContextToExecuteQuery()
@@ -262,6 +269,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC, err = c.prepareRetry(defChanged); err != nil {
 			return nil, err
 		}
+	}
+
+	if strings.EqualFold(c.sql, "select c from t1 where a = 3") {
+		fmt.Printf("----------------wuxiliang2-------------->StatsInfo address: %p, run end time:%v, %s\n", stats, time.Now(), stats.String())
 	}
 
 	if err = runC.proc.GetQueryContextError(); err != nil {

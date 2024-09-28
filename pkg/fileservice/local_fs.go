@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -368,8 +370,11 @@ read_memory_cache:
 
 	// Record diskIO and netwokIO(un memory IO) resource
 	ioStart := time.Now()
+	fmt.Printf("----------------wuxiliang5-------------->StatsInfo address: %p, IOStarttime:%v, %s\n", stats, ioStart, stats.String())
 	defer func() {
 		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+		stackInfo := debug.Stack()
+		fmt.Printf("----------------wuxiliang6-------------->StatsInfo address: %p, IOEndtime:%v, %s, Detailed Stack Trace:%s\n", stats, ioStart, stats.String(), string(stackInfo))
 	}()
 
 	if l.diskCache != nil {

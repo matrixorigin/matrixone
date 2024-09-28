@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
@@ -434,6 +436,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
 	}
+
+	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
+	buildStart := time.Now()
+	defer func() {
+		stats.AddBuidReaderTimeConsumption(time.Since(buildStart))
+	}()
 
 	readers, err := s.buildReaders(c)
 	if err != nil {
