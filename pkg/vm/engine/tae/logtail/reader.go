@@ -147,7 +147,7 @@ func MakeGlobalCheckpointDataReader(
 		return nil, err
 	}
 	var bats []*containers.Batch
-	item := checkpointDataReferVersions[version][MetaIDX]
+	item := checkpointDataReferVersions[CheckpointCurrentVersion][MetaIDX]
 	if bats, err = LoadBlkColumnsByMeta(
 		version, ctx, item.types, item.attrs, uint16(0), reader, common.DebugAllocator,
 	); err != nil {
@@ -187,9 +187,9 @@ func (r *CheckpointReader) LoadBatchData(
 			uint16(idx) != TombstoneObjectInfoIDX {
 			continue
 		}
-		item := checkpointDataReferVersions[r.version][idx]
+		item := checkpointDataReferVersions[CheckpointCurrentVersion][idx]
 		if bats, err = LoadBlkColumnsByMeta(
-			r.version, ctx, item.types, item.attrs, uint16(idx), reader, mp,
+			CheckpointCurrentVersion, ctx, item.types, item.attrs, uint16(idx), reader, mp,
 		); err != nil {
 			return false, err
 		}
