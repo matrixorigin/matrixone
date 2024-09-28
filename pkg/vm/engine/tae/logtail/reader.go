@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -167,8 +168,9 @@ func MakeGlobalCheckpointDataReader(
 
 func (r *CheckpointReader) LoadBatchData(
 	ctx context.Context,
-	bat *batch.Batch,
+	_ []string, _ *plan.Expr,
 	mp *mpool.MPool,
+	bat *batch.Batch,
 ) (bool, error) {
 	if len(r.locations) == 0 {
 		return true, nil
