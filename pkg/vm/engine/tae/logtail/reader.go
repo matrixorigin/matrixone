@@ -15,7 +15,15 @@
 package logtail
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -110,4 +118,79 @@ func (r *Reader) GetMaxLSN() (maxLsn uint64) {
 			return true
 		})
 	return
+}
+
+type CheckpointReader struct {
+	sid       string
+	fs        fileservice.FileService
+	meta      map[uint64]*CheckpointMeta
+	locations []*objectio.Location
+	version   uint32
+}
+
+func MakeGlobalCheckpointDataReader(
+	ctx context.Context,
+	sid string,
+	fs fileservice.FileService,
+	location *objectio.Location,
+	version uint32) (*CheckpointReader, error) {
+	metadata := &CheckpointReader{
+		meta:      make(map[uint64]*CheckpointMeta),
+		locations: make([]*objectio.Location, 0),
+		sid:       sid,
+		fs:        fs,
+		version:   version,
+	}
+	reader, err := blockio.NewObjectReader(sid, fs, *location)
+	if err != nil {
+		return nil, err
+	}
+	var bats []*containers.Batch
+	item := checkpointDataReferVersions[version][MetaIDX]
+	if bats, err = LoadBlkColumnsByMeta(
+		version, ctx, item.types, item.attrs, uint16(0), reader, common.DebugAllocator,
+	); err != nil {
+		return nil, err
+	}
+	locations := make(map[string]objectio.Location)
+	buildMeta(bats[0], locations, metadata.meta)
+	for _, key := range locations {
+		metadata.locations = append(metadata.locations, &key)
+	}
+	return metadata, nil
+}
+
+func (r *CheckpointReader) LoadBatchData(
+	ctx context.Context,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) (bool, error) {
+	if len(r.locations) == 0 {
+		return true, nil
+	}
+	key := r.locations[0]
+	var reader *blockio.BlockReader
+	reader, err := blockio.NewObjectReader(r.sid, r.fs, *key)
+	if err != nil {
+		return false, err
+	}
+	var bats []*containers.Batch
+	for idx := range checkpointDataReferVersions[r.version] {
+		if uint16(idx) == MetaIDX || uint16(idx) == TNMetaIDX {
+			continue
+		}
+		item := checkpointDataReferVersions[r.version][idx]
+		if bats, err = LoadBlkColumnsByMeta(
+			r.version, ctx, item.types, item.attrs, uint16(idx), reader, mp,
+		); err != nil {
+			return false, err
+		}
+		for i := range bats {
+			cnBat := containers.ToCNBatch(bats[i])
+			bat.Append(ctx, mp, cnBat)
+			bats[i].Close()
+		}
+	}
+	r.locations = r.locations[1:]
+	return false, nil
 }
