@@ -31,6 +31,21 @@ type FilterFn func(context.Context, *bitmap.Bitmap, *batch.Batch, *mpool.MPool) 
 type SourerFn func(context.Context, *batch.Batch, *mpool.MPool) (bool, error)
 type SinkerFn func(context.Context, *batch.Batch) error
 
+func NewGCExecutor(
+	buffer *containers.OneSchemaBatchBuffer,
+	isBufferOwner bool,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) *GCExecutor {
+	exec := &GCExecutor{
+		mp: mp,
+		fs: fs,
+	}
+	exec.isBufferOwner = exec.buffer.isOwner
+	exec.buffer.impl = buffer
+	return exec
+}
+
 type GCExecutor struct {
 	buffer struct {
 		isOwner bool
@@ -51,11 +66,7 @@ func (exec *GCExecutor) doFilter(
 ) error {
 	bat := exec.getBuffer()
 	for {
-		// 1. reset bitmap and sels
-		exec.bm.Reset()
-		exec.sels = exec.sels[:0]
-
-		// 2. get next batch from sourcer
+		// 1. get next batch from sourcer
 		done, err := sourcer(ctx, bat, exec.mp)
 		if err != nil {
 			return err
@@ -64,16 +75,19 @@ func (exec *GCExecutor) doFilter(
 			break
 		}
 
-		// 3. do filter on the batch and get the bitmap
+		// 2. do filter on the batch and get the bitmap
 		//    bit 1 means the row can be GC'ed
 		//    bit 0 means the row cannot be GC'ed
+		exec.bm.Clear()
+		exec.bm.TryExpandWithSize(bat.RowCount())
 		if err := filter(ctx, &exec.bm, bat, exec.mp); err != nil {
 			return err
 		}
 
-		// 4. sink the batch to the corresponding sinker
+		// 3. sink the batch to the corresponding sinker
 		cannotGCBat := exec.getBuffer()
 		defer exec.putBuffer(cannotGCBat)
+		exec.sels = exec.sels[:0]
 		bitmap.ToArray(&exec.bm, &exec.sels)
 		if _, err := cannotGCBat.AppendWithCopy(ctx, exec.mp, bat); err != nil {
 			return err
