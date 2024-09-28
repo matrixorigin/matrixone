@@ -898,9 +898,13 @@ type Relation interface {
 	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 }
 
-type Reader interface {
+type BaseReader interface {
 	Close() error
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)
+}
+
+type Reader interface {
+	BaseReader
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
 	SetFilterZM(objectio.ZoneMap)
