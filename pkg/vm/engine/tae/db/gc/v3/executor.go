@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -31,6 +32,31 @@ type FilterFn func(context.Context, *bitmap.Bitmap, *batch.Batch, *mpool.MPool) 
 type SourerFn func(context.Context, *batch.Batch, *mpool.MPool) (bool, error)
 type SinkerFn func(context.Context, *batch.Batch) error
 
+func BuildBloomfilter(
+	ctx context.Context,
+	rowCount int,
+	probability float64,
+	columnIdx int,
+	sourcer SourerFn,
+	buffer containers.IBatchBuffer,
+	mp *mpool.MPool,
+) (bf *bloomfilter.BloomFilter, err error) {
+	bf = bloomfilter.New(int64(rowCount), probability)
+	bat := buffer.Fetch()
+	defer buffer.Putback(bat, mp)
+	var done bool
+	for {
+		if done, err = sourcer(ctx, bat, mp); err != nil {
+			return
+		}
+		if done {
+			break
+		}
+		bf.Add(bat.Vecs[columnIdx])
+	}
+	return
+}
+
 func NewGCExecutor(
 	buffer *containers.OneSchemaBatchBuffer,
 	isBufferOwner bool,
@@ -41,7 +67,7 @@ func NewGCExecutor(
 		mp: mp,
 		fs: fs,
 	}
-	exec.isBufferOwner = exec.buffer.isOwner
+	exec.buffer.isOwner = isBufferOwner
 	exec.buffer.impl = buffer
 	return exec
 }
