@@ -237,10 +237,26 @@ func addObjectToBatch(
 	name string,
 	object *ObjectEntry,
 	mPool *mpool.MPool,
-) {
-	vector.AppendBytes(bat.Vecs[0], []byte(name), false, mPool)
-	vector.AppendFixed[types.TS](bat.Vecs[1], object.createTS, false, mPool)
-	vector.AppendFixed[types.TS](bat.Vecs[2], object.dropTS, false, mPool)
-	vector.AppendFixed[uint64](bat.Vecs[3], object.db, false, mPool)
-	vector.AppendFixed[uint64](bat.Vecs[4], object.table, false, mPool)
+) error {
+	err := vector.AppendBytes(bat.Vecs[0], []byte(name), false, mPool)
+	if err != nil {
+		return err
+	}
+	err = vector.AppendFixed[types.TS](bat.Vecs[1], object.createTS, false, mPool)
+	if err != nil {
+		return err
+	}
+	err = vector.AppendFixed[types.TS](bat.Vecs[2], object.dropTS, false, mPool)
+	if err != nil {
+		return err
+	}
+	err = vector.AppendFixed[uint64](bat.Vecs[3], object.db, false, mPool)
+	if err != nil {
+		return err
+	}
+	err = vector.AppendFixed[uint64](bat.Vecs[4], object.table, false, mPool)
+	if err != nil {
+		return err
+	}
+	return nil
 }

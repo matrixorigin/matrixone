@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -327,7 +328,7 @@ func (t *GCTable) SoftGC(
 			return nil, nil, err
 		}
 	}
-	if _, err := collectMapData(objects, buffer, t.mp); err != nil {
+	if err := collectMapData(objects, buffer, t.mp); err != nil {
 		logutil.Error(
 			"GCTable-SoftGC-COLLECT-ERROR",
 			zap.Error(err),
@@ -354,6 +355,65 @@ func (t *GCTable) SoftGC(
 	t.files.stats = t.files.stats[0:]
 	t.files.stats = append(t.files.stats, gcStats...)
 	return gcFiles, snapList, err
+}
+
+func (t *GCTable) Process(
+	ctx context.Context,
+	ckps []*checkpoint.CheckpointEntry,
+	collectCkpData func(*checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
+	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CheckpointData) error,
+) error {
+	if len(ckps) == 0 {
+		return nil
+	}
+	start := ckps[0].GetStart()
+	end := ckps[len(ckps)-1].GetEnd()
+	updateInput := func(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
+		if len(ckps) == 0 {
+			return true, nil
+		}
+		data, err := collectCkpData(ckps[0])
+		if err != nil {
+			return false, err
+		}
+		if processCkpData != nil {
+			err = processCkpData(ckps[0], data)
+			if err != nil {
+				return false, err
+			}
+		}
+		objects := make(map[string]*ObjectEntry)
+		collectObjectsWithCkp(data, objects)
+		err = collectMapData(objects, bat, mp)
+		if err != nil {
+			return false, err
+		}
+		ckps = ckps[1:]
+		return false, nil
+	}
+	sinker := t.getSinker(0)
+	defer sinker.Close()
+	if err := engine_util.StreamBatchProcess(
+		ctx,
+		updateInput,
+		t.ProcessMapBatch,
+		sinker.Write,
+		t.buffer,
+		t.mp,
+	); err != nil {
+		logutil.Error(
+			"GCTable-createInput-SINK-ERROR",
+			zap.Error(err),
+		)
+		return err
+	}
+	t.tsRange.start = start
+	t.tsRange.end = end
+	if err := sinker.Sync(ctx); err != nil {
+		return err
+	}
+	stats, _ := sinker.GetResult()
+	return t.doneAllBatches(ctx, &start, &end, stats)
 }
 
 func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, pitr *types.TS, name string) bool {
@@ -412,36 +472,6 @@ func (t *GCTable) getSinker(tailSize int) *engine_util.Sinker {
 	)
 }
 
-func (t *GCTable) Process(
-	ctx context.Context,
-	start, end *types.TS,
-	loadNextBatch func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
-	processOneBatch func(context.Context, *batch.Batch, *mpool.MPool) error,
-) error {
-
-	t.tsRange.start = *start
-	t.tsRange.end = *end
-
-	sinker := t.getSinker(0)
-	defer sinker.Close()
-	if err := engine_util.StreamBatchProcess(
-		ctx,
-		loadNextBatch,
-		processOneBatch,
-		sinker.Write,
-		t.buffer,
-		t.mp,
-	); err != nil {
-		return err
-	}
-
-	if err := sinker.Sync(ctx); err != nil {
-		return err
-	}
-	stats, _ := sinker.GetResult()
-	return t.doneAllBatches(ctx, start, end, stats)
-}
-
 func (t *GCTable) doneAllBatches(ctx context.Context, start, end *types.TS, stats []objectio.ObjectStats) error {
 	name := blockio.EncodeCheckpointMetadataFileName(t.metaDir, PrefixGCMeta, *start, *end)
 	ret := batch.New(false, ObjectTableMetaAttrs)
@@ -479,14 +509,8 @@ func (t *GCTable) Merge(table *GCTable) {
 	}
 }
 
-func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
+func collectObjectsWithCkp(data *logtail.CheckpointData, objects map[string]*ObjectEntry) {
 	ins := data.GetObjectBatchs()
-	t.Lock()
-	defer t.Unlock()
-	t.updateObjectListLocked(ins, t.objects)
-}
-
-func (t *GCTable) updateObjectListLocked(ins *containers.Batch, objects map[string]*ObjectEntry) {
 	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
 	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
 	dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
@@ -520,15 +544,18 @@ func collectMapData(
 	objects map[string]*ObjectEntry,
 	bat *batch.Batch,
 	mp *mpool.MPool,
-) (bool, error) {
+) error {
 	if len(objects) == 0 {
-		return true, nil
+		return nil
 	}
 	for name, entry := range objects {
-		addObjectToBatch(bat, name, entry, mp)
+		err := addObjectToBatch(bat, name, entry, mp)
+		if err != nil {
+			return err
+		}
 	}
 	batch.SetLength(bat, len(objects))
-	return false, nil
+	return nil
 }
 
 func (t *GCTable) ProcessMapBatch(

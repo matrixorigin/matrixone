@@ -258,7 +258,7 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 	return
 }
 
-func getCheckpointData(
+func GetCheckpointData(
 	ctx context.Context,
 	sid string,
 	fs fileservice.FileService,
@@ -386,7 +386,7 @@ func LoadCheckpointEntriesFromKey(
 	baseTS *types.TS,
 ) ([]*objectio.BackupObject, *CheckpointData, error) {
 	locations := make([]*objectio.BackupObject, 0)
-	data, err := getCheckpointData(ctx, sid, fs, location, version)
+	data, err := GetCheckpointData(ctx, sid, fs, location, version)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -496,7 +496,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	}()
 	phaseNumber = 1
 	// Load checkpoint
-	data, err := getCheckpointData(ctx, sid, fs, loc, version)
+	data, err := GetCheckpointData(ctx, sid, fs, loc, version)
 	if err != nil {
 		return nil, nil, nil, err
 	}
