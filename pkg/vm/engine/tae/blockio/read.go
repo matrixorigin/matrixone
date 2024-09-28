@@ -179,6 +179,8 @@ func BlockDataRead(
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
 
+	snapshotTS := types.TimestampToTS(ts)
+
 	var (
 		sels []int64
 		err  error
@@ -188,8 +190,18 @@ func BlockDataRead(
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
-			ctx, isTombstone, tableName, info, ds, filterSeqnums, filterColTypes,
-			types.TimestampToTS(ts), searchFunc, cacheBat, mp, fs,
+			ctx,
+			isTombstone,
+			tableName,
+			info,
+			ds,
+			filterSeqnums,
+			filterColTypes,
+			snapshotTS,
+			searchFunc,
+			cacheBat,
+			mp,
+			fs,
 		); err != nil {
 			return err
 		}
@@ -204,8 +216,19 @@ func BlockDataRead(
 	}
 
 	err = BlockDataReadInner(
-		ctx, isTombstone, info, ds, columns, colTypes,
-		types.TimestampToTS(ts), sels, policy, bat, cacheBat, mp, fs,
+		ctx,
+		isTombstone,
+		info,
+		ds,
+		columns,
+		colTypes,
+		snapshotTS,
+		sels,
+		policy,
+		bat,
+		cacheBat,
+		mp,
+		fs,
 	)
 	if err != nil {
 		return err

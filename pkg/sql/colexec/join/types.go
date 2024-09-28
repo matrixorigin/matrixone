@@ -15,6 +15,7 @@
 package join
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -35,6 +36,8 @@ const (
 
 type container struct {
 	state int
+
+	itr hashmap.Iterator
 
 	batchRowCount int64
 	lastrow       int
@@ -118,7 +121,7 @@ func (innerJoin *InnerJoin) Release() {
 
 func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &innerJoin.ctr
-
+	ctr.itr = nil
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()

@@ -252,8 +252,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if execCtx.proc.GetLastInsertID() != 0 {
 				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
 			}
-		case *tree.CreateTable:
-			_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
 		case *tree.DropTable:
 			// handle dynamic table drop, cancel all the running daemon task
 			_ = handleDropDynamicTable(execCtx.reqCtx, ses, st)
