@@ -23,13 +23,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type FilterFn func(context.Context, *bitmap.Bitmap, *batch.Batch, *mpool.MPool) error
-type SourerFn func(context.Context, *batch.Batch, *mpool.MPool) (bool, error)
+type SourerFn func(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)
 type SinkerFn func(context.Context, *batch.Batch) error
 
 func BuildBloomfilter(
@@ -46,7 +47,8 @@ func BuildBloomfilter(
 	defer buffer.Putback(bat, mp)
 	var done bool
 	for {
-		if done, err = sourcer(ctx, bat, mp); err != nil {
+		bat.CleanOnlyData()
+		if done, err = sourcer(ctx, bat.Attrs, nil, mp, bat); err != nil {
 			return
 		}
 		if done {
@@ -93,7 +95,7 @@ func (exec *GCExecutor) doFilter(
 	bat := exec.getBuffer()
 	for {
 		// 1. get next batch from sourcer
-		done, err := sourcer(ctx, bat, exec.mp)
+		done, err := sourcer(ctx, bat.Attrs, nil, exec.mp, bat)
 		if err != nil {
 			return err
 		}

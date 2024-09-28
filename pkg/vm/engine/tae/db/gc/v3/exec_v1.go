@@ -44,9 +44,7 @@ func MakeBloomfilterCoarseFilter(
 		rowCount,
 		probability,
 		0,
-		func(ctx context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
-			return reader.Read(ctx, bat.Attrs, nil, mp, bat)
-		},
+		reader.Read,
 		buffer,
 		mp,
 	)

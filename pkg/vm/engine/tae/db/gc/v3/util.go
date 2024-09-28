@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
@@ -52,7 +53,7 @@ func MakeLoadFunc(
 		}
 	}
 	return func(
-		ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
+		ctx context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch,
 	) (bool, error) {
 		if cursor < len(tail) {
 			if _, err := bat.AppendWithCopy(ctx, mp, bat); err != nil {
