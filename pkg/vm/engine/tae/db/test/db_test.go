@@ -7001,6 +7001,9 @@ func TestPitrMeta(t *testing.T) {
 	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
+	pitr, err := db.DiskCleaner.GetCleaner().GetPITRs()
+	assert.Nil(t, err)
+	assert.True(t, len(pitr.ToTsList()) > 0)
 }
 
 func TestMergeGC(t *testing.T) {
