@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"go.uber.org/zap"
 	"math"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -202,14 +203,6 @@ func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
 	}
 	block := NewBlock(w.seqnums)
 	w.AddBlock(block, batch, w.seqnums)
-	return block, nil
-}
-
-func (w *objectWriterV1) WriteTombstone(batch *batch.Batch) (BlockObject, error) {
-	denseSeqnums := NewSeqnums(nil)
-	denseSeqnums.InitWithColCnt(len(batch.Vecs))
-	block := NewBlock(denseSeqnums)
-	w.AddTombstone(block, batch, denseSeqnums)
 	return block, nil
 }
 
