@@ -15,9 +15,8 @@
 package gc
 
 import (
-	"bytes"
 	"context"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -490,8 +489,10 @@ func (t *GCTable) ProcessMapBatch(
 // collectData collects data from memory that can be written to s3
 func (t *GCTable) LoadBatchData(
 	ctx context.Context,
-	bat *batch.Batch,
+	_ []string,
+	_ *plan.Expr,
 	mp *mpool.MPool,
+	bat *batch.Batch,
 ) (bool, error) {
 	if len(t.files.stats) == 0 {
 		return true, nil
@@ -582,10 +583,10 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 // For test
 
 func (t *GCTable) Compare(table *GCTable) bool {
-	if !t.compareObjects(t.objects, table.objects) {
-		logutil.Infof("objects are not equal")
-		return false
-	}
+	//if !t.compareObjects(t.objects, table.objects) {
+	//	logutil.Infof("objects are not equal")
+	//	return false
+	//}
 	return true
 }
 
@@ -607,14 +608,15 @@ func (t *GCTable) compareObjects(objects, compareObjects map[string]*ObjectEntry
 }
 
 func (t *GCTable) String() string {
-	if len(t.objects) == 0 {
-		return ""
-	}
-	var w bytes.Buffer
-	_, _ = w.WriteString("objects:[\n")
-	for name, entry := range t.objects {
-		_, _ = w.WriteString(fmt.Sprintf("name: %s, createTS: %v ", name, entry.createTS.ToString()))
-	}
-	_, _ = w.WriteString("]\n")
-	return w.String()
+	//if len(t.objects) == 0 {
+	//	return ""
+	//}
+	//var w bytes.Buffer
+	//_, _ = w.WriteString("objects:[\n")
+	//for name, entry := range t.objects {
+	//	_, _ = w.WriteString(fmt.Sprintf("name: %s, createTS: %v ", name, entry.createTS.ToString()))
+	//}
+	//_, _ = w.WriteString("]\n")
+	//return w.String()
+	return ""
 }

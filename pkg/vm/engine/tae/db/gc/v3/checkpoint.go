@@ -22,8 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -699,12 +697,8 @@ func (c *checkpointCleaner) GetPITRs() (*logtail.PitrInfo, error) {
 func (c *checkpointCleaner) TryGC() error {
 	maxGlobalCKP := c.ckpClient.MaxGlobalCheckpoint()
 	if maxGlobalCKP != nil {
-		data, err := c.collectCkpData(maxGlobalCKP)
-		if err != nil {
-			return err
-		}
-		defer data.Close()
-		err = c.tryGC(data, maxGlobalCKP)
+		location := maxGlobalCKP.GetLocation()
+		err := c.tryGC(&location, maxGlobalCKP)
 		if err != nil {
 			return err
 		}
@@ -712,7 +706,7 @@ func (c *checkpointCleaner) TryGC() error {
 	return nil
 }
 
-func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint.CheckpointEntry) error {
+func (c *checkpointCleaner) tryGC(location *objectio.Location, gckp *checkpoint.CheckpointEntry) error {
 	if !c.delWorker.Start() {
 		return nil
 	}
@@ -731,7 +725,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		return nil
 	}
 
-	gc, snapshotList, err := c.softGC(data, gckp, snapshots, pitrs)
+	gc, snapshotList, err := c.softGC(location, gckp, snapshots, pitrs)
 	if err != nil {
 		logutil.Errorf("[DiskCleaner] softGC failed: %v", err.Error())
 		return err
@@ -754,7 +748,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 }
 
 func (c *checkpointCleaner) softGC(
-	data *logtail.CheckpointData,
+	location *objectio.Location,
 	gckp *checkpoint.CheckpointEntry,
 	snapshots map[uint32]containers.Vector,
 	pitrs *logtail.PitrInfo,
@@ -780,19 +774,7 @@ func (c *checkpointCleaner) softGC(
 		table.Close()
 		c.inputs.tables[i] = nil
 	}
-
-	objects := make(map[string]*ObjectEntry)
-	collectObjectsWithCkp(data, objects)
-	bat := mergeTable.fetchBuffer()
-	err := collectMapData(objects, bat, mergeTable.mp)
-	if err != nil {
-		mergeTable.putBuffer(bat)
-		logutil.Errorf("softGC failed: %v", err.Error())
-		return nil, nil, err
-	}
-	bf := bloomfilter.New(int64(bat.Vecs[0].Length()), 0.00001)
-	mergeTable.putBuffer(bat)
-	gc, snapList, err := mergeTable.SoftGC(c.ctx, bf, gckp.GetEnd(), snapshots, pitrs, c.snapshotMeta)
+	gc, snapList, err := mergeTable.SoftGC(c.ctx, location, gckp.GetEnd(), snapshots, pitrs, c.snapshotMeta)
 	if err != nil {
 		logutil.Errorf("softGC failed: %v", err.Error())
 		return nil, nil, err
@@ -837,24 +819,6 @@ func (c *checkpointCleaner) CheckGC() error {
 		}
 		logutil.Warnf("MaxCompared is nil, use maxGlobalCkp %v", gCkp.String())
 	}
-	data, err := c.collectCkpData(gCkp)
-	if err != nil {
-		return err
-	}
-	defer data.Close()
-	gcTable := NewGCTable(c.fs.Service, c.mPool)
-	defer gcTable.Close()
-	objects := make(map[string]*ObjectEntry)
-	collectObjectsWithCkp(data, objects)
-	bat := gcTable.fetchBuffer()
-	err = collectMapData(objects, bat, gcTable.mp)
-	if err != nil {
-		gcTable.putBuffer(bat)
-		logutil.Errorf("softGC failed: %v", err.Error())
-		return err
-	}
-	bf := bloomfilter.New(int64(bat.Vecs[0].Length()), 0.00001)
-	gcTable.putBuffer(bat)
 	for i, ckp := range debugCandidates {
 		maxEnd := maxConsumed.GetEnd()
 		ckpEnd := ckp.GetEnd()
@@ -887,13 +851,14 @@ func (c *checkpointCleaner) CheckGC() error {
 		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
 		return moerr.NewInternalErrorNoCtxf("processing clean GetPITRs %s: %v", debugCandidates[0].String(), err)
 	}
-	debugTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
+	location := gCkp.GetLocation()
+	debugTable.SoftGC(c.ctx, &location, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
 	mergeTable := NewGCTable(c.fs.Service, c.mPool)
 	for _, table := range c.inputs.tables {
 		mergeTable.Merge(table)
 	}
 	defer mergeTable.Close()
-	mergeTable.SoftGC(c.ctx, bf, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
+	mergeTable.SoftGC(c.ctx, &location, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
@@ -974,18 +939,8 @@ func (c *checkpointCleaner) Process() {
 			zap.String("max-global :", maxGlobalCKP.String()),
 			zap.String("ts", compareTS.ToString()),
 		)
-		data, err := c.collectCkpData(maxGlobalCKP)
-		if err != nil {
-			c.inputs.RUnlock()
-			logutil.Error(
-				"DiskCleaner-Process-CollectGlobalCkpData-Error",
-				zap.Error(err),
-				zap.String("checkpoint", candidates[0].String()),
-			)
-			return
-		}
-		defer data.Close()
-		err = c.tryGC(data, maxGlobalCKP)
+		location := maxGlobalCKP.GetLocation()
+		err = c.tryGC(&location, maxGlobalCKP)
 		if err != nil {
 			logutil.Error(
 				"DiskCleaner-Process-TryGC-Error",
