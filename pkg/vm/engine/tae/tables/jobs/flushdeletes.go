@@ -63,7 +63,7 @@ func (task *flushDeletesTask) Execute(ctx context.Context) error {
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	task.name = name
 	waitT := time.Since(task.createAt)
-	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, 0, nil, false)
 	if err != nil {
 		return err
 	}
