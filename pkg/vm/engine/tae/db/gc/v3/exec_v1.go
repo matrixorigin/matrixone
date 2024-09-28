@@ -16,12 +16,13 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -30,23 +31,23 @@ func MakeBloomfilterCoarseFilter(
 	rowCount int,
 	probability float64,
 	buffer containers.IBatchBuffer,
+	location *objectio.Location,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (
 	FilterFn,
 	error,
 ) {
-	var reader engine.BaseReader
-	// TODO: make gloabl check point reader or something
-	// reader = MakeReaderXXX(...)
+	reader, err := logtail.MakeGlobalCheckpointDataReader(ctx, "", fs, location, 0)
+	if err != nil {
+		return nil, err
+	}
 	bf, err := BuildBloomfilter(
 		ctx,
 		rowCount,
 		probability,
 		0,
-		func(ctx context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
-			return reader.Read(ctx, bat.Attrs, nil, mp, bat)
-		},
+		reader.LoadBatchData,
 		buffer,
 		mp,
 	)

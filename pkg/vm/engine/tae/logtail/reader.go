@@ -152,6 +152,11 @@ func MakeGlobalCheckpointDataReader(
 	); err != nil {
 		return nil, err
 	}
+	defer func() {
+		for _, bat := range bats {
+			bat.Close()
+		}
+	}()
 	locations := make(map[string]objectio.Location)
 	buildMeta(bats[0], locations, metadata.meta)
 	for _, key := range locations {
@@ -176,7 +181,8 @@ func (r *CheckpointReader) LoadBatchData(
 	}
 	var bats []*containers.Batch
 	for idx := range checkpointDataReferVersions[r.version] {
-		if uint16(idx) == MetaIDX || uint16(idx) == TNMetaIDX {
+		if uint16(idx) != ObjectInfoIDX &&
+			uint16(idx) != TombstoneObjectInfoIDX {
 			continue
 		}
 		item := checkpointDataReferVersions[r.version][idx]
@@ -193,4 +199,9 @@ func (r *CheckpointReader) LoadBatchData(
 	}
 	r.locations = r.locations[1:]
 	return false, nil
+}
+
+func (r *CheckpointReader) Close() {
+	r.meta = nil
+	r.locations = nil
 }

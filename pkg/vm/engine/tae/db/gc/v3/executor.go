@@ -49,6 +49,11 @@ func BuildBloomfilter(
 		if done, err = sourcer(ctx, bat, mp); err != nil {
 			return
 		}
+		if bf == nil {
+			bf = bloomfilter.New(int64(bat.Vecs[0].Length()), probability)
+		} else {
+			bf.Add(bat.Vecs[0])
+		}
 		if done {
 			break
 		}
