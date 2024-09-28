@@ -1005,7 +1005,6 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	var (
 		location objectio.Location
 
-		loaded  *batch.Batch
 		release func()
 	)
 
@@ -1017,6 +1016,9 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 		}
 		return false
 	}
+
+	attrs := objectio.GetTombstoneAttrs(true)
+	emptyBatch := batch.EmptyBatchWithAttrs(attrs)
 
 	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
@@ -1040,16 +1042,18 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
-			if loaded, _, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
+			if _, release, err = blockio.ReadDeletes(
+				ls.ctx, location, ls.fs, obj.GetCNCreated(), &emptyBatch,
+			); err != nil {
 				return nil, err
 			}
 
 			var deletedRowIds []objectio.Rowid
 			var commit []types.TS
 
-			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](loaded.Vecs[0])
+			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](emptyBatch.Vecs[0])
 			if !obj.GetCNCreated() {
-				commit = vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[1])
+				commit = vector.MustFixedColWithTypeCheck[types.TS](emptyBatch.Vecs[1])
 			}
 
 			for i := 0; i < len(rowIds); i++ {

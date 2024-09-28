@@ -4265,9 +4265,10 @@ func TestBlockRead(t *testing.T) {
 				return bat
 			}
 			b1 := buildBatch(colTyps)
+			cacheBat := batch.EmptyBatchWithSize(len(colIdxs) + 1)
 			err = blockio.BlockDataReadInner(
 				context.Background(), false, info, ds, colIdxs, colTyps,
-				beforeDel, nil, fileservice.Policy(0), b1, pool, fs,
+				beforeDel, nil, fileservice.Policy(0), b1, &cacheBat, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4278,7 +4279,7 @@ func TestBlockRead(t *testing.T) {
 			b2 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
 				context.Background(), false, info, ds, colIdxs, colTyps,
-				afterFirstDel, nil, fileservice.Policy(0), b2, pool, fs,
+				afterFirstDel, nil, fileservice.Policy(0), b2, &cacheBat, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 19, b2.Vecs[0].Length())
@@ -4288,7 +4289,7 @@ func TestBlockRead(t *testing.T) {
 			b3 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
 				context.Background(), false, info, ds, colIdxs, colTyps,
-				afterSecondDel, nil, fileservice.Policy(0), b3, pool, fs,
+				afterSecondDel, nil, fileservice.Policy(0), b3, &cacheBat, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b2.Vecs))
@@ -4300,7 +4301,7 @@ func TestBlockRead(t *testing.T) {
 				ds,
 				[]uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
-				afterSecondDel, nil, fileservice.Policy(0), b4, pool, fs,
+				afterSecondDel, nil, fileservice.Policy(0), b4, &cacheBat, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b4.Vecs))
@@ -4313,7 +4314,7 @@ func TestBlockRead(t *testing.T) {
 				context.Background(), false, info,
 				ds, []uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
-				afterSecondDel, nil, fileservice.Policy(0), b5, pool, fs,
+				afterSecondDel, nil, fileservice.Policy(0), b5, &cacheBat, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b5.Vecs))
