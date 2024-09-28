@@ -19,6 +19,7 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"io"
 	"math"
 	"math/rand"
@@ -46,10 +47,10 @@ import (
 
 type inspectContext struct {
 	db     *db.DB
-	acinfo *db.AccessInfo
+	acinfo *cmd_util.AccessInfo
 	args   []string
 	out    io.Writer
-	resp   *db.InspectResp
+	resp   *cmd_util.InspectResp
 }
 
 // impl Pflag.Value interface
@@ -1006,7 +1007,7 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEnt
 	return oentry, bn, nil
 }
 
-func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {
+func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {
 	if address == "*" {
 		return nil, nil
 	}
@@ -1095,7 +1096,7 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 //
 // the history of all
 // mo_ctl("dn", "inspect", "storage_usage -t *");
-func parseStorageUsageDetail(expr string, ac *db.AccessInfo, db *db.DB) (
+func parseStorageUsageDetail(expr string, ac *cmd_util.AccessInfo, db *db.DB) (
 	accId uint64, dbId uint64, tblId uint64, err error) {
 	strs := strings.Split(expr, ".")
 
@@ -1168,7 +1169,7 @@ func subString(src string, pos1, pos2 int) (string, error) {
 //
 // no limit, show all request trace info
 // select mo_ctl("dn", "inspect", "-t ");
-func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
+func parseStorageUsageTrace(expr string, ac *cmd_util.AccessInfo, db *db.DB) (
 	tStart, tEnd time.Time, accounts map[uint64]struct{}, err error) {
 
 	var str string
