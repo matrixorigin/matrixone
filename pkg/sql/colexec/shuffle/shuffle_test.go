@@ -262,7 +262,7 @@ func TestReset(t *testing.T) {
 }
 
 func TestPrint(t *testing.T) {
-	sp := NewShufflePool(4)
+	sp := NewShufflePool(4, 1)
 	sp.Print()
 }
 

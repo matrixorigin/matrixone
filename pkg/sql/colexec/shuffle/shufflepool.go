@@ -27,6 +27,7 @@ import (
 
 type ShufflePool struct {
 	bucketNum    int32
+	maxHolders   int32
 	holders      int32
 	finished     int32
 	batches      []*batch.Batch
@@ -35,8 +36,8 @@ type ShufflePool struct {
 	fullBatchIdx []int
 }
 
-func NewShufflePool(bucketNum int32) *ShufflePool {
-	sp := &ShufflePool{bucketNum: bucketNum}
+func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePool {
+	sp := &ShufflePool{bucketNum: bucketNum, maxHolders: maxHolders}
 	sp.holders = 0
 	sp.finished = 0
 	sp.batches = make([]*batch.Batch, sp.bucketNum)
@@ -49,7 +50,7 @@ func (sp *ShufflePool) Hold() {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
 	sp.holders++
-	if sp.holders > sp.bucketNum {
+	if sp.holders > sp.maxHolders {
 		panic("shuffle pool too many holders!")
 	}
 }
@@ -58,21 +59,21 @@ func (sp *ShufflePool) Ending() bool {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
 	sp.finished++
-	if sp.finished > sp.bucketNum || sp.finished > sp.holders {
+	if sp.finished > sp.maxHolders || sp.finished > sp.holders {
 		panic("shuffle pool too many finished!")
 	}
-	return sp.finished == sp.bucketNum
+	return sp.finished == sp.maxHolders
 }
 
 func (sp *ShufflePool) Reset(m *mpool.MPool, force bool) {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
 	if force {
-		logutil.Warnf("shuffle pool force reset, bucketNum %v, holders %v, finished %v", sp.bucketNum, sp.holders, sp.finished)
+		logutil.Warnf("shuffle pool force reset, maxHolders %v, holders %v, finished %v", sp.maxHolders, sp.holders, sp.finished)
 		return
 	}
-	if sp.bucketNum != sp.holders || sp.bucketNum != sp.finished {
-		logutil.Errorf("shuffle pool reset with invalid state! bucketNum %v, holders %v, finished %v", sp.bucketNum, sp.holders, sp.finished)
+	if sp.maxHolders != sp.holders || sp.maxHolders != sp.finished {
+		logutil.Errorf("shuffle pool reset with invalid state! maxHolders %v, holders %v, finished %v", sp.maxHolders, sp.holders, sp.finished)
 		panic("shuffle pool reset with invalid state! ")
 	}
 	for i := range sp.batches {
@@ -86,7 +87,7 @@ func (sp *ShufflePool) Reset(m *mpool.MPool, force bool) {
 func (sp *ShufflePool) Print() { // only for debug
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
-	logutil.Warnf("shuffle pool print, bucketNum %v, holders %v, finished %v", sp.bucketNum, sp.holders, sp.finished)
+	logutil.Warnf("shuffle pool print, maxHolders %v, holders %v, finished %v", sp.maxHolders, sp.holders, sp.finished)
 	for i := range sp.batches {
 		bat := sp.batches[i]
 		if bat == nil {
@@ -104,7 +105,7 @@ func (sp *ShufflePool) GetEndingBatch(buf *batch.Batch, proc *process.Process) *
 	}
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
-	if sp.finished < sp.bucketNum {
+	if sp.finished < sp.maxHolders {
 		return nil
 	}
 	for i := range sp.batches {

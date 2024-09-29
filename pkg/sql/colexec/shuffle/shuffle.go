@@ -57,7 +57,7 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		}
 	}
 	if shuffle.GetShufflePool() == nil {
-		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum))
+		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1))
 	}
 	shuffle.ctr.shufflePool.Hold()
 	shuffle.ctr.ending = false
