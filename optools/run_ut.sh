@@ -133,15 +133,13 @@ elif [[ 'UT' == $TEST_TYPE ]]; then
     echo "# Running UT"
     horiz_rule
     run_tests
-    result="$?";
-    echo "$result";
 
     horiz_rule
     echo "# Post testing"
     horiz_rule
     post_test
 
-    ut_summary $result
+    ut_summary
 else
     logger "ERR" "Wrong test type"
     exit 1
