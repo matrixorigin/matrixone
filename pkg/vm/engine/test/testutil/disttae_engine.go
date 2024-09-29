@@ -611,6 +611,9 @@ func (ha *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservice
 func (ha *testHAKeeperClient) GetClusterState(ctx context.Context) (logservice2.CheckerState, error) {
 	return logservice2.CheckerState{}, nil
 }
+func (c *testHAKeeperClient) CheckLogServiceHealth(_ context.Context) error {
+	return nil
+}
 
 func (ha *testHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, error) {
 	return nil, nil
