@@ -324,7 +324,10 @@ func (ctr *container) processH0() error {
 // processH8 do group by aggregation with int hashmap.
 func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.RowCount()
-	itr := ctr.intHashMap.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.intHashMap.NewIterator()
+	}
+	itr := ctr.itr
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
@@ -348,7 +351,10 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 // processHStr do group by aggregation with string hashmap.
 func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
 	count := bat.RowCount()
-	itr := ctr.strHashMap.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.strHashMap.NewIterator()
+	}
+	itr := ctr.itr
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
