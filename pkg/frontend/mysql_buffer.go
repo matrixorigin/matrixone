@@ -185,7 +185,6 @@ type Conn struct {
 	timeout           time.Duration
 	allocator         *BufferAllocator
 	ses               *Session
-	mu                sync.Mutex
 	closeFunc         sync.Once
 }
 
@@ -194,7 +193,6 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (_ *Conn, err error) 
 	// just for ut
 	_, ok := globalSessionAlloc.Load().(Allocator)
 	if !ok {
-		panic("abc")
 		allocator := NewSessionAllocator(pu)
 		setGlobalSessionAlloc(allocator)
 	}
@@ -213,7 +211,7 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (_ *Conn, err error) 
 
 	defer func() {
 		if err != nil {
-			c.freeBuffSafe()
+			c.freeBuffUnsafe()
 		}
 	}()
 
@@ -252,27 +250,27 @@ func (c *Conn) freeDynamicBuffUnsafe() {
 }
 
 func (c *Conn) freeBuffUnsafe() {
+	if c == nil {
+		return
+	}
 	c.fixBuf.freeBuffUnsafe(c.allocator)
 	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
 	c.freeDynamicBuffUnsafe()
 }
 
 func (c *Conn) freeNoFixBuffUnsafe() {
+	if c == nil {
+		return
+	}
 	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
 	c.freeDynamicBuffUnsafe()
-}
-
-func (c *Conn) freeBuffSafe() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.freeBuffUnsafe()
 }
 
 func (c *Conn) Close() error {
 	var err error
 	c.closeFunc.Do(func() {
 		defer func() {
-			c.freeBuffSafe()
+			c.freeBuffUnsafe()
 		}()
 
 		err = c.closeConn()
@@ -346,8 +344,6 @@ func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 }
 
 func (c *Conn) FreeLoadLocal() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
 }
 
@@ -455,7 +451,7 @@ func (c *Conn) Read() (_ []byte, err error) {
 			return nil, err
 		}
 
-		payload, err = c.ReadOnePayload(payloadLength)
+		payload, err = ReadOnePayload(c, payloadLength)
 		if err != nil {
 			return nil, err
 		}
@@ -496,6 +492,10 @@ func (c *Conn) GetPayloadLength() (int, bool) {
 	return payloadLength, true
 }
 
+var ReadOnePayload = func(c *Conn, payloadLength int) ([]byte, error) {
+	return c.ReadOnePayload(payloadLength)
+}
+
 // ReadOnePayload allocates memory for a payload and reads it
 func (c *Conn) ReadOnePayload(payloadLength int) (payload []byte, err error) {
 	defer func() {
@@ -509,24 +509,25 @@ func (c *Conn) ReadOnePayload(payloadLength int) (payload []byte, err error) {
 		}
 		if err != nil {
 			c.allocator.Free(payload)
+			payload = nil
 		}
 	}()
 
 	if payloadLength == 0 {
-		return nil, nil
+		return
 	}
 
 	payload, err = c.allocator.Alloc(payloadLength)
 	if err != nil {
-		return nil, err
+		return
 	}
 
-	err = c.ReadNBytesIntoBuf(payload, payloadLength)
+	err = ReadNBytesIntoBuf(c, payload, payloadLength)
 	if err != nil {
-		return nil, err
+		return
 	}
 
-	return payload, nil
+	return
 }
 
 var ReadNBytesIntoBuf = func(c *Conn, buf []byte, n int) error {
@@ -583,17 +584,17 @@ func (c *Conn) Append(elems ...byte) (err error) {
 		// if bufferLength > 16MB, split packet
 		remainPacketSpace := int(MaxPayloadSize) - c.packetLength
 		writeLength := Min(remainPacketSpace, len(elems[cutIndex:]))
-		err = c.AppendPart(elems[cutIndex : cutIndex+writeLength])
+		err = AppendPart(c, elems[cutIndex:cutIndex+writeLength])
 		if err != nil {
 			return err
 		}
 		if c.packetLength == int(MaxPayloadSize) {
-			err = c.FinishedPacket()
+			err = FinishedPacket(c)
 			if err != nil {
 				return err
 			}
 
-			err = c.BeginPacket()
+			err = BeginPacket(c)
 			if err != nil {
 				return err
 			}
@@ -603,6 +604,10 @@ func (c *Conn) Append(elems ...byte) (err error) {
 	}
 
 	return err
+}
+
+var AppendPart = func(c *Conn, elems []byte) error {
+	return c.AppendPart(elems)
 }
 
 // AppendPart is the base method of adding bytes to buffer
@@ -622,7 +627,7 @@ func (c *Conn) AppendPart(elems []byte) error {
 			allocLength += fixBufferSize - allocLength%fixBufferSize
 		}
 
-		err = c.AllocNewBlock(allocLength)
+		err = AllocNewBlock(c, allocLength)
 		if err != nil {
 			return err
 		}
@@ -637,11 +642,24 @@ func (c *Conn) AppendPart(elems []byte) error {
 	return err
 }
 
+var AllocNewBlock = func(c *Conn, allocLength int) error {
+	return c.AllocNewBlock(allocLength)
+}
+
 // AllocNewBlock allocates memory and push it into the dynamic buffer
 func (c *Conn) AllocNewBlock(allocLength int) (err error) {
 	var buf []byte
 
 	defer func() {
+		if rErr := recover(); rErr != nil {
+			_, ok := rErr.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
+			} else {
+				err = errors.Join(err, rErr.(error))
+			}
+		}
+
 		if err != nil {
 			c.allocator.Free(buf)
 		}
@@ -649,19 +667,23 @@ func (c *Conn) AllocNewBlock(allocLength int) (err error) {
 
 	buf, err = c.allocator.Alloc(allocLength)
 	if err != nil {
-		return err
+		return
 	}
 	newBlock := &MemBlock{}
 	newBlock.data = buf
 	c.dynamicWrBuf.PushBack(newBlock)
 	c.curBuf = newBlock
-	return nil
+	return
+}
+
+var BeginPacket = func(c *Conn) error {
+	return c.BeginPacket()
 }
 
 // BeginPacket Reserve Header in the buffer
 func (c *Conn) BeginPacket() error {
 	if c.curBuf.AvailableSpaceLen() < HeaderLengthOfTheProtocol {
-		err := c.AllocNewBlock(fixBufferSize)
+		err := AllocNewBlock(c, fixBufferSize)
 		if err != nil {
 			return err
 		}
@@ -670,6 +692,10 @@ func (c *Conn) BeginPacket() error {
 	c.curBuf.IncWriteIndex(HeaderLengthOfTheProtocol)
 	c.bufferLength += HeaderLengthOfTheProtocol
 	return nil
+}
+
+var FinishedPacket = func(c *Conn) error {
+	return c.FinishedPacket()
 }
 
 // FinishedPacket Fill in the header and flush if buffer full
@@ -772,8 +798,6 @@ func (c *Conn) RemoteAddress() string {
 }
 
 func (c *Conn) closeConn() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	var err error
 	if c.conn != nil {
 		if err = c.conn.Close(); err != nil {

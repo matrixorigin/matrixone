@@ -1075,6 +1075,9 @@ func (lca *leakCheckAllocator) Alloc(capacity int) ([]byte, error) {
 }
 
 func (lca *leakCheckAllocator) Free(bytes []byte) {
+	if len(bytes) == 0 {
+		return
+	}
 	lca.Lock()
 	defer lca.Unlock()
 	if _, ok := lca.records[unsafe.Pointer(&bytes[0])]; ok {
@@ -1223,11 +1226,28 @@ func makePacket(data []byte, seq uint8) []byte {
 	return append(makeHead(len(data), seq), data...)
 }
 
+func newTestConn(t *testing.T, leakAlloc *leakCheckAllocator) (*testConn, *Conn) {
+	var conn *Conn
+	tConn := &testConn{}
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	sv.SessionTimeout.Duration = 5 * time.Minute
+	if err != nil {
+		panic(err)
+	}
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	setGlobalSessionAlloc(leakAlloc)
+	conn, err = NewIOSession(tConn, pu)
+	assert.Nil(t, err)
+	assert.NotNil(t, conn)
+	return tConn, conn
+}
+
 func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 	leakAlloc := newLeakCheckAllocator()
 	var err error
 	var conn *Conn
 	var read []byte
+	var tConn *testConn
 	payload1Len := 10
 
 	payload1 := make([]byte, payload1Len)
@@ -1241,18 +1261,7 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 		payload2[i] = byte(1)
 	}
 
-	tConn := &testConn{}
-
-	sv, err := getSystemVariables("test/system_vars_config.toml")
-	sv.SessionTimeout.Duration = 5 * time.Minute
-	if err != nil {
-		panic(err)
-	}
-	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(leakAlloc)
-	conn, err = NewIOSession(tConn, pu)
-	assert.Nil(t, err)
-	assert.NotNil(t, conn)
+	tConn, conn = newTestConn(t, leakAlloc)
 
 	resetFunc := func() {
 		leakAlloc.mod = 0
@@ -1459,6 +1468,7 @@ func TestConn_ReadErr(t *testing.T) {
 	leakAlloc := newLeakCheckAllocator()
 	var err error
 	var conn *Conn
+	var tConn *testConn
 	var read []byte
 	payload1Len := 10
 
@@ -1489,17 +1499,7 @@ func TestConn_ReadErr(t *testing.T) {
 		xVal++
 	}
 
-	tConn := &testConn{}
-	sv, err := getSystemVariables("test/system_vars_config.toml")
-	sv.SessionTimeout.Duration = 5 * time.Minute
-	if err != nil {
-		panic(err)
-	}
-	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(leakAlloc)
-	conn, err = NewIOSession(tConn, pu)
-	assert.Nil(t, err)
-	assert.NotNil(t, conn)
+	tConn, conn = newTestConn(t, leakAlloc)
 
 	resetFunc := func() {
 		leakAlloc.mod = 0
@@ -1611,21 +1611,24 @@ func TestConn_ReadErr(t *testing.T) {
 			resetFunc()
 			conn.Reset()
 
+			conn.allowedPacketSize = int(MaxPayloadSize) * 3
+
 			readCnt := 0
-			stub1 := gostub.Stub(&ReadNBytesIntoBuf,
-				func(c *Conn, buf []byte, n int) error {
-					if readCnt == 2 {
-						return moerr.NewInternalErrorNoCtx("ReadNBytesIntoBuf returns err")
+			stub1 := gostub.Stub(&ReadOnePayload,
+				func(c *Conn, payloadLength int) ([]byte, error) {
+					if readCnt == 1 {
+						return nil, moerr.NewInternalErrorNoCtx("ReadNBytesIntoBuf returns err")
 					}
 					readCnt++
-					return c.ReadNBytesIntoBuf(buf, n)
+					return c.ReadOnePayload(payloadLength)
 				})
 			defer stub1.Reset()
 
 			//32MB second read returns error
 			_, _ = tConn.Write(makePacket(payload4, 4))
 			_, _ = tConn.Write(makePacket(payload4, 5))
-			_, _ = tConn.Write(makePacket([]byte{}, 6))
+			_, _ = tConn.Write(makePacket(payload4, 6))
+			_, _ = tConn.Write(makePacket([]byte{}, 7))
 			read, err = conn.Read()
 			assert.NotNil(t, err)
 			assert.Nil(t, read)
@@ -1642,22 +1645,25 @@ func TestConn_ReadErr(t *testing.T) {
 			resetFunc()
 			conn.Reset()
 
+			conn.allowedPacketSize = int(MaxPayloadSize) * 3
+
 			readCnt := 0
 
-			stub1 := gostub.Stub(&ReadNBytesIntoBuf,
-				func(c *Conn, buf []byte, n int) error {
-					if readCnt == 2 {
+			stub1 := gostub.Stub(&ReadOnePayload,
+				func(c *Conn, payloadLength int) ([]byte, error) {
+					if readCnt == 1 {
 						panic("ReadNBytesIntoBuf panics")
 					}
 					readCnt++
-					return c.ReadNBytesIntoBuf(buf, n)
+					return c.ReadOnePayload(payloadLength)
 				})
 			defer stub1.Reset()
 
 			//32MB second read panic
 			_, _ = tConn.Write(makePacket(payload4, 4))
 			_, _ = tConn.Write(makePacket(payload4, 5))
-			_, _ = tConn.Write(makePacket([]byte{}, 6))
+			_, _ = tConn.Write(makePacket(payload4, 6))
+			_, _ = tConn.Write(makePacket([]byte{}, 7))
 			read, err = conn.Read()
 			assert.NotNil(t, err)
 			assert.Nil(t, read)
@@ -1669,6 +1675,382 @@ func TestConn_ReadErr(t *testing.T) {
 	for loop := 0; loop < 2; loop++ {
 		runCaseFunc()
 	}
+	_ = conn.Close()
+	assert.True(t, leakAlloc.CheckBalance())
+}
+
+func TestConn_ReadOnePayload(t *testing.T) {
+	leakAlloc := newLeakCheckAllocator()
+	var err error
+	var conn *Conn
+	var tConn *testConn
+	var read []byte
+	payload1Len := 10
+
+	payload1 := make([]byte, payload1Len)
+	for i := 0; i < payload1Len; i++ {
+		payload1[i] = byte(i)
+	}
+
+	payload2Len := 20
+	payload2 := make([]byte, payload2Len)
+	for i := 0; i < payload2Len; i++ {
+		payload2[i] = byte(1)
+	}
+
+	payload3Len := 2 * 1024 * 1024
+	payload3 := make([]byte, payload3Len)
+	xVal := uint8(0)
+	for i := 0; i < payload3Len; i++ {
+		payload3[i] = xVal
+		xVal++
+	}
+
+	payload4Len := int(MaxPayloadSize)
+	payload4 := make([]byte, payload4Len)
+	xVal = 0
+	for i := 0; i < payload4Len; i++ {
+		payload4[i] = xVal
+		xVal++
+	}
+
+	tConn, conn = newTestConn(t, leakAlloc)
+
+	resetFunc := func() {
+		leakAlloc.mod = 0
+		tConn.mod = 0
+		tConn.data = nil
+	}
+
+	runCaseFunc := func() {
+		{
+			resetFunc()
+			conn.Reset()
+
+			//success
+			_, _ = tConn.Write(payload1)
+			_, _ = tConn.Write(payload2)
+			_, _ = tConn.Write([]byte{})
+			read, err = conn.ReadOnePayload(payload1Len)
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload1, read))
+			leakAlloc.Free(read)
+
+			read, err = conn.ReadOnePayload(payload2Len)
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload2, read))
+			leakAlloc.Free(read)
+
+			read, err = conn.ReadOnePayload(0)
+			assert.Nil(t, err)
+			assert.Nil(t, read)
+			leakAlloc.Free(read)
+
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
+
+			conn.freeNoFixBuffUnsafe()
+			assert.True(t, !leakAlloc.CheckBalance())
+		}
+
+		{
+			resetFunc()
+			conn.Reset()
+
+			readCnt := 0
+			stub1 := gostub.Stub(&ReadNBytesIntoBuf,
+				func(c *Conn, buf []byte, n int) error {
+					if readCnt == 1 {
+						return moerr.NewInternalErrorNoCtx("ReadNBytesIntoBuf returns err")
+					}
+					readCnt++
+					return c.ReadNBytesIntoBuf(buf, n)
+				})
+			defer stub1.Reset()
+
+			_, _ = tConn.Write(payload1)
+			_, _ = tConn.Write(payload2)
+			read, err = conn.ReadOnePayload(payload1Len)
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload1, read))
+			leakAlloc.Free(read)
+
+			read, err = conn.ReadOnePayload(payload2Len)
+			assert.NotNil(t, err)
+			assert.Nil(t, read)
+			leakAlloc.Free(read)
+
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
+		}
+
+		{
+			resetFunc()
+			conn.Reset()
+
+			readCnt := 0
+
+			stub1 := gostub.Stub(&ReadNBytesIntoBuf,
+				func(c *Conn, buf []byte, n int) error {
+					if readCnt == 1 {
+						panic("ReadNBytesIntoBuf panics")
+					}
+					readCnt++
+					return c.ReadNBytesIntoBuf(buf, n)
+				})
+			defer stub1.Reset()
+
+			_, _ = tConn.Write(payload1)
+			_, _ = tConn.Write(payload2)
+			read, err = conn.ReadOnePayload(payload1Len)
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload1, read))
+			leakAlloc.Free(read)
+
+			read, err = conn.ReadOnePayload(payload2Len)
+			assert.NotNil(t, err)
+			assert.Nil(t, read)
+			leakAlloc.Free(read)
+
+			assert.NotNil(t, conn.fixBuf.data)
+			assert.Zero(t, conn.dynamicWrBuf.Len())
+		}
+	}
+	for loop := 0; loop < 2; loop++ {
+		runCaseFunc()
+	}
+	_ = conn.Close()
+	assert.True(t, leakAlloc.CheckBalance())
+}
+
+func TestConn_AllocNewBlock(t *testing.T) {
+	leakAlloc := newLeakCheckAllocator()
+	var err error
+	var conn *Conn
+
+	_, conn = newTestConn(t, leakAlloc)
+
+	{
+		err = conn.AllocNewBlock(10)
+		assert.Nil(t, err)
+		assert.Equal(t, conn.dynamicWrBuf.Len(), 1)
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+	}
+
+	{
+		leakAlloc.mod = leakCheckAllocatorModeAllocReturnErr
+		err = conn.AllocNewBlock(10)
+		assert.NotNil(t, err)
+		assert.Equal(t, conn.dynamicWrBuf.Len(), 0)
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+	}
+
+	{
+		leakAlloc.mod = 0
+		conn.dynamicWrBuf = nil
+		err = conn.AllocNewBlock(10)
+		assert.NotNil(t, err)
+		assert.Nil(t, conn.dynamicWrBuf)
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+	}
+
+	_ = conn.Close()
+	assert.True(t, leakAlloc.CheckBalance())
+}
+
+func Test_AppendPart(t *testing.T) {
+	leakAlloc := newLeakCheckAllocator()
+	var err error
+	var conn *Conn
+
+	payload3Len := 2 * 1024 * 1024
+	payload3 := make([]byte, payload3Len)
+	xVal := uint8(0)
+	for i := 0; i < payload3Len; i++ {
+		payload3[i] = xVal
+		xVal++
+	}
+
+	_, conn = newTestConn(t, leakAlloc)
+
+	{
+		err = conn.AppendPart(payload3)
+		assert.Nil(t, err)
+		assert.Equal(t, conn.dynamicWrBuf.Len(), 1)
+		assert.Equal(t, conn.packetLength, payload3Len)
+
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+	}
+
+	{
+		stub1 := gostub.Stub(&AllocNewBlock,
+			func(c *Conn, _ int) error {
+				return moerr.NewInternalErrorNoCtx("AllocNewBlock returns err")
+			})
+
+		oldPacketLen := conn.packetLength
+		err = conn.AppendPart(payload3)
+		assert.NotNil(t, err)
+		assert.Equal(t, conn.dynamicWrBuf.Len(), 0)
+		assert.Equal(t, conn.packetLength, oldPacketLen)
+
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+
+		stub1.Reset()
+	}
+
+	_ = conn.Close()
+	assert.True(t, leakAlloc.CheckBalance())
+}
+
+func Test_Append(t *testing.T) {
+	leakAlloc := newLeakCheckAllocator()
+	var err error
+	var conn *Conn
+
+	payload1Len := 10
+
+	payload1 := make([]byte, payload1Len)
+	for i := 0; i < payload1Len; i++ {
+		payload1[i] = byte(i)
+	}
+	_, conn = newTestConn(t, leakAlloc)
+
+	resetFunc := func() {
+		leakAlloc.mod = 0
+	}
+
+	{
+		resetFunc()
+		conn.Reset()
+
+		err = conn.Append(payload1...)
+		assert.Nil(t, err)
+		assert.Equal(t, conn.dynamicWrBuf.Len(), 0)
+		assert.Equal(t, conn.packetLength, payload1Len)
+
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+	}
+
+	{
+		resetFunc()
+		conn.Reset()
+
+		stub1 := gostub.Stub(&AppendPart,
+			func(c *Conn, elems []byte) error {
+				return moerr.NewInternalErrorNoCtx("AppendPart returns err")
+			})
+
+		err = conn.Append(payload1...)
+		assert.NotNil(t, err)
+
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+
+		stub1.Reset()
+	}
+
+	{
+		resetFunc()
+		conn.Reset()
+
+		conn.packetLength = int(MaxPayloadSize) - payload1Len
+
+		stub1 := gostub.Stub(&FinishedPacket,
+			func(c *Conn) error {
+				return moerr.NewInternalErrorNoCtx("FinishedPacket returns err")
+			})
+
+		err = conn.Append(payload1...)
+		assert.NotNil(t, err)
+
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+
+		stub1.Reset()
+	}
+
+	{
+		resetFunc()
+		conn.Reset()
+
+		conn.packetLength = int(MaxPayloadSize) - payload1Len
+
+		stub1 := gostub.Stub(&BeginPacket,
+			func(c *Conn) error {
+				return moerr.NewInternalErrorNoCtx("BeginPacket returns err")
+			})
+
+		err = conn.Append(payload1...)
+		assert.NotNil(t, err)
+
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+
+		stub1.Reset()
+	}
+	_ = conn.Close()
+	assert.True(t, leakAlloc.CheckBalance())
+}
+
+func Test_BeginPacket(t *testing.T) {
+	leakAlloc := newLeakCheckAllocator()
+	var err error
+	var conn *Conn
+
+	payload1Len := 10
+
+	payload1 := make([]byte, payload1Len)
+	for i := 0; i < payload1Len; i++ {
+		payload1[i] = byte(i)
+	}
+	_, conn = newTestConn(t, leakAlloc)
+
+	resetFunc := func() {
+		leakAlloc.mod = 0
+	}
+
+	{
+		resetFunc()
+		conn.Reset()
+
+		err = conn.BeginPacket()
+		assert.Nil(t, err)
+		assert.Equal(t, conn.dynamicWrBuf.Len(), 0)
+		assert.Equal(t, conn.bufferLength, 4)
+
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+	}
+
+	{
+		resetFunc()
+		conn.Reset()
+
+		stub1 := gostub.Stub(&AllocNewBlock,
+			func(c *Conn, _ int) error {
+				return moerr.NewInternalErrorNoCtx("AllocNewBlock returns err")
+			})
+
+		conn.curBuf.writeIndex = int(fixBufferSize) - 3
+
+		err = conn.BeginPacket()
+		assert.NotNil(t, err)
+		assert.Equal(t, conn.dynamicWrBuf.Len(), 0)
+		assert.Equal(t, conn.bufferLength, 0)
+
+		conn.freeNoFixBuffUnsafe()
+		assert.True(t, !leakAlloc.CheckBalance())
+
+		stub1.Reset()
+	}
+
 	_ = conn.Close()
 	assert.True(t, leakAlloc.CheckBalance())
 }
