@@ -230,7 +230,10 @@ func (ctr *container) processH0(bat *batch.Batch, _ *process.Process) error {
 
 func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.RowCount()
-	itr := ctr.intHashMap.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.intHashMap.NewIterator()
+	}
+	itr := ctr.itr
 
 	ctr.initEmptyBatchFromInput(bat)
 	noNeedToFill := ctr.bat.IsEmpty()
@@ -270,7 +273,10 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 
 func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
 	count := bat.RowCount()
-	itr := ctr.strHashMap.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.strHashMap.NewIterator()
+	}
+	itr := ctr.itr
 
 	ctr.initEmptyBatchFromInput(bat)
 	noNeedToFill := ctr.bat.IsEmpty()

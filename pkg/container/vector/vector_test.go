@@ -2338,6 +2338,21 @@ func TestSetFunction(t *testing.T) {
 	}
 }
 
+func TestSortAndCompact(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := NewVec(types.New(types.T_array_float32, 4, 0))
+	err := AppendArrayList(v, [][]float32{{1, 2, 3, 0}, {1, 2, 3, 0}}, nil, mp)
+	require.NoError(t, err)
+	v.InplaceSortAndCompact()
+	require.Equal(t, v.length, 1)
+
+	v = NewVec(types.New(types.T_array_float64, 4, 0))
+	err = AppendArrayList(v, [][]float64{{1.1, 2, 3, 0}, {1.1, 2, 3, 0}}, nil, mp)
+	require.NoError(t, err)
+	v.InplaceSortAndCompact()
+	require.Equal(t, v.length, 1)
+}
+
 func TestSetFunction2(t *testing.T) {
 	// set vec to const value -> const null -> const value -> const null.
 	// bool type

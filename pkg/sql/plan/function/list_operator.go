@@ -718,6 +718,286 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorStrIn().operatorIn
 				},
 			},
+			// {
+			// 	overloadId: 24,
+			// 	args:       []types.T{types.T_uint8, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[uint8]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 25,
+			// 	args:       []types.T{types.T_uint16, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[uint16]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 26,
+			// 	args:       []types.T{types.T_uint32, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[uint32]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 27,
+			// 	args:       []types.T{types.T_uint64, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[uint64]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 28,
+			// 	args:       []types.T{types.T_int8, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[int8]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 29,
+			// 	args:       []types.T{types.T_int16, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[int16]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 30,
+			// 	args:       []types.T{types.T_int32, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[int32]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 31,
+			// 	args:       []types.T{types.T_int64, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[int64]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 32,
+			// 	args:       []types.T{types.T_float32, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[float32]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 33,
+			// 	args:       []types.T{types.T_float64, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[float64]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 34,
+			// 	args:       []types.T{types.T_decimal64, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Decimal64]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 35,
+			// 	args:       []types.T{types.T_decimal128, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Decimal128]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 36,
+			// 	args:       []types.T{types.T_varchar, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 37,
+			// 	args:       []types.T{types.T_char, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 38,
+			// 	args:       []types.T{types.T_date, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Date]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 39,
+			// 	args:       []types.T{types.T_datetime, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Datetime]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 40,
+			// 	args:       []types.T{types.T_bool, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[bool]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 41,
+			// 	args:       []types.T{types.T_timestamp, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Timestamp]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 42,
+			// 	args:       []types.T{types.T_blob, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 43,
+			// 	args:       []types.T{types.T_uuid, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Uuid]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 44,
+			// 	args:       []types.T{types.T_text, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 45,
+			// 	args:       []types.T{types.T_time, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Time]().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 46,
+			// 	args:       []types.T{types.T_binary, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 47,
+			// 	args:       []types.T{types.T_varbinary, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorIn
+			// 	},
+			// },
+			{
+				overloadId: 24,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorStrIn().operatorIn
+				},
+			},
+			// {
+			// 	overloadId: 49,
+			// 	args:       []types.T{types.T_array_float32, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorIn
+			// 	},
+			// },
+			{
+				overloadId: 25,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorStrIn().operatorIn
+				},
+			},
+			// {
+			// 	overloadId: 51,
+			// 	args:       []types.T{types.T_array_float64, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorIn
+			// 	},
+			// },
 		},
 	},
 
@@ -969,6 +1249,287 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorStrIn().operatorNotIn
 				},
 			},
+
+			// {
+			// 	overloadId: 24,
+			// 	args:       []types.T{types.T_uint8, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[uint8]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 25,
+			// 	args:       []types.T{types.T_uint16, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[uint16]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 26,
+			// 	args:       []types.T{types.T_uint32, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[uint32]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 27,
+			// 	args:       []types.T{types.T_uint64, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[uint64]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 28,
+			// 	args:       []types.T{types.T_int8, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[int8]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 29,
+			// 	args:       []types.T{types.T_int16, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[int16]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 30,
+			// 	args:       []types.T{types.T_int32, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[int32]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 31,
+			// 	args:       []types.T{types.T_int64, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[int64]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 32,
+			// 	args:       []types.T{types.T_float32, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[float32]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 33,
+			// 	args:       []types.T{types.T_float64, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[float64]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 34,
+			// 	args:       []types.T{types.T_decimal64, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Decimal64]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 35,
+			// 	args:       []types.T{types.T_decimal128, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Decimal128]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 36,
+			// 	args:       []types.T{types.T_varchar, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 37,
+			// 	args:       []types.T{types.T_char, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 38,
+			// 	args:       []types.T{types.T_date, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Date]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 39,
+			// 	args:       []types.T{types.T_datetime, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Datetime]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 40,
+			// 	args:       []types.T{types.T_bool, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[bool]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 41,
+			// 	args:       []types.T{types.T_timestamp, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Timestamp]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 42,
+			// 	args:       []types.T{types.T_blob, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 43,
+			// 	args:       []types.T{types.T_uuid, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Uuid]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 44,
+			// 	args:       []types.T{types.T_text, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 45,
+			// 	args:       []types.T{types.T_time, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorFixedIn[types.Time]().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 46,
+			// 	args:       []types.T{types.T_binary, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 47,
+			// 	args:       []types.T{types.T_varbinary, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 48,
+			// 	args:       []types.T{types.T_array_float32, types.T_array_float32},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 49,
+			// 	args:       []types.T{types.T_array_float32, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 50,
+			// 	args:       []types.T{types.T_array_float64, types.T_array_float64},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorNotIn
+			// 	},
+			// },
+			// {
+			// 	overloadId: 51,
+			// 	args:       []types.T{types.T_array_float64, types.T_tuple},
+			// 	retType: func(parameters []types.Type) types.Type {
+			// 		return types.T_bool.ToType()
+			// 	},
+			// 	newOp: func() executeLogicOfOverload {
+			// 		return newOpOperatorStrIn().operatorNotIn
+			// 	},
+			// },
 		},
 	},
 

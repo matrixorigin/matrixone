@@ -58,4 +58,6 @@ type Batch struct {
 
 	// row count of batch, to instead of old len(Zs).
 	rowCount int
+
+	offHeap bool
 }

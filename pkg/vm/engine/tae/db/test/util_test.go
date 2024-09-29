@@ -43,7 +43,7 @@ func TestAOT1(t *testing.T) {
 		10,
 		createBlockFn[*testRows],
 		func(a, b *model.TimedSliceBlock[*testRows]) bool {
-			return a.BornTS.Less(&b.BornTS)
+			return a.BornTS.LT(&b.BornTS)
 		})
 	for i := 0; i < 30; i++ {
 		rows := &testRows{id: i}

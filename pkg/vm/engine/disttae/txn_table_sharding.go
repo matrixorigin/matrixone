@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -37,6 +36,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -285,39 +285,51 @@ func (tbl *txnTableDelegate) Ranges(
 		)
 	}
 
-	buf := morpc.NewBuffer()
-	defer buf.Close()
+	var blocks objectio.BlockInfoSlice
 	uncommitted, _ := tbl.origin.collectUnCommittedDataObjs(txnOffset)
-	buf.Mark()
-	for _, v := range uncommitted {
-		buf.EncodeBytes(v[:])
+	err = tbl.origin.rangesOnePart(
+		ctx,
+		nil,
+		tbl.origin.tableDef,
+		exprs,
+		&blocks,
+		tbl.origin.proc.Load(),
+		uncommitted,
+	)
+	if err != nil {
+		return nil, err
 	}
 
-	var rs []engine.RelData
+	var rs engine.RelData
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadRanges,
 		func(param *shard.ReadParam) {
 			param.RangesParam.Exprs = exprs
-			param.RangesParam.UncommittedObjects = buf.GetMarkedData()
 		},
 		func(resp []byte) {
-			data, err := UnmarshalRelationData(resp)
+			data, err := engine_util.UnmarshalRelationData(resp)
 			if err != nil {
 				panic(err)
 			}
-			rs = append(rs, data)
+			rs = data
 		},
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	ret := NewBlockListRelationData(0)
-	for _, r := range rs {
-		blks := r.GetBlockInfoSlice()
-		ret.blklist.Append(blks)
+	ret := engine_util.NewBlockListRelationData(0)
+
+	for i := 0; i < rs.DataCnt(); i++ {
+		blk := rs.GetBlockInfo(i)
+		ret.AppendBlockInfo(&blk)
 	}
+
+	for i := 0; i < len(blocks); i++ {
+		ret.AppendBlockInfo(blocks.Get(i))
+	}
+
 	return ret, nil
 }
 
@@ -353,7 +365,7 @@ func (tbl *txnTableDelegate) CollectTombstones(
 			param.CollectTombstonesParam.CollectPolicy = engine.Policy_CollectCommittedTombstones
 		},
 		func(resp []byte) {
-			tombstones, err := UnmarshalTombstoneData(resp)
+			tombstones, err := engine_util.UnmarshalTombstoneData(resp)
 			if err != nil {
 				panic(err)
 			}
@@ -630,7 +642,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	proc := p.(*process.Process)
 
 	if plan2.IsFalseExpr(expr) {
-		return []engine.Reader{new(emptyReader)}, nil
+		return []engine.Reader{new(engine_util.EmptyReader)}, nil
 	}
 
 	if orderBy && num != 1 {
@@ -666,7 +678,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = NewBlockListRelationData(1)
+		relData = engine_util.NewBlockListRelationData(1)
 	}
 
 	blkCnt := relData.DataCnt()
@@ -674,7 +686,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	if blkCnt < num {
 		newNum = blkCnt
 		for i := 0; i < num-blkCnt; i++ {
-			rds = append(rds, new(emptyReader))
+			rds = append(rds, new(engine_util.EmptyReader))
 		}
 	}
 
@@ -695,9 +707,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		localRelData, remoteRelData := group(shard)
 
 		srd := &shardingLocalReader{
-			//lrd:                   lrd,
-			tblDelegate: tbl,
-			//remoteRelData:         remoteRelData,
+			tblDelegate:           tbl,
 			remoteTombApplyPolicy: engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3,
 			remoteScanType:        scanType,
 		}
@@ -712,10 +722,11 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 			if err != nil {
 				return nil, err
 			}
-			lrd, err := NewReader(
+			lrd, err := engine_util.NewReader(
 				ctx,
-				proc,
-				tbl.origin.getTxn().engine,
+				proc.Mp(),
+				tbl.origin.getTxn().engine.packerPool,
+				tbl.origin.getTxn().engine.fs,
 				tbl.origin.GetTableDef(ctx),
 				tbl.origin.db.op.SnapshotTS(),
 				expr,
@@ -724,7 +735,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 			if err != nil {
 				return nil, err
 			}
-			lrd.scanType = scanType
+			lrd.SetScanType(scanType)
 			srd.lrd = lrd
 		}
 

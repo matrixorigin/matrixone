@@ -39,9 +39,7 @@ type outputTestCase struct {
 	proc  *process.Process
 }
 
-var (
-	tcs []outputTestCase
-)
+var tcs []outputTestCase
 
 func sqlOutput(_ *batch.Batch) error {
 	return nil
@@ -55,6 +53,26 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Output{
+				Data: nil,
+				Func: sqlOutput,
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int8.ToType(),
+			},
+			arg: &Output{
+				ctr: container{
+					block: true,
+				},
 				Data: nil,
 				Func: sqlOutput,
 				OperatorBase: vm.OperatorBase{

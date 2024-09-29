@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -223,18 +224,10 @@ func HandleShardingReadRanges(
 		return nil, err
 	}
 
-	var uncommittedRanges []objectio.ObjectStats
-	n := len(param.RangesParam.UncommittedObjects) / objectio.ObjectStatsLen
-	for i := 0; i < n; i++ {
-		var stat objectio.ObjectStats
-		stat.UnMarshal(param.RangesParam.UncommittedObjects[i*objectio.ObjectStatsLen : (i+1)*objectio.ObjectStatsLen])
-		uncommittedRanges = append(uncommittedRanges, stat)
-	}
-
 	ranges, err := tbl.doRanges(
 		ctx,
 		param.RangesParam.Exprs,
-		uncommittedRanges,
+		nil,
 	)
 	if err != nil {
 		return nil, err
@@ -266,7 +259,7 @@ func HandleShardingReadBuildReader(
 		return nil, err
 	}
 
-	relData, err := UnmarshalRelationData(param.ReaderBuildParam.RelData)
+	relData, err := engine_util.UnmarshalRelationData(param.ReaderBuildParam.RelData)
 	if err != nil {
 		return nil, err
 	}
@@ -282,10 +275,11 @@ func HandleShardingReadBuildReader(
 		return nil, err
 	}
 
-	rd, err := NewReader(
+	rd, err := engine_util.NewReader(
 		ctx,
-		tbl.proc.Load(),
-		e.(*Engine),
+		tbl.proc.Load().Mp(),
+		e.(*Engine).packerPool,
+		e.(*Engine).fs,
 		tbl.tableDef,
 		tbl.db.op.SnapshotTS(),
 		param.ReaderBuildParam.Expr,
