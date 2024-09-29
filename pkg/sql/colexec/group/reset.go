@@ -22,6 +22,7 @@ import (
 func (group *Group) Reset(
 	proc *process.Process, isPipelineFail bool, pipelineErr error) {
 
+	group.ctr.itr = nil
 	group.ctr.skipInitReusableMem = true
 	group.ctr.state = vm.Build
 

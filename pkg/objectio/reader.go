@@ -291,24 +291,6 @@ func (r *objectReaderV1) ReadExtent(
 	return obj.([]byte), nil
 }
 
-func (r *objectReaderV1) ReadMultiBlocks(
-	ctx context.Context,
-	opts map[uint16]*ReadBlockOptions,
-	m *mpool.MPool,
-) (ioVec *fileservice.IOVector, err error) {
-	var objectMeta ObjectMeta
-	if objectMeta, err = r.ReadMeta(ctx, m); err != nil {
-		return
-	}
-	return ReadMultiBlocksWithMeta(
-		ctx,
-		r.name,
-		objectMeta,
-		opts,
-		r.fs,
-		constructorFactory)
-}
-
 func (r *objectReaderV1) ReadMultiSubBlocks(
 	ctx context.Context,
 	opts map[uint16]*ReadBlockOptions,
