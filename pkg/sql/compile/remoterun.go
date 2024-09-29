@@ -415,7 +415,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *deletion.Deletion:
 		in.Delete = &pipeline.Deletion{
-			AffectedRows: t.AffectedRows(),
+			AffectedRows: t.GetAffectedRows(),
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 			IBucket:      t.IBucket,

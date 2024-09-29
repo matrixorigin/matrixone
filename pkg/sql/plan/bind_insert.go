@@ -64,6 +64,12 @@ func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.Objec
 		if tableDefs[i].Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 			return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "fake primary key")
 		}
+		if len(tableDefs[i].Name2ColIndex) == 0 {
+			tableDefs[i].Name2ColIndex = make(map[string]int32)
+			for colIdx, col := range tableDefs[i].Cols {
+				tableDefs[i].Name2ColIndex[col.Name] = int32(colIdx)
+			}
+		}
 	}
 
 	return objRefs, tableDefs, nil
@@ -445,10 +451,6 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 	colName2Idx := make(map[string]int32)
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
-	colToIdx := make(map[string]int)
-	for i, col := range tableDef.Cols {
-		colToIdx[col.Name] = i
-	}
 
 	//var ifInsertFromUniqueColMap map[string]bool
 	if insertColumns, err = builder.getInsertColsFromStmt(stmt, tableDef); err != nil {
