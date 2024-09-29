@@ -44,9 +44,16 @@ type Scheduler struct {
 }
 
 func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
+	policySlice := make([]policy, 0, 4)
+	policySlice = append(policySlice, newBasicPolicy(), newObjCompactPolicy(rt.Fs.Service))
+	if !common.RuntimeDisableZMBasedMerge.Load() {
+		policySlice = append(policySlice, newObjOverlapPolicy())
+	}
+	policySlice = append(policySlice, newTombstonePolicy())
+
 	op := &Scheduler{
 		LoopProcessor: new(catalog.LoopProcessor),
-		policies:      newPolicyGroup(newBasicPolicy(), newObjCompactPolicy(rt.Fs.Service), newTombstonePolicy()),
+		policies:      newPolicyGroup(policySlice...),
 		executor:      newMergeExecutor(rt, sched),
 		stoppedTables: struct {
 			sync.RWMutex
