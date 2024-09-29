@@ -23,28 +23,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(ValueScan)
+const thisOperator = "value_scan"
 
-type container struct {
-	idx int
-
-	// thisValueShouldClean indicates that whether we should clean the batch after operator done.
-	// for some case like `this value is from session prepared`, we cannot clean that.
-	thisValueShouldClean bool
-}
 type ValueScan struct {
-	ctr        container
+	vm.OperatorBase
+	colexec.Projection
+
+	runningCtx container
+	// if dataInProcess is true,
+	// this means all the batches were saved other place.
+	// there is no need clean them after operator done.
+	dataInProcess bool
+
 	Batchs     []*batch.Batch
 	RowsetData *plan.RowsetData
 	ColCount   int
 	Uuid       []byte
-
-	vm.OperatorBase
-	colexec.Projection
 }
 
-func (valueScan *ValueScan) GetOperatorBase() *vm.OperatorBase {
-	return &valueScan.OperatorBase
+type container struct {
+	// nowIdx indicates which data should send to next operator now.
+	nowIdx int
 }
 
 func init() {
@@ -60,46 +59,75 @@ func init() {
 	)
 }
 
-func (valueScan ValueScan) TypeName() string {
-	return opName
+func NewValueScanFromProcess() *ValueScan {
+	vs := getFromReusePool()
+	vs.dataInProcess = true
+	return vs
 }
 
-func NewArgument() *ValueScan {
+func NewValueScanFromItSelf() *ValueScan {
+	vs := getFromReusePool()
+	vs.dataInProcess = false
+	return vs
+}
+
+func getFromReusePool() *ValueScan {
 	return reuse.Alloc[ValueScan](nil)
 }
 
 func (valueScan *ValueScan) Release() {
-	valueScan.ctr.thisValueShouldClean = true
-	if valueScan.Batchs != nil {
-		valueScan.Batchs = valueScan.Batchs[:0]
-	}
-
 	if valueScan != nil {
+		if valueScan.dataInProcess {
+			for i := range valueScan.Batchs {
+				valueScan.Batchs[i] = nil
+			}
+			valueScan.Batchs = valueScan.Batchs[:0]
+		} else {
+			valueScan.Batchs = nil
+		}
+
 		reuse.Free[ValueScan](valueScan, nil)
 	}
 }
 
 func (valueScan *ValueScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	valueScan.ctr.idx = 0
-	if valueScan.Batchs != nil {
-		valueScan.cleanBatchs(proc)
-	}
+	valueScan.runningCtx.nowIdx = 0
+	valueScan.doBatchClean(proc)
 	valueScan.ResetProjection(proc)
+	return
 }
 
 func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err error) {
 	valueScan.FreeProjection(proc)
-	if valueScan.Batchs != nil {
-		valueScan.cleanBatchs(proc)
-	}
+	valueScan.doBatchClean(proc)
+	return
 }
 
-func (valueScan *ValueScan) cleanBatchs(proc *process.Process) {
-	if valueScan.ctr.thisValueShouldClean {
-		for _, bat := range valueScan.Batchs {
-			if bat != nil {
-				bat.Clean(proc.Mp())
-			}
-		}
+func (valueScan *ValueScan) doBatchClean(proc *process.Process) {
+	// If data was stored in the process, do not clean it.
+	// process's free will clean them.
+	if valueScan.dataInProcess {
+		return
 	}
+
+	for i := range valueScan.Batchs {
+		if valueScan.Batchs[i] != nil {
+			valueScan.Batchs[i].Clean(proc.Mp())
+		}
+		valueScan.Batchs[i] = nil
+	}
+	valueScan.Batchs = nil
+}
+
+// TypeName implement the `reuse.ReusableObject` interface.
+func (ValueScan *ValueScan) TypeName() string {
+	return thisOperator
+}
+
+func (valueScan *ValueScan) GetOperatorBase() *vm.OperatorBase {
+	return &valueScan.OperatorBase
+}
+
+func (ValueScan *ValueScan) OpType() vm.OpType {
+	return vm.ValueScan
 }

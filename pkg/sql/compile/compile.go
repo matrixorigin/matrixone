@@ -1497,6 +1497,14 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ret.DataSource = &Source{isConst: true, node: n}
 
 		currentFirstFlag := c.anal.isFirst
+
+		// bad here.
+		// this will generate a pipeline `value_scan(empty batch, nil) -> projection(1, a, b) -> output.`
+		//
+		// we cannot ensure empty batch has enough count of vectors for column projection.
+		// for resolve this bug, I do a hack at method `ColumnExpressionExecutor.Eval` with `[hack-#002]` Flag.
+		//
+		// build a value scan from an EmptyTable with same table structure is the correct way.
 		op := constructValueScan()
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ret.setRootOperator(op)
