@@ -112,7 +112,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				continue
 			}
 
-			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			if !catalog.IsNullIndexAlgo(idxDef.IndexAlgo) {
 				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
 			}
 
