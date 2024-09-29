@@ -31,7 +31,7 @@ type ShufflePool struct {
 	batches      []*batch.Batch
 	lock         sync.Mutex
 	locks        []sync.Mutex
-	fullBatchIdx []int32
+	fullBatchIdx []int
 }
 
 func NewShufflePool(bucketNum int32) *ShufflePool {
@@ -39,7 +39,7 @@ func NewShufflePool(bucketNum int32) *ShufflePool {
 	sp.holders = 0
 	sp.batches = make([]*batch.Batch, sp.bucketNum)
 	sp.locks = make([]sync.Mutex, bucketNum)
-	sp.fullBatchIdx = make([]int32, 0, bucketNum)
+	sp.fullBatchIdx = make([]int, 0, bucketNum)
 	return sp
 }
 
@@ -124,6 +124,7 @@ func (sp *ShufflePool) GetFullBatch(buf *batch.Batch, proc *process.Process) (*b
 		return buf, nil
 	}
 	fullIdx := sp.fullBatchIdx[length-1]
+	sp.fullBatchIdx = sp.fullBatchIdx[:length-1]
 	sp.locks[fullIdx].Lock()
 	defer sp.locks[fullIdx].Unlock()
 
@@ -167,6 +168,20 @@ func (sp *ShufflePool) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, se
 				}
 			}
 			bat.AddRowCount(len(currentSels))
+			if bat.RowCount() > colexec.DefaultBatchSize-512 && sp.lock.TryLock() {
+				found := false
+				for _, j := range sp.fullBatchIdx {
+					if i == j {
+						//already in full batch index
+						found = true
+						break
+					}
+				}
+				if !found {
+					sp.fullBatchIdx = append(sp.fullBatchIdx, i)
+				}
+				sp.lock.Unlock()
+			}
 			sp.locks[i].Unlock()
 		}
 	}
