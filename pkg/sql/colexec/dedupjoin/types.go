@@ -73,8 +73,8 @@ type DedupJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 
-	OnDupAction plan.Node_OnDuplicateAction
-	pkColName   string
+	OnDupAction  plan.Node_OnDuplicateAction
+	DedupColName string
 
 	vm.OperatorBase
 	colexec.Projection

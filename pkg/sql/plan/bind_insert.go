@@ -124,7 +124,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 
 	for _, tableDef := range tableDefs {
 		for _, idxDef := range tableDef.Indexes {
-			if !catalog.IsNullIndexAlgo(idxDef.IndexAlgo) {
+			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
 				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
 			}
 

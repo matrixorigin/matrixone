@@ -230,7 +230,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 
 			switch ap.OnDupAction {
 			case plan.Node_ERROR:
-				return moerr.NewDuplicateEntry(proc.Ctx, ctr.vecs[0].RowToString(i), ap.pkColName)
+				return moerr.NewDuplicateEntry(proc.Ctx, ctr.vecs[0].RowToString(i), ap.DedupColName)
 			case plan.Node_IGNORE:
 				ctr.matched.Add(vals[k] - 1)
 			case plan.Node_UPDATE: // TODO

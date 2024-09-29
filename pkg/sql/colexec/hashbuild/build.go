@@ -44,7 +44,8 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 
 	if hashBuild.NeedHashMap {
 		hashBuild.ctr.hashmapBuilder.IsDedup = hashBuild.IsDedup
-		hashBuild.ctr.hashmapBuilder.OnDupAction = hashBuild.OnDupAction
+		hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
+		hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 		return hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, proc)
 	}
 	return nil

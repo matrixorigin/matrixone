@@ -49,8 +49,9 @@ type HashBuild struct {
 	JoinMapRefCnt     int32
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 
-	IsDedup     bool
-	OnDupAction pbplan.Node_OnDuplicateAction
+	IsDedup           bool
+	OnDuplicateAction pbplan.Node_OnDuplicateAction
+	DedupColName      string
 	vm.OperatorBase
 }
 

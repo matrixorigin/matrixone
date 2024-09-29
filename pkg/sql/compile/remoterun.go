@@ -789,6 +789,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:        t.JoinMapTag,
 			JoinMapRefCnt:     t.JoinMapRefCnt,
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
+			OnDuplicateAction: t.OnDuplicateAction,
+			DedupColName:      t.DedupColName,
 		}
 	case *shufflebuild.ShuffleBuild:
 		in.ShuffleBuild = &pipeline.Shufflebuild{
@@ -810,6 +812,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 			OnDuplicateAction:      t.OnDupAction,
+			DedupColName:           t.DedupColName,
 			IsShuffle:              t.IsShuffle,
 			JoinMapTag:             t.JoinMapTag,
 			ShuffleIdx:             t.ShuffleIdx,
@@ -1295,6 +1298,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.JoinMapRefCnt = t.JoinMapRefCnt
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
+		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.DedupColName = t.DedupColName
 		op = arg
 	case vm.ShuffleBuild:
 		arg := shufflebuild.NewArgument()
@@ -1317,6 +1322,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.OnDupAction = t.OnDuplicateAction
+		arg.DedupColName = t.DedupColName
 		arg.IsShuffle = t.IsShuffle
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx

@@ -345,9 +345,10 @@ message DedupJoin {
   repeated plan.Expr right_cond = 2;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 3;
   plan.Node.OnDuplicateAction on_duplicate_action = 4;
-  bool is_shuffle = 5;
-  int32 join_map_tag = 6;
-  int32 shuffle_idx = 7;
+  string dedup_col_name = 5;
+  bool is_shuffle = 6;
+  int32 join_map_tag = 7;
+  int32 shuffle_idx = 8;
 }
 
 message Product {
@@ -427,6 +428,8 @@ message HashBuild {
 	int32 JoinMapTag = 6;
 	int32 JoinMapRefCnt = 7;
 	plan.RuntimeFilterSpec RuntimeFilterSpec = 8;
+  plan.Node.OnDuplicateAction on_duplicate_action = 9;
+  string dedup_col_name = 10;
 }
 
 message Shufflebuild {

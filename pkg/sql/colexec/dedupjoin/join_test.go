@@ -131,7 +131,7 @@ func TestDedupJoin(t *testing.T) {
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.barg.IsDedup = true
-		tc.barg.OnDupAction = plan.Node_IGNORE
+		tc.barg.OnDuplicateAction = plan.Node_IGNORE
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
 

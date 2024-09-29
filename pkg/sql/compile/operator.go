@@ -1078,6 +1078,7 @@ func constructDedupJoin(n *plan.Node, right_typs []types.Type, proc *process.Pro
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.OnDupAction = n.OnDuplicateAction
+	arg.DedupColName = n.DedupColName
 	//arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
 		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1748,8 +1749,8 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
 		ret.IsDedup = true
-		ret.OnDupAction = arg.OnDupAction
-		//ret.NeedAllocateSels = true
+		ret.OnDuplicateAction = arg.OnDupAction
+		ret.DedupColName = arg.DedupColName
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}

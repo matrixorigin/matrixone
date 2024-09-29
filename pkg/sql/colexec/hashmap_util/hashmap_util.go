@@ -41,10 +41,10 @@ type HashmapBuilder struct {
 	executor           []colexec.ExpressionExecutor
 	UniqueJoinKeys     []*vector.Vector
 
-	IsDedup      bool
-	OnDupAction  pbplan.Node_OnDuplicateAction
-	DedupColName string
-	IgnoreRows   *bitmap.Bitmap
+	IsDedup           bool
+	OnDuplicateAction pbplan.Node_OnDuplicateAction
+	DedupColName      string
+	IgnoreRows        *bitmap.Bitmap
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -301,7 +301,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 
 			if hb.IsDedup {
 				if v <= vOld {
-					switch hb.OnDupAction {
+					switch hb.OnDuplicateAction {
 					case pbplan.Node_ERROR:
 						return moerr.NewDuplicateEntry(proc.Ctx, hb.vecs[vecIdx1][0].RowToString(vecIdx2+k), hb.DedupColName)
 					case pbplan.Node_IGNORE:
