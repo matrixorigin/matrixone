@@ -345,7 +345,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 			sm.aobjDelTsMap[info.deleteAt] = struct{}{}
 		}
 		objectBat, _, err := blockio.LoadOneBlock(
-			ctx, fs, info.stats.ObjectLocation(), objectio.SchemaData)
+			ctx,
+			fs,
+			info.stats.ObjectLocation(),
+			objectio.SchemaData,
+		)
 		if err != nil {
 			return err
 		}
@@ -422,7 +426,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 				info.stats.ObjectName(), info.stats.BlkCnt()))
 		}
 		objectBat, _, err := blockio.LoadOneBlock(
-			ctx, fs, info.stats.ObjectLocation(), objectio.SchemaData)
+			ctx,
+			fs,
+			info.stats.ObjectLocation(),
+			objectio.SchemaData,
+		)
 		if err != nil {
 			return err
 		}

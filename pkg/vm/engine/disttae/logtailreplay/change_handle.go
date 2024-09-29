@@ -175,7 +175,13 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		return moerr.GetOkExpectedEOF()
 	}
 	currentObject := h.objects[h.objectOffsetCursor].ObjectStats
-	data, err := readObjects(currentObject, uint32(h.blkOffsetCursor), h.fs, h.isTombstone, ctx)
+	data, err := readObjects(
+		ctx,
+		h.isTombstone,
+		uint32(h.blkOffsetCursor),
+		&currentObject,
+		h.fs,
+	)
 	if h.isTombstone {
 		updateCNTombstoneBatch(
 			data,
@@ -276,7 +282,13 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 			return
 		}
 		currentObjectStats := h.objects[h.objectOffsetCursor].ObjectStats
-		h.currentBatch, err = readObjects(currentObjectStats, 0, h.fs, h.isTombstone, ctx)
+		h.currentBatch, err = readObjects(
+			ctx,
+			h.isTombstone,
+			0,
+			&currentObjectStats,
+			h.fs,
+		)
 		if h.isTombstone {
 			updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, h.mp)
 		} else {
@@ -833,17 +845,20 @@ func checkTS(start, end types.TS, ts types.TS) bool {
 	return ts.LE(&end) && ts.GE(&start)
 }
 
-func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.FileService, isTombstone bool, ctx context.Context) (bat *batch.Batch, err error) {
-	metaType := objectio.SchemaData
-	if isTombstone {
-		metaType = objectio.SchemaTombstone
-	}
+func readObjects(
+	ctx context.Context,
+	isTombstone bool,
+	blockID uint32,
+	stats *objectio.ObjectStats,
+	fs fileservice.FileService,
+) (bat *batch.Batch, err error) {
 	loc := stats.BlockLocation(uint16(blockID), 8192)
 	bat, _, err = blockio.LoadOneBlock(
 		ctx,
 		fs,
 		loc,
-		metaType)
+		objectio.SchemaData,
+	)
 	return
 }
 
