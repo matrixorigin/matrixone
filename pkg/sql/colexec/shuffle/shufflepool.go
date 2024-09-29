@@ -26,17 +26,20 @@ import (
 )
 
 type ShufflePool struct {
-	bucketNum int32
-	holders   int32
-	batches   []*batch.Batch
-	lock      sync.Mutex
+	bucketNum    int32
+	holders      int32
+	batches      []*batch.Batch
+	lock         sync.Mutex
+	locks        []sync.Mutex
+	fullBatchIdx []int32
 }
 
 func NewShufflePool(bucketNum int32) *ShufflePool {
 	sp := &ShufflePool{bucketNum: bucketNum}
 	sp.holders = 0
 	sp.batches = make([]*batch.Batch, sp.bucketNum)
-	//sp.locks = make([]sync.Mutex, bucketNum)
+	sp.locks = make([]sync.Mutex, bucketNum)
+	sp.fullBatchIdx = make([]int32, 0, bucketNum)
 	return sp
 }
 
@@ -67,6 +70,7 @@ func (sp *ShufflePool) Reset(m *mpool.MPool) {
 			sp.batches[i].Clean(m)
 		}
 	}
+	sp.fullBatchIdx = sp.fullBatchIdx[:0]
 }
 
 func (sp *ShufflePool) Print() { // only for debug
@@ -114,36 +118,40 @@ func (sp *ShufflePool) GetFullBatch(buf *batch.Batch, proc *process.Process) (*b
 	}
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
-	for i := range sp.batches {
-		bat := sp.batches[i]
-		if bat != nil && bat.RowCount() >= colexec.DefaultBatchSize {
-			//find a full batch, put buf in place
-			if buf == nil {
-				buf, err = proc.NewBatchFromSrc(bat, colexec.DefaultBatchSize)
-				if err != nil {
-					return nil, err
-				}
-			}
-			buf.ShuffleIDX = bat.ShuffleIDX
-			sp.batches[i] = buf
-			return bat, nil
+
+	length := len(sp.fullBatchIdx)
+	if length == 0 {
+		return buf, nil
+	}
+	fullIdx := sp.fullBatchIdx[length-1]
+	sp.locks[fullIdx].Lock()
+	defer sp.locks[fullIdx].Unlock()
+
+	bat := sp.batches[fullIdx]
+	//find a full batch, put buf in place
+	if buf == nil {
+		buf, err = proc.NewBatchFromSrc(bat, colexec.DefaultBatchSize)
+		if err != nil {
+			return nil, err
 		}
 	}
-	//no full batch in pool
-	return buf, nil
+	buf.ShuffleIDX = bat.ShuffleIDX
+	sp.batches[fullIdx] = buf
+	return bat, nil
+
 }
 
 func (sp *ShufflePool) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, sels [][]int64, proc *process.Process) error {
 	var err error
-	sp.lock.Lock()
-	defer sp.lock.Unlock()
 	for i := range sp.batches {
 		currentSels := sels[i]
 		if len(currentSels) > 0 {
+			sp.locks[i].Lock()
 			bat := sp.batches[i]
 			if bat == nil {
 				bat, err = proc.NewBatchFromSrc(srcBatch, colexec.DefaultBatchSize)
 				if err != nil {
+					sp.locks[i].Unlock()
 					return err
 				}
 				bat.ShuffleIDX = int32(i)
@@ -154,10 +162,12 @@ func (sp *ShufflePool) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, se
 				v.SetSorted(false)
 				err = v.Union(srcBatch.Vecs[vecIndex], currentSels, proc.Mp())
 				if err != nil {
+					sp.locks[i].Unlock()
 					return err
 				}
 			}
 			bat.AddRowCount(len(currentSels))
+			sp.locks[i].Unlock()
 		}
 	}
 	return nil
