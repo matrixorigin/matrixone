@@ -361,7 +361,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 	for i := range node.FilterList {
 		// if already in filterIdx, continue
 		applied := false
-		for j := range filterIdx {
+		for _, j := range filterIdx {
 			if i == j {
 				applied = true
 			}
