@@ -1497,6 +1497,9 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, expr *plan.Expr) 
 			return 1
 		}
 	}
+	if s.Overlap > 0.25 {
+		return 1
+	}
 	ret := sel * math.Pow(1000000, s.Overlap)
 	if ret > 1 {
 		ret = 1
