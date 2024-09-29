@@ -223,11 +223,6 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 				info.ShuffleRanges[i].Eval()
 				info.ShuffleRanges[i].ReleaseUnused()
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
-
-				if colName == "vin" {
-					logutil.Infof("shuffle range for vin, uniform %v, overlap %v, result %v", info.ShuffleRanges[i].Uniform, info.ShuffleRanges[i].Overlap, info.ShuffleRanges[i].Result)
-				}
-
 			}
 			info.ShuffleRanges[i] = nil
 		}

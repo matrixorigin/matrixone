@@ -762,9 +762,6 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 
 	if info.AccurateObjectNumber > 1 {
 		for idx := range tableDef.Cols[:lenCols] {
-			if tableDef.Cols[idx].Name == "vin" {
-				logutil.Infof("ndv %v tablecnt %v", info.ColumnNDVs[idx], info.TableCnt)
-			}
 			rate := info.ColumnNDVs[idx] / info.TableCnt
 			if rate > 1 {
 				rate = 1
