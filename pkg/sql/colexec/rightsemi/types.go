@@ -16,6 +16,7 @@ package rightsemi
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,6 +44,7 @@ type evalVector struct {
 
 type container struct {
 	state   int
+	itr     hashmap.Iterator
 	lastpos int
 
 	batches       []*batch.Batch
@@ -125,6 +127,7 @@ func (rightSemi *RightSemi) Release() {
 
 func (rightSemi *RightSemi) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightSemi.ctr
+	ctr.itr = nil
 	if !ctr.handledLast && rightSemi.NumCPU > 1 && !rightSemi.IsMerger {
 		rightSemi.Channel <- nil
 	}

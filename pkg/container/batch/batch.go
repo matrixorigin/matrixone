@@ -39,6 +39,18 @@ func New(ro bool, attrs []string) *Batch {
 	}
 }
 
+func NewOffHeap(ro bool, attrs []string) *Batch {
+	ret := New(ro, attrs)
+	ret.offHeap = true
+	return ret
+}
+
+func NewOffHeapEmpty() *Batch {
+	return &Batch{
+		offHeap: true,
+	}
+}
+
 func NewWithSize(n int) *Batch {
 	return &Batch{
 		Cnt:      1,
@@ -47,11 +59,43 @@ func NewWithSize(n int) *Batch {
 	}
 }
 
-func NewWithSchema(ro bool, attrs []string, attTypes []types.Type) *Batch {
+func NewOffHeapWithSize(n int) *Batch {
+	ret := NewWithSize(n)
+	ret.offHeap = true
+	return ret
+}
+
+func NewWithSchema(ro bool, offHeap bool, attrs []string, attTypes []types.Type) *Batch {
 	bat := New(ro, attrs)
 	for i, t := range attTypes {
-		bat.Vecs[i] = vector.NewVec(t)
+		if offHeap {
+			bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
+		} else {
+			bat.Vecs[i] = vector.NewVec(t)
+		}
 	}
+	return bat
+}
+
+func EmptyBatchWithSize(n int) Batch {
+	bat := Batch{
+		Vecs: make([]*vector.Vector, n),
+	}
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.NewVec(types.T_any.ToType())
+	}
+	return bat
+}
+
+func EmptyBatchWithAttrs(attrs []string) Batch {
+	bat := Batch{
+		Attrs: attrs,
+		Vecs:  make([]*vector.Vector, len(attrs)),
+	}
+	for i := range attrs {
+		bat.Vecs[i] = vector.NewVec(types.T_any.ToType())
+	}
+
 	return bat
 }
 
@@ -60,6 +104,17 @@ func SetLength(bat *Batch, n int) {
 		vec.SetLength(n)
 	}
 	bat.rowCount = n
+}
+
+func (bat *Batch) Slice(from, to int) *Batch {
+	return &Batch{
+		Ro:       bat.Ro,
+		Attrs:    bat.Attrs[from:to],
+		Vecs:     bat.Vecs[from:to],
+		rowCount: bat.rowCount,
+		Cnt:      1,
+	}
+
 }
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
@@ -135,7 +190,11 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	if firstTime {
 		bat.Vecs = make([]*vector.Vector, l)
 		for i := range bat.Vecs {
-			bat.Vecs[i] = vector.NewVecFromReuse()
+			if bat.offHeap {
+				bat.Vecs[i] = vector.NewOffHeapVec()
+			} else {
+				bat.Vecs[i] = vector.NewVecFromReuse()
+			}
 		}
 	}
 	vecs := bat.Vecs
@@ -258,6 +317,9 @@ func (bat *Batch) SetAttributes(attrs []string) {
 
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
 	bat.Vecs[pos] = vec
+	if vec != nil {
+		vec.SetOffHeap(bat.offHeap)
+	}
 }
 
 func (bat *Batch) GetVector(pos int32) *vector.Vector {
@@ -269,7 +331,12 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 	for i, attr := range bat.Attrs {
 		mp[attr] = i
 	}
-	rbat := NewWithSize(len(cols))
+	var rbat *Batch
+	if bat.offHeap {
+		rbat = NewOffHeapWithSize(len(cols))
+	} else {
+		rbat = NewWithSize(len(cols))
+	}
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
@@ -326,6 +393,14 @@ func (bat *Batch) CleanOnlyData() {
 	bat.rowCount = 0
 }
 
+func (bat *Batch) FreeColumns(m *mpool.MPool) {
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(m)
+		}
+	}
+}
+
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
 
@@ -352,7 +427,12 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	rbat.Recursive = bat.Recursive
 	for j, vec := range bat.Vecs {
 		typ := *bat.GetVector(int32(j)).GetType()
-		rvec := vector.NewVec(typ)
+		var rvec *vector.Vector
+		if bat.offHeap {
+			rvec = vector.NewOffHeapVecWithType(typ)
+		} else {
+			rvec = vector.NewVec(typ)
+		}
 		if err = vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
 			rbat.Clean(mp)
 			return nil, err
@@ -517,6 +597,7 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 		if err != nil {
 			return nil, err
 		}
+		b.Vecs[i].SetOffHeap(bat.offHeap)
 	}
 	b.rowCount = end - start
 	return b, nil

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package engine_util
 
 import (
 	"bytes"
@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 )
 
 type MemPKFilter struct {
@@ -37,11 +36,11 @@ type MemPKFilter struct {
 	SpecFactory func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec
 }
 
-func newMemPKFilter(
+func NewMemPKFilter(
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
-	basePKFilter engine_util.BasePKFilter,
+	basePKFilter BasePKFilter,
 ) (filter MemPKFilter, err error) {
 	//defer func() {
 	//	if filter.iter == nil {
@@ -196,7 +195,7 @@ func newMemPKFilter(
 		filter.SetFullData(basePKFilter.Op, false, packed...)
 
 	case function.PREFIX_BETWEEN, function.BETWEEN,
-		engine_util.RangeLeftOpen, engine_util.RangeRightOpen, engine_util.RangeBothOpen:
+		RangeLeftOpen, RangeRightOpen, RangeBothOpen:
 		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
 		packed = append(packed, logtailreplay.EncodePrimaryKey(ubVal, packer))
 		if basePKFilter.Op == function.PREFIX_BETWEEN {
@@ -266,16 +265,16 @@ func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(ts timestamp.Timestamp) {
 			return logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL)
 		}
 
-	case function.BETWEEN, engine_util.RangeLeftOpen, engine_util.RangeRightOpen, engine_util.RangeBothOpen, function.PREFIX_BETWEEN:
+	case function.BETWEEN, RangeLeftOpen, RangeRightOpen, RangeBothOpen, function.PREFIX_BETWEEN:
 		var kind int
 		switch f.op {
 		case function.BETWEEN:
 			kind = 0
-		case engine_util.RangeLeftOpen:
+		case RangeLeftOpen:
 			kind = 1
-		case engine_util.RangeRightOpen:
+		case RangeRightOpen:
 			kind = 2
-		case engine_util.RangeBothOpen:
+		case RangeBothOpen:
 			kind = 3
 		case function.PREFIX_BETWEEN:
 			kind = 4

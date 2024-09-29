@@ -73,7 +73,7 @@ func TestTransferPage(t *testing.T) {
 		rowID, ok := memo2.Transfer(uint32(i))
 		assert.True(t, ok)
 		blockId, offset := rowID.Decode()
-		assert.Equal(t, dest.BlockID, blockId)
+		assert.Equal(t, dest.BlockID, *blockId)
 		assert.Equal(t, uint32(i), offset)
 	}
 }

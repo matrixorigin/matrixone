@@ -40,15 +40,6 @@ type truncatedLsnQuery struct{}
 type leaseHistoryQuery struct{ lsn uint64 }
 type requiredLsnQuery struct{}
 
-func getAppendCmd(cmd []byte, replicaID uint64) []byte {
-	if len(cmd) < headerSize+8 {
-		panic("cmd too small")
-	}
-	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
-	binaryEnc.PutUint64(cmd[headerSize:], replicaID)
-	return cmd
-}
-
 func parseCmdTag(cmd []byte) pb.UpdateType {
 	return pb.UpdateType(binaryEnc.Uint32(cmd))
 }
@@ -161,12 +152,15 @@ func (s *stateMachine) handleTruncateLsn(cmd []byte) sm.Result {
 // sm.Result value with the Value field set to the current leaseholder ID
 // to indicate rejection by mismatched leaseholder ID.
 func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
+	// TODO(volgariver6): no need to check leaseholder if there is only one TN replica.
+	// If there are multiple TN replicas, do the check.
+
 	// if the leaseholder is reserved, skip the check, as it is the RSM of standby shard.
-	if s.state.LeaseHolderID != 0 && s.state.LeaseHolderID != parseLeaseHolderID(cmd) {
-		data := make([]byte, 8)
-		binaryEnc.PutUint64(data, s.state.LeaseHolderID)
-		return sm.Result{Data: data}
-	}
+	// if s.state.LeaseHolderID != 0 && s.state.LeaseHolderID != parseLeaseHolderID(cmd) {
+	// 	data := make([]byte, 8)
+	// 	binaryEnc.PutUint64(data, s.state.LeaseHolderID)
+	// 	return sm.Result{Data: data}
+	// }
 	return sm.Result{Value: s.state.Index}
 }
 
