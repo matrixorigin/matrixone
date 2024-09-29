@@ -413,7 +413,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 					newFilter := DeepCopyExpr(node.FilterList[i])
 					newFilter.GetF().Args[0] = deserialExpr
 					idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
-					return
+					continue
 				}
 			}
 		}
