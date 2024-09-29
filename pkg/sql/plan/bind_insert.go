@@ -345,7 +345,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 					TableId:            tableDef.TblId,
 					PrimaryColIdxInBat: int32(colName2Idx[tableDef.Name+"."+col.Name]),
 					PrimaryColTyp:      col.Typ,
-					LockTable:          false, //todo base stats and change lockTable
 				})
 			}
 
@@ -386,7 +385,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 						TableId:            idxTableDef.TblId,
 						PrimaryColIdxInBat: int32(colName2Idx[idxTableDef.Name+"."+col.Name]),
 						PrimaryColTyp:      col.Typ,
-						LockTable:          false, //todo base stats and change lockTable
 					})
 				}
 
