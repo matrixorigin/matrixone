@@ -552,7 +552,7 @@ func CannotRemote(op Operator) bool {
 }
 
 type ModificationArgument interface {
-	AffectedRows() uint64
+	GetAffectedRows() uint64
 }
 
 // doHandleAllOp function uses post traversal to recursively process nodes in the operand tree.
