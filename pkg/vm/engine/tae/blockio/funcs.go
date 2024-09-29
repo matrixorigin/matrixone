@@ -30,7 +30,6 @@ import (
 
 func LoadColumnsData(
 	ctx context.Context,
-	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
@@ -45,7 +44,7 @@ func LoadColumnsData(
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	dataMeta = meta.MustGetMeta(metaType)
+	dataMeta = meta.MustGetMeta(objectio.SchemaData)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
 		return
 	}
@@ -66,7 +65,6 @@ func LoadColumnsData(
 
 func LoadColumnsData2(
 	ctx context.Context,
-	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
@@ -81,7 +79,7 @@ func LoadColumnsData2(
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	dataMeta := meta.MustGetMeta(metaType)
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
 	}
@@ -141,7 +139,7 @@ func LoadTombstoneColumns(
 	policy fileservice.Policy,
 ) (meta objectio.ObjectDataMeta, release func(), err error) {
 	return LoadColumnsData(
-		ctx, objectio.SchemaTombstone, cols, typs, fs, location, cacheBat, m, policy,
+		ctx, cols, typs, fs, location, cacheBat, m, policy,
 	)
 }
 
@@ -156,7 +154,7 @@ func LoadColumns(
 	policy fileservice.Policy,
 ) (release func(), err error) {
 	_, release, err = LoadColumnsData(
-		ctx, objectio.SchemaData, cols, typs, fs, location, cacheBat, m, policy,
+		ctx, cols, typs, fs, location, cacheBat, m, policy,
 	)
 	return
 }
@@ -173,7 +171,7 @@ func LoadColumns2(
 	needCopy bool,
 	vPool *containers.VectorPool,
 ) (vectors []containers.Vector, release func(), err error) {
-	return LoadColumnsData2(ctx, objectio.SchemaData, cols, typs, fs, location, policy, needCopy, vPool)
+	return LoadColumnsData2(ctx, cols, typs, fs, location, policy, needCopy, vPool)
 }
 
 func LoadOneBlock(
