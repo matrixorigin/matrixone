@@ -86,10 +86,7 @@ func (sp *ShufflePool) Reset(m *mpool.MPool, force bool) {
 func (sp *ShufflePool) Print() { // only for debug
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
-	logutil.Infof("shuffle pool %p holders %v", sp, sp.holders)
-	if sp.holders > 0 {
-		return
-	}
+	logutil.Warnf("shuffle pool print, bucketNum %v, holders %v, finished %v", sp.bucketNum, sp.holders, sp.finished)
 	for i := range sp.batches {
 		bat := sp.batches[i]
 		if bat == nil {
@@ -107,7 +104,7 @@ func (sp *ShufflePool) GetEndingBatch(buf *batch.Batch, proc *process.Process) *
 	}
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
-	if sp.holders > 0 {
+	if sp.finished < sp.bucketNum {
 		return nil
 	}
 	for i := range sp.batches {
