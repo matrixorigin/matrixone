@@ -26,12 +26,26 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBasicCluster(t *testing.T) {
-	c, err := NewCluster(WithCNCount(3))
+	c, err := NewCluster(
+		WithCNCount(3),
+		WithPreStart(
+			func(svc ServiceOperator) {
+				if svc.ServiceType() == metadata.ServiceType_CN {
+					svc.Adjust(
+						func(config *ServiceConfig) {
+							config.CN.AutomaticUpgrade = true
+						},
+					)
+				}
+			},
+		),
+	)
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
 
