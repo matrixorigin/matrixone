@@ -157,7 +157,6 @@ func prepareTestInsertBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		bat := &batch.Batch{
 			Vecs:  []*vector.Vector{columnA, columnB, columnC, columnD},
 			Attrs: attrs,
-			Cnt:   1,
 		}
 
 		if hasUniqueKey {

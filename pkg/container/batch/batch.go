@@ -30,7 +30,6 @@ import (
 func New(ro bool, attrs []string) *Batch {
 	return &Batch{
 		Ro:       ro,
-		Cnt:      1,
 		Attrs:    attrs,
 		Vecs:     make([]*vector.Vector, len(attrs)),
 		rowCount: 0,
@@ -51,7 +50,6 @@ func NewOffHeapEmpty() *Batch {
 
 func NewWithSize(n int) *Batch {
 	return &Batch{
-		Cnt:      1,
 		Vecs:     make([]*vector.Vector, n),
 		rowCount: 0,
 	}
@@ -110,7 +108,6 @@ func (bat *Batch) Slice(from, to int) *Batch {
 		Attrs:    bat.Attrs[from:to],
 		Vecs:     bat.Vecs[from:to],
 		rowCount: bat.rowCount,
-		Cnt:      1,
 	}
 
 }
@@ -236,7 +233,6 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	bat.Recursive = types.DecodeInt32(data[:4])
 	data = data[4:]
 	bat.ShuffleIDX = types.DecodeInt32(data[:4])
-	bat.Cnt = 1
 
 	if len(aggs) > 0 {
 		bat.Aggs = make([]aggexec.AggFuncExec, len(aggs))

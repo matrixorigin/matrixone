@@ -1242,7 +1242,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			if err := types.Decode([]byte(opr.ValueScan.BatchBlock), bat); err != nil {
 				return nil, err
 			}
-			bat.Cnt = 1
 			op.(*value_scan.ValueScan).Batchs = append(op.(*value_scan.ValueScan).Batchs, bat)
 		}
 	case vm.UnionAll:

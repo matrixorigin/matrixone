@@ -186,7 +186,6 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	bat := &batch.Batch{
 		Attrs: make([]string, 16),
 		Vecs:  make([]*vector.Vector, 16),
-		Cnt:   1,
 	}
 	bat.Attrs[0] = MO_INDEX_ID
 	bat.Attrs[1] = MO_INDEX_TABLE_ID

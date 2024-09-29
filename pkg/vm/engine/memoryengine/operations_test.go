@@ -53,7 +53,6 @@ func TestOperationsMarshalAndUnmarshal(t *testing.T) {
 	bat.Vecs[0] = colA
 	bat.Vecs[1] = colB
 	bat.SetRowCount(5)
-	bat.Cnt = 1
 
 	tableDefA := &engine.AttributeDef{
 		Attr: engine.Attribute{
