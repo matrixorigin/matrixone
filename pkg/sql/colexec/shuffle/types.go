@@ -94,11 +94,15 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	if shuffle.ctr.buf != nil {
 		shuffle.ctr.buf.Clean(proc.Mp())
 	}
-	if shuffle.ctr.shufflePool != nil && shuffle.ctr.lastForShufflePool {
+	if shuffle.ctr.shufflePool != nil {
 		//shuffle.ctr.shufflePool.Print()
-		shuffle.ctr.shufflePool.Reset(proc.Mp())
-		shuffle.ctr.lastForShufflePool = false
+		if pipelineFailed || err != nil {
+			shuffle.ctr.shufflePool.Reset(proc.Mp(), true)
+		} else if shuffle.ctr.lastForShufflePool {
+			shuffle.ctr.shufflePool.Reset(proc.Mp(), false)
+		}
 	}
+	shuffle.ctr.lastForShufflePool = false
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
 }
