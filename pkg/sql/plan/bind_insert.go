@@ -44,7 +44,7 @@ func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.Objec
 			dbName = builder.compCtx.DefaultDatabase()
 		}
 		// if dbName == catalog.MO_CATALOG || dbName == catalog.MO_DATABASE || dbName == catalog.MO_TABLES || dbName == catalog.MO_COLUMNS {
-		// 	return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from catalog")
+		// 	return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "cannot insert/update/delete from catalog")
 		// }
 
 		objRefs[i], tableDefs[i] = builder.compCtx.Resolve(dbName, tblName, nil)
@@ -61,6 +61,9 @@ func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.Objec
 			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "Cannot insert/update/delete from sequence")
 		}
 
+		if tableDefs[i].Partition != nil {
+			return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "partition table")
+		}
 		if tableDefs[i].Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 			return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "fake primary key")
 		}
@@ -277,57 +280,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			}, ctx)
 		}
 	}
-	/*
-		for i, tableDef := range tableDefs {
-			if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-				continue
-			}
 
-			pkPos, pkTyp := getPkPos(tableDef, false)
-
-			lockTarget := &plan.LockTarget{
-				TableId:            tableDef.TblId,
-				PrimaryColIdxInBat: int32(pkPos),
-				PrimaryColTyp:      pkTyp,
-				RefreshTsIdxInBat:  -1, //unsupported now
-			}
-
-			//if tableDef.Partition != nil {
-			//	lockTarget.IsPartitionTable = true
-			//	lockTarget.FilterColIdxInBat = int32(partitionIdx)
-			//	lockTarget.PartitionTableIds = partTableIDs
-			//}
-
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_LOCK_OP,
-				Children:    []int32{lastNodeID},
-				LockTargets: []*plan.LockTarget{lockTarget},
-			}, ctx)
-
-			for _, idxTableDef := range idxTableDefs[i] {
-				pkPos, pkTyp := getPkPos(idxTableDef, false)
-
-				lockTarget := &plan.LockTarget{
-					TableId:            idxTableDef.TblId,
-					PrimaryColIdxInBat: int32(pkPos),
-					PrimaryColTyp:      pkTyp,
-					RefreshTsIdxInBat:  -1, //unsupported now
-				}
-
-				//if tableDef.Partition != nil {
-				//	lockTarget.IsPartitionTable = true
-				//	lockTarget.FilterColIdxInBat = int32(partitionIdx)
-				//	lockTarget.PartitionTableIds = partTableIDs
-				//}
-
-				lastNodeID = builder.appendNode(&plan.Node{
-					NodeType:    plan.Node_LOCK_OP,
-					Children:    []int32{lastNodeID},
-					LockTargets: []*plan.LockTarget{lockTarget},
-				}, ctx)
-			}
-		}
-	*/
 	dmlNode := &plan.Node{
 		NodeType: plan.Node_MULTI_UPDATE,
 		Children: []int32{lastNodeID},
