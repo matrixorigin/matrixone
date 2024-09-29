@@ -835,19 +835,3 @@ func (builder *QueryBuilder) buildValueScan(
 
 	return nodeID, nil
 }
-
-func (builder *QueryBuilder) bindLockOpForInsert(
-	tableDef *TableDef,
-) (err error) {
-	// lock for pk
-	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-		//
-	}
-
-	// for for unique key
-	if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		return
-	}
-
-	return
-}
