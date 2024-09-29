@@ -519,3 +519,38 @@ select * from t;
 a    b
 1    [1, 2]
 drop database prepare_test;
+drop database if exists db1;
+create database db1;
+use db1;
+drop table if exists t1;
+create table t1(a int primary key, b int, c int, key(b));
+insert into t1 select result, result%25000, result from generate_series (1, 50000)g;
+prepare s1 from select * from t1 where b in (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+set @a=1;
+set @b=22;
+set @c=333;
+execute s1 using @a,@a,@a,@a,@a,@a,@a,@a,@b,@c;
+a    b    c
+1    1    1
+22    22    22
+333    333    333
+25001    1    25001
+25022    22    25022
+25333    333    25333
+create table t2(a int primary key, b int);
+insert into t2 select result*2,result+100 from generate_series(1,50000)g;
+select count(*) from t1,t2 where t1.a=t2.a;
+count(*)
+25000
+prepare s from select * from t1,t2 where t1.a=t2.a and t2.b=?;
+execute s using @a;
+a    b    c    a    b
+set @a=10000;
+execute s using @a;
+a    b    c    a    b
+19800    19800    19800    19800    10000
+set @a=23456;
+execute s using @a;
+a    b    c    a    b
+46712    21712    46712    46712    23456
+drop database if exists db1;

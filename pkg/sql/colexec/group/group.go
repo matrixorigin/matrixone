@@ -126,7 +126,11 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		} else {
 			group.ctr.typ = HStr
 		}
-
+		for _, flag := range group.GroupingFlag {
+			if !flag {
+				group.ctr.typ = HStr
+			}
+		}
 		if err = group.ctr.initResultBat(proc, group); err != nil {
 			return err
 		}
@@ -153,6 +157,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 			return
 		}
 	}
+
 	return group.ctr.initHashMap(proc, group)
 }
 
@@ -210,6 +215,12 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 				batList[0] = bat
 				if err = ctr.evaluateAggAndGroupBy(proc, batList); err != nil {
 					return result, err
+				}
+
+				for i, flag := range ap.GroupingFlag {
+					if !flag {
+						ctr.groupVecs.Vec[i] = vector.NewRollupConst(ctr.groupVecs.Typ[i], ctr.groupVecs.Vec[i].Length(), proc.Mp())
+					}
 				}
 
 				if len(ap.Exprs) == 0 {
@@ -313,7 +324,10 @@ func (ctr *container) processH0() error {
 // processH8 do group by aggregation with int hashmap.
 func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.RowCount()
-	itr := ctr.intHashMap.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.intHashMap.NewIterator()
+	}
+	itr := ctr.itr
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
@@ -337,7 +351,10 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 // processHStr do group by aggregation with string hashmap.
 func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
 	count := bat.RowCount()
-	itr := ctr.strHashMap.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.strHashMap.NewIterator()
+	}
+	itr := ctr.itr
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
@@ -441,9 +458,9 @@ func (ctr *container) getAggResult() ([]*vector.Vector, error) {
 // init the container.bat to store the final result of group-operator
 func (ctr *container) initResultBat(proc *process.Process, config *Group) (err error) {
 	// init the batch to store the group-by.
-	ctr.bat = batch.NewWithSize(len(config.Exprs))
+	ctr.bat = batch.NewOffHeapWithSize(len(config.Exprs))
 	for i := range ctr.groupVecs.Typ {
-		ctr.bat.Vecs[i] = vector.NewVec(ctr.groupVecs.Typ[i])
+		ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(ctr.groupVecs.Typ[i])
 	}
 	if config.PreAllocSize > 0 {
 		if err = ctr.bat.PreExtend(proc.Mp(), int(config.PreAllocSize)); err != nil {
@@ -457,7 +474,7 @@ func (ctr *container) initResultBat(proc *process.Process, config *Group) (err e
 func (ctr *container) initHashMap(proc *process.Process, config *Group) (err error) {
 	// init the hashmap.
 	switch {
-	case ctr.keyWidth <= 8:
+	case ctr.typ == H8:
 		if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVecsNullable); err != nil {
 			return err
 		}
@@ -466,8 +483,7 @@ func (ctr *container) initHashMap(proc *process.Process, config *Group) (err err
 				return err
 			}
 		}
-
-	default:
+	case ctr.typ == HStr:
 		if ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVecsNullable); err != nil {
 			return err
 		}
@@ -476,6 +492,8 @@ func (ctr *container) initHashMap(proc *process.Process, config *Group) (err err
 				return err
 			}
 		}
+	default:
+		return moerr.NewInternalError(proc.Ctx, "unexpected hashmap typ for group-operator.")
 	}
 	return nil
 }
@@ -488,7 +506,7 @@ func (ctr *container) aggWithoutGroupByCannotEmptySet(proc *process.Process, con
 	// if this was a query like `select agg(a) from t`, and t is empty.
 	// agg(a) should return 0 for count, and return null for other agg.
 	if ctr.bat == nil {
-		ctr.bat = batch.NewWithSize(0)
+		ctr.bat = batch.NewOffHeapWithSize(0)
 	}
 	if len(ctr.bat.Aggs) == 0 {
 		// init the agg.

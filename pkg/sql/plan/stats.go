@@ -1099,9 +1099,14 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		if scanNode.Stats.Outcnt > scanNode.Stats.TableCnt {
 			scanNode.Stats.Outcnt = scanNode.Stats.TableCnt
 		}
-		newBlockNum := int32(scanNode.Stats.Outcnt/3) + 1
-		if newBlockNum < scanNode.Stats.BlockNum {
-			scanNode.Stats.BlockNum = newBlockNum
+		newBlockNum := scanNode.Stats.Outcnt
+		if newBlockNum > 64 {
+			newBlockNum = (scanNode.Stats.Outcnt / 2)
+		} else if newBlockNum > 256 {
+			newBlockNum = (scanNode.Stats.Outcnt / 4)
+		}
+		if newBlockNum < float64(scanNode.Stats.BlockNum) {
+			scanNode.Stats.BlockNum = int32(newBlockNum)
 		}
 		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * DefaultBlockMaxRows
 		if scanNode.Stats.Cost > scanNode.Stats.TableCnt {
@@ -1492,7 +1497,10 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, expr *plan.Expr) 
 			return 1
 		}
 	}
-	ret := sel * math.Pow(500, math.Pow(s.Overlap, 2))
+	if s.Overlap > 0.25 {
+		return 1
+	}
+	ret := sel * math.Pow(1000000, s.Overlap)
 	if ret > 1 {
 		ret = 1
 	}

@@ -69,16 +69,16 @@ func (ts *TS) Compare(rhs *TS) int {
 	return 1
 }
 
-func (ts *TS) Less(rhs *TS) bool {
+func (ts *TS) LT(rhs *TS) bool {
 	return ts.Compare(rhs) < 0
 }
-func (ts *TS) LessEq(rhs *TS) bool {
+func (ts *TS) LE(rhs *TS) bool {
 	return ts.Compare(rhs) <= 0
 }
-func (ts *TS) Greater(rhs *TS) bool {
+func (ts *TS) GT(rhs *TS) bool {
 	return ts.Compare(rhs) > 0
 }
-func (ts *TS) GreaterEq(rhs *TS) bool {
+func (ts *TS) GE(rhs *TS) bool {
 	return ts.Compare(rhs) >= 0
 }
 
@@ -210,7 +210,7 @@ func (alloc *TsAlloctor) Get() TS {
 }
 
 func (alloc *TsAlloctor) SetStart(start TS) {
-	//if start.Greater(alloc.Get()) {
+	//if start.GT(alloc.Get()) {
 	alloc.clock.Update(timestamp.Timestamp{PhysicalTime: DecodeInt64(start[4:12]),
 		LogicalTime: DecodeUint32(start[:4])})
 	//}
@@ -298,7 +298,6 @@ func MockColTypes() (ct []Type) {
 	return columnTypes
 }
 
-// PXU FIXME Done
 func CompareTSTSAligned(a, b TS) int {
 	return a.Compare(&b)
 }

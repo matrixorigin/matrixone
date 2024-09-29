@@ -30,45 +30,41 @@ import (
 
 func LoadColumnsData(
 	ctx context.Context,
-	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
+	cacheBat *batch.Batch,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, dataMeta objectio.ObjectDataMeta, release func(), err error) {
+) (dataMeta objectio.ObjectDataMeta, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
-	var ioVectors *fileservice.IOVector
+	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	dataMeta = meta.MustGetMeta(metaType)
+	dataMeta = meta.MustGetMeta(objectio.SchemaData)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
 		return
 	}
-	bat = batch.NewWithSize(len(cols))
 	release = func() {
-		objectio.ReleaseIOVector(ioVectors)
-		bat.Clean(m)
+		objectio.ReleaseIOVector(&ioVectors)
+		cacheBat.FreeColumns(m)
 	}
-	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
-		if err != nil {
+		if err = objectio.MustVectorTo(cacheBat.Vecs[i], ioVectors.Entries[i].CachedData.Bytes()); err != nil {
+			release()
+			release = nil
 			return
 		}
-		bat.Vecs[i] = obj.(*vector.Vector)
-		bat.SetRowCount(bat.Vecs[i].Length())
 	}
-	//TODO call CachedData.Release
+	cacheBat.SetRowCount(cacheBat.Vecs[0].Length())
 	return
 }
 
 func LoadColumnsData2(
 	ctx context.Context,
-	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
@@ -79,22 +75,22 @@ func LoadColumnsData2(
 ) (vectors []containers.Vector, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
-	var ioVectors *fileservice.IOVector
+	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	dataMeta := meta.MustGetMeta(metaType)
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
 	}
 	vectors = make([]containers.Vector, len(cols))
 	defer func() {
 		if needCopy {
-			objectio.ReleaseIOVector(ioVectors)
+			objectio.ReleaseIOVector(&ioVectors)
 			return
 		}
 		release = func() {
-			objectio.ReleaseIOVector(ioVectors)
+			objectio.ReleaseIOVector(&ioVectors)
 			for _, vec := range vectors {
 				vec.Close()
 			}
@@ -138,10 +134,13 @@ func LoadTombstoneColumns(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
+	cacheBat *batch.Batch, // cacheBat.Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, meta objectio.ObjectDataMeta, release func(), err error) {
-	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, policy)
+) (meta objectio.ObjectDataMeta, release func(), err error) {
+	return LoadColumnsData(
+		ctx, cols, typs, fs, location, cacheBat, m, policy,
+	)
 }
 
 func LoadColumns(
@@ -150,10 +149,13 @@ func LoadColumns(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
+	cacheBat *batch.Batch, // fillBatch.Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, release func(), err error) {
-	bat, _, release, err = LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy)
+) (release func(), err error) {
+	_, release, err = LoadColumnsData(
+		ctx, cols, typs, fs, location, cacheBat, m, policy,
+	)
 	return
 }
 
@@ -169,7 +171,7 @@ func LoadColumns2(
 	needCopy bool,
 	vPool *containers.VectorPool,
 ) (vectors []containers.Vector, release func(), err error) {
-	return LoadColumnsData2(ctx, objectio.SchemaData, cols, typs, fs, location, policy, needCopy, vPool)
+	return LoadColumnsData2(ctx, cols, typs, fs, location, policy, needCopy, vPool)
 }
 
 func LoadOneBlock(

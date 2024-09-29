@@ -29,6 +29,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_mo_snapshots,
 	upg_mo_retention,
 	upg_information_schema_columns,
+	upg_information_schema_schemata,
 }
 
 const viewServerSnapshotUsage = "server_snapshot_usage"
@@ -90,4 +91,23 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "COLUMNS"),
+}
+
+var upg_information_schema_schemata = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "SCHEMATA",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    sysview.InformationSchemaSchemataDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "SCHEMATA")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == sysview.InformationSchemaSchemataDDL {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "SCHEMATA"),
 }
