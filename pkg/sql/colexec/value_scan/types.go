@@ -107,6 +107,7 @@ func (valueScan *ValueScan) doBatchClean(proc *process.Process) {
 	// If data was stored in the process, do not clean it.
 	// process's free will clean them.
 	if valueScan.dataInProcess {
+		valueScan.Batchs = valueScan.Batchs[:0]
 		return
 	}
 
