@@ -463,7 +463,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		dataBlk := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
 		name := objectio.BuildObjectNameWithObjectID(obj.GetID())
-		writer, err := blockio.NewBlockWriterNew(dataBlk.GetFs().Service, name, 0, nil)
+		writer, err := blockio.NewBlockWriterNew(dataBlk.GetFs().Service, name, 0, nil, false)
 		assert.Nil(t, err)
 		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
 		assert.Nil(t, err)
@@ -4389,7 +4389,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		t.Log(tae.Catalog.SimplePPString(3))
 
 		txn, _ = tae.GetRelation()
-		task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.DB.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -5019,7 +5019,7 @@ func TestMergeMemsize(t *testing.T) {
 	bats := wholebat.Split(batCnt)
 	// write only one block by apply metaloc
 	objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
 	for _, b := range bats {
@@ -5091,7 +5091,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	bat := catalog.MockBatch(schema, 400)
 	// write only one block by apply metaloc
 	objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
 	_, err = writer.WriteBatch(containers.ToCNBatch(bat))
@@ -5196,7 +5196,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	// write only one Object
 	for i := 0; i < 1; i++ {
 		objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil)
+		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil, false)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for _, bat := range bats[i*25 : (i+1)*25] {
@@ -7001,6 +7001,9 @@ func TestPitrMeta(t *testing.T) {
 	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
+	pitr, err := db.DiskCleaner.GetCleaner().GetPITRs()
+	assert.Nil(t, err)
+	assert.True(t, len(pitr.ToTsList()) > 0)
 }
 
 func TestMergeGC(t *testing.T) {
@@ -7987,7 +7990,7 @@ func TestCommitS3Blocks(t *testing.T) {
 	statsVecs := make([]containers.Vector, 0)
 	for _, bat := range datas {
 		name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
+		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil, false)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for i := 0; i < 50; i++ {
@@ -8065,7 +8068,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	testutil.CreateRelation(t, tae.DB, "db", schema, true)
 
 	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
 	_, err = writer.WriteBatch(containers.ToCNBatch(data))
@@ -8079,7 +8082,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	statsVec.Append(ss[:], false)
 
 	name2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name2, 0, nil)
+	writer, err = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name2, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
 	_, err = writer.WriteBatch(containers.ToCNBatch(data))
@@ -8240,7 +8243,7 @@ func TestDeduplication(t *testing.T) {
 	})
 
 	blk1Name := objectio.BuildObjectNameWithObjectID(ObjectIDs[1])
-	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil, false)
 	assert.NoError(t, err)
 	writer.SetPrimaryKey(3)
 	writer.WriteBatch(containers.ToCNBatch(bats[0]))
@@ -9887,14 +9890,28 @@ func TestStartStopTableMerge(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 
 	tbl := rel.GetMeta().(*catalog.TableEntry)
-	scheduler.StopMerge(tbl)
+	require.NoError(t, scheduler.StopMerge(tbl, false))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.NoError(t, scheduler.StartMerge(tbl.GetID(), false))
+	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
+	require.Error(t, scheduler.StartMerge(tbl.GetID(), false))
 
-	require.Equal(t, moerr.GetOkStopCurrRecur(), scheduler.LoopProcessor.OnTable(tbl))
+	require.NoError(t, scheduler.StopMerge(tbl, true))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
-	scheduler.StartMerge(tbl)
+	require.NoError(t, scheduler.StopMerge(tbl, true))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
+	require.Error(t, scheduler.StopMerge(tbl, false))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+
+	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
+	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+
+	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
 	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
 }
+
 func TestDeleteByPhyAddrKeys(t *testing.T) {
 	ctx := context.Background()
 
@@ -9944,7 +9961,8 @@ func TestRollbackMergeInQueue(t *testing.T) {
 
 	err = task.OnExec(context.Background())
 	require.NoError(t, err)
-	tae.Runtime.LockMergeService.LockFromUser(rel.ID())
+	err = tae.DB.MergeScheduler.StopMerge(rel.GetMeta().(*catalog.TableEntry), false)
+	require.NoError(t, err)
 	require.Error(t, txn.Commit(ctx)) // rollback
 
 	_, rel = tae.GetRelation()

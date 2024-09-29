@@ -198,7 +198,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 	}
 	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+	itr := ctr.itr
 
 	rowCountIncrease := 0
 	eligible := make([]int64, 0) // eligible := make([]int32, 0, hashmap.UnitLimit)
