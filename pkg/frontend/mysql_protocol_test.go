@@ -1890,8 +1890,8 @@ func closeDbConn(t *testing.T, db *sql.DB) {
 
 func startConsumeRead(conn net.Conn) {
 	to := NewTimeout(5*time.Minute, false)
+	buf := make([]byte, 1024)
 	for !to.isTimeout() {
-		buf := make([]byte, 1024)
 		_, err := conn.Read(buf)
 		if err != nil {
 			return

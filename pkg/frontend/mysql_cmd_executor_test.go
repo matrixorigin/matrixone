@@ -101,10 +101,7 @@ func Test_mce(t *testing.T) {
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go startConsumeRead(clientConn)
+		tConn := &testConn{}
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -112,7 +109,7 @@ func Test_mce(t *testing.T) {
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		ioses, err := NewIOSession(tConn, pu)
 		convey.So(err, convey.ShouldBeNil)
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
@@ -815,10 +812,6 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go startConsumeRead(clientConn)
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -826,7 +819,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		ioses, err := NewIOSession(&testConn{}, pu)
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		ses := NewSession(ctx, "", proto, nil)
@@ -926,10 +919,6 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 				txnClient := mock_frontend.NewMockTxnClient(ctrl)
 				txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
-				clientConn, serverConn := net.Pipe()
-				defer clientConn.Close()
-				defer serverConn.Close()
-				go startConsumeRead(clientConn)
 				sv, err := getSystemVariables("test/system_vars_config.toml")
 				if err != nil {
 					t.Error(err)
@@ -937,7 +926,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 				pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 				pu.SV.SkipCheckUser = true
 				setGlobalPu(pu)
-				ioses, err := NewIOSession(serverConn, pu)
+				ioses, err := NewIOSession(&testConn{}, pu)
 				convey.So(err, convey.ShouldBeNil)
 				pu.StorageEngine = eng
 				pu.TxnClient = txnClient

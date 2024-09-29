@@ -7703,15 +7703,12 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
 	setGlobalPu(pu)
+	setGlobalSessionAlloc(newLeakCheckAllocator())
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	ctx = defines.AttachAccountId(ctx, 0)
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
 
-	ioses, err := NewIOSession(serverConn, pu)
+	ioses, err := NewIOSession(&testConn{}, pu)
 	if err != nil {
 		panic(err)
 	}
