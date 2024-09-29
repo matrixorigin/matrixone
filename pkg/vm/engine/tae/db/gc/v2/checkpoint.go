@@ -531,6 +531,7 @@ func (c *checkpointCleaner) getDeleteFile(
 	idx int,
 	ts, stage types.TS,
 	ckpSnapList []types.TS,
+	pitr *types.TS,
 ) ([]string, []*checkpoint.CheckpointEntry, error) {
 	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(ctx, c.sid, fs, files, idx, ts, true)
 	if err != nil {
@@ -551,8 +552,8 @@ func (c *checkpointCleaner) getDeleteFile(
 		ckp := ckps[i]
 		end := ckp.GetEnd()
 		if end.LT(&stage) {
-			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) &&
-				ckp.GetType() != checkpoint.ET_Global {
+			if end.GE(pitr) || (isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) &&
+				ckp.GetType() != checkpoint.ET_Global) {
 				// TODO: remove this log
 				logutil.Info("[MergeCheckpoint]",
 					common.OperationField("isSnapshotCKPRefers"),
@@ -621,16 +622,23 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 	for _, ts := range snapshotList {
 		ckpSnapList = append(ckpSnapList, ts...)
 	}
-	ckpSnapList = append(ckpSnapList, pitrs.ToTsList()...)
 	sort.Slice(ckpSnapList, func(i, j int) bool {
 		return ckpSnapList[i].LT(&ckpSnapList[j])
 	})
+	pitrList := pitrs.ToTsList()
+	sort.Slice(pitrList, func(i, j int) bool {
+		return pitrList[i].LT(&pitrList[j])
+	})
+	pitr := types.TS{}
+	if len(pitrList) > 0 {
+		pitr = pitrList[len(pitrList)-1]
+	}
 	for _, idx := range idxes {
 		logutil.Info("[MergeCheckpoint]",
 			common.OperationField("MergeCheckpointFiles"),
 			common.OperandField(stage.ToString()),
 			common.OperandField(idx))
-		delFiles, mergeFile, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList)
+		delFiles, mergeFile, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList, &pitr)
 		if err != nil {
 			return err
 		}
