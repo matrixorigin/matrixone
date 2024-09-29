@@ -47,6 +47,7 @@ func NewVecFromReuse() *Vector {
 	//v := reuse.Alloc[Vector](nil)
 	v := new(Vector)
 	v.nsp = &nulls.Nulls{}
+	v.gsp = &nulls.Nulls{}
 	// if v.OnUsed {
 	// 	panic("alloc onused vector")
 	// }

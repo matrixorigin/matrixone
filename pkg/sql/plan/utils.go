@@ -2349,6 +2349,29 @@ func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 	return false
 }
 
+func containGrouping(expr *Expr) bool {
+	var ret bool
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || containGrouping(arg)
+		}
+		ret = ret || (exprImpl.F.Func.ObjName == "grouping")
+	case *plan.Expr_Col:
+		ret = false
+	}
+
+	return ret
+}
+
+func checkGrouping(ctx context.Context, expr *Expr) error {
+	if containGrouping(expr) {
+		return moerr.NewSyntaxError(ctx, "aggregate function grouping not allowed in WHERE clause")
+	}
+	return nil
+}
+
 // a > current_time() + 1 and b < ? + c and d > ? + 2
 // =>
 // a > foldVal1 and b < foldVal2 + c and d > foldVal3
