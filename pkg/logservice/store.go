@@ -440,7 +440,7 @@ func (l *store) checkHealth(shardID uint64) error {
 		if storeInfo.Tick >= cs.Tick {
 			return nil
 		}
-		if (cs.Tick-storeInfo.Tick)/uint64(l.cfg.HAKeeperTickInterval.Duration) >
+		if (cs.Tick-storeInfo.Tick)*uint64(l.cfg.HAKeeperTickInterval.Duration) >
 			uint64(l.cfg.HAKeeperConfig.LogStoreTimeout.Duration) {
 			return moerr.NewInternalErrorNoCtxf("log store %s of shard %d expired",
 				l.cfg.UUID, shardID)
