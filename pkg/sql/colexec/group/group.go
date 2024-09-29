@@ -454,7 +454,7 @@ func (ctr *container) initResultBat(proc *process.Process, config *Group) (err e
 	// init the batch to store the group-by.
 	ctr.bat = batch.NewOffHeapWithSize(len(config.Exprs))
 	for i := range ctr.groupVecs.Typ {
-		ctr.bat.Vecs[i] = vector.NewVec(ctr.groupVecs.Typ[i])
+		ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(ctr.groupVecs.Typ[i])
 	}
 	if config.PreAllocSize > 0 {
 		if err = ctr.bat.PreExtend(proc.Mp(), int(config.PreAllocSize)); err != nil {
