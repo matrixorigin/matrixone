@@ -67,11 +67,9 @@ func (builder *QueryBuilder) applyAssociativeLawRule2(nodeID int32) int32 {
 	if NodeC.Stats.Selectivity > 0.5 {
 		return nodeID
 	}
-	NodeB := builder.qry.Nodes[leftChild.Children[1]]
-	node.Children[0] = NodeB.NodeId
+	node.Children[0] = builder.qry.Nodes[leftChild.Children[1]].NodeId
 	determineHashOnPK(node.NodeId, builder)
-	if !node.Stats.HashmapStats.HashOnPK {
-		// b join c must be hash on primary key, or we can not do this change
+	if !node.Stats.HashmapStats.HashOnPK { // b join c must be hash on primary key, or we can not do this change
 		node.Children[0] = leftChild.NodeId
 		return node.NodeId
 	}
