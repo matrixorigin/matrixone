@@ -183,8 +183,16 @@ func (s *ShuffleRange) Eval() {
 			}
 			if s.Tree == nil {
 				s.Tree = node
+				s.Min = node.Value
+				s.Max = node.Key
 			} else {
 				s.Tree = s.Tree.Merge(node)
+				if s.Min > node.Value {
+					s.Min = node.Value
+				}
+				if s.Max < node.Key {
+					s.Max = node.Key
+				}
 			}
 		}
 	}
