@@ -549,6 +549,15 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
+	case vm.MultiUpdate:
+		t := sourceOp.(*multi_update.MultiUpdate)
+		op := multi_update.NewArgument()
+		op.MultiUpdateCtx = t.MultiUpdateCtx
+		op.ToWriteS3 = t.ToWriteS3
+		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
+		op.Engine = t.Engine
+		op.SetInfo(&info)
+		return op
 	}
 	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 }

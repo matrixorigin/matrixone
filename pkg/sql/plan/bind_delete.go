@@ -208,42 +208,16 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 			}, ctx)
 		}
 	}
-
-	for i, tableDef := range tblInfo.tableDefs {
-		if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-			continue
-		}
-
-		pkPos, pkTyp := getPkPos(tableDef, false)
-
-		lockTarget := &plan.LockTarget{
-			TableId:            tableDef.TblId,
-			PrimaryColIdxInBat: int32(pkPos),
-			PrimaryColTyp:      pkTyp,
-			RefreshTsIdxInBat:  -1, //unsupported now
-		}
-
-		//if tableDef.Partition != nil {
-		//	lockTarget.IsPartitionTable = true
-		//	lockTarget.FilterColIdxInBat = int32(partitionIdx)
-		//	lockTarget.PartitionTableIds = partTableIDs
-		//}
-
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{lastNodeID},
-			LockTargets: []*plan.LockTarget{lockTarget},
-		}, ctx)
-
-		for _, idxNode := range idxScanNodes[i] {
-			if idxNode == nil {
+	/*
+		for i, tableDef := range tblInfo.tableDefs {
+			if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 				continue
 			}
 
-			pkPos, pkTyp := getPkPos(idxNode.TableDef, false)
+			pkPos, pkTyp := getPkPos(tableDef, false)
 
 			lockTarget := &plan.LockTarget{
-				TableId:            idxNode.TableDef.TblId,
+				TableId:            tableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
 				PrimaryColTyp:      pkTyp,
 				RefreshTsIdxInBat:  -1, //unsupported now
@@ -260,47 +234,92 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				Children:    []int32{lastNodeID},
 				LockTargets: []*plan.LockTarget{lockTarget},
 			}, ctx)
+
+			for _, idxNode := range idxScanNodes[i] {
+				if idxNode == nil {
+					continue
+				}
+
+				pkPos, pkTyp := getPkPos(idxNode.TableDef, false)
+
+				lockTarget := &plan.LockTarget{
+					TableId:            idxNode.TableDef.TblId,
+					PrimaryColIdxInBat: int32(pkPos),
+					PrimaryColTyp:      pkTyp,
+					RefreshTsIdxInBat:  -1, //unsupported now
+				}
+
+				//if tableDef.Partition != nil {
+				//	lockTarget.IsPartitionTable = true
+				//	lockTarget.FilterColIdxInBat = int32(partitionIdx)
+				//	lockTarget.PartitionTableIds = partTableIDs
+				//}
+
+				lastNodeID = builder.appendNode(&plan.Node{
+					NodeType:    plan.Node_LOCK_OP,
+					Children:    []int32{lastNodeID},
+					LockTargets: []*plan.LockTarget{lockTarget},
+				}, ctx)
+			}
 		}
+	*/
+	dmlNode := &plan.Node{
+		NodeType: plan.Node_MULTI_UPDATE,
+		Children: []int32{lastNodeID},
 	}
 
 	for i, tableDef := range tblInfo.tableDefs {
 		pkPos := int32(colName2Idx[i][tableDef.Pkey.PkeyColName])
 		rowIDPos := int32(colName2Idx[i][catalog.Row_ID])
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_DELETE,
-			Children: []int32{lastNodeID},
-			// ProjectList: getProjectionByLastNode(builder, lastNodeId),
-			DeleteCtx: &plan.DeleteCtx{
-				TableDef: DeepCopyTableDef(tableDef, true),
-				//RowIdIdx:            int32(delNodeInfo.deleteIndex),
-				Ref: DeepCopyObjectRef(tblInfo.objRef[i]),
-				//AddAffectedRows:     delNodeInfo.addAffectedRows,
-				//IsClusterTable:      delNodeInfo.IsClusterTable,
-				//PartitionTableIds:   delNodeInfo.partTableIDs,
-				//PartitionTableNames: delNodeInfo.partTableNames,
-				//PartitionIdx:        int32(delNodeInfo.partitionIdx),
-			},
-			InsertDeleteCols: []*plan.Expr{
+
+		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
+			TableDef: DeepCopyTableDef(tableDef, true),
+			ObjRef:   DeepCopyObjectRef(tblInfo.objRef[i]),
+			DeleteCols: []plan.ColRef{
 				{
-					Typ: selectNode.ProjectList[pkPos].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: selectNode.BindingTags[0],
-							ColPos: pkPos,
-						},
-					},
+					RelPos: selectNode.BindingTags[0],
+					ColPos: pkPos,
 				},
 				{
-					Typ: selectNode.ProjectList[rowIDPos].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: selectNode.BindingTags[0],
-							ColPos: rowIDPos,
-						},
-					},
+					RelPos: selectNode.BindingTags[0],
+					ColPos: rowIDPos,
 				},
 			},
-		}, ctx)
+		})
+
+		//lastNodeID = builder.appendNode(&plan.Node{
+		//	NodeType: plan.Node_DELETE,
+		//	Children: []int32{lastNodeID},
+		//	DeleteCtx: &plan.DeleteCtx{
+		//		TableDef: DeepCopyTableDef(tableDef, true),
+		//		Ref: DeepCopyObjectRef(tblInfo.objRef[i]),
+		//		AddAffectedRows:     delNodeInfo.addAffectedRows,
+		//		IsClusterTable:      delNodeInfo.IsClusterTable,
+		//		PartitionTableIds:   delNodeInfo.partTableIDs,
+		//		PartitionTableNames: delNodeInfo.partTableNames,
+		//		PartitionIdx:        int32(delNodeInfo.partitionIdx),
+		//	},
+		//	InsertDeleteCols: []*plan.Expr{
+		//		{
+		//			Typ: selectNode.ProjectList[pkPos].Typ,
+		//			Expr: &plan.Expr_Col{
+		//				Col: &plan.ColRef{
+		//					RelPos: selectNode.BindingTags[0],
+		//					ColPos: pkPos,
+		//				},
+		//			},
+		//		},
+		//		{
+		//			Typ: selectNode.ProjectList[rowIDPos].Typ,
+		//			Expr: &plan.Expr_Col{
+		//				Col: &plan.ColRef{
+		//					RelPos: selectNode.BindingTags[0],
+		//					ColPos: rowIDPos,
+		//				},
+		//			},
+		//		},
+		//	},
+		//}, ctx)
 
 		for _, idxNode := range idxScanNodes[i] {
 			if idxNode == nil {
@@ -309,43 +328,61 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 
 			pkPos := int32(idxNode.TableDef.Name2ColIndex[idxNode.TableDef.Pkey.PkeyColName])
 			rowIDPos := int32(idxNode.TableDef.Name2ColIndex[catalog.Row_ID])
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType: plan.Node_DELETE,
-				Children: []int32{lastNodeID},
-				DeleteCtx: &plan.DeleteCtx{
-					TableDef: DeepCopyTableDef(idxNode.TableDef, true),
-					Ref:      DeepCopyObjectRef(idxNode.ObjRef),
-					//PrimaryKeyIdx:       int32(delNodeInfo.pkPos),
-					//CanTruncate:         canTruncate,
-					//AddAffectedRows:     delNodeInfo.addAffectedRows,
-					//IsClusterTable:      delNodeInfo.IsClusterTable,
-					//PartitionTableIds:   delNodeInfo.partTableIDs,
-					//PartitionTableNames: delNodeInfo.partTableNames,
-					//PartitionIdx:        int32(delNodeInfo.partitionIdx),
-				},
-				InsertDeleteCols: []*plan.Expr{
+
+			dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
+				TableDef: DeepCopyTableDef(idxNode.TableDef, true),
+				ObjRef:   DeepCopyObjectRef(idxNode.ObjRef),
+				DeleteCols: []plan.ColRef{
 					{
-						Typ: idxNode.TableDef.Cols[pkPos].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: idxNode.BindingTags[0],
-								ColPos: pkPos,
-							},
-						},
+						RelPos: idxNode.BindingTags[0],
+						ColPos: pkPos,
 					},
 					{
-						Typ: idxNode.TableDef.Cols[rowIDPos].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: idxNode.BindingTags[0],
-								ColPos: rowIDPos,
-							},
-						},
+						RelPos: idxNode.BindingTags[0],
+						ColPos: rowIDPos,
 					},
 				},
-			}, ctx)
+			})
+
+			//lastNodeID = builder.appendNode(&plan.Node{
+			//	NodeType: plan.Node_DELETE,
+			//	Children: []int32{lastNodeID},
+			//	DeleteCtx: &plan.DeleteCtx{
+			//		TableDef: DeepCopyTableDef(idxNode.TableDef, true),
+			//		Ref:      DeepCopyObjectRef(idxNode.ObjRef),
+			//		PrimaryKeyIdx:       int32(delNodeInfo.pkPos),
+			//		CanTruncate:         canTruncate,
+			//		AddAffectedRows:     delNodeInfo.addAffectedRows,
+			//		IsClusterTable:      delNodeInfo.IsClusterTable,
+			//		PartitionTableIds:   delNodeInfo.partTableIDs,
+			//		PartitionTableNames: delNodeInfo.partTableNames,
+			//		PartitionIdx:        int32(delNodeInfo.partitionIdx),
+			//	},
+			//	InsertDeleteCols: []*plan.Expr{
+			//		{
+			//			Typ: idxNode.TableDef.Cols[pkPos].Typ,
+			//			Expr: &plan.Expr_Col{
+			//				Col: &plan.ColRef{
+			//					RelPos: idxNode.BindingTags[0],
+			//					ColPos: pkPos,
+			//				},
+			//			},
+			//		},
+			//		{
+			//			Typ: idxNode.TableDef.Cols[rowIDPos].Typ,
+			//			Expr: &plan.Expr_Col{
+			//				Col: &plan.ColRef{
+			//					RelPos: idxNode.BindingTags[0],
+			//					ColPos: rowIDPos,
+			//				},
+			//			},
+			//		},
+			//	},
+			//}, ctx)
 		}
 	}
+
+	lastNodeID = builder.appendNode(dmlNode, ctx)
 
 	reCheckifNeedLockWholeTable(builder)
 
