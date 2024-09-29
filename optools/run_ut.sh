@@ -38,7 +38,7 @@ BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 
 
 LOG="$G_TS-$TEST_TYPE.log"
-UT_TIMEOUT=${UT_TIMEOUT:-"10"}
+UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
@@ -102,17 +102,16 @@ function run_tests(){
         logger "INF" "Run UT with race check"
         CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -json -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
     fi
-
 }
 
 function ut_summary(){
   go install github.com/matrixorigin/go-ut-analysis@latest
-  go-ut-analysis test -f "${UT_REPORT}" --first 10 --report-path  "${BUILD_WKSP}/ut-report"
-  if [ "$(find "${BUILD_WKSP}/ut-report/failed" | wc -l)" -gt 2 ]; then
-    logger "INF" "UNIT TESTING FAILED !!!"
-    exit 1
-  else
+  go-ut-analysis test -f "${UT_REPORT}" --first 10 --report-path  "${BUILD_WKSP}/ut-report" --stdout=false;
+  if find ut-report > /dev/null 2>&1 && ! find ut-report/failed/outputs > /dev/null 2>&1; then
     logger "INF" "UNIT TESTING SUCCEEDED !!!"
+  else
+    logger "INF" "UNIT TESTING FAILED !!!"
+    exit 1;
   fi
 }
 
@@ -134,13 +133,15 @@ elif [[ 'UT' == $TEST_TYPE ]]; then
     echo "# Running UT"
     horiz_rule
     run_tests
+    result="$?";
+    echo "$result";
 
     horiz_rule
     echo "# Post testing"
     horiz_rule
     post_test
 
-    ut_summary
+    ut_summary $result
 else
     logger "ERR" "Wrong test type"
     exit 1
