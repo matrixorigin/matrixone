@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -33,29 +35,105 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
 
-func TransferTombstones(
+func TransferTombstoneObjects(
+	ctx context.Context,
+	tbl *txnTable,
+	start types.TS,
+	end types.TS,
+) (err error) {
+	now := time.Now()
+	flow, err := ConstructCNTombstoneObjectsTransferFlow(
+		start,
+		end,
+		tbl,
+		tbl.getTxn(),
+		tbl.getTxn().proc.Mp(),
+		tbl.getTxn().proc.GetFileService())
+	if err != nil {
+		return err
+	} else if flow == nil {
+		return
+	}
+
+	defer func() {
+		err = flow.Close()
+	}()
+
+	if err = flow.Process(ctx); err != nil {
+		return
+	}
+
+	statsList, tail := flow.GetResult()
+	if len(tail) > 0 {
+		logutil.Fatal("tombstone sinker tail size is not zero",
+			zap.Int("tail", len(tail)))
+	}
+
+	obj := make([]string, 0, len(statsList))
+	for i := range statsList {
+		fileName := statsList[i].ObjectLocation().String()
+		obj = append(obj, statsList[i].String())
+		bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
+		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		if err = vector.AppendBytes(
+			bat.GetVector(0),
+			statsList[i].Marshal(),
+			false,
+			tbl.proc.Load().GetMPool()); err != nil {
+			return
+		}
+
+		bat.SetRowCount(bat.Vecs[0].Length())
+
+		if err = tbl.getTxn().WriteFile(
+			DELETE,
+			tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName,
+			bat, tbl.getTxn().tnStores[0],
+		); err != nil {
+			return
+		}
+	}
+
+	logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ",
+		zap.String("txn-id", tbl.getTxn().op.Txn().DebugString()),
+		zap.String("table",
+			fmt.Sprintf("%s(%d)-%s(%d)",
+				tbl.db.databaseName, tbl.db.databaseId, tbl.tableName, tbl.tableId)),
+		zap.Duration("time-spent", time.Since(now)),
+		zap.Int("transferred-row-cnt", flow.transferred),
+		zap.String("new-files", strings.Join(obj, "; ")))
+
+	return nil
+}
+
+func TransferInMemTombstones(
 	ctx context.Context,
 	table *txnTable,
-	state *logtailreplay.PartitionState,
-	deletedObjects, createdObjects map[objectio.ObjectNameShort]struct{},
+	start types.TS,
+	end types.TS,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
+	state, err := table.getPartitionState(ctx)
+	if err != nil {
+		return
+	}
+	deletedObjects, createdObjects := state.GetChangedObjsBetween(start, end)
 	if len(deletedObjects) == 0 || len(createdObjects) == 0 {
 		return
 	}
 	wantDetail := false
 	var transferCnt int
-	start := time.Now()
+	now := time.Now()
 	v2.TransferTombstonesCountHistogram.Observe(1)
 	defer func() {
-		duration := time.Since(start)
+		duration := time.Since(now)
 		if duration > time.Millisecond*500 || err != nil || wantDetail {
 			logutil.Info(
 				"TRANSFER-TOMBSTONE-SLOW-LOG",
