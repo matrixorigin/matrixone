@@ -688,18 +688,6 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnu
 	return w.addBlock(&w.blocks[SchemaData], blockMeta, bat, seqnums)
 }
 
-func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
-	w.Lock()
-	defer w.Unlock()
-	if w.tombstonesColmeta == nil {
-		w.tombstonesColmeta = make([]ColumnMeta, len(bat.Vecs))
-	}
-	for i := range w.tombstonesColmeta {
-		w.tombstonesColmeta[i] = BuildObjectColumnMeta()
-	}
-	return w.addBlock(&w.blocks[SchemaTombstone], blockMeta, bat, seqnums)
-}
-
 func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums, dataType DataMetaType) (int, error) {
 	w.Lock()
 	defer w.Unlock()
