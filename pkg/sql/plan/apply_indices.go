@@ -371,6 +371,9 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		}
 
 		fn := node.FilterList[i].GetF()
+		if fn == nil {
+			continue
+		}
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			continue
