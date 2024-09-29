@@ -332,12 +332,21 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		NodeType: plan.Node_MULTI_UPDATE,
 		Children: []int32{lastNodeID},
 	}
+	var lockTargets []*plan.LockTarget
 
 	for i, tableDef := range tableDefs {
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
 		for k, col := range tableDef.Cols {
 			if col.Name == catalog.Row_ID {
 				continue
+			}
+			if col.Name == tableDef.Pkey.PkeyColName && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+				lockTargets = append(lockTargets, &plan.LockTarget{
+					TableId:            tableDef.TblId,
+					PrimaryColIdxInBat: int32(colName2Idx[tableDef.Name+"."+col.Name]),
+					PrimaryColTyp:      col.Typ,
+					LockTable:          false, //todo base stats and change lockTable
+				})
 			}
 
 			insertCols[k].RelPos = selectNode.BindingTags[0]
@@ -372,6 +381,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				if col.Name == catalog.Row_ID {
 					continue
 				}
+				if tableDef.Indexes[j].Unique && col.Name == idxTableDef.Pkey.PkeyColName {
+					lockTargets = append(lockTargets, &plan.LockTarget{
+						TableId:            idxTableDef.TblId,
+						PrimaryColIdxInBat: int32(colName2Idx[idxTableDef.Name+"."+col.Name]),
+						PrimaryColTyp:      col.Typ,
+						LockTable:          false, //todo base stats and change lockTable
+					})
+				}
 
 				idxInsertCols[k].RelPos = selectNode.BindingTags[0]
 				idxInsertCols[k].ColPos = int32(colName2Idx[idxTableDef.Name+"."+col.Name])
@@ -403,9 +420,16 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		}
 	}
 
+	if len(lockTargets) > 0 {
+		lastNodeID = builder.appendNode(&Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lastNodeID},
+			LockTargets: lockTargets,
+		}, ctx)
+		dmlNode.Children[0] = lastNodeID
+		reCheckifNeedLockWholeTable(builder)
+	}
 	lastNodeID = builder.appendNode(dmlNode, ctx)
-
-	reCheckifNeedLockWholeTable(builder)
 
 	return lastNodeID, err
 }
@@ -812,4 +836,20 @@ func (builder *QueryBuilder) buildValueScan(
 	}, bindCtx)
 
 	return nodeID, nil
+}
+
+func (builder *QueryBuilder) bindLockOpForInsert(
+	tableDef *TableDef,
+) (err error) {
+	// lock for pk
+	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		//
+	}
+
+	// for for unique key
+	if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return
+	}
+
+	return
 }
