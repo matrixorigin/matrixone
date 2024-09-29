@@ -584,8 +584,7 @@ func MockCNDeleteInS3(
 	bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
 	bat.AddVector("pk", pkVec)
 	name := objectio.MockObjectName()
-	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, nil)
-	writer.SetDataType(objectio.SchemaTombstone)
+	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, nil, true)
 	writer.SetPrimaryKeyWithType(uint16(objectio.TombstonePrimaryKeyIdx), index.HBF,
 		index.ObjectPrefixFn,
 		index.BlockPrefixFn)

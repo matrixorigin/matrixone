@@ -307,12 +307,17 @@ func (tbl *txnTable) TransferDeletes(
 			schema := tbl.getSchema(true)
 			seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
 			name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-			writer, err := blockio.NewBlockWriterNew(tbl.store.rt.Fs.Service, name, schema.Version, seqnums)
+			writer, err := blockio.NewBlockWriterNew(
+				tbl.store.rt.Fs.Service,
+				name,
+				schema.Version,
+				seqnums,
+				true,
+			)
 			if err != nil {
 				return err
 			}
 
-			writer.SetDataType(objectio.SchemaTombstone)
 			writer.SetPrimaryKeyWithType(
 				uint16(objectio.TombstonePrimaryKeyIdx),
 				index.HBF,

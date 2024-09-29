@@ -35,6 +35,8 @@ func NewArgument() *MergeGroup {
 func (mergeGroup *MergeGroup) Reset(
 	proc *process.Process, isPipelineFail bool, pipelineErr error) {
 
+	mergeGroup.ctr.itr = nil
+
 	if isPipelineFail {
 		mergeGroup.Free(proc, isPipelineFail, pipelineErr)
 		return
