@@ -28,6 +28,7 @@ import (
 type ShufflePool struct {
 	bucketNum    int32
 	holders      int32
+	finished     int32
 	batches      []*batch.Batch
 	lock         sync.Mutex
 	locks        []sync.Mutex
@@ -37,6 +38,7 @@ type ShufflePool struct {
 func NewShufflePool(bucketNum int32) *ShufflePool {
 	sp := &ShufflePool{bucketNum: bucketNum}
 	sp.holders = 0
+	sp.finished = 0
 	sp.batches = make([]*batch.Batch, sp.bucketNum)
 	sp.locks = make([]sync.Mutex, bucketNum)
 	sp.fullBatchIdx = make([]int, 0, bucketNum)
@@ -47,23 +49,31 @@ func (sp *ShufflePool) Hold() {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
 	sp.holders++
+	if sp.holders > sp.bucketNum {
+		panic("shuffle pool too many holders!")
+	}
 }
 
 func (sp *ShufflePool) Ending() bool {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
-	sp.holders--
-	if sp.holders < 0 {
-		panic("shuffle pool holders should never be negative")
+	sp.finished++
+	if sp.finished > sp.bucketNum || sp.finished > sp.holders {
+		panic("shuffle pool too many finished!")
 	}
-	return sp.holders == 0
+	return sp.finished == sp.bucketNum
 }
 
-func (sp *ShufflePool) Reset(m *mpool.MPool) {
+func (sp *ShufflePool) Reset(m *mpool.MPool, force bool) {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
-	if sp.holders > 0 {
-		panic("shuffle pool can't reset when holders > 0")
+	if force {
+		logutil.Warnf("shuffle pool force reset, bucketNum %v, holders %v, finished %v", sp.bucketNum, sp.holders, sp.finished)
+		return
+	}
+	if sp.bucketNum != sp.holders || sp.bucketNum != sp.finished {
+		logutil.Errorf("shuffle pool reset with invalid state! bucketNum %v, holders %v, finished %v", sp.bucketNum, sp.holders, sp.finished)
+		panic("shuffle pool reset with invalid state! ")
 	}
 	for i := range sp.batches {
 		if sp.batches[i] != nil {
