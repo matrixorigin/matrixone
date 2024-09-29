@@ -47,13 +47,7 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCou
 			return true, err
 		}
 
-		err = s.stopper.RunNamedRetryTask(
-			"UpgradeTenant",
-			retryCount,
-			func(ctx context.Context) error {
-				return s.UpgradeOneTenant(ctx, tenantID)
-			},
-		)
+		err = s.stopper.RunNamedRetryTask("UpgradeTenant", tenantID, retryCount, s.UpgradeOneTenant)
 		if err != nil {
 			return true, err
 		}

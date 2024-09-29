@@ -16,8 +16,6 @@ package stopper
 
 import (
 	"context"
-	"fmt"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -178,11 +176,7 @@ func (s *Stopper) RunNamedTask(name string, task func(context.Context)) error {
 	return nil
 }
 
-func (s *Stopper) RunNamedRetryTask(
-	name string,
-	retryLimit uint32,
-	task func(context.Context) error,
-) error {
+func (s *Stopper) RunNamedRetryTask(name string, accountId int32, retryLimit uint32, task func(context.Context, int32) error) error {
 	// we use read lock here for avoid race
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -192,13 +186,7 @@ func (s *Stopper) RunNamedRetryTask(
 	}
 
 	id, ctx := s.allocate()
-	s.doRunCancelableRetryTask(
-		ctx,
-		id,
-		name,
-		retryLimit,
-		task,
-	)
+	s.doRunCancelableRetryTask(ctx, id, name, accountId, retryLimit, task)
 	return nil
 }
 
@@ -270,7 +258,7 @@ func (s *Stopper) runningTasks() []string {
 func (s *Stopper) setupTask(id uint64, name string) {
 	s.tasks.Lock()
 	defer s.tasks.Unlock()
-	s.tasks.m[id] = fmt.Sprintf("%s: %s\n", name, debug.Stack())
+	s.tasks.m[id] = name
 }
 
 func (s *Stopper) shutdownTask(id uint64) {
@@ -290,14 +278,13 @@ func (s *Stopper) doRunCancelableTask(ctx context.Context, taskID uint64, name s
 	}()
 }
 
-// doRunCancelableRetryTask cancelable and able to retry execute asynchronous tasks
-func (s *Stopper) doRunCancelableRetryTask(
-	ctx context.Context,
+// doRunCancelableRetryTask Canceleable and able to retry execute asynchronous tasks
+func (s *Stopper) doRunCancelableRetryTask(ctx context.Context,
 	taskID uint64,
 	name string,
+	accountId int32,
 	retryLimit uint32,
-	task func(context.Context) error,
-) {
+	task func(context.Context, int32) error) {
 	s.setupTask(taskID, name)
 	go func() {
 		defer func() {
@@ -307,7 +294,7 @@ func (s *Stopper) doRunCancelableRetryTask(
 		wait := time.Second
 		maxWait := time.Second * 10
 		for i := 0; i < int(retryLimit); i++ {
-			if err := task(ctx); err == nil {
+			if err := task(ctx, accountId); err == nil {
 				return
 			}
 			time.Sleep(wait)

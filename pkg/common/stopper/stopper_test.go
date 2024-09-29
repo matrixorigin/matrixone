@@ -78,8 +78,9 @@ func TestRunNamedRetryTask(t *testing.T) {
 	called := 0
 	err := s.RunNamedRetryTask(
 		"retry",
+		0,
 		2,
-		func(ctx context.Context) error {
+		func(ctx context.Context, _ int32) error {
 			called++
 			if called == 0 {
 				return io.EOF
