@@ -306,13 +306,6 @@ func (c *cluster) initConfigs() error {
 		return err
 	}
 
-	if c.options.withProxy {
-		if err := c.initProxyServiceConfig(); err != nil {
-			return err
-		}
-
-	}
-
 	return c.initCNConfigs(0)
 }
 
@@ -362,20 +355,6 @@ func (c *cluster) initTNServiceConfig() error {
 		file,
 		genConfigText(
 			tnConfig,
-			templateArgs{
-				ID:          c.id,
-				DataDir:     c.options.dataPath,
-				ServicePort: c.ports.servicePort,
-			},
-		),
-	)
-}
-
-func (c *cluster) initProxyServiceConfig() error {
-	return genConfig(
-		filepath.Join(c.options.dataPath, "proxy.toml"),
-		genConfigText(
-			proxyConfig,
 			templateArgs{
 				ID:          c.id,
 				DataDir:     c.options.dataPath,

@@ -35,12 +35,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"go.uber.org/zap"
 )
@@ -166,10 +164,6 @@ func (op *operator) Start() error {
 		err = op.startTNServiceLocked(fs)
 	case metadata.ServiceType_LOG:
 		err = op.startLogServiceLocked(fs)
-	case metadata.ServiceType_PROXY:
-		err = op.startProxyServiceLocked()
-	case metadata.ServiceType_PYTHON_UDF:
-		err = op.startPythonUDFServiceLocked()
 	default:
 		panic("unknown service type")
 	}
@@ -279,46 +273,6 @@ func (op *operator) startCNServiceLocked(
 	}
 	op.reset.svc = s
 	return nil
-}
-
-func (op *operator) startProxyServiceLocked() error {
-	if err := op.waitClusterConditionLocked(op.waitHAKeeperRunningLocked); err != nil {
-		return err
-	}
-	return op.reset.stopper.RunNamedTask(
-		"proxy-service",
-		func(ctx context.Context) {
-			s, err := proxy.NewServer(
-				ctx,
-				op.cfg.getProxyConfig(),
-				proxy.WithRuntime(op.reset.rt),
-			)
-			if err != nil {
-				panic(err)
-			}
-			if err := s.Start(); err != nil {
-				panic(err)
-			}
-		},
-	)
-}
-
-func (op *operator) startPythonUDFServiceLocked() error {
-	if err := op.waitClusterConditionLocked(op.waitHAKeeperRunningLocked); err != nil {
-		return err
-	}
-	return op.reset.stopper.RunNamedTask(
-		"python-udf-service",
-		func(ctx context.Context) {
-			s, err := pythonservice.NewService(op.cfg.PythonUdfServerConfig)
-			if err != nil {
-				panic(err)
-			}
-			if err := s.Start(); err != nil {
-				panic(err)
-			}
-		},
-	)
 }
 
 func (op *operator) init() error {

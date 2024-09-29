@@ -53,6 +53,12 @@ func TestBasicCluster(t *testing.T) {
 	validCNCanWork(t, c, 1)
 	validCNCanWork(t, c, 2)
 
+	cn, err := c.GetCNService(0)
+	require.NoError(t, err)
+	v, err := c.GetService(cn.ServiceID())
+	require.NoError(t, err)
+	require.Equal(t, cn, v)
+
 	require.NoError(t, c.Close())
 }
 
