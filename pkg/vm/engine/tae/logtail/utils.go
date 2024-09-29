@@ -1000,6 +1000,7 @@ type blockIndexes struct {
 	indexes *BlockLocation
 }
 
+// PXU TODO: pass ctx
 func (data *CheckpointData) WriteTo(
 	fs fileservice.FileService,
 	blockRows int,
@@ -1009,7 +1010,7 @@ func (data *CheckpointData) WriteTo(
 	segmentid := objectio.NewSegmentid()
 	fileNum := uint16(0)
 	name := objectio.BuildObjectName(segmentid, fileNum)
-	writer, err := blockio.NewBlockWriterNew(fs, name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(fs, name, 0, nil, false)
 	if err != nil {
 		return
 	}
@@ -1038,7 +1039,7 @@ func (data *CheckpointData) WriteTo(
 			}
 			checkpointFiles = append(checkpointFiles, name.String())
 			name = objectio.BuildObjectName(segmentid, fileNum)
-			writer, err = blockio.NewBlockWriterNew(fs, name, 0, nil)
+			writer, err = blockio.NewBlockWriterNew(fs, name, 0, nil, false)
 			if err != nil {
 				return
 			}
@@ -1152,7 +1153,7 @@ func (data *CheckpointData) WriteTo(
 
 	segmentid2 := objectio.NewSegmentid()
 	name2 := objectio.BuildObjectName(segmentid2, 0)
-	writer2, err := blockio.NewBlockWriterNew(fs, name2, 0, nil)
+	writer2, err := blockio.NewBlockWriterNew(fs, name2, 0, nil, false)
 	if err != nil {
 		return
 	}
@@ -1901,7 +1902,7 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 
 func (collector *BaseCollector) VisitObjForBackup(entry *catalog.ObjectEntry) (err error) {
 	createTS := entry.GetCreatedAt()
-	if createTS.Greater(&collector.start) {
+	if createTS.GT(&collector.start) {
 		return nil
 	}
 	return collector.visitObjectEntry(entry)
@@ -1928,7 +1929,7 @@ func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 // TODO
 // func (collector *BaseCollector) VisitBlkForBackup(entry *catalog.BlockEntry) (err error) {
 // 	entry.RLock()
-// 	if entry.GetCreatedAtLocked().Greater(collector.start) {
+// 	if entry.GetCreatedAtLocked().GT(collector.start) {
 // 		entry.RUnlock()
 // 		return nil
 // 	}

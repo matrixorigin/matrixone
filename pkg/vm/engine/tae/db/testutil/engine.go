@@ -99,7 +99,7 @@ func (e *TestEngine) Restart(ctx context.Context) {
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
-			return !end.GreaterEq(&min)
+			return !end.GE(&min)
 		}, gc.CheckerKeyMinTS)
 	assert.NoError(e.T, err)
 }
@@ -115,12 +115,13 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
-			return !end.GreaterEq(&min)
+			return !end.GE(&min)
 		}, gc.CheckerKeyMinTS)
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) Close() error {
+	blockio.Stop("")
 	err := e.DB.Close()
 	return err
 }
@@ -151,6 +152,13 @@ func (e *TestEngine) ForceLongCheckpoint() {
 	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.T, err)
 	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
+	assert.NoError(e.T, err)
+}
+
+func (e *TestEngine) ForceLongCheckpointTruncate() {
+	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
+	assert.NoError(e.T, err)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), true)
 	assert.NoError(e.T, err)
 }
 
@@ -356,7 +364,7 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 	rowIDs.Close()
 	assert.NoError(e.T, err)
 	require.False(e.T, stats.IsZero())
-	ok, err = rel.TryDeleteByStats(firstID, *stats)
+	ok, err = rel.AddPersistedTombstoneFile(firstID, *stats)
 	assert.NoError(e.T, err)
 	if !ok {
 		return ok, err
@@ -379,7 +387,7 @@ func InitTestDBWithDir(
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
-			return !end.GreaterEq(&min)
+			return !end.GE(&min)
 		}, gc.CheckerKeyMinTS)
 	return db
 }
@@ -400,7 +408,7 @@ func InitTestDB(
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
-			return !end.GreaterEq(&min)
+			return !end.GE(&min)
 		}, gc.CheckerKeyMinTS)
 	return db
 }

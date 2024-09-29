@@ -11,20 +11,20 @@ select Sleep(1);
 sleep(1)
 0
 explain select * from t1 where c2 like '1%';
-QUERY PLAN
+TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: prefix_eq(t1.c2, '1')
-        Block Filter Cond: prefix_eq(t1.c2, '1')
+        Filter Cond: prefix_eq(t1.c2)
+        Block Filter Cond: prefix_eq(t1.c2)
 select count(*) from t1 where c2 like '1%';
 count(*)
 11112
 explain select * from t1 where c2 like '1_';
-QUERY PLAN
+TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: prefix_eq(t1.c2, '1'), (t1.c2 like '1_')
-        Block Filter Cond: prefix_eq(t1.c2, '1')
+        Filter Cond: prefix_eq(t1.c2), (t1.c2 like '1_')
+        Block Filter Cond: prefix_eq(t1.c2)
 select * from t1 where c2 like '1_';
 c1    c2    c3
 10    10    10
@@ -38,11 +38,11 @@ c1    c2    c3
 18    18    18
 19    19    19
 explain select * from t1 where c2 like '1_2';
-QUERY PLAN
+TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: prefix_eq(t1.c2, '1'), (t1.c2 like '1_2')
-        Block Filter Cond: prefix_eq(t1.c2, '1')
+        Filter Cond: prefix_eq(t1.c2), (t1.c2 like '1_2')
+        Block Filter Cond: prefix_eq(t1.c2)
 select * from t1 where c2 like '1_2';
 c1    c2    c3
 102    102    102
@@ -64,11 +64,11 @@ select count(*) from t1 where c2 like '%12';
 count(*)
 1000
 explain select * from t1 where c2 like '1_2%3';
-QUERY PLAN
+TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: prefix_eq(t1.c2, '1'), (t1.c2 like '1_2%3')
-        Block Filter Cond: prefix_eq(t1.c2, '1')
+        Filter Cond: prefix_eq(t1.c2), (t1.c2 like '1_2%3')
+        Block Filter Cond: prefix_eq(t1.c2)
 select count(*) from t1 where c2 like '1_2%3';
 count(*)
 110

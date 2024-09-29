@@ -682,7 +682,7 @@ func TestTxn9(t *testing.T) {
 		}
 		startTS := txn2.GetStartTS()
 		prepareTS := txn.GetPrepareTS()
-		if startTS.Greater(&prepareTS) {
+		if startTS.GT(&prepareTS) {
 			assert.Equal(t, 2, cnt)
 		} else {
 			assert.Equal(t, 1, cnt)
@@ -698,7 +698,7 @@ func TestTxn9(t *testing.T) {
 		if waitTxn != nil {
 			startTS := txn.GetStartTS()
 			prepareTS := waitTxn.GetPrepareTS()
-			if startTS.Greater(&prepareTS) {
+			if startTS.GT(&prepareTS) {
 				testutil.CheckAllColRowsByScan(t, rel, waitExpect, true)
 			} else {
 				testutil.CheckAllColRowsByScan(t, rel, nowaitExpect, true)

@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -77,6 +78,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -177,6 +179,10 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		s.Reset(c)
 	}
 
+	for _, e := range c.filterExprExes {
+		e.ResetForNextQuery()
+	}
+
 	c.MessageBoard = c.MessageBoard.Reset()
 	proc.SetMessageBoard(c.MessageBoard)
 	c.counterSet.Reset()
@@ -228,6 +234,12 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.isPrepare = false
+	c.needBlock = false
+
+	for _, exe := range c.filterExprExes {
+		exe.Free()
+	}
+	c.filterExprExes = nil
 
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
@@ -876,7 +888,8 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
 		rs.setRootOperator(
 			output.NewArgument().
-				WithFunc(c.fill),
+				WithFunc(c.fill).
+				WithBlock(c.needBlock),
 		)
 		return rs, nil
 	}
@@ -1232,15 +1245,15 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileSinkNode(n, ss, step)
-	/*case plan.Node_APPLY:
-	left, err = c.compilePlanScope(step, n.Children[0], ns)
-	if err != nil {
-		return nil, err
-	}
+	case plan.Node_APPLY:
+		left, err = c.compilePlanScope(step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
 
-	c.setAnalyzeCurrent(left, int(curNodeIdx))
-	ss = c.compileSort(n, c.compileApply(n, ns[n.Children[1]], left))
-	return ss, nil*/
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		ss = c.compileSort(n, c.compileApply(n, ns[n.Children[1]], left))
+		return ss, nil
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -1698,6 +1711,12 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
+	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
+	compileStart := time.Now()
+	defer func() {
+		stats.AddCompileTableScanConsumption(time.Since(compileStart))
+	}()
+
 	nodes, partialResults, partialResultTypes, err := c.generateNodes(n)
 	if err != nil {
 		return nil, err
@@ -1827,12 +1846,30 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		}
 	}
 
-	var filterExpr *plan.Expr
-	if len(n.FilterList) > 0 {
-		filterExpr = colexec.RewriteFilterExprList(n.FilterList)
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true, true)
+	if len(n.FilterList) != len(s.DataSource.FilterList) {
+		s.DataSource.FilterList = plan2.DeepCopyExprList(n.FilterList)
+		for _, e := range s.DataSource.FilterList {
+			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	for _, e := range s.DataSource.FilterList {
+		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
 		if err != nil {
 			return err
+		}
+	}
+	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
+
+	if len(n.BlockFilterList) != len(s.DataSource.BlockFilterList) {
+		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(n.BlockFilterList)
+		for _, e := range s.DataSource.BlockFilterList {
+			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1844,7 +1881,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.PartitionRelationNames = partitionRelNames
 	s.DataSource.SchemaName = n.ObjRef.SchemaName
 	s.DataSource.AccountId = n.ObjRef.GetPubInfo()
-	s.DataSource.FilterExpr = filterExpr
 	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	s.DataSource.OrderBy = n.OrderBy
 	return nil
@@ -2531,24 +2567,22 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
-/*
-	func (c *Compile) compileApply(node, right *plan.Node, probeScopes []*Scope) []*Scope {
-		rs := c.mergeScopesByCN(probeScopes)
+func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 
-		switch node.JoinType {
-		case plan.Node_INNER:
-			for i := range rs {
-				op := constructApply(node, right, apply.CROSS, c.proc)
-				op.SetIdx(c.anal.curNodeIdx)
-				rs[i].setRootOperator(op)
-			}
-		default:
-			panic("unknown apply")
+	switch node.ApplyType {
+	case plan.Node_CROSSAPPLY:
+		for i := range rs {
+			op := constructApply(node, right, apply.CROSS, c.proc)
+			op.SetIdx(c.anal.curNodeIdx)
+			rs[i].setRootOperator(op)
 		}
-
-		return rs
+	default:
+		panic("unknown apply")
 	}
-*/
+
+	return rs
+}
+
 func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -2710,7 +2744,7 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
-	arg := constructTimeWindow(c.proc.Ctx, n)
+	arg := constructTimeWindow(c.proc.Ctx, n, c.proc)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -3198,7 +3232,7 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		block = n.LockTargets[0].Block
 		if block {
-			ss = []*Scope{c.newMergeScope(ss)}
+			c.needBlock = true
 		}
 	}
 
@@ -3210,10 +3244,8 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		lockOpArg.SetBlock(block)
 		lockOpArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].doSetRootOperator(lockOpArg)
-
 	}
 	c.anal.isFirst = false
 	return ss, nil
@@ -3626,6 +3658,9 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 	}
 	ret := blocks/16 + 1
 	if ret < cpunum {
+		if cpunum > 4 && ret < 4 {
+			return 4
+		}
 		return ret
 	}
 	return cpunum
@@ -3785,7 +3820,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, blockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3807,7 +3842,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, blockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3893,7 +3928,26 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				},
 			}
 		}
-		relData, err = c.expandRanges(n, rel, n.BlockFilterList)
+		//@todo need remove expandRanges from Compile.
+		// all expandRanges should be called by Run
+		var filterExpr []*plan.Expr
+		if len(n.BlockFilterList) > 0 {
+			filterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
+			for _, e := range filterExpr {
+				_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			}
+			for _, e := range filterExpr {
+				err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			}
+		}
+
+		relData, err = c.expandRanges(n, rel, filterExpr)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -3932,7 +3986,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			)
 			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
-					ctx, blk.BlockID, fs,
+					ctx, &blk.BlockID, fs,
 				); err2 != nil {
 					return false, err2
 				} else if blk.IsAppendable() || hasTombstone {
@@ -4166,7 +4220,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 					case types.T_TS:
 						min := types.DecodeFixed[types.TS](zm.GetMinBuf())
 						ts := partialResults[i].(types.TS)
-						if min.Less(&ts) {
+						if min.LT(&ts) {
 							partialResults[i] = min
 						}
 					case types.T_Rowid:
@@ -4295,7 +4349,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 					case types.T_TS:
 						max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
 						ts := partialResults[i].(types.TS)
-						if max.Greater(&ts) {
+						if max.GT(&ts) {
 							partialResults[i] = max
 						}
 					case types.T_Rowid:

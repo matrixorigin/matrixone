@@ -142,9 +142,6 @@ func (h *Handle) GetDB() *db.DB {
 }
 
 func (h *Handle) IsInterceptTable(name string) bool {
-	if name == "bmsql_stock" {
-		return true
-	}
 	printMatchRegexp := h.getInterceptMatchRegexp()
 	if printMatchRegexp == nil {
 		return false
@@ -198,32 +195,61 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
-func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (releaseF []func()) {
-	delM := make(map[uint64]uint64)
+func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (releaseF []func(), err error) {
+	delM := make(map[uint64]*struct {
+		dbID uint64
+		rows uint64
+	})
 	for _, e := range reqs {
 		if req, ok := e.(*db.WriteReq); ok && req.Type == db.EntryDelete {
+			if req.FileName == "" && req.Batch == nil {
+				continue
+			}
+
+			delM[req.TableID] = &struct {
+				dbID uint64
+				rows uint64
+			}{dbID: req.DatabaseId, rows: 0}
+
 			if req.FileName != "" {
 				for _, stats := range req.TombstoneStats {
-					delM[req.TableID] += uint64(stats.Rows())
+					delM[req.TableID].rows += uint64(stats.Rows())
 				}
 			}
 			if req.Batch != nil {
-				delM[req.TableID] += uint64(req.Batch.RowCount())
+				delM[req.TableID].rows += uint64(req.Batch.RowCount())
 			}
 		}
 	}
 
-	for id, rows := range delM {
-		if rows <= h.db.Opts.BulkTomestoneTxnThreshold {
+	for id, info := range delM {
+		if info.rows <= h.db.Opts.BulkTomestoneTxnThreshold {
 			continue
 		}
-		h.db.Runtime.LockMergeService.LockFromUser(id)
+
+		dbHandle, err := txn.GetDatabaseByID(info.dbID)
+		if err != nil {
+			return nil, err
+		}
+
+		relation, err := dbHandle.GetRelationByID(id)
+		if err != nil {
+			return nil, err
+		}
+
+		err = h.db.MergeScheduler.StopMerge(relation.GetMeta().(*catalog.TableEntry), true)
+		if err != nil {
+			return nil, err
+		}
 		logutil.Info("LockMerge Bulk Delete",
-			zap.Uint64("tid", id), zap.Uint64("rows", rows), zap.String("txn", txn.String()))
+			zap.Uint64("tid", id), zap.Uint64("rows", info.rows), zap.String("txn", txn.String()))
 		release := func() {
-			h.db.Runtime.LockMergeService.UnlockFromUser(id)
+			err = h.db.MergeScheduler.StartMerge(id, true)
+			if err != nil {
+				return
+			}
 			logutil.Info("LockMerge Bulk Delete Committed",
-				zap.Uint64("tid", id), zap.Uint64("rows", rows), zap.String("txn", txn.String()))
+				zap.Uint64("tid", id), zap.Uint64("rows", info.rows), zap.String("txn", txn.String()))
 		}
 		releaseF = append(releaseF, release)
 	}
@@ -236,7 +262,16 @@ func (h *Handle) handleRequests(
 	txn txnif.AsyncTxn,
 	txnCtx *txnContext,
 ) (releaseF []func(), err error) {
-	releaseF = h.tryLockMergeForBulkDelete(txnCtx.reqs, txn)
+	var (
+		inMemoryInsertRows        int
+		persistedMemoryInsertRows int
+		inMemoryTombstoneRows     int
+		persistedTombstoneRows    int
+	)
+	releaseF, err = h.tryLockMergeForBulkDelete(txnCtx.reqs, txn)
+	if err != nil {
+		logutil.Warn("failed to lock merging", zap.Error(err))
+	}
 	for _, e := range txnCtx.reqs {
 		switch req := e.(type) {
 		case *pkgcatalog.CreateDatabaseReq:
@@ -250,7 +285,14 @@ func (h *Handle) handleRequests(
 		case *api.AlterTableReq:
 			err = h.HandleAlterTable(ctx, txn, req)
 		case *db.WriteReq:
-			err = h.HandleWrite(ctx, txn, req)
+			var r1, r2, r3, r4 int
+			r1, r2, r3, r4, err = h.HandleWrite(ctx, txn, req)
+			if err == nil {
+				inMemoryInsertRows += r1
+				persistedMemoryInsertRows += r2
+				inMemoryTombstoneRows += r3
+				persistedTombstoneRows += r4
+			}
 		default:
 			err = moerr.NewNotSupportedf(ctx, "unknown txn request type: %T", req)
 		}
@@ -259,6 +301,16 @@ func (h *Handle) handleRequests(
 			txn.Rollback(ctx)
 			return
 		}
+	}
+	if inMemoryInsertRows+inMemoryTombstoneRows+persistedTombstoneRows+persistedMemoryInsertRows > 100000 {
+		logutil.Info(
+			"BIG-COMMIT-TRACE-LOG",
+			zap.Int("in-memory-rows", inMemoryInsertRows),
+			zap.Int("persisted-rows", persistedMemoryInsertRows),
+			zap.Int("in-memory-tombstones", inMemoryTombstoneRows),
+			zap.Int("persisted-tombstones", persistedTombstoneRows),
+			zap.String("txn", txn.String()),
+		)
 	}
 	return
 }
@@ -325,7 +377,7 @@ func (h *Handle) HandlePreCommitWrite(
 		}
 	}
 	//evaluate all the txn requests.
-	return h.TryPrefetchTxn(ctx, meta)
+	return h.TryPrefetchTxn(ctx, &meta)
 }
 
 // HandlePreCommitWrite impls TxnStorage:Commit
@@ -672,7 +724,14 @@ func (h *Handle) HandleDropRelation(
 func (h *Handle) HandleWrite(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *db.WriteReq) (err error) {
+	req *db.WriteReq,
+) (
+	inMemoryInsertRows int,
+	persistedMemoryInsertRows int,
+	inMemoryTombstoneRows int,
+	persistedTombstoneRows int,
+	err error,
+) {
 	defer func() {
 		if req.Cancel != nil {
 			req.Cancel()
@@ -718,50 +777,43 @@ func (h *Handle) HandleWrite(
 	if req.Type == db.EntryInsert {
 		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
-			//metalocations := make(map[string]struct{})
-			//for _, metLoc := range req.MetaLocs {
-			//	location, err := blockio.EncodeLocationFromString(metLoc)
-			//	if err != nil {
-			//		return err
-			//	}
-			//	metalocations[location.Name().String()] = struct{}{}
-			//}
 			statsVec := req.Batch.Vecs[0]
 			for i := 0; i < statsVec.Length(); i++ {
 				s := objectio.ObjectStats(statsVec.GetBytesAt(i))
 				if !s.GetCNCreated() {
-					logutil.Fatal("the `CNCreated` mask not set")
+					logutil.Fatalf("the `CNCreated` mask not set: %s", s.String())
 				}
-				//delete(metalocations, s.ObjectName().String())
+				persistedMemoryInsertRows += int(s.Rows())
 			}
-			//if len(metalocations) != 0 {
-			//	logutil.Warn(
-			//		"TAE-EMPTY-STATS",
-			//		zap.Any("locations", metalocations),
-			//		zap.String("table", req.TableName),
-			//	)
-			//	err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
-			//	return
-			//}
-			err = tb.AddObjsWithMetaLoc(
+			err = tb.AddDataFiles(
 				ctx,
 				containers.ToTNVector(statsVec, common.WorkspaceAllocator),
 			)
 			return
 		}
 		//check the input batch passed by cn is valid.
-		len := 0
 		for i, vec := range req.Batch.Vecs {
 			if vec == nil {
-				logutil.Errorf("the vec:%d in req.Batch is nil", i)
-				panic("invalid vector : vector is nil")
+				logutil.Fatal(
+					"INVALID-INSERT-BATCH-NIL-VEC",
+					zap.Int("idx", i),
+					zap.Uint64("table-id", req.TableID),
+					zap.String("table-name", req.TableName),
+					zap.String("txn", txn.String()),
+				)
 			}
 			if i == 0 {
-				len = vec.Length()
+				inMemoryInsertRows = vec.Length()
 			}
-			if vec.Length() != len {
-				logutil.Errorf("the length of vec:%d in req.Batch is not equal to the first vec", i)
-				panic("invalid batch : the length of vectors in batch is not the same")
+			if vec.Length() != inMemoryInsertRows {
+				logutil.Fatal(
+					"INVALID-INSERT-BATCH-DIFF-LENGTH",
+					zap.Int("idx", i),
+					zap.Uint64("table-id", req.TableID),
+					zap.String("table-name", req.TableName),
+					zap.String("rows", fmt.Sprintf("%d/%d", vec.Length(), inMemoryInsertRows)),
+					zap.String("txn", txn.String()),
+				)
 			}
 		}
 		// TODO: debug for #13342, remove me later
@@ -815,11 +867,12 @@ func (h *Handle) HandleWrite(
 		)
 
 		for _, stats := range req.TombstoneStats {
+			persistedTombstoneRows += int(stats.Rows())
 			id := tb.GetMeta().(*catalog.TableEntry).AsCommonID()
 
-			if ok, err = tb.TryDeleteByStats(id, stats); err != nil {
+			if ok, err = tb.AddPersistedTombstoneFile(id, stats); err != nil {
 				logutil.Errorf("try delete by stats faild: %s, %v", stats.String(), err)
-				return err
+				return
 			} else if ok {
 				continue
 			}
@@ -845,7 +898,7 @@ func (h *Handle) HandleWrite(
 						stats.String(), loc.String(), i, err)
 
 					closeFunc()
-					return err
+					return
 				}
 
 				closeFunc()
@@ -859,6 +912,7 @@ func (h *Handle) HandleWrite(
 	}
 	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0), common.WorkspaceAllocator)
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
+	inMemoryTombstoneRows += rowIDVec.Length()
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
 	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {

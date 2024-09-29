@@ -77,6 +77,13 @@ var (
 
 const ZoneMapSize = index.ZMSize
 
+func GetTombstoneAttrs(withHidden bool) []string {
+	if withHidden {
+		return TombstoneAttrs_TN_Created
+	}
+	return TombstoneAttrs_CN_Created
+}
+
 func GetTombstoneCommitTSAttrIdx(columnCnt uint16) uint16 {
 	if columnCnt == 3 {
 		return TombstoneAttr_NA_CommitTs_Idx

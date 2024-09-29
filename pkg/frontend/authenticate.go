@@ -5377,6 +5377,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
 		canExecInRestricted = true
+	case *tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores,
+		*tree.ShowLogserviceSettings, *tree.SetLogserviceSettings:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt, *tree.ExplainPhyPlan:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -7011,6 +7017,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsAdminRole(), nil
 		}
 
+		checkShowLogservicePrivilege := func() (bool, error) {
+			//only the moAdmin and accountAdmin can execute the show accounts.
+			return tenant.IsAdminRole(), nil
+		}
+
 		checkBackUpStartPrivilege := func() (bool, error) {
 			//only the moAdmin can execute the backup statement
 			return tenant.IsSysTenant(), nil
@@ -7050,6 +7061,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return checkShowAccountsPrivilege()
 		case *tree.ShowAccountUpgrade:
 			return tenant.IsMoAdminRole(), nil
+		case *tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores,
+			*tree.ShowLogserviceSettings, *tree.SetLogserviceSettings:
+			return checkShowLogservicePrivilege()
 		case *tree.UpgradeStatement:
 			return tenant.IsMoAdminRole(), nil
 		case *tree.BackupStart:
@@ -7265,6 +7279,12 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 		if rtnErr != nil {
 			return rtnErr
 		}
+
+		rtnErr = updatePitrObjectId(ctx, bh, newTenant.GetTenant(), uint64(newTenant.GetTenantID()))
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		return rtnErr
 	}
 

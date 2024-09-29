@@ -277,7 +277,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 
 	if c.hasValidQueryPlan() {
-		c.handlePlanAnalyze(runC, isExplainPhyPlan, option)
+		c.handlePlanAnalyze(runC, isExplainPhyPlan, queryResult, option)
 	}
 
 	return queryResult, err
@@ -376,12 +376,16 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 	}
 }
 
-func (c *Compile) handlePlanAnalyze(runC *Compile, isExplainPhyPlan bool, option *ExplainOption) {
+func (c *Compile) handlePlanAnalyze(runC *Compile, isExplainPhy bool, queryResult *util2.RunResult, option *ExplainOption) {
 	c.GenPhyPlan(runC)
 	c.fillPlanNodeAnalyzeInfo()
 
-	if isExplainPhyPlan {
-		scopeInfo := makeExplainPhyPlanBuffer(c.scopes, option)
+	if isExplainPhy {
+		topContext := c.proc.GetTopContext()
+
+		statsInfo := statistic.StatsInfoFromContext(topContext)
+		scopeInfo := makeExplainPhyPlanBuffer(c.scopes, queryResult, statsInfo, c.anal, option)
+
 		runC.anal.explainPhyBuffer = scopeInfo
 	}
 }
