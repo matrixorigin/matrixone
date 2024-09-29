@@ -113,8 +113,7 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (bat *batc
 					if row.Pos >= 0 {
 						isNull := params.GetNulls().Contains(uint64(row.Pos - 1))
 						str := vs[row.Pos-1].UnsafeGetString(params.GetArea())
-						if err = util.SetBytesToAnyVector(proc.Ctx, str, int(row.RowPos), isNull, bat.Vecs[i],
-							proc); err != nil {
+						if err = util.SetBytesToAnyVector(proc, str, int(row.RowPos), isNull, bat.Vecs[i]); err != nil {
 							return nil, canFreeThis, err
 						}
 					}
