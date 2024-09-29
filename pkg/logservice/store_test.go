@@ -1115,3 +1115,59 @@ func TestAddLogShard(t *testing.T) {
 	}
 	runStoreTest(t, fn)
 }
+
+func TestCheckHealth(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	checkFn := func(ok bool) func(*testing.T, *store) {
+		return func(t *testing.T, store *store) {
+			peers := make(map[uint64]dragonboat.Target)
+			peers[1] = store.id()
+			assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+			store.hakeeperTick()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+			defer cancel()
+			_, err := store.addLogStoreHeartbeat(ctx, store.getHeartbeatMessage())
+			assert.NoError(t, err)
+
+			ticker := time.NewTicker(time.Millisecond * 100)
+			defer ticker.Stop()
+			timer := time.NewTimer(time.Second * 2)
+			defer timer.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					if err := store.checkHealth(1); err != nil {
+						t.Logf("check health failed: %v", err)
+					} else {
+						t.Log("check health successfully")
+						return
+					}
+
+				case <-timer.C:
+					if ok {
+						t.Fatal("check health timed out")
+					} else {
+						t.Log("check health timed out")
+					}
+					return
+				}
+			}
+		}
+	}
+
+	t.Run("fail", func(t *testing.T) {
+		cfg := getStoreTestConfig()
+		defer vfs.ReportLeakedFD(cfg.FS, t)
+		store, err := getTestStore(cfg, false, nil)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, store.close())
+		}()
+		checkFn(false)(t, store)
+	})
+
+	t.Run("ok", func(t *testing.T) {
+		runStoreTest(t, checkFn(true))
+	})
+}
