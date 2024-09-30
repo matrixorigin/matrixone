@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -40,7 +41,16 @@ func newAllocator() malloc.Allocator {
 	softLimitLogMinInterval := time.Second * 10
 
 	return malloc.NewInuseTrackingAllocator(
-		malloc.GetDefault(nil),
+		// metrics
+		malloc.NewMetricsAllocator(
+			// default
+			malloc.GetDefault(nil),
+			metric.MallocCounter.WithLabelValues("hashmap-allocate"),
+			metric.MallocGauge.WithLabelValues("hashmap-inuse"),
+			metric.MallocCounter.WithLabelValues("hashmap-allocate-objects"),
+			metric.MallocGauge.WithLabelValues("hashmap-inuse-objects"),
+		),
+
 		func(inUse uint64) {
 
 			// soft limit

@@ -19,6 +19,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -410,22 +411,28 @@ type SessionAllocator struct {
 	allocator *malloc.ManagedAllocator[malloc.Allocator]
 }
 
-func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+var baseSessionAllocator = sync.OnceValue(func() malloc.Allocator {
 	// default
 	allocator := malloc.GetDefault(nil)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounter.WithLabelValues("session-allocate"),
+		metric.MallocGauge.WithLabelValues("session-inuse"),
+		metric.MallocCounter.WithLabelValues("session-allocate-objects"),
+		metric.MallocGauge.WithLabelValues("session-inuse-objects"),
+	)
+	return allocator
+})
+
+func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+	// base
+	allocator := baseSessionAllocator()
 	// size bounded
 	allocator = malloc.NewSizeBoundedAllocator(
 		allocator,
 		uint64(pu.SV.GuestMmuLimitation),
 		nil,
-	)
-	// with metrics
-	allocator = malloc.NewMetricsAllocator(
-		allocator,
-		metric.MallocCounterSessionAllocateBytes,
-		metric.MallocGaugeSessionInuseBytes,
-		metric.MallocCounterSessionAllocateObjects,
-		metric.MallocGaugeSessionInuseObjects,
 	)
 	ret := &SessionAllocator{
 		// managed
