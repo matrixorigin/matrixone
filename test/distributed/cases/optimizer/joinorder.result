@@ -21,6 +21,9 @@ Project
         ->  Table Scan on joinorder.t3
               Filter Cond: (t3.c2 = 1)
               Block Filter Cond: (t3.c2 = 1)
+select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t2.c3=t3.c3 and t3.c2=1;
+count(*)
+0
 explain select * from t1,t2,t3 where t1.c1=t2.c1 and t1.c1=t3.c1 and t3.c2<10;
 QUERY PLAN
 Project
@@ -39,6 +42,9 @@ Project
               ->  Table Scan on joinorder.t3
                     Filter Cond: (t3.c2 < 10)
                     Block Filter Cond: (t3.c2 < 10)
+select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c1=t3.c1 and t3.c2<10;
+count(*)
+0
 explain select * from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t3.c3<10;
 QUERY PLAN
 Project
@@ -54,6 +60,9 @@ Project
                     Runtime Filter Probe: t1.c2
               ->  Table Scan on joinorder.t3
                     Filter Cond: (t3.c3 < 10)
+select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t3.c3<10;
+count(*)
+100000
 explain select * from t1,t2,t3 where t1.c1=t2.c1 and t2.c2=t3.c2 and t3.c3<10;
 QUERY PLAN
 Project
@@ -71,3 +80,57 @@ Project
                     Runtime Filter Probe: t2.c2
               ->  Table Scan on joinorder.t3
                     Filter Cond: (t3.c3 < 10)
+select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t2.c2=t3.c2 and t3.c3<10;
+count(*)
+100000
+explain select * from t1,t2,t3 where t1.c1<t2.c1 and t2.c3<t3.c3 and t1.c2=0;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: INNER
+        Join Cond: (t2.c3 < t3.c3)
+        ->  Table Scan on joinorder.t3
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t1.c1 < t2.c1)
+              ->  Table Scan on joinorder.t2
+              ->  Table Scan on joinorder.t1
+                    Filter Cond: (t1.c2 = 0)
+                    Block Filter Cond: (t1.c2 = 0)
+select count(*) from t1,t2,t3 where t1.c1<t2.c1 and t2.c3<t3.c3 and t1.c2=0;
+count(*)
+0
+explain select * from t1,t2,t3 where t2.c1<t3.c1 and t3.c3<t1.c3 and t2.c2=0;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: INNER
+        Join Cond: (t3.c3 < t1.c3)
+        ->  Table Scan on joinorder.t1
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t2.c1 < t3.c1)
+              ->  Table Scan on joinorder.t3
+              ->  Table Scan on joinorder.t2
+                    Filter Cond: (t2.c2 = 0)
+                    Block Filter Cond: (t2.c2 = 0)
+select count(*) from t1,t2,t3 where t2.c1<t3.c1 and t3.c3<t1.c3 and t2.c2=0;
+count(*)
+0
+explain select * from t1,t2,t3 where t3.c1<t1.c1 and t1.c3<t2.c3 and t3.c2=0;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: INNER
+        Join Cond: (t1.c3 < t2.c3)
+        ->  Table Scan on joinorder.t2
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t3.c1 < t1.c1)
+              ->  Table Scan on joinorder.t1
+              ->  Table Scan on joinorder.t3
+                    Filter Cond: (t3.c2 = 0)
+                    Block Filter Cond: (t3.c2 = 0)
+select count(*) from t1,t2,t3 where t3.c1<t1.c1 and t1.c3<t2.c3 and t3.c2=0;
+count(*)
+0

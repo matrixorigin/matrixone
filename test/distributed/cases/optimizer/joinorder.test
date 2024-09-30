@@ -9,9 +9,22 @@ insert into t2 select result, result+10000,result%100 from generate_series(1,200
 insert into t3 select result, result+50000,result%100 from generate_series(1,1000000)g;
 -- @separator:table
 explain select * from t1,t2,t3 where t1.c1=t2.c1 and t2.c3=t3.c3 and t3.c2=1;
+select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t2.c3=t3.c3 and t3.c2=1;
 -- @separator:table
 explain select * from t1,t2,t3 where t1.c1=t2.c1 and t1.c1=t3.c1 and t3.c2<10;
+select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c1=t3.c1 and t3.c2<10;
 -- @separator:table
 explain select * from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t3.c3<10;
+select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t3.c3<10;
 -- @separator:table
 explain select * from t1,t2,t3 where t1.c1=t2.c1 and t2.c2=t3.c2 and t3.c3<10;
+select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t2.c2=t3.c2 and t3.c3<10;
+-- @separator:table
+explain select * from t1,t2,t3 where t1.c1<t2.c1 and t2.c3<t3.c3 and t1.c2=0;
+select count(*) from t1,t2,t3 where t1.c1<t2.c1 and t2.c3<t3.c3 and t1.c2=0;
+-- @separator:table
+explain select * from t1,t2,t3 where t2.c1<t3.c1 and t3.c3<t1.c3 and t2.c2=0;
+select count(*) from t1,t2,t3 where t2.c1<t3.c1 and t3.c3<t1.c3 and t2.c2=0;
+-- @separator:table
+explain select * from t1,t2,t3 where t3.c1<t1.c1 and t1.c3<t2.c3 and t3.c2=0;
+select count(*) from t1,t2,t3 where t3.c1<t1.c1 and t1.c3<t2.c3 and t3.c2=0;
