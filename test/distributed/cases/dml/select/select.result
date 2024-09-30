@@ -495,3 +495,19 @@ select * from t1 where b in ("11_a","21_a");
 a    b    c
 11    11_a    100000011
 21    21_a    100000021
+drop table if exists t1;
+create table t1(a int primary key, b int, c varchar(200));
+insert into t1 select result, result, "aabbccddeeffgghhii_"||result from generate_series (1, 100000)g;
+select a from t1 where c in ("123456789012345678901234567890","123456789012345678901234567890","aabbccddeeffgghhii_100000");
+a
+100000
+drop table if exists t1;
+create table t1(a int primary key, b vecf32(10));
+insert into t1 select result, "[0.11,0.22,0.33,0.44,0.55,0.66,0.77,0.88,0.99,0.101]" from generate_series (1, 100000)g;
+select a from t1 where b in ("[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.101]","[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.102]");
+a
+drop table if exists t1;
+create table t1(a int primary key, b vecf64(10));
+insert into t1 select result, "[0.11,0.22,0.33,0.44,0.55,0.66,0.77,0.88,0.99,0.101]" from generate_series (1, 100000)g;
+select a from t1 where b in ("[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.101]","[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.102]");
+a

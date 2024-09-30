@@ -16,6 +16,7 @@ package right
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,6 +44,7 @@ type evalVector struct {
 
 type container struct {
 	state   int
+	itr     hashmap.Iterator
 	lastpos int
 
 	batches       []*batch.Batch
@@ -123,6 +125,7 @@ func (rightJoin *RightJoin) Release() {
 
 func (rightJoin *RightJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightJoin.ctr
+	ctr.itr = nil
 	if !ctr.handledLast && rightJoin.NumCPU > 1 && !rightJoin.IsMerger {
 		rightJoin.Channel <- nil
 	}
