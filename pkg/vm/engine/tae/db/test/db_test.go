@@ -10001,3 +10001,31 @@ func TestTransferInMerge(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
+
+func TestTransferInMerge2(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 8192
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, _ := tae.GetRelation()
+	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, txn)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	{
+		tae.MergeBlocks(true)
+		tae.MergeBlocks(true)
+	}
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.CheckRowsByScan(9, true)
+}
