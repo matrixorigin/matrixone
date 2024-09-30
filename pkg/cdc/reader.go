@@ -170,7 +170,6 @@ func (reader *tableReader) readTableWithTxn(
 	//  to = txn operator snapshot ts
 	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblId)
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
-	//fmt.Fprintln(os.Stderr, reader.info, "from", fromTs.ToString(), "to", toTs.ToString())
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
 	if err != nil {
 		return
@@ -198,50 +197,6 @@ func (reader *tableReader) readTableWithTxn(
 		return bat.Vecs[0].Length()
 	}
 
-	addSnapshotStartStatistics := func() {
-		count := float64(recordCount(insertData))
-		allocated := float64(insertData.Allocated())
-
-		v2.CdcProcessingTotalRecordCountGauge.Add(count)
-		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
-		v2.CdcProcessingSnapshotRecordCountGauge.Add(count)
-		v2.CdcSnapshotAllocatedBatchBytesGauge.Add(allocated)
-		v2.CdcReadRecordCounter.Add(count)
-	}
-
-	addSnapshotEndStatistics := func() {
-		count := float64(recordCount(insertData))
-		allocated := float64(insertData.Allocated())
-
-		v2.CdcProcessingTotalRecordCountGauge.Sub(count)
-		v2.CdcTotalAllocatedBatchBytesGauge.Sub(allocated)
-		v2.CdcProcessingSnapshotRecordCountGauge.Sub(count)
-		v2.CdcSnapshotAllocatedBatchBytesGauge.Sub(allocated)
-		v2.CdcSinkRecordCounter.Add(count)
-	}
-
-	addTailStartStatistics := func() {
-		count := float64(recordCount(insertData) + recordCount(deleteData))
-		allocated := float64(insertData.Allocated() + deleteData.Allocated())
-
-		v2.CdcProcessingTotalRecordCountGauge.Add(count)
-		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
-		v2.CdcProcessingTailRecordCountGauge.Add(count)
-		v2.CdcTailAllocatedBatchBytesGauge.Add(allocated)
-		v2.CdcReadRecordCounter.Add(count)
-	}
-
-	addTailEndStatistics := func() {
-		count := float64(insertAtmBatch.RowCount() + deleteAtmBatch.RowCount())
-		allocated := float64(insertAtmBatch.Allocated() + deleteAtmBatch.Allocated())
-
-		v2.CdcProcessingTotalRecordCountGauge.Sub(count)
-		v2.CdcTotalAllocatedBatchBytesGauge.Sub(allocated)
-		v2.CdcProcessingTailRecordCountGauge.Sub(count)
-		v2.CdcTailAllocatedBatchBytesGauge.Sub(allocated)
-		v2.CdcSinkRecordCounter.Add(count)
-	}
-
 	var curHint engine.ChangesHandle_Hint
 	for {
 		select {
@@ -258,25 +213,6 @@ func (reader *tableReader) readTableWithTxn(
 
 		//both nil denote no more data
 		if insertData == nil && deleteData == nil {
-			//FIXME: it is engine's bug
-			//Tail_wip does not finished with Tail_done
-			if insertAtmBatch != nil || deleteAtmBatch != nil {
-				err = reader.sinker.Sink(ctx, &DecoderOutput{
-					outputTyp:      OutputTypeTailDone,
-					insertAtmBatch: insertAtmBatch,
-					deleteAtmBatch: deleteAtmBatch,
-					fromTs:         fromTs,
-					toTs:           toTs,
-				})
-				if err != nil {
-					return err
-				}
-
-				addTailEndStatistics()
-				insertAtmBatch = nil
-				deleteAtmBatch = nil
-			}
-
 			// heartbeat
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
 				noMoreData: true,
@@ -286,10 +222,15 @@ func (reader *tableReader) readTableWithTxn(
 			return
 		}
 
+		count := float64(recordCount(insertData) + recordCount(deleteData))
+		allocated := float64(insertData.Allocated() + deleteData.Allocated())
+		v2.CdcTotalProcessingRecordCountGauge.Add(count)
+		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
+		v2.CdcReadRecordCounter.Add(count)
+
 		switch curHint {
 		case engine.ChangesHandle_Snapshot:
 			// transform into insert instantly
-			addSnapshotStartStatistics()
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
 				outputTyp:     OutputTypeCheckpoint,
 				checkpointBat: insertData,
@@ -299,16 +240,12 @@ func (reader *tableReader) readTableWithTxn(
 			if err != nil {
 				return
 			}
-
-			addSnapshotEndStatistics()
 		case engine.ChangesHandle_Tail_wip:
-			addTailStartStatistics()
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 			insertAtmBatch.Append(packer, insertData, reader.insTsColIdx, reader.insCompositedPkColIdx)
 			deleteAtmBatch.Append(packer, deleteData, reader.delTsColIdx, reader.delCompositedPkColIdx)
 		case engine.ChangesHandle_Tail_done:
-			addTailStartStatistics()
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 			insertAtmBatch.Append(packer, insertData, reader.insTsColIdx, reader.insCompositedPkColIdx)
@@ -324,7 +261,7 @@ func (reader *tableReader) readTableWithTxn(
 				return
 			}
 
-			addTailEndStatistics()
+			// reset, allocate new when next wip/done
 			insertAtmBatch = nil
 			deleteAtmBatch = nil
 		}
