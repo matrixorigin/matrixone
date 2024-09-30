@@ -114,7 +114,6 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	bat := &batch.Batch{
 		Attrs: make([]string, num),
 		Vecs:  make([]*vector.Vector, num),
-		Cnt:   1,
 	}
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name
