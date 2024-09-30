@@ -883,7 +883,6 @@ type txnTable struct {
 }
 
 type withFilterMixin struct {
-	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
@@ -921,7 +920,8 @@ type reader struct {
 
 	memFilter MemPKFilter
 
-	scanType int
+	scanType   int
+	cacheBatch *batch.Batch
 }
 
 type mergeReader struct {

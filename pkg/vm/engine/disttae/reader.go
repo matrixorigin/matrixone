@@ -301,7 +301,6 @@ func NewReader(
 
 	r := &reader{
 		withFilterMixin: withFilterMixin{
-			ctx:      ctx,
 			fs:       e.fs,
 			ts:       ts,
 			tableDef: tableDef,
@@ -318,6 +317,12 @@ func NewReader(
 func (r *reader) Close() error {
 	r.source.Close()
 	r.withFilterMixin.reset()
+	if r.cacheBatch != nil {
+		if r.cacheBatch.Allocated() > 0 {
+			logutil.Fatal("cache batch is not empty")
+		}
+		r.cacheBatch = nil
+	}
 	return nil
 }
 
@@ -377,16 +382,21 @@ func (r *reader) Read(
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
-	statsCtx, numRead, numHit := r.ctx, int64(0), int64(0)
+	statsCtx, numRead, numHit := ctx, int64(0), int64(0)
 	if filter.Valid {
 		// try to store the blkReadStats CounterSet into ctx, so that
 		// it can record the mem cache hit stats when call MemCache.Read() later soon.
-		statsCtx, numRead, numHit = prepareGatherStats(r.ctx)
+		statsCtx, numRead, numHit = prepareGatherStats(ctx)
 	}
 
 	var policy fileservice.Policy
 	if r.scanType == LARGE || r.scanType == NORMAL {
 		policy = fileservice.SkipMemoryCacheWrites
+	}
+
+	if r.cacheBatch == nil {
+		cacheBatch := batch.EmptyBatchWithSize(len(r.columns.seqnums) + 1)
+		r.cacheBatch = &cacheBatch
 	}
 
 	err = blockio.BlockDataRead(
@@ -403,6 +413,7 @@ func (r *reader) Read(
 		policy,
 		r.name,
 		outBatch,
+		r.cacheBatch,
 		mp,
 		r.fs,
 	)
