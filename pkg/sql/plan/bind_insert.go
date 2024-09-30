@@ -61,6 +61,12 @@ func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.Objec
 			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "Cannot insert/update/delete from sequence")
 		}
 
+		for _, col := range tableDefs[i].Cols {
+			if types.T(col.Typ.Id).IsArrayRelate() {
+				return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "vector column")
+			}
+		}
+
 		if tableDefs[i].Partition != nil {
 			return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "partition table")
 		}
