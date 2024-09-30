@@ -144,7 +144,6 @@ func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		bat := &batch.Batch{
 			Vecs:  []*vector.Vector{columnA, columnB, columnC, columnD, columnRowID},
 			Attrs: attrs,
-			Cnt:   1,
 		}
 
 		if hasUniqueKey {

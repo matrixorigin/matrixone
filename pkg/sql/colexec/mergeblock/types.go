@@ -147,7 +147,6 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Proc
 		for i := range mergeBlock.container.partitionSources {
 			bat := batch.NewWithSize(len(attrs))
 			bat.Attrs = attrs
-			bat.Cnt = 1
 			for idx := 0; idx < len(attrs); idx++ {
 				bat.Vecs[idx] = vector.NewVec(typs[idx])
 			}
@@ -156,7 +155,6 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Proc
 	} else {
 		bat := batch.NewWithSize(len(attrs))
 		bat.Attrs = attrs
-		bat.Cnt = 1
 		for idx := 0; idx < len(attrs); idx++ {
 			bat.Vecs[idx] = vector.NewVec(typs[idx])
 		}
@@ -238,7 +236,6 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch) err
 			if err := newBat.UnmarshalBinary(blkInfosVec.GetBytesAt(i)); err != nil {
 				return err
 			}
-			newBat.Cnt = 1
 			if mergeBlock.AddAffectedRows {
 				mergeBlock.container.affectedRows += uint64(newBat.RowCount())
 			}

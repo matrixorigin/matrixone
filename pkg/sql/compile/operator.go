@@ -529,7 +529,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		return op
 	case vm.ValueScan:
 		t := sourceOp.(*value_scan.ValueScan)
-		op := value_scan.NewArgument()
+		op := value_scan.NewValueScanFromProcess()
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -1953,7 +1953,7 @@ func constructTableScan(n *plan.Node) *table_scan.TableScan {
 }
 
 func constructValueScan() *value_scan.ValueScan {
-	return value_scan.NewArgument()
+	return value_scan.NewValueScanFromProcess()
 }
 
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
