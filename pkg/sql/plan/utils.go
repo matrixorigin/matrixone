@@ -2172,6 +2172,18 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 	}
 }
 
+func GetColExpr(typ Type, relpos int32, colpos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relpos,
+				ColPos: colpos,
+			},
+		},
+	}
+}
+
 func MakeSerialExtractExpr(ctx context.Context, fromExpr *Expr, origType Type, serialIdx int64) (*Expr, error) {
 	return BindFuncExprImplByPlanExpr(ctx, "serial_extract", []*plan.Expr{
 		fromExpr,
