@@ -7081,38 +7081,6 @@ func TestMergPitr(t *testing.T) {
 		types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(),
 		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
 		types.T_uint8.ToType(), types.T_varchar.ToType()}
-	for i := 0; i < 4; i++ {
-		opt := containers.Options{}
-		opt.Capacity = 0
-		data := containers.BuildBatch(attrs, vecTypes, opt)
-		data.Vecs[0].Append([]byte("db"), false)
-		data.Vecs[1].Append([]byte("rel"), false)
-		data.Vecs[2].Append(uint64(0), false)
-		data.Vecs[3].Append(uint64(0), false)
-		data.Vecs[4].Append(uint64(0), false)
-		if i == 0 {
-			data.Vecs[5].Append([]byte("cluster"), false)
-			data.Vecs[10].Append(uint64(0), false)
-			data.Vecs[11].Append(uint8(1), false)
-			data.Vecs[12].Append([]byte("h"), false)
-		} else {
-			data.Vecs[5].Append([]byte("account"), false)
-			data.Vecs[10].Append(uint64(0), false)
-			data.Vecs[11].Append(uint8(2), false)
-			data.Vecs[12].Append([]byte("h"), false)
-		}
-		data.Vecs[6].Append(uint64(0), false)
-		data.Vecs[7].Append([]byte("varchar"), false)
-		data.Vecs[8].Append([]byte("varchar"), false)
-		data.Vecs[9].Append([]byte("varchar"), false)
-		txn1, _ := db.StartTxn(nil)
-		database, _ := txn1.GetDatabase("db")
-		rel, _ := database.GetRelationByID(rel4.ID())
-		err := rel.Append(context.Background(), data)
-		data.Close()
-		assert.Nil(t, err)
-		assert.Nil(t, txn1.Commit(context.Background()))
-	}
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
@@ -7159,6 +7127,38 @@ func TestMergPitr(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Nil(t, txn1.Commit(context.Background()))
 		}
+		for i := 0; i < 4; i++ {
+			opt := containers.Options{}
+			opt.Capacity = 0
+			data := containers.BuildBatch(attrs, vecTypes, opt)
+			data.Vecs[0].Append([]byte("db"), false)
+			data.Vecs[1].Append([]byte("rel"), false)
+			data.Vecs[2].Append(uint64(0), false)
+			data.Vecs[3].Append(uint64(0), false)
+			data.Vecs[4].Append(uint64(0), false)
+			if i == 0 {
+				data.Vecs[5].Append([]byte("cluster"), false)
+				data.Vecs[10].Append(uint64(0), false)
+				data.Vecs[11].Append(uint8(1), false)
+				data.Vecs[12].Append([]byte("h"), false)
+			} else {
+				data.Vecs[5].Append([]byte("account"), false)
+				data.Vecs[10].Append(uint64(0), false)
+				data.Vecs[11].Append(uint8(2), false)
+				data.Vecs[12].Append([]byte("h"), false)
+			}
+			data.Vecs[6].Append(uint64(0), false)
+			data.Vecs[7].Append([]byte("varchar"), false)
+			data.Vecs[8].Append([]byte("varchar"), false)
+			data.Vecs[9].Append([]byte("varchar"), false)
+			txn1, _ := db.StartTxn(nil)
+			database, _ := txn1.GetDatabase("db")
+			rel, _ := database.GetRelationByID(rel4.ID())
+			err := rel.Append(context.Background(), data)
+			data.Close()
+			assert.Nil(t, err)
+			assert.Nil(t, txn1.Commit(context.Background()))
+		}
 	}()
 	for _, data := range bats {
 		wg.Add(2)
@@ -7194,18 +7194,20 @@ func TestMergPitr(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
-	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
-		return
-	}
 	db.DiskCleaner.GetCleaner().EnableGCForTest()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
-	})
+
 	testutils.WaitExpect(5000, func() bool {
 		stage := db.BGCheckpointRunner.GetStage()
 		return !stage.IsEmpty()
+	})
+
+	testutils.WaitExpect(5000, func() bool {
+		ckpStage := db.DiskCleaner.GetCleaner().GeteCkpStage()
+		if ckpStage == nil {
+			return false
+		}
+		return !ckpStage.IsEmpty()
 	})
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil

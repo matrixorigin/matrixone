@@ -631,8 +631,10 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		return pitrList[i].LT(&pitrList[j])
 	})
 	pitr := types.TS{}
-	if len(pitrList) > 0 {
+	pitrCount := len(pitrList)
+	if pitrCount > 0 {
 		pitr = pitrList[len(pitrList)-1]
+		logutil.Info("[MergeCheckpoint] Pitr", zap.Int("pitrCount", pitrCount))
 	}
 	for _, idx := range idxes {
 		logutil.Info("[MergeCheckpoint]",
