@@ -470,6 +470,9 @@ func (mp *MysqlProtocolImpl) Read() ([]byte, error) {
 func (mp *MysqlProtocolImpl) ReadLoadLocalPacket() ([]byte, error) {
 	return mp.tcpConn.ReadLoadLocalPacket()
 }
+func (mp *MysqlProtocolImpl) FreeLoadLocal() {
+	mp.tcpConn.FreeLoadLocal()
+}
 func (mp *MysqlProtocolImpl) Free(buf []byte) {
 	mp.tcpConn.allocator.Free(buf)
 }
