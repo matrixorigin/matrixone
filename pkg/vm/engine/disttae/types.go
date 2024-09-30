@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,7 +53,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
 )
 
 const (
@@ -744,7 +745,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		txn.resetSnapshot()
 	}
 	//Transfer row ids for deletes in RC isolation
-	return txn.transferInmemTombstoneLocked(ctx, commit)
+	return txn.transferTombstonesLocked(ctx, commit)
 }
 
 // Entry represents a delete/insert
