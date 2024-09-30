@@ -103,8 +103,8 @@ func (builder *QueryBuilder) applyAssociativeLawRule3(nodeID int32) int32 {
 	}
 
 	node.Children[0] = NodeA.NodeId
-	newSel := NodeC.Stats.Selectivity / getHashColsNDVRatio(node.NodeId, builder)
-	if newSel >= NodeB.Stats.Selectivity {
+	ratio, ok := getHashColsNDVRatio(node.NodeId, builder)
+	if !ok || NodeC.Stats.Selectivity/ratio >= NodeB.Stats.Selectivity {
 		//new selectivity bigger than b.sel, can't do this change
 		node.Children[0] = leftChild.NodeId
 		return node.NodeId
