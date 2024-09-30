@@ -298,6 +298,9 @@ func (c *Compile) getAffectedRows() uint64 {
 }
 
 func (c *Compile) GetConuterSet() *perfcounter.CounterSet {
+	if c == nil {
+		return nil
+	}
 	return c.counterSet
 }
 
