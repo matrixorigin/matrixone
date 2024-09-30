@@ -661,3 +661,58 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 	}
 	return ret, nil
 }
+
+func getPartitionInfos(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef) ([]uint64, []string) {
+	partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
+	partTableNames := make([]string, tableDef.Partition.PartitionNum)
+	for i, partition := range tableDef.Partition.Partitions {
+		_, partTableDef := ctx.Resolve(objRef.SchemaName, partition.PartitionTableName, nil)
+		partTableIds[i] = partTableDef.TblId
+		partTableNames[i] = partition.PartitionTableName
+	}
+	return partTableIds, partTableNames
+}
+
+func getRemapParitionExpr(tableDef *TableDef, relPos int32, colPosMap map[string]int32) (retExpr *Expr, err error) {
+	retExpr = DeepCopyExpr(tableDef.Partition.PartitionExpression)
+	err = remapPartitionExprColRef(retExpr, tableDef.Name, relPos, colPosMap)
+	return
+}
+
+func remapPartitionExprColRef(expr *Expr, tableName string, relPos int32, colPosMap map[string]int32) (err error) {
+	switch ne := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colName := tableName + "." + ne.Col.Name
+		if colPos, ok := colPosMap[colName]; ok {
+			ne.Col.RelPos = relPos
+			ne.Col.ColPos = colPos
+		} else {
+			err = moerr.NewInternalErrorNoCtx("can not find col by name in partition expr")
+			return
+		}
+
+	case *plan.Expr_F:
+		for _, arg := range ne.F.GetArgs() {
+			if err = remapPartitionExprColRef(arg, tableName, relPos, colPosMap); err != nil {
+				return
+			}
+		}
+
+	case *plan.Expr_W:
+		if err = remapPartitionExprColRef(ne.W.WindowFunc, tableName, relPos, colPosMap); err != nil {
+			return
+		}
+
+		for _, arg := range ne.W.PartitionBy {
+			if err = remapPartitionExprColRef(arg, tableName, relPos, colPosMap); err != nil {
+				return
+			}
+		}
+		for _, order := range ne.W.OrderBy {
+			if err = remapPartitionExprColRef(order.Expr, tableName, relPos, colPosMap); err != nil {
+				return
+			}
+		}
+	}
+	return
+}
