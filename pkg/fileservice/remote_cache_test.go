@@ -24,10 +24,12 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -35,8 +37,8 @@ type mockKeyRouter[K comparable] struct {
 	target string
 }
 
-func (r *mockKeyRouter[K]) Target(_ CacheKey) string    { return r.target }
-func (r *mockKeyRouter[K]) AddItem(_ gossip.CommonItem) {}
+func (r *mockKeyRouter[K]) Target(_ fscache.CacheKey) string { return r.target }
+func (r *mockKeyRouter[K]) AddItem(_ gossip.CommonItem)      {}
 
 type cacheFs struct {
 	qs queryservice.QueryService
@@ -120,7 +122,8 @@ func runTestWithTwoFileServices(t *testing.T, fn func(sf1 *cacheFs, sf2 *cacheFs
 			KeyRouterFactory: func() client.KeyRouter[query.CacheKey] {
 				return keyRouter
 			},
-			QueryClient: qt,
+			QueryClient:    qt,
+			MemoryCapacity: ptrTo[toml.ByteSize](1 << 30),
 		}
 		cacheCfg.setDefaults()
 		cacheCfg.SetRemoteCacheCallback()

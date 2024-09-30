@@ -38,8 +38,9 @@ import (
 )
 
 type DiskCache struct {
-	path            string
-	perfCounterSets []*perfcounter.CounterSet
+	path               string
+	cacheDataAllocator CacheDataAllocator
+	perfCounterSets    []*perfcounter.CounterSet
 
 	updatingPaths struct {
 		*sync.Cond
@@ -56,6 +57,7 @@ func NewDiskCache(
 	perfCounterSets []*perfcounter.CounterSet,
 	asyncLoad bool,
 	name string,
+	cacheDataAllocator CacheDataAllocator,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -63,11 +65,17 @@ func NewDiskCache(
 		return nil, err
 	}
 
+	if cacheDataAllocator == nil {
+		cacheDataAllocator = DefaultCacheDataAllocator()
+	}
+
 	ret = &DiskCache{
-		path:            path,
-		perfCounterSets: perfCounterSets,
+		path:               path,
+		cacheDataAllocator: cacheDataAllocator,
+		perfCounterSets:    perfCounterSets,
 
 		cache: fifocache.New(
+
 			func() int64 {
 				// read from global size hint
 				if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
@@ -77,6 +85,12 @@ func NewDiskCache(
 				return capacity()
 			},
 
+			func(key string) uint8 {
+				return uint8(xxhash.Sum64String(key))
+			},
+
+			nil,
+			nil,
 			func(path string, _ struct{}) {
 				err := os.Remove(path)
 				if err == nil {
@@ -88,10 +102,6 @@ func NewDiskCache(
 						zap.Any("error", err),
 					)
 				}
-			},
-
-			func(key string) uint8 {
-				return uint8(xxhash.Sum64String(key))
 			},
 		),
 	}
@@ -319,7 +329,7 @@ func (d *DiskCache) Read(
 			d.cache.Set(diskPath, struct{}{}, fileSize(stat))
 		}
 
-		if err := entry.ReadFromOSFile(ctx, file); err != nil {
+		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
 			return err
 		}
 

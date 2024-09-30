@@ -101,12 +101,12 @@ func shardMetaCacheKey(key mataCacheKey) uint8 {
 }
 
 func init() {
-	metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(metaCacheSize()), nil, shardMetaCacheKey)
+	metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(metaCacheSize()), shardMetaCacheKey, nil, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(size), nil, shardMetaCacheKey)
+		metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(size), shardMetaCacheKey, nil, nil, nil)
 	})
 }
 

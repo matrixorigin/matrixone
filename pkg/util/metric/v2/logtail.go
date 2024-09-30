@@ -119,6 +119,18 @@ var (
 	LogtailSendLatencyHistogram = logTailSendDurationHistogram.WithLabelValues("latency")
 	LogtailSendNetworkHistogram = logTailSendDurationHistogram.WithLabelValues("network")
 
+	LogtailPullScanTxnCountHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "pull_scan_txn_count",
+			Help:      "Bucketed histogram of pull scan txn count.",
+			Buckets:   prometheus.ExponentialBuckets(1, 3.0, 20),
+		}, []string{"type"})
+
+	LogTailPullScanSkipBlkCountHistogram = LogtailPullScanTxnCountHistogram.WithLabelValues("skip-blk")
+	LogTailPullScanScanRowCountHistogram = LogtailPullScanTxnCountHistogram.WithLabelValues("scan-row")
+
 	LogTailLoadCheckpointDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "mo",

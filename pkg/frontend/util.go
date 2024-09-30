@@ -20,7 +20,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"math/rand"
 	"os"
 	"runtime"
@@ -29,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
@@ -1344,12 +1345,6 @@ func (g *topsort) sort() (ans []string, err error) {
 		err = moerr.NewInternalErrorNoCtx("There is a cycle in dependency graph")
 	}
 	return
-}
-
-func setFPrints(txnOp TxnOperator, fprints footPrints) {
-	if txnOp != nil {
-		txnOp.SetFootPrints(fprints.prints[:])
-	}
 }
 
 type footPrints struct {

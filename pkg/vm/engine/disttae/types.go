@@ -338,6 +338,8 @@ func (txn *Transaction) EndStatement() {
 }
 
 func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error {
+	txn.op.EnterIncrStmt()
+	defer txn.op.ExitIncrStmt()
 	if !commit {
 		if !txn.startStatementCalled {
 			logutil.Fatal("BUG: StartStatement not called")
@@ -518,6 +520,8 @@ func (txn *Transaction) gcObjs(start int) error {
 }
 
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
+	txn.op.EnterRollbackStmt()
+	defer txn.op.ExitRollbackStmt()
 	txn.Lock()
 	defer txn.Unlock()
 

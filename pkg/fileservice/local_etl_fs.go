@@ -15,7 +15,6 @@
 package fileservice
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"os"
@@ -24,7 +23,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -230,36 +228,15 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
 
-			if entry.ToCacheData != nil {
-				r = io.TeeReader(r, entry.WriterForRead)
-				counter := new(atomic.Int64)
-				cr := &countingReader{
-					R: r,
-					C: counter,
-				}
-				cacheData, err := entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
-				if err != nil {
-					return err
-				}
-				if cacheData == nil {
-					panic("ToCacheData returns nil cache data")
-				}
-				vector.Entries[i].CachedData = cacheData
-				if entry.Size > 0 && counter.Load() != entry.Size {
-					return moerr.NewUnexpectedEOFNoCtx(path.File)
-				}
-
-			} else {
-				var buf []byte
-				put := ioBufferPool.Get(&buf)
-				defer put.Put()
-				n, err := io.CopyBuffer(entry.WriterForRead, r, buf)
-				if err != nil {
-					return err
-				}
-				if entry.Size > 0 && n != int64(entry.Size) {
-					return moerr.NewUnexpectedEOFNoCtx(path.File)
-				}
+			var buf []byte
+			put := ioBufferPool.Get(&buf)
+			defer put.Put()
+			n, err := io.CopyBuffer(entry.WriterForRead, r, buf)
+			if err != nil {
+				return err
+			}
+			if entry.Size > 0 && n != int64(entry.Size) {
+				return moerr.NewUnexpectedEOFNoCtx(path.File)
 			}
 
 		} else if entry.ReadCloserForRead != nil {
@@ -279,28 +256,9 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			if entry.Size > 0 {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
-			if entry.ToCacheData == nil {
-				*entry.ReadCloserForRead = &readCloser{
-					r:         r,
-					closeFunc: f.Close,
-				}
-			} else {
-				buf := new(bytes.Buffer)
-				*entry.ReadCloserForRead = &readCloser{
-					r: io.TeeReader(r, buf),
-					closeFunc: func() error {
-						defer f.Close()
-						cacheData, err := entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
-						if err != nil {
-							return err
-						}
-						if cacheData != nil {
-							panic("ToCacheData returns nil cache data")
-						}
-						vector.Entries[i].CachedData = cacheData
-						return nil
-					},
-				}
+			*entry.ReadCloserForRead = &readCloser{
+				r:         r,
+				closeFunc: f.Close,
 			}
 
 		} else {
@@ -345,7 +303,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setCachedData(ctx); err != nil {
+			if err := entry.setCachedData(ctx, DefaultCacheDataAllocator()); err != nil {
 				return err
 			}
 

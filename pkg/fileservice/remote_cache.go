@@ -16,9 +16,11 @@ package fileservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -88,7 +90,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 			continue
 		}
 
-		cacheKey := CacheKey{
+		cacheKey := fscache.CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
 			Sz:     entry.Size,

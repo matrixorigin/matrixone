@@ -413,7 +413,6 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	if th.txnOp == nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: txnClient new a null txn")
 	}
-	setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 	return err
 }
 
@@ -511,7 +510,6 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(79)
 		commitTs := th.txnOp.Txn().CommitTS
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
-		setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 		err = th.txnOp.Commit(ctx2)
 		if err != nil {
 			th.invalidateTxnUnsafe()
@@ -556,7 +554,6 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(85)
 		//non derived statement
 		if th.txnOp != nil && !execCtx.ses.IsDerivedStmt() {
-			setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 			err = th.txnOp.GetWorkspace().RollbackLastStatement(th.txnCtx)
 			if err != nil {
 				err4 := th.rollbackUnsafe(execCtx)
@@ -617,7 +614,6 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(84)
 		defer execCtx.ses.ExitFPrint(84)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
-		setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 		err = th.txnOp.Rollback(ctx2)
 		if err != nil {
 			th.invalidateTxnUnsafe()

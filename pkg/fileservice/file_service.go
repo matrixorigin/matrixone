@@ -140,8 +140,6 @@ type IOEntry struct {
 
 	// fromCache indicates which cache filled the entry
 	fromCache IOVectorCache
-
-	allocator CacheDataAllocator
 }
 
 func (i IOEntry) String() string {
@@ -154,7 +152,7 @@ func (i IOEntry) String() string {
 }
 
 type CacheDataAllocator interface {
-	Alloc(size int) fscache.Data
+	AllocateCacheData(size int) fscache.Data
 }
 
 // DirEntry is a file or dir

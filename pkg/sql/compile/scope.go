@@ -516,7 +516,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 		// determined how many cpus we should use.
 		blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-		scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
+		scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len(), s.DataSource.hasLimit)
 
 		readers, err = c.e.NewBlockReader(
 			ctx, scanUsedCpuNumber,
@@ -530,10 +530,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		switch s.NodeInfo.Rel.GetEngineType() {
 		case engine.Disttae:
 			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len(), s.DataSource.hasLimit)
 		case engine.Memory:
 			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
-			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, idSlice.Len())
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, idSlice.Len(), s.DataSource.hasLimit)
 		default:
 			scanUsedCpuNumber = 1
 		}
@@ -608,10 +608,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		switch rel.GetEngineType() {
 		case engine.Disttae:
 			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len(), s.DataSource.hasLimit)
 		case engine.Memory:
 			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
-			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, idSlice.Len())
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, idSlice.Len(), s.DataSource.hasLimit)
 		default:
 			scanUsedCpuNumber = 1
 		}
@@ -733,8 +733,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	return mergeFromParallelScanScope, nil
 }
 
-func DetermineRuntimeDOP(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 16 {
+func DetermineRuntimeDOP(cpunum, blocks int, haslimit bool) int {
+	if cpunum <= 0 || blocks <= 16 || haslimit {
 		return 1
 	}
 	ret := blocks/16 + 1

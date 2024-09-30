@@ -233,12 +233,15 @@ type txnOperator struct {
 		children []*txnOperator
 	}
 
-	commitCounter   counter
-	rollbackCounter counter
-	runSqlCounter   counter
-	fprints         footPrints
+	commitCounter       counter
+	rollbackCounter     counter
+	runSqlCounter       counter
+	incrStmtCounter     counter
+	rollbackStmtCounter counter
+	fprints             footPrints
 
 	waitActiveCost time.Duration
+	runningSQL     atomic.Bool
 }
 
 func newTxnOperator(
@@ -515,6 +518,10 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
+	if tc.runningSQL.Load() {
+		util.GetLogger().Fatal("commit on running txn")
+	}
+
 	tc.commitCounter.addEnter()
 	defer tc.commitCounter.addExit()
 	txn := tc.getTxnMeta(false)
@@ -550,6 +557,10 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
+	if tc.runningSQL.Load() {
+		util.GetLogger().Fatal("commit on running txn")
+	}
+
 	tc.rollbackCounter.addEnter()
 	defer tc.rollbackCounter.addExit()
 	v2.TxnRollbackCounter.Inc()
@@ -624,6 +635,16 @@ func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
 	return tc.doAddLockTableLocked(value)
 }
 
+func (tc *txnOperator) HasLockTable(table uint64) bool {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if tc.mu.txn.Mode != txn.TxnMode_Pessimistic {
+		panic("lock in optimistic mode")
+	}
+
+	return tc.hasLockTableLocked(table)
+}
+
 func (tc *txnOperator) ResetRetry(retry bool) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -648,6 +669,15 @@ func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
 	}
 	tc.mu.lockTables = append(tc.mu.lockTables, value)
 	return nil
+}
+
+func (tc *txnOperator) hasLockTableLocked(table uint64) bool {
+	for _, l := range tc.mu.lockTables {
+		if l.Table == table {
+			return true
+		}
+	}
+	return false
 }
 
 func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
@@ -1241,10 +1271,12 @@ func (tc *txnOperator) doCostAction(
 }
 
 func (tc *txnOperator) EnterRunSql() {
+	tc.runningSQL.Store(true)
 	tc.runSqlCounter.addEnter()
 }
 
 func (tc *txnOperator) ExitRunSql() {
+	tc.runningSQL.Store(false)
 	tc.runSqlCounter.addExit()
 }
 
@@ -1260,14 +1292,39 @@ func (tc *txnOperator) inRollback() bool {
 	return tc.rollbackCounter.more()
 }
 
+func (tc *txnOperator) EnterIncrStmt() {
+	tc.incrStmtCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitIncrStmt() {
+	tc.incrStmtCounter.addExit()
+}
+
+func (tc *txnOperator) inIncrStmt() bool {
+	return tc.incrStmtCounter.more()
+}
+
+func (tc *txnOperator) EnterRollbackStmt() {
+	tc.rollbackStmtCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitRollbackStmt() {
+	tc.rollbackStmtCounter.addExit()
+}
+func (tc *txnOperator) inRollbackStmt() bool {
+	return tc.rollbackStmtCounter.more()
+}
+
 func (tc *txnOperator) counter() string {
-	return fmt.Sprintf("commit: %s rollback: %s runSql: %s footPrints: %s",
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s footPrints: %s",
 		tc.commitCounter.String(),
 		tc.rollbackCounter.String(),
 		tc.runSqlCounter.String(),
+		tc.incrStmtCounter.String(),
+		tc.rollbackStmtCounter.String(),
 		tc.fprints.String())
 }
 
-func (tc *txnOperator) SetFootPrints(prints [][2]uint32) {
-	tc.fprints.setFPrints(prints)
+func (tc *txnOperator) SetFootPrints(id int, enter bool) {
+	tc.fprints.add(id, enter)
 }

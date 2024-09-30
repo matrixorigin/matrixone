@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,30 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lrucache
+package fscache
 
-import "testing"
+import (
+	"context"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+)
 
-func TestList(t *testing.T) {
-	// test newList
-	l := newList[int, Bytes]()
-	if l == nil {
-		t.Fatal("newList failed")
-	}
-	// test lazyInit
-	l.lazyInit()
-	if l.root.next == nil {
-		t.Fatal("lazyInit failed")
-	}
-	// test PushFront
-	l.PushFront(&lruItem[int, Bytes]{Key: 1})
-	if l.root.next.Key != 1 {
-		t.Fatal("PushFront failed")
-	}
-	// test Back
-	if l.Back().Key != 1 {
-		t.Fatal("Back failed")
-	}
-	// test Remove
-	l.Remove(l.Back())
+type CacheKey = pb.CacheKey
+
+type DataCache interface {
+	EnsureNBytes(n int)
+	Capacity() int64
+	Used() int64
+	Available() int64
+	Get(context.Context, CacheKey) (Data, bool)
+	Set(context.Context, CacheKey, Data) error
+	DeletePaths(context.Context, []string)
+	Flush()
+	Evict(chan int64)
 }

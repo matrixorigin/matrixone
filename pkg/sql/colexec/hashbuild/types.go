@@ -39,8 +39,8 @@ const (
 
 type container struct {
 	colexec.ReceiverOperator
-
-	state int
+	needDupVec bool
+	state      int
 
 	hasNull            bool
 	isMerge            bool
@@ -114,6 +114,13 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	ctr := arg.ctr
 	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if ctr != nil {
+		if ctr.needDupVec {
+			for i := range ctr.vecs {
+				for j := range ctr.vecs[i] {
+					ctr.vecs[i][j].Free(proc.Mp())
+				}
+			}
+		}
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
 		if !arg.NeedHashMap {

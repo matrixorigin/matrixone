@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -77,13 +78,28 @@ func (r *Reader) GetDirtyByTable(
 	dbID, id uint64,
 ) (tree *model.TableTree) {
 	tree = model.NewTableTree(dbID, id)
+	var rowScan, blkSkip int
 	op := func(row RowT) (moveOn bool) {
+		rowScan++
 		if memo := row.GetMemo(); memo.HasTableDataChanges(id) {
 			tree.Merge(memo.GetDirtyTableByID(id))
 		}
 		return true
 	}
-	r.table.ForeachRowInBetween(r.from, r.to, nil, op)
+	skipFn := func(blk BlockT) bool {
+		summary := blk.summary.Load()
+		if summary == nil {
+			return false
+		}
+		_, exist := summary.tids[id]
+		if !exist {
+			blkSkip++
+		}
+		return !exist
+	}
+	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op)
+	v2.LogTailPullScanSkipBlkCountHistogram.Observe(float64(blkSkip))
+	v2.LogTailPullScanScanRowCountHistogram.Observe(float64(rowScan))
 	return
 }
 

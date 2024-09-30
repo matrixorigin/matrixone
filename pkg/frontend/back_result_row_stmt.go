@@ -46,7 +46,6 @@ func executeResultRowStmtInBack(backSes *backSession,
 	backSes.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
 
 	fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
-	setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 
 	err = disttae.CheckTxnIsValid(fPrintTxnOp)
 	if err != nil {

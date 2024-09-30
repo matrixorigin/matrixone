@@ -432,7 +432,7 @@ func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {
 	fn(t, listenAddr, s)
 }
 
-func TestHandler_HandleEventKillQuery(t *testing.T) {
+func TestHandler_HandleEventKill(t *testing.T) {
 	testWithServer(t, func(t *testing.T, addr string, s *Server) {
 		db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
 		// connect to server.

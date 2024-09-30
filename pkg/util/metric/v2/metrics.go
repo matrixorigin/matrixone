@@ -63,6 +63,7 @@ func initMemMetrics() {
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
 	registry.MustRegister(mallocCounter)
+	registry.MustRegister(mallocGauge)
 }
 
 func initTaskMetrics() {
@@ -109,6 +110,7 @@ func initLogtailMetrics() {
 	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
 
+	registry.MustRegister(LogtailPullScanTxnCountHistogram)
 	registry.MustRegister(LogTailPushCollectionDurationHistogram)
 	registry.MustRegister(LogTailPullCollectionPhase1DurationHistogram)
 	registry.MustRegister(LogTailPullCollectionPhase2DurationHistogram)

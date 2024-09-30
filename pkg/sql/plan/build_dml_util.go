@@ -2758,15 +2758,14 @@ func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, 
 		}
 
 		if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			pkNamesMap := make(map[string]int)
-			for _, name := range tableDef.Pkey.Names {
-				pkNamesMap[name] = 1
-			}
-
+			// pkNamesMap := make(map[string]int)
 			prikeyPos := make([]int, 0)
-			for i, coldef := range tableDef.Cols {
-				if _, ok := pkNamesMap[coldef.Name]; ok {
-					prikeyPos = append(prikeyPos, i)
+			for _, name := range tableDef.Pkey.Names {
+				for i, coldef := range tableDef.Cols {
+					if coldef.Name == name {
+						prikeyPos = append(prikeyPos, i)
+						break
+					}
 				}
 			}
 

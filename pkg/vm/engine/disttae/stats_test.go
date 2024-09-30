@@ -74,3 +74,16 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 		assert.Equal(t, 1, int(count.Load()))
 	})
 }
+
+func TestGlobalStats_ClearTables(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gs := NewGlobalStats(ctx, nil, nil)
+	for i := 0; i < 10; i++ {
+		gs.notifyLogtailUpdate(uint64(2000 + i))
+	}
+	assert.Equal(t, 10, len(gs.logtailUpdate.mu.updated))
+	gs.clearTables()
+	assert.Equal(t, 0, len(gs.logtailUpdate.mu.updated))
+}

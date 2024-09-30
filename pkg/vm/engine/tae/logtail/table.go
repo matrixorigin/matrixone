@@ -66,8 +66,8 @@ func (txn *smallTxn) GetLSN() uint64 {
 
 type summary struct {
 	hasCatalogChanges bool
+	tids              map[uint64]struct{}
 	// TODO
-	// table ids
 	// maxLsn
 }
 
@@ -207,10 +207,14 @@ func (blk *txnBlock) Close() {
 
 func (blk *txnBlock) trySumary() {
 	summary := new(summary)
+	summary.tids = make(map[uint64]struct{}, 8)
 	for _, row := range blk.rows {
-		if row.GetMemo().HasCatalogChanges() {
+		memo := row.GetMemo()
+		if !summary.hasCatalogChanges && memo.HasCatalogChanges() {
 			summary.hasCatalogChanges = true
-			break
+		}
+		for k := range memo.Tree.Tables {
+			summary.tids[k] = struct{}{}
 		}
 	}
 	blk.summary.CompareAndSwap(nil, summary)

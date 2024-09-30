@@ -145,7 +145,7 @@ func (c *mockClientConn) BuildConnWithServer(_ string) (ServerConn, error) {
 
 func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
 	switch ev := e.(type) {
-	case *killQueryEvent:
+	case *killEvent:
 		cn, err := c.router.SelectByConnID(ev.connID)
 		if err != nil {
 			sendResp([]byte(err.Error()), resp)

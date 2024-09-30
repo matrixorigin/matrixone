@@ -120,26 +120,22 @@ func (count *counter) String() string {
 	return fmt.Sprintf("enter:%d, exit:%d", count.enter.Load(), count.exit.Load())
 }
 
-type fPrint [2]uint32
-
-func (fp fPrint) String() string {
-	return fmt.Sprintf("enter:%d exit:%d", fp[0], fp[1])
-}
-func (fp fPrint) nonZero() bool {
-	return fp[0] != 0 || fp[1] != 0
+func (count *counter) nonZero() bool {
+	return count.enter.Load() != 0 || count.exit.Load() != 0
 }
 
 type footPrints struct {
-	prints [256]fPrint
+	prints [256]counter
 }
 
-func (fprints *footPrints) setFPrints(fp [][2]uint32) {
-	flen := len(fp)
-	if len(fprints.prints) < flen {
-		flen = len(fprints.prints)
+func (fprints *footPrints) add(id int, enter bool) {
+	if id < 0 || id >= len(fprints.prints) {
+		return
 	}
-	for i := 0; i < flen; i++ {
-		fprints.prints[i] = fp[i]
+	if enter {
+		fprints.prints[id].addEnter()
+	} else {
+		fprints.prints[id].addExit()
 	}
 }
 

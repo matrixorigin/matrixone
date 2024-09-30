@@ -263,3 +263,8 @@ insert into t1 values (1,1),(2,2),(3,3);
 -- @separator:table
 select mo_ctl('dn', 'flush', 'select.t1');
 select * from t1 where a in (3,3,3,2,1);
+
+drop table if exists t1;
+create table t1 (a int, b varchar, c int, primary key (c,a), key idx_b(b));
+insert into t1 select result, result || "_a",result+100000000 from generate_series(1,10000) g;
+select * from t1 where b in ("11_a","21_a");

@@ -172,12 +172,12 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 // only memory obtained through memcache.Alloc can be set to memcache
 func TestLocalFSWithIOVectorCache(t *testing.T) {
 	memCache1 := NewMemCache(
-		newMemoryCache(fscache.ConstCapacity(1<<20), false, nil),
+		fscache.ConstCapacity(1<<20), nil,
 		nil,
 		"",
 	)
 	memCache2 := NewMemCache(
-		newMemoryCache(fscache.ConstCapacity(1<<20), false, nil),
+		fscache.ConstCapacity(1<<20), nil,
 		nil,
 		"",
 	)
@@ -209,7 +209,7 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 			{
 				Size: 8,
 				ToCacheData: func(r io.Reader, _ []byte, allocator CacheDataAllocator) (fscache.Data, error) {
-					cacheData := allocator.Alloc(8)
+					cacheData := allocator.AllocateCacheData(8)
 					_, err := io.ReadFull(r, cacheData.Bytes())
 					if err != nil {
 						return nil, err
