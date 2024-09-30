@@ -111,14 +111,16 @@ func SetAnyToStringVector(proc *process.Process, val any, vec *vector.Vector, id
 	}
 }
 
-func SetBytesToAnyVector(ctx context.Context, val string, row int,
-	isNull bool, vec *vector.Vector, proc *process.Process) error {
+func SetBytesToAnyVector(proc *process.Process, val string, row int,
+	isNull bool, vec *vector.Vector) error {
 	if isNull {
 		vec.GetNulls().Set(uint64(row))
 		return nil
 	} else {
 		vec.GetNulls().Unset(uint64(row))
 	}
+
+	ctx := proc.Ctx
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		v, err := types.ParseBool(val)
@@ -156,7 +158,7 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", val)
 		}
-		return vector.SetFixedAtNoTypeCheck(vec, row, int64(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_uint8:
 		v, err := strconv.ParseUint(val, 0, 8)
 		if err != nil {
@@ -180,7 +182,7 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", val)
 		}
-		return vector.SetFixedAtNoTypeCheck(vec, row, uint64(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_float32:
 		v, err := strconv.ParseFloat(val, 32)
 		if err != nil {
@@ -192,7 +194,7 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "float64", "value '%v'", val)
 		}
-		return vector.SetFixedAtNoTypeCheck(vec, row, float64(v))
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_decimal64:
 		v, err := types.ParseDecimal64(val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {

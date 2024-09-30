@@ -58,7 +58,6 @@ func TestMergeDelete(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.Ctx = context.TODO()
 	metaLocBat0 := &batch.Batch{
-		Cnt: 1,
 		Attrs: []string{
 			catalog.BlockMetaOffset,
 		},
@@ -71,7 +70,6 @@ func TestMergeDelete(t *testing.T) {
 
 	vcu32, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(15), 1, proc.GetMPool())
 	batch1 := &batch.Batch{
-		Cnt: 1,
 		Attrs: []string{
 			catalog.BlockMeta_Delete_ID,
 			catalog.BlockMeta_DeltaLoc,
@@ -91,7 +89,6 @@ func TestMergeDelete(t *testing.T) {
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
 	metaLocBat1 := &batch.Batch{
-		Cnt: 1,
 		Attrs: []string{
 			catalog.Row_ID,
 		},
@@ -119,7 +116,6 @@ func TestMergeDelete(t *testing.T) {
 	require.Nil(t, err)
 
 	metaLocBat2 := &batch.Batch{
-		Cnt: 1,
 		Attrs: []string{
 			catalog.BlockMetaOffset,
 		},
@@ -131,7 +127,6 @@ func TestMergeDelete(t *testing.T) {
 	require.Nil(t, err)
 
 	metaLocBat3 := &batch.Batch{
-		Cnt: 1,
 		Attrs: []string{
 			catalog.BlockMeta_DeltaLoc,
 		},
@@ -144,7 +139,6 @@ func TestMergeDelete(t *testing.T) {
 
 	vcu32_2, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(45), 3, proc.GetMPool())
 	batch2 := &batch.Batch{
-		Cnt: 1,
 		Attrs: []string{
 			catalog.BlockMeta_Delete_ID,
 			catalog.BlockMeta_DeltaLoc,
