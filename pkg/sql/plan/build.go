@@ -58,11 +58,7 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	}, err
 }
 
-func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepareStmt bool, skipStats bool, isExplain bool) (*Plan, error) {
-	// if !isExplain {
-	// 	return buildInsert(stmt, ctx, false, isPrepareStmt)
-	// }
-
+func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
@@ -76,10 +72,10 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
-		//if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
-		return buildInsert(stmt, ctx, false, isPrepareStmt)
-		//}
-		//return nil, err
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+			return buildInsert(stmt, ctx, false, isPrepareStmt)
+		}
+		return nil, err
 	}
 	ctx.SetViews(bindCtx.views)
 
@@ -190,7 +186,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, isE
 	case *tree.ExplainPhyPlan:
 		return buildExplainPhyPlan(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:
-		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false, isExplain)
+		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Replace:
 		return buildReplace(stmt, ctx, isPrepareStmt, false)
 	case *tree.Update:

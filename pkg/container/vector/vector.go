@@ -3189,7 +3189,7 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 			vs[i] = vs[sel]
 		}
 		nulls.Filter(v.gsp, sels, false)
-		nulls.Filter(v.nsp, sels, v.offHeap)
+		nulls.Filter(v.nsp, sels, false)
 		v.length = len(sels)
 	} else if len(sels) > 0 {
 		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < v.length; oldIdx++ {
@@ -3225,7 +3225,7 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate b
 			idx++
 		}
 		nulls.FilterByMask(v.gsp, sels, false)
-		nulls.FilterByMask(v.nsp, sels, v.offHeap)
+		nulls.FilterByMask(v.nsp, sels, false)
 		v.length = length
 	} else if length > 0 {
 		sel := itr.Next()
@@ -3268,7 +3268,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	ws = ws[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	nulls.Filter(v.gsp, sels, false)
-	nulls.Filter(v.nsp, sels, v.offHeap)
+	nulls.Filter(v.nsp, sels, false)
 	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
 	if v.cantFreeData {
 		v.cantFreeData = false

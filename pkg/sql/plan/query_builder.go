@@ -1630,6 +1630,60 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
+	case plan.Node_PRE_INSERT:
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		for i, globalRef := range childRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+		if node.PreInsertCtx.CompPkeyExpr != nil {
+			globalRef := [2]int32{node.BindingTags[0], 0}
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: node.PreInsertCtx.CompPkeyExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: 0,
+					},
+				},
+			})
+		} else if node.PreInsertCtx.ClusterByExpr != nil {
+			globalRef := [2]int32{node.BindingTags[0], 0}
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: node.PreInsertCtx.ClusterByExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: 0,
+					},
+				},
+			})
+		}
+
 	default:
 		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
 	}
