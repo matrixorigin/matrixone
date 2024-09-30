@@ -448,12 +448,16 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		return op
 	case vm.Shuffle:
 		sourceArg := sourceOp.(*shuffle.Shuffle)
+		if sourceArg.GetShufflePool() == nil {
+			sourceArg.SetShufflePool(shuffle.NewShufflePool(sourceArg.BucketNum, int32(maxParallel)))
+		}
 		op := shuffle.NewArgument()
+		op.SetShufflePool(sourceArg.GetShufflePool())
 		op.ShuffleType = sourceArg.ShuffleType
 		op.ShuffleColIdx = sourceArg.ShuffleColIdx
 		op.ShuffleColMax = sourceArg.ShuffleColMax
 		op.ShuffleColMin = sourceArg.ShuffleColMin
-		op.AliveRegCnt = sourceArg.AliveRegCnt
+		op.BucketNum = sourceArg.BucketNum
 		op.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
 		op.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
@@ -1370,12 +1374,12 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.S
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
-	arg.AliveRegCnt = int32(len(ss))
+	arg.BucketNum = int32(len(ss))
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	if left && len(node.RuntimeFilterProbeList) > 0 {
 		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
@@ -1390,12 +1394,12 @@ func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle 
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
-	arg.AliveRegCnt = int32(len(ss))
+	arg.BucketNum = int32(len(ss))
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
 }
