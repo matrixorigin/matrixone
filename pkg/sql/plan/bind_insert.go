@@ -43,9 +43,6 @@ func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.Objec
 		if len(dbName) == 0 {
 			dbName = builder.compCtx.DefaultDatabase()
 		}
-		// if dbName == catalog.MO_CATALOG || dbName == catalog.MO_DATABASE || dbName == catalog.MO_TABLES || dbName == catalog.MO_COLUMNS {
-		// 	return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "cannot insert/update/delete from catalog")
-		// }
 
 		objRefs[i], tableDefs[i] = builder.compCtx.Resolve(dbName, tblName, nil)
 		if tableDefs[i] == nil {
