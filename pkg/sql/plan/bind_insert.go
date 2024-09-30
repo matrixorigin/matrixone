@@ -116,7 +116,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		}()
 	}
 
-	lastNodeID, colName2Idx, err := builder.initInsertStmt(ctx, stmt, tableDefs[0])
+	lastNodeID, colName2Idx, err := builder.initInsertStmt(ctx, stmt, objRefs[0], tableDefs[0])
 	if err != nil {
 		return 0, err
 	}
@@ -417,7 +417,7 @@ func (builder *QueryBuilder) getInsertColsFromStmt(stmt *tree.Insert, tableDef *
 	return insertColNames, nil
 }
 
-func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Insert, tableDef *plan.TableDef) (int32, map[string]int32, error) {
+func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Insert, objRef *plan.ObjectRef, tableDef *plan.TableDef) (int32, map[string]int32, error) {
 	var (
 		lastNodeID int32
 		err        error
@@ -499,7 +499,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		return 0, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 	}
 
-	tag := lastNode.BindingTags[0]
+	selectTag := lastNode.BindingTags[0]
 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
 	insertColToExpr := make(map[string]*Expr)
@@ -509,7 +509,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 			Typ: oldProject[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: tag,
+					RelPos: selectTag,
 					ColPos: int32(i),
 				},
 			},
@@ -528,28 +528,36 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		insertColToExpr[column] = projExpr
 	}
 
-	// have tables : t1(a default 0, b int, pk(a,b)) ,  t2(j int,k int)
-	// rewrite 'insert into t1 select * from t2' to
-	// select 'select _t.j, _t.k from (select * from t2) _t(j,k)
-	// --------
-	// rewrite 'insert into t1(b) values (1)' to
-	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
-	projectList := make([]*Expr, 0, len(tableDef.Cols)-1)
+	hasAutoCol := false
+	for _, col := range tableDef.Cols {
+		if col.Typ.AutoIncr {
+			hasAutoCol = true
+			break
+		}
+	}
+
+	projList1 := make([]*Expr, 0, len(tableDef.Cols)-1)
+	projList2 := make([]*Expr, 0, len(tableDef.Cols)-1)
+	projTag1 := builder.genNewTag()
+	preInsertTag := builder.genNewTag()
+
+	var (
+		compPkeyExpr  *plan.Expr
+		clusterByExpr *plan.Expr
+	)
+
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
-			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projectList))
-			projectList = append(projectList, oldExpr)
-			// if col.Typ.AutoIncr {
-			// if _, ok := pkCols[col.Name]; ok {
-			// 	uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
-			// 	if err != nil {
-			// 		return false, nil, err
-			// 	}
-			// 	if uniqueCheckOnAutoIncr == "Error" {
-			// 		return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
-			// 	}
-			// }
-			// }
+			projList2 = append(projList2, &plan.Expr{
+				Typ: oldExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: projTag1,
+						ColPos: int32(len(projList1)),
+					},
+				},
+			})
+			projList1 = append(projList1, oldExpr)
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
@@ -559,9 +567,16 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 				args[k] = DeepCopyExpr(insertColToExpr[part])
 			}
 
-			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projectList))
-			pkExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
-			projectList = append(projectList, pkExpr)
+			compPkeyExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			projList2 = append(projList2, &plan.Expr{
+				Typ: compPkeyExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: preInsertTag,
+						ColPos: 0,
+					},
+				},
+			})
 		} else if tableDef.ClusterBy != nil && col.Name == tableDef.ClusterBy.Name {
 			names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			args := make([]*plan.Expr, len(names))
@@ -570,34 +585,65 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 				args[k] = DeepCopyExpr(insertColToExpr[part])
 			}
 
-			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projectList))
-			pkExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
-			projectList = append(projectList, pkExpr)
+			clusterByExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+			projList2 = append(projList2, &plan.Expr{
+				Typ: clusterByExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: preInsertTag,
+						ColPos: 0,
+					},
+				},
+			})
 		} else {
-			// TODO: handle auto-increment column
-			if col.Typ.AutoIncr {
-				return 0, nil, moerr.NewUnsupportedDML(builder.GetContext(), "no given value for auto increment column")
-			}
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
 				return 0, nil, err
 			}
 
-			projectList = append(projectList, defExpr)
+			projList2 = append(projList2, &plan.Expr{
+				Typ: defExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: projTag1,
+						ColPos: int32(len(projList1)),
+					},
+				},
+			})
+			projList1 = append(projList1, defExpr)
 		}
 
 		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
 	}
 
 	// append ProjectNode
-	projectCtx := NewBindContext(builder, bindCtx)
-	lastTag := builder.genNewTag()
+	tmpCtx := NewBindContext(builder, bindCtx)
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
-		ProjectList: projectList,
+		ProjectList: projList1,
 		Children:    []int32{lastNodeID},
-		BindingTags: []int32{lastTag},
-	}, projectCtx)
+		BindingTags: []int32{projTag1},
+	}, tmpCtx)
+
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PRE_INSERT,
+		Children: []int32{lastNodeID},
+		PreInsertCtx: &plan.PreInsertCtx{
+			Ref:           objRef,
+			TableDef:      tableDef,
+			HasAutoCol:    hasAutoCol,
+			CompPkeyExpr:  compPkeyExpr,
+			ClusterByExpr: clusterByExpr,
+		},
+		BindingTags: []int32{preInsertTag},
+	}, tmpCtx)
+
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: projList2,
+		Children:    []int32{lastNodeID},
+		BindingTags: []int32{builder.genNewTag()},
+	}, tmpCtx)
 
 	return lastNodeID, colName2Idx, nil
 }
