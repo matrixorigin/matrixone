@@ -371,8 +371,7 @@ func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
 }
 
 func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
-	bat, _ := proc.Base.valueScanBatch[key]
-	return bat
+	return proc.Base.valueScanBatch[key]
 }
 
 func (proc *Process) CleanValueScanBatchs() {

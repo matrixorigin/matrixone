@@ -31,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (ValueScan *ValueScan) String(buf *bytes.Buffer) {
+func (valueScan *ValueScan) String(buf *bytes.Buffer) {
 	buf.WriteString(thisOperator + ": value_scan")
 }
 

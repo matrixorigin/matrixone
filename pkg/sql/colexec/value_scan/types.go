@@ -90,17 +90,15 @@ func (valueScan *ValueScan) Release() {
 	}
 }
 
-func (valueScan *ValueScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+func (valueScan *ValueScan) Reset(proc *process.Process, _ bool, _ error) {
 	valueScan.runningCtx.nowIdx = 0
 	valueScan.doBatchClean(proc)
 	valueScan.ResetProjection(proc)
-	return
 }
 
-func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+func (valueScan *ValueScan) Free(proc *process.Process, _ bool, _ error) {
 	valueScan.FreeProjection(proc)
 	valueScan.doBatchClean(proc)
-	return
 }
 
 func (valueScan *ValueScan) doBatchClean(proc *process.Process) {
@@ -121,7 +119,7 @@ func (valueScan *ValueScan) doBatchClean(proc *process.Process) {
 }
 
 // TypeName implement the `reuse.ReusableObject` interface.
-func (ValueScan *ValueScan) TypeName() string {
+func (valueScan ValueScan) TypeName() string {
 	return thisOperator
 }
 
@@ -129,6 +127,6 @@ func (valueScan *ValueScan) GetOperatorBase() *vm.OperatorBase {
 	return &valueScan.OperatorBase
 }
 
-func (ValueScan *ValueScan) OpType() vm.OpType {
+func (valueScan *ValueScan) OpType() vm.OpType {
 	return vm.ValueScan
 }
