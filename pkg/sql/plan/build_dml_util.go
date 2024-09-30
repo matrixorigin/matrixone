@@ -880,6 +880,12 @@ func buildInsertPlansWithRelatedHiddenTable(
 		return err
 	}
 
+	// ERIC
+	err = buildPostInsertIndexPlans(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -1268,6 +1274,7 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 				} else if catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
 					delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
 				}
+				// ERIC fulltext
 			}
 		}
 	}
@@ -4273,5 +4280,73 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 		buildDeleteMultiTableIndexes(ctx, builder, bindCtx, delCtx, multiTableIndexes)
 	}
 
+	return nil
+}
+
+// build post insert fulltext index plan
+func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
+	updateColLength int, sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
+
+	return nil
+}
+
+// build post insert fulltext index plan
+func buildPostInsertIndexPlans(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
+	updateColLength int, sourceStep int32, ifInsertFromUniqueColMap map[string]bool) error {
+	var err error
+
+	for idx, indexdef := range tableDef.Indexes {
+
+		if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+			err = buildPostInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep,
+				ifInsertFromUniqueColMap, indexdef, idx)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// build post insert index plans
+func buildPostDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
+	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
+
+	return nil
+}
+
+// build post delete index plans
+func buildPostDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
+	var err error
+
+	//isUpdate := delCtx.updateColLength > 0
+
+	//hasUniqueKey := haveUniqueKey(delCtx.tableDef)
+	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
+	//canTruncate := delCtx.isDeleteWithoutFilters
+
+	if !hasSecondaryKey {
+		return nil
+	}
+
+	typMap := make(map[string]plan.Type)
+	posMap := make(map[string]int)
+	colMap := make(map[string]*ColDef)
+	for idx, col := range delCtx.tableDef.Cols {
+		posMap[col.Name] = idx
+		typMap[col.Name] = col.Typ
+		colMap[col.Name] = col
+	}
+
+	for idx, indexdef := range delCtx.tableDef.Indexes {
+
+		if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+			err = buildPostDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
