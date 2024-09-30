@@ -284,49 +284,49 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int64 {
 
 func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int64 {
 	sels := ap.getSels()
-	buckertNum := uint64(ap.BucketNum)
+	bucketNum := uint64(ap.BucketNum)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), buckertNum)
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int64(row))
 		}
 	case types.T_int32:
 		groupByCol := vector.MustFixedColNoTypeCheck[int32](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), buckertNum)
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int64(row))
 		}
 	case types.T_int16:
 		groupByCol := vector.MustFixedColNoTypeCheck[int16](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), buckertNum)
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int64(row))
 		}
 	case types.T_uint64:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint64](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(v, buckertNum)
+			regIndex := plan2.SimpleInt64HashToRange(v, bucketNum)
 			sels[regIndex] = append(sels[regIndex], int64(row))
 		}
 	case types.T_uint32:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint32](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), buckertNum)
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int64(row))
 		}
 	case types.T_uint16:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), buckertNum)
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int64(row))
 		}
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleCharHashToRange(v.GetByteSlice(area), buckertNum)
+			regIndex := plan2.SimpleCharHashToRange(v.GetByteSlice(area), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int64(row))
 		}
 	default:
