@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net"
 	"reflect"
 	"strings"
 	"testing"
@@ -10315,10 +10314,9 @@ func TestUpload(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		proc := testutil.NewProc()
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go writeExceptResult(clientConn, []*Packet{
+		tConn := &testConn{}
+		defer tConn.Close()
+		writeExceptResult(tConn, []*Packet{
 			{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1},
 			{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2},
 			{Length: 0, Payload: []byte(""), SequenceID: 3},
@@ -10338,7 +10336,7 @@ func TestUpload(t *testing.T) {
 		pu.FileService = fs
 		setGlobalPu(pu)
 
-		ioses, err := NewIOSession(serverConn, pu)
+		ioses, err := NewIOSession(tConn, pu)
 		assert.Nil(t, err)
 		proto := &testMysqlWriter{
 			ioses: ioses,

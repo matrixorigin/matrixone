@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"math"
-	"net"
 	"testing"
 	"time"
 
@@ -410,17 +409,13 @@ func TestSession_GetTempTableStorage(t *testing.T) {
 }
 
 func TestIfInitedTempEngine(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
 
 	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
-		ioses, err := NewIOSession(serverConn, pu)
+		ioses, err := NewIOSession(&testConn{}, pu)
 		if err != nil {
 			t.Error(err)
 		}
@@ -435,7 +430,7 @@ func TestIfInitedTempEngine(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	setGlobalPu(pu)
-
+	setGlobalSessionAlloc(newLeakCheckAllocator())
 	ses := genSession(ctrl, pu)
 	assert.False(t, ses.GetTxnHandler().HasTempEngine())
 }
