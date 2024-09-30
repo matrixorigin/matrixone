@@ -840,7 +840,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				val := row[colIdx].(int32)
-				if err := vector.AppendFixed[int32](bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed[int32](bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
@@ -851,7 +852,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					continue
 				}
 				val := row[colIdx].(int64)
-				if err := vector.AppendFixed[int64](bat.Vecs[colIdx], val, false, pool); err != nil {
+				err := vector.AppendFixed[int64](bat.Vecs[colIdx], val, false, pool)
+				if err != nil {
 					return nil, nil, err
 				}
 			}
