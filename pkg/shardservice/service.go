@@ -183,6 +183,11 @@ func (s *service) Create(
 			client.ClosedEvent,
 			func(txn client.TxnEvent) {
 				if txn.Committed() {
+					s.logger.Info("sharding table created",
+						zap.Uint64("table", table),
+						zap.String("committed", txn.Txn.CommitTS.DebugString()),
+					)
+
 					// The callback here is not guaranteed to execute after the transaction has
 					// already committed.
 					// The creation will lazy execute in Read.
@@ -491,12 +496,20 @@ func (s *service) doTask(
 			v2.ReplicaCountGauge.Set(float64(s.cache.allocate.Load().replicasCount(nil)))
 			timer.Reset(s.cfg.HeartbeatDuration.Duration)
 		case table := <-s.createC:
+			s.logger.Info(
+				"handle create table",
+				zap.Uint64("table", table),
+			)
 			if err := s.handleCreateTable(table); err != nil {
 				s.logger.Error("failed to create table shards",
 					zap.Uint64("table", table),
 					zap.Error(err))
 			}
 		case table := <-s.deleteC:
+			s.logger.Info(
+				"handle delete table",
+				zap.Uint64("table", table),
+			)
 			if err := s.handleDeleteTable(table); err != nil {
 				s.logger.Error("failed to delete table shards",
 					zap.Uint64("table", table),
@@ -719,12 +732,20 @@ func (s *service) handleCheckChanged() error {
 	return s.storage.GetChanged(
 		m,
 		func(deleted uint64) {
+			s.logger.Info(
+				"found table deleted",
+				zap.Uint64("table", deleted),
+			)
 			select {
 			case s.deleteC <- deleted:
 			default:
 			}
 		},
 		func(changed uint64) {
+			s.logger.Info(
+				"found table changed",
+				zap.Uint64("table", changed),
+			)
 			select {
 			case s.createC <- changed:
 			default:
