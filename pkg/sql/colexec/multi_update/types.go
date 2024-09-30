@@ -87,7 +87,7 @@ type MultiUpdateCtx struct {
 	InsertCols []int
 	DeleteCols []int
 
-	PartitionTableIDs   []int32  // Align array index with the partition number
+	PartitionTableIDs   []uint64 // Align array index with the partition number
 	PartitionTableNames []string // Align array index with the partition number
 	PartitionIdx        int      // The array index position of the partition expression column
 

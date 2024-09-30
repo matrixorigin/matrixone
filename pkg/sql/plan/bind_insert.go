@@ -64,9 +64,6 @@ func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.Objec
 			}
 		}
 
-		if tableDefs[i].Partition != nil {
-			return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "partition table")
-		}
 		if tableDefs[i].Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 			return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "fake primary key")
 		}
@@ -285,34 +282,83 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 	}
 
 	dmlNode := &plan.Node{
-		NodeType: plan.Node_MULTI_UPDATE,
-		Children: []int32{lastNodeID},
+		NodeType:    plan.Node_MULTI_UPDATE,
+		BindingTags: []int32{builder.genNewTag()},
 	}
-	var lockTargets []*plan.LockTarget
+	var lockOpNode *Node
+	selectNodeTag := selectNode.BindingTags[0]
+	var partitionExpr *Expr
 
 	for i, tableDef := range tableDefs {
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
+		updateCtx := &plan.UpdateCtx{
+			ObjRef:     objRefs[i],
+			TableDef:   tableDef,
+			InsertCols: insertCols,
+		}
+		if tableDef.Partition != nil {
+			partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, objRefs[i], tableDef)
+			updateCtx.PartitionIdx = int32(len(colName2Idx))
+			updateCtx.PartitionTableIds = partitionTableIDs
+			updateCtx.PartitionTableNames = partitionTableNames
+			partitionExpr, err = getRemapParitionExpr(tableDef, selectNodeTag, colName2Idx)
+			if err != nil {
+				return -1, err
+			}
+
+			projectList := make([]*Expr, len(selectNode.ProjectList)+1)
+			for i := range selectNode.ProjectList {
+				projectList[i] = &plan.Expr{
+					Typ: selectNode.ProjectList[i].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNodeTag,
+							ColPos: int32(i),
+						},
+					},
+				}
+			}
+			projectList[len(selectNode.ProjectList)] = partitionExpr
+			selectNodeTag = builder.genNewTag()
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{lastNodeID},
+				BindingTags: []int32{selectNodeTag},
+				ProjectList: projectList,
+			}, ctx)
+			dmlNode.BindingTags = append(dmlNode.BindingTags, selectNodeTag)
+		}
+
+		lockOpNode = &Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lastNodeID},
+			TableDef:    tableDef,
+			BindingTags: []int32{builder.genNewTag(), selectNodeTag},
+		}
+
 		for k, col := range tableDef.Cols {
 			if col.Name == catalog.Row_ID {
 				continue
 			}
 			if col.Name == tableDef.Pkey.PkeyColName && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-				lockTargets = append(lockTargets, &plan.LockTarget{
+				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
 					PrimaryColIdxInBat: int32(colName2Idx[tableDef.Name+"."+col.Name]),
 					PrimaryColTyp:      col.Typ,
-				})
+				}
+				if partitionExpr != nil {
+					lockTarget.IsPartitionTable = true
+					lockTarget.PartitionTableIds = updateCtx.PartitionTableIds
+					lockTarget.FilterColIdxInBat = updateCtx.PartitionIdx
+				}
+				lockOpNode.LockTargets = append(lockOpNode.LockTargets, lockTarget)
 			}
 
-			insertCols[k].RelPos = selectNode.BindingTags[0]
-			insertCols[k].ColPos = int32(colName2Idx[tableDef.Name+"."+col.Name])
+			insertCols[k].RelPos = selectNodeTag
+			insertCols[k].ColPos = colName2Idx[tableDef.Name+"."+col.Name]
 		}
 
-		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
-			ObjRef:     objRefs[i],
-			TableDef:   tableDef,
-			InsertCols: insertCols,
-		})
+		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 
 		//lastNodeID = builder.appendNode(&plan.Node{
 		//	NodeType: plan.Node_INSERT,
@@ -337,14 +383,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 					continue
 				}
 				if tableDef.Indexes[j].Unique && col.Name == idxTableDef.Pkey.PkeyColName {
-					lockTargets = append(lockTargets, &plan.LockTarget{
+					lockOpNode.LockTargets = append(lockOpNode.LockTargets, &plan.LockTarget{
 						TableId:            idxTableDef.TblId,
 						PrimaryColIdxInBat: int32(colName2Idx[idxTableDef.Name+"."+col.Name]),
 						PrimaryColTyp:      col.Typ,
 					})
 				}
 
-				idxInsertCols[k].RelPos = selectNode.BindingTags[0]
+				idxInsertCols[k].RelPos = selectNodeTag
 				idxInsertCols[k].ColPos = int32(colName2Idx[idxTableDef.Name+"."+col.Name])
 			}
 
@@ -372,17 +418,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			//	InsertDeleteCols: idxInsertCols,
 			//}, ctx)
 		}
+
 	}
 
-	if len(lockTargets) > 0 {
-		lastNodeID = builder.appendNode(&Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{lastNodeID},
-			LockTargets: lockTargets,
-		}, ctx)
-		dmlNode.Children[0] = lastNodeID
+	if lockOpNode != nil {
+		lastNodeID = builder.appendNode(lockOpNode, ctx)
 		reCheckifNeedLockWholeTable(builder)
 	}
+	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, ctx)
 
 	return lastNodeID, err

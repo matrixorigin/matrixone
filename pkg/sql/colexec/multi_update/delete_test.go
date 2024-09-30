@@ -228,9 +228,9 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 
 	if isPartition {
 		for i, updateCtx := range updateCtxs {
-			partTblIDs := make([]int32, len(tableDef.Partition.PartitionTableNames))
+			partTblIDs := make([]uint64, len(tableDef.Partition.PartitionTableNames))
 			for j := range tableDef.Partition.PartitionTableNames {
-				partTblIDs[j] = int32(i*1000 + j)
+				partTblIDs[j] = uint64(i*1000 + j)
 			}
 			updateCtx.PartitionIdx = colCount
 			updateCtx.PartitionTableIDs = partTblIDs

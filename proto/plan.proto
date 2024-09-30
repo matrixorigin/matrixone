@@ -615,7 +615,7 @@ message UpdateCtx {
 	ObjectRef obj_ref	= 1;
 	TableDef table_def	= 2;
 
-	repeated int32 partition_table_ids		= 3;
+	repeated uint64 partition_table_ids		= 3;
 	repeated string partition_table_names	= 4;
 	int32 partition_idx						= 5;
 
