@@ -301,7 +301,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 			if len(hb.UniqueJoinKeys) == 0 {
 				hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executor))
 				for j, vec := range hb.vecs[vecIdx1] {
-					hb.UniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
+					hb.UniqueJoinKeys[j] = vector.NewOffHeapVecWithType(*vec.GetType())
 				}
 			}
 
