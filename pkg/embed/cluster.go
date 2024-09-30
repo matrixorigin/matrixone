@@ -104,22 +104,19 @@ func (c *cluster) Start() error {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
 
-	if err := c.doStartLocked(0); err != nil {
-		return err
-	}
-
+	c.doStartLocked(0)
 	c.state = started
 	return nil
 }
 
-func (c *cluster) doStartLocked(from int) error {
+func (c *cluster) doStartLocked(from int) {
 	var wg sync.WaitGroup
 	errC := make(chan error, 1)
 	defer close(errC)
 	for _, s := range c.services[from:] {
 		if s.serviceType != metadata.ServiceType_CN {
 			if err := s.Start(); err != nil {
-				return err
+				panic(err)
 			}
 			continue
 		}
@@ -128,23 +125,12 @@ func (c *cluster) doStartLocked(from int) error {
 		go func(s *operator) {
 			defer wg.Done()
 			if err := s.Start(); err != nil {
-				select {
-				case errC <- err:
-					return
-				default:
-				}
-				return
+				panic(err)
 			}
 		}(s)
 	}
-	wg.Wait()
 
-	select {
-	case err := <-errC:
-		return err
-	default:
-	}
-	return nil
+	wg.Wait()
 }
 
 func (c *cluster) Close() error {
@@ -241,7 +227,8 @@ func (c *cluster) StartNewCNService(n int) error {
 		return err
 	}
 
-	return c.doStartLocked(serviceFrom)
+	c.doStartLocked(serviceFrom)
+	return nil
 }
 
 func (c *cluster) adjust() {
@@ -294,10 +281,6 @@ func (c *cluster) createServiceOperators(from int) error {
 }
 
 func (c *cluster) initConfigs() error {
-	if len(c.files) > 0 {
-		return nil
-	}
-
 	if err := c.initLogServiceConfig(); err != nil {
 		return err
 	}
