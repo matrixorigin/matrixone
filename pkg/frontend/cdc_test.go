@@ -2687,10 +2687,7 @@ func TestCdcTask_Pause(t *testing.T) {
 func TestCdcTask_Cancel(t *testing.T) {
 	ch := make(chan int, 1)
 	go func() {
-		select {
-		case <-ch:
-			return
-		}
+		<-ch
 	}()
 
 	db, mock, err := sqlmock.New()
