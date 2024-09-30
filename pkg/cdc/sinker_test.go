@@ -514,14 +514,14 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	assert.NoError(t, err)
 
 	// receive a tail
-	insertAtomicBat := NewAtomicBatch(nil, t1, t2)
+	insertAtomicBat := NewAtomicBatch(testutil.TestUtilMp, t1, t2)
 	insertBat := batch.New(true, []string{"a", "ts"})
 	insertBat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil)
 	insertBat.Vecs[1] = testutil.MakeTSVector([]types.TS{t1}, nil)
 	insertBat.SetRowCount(3)
 	insertAtomicBat.Append(packer, insertBat, 1, 0)
 
-	deleteAtomicBat := NewAtomicBatch(nil, t1, t2)
+	deleteAtomicBat := NewAtomicBatch(testutil.TestUtilMp, t1, t2)
 	deleteBat := batch.New(true, []string{"a", "ts"})
 	deleteBat.Vecs[0] = testutil.MakeUint64Vector([]uint64{4}, nil)
 	deleteBat.Vecs[1] = testutil.MakeTSVector([]types.TS{t1}, nil)
@@ -767,7 +767,7 @@ func Test_mysqlSinker_sinkRemain(t *testing.T) {
 	fromTs := types.BuildTS(1, 1)
 	toTs := types.BuildTS(2, 1)
 	atomicBat := &AtomicBatch{
-		Mp:      nil,
+		Mp:      testutil.TestUtilMp,
 		From:    fromTs,
 		To:      toTs,
 		Batches: []*batch.Batch{bat},

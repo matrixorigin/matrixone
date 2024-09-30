@@ -1555,7 +1555,7 @@ func updateCdcTask(
 		taskKeyMap[tInfo] = struct{}{}
 	}
 
-	if empty {
+	if taskName != "" && empty {
 		return 0, moerr.NewInternalErrorf(ctx, "no cdc task found, task name: %s", taskName)
 	}
 
