@@ -62,7 +62,7 @@ func (ba *BufferAllocator) Alloc(size int) ([]byte, error) {
 }
 
 func (ba *BufferAllocator) Free(buf []byte) {
-	if buf == nil || len(buf) == 0 || cap(buf) == 0 {
+	if len(buf) == 0 || cap(buf) == 0 {
 		return
 	}
 	ba.allocator.Free(buf)

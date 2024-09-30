@@ -1180,6 +1180,8 @@ func testDefer1(t *testing.T) {
 	a = 10
 
 	err = moerr.NewInternalErrorNoCtx("err is not nil")
+
+	fmt.Println(a)
 }
 
 func Test_defer(t *testing.T) {
