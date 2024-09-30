@@ -191,7 +191,7 @@ insert into pri01 values (1,1), (2,2), (3,3);
 insert into aff01 values (1,1), (2,2), (3,3);
 -- @ignore:2
 select * from mo_catalog.mo_retention;
-select sleep(2);
+select sleep(3);
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
 select sleep(1);
