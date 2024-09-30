@@ -969,6 +969,7 @@ type CdcTask struct {
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
 	sunkWatermarkUpdater *cdc2.WatermarkUpdater
+	holdCh               chan int
 }
 
 func NewCdcTask(
@@ -1055,11 +1056,11 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 
 	if firstTime {
 		// hold
-		ch := make(chan int, 1)
+		cdc.holdCh = make(chan int, 1)
 		select {
 		case <-ctx.Done():
 			break
-		case <-ch:
+		case <-cdc.holdCh:
 			break
 		}
 	}
@@ -1295,7 +1296,13 @@ func (cdc *CdcTask) Cancel() error {
 	if cdc.activeRoutine.Cancel != nil {
 		close(cdc.activeRoutine.Cancel)
 	}
-	return cdc.sunkWatermarkUpdater.DeleteAllFromDb()
+
+	if err := cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
+		return err
+	}
+
+	cdc.holdCh <- 1
+	return nil
 }
 
 func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client.TxnOperator) error {
@@ -1322,6 +1329,7 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		tableDef,
 		cdc2.DefaultRetryTimes,
 		cdc2.DefaultRetryDuration,
+		cdc.activeRoutine,
 	)
 	if err != nil {
 		return err
@@ -1537,12 +1545,18 @@ func updateCdcTask(
 		_ = rows.Close()
 	}()
 
+	empty := true
 	for rows.Next() {
+		empty = false
 		if err = rows.Scan(&taskId); err != nil {
 			return 0, err
 		}
 		tInfo := taskservice.CdcTaskKey{AccountId: accountId, TaskId: taskId}
 		taskKeyMap[tInfo] = struct{}{}
+	}
+
+	if taskName != "" && empty {
+		return 0, moerr.NewInternalErrorf(ctx, "no cdc task found, task name: %s", taskName)
 	}
 
 	var prepare *sql.Stmt
@@ -1673,7 +1687,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	defer func() {
 		cdc2.FinishTxnOp(ctx, err, txnOp, pu.StorageEngine)
 	}()
-	timestamp := txnOp.SnapshotTS().ToStdTime().String()
+	timestamp := txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
 
 	// get from task table
 	sql := getSqlForGetTask(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
@@ -1769,7 +1783,7 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 				return
 			}
 
-			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark.ToStdTime().String())
+			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark.ToStdTime().In(time.Local).String())
 		}
 	}
 

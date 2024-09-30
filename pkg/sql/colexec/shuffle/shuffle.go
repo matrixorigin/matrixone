@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -52,9 +51,6 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	}
 	if shuffle.ctr.sels == nil {
 		shuffle.ctr.sels = make([][]int64, shuffle.BucketNum)
-		for i := 0; i < int(shuffle.BucketNum); i++ {
-			shuffle.ctr.sels[i] = make([]int64, 0, colexec.DefaultBatchSize)
-		}
 	}
 	if shuffle.GetShufflePool() == nil {
 		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1))
@@ -171,9 +167,11 @@ func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
 	return nil
 }
 
-func (shuffle *Shuffle) getSels() [][]int64 {
+func (shuffle *Shuffle) clearSels() [][]int64 {
 	for i := range shuffle.ctr.sels {
-		shuffle.ctr.sels[i] = shuffle.ctr.sels[i][:0]
+		if len(shuffle.ctr.sels[i]) > 0 {
+			shuffle.ctr.sels[i] = shuffle.ctr.sels[i][:0]
+		}
 	}
 	return shuffle.ctr.sels
 }
@@ -209,7 +207,7 @@ func shuffleConstVectorByHash(ap *Shuffle, bat *batch.Batch) uint64 {
 }
 
 func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int64 {
-	sels := ap.getSels()
+	sels := ap.clearSels()
 	lenRegs := uint64(ap.BucketNum)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
@@ -283,7 +281,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int64 {
 }
 
 func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int64 {
-	sels := ap.getSels()
+	sels := ap.clearSels()
 	bucketNum := uint64(ap.BucketNum)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
@@ -457,7 +455,7 @@ func allBatchInOneRange(ap *Shuffle, bat *batch.Batch) (bool, uint64) {
 }
 
 func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int64 {
-	sels := ap.getSels()
+	sels := ap.clearSels()
 	bucketNum := uint64(ap.BucketNum)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
@@ -577,7 +575,7 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int64 
 }
 
 func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int64 {
-	sels := ap.getSels()
+	sels := ap.clearSels()
 	bucketNum := uint64(ap.BucketNum)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
