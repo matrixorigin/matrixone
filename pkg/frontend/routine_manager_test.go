@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -65,48 +66,90 @@ func Test_Closed(t *testing.T) {
 
 }
 
+var _ net.Addr = new(testAddr)
+
+type testAddr struct {
+}
+
+func (ta *testAddr) Network() string {
+	return "test network"
+}
+
+func (ta *testAddr) String() string {
+	return "test addr"
+}
+
 var _ net.Conn = new(testConn)
 
+const (
+	testConnModNormal int = iota
+	testConnModCloseReturnErr
+	testConnModSetReadDeadlineReturnErr
+	testConnModReadReturnErr
+	testConnModReadPanic
+)
+
 type testConn struct {
+	mod    int
+	data   []byte
+	local  testAddr
+	remote testAddr
 }
 
 func (tc *testConn) Read(b []byte) (n int, err error) {
-	//TODO implement me
-	panic("implement me")
+	if tc.mod == testConnModReadReturnErr {
+		return 0, moerr.NewInternalErrorNoCtx("test conn read returns error")
+	} else if tc.mod == testConnModReadPanic {
+		panic("test conn read panic")
+	}
+	blen := len(b)
+	if blen == 0 {
+		return 0, nil
+	}
+	dlen := len(tc.data)
+	readLen := min(dlen, blen)
+	if readLen == 0 {
+		return 0, io.EOF
+	}
+	copy(b, tc.data[0:readLen])
+	tc.data = tc.data[readLen:]
+	return readLen, nil
 }
 
 func (tc *testConn) Write(b []byte) (n int, err error) {
-	//TODO implement me
-	panic("implement me")
+	tc.data = append(tc.data, b...)
+	return len(b), nil
 }
 
 func (tc *testConn) Close() error {
-	return moerr.NewInternalErrorNoCtx("must be error")
+	if tc.mod == testConnModCloseReturnErr {
+		return moerr.NewInternalErrorNoCtx("test close returns error")
+	}
+	return nil
 }
 
 func (tc *testConn) LocalAddr() net.Addr {
-	//TODO implement me
-	panic("implement me")
+	return &tc.local
 }
 
 func (tc *testConn) RemoteAddr() net.Addr {
-	//TODO implement me
-	panic("implement me")
+	return &tc.remote
 }
 
 func (tc *testConn) SetDeadline(t time.Time) error {
-	//TODO implement me
-	panic("implement me")
+
+	return nil
 }
 
 func (tc *testConn) SetReadDeadline(t time.Time) error {
-	//TODO implement me
-	panic("implement me")
+	if tc.mod == testConnModSetReadDeadlineReturnErr {
+		return moerr.NewInternalErrorNoCtx("SetReadDeadline returns err")
+	}
+	return nil
 }
 
 func (tc *testConn) SetWriteDeadline(t time.Time) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func TestRoutineManager_killClients(t *testing.T) {
