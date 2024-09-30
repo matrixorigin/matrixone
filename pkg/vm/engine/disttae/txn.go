@@ -107,7 +107,6 @@ func (txn *Transaction) WriteBatch(
 	}()
 
 	txn.readOnly.Store(false)
-	bat.Cnt = 1
 	txn.Lock()
 	defer txn.Unlock()
 	// generate rowid for insert

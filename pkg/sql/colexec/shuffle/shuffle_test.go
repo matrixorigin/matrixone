@@ -50,13 +50,27 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
+				types.T_int16.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Range),
+				BucketNum:     5,
+				ShuffleColMin: 1,
+				ShuffleColMax: 1000000,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
 				types.T_int32.ToType(),
 			},
 			arg: &Shuffle{
 				ctr:           container{},
 				ShuffleColIdx: 0,
 				ShuffleType:   int32(plan.ShuffleType_Range),
-				AliveRegCnt:   4,
+				BucketNum:     4,
 				ShuffleColMin: 1,
 				ShuffleColMax: 1000000,
 			},
@@ -70,9 +84,51 @@ func init() {
 				ctr:           container{},
 				ShuffleColIdx: 0,
 				ShuffleType:   int32(plan.ShuffleType_Range),
-				AliveRegCnt:   8,
+				BucketNum:     8,
 				ShuffleColMin: 1,
-				ShuffleColMax: 10000,
+				ShuffleColMax: 8888888,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint16.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Range),
+				BucketNum:     5,
+				ShuffleColMin: 1,
+				ShuffleColMax: 1000000,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint32.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Range),
+				BucketNum:     3,
+				ShuffleColMin: 1,
+				ShuffleColMax: 1000000,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint64.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Range),
+				BucketNum:     8,
+				ShuffleColMin: 1,
+				ShuffleColMax: 999999,
 			},
 		},
 		{
@@ -84,18 +140,78 @@ func init() {
 				ctr:           container{},
 				ShuffleColIdx: 0,
 				ShuffleType:   int32(plan.ShuffleType_Hash),
-				AliveRegCnt:   3,
+				BucketNum:     3,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint64.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     4,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int32.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     5,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint32.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     6,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int16.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     7,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint16.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     8,
 			},
 		},
 	}
 }
 
-func runShuffleCase(t *testing.T, tc shuffleTestCase) {
+func runShuffleCase(t *testing.T, tc shuffleTestCase, hasnull bool) {
 	var result vm.CallResult
 	var count int
 	err := tc.arg.Prepare(tc.proc)
 	require.NoError(t, err)
-	resetChildren(tc.arg, getInputBats(tc))
+	resetChildren(tc.arg, getInputBats(tc, hasnull))
 	for {
 		result, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
@@ -113,9 +229,9 @@ func runShuffleCase(t *testing.T, tc shuffleTestCase) {
 func TestShuffle(t *testing.T) {
 
 	for _, tc := range tcs {
-		runShuffleCase(t, tc)
+		runShuffleCase(t, tc, true)
 		// second run
-		runShuffleCase(t, tc)
+		runShuffleCase(t, tc, false)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -145,30 +261,38 @@ func TestReset(t *testing.T) {
 	}
 }
 
-func getInputBats(tc shuffleTestCase) []*batch.Batch {
+func TestPrint(t *testing.T) {
+	sp := NewShufflePool(4, 1)
+	sp.Print()
+}
+
+func getInputBats(tc shuffleTestCase, hasnull bool) []*batch.Batch {
 	return []*batch.Batch{
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
-		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatch(tc.types, tc.proc, Rows, hasnull),
 		batch.EmptyBatch,
 	}
 }
 
 // create a new block based on the type information
-func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64, hasNull bool) *batch.Batch {
+	if hasNull {
+		return testutil.NewBatchWithNulls(ts, true, int(rows), proc.Mp())
+	}
 	return testutil.NewBatch(ts, true, int(rows), proc.Mp())
 }
 
