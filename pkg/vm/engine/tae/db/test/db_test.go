@@ -10009,7 +10009,7 @@ func TestTransferInMerge2(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 2)
-	schema.Extra.BlockMaxRows = 8192
+	schema.Extra.BlockMaxRows = 5
 	schema.Extra.ObjectMaxBlocks = 256
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 10)
@@ -10028,4 +10028,5 @@ func TestTransferInMerge2(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit(context.Background()))
 	tae.CheckRowsByScan(9, true)
+	t.Log(tae.Catalog.SimplePPString(3))
 }

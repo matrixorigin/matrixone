@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/trace"
+	"sort"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -192,6 +193,9 @@ func (tbl *txnTable) TransferDeletes(
 	if len(tbl.tombstoneTable.tableSpace.stats) != 0 {
 		tGetSoftdeleteObjects := time.Now()
 		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(tbl.store.txn.GetStartTS(), tbl.transferedTS.Next(), ts)
+		sort.Slice(softDeleteObjects, func(i, j int) bool {
+			return softDeleteObjects[i].CreatedAt.LE(&softDeleteObjects[j].CreatedAt)
+		})
 		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
 		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
 		var findTombstoneDuration, readTombstoneDuration, deleteRowsDuration time.Duration
@@ -212,10 +216,10 @@ func (tbl *txnTable) TransferDeletes(
 			if err != nil {
 				return err
 			}
-			if sel.IsEmpty() {
+			id := obj.AsCommonID()
+			if sel.IsEmpty() && transferBatch == nil {
 				continue
 			}
-			id := obj.AsCommonID()
 
 			v2.TxnS3TombstoneTransferDataObjectCounter.Add(1)
 			v2.TxnS3TombstoneTransferStatsCounter.Add(float64(sel.Count()))
@@ -297,13 +301,13 @@ func (tbl *txnTable) TransferDeletes(
 						return err
 					}
 				}
-				if transferBatch != nil {
-					err = transferFn(
-						transferBatch.GetVectorByName(objectio.TombstoneAttr_PK_Attr),
-						transferBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr))
-					if err != nil {
-						return err
-					}
+			}
+			if transferBatch != nil {
+				err = transferFn(
+					transferBatch.GetVectorByName(objectio.TombstoneAttr_PK_Attr),
+					transferBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr))
+				if err != nil {
+					return err
 				}
 			}
 			tbl.store.warChecker.Delete(id)
