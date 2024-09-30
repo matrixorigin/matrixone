@@ -373,6 +373,15 @@ func (tbl *txnTable) TransferDeletes(
 				return err
 			}
 			writerStats := writer.GetObjectStats()
+			logutil.Info(
+				"TN-TRANSFER-TOMBSTONE-FILES",
+				zap.String("table", tbl.GetLocalSchema(false).Name),
+				zap.String("phase", phase),
+				zap.String("from", tbl.transferedTS.Next().ToString()),
+				zap.String("to", ts.ToString()),
+				zap.Int("s-cnt", len(softDeleteObjects)),
+				zap.String("txn", tbl.store.txn.String()),
+			)
 			stats := objectio.NewObjectStatsWithObjectID(name.ObjectId(), false, true, true)
 			objectio.SetObjectStats(stats, &writerStats)
 			tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, *stats)
