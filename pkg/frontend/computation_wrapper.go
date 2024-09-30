@@ -415,7 +415,11 @@ func createCompile(
 
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 	stats.CompileStart()
-	defer stats.CompileEnd()
+	defer func() {
+		stats.CompileEnd()
+		stats.RecordCompileQueryEndS3IO(retCompile.GetConuterSet())
+	}()
+
 	defer func() {
 		if err != nil && retCompile != nil {
 			retCompile.SetIsPrepare(false)

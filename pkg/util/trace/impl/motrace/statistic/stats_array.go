@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 type StatsArray [StatsArrayLength]float64
@@ -265,6 +267,12 @@ type StatsInfo struct {
 
 	// The following attributes are independent statistics for special operations in `CompileQuery` phase, used for reference.
 	CompileTableScanDuration int64 `json:"CompileTableScanDuration"`
+	CompileStageS3Input      int64 `json:"CompileStageS3Input"`
+	CompileStageS3Output     int64 `json:"CompileStageS3Output"`
+
+	// The following attributes are independent statistics for special operations in `Exec physical plan` phase, used for reference.
+	ExecutionStageS3Input  int64 `json:"ExecutionStageS3Input"`
+	ExecutionStageS3Output int64 `json:"ExecutionStageS3Output"`
 	//--------------------------------------------------------------------------------
 
 	//PipelineTimeConsumption      time.Duration
@@ -334,6 +342,35 @@ func (stats *StatsInfo) ExecutionEnd() {
 	}
 	stats.ExecutionEndTime = time.Now()
 	stats.ExecutionDuration = stats.ExecutionEndTime.Sub(stats.ExecutionStartTime)
+}
+
+func (stats *StatsInfo) RecordExecutionEndS3IO(counterSet *perfcounter.CounterSet) {
+	if stats == nil || counterSet == nil {
+		return
+	}
+
+	stats.ExecutionStageS3Input += counterSet.FileService.S3.Put.Load()
+	stats.ExecutionStageS3Input += counterSet.FileService.S3.List.Load()
+
+	stats.ExecutionStageS3Output += counterSet.FileService.S3.Head.Load()
+	stats.ExecutionStageS3Output += counterSet.FileService.S3.Get.Load()
+	stats.ExecutionStageS3Output += counterSet.FileService.S3.Delete.Load()
+	stats.ExecutionStageS3Output += counterSet.FileService.S3.DeleteMulti.Load()
+}
+
+func (stats *StatsInfo) RecordCompileQueryEndS3IO(counterSet *perfcounter.CounterSet) {
+	if stats == nil || counterSet == nil {
+		return
+	}
+
+	stats.CompileStageS3Input += counterSet.FileService.S3.Put.Load()
+	stats.CompileStageS3Input += counterSet.FileService.S3.List.Load()
+
+	stats.CompileStageS3Output += counterSet.FileService.S3.Head.Load()
+	stats.CompileStageS3Output += counterSet.FileService.S3.Get.Load()
+	stats.CompileStageS3Output += counterSet.FileService.S3.Delete.Load()
+	stats.CompileStageS3Output += counterSet.FileService.S3.DeleteMulti.Load()
+
 }
 
 func (stats *StatsInfo) AddOutputTimeConsumption(d time.Duration) {

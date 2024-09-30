@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -294,6 +295,10 @@ func (c *Compile) setAffectedRows(n uint64) {
 func (c *Compile) getAffectedRows() uint64 {
 	affectRows := c.affectRows.Load()
 	return affectRows
+}
+
+func (c *Compile) GetConuterSet() *perfcounter.CounterSet {
+	return c.counterSet
 }
 
 func (c *Compile) run(s *Scope) error {
