@@ -82,6 +82,8 @@ func (sp *ShufflePool) Reset(m *mpool.MPool, force bool) {
 		}
 	}
 	sp.fullBatchIdx = sp.fullBatchIdx[:0]
+	sp.holders = 0
+	sp.finished = 0
 }
 
 func (sp *ShufflePool) Print() { // only for debug
