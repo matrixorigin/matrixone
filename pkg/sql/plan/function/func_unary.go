@@ -1789,3 +1789,26 @@ func LastDay(
 	}
 	return nil
 }
+
+func GroupingFunc(parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := 0; i < length; i++ {
+		var ans int64 = 0
+		power := 0
+		for j := len(parameters) - 1; j >= 0; j-- {
+			rollup := parameters[j].GetGrouping()
+			isRollup := rollup.Contains(uint64(i))
+			if isRollup {
+				ans += 1 << power
+			}
+			power++
+		}
+		rs.AppendMustValue(ans)
+	}
+	return nil
+}

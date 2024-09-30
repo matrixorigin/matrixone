@@ -22,12 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/google/uuid"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,8 +49,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 var _ engine.Engine = new(Engine)
@@ -632,11 +631,11 @@ func (e *Engine) Hints() (h engine.Hints) {
 }
 
 func determineScanType(relData engine.RelData, readerNum int) (scanType int) {
-	scanType = NORMAL
+	scanType = engine_util.NORMAL
 	if relData.DataCnt() < readerNum*SMALLSCAN_THRESHOLD || readerNum == 1 {
-		scanType = SMALL
+		scanType = engine_util.SMALL
 	} else if (readerNum * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
-		scanType = LARGE
+		scanType = engine_util.LARGE
 	}
 	return
 }
@@ -659,7 +658,7 @@ func (e *Engine) BuildBlockReaders(
 	if blkCnt < num {
 		newNum = blkCnt
 		for i := 0; i < num-blkCnt; i++ {
-			rds = append(rds, new(emptyReader))
+			rds = append(rds, new(engine_util.EmptyReader))
 		}
 	}
 	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
@@ -676,16 +675,16 @@ func (e *Engine) BuildBlockReaders(
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
-		ds := NewRemoteDataSource(
+		ds := engine_util.NewRemoteDataSource(
 			ctx,
-			proc,
 			fs,
 			ts,
 			shard)
-		rd, err := NewReader(
+		rd, err := engine_util.NewReader(
 			ctx,
 			proc.Mp(),
-			e,
+			e.packerPool,
+			e.fs,
 			def,
 			ts,
 			expr,
@@ -694,13 +693,13 @@ func (e *Engine) BuildBlockReaders(
 		if err != nil {
 			return nil, err
 		}
-		rd.scanType = scanType
+		rd.SetScanType(scanType)
 		rds = append(rds, rd)
 	}
 	return rds, nil
 }
 
-func (e *Engine) getTNServices() []DNStore {
+func (e *Engine) GetTNServices() []DNStore {
 	cluster := clusterservice.GetMOCluster(e.service)
 	return cluster.GetAllTNServices()
 }

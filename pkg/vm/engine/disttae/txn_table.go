@@ -468,7 +468,7 @@ func (tbl *txnTable) CollectTombstones(
 	txnOffset int,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
-	tombstone := NewEmptyTombstoneData()
+	tombstone := engine_util.NewEmptyTombstoneData()
 
 	//collect uncommitted tombstones
 
@@ -499,15 +499,20 @@ func (tbl *txnTable) CollectTombstones(
 					//deletes in txn.Write maybe comes from PartitionState.Rows ,
 					// PartitionReader need to skip them.
 					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
-					tombstone.rowids = append(tombstone.rowids, vs...)
+					tombstone.AppendInMemory(vs...)
 				}
 			})
 
 		//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-		tbl.getTxn().deletedBlocks.getDeletedRowIDs(&tombstone.rowids)
+		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row *types.Rowid) {
+			tombstone.AppendInMemory(*row)
+		})
 
 		//collect uncommitted persisted tombstones.
-		if err := tbl.getTxn().getUncommittedS3Tombstone(&tombstone.files); err != nil {
+		if err := tbl.getTxn().getUncommittedS3Tombstone(
+			func(stats *objectio.ObjectStats) {
+				tombstone.AppendFiles(*stats)
+			}); err != nil {
 			return nil, err
 		}
 	}
@@ -527,7 +532,7 @@ func (tbl *txnTable) CollectTombstones(
 			for iter.Next() {
 				entry := iter.Entry()
 				//bid, o := entry.RowID.Decode()
-				tombstone.rowids = append(tombstone.rowids, entry.RowID)
+				tombstone.AppendInMemory(entry.RowID)
 			}
 			iter.Close()
 		}
@@ -535,7 +540,10 @@ func (tbl *txnTable) CollectTombstones(
 		//tombstone.SortInMemory()
 		//collect committed persisted tombstones from partition state.
 		snapshot := types.TimestampToTS(tbl.db.op.Txn().SnapshotTS)
-		err = state.CollectTombstoneObjects(snapshot, &tombstone.files)
+		err = state.CollectTombstoneObjects(snapshot,
+			func(stats *objectio.ObjectStats) {
+				tombstone.AppendFiles(*stats)
+			})
 		if err != nil {
 			return nil, err
 		}
@@ -664,8 +672,9 @@ func (tbl *txnTable) doRanges(
 		return
 	}
 
-	data = &blockListRelData{
-		blklist: blocks,
+	data = &engine_util.BlockListRelData{}
+	for i := range blocks.Len() {
+		data.AppendBlockInfo(blocks.Get(i))
 	}
 
 	return
@@ -1617,14 +1626,13 @@ func buildRemoteDS(
 		return
 	}
 
-	newRelData, err := UnmarshalRelationData(buf)
+	newRelData, err := engine_util.UnmarshalRelationData(buf)
 	if err != nil {
 		return
 	}
 
-	source = NewRemoteDataSource(
+	source = engine_util.NewRemoteDataSource(
 		ctx,
-		tbl.proc.Load(),
 		tbl.getTxn().engine.fs,
 		tbl.db.op.SnapshotTS(),
 		newRelData,
@@ -1727,7 +1735,7 @@ func (tbl *txnTable) BuildReaders(
 	proc := p.(*process.Process)
 	//copy from NewReader.
 	if plan2.IsFalseExpr(expr) {
-		return []engine.Reader{new(emptyReader)}, nil
+		return []engine.Reader{new(engine_util.EmptyReader)}, nil
 	}
 
 	if orderBy && num != 1 {
@@ -1736,14 +1744,14 @@ func (tbl *txnTable) BuildReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = NewBlockListRelationData(1)
+		relData = engine_util.NewBlockListRelationData(1)
 	}
 	blkCnt := relData.DataCnt()
 	newNum := num
 	if blkCnt < num {
 		newNum = blkCnt
 		for i := 0; i < num-blkCnt; i++ {
-			rds = append(rds, new(emptyReader))
+			rds = append(rds, new(engine_util.EmptyReader))
 		}
 	}
 
@@ -1765,10 +1773,11 @@ func (tbl *txnTable) BuildReaders(
 		if err != nil {
 			return nil, err
 		}
-		rd, err := NewReader(
+		rd, err := engine_util.NewReader(
 			ctx,
 			proc.Mp(),
-			tbl.getTxn().engine,
+			tbl.getTxn().engine.packerPool,
+			tbl.getTxn().engine.fs,
 			def,
 			tbl.db.op.SnapshotTS(),
 			expr,
@@ -1778,7 +1787,7 @@ func (tbl *txnTable) BuildReaders(
 			return nil, err
 		}
 
-		rd.scanType = scanType
+		rd.SetScanType(scanType)
 		rds = append(rds, rd)
 	}
 	return rds, nil
@@ -1968,31 +1977,33 @@ func (tbl *txnTable) PKPersistedBetween(
 		return getNonSortedPKSearchFuncByPKVec(keys)
 	}
 
+	cacheBat := batch.EmptyBatchWithSize(1)
 	//read block ,check if keys exist in the block.
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
 	for _, blk := range candidateBlks {
-		bat, release, err := blockio.LoadColumns(
+		release, err := blockio.LoadColumns(
 			ctx,
 			[]uint16{uint16(pkSeq)},
 			[]types.Type{pkType},
 			fs,
 			blk.MetaLocation(),
+			&cacheBat,
 			tbl.proc.Load().GetMPool(),
 			fileservice.Policy(0),
 		)
 		if err != nil {
 			return true, err
 		}
-		defer release()
 
 		searchFunc := filter.DecideSearchFunc(blk.IsSorted())
 		if searchFunc == nil {
 			searchFunc = buildUnsortedFilter()
 		}
 
-		sels := searchFunc(bat.Vecs)
+		sels := searchFunc(cacheBat.Vecs)
+		release()
 		if len(sels) > 0 {
 			return true, nil
 		}
@@ -2066,7 +2077,7 @@ func (tbl *txnTable) MergeObjects(
 	// check object visibility
 	for _, objstat := range objStats {
 		info, exist := state.GetObject(*objstat.ObjectShortName())
-		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
+		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LE(&snapshot)) {
 			logutil.Errorf("object not visible: %s", info.String())
 			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 		}

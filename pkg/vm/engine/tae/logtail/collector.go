@@ -97,10 +97,10 @@ func NewDirtyTreeEntry(start, end types.TS, tree *model.Tree) *DirtyTreeEntry {
 }
 
 func (entry *DirtyTreeEntry) Merge(o *DirtyTreeEntry) {
-	if entry.start.Greater(&o.start) {
+	if entry.start.GT(&o.start) {
 		entry.start = o.start
 	}
-	if entry.end.Less(&o.end) {
+	if entry.end.LT(&o.end) {
 		entry.end = o.end
 	}
 	entry.tree.Merge(o.tree)
@@ -159,7 +159,7 @@ func NewDirtyCollector(
 	}
 	collector.storage.entries = btree.NewBTreeGOptions(
 		func(a, b *DirtyTreeEntry) bool {
-			return a.start.Less(&b.start) && a.end.Less(&b.end)
+			return a.start.LT(&b.start) && a.end.LT(&b.end)
 		}, btree.Options{
 			NoLocks: true,
 		})
@@ -235,7 +235,7 @@ func (d *dirtyCollector) GetAndRefreshMerged() (merged *DirtyTreeEntry) {
 	d.storage.RLock()
 	maxTs := d.storage.maxTs
 	d.storage.RUnlock()
-	if maxTs.LessEq(&merged.end) {
+	if maxTs.LE(&merged.end) {
 		return
 	}
 	merged = d.Merge()
@@ -266,7 +266,7 @@ func (d *dirtyCollector) tryUpdateMerged(merged *DirtyTreeEntry) (updated bool) 
 	var old *DirtyTreeEntry
 	for {
 		old = d.merged.Load()
-		if old.end.GreaterEq(&merged.end) {
+		if old.end.GE(&merged.end) {
 			break
 		}
 		if d.merged.CompareAndSwap(old, merged) {
@@ -285,7 +285,7 @@ func (d *dirtyCollector) findRange(lagDuration time.Duration) (from, to types.TS
 	lag := types.BuildTS(now.Physical()-int64(lagDuration), now.Logical())
 	d.storage.RLock()
 	defer d.storage.RUnlock()
-	if lag.LessEq(&d.storage.maxTs) {
+	if lag.LE(&d.storage.maxTs) {
 		return
 	}
 	from, to = d.storage.maxTs.Next(), lag

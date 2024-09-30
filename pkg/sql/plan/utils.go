@@ -25,6 +25,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1067,21 +1069,22 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-// todo: remove this in the future
 func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
-	if tableDef.Pkey != nil {
-		if colName == tableDef.Pkey.PkeyColName {
-			return 0
-		}
-		pkNames := tableDef.Pkey.Names
-		for i := range pkNames {
-			if pkNames[i] == colName {
-				return i
-			}
-		}
-	}
 	if tableDef.ClusterBy != nil {
 		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
+	}
+	if catalog.IsFakePkName(tableDef.Pkey.PkeyColName) {
+		return -1
+	}
+
+	if colName == tableDef.Pkey.PkeyColName {
+		return 0
+	}
+	pkNames := tableDef.Pkey.Names
+	for i := range pkNames {
+		if pkNames[i] == colName {
+			return i
+		}
 	}
 	return -1
 }
@@ -1089,20 +1092,6 @@ func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
 func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	colName := tableDef.Cols[colPos].Name
 	return GetSortOrderByName(tableDef, colName)
-}
-
-func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsConst bool) ([]*plan.Expr, error) {
-	newExprs := DeepCopyExprList(exprs)
-	for i := range newExprs {
-		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst, true)
-		if err != nil {
-			return nil, err
-		}
-		if foldedExpr != nil {
-			newExprs[i] = foldedExpr
-		}
-	}
-	return newExprs, nil
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
@@ -2183,6 +2172,40 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 	}
 }
 
+func GetColExpr(typ Type, relpos int32, colpos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relpos,
+				ColPos: colpos,
+			},
+		},
+	}
+}
+
+func MakeSerialExtractExpr(ctx context.Context, fromExpr *Expr, origType Type, serialIdx int64) (*Expr, error) {
+	return BindFuncExprImplByPlanExpr(ctx, "serial_extract", []*plan.Expr{
+		fromExpr,
+		{
+			Typ: plan.Type{
+				Id: int32(types.T_int64),
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_I64Val{I64Val: serialIdx},
+				},
+			},
+		},
+		{
+			Typ: origType,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{},
+			},
+		},
+	})
+}
+
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
 	rightArg := &plan.Expr{
 		Typ: left.Typ,
@@ -2338,6 +2361,29 @@ func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 	return false
 }
 
+func containGrouping(expr *Expr) bool {
+	var ret bool
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || containGrouping(arg)
+		}
+		ret = ret || (exprImpl.F.Func.ObjName == "grouping")
+	case *plan.Expr_Col:
+		ret = false
+	}
+
+	return ret
+}
+
+func checkGrouping(ctx context.Context, expr *Expr) error {
+	if containGrouping(expr) {
+		return moerr.NewSyntaxError(ctx, "aggregate function grouping not allowed in WHERE clause")
+	}
+	return nil
+}
+
 // a > current_time() + 1 and b < ? + c and d > ? + 2
 // =>
 // a > foldVal1 and b < foldVal2 + c and d > foldVal3
@@ -2426,14 +2472,14 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			panic("EvalFoldVal: fold id not exist")
 		}
 		exe := (*executors)[idx]
-		vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-		if err != nil {
-			return err
-		}
-
 		var data []byte
 		var err error
-		if vec.Length() > 1 {
+
+		if _, ok := exe.(*colexec.ListExpressionExecutor); ok {
+			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			if err != nil {
+				return err
+			}
 			vec.InplaceSortAndCompact()
 			data, err = vec.MarshalBinary()
 			if err != nil {
@@ -2441,6 +2487,10 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			}
 			ef.Fold.IsConst = false
 		} else {
+			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			if err != nil {
+				return err
+			}
 			data, _ = getConstantBytes(vec, false, 0)
 			ef.Fold.IsConst = true
 		}

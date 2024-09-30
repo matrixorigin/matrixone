@@ -43,7 +43,13 @@ func generateBlockWriter(writer *s3Writer,
 	if isDelete {
 		seqnums = nil
 	}
-	blockWriter, err := blockio.NewBlockWriterNew(s3, obj, writer.schemaVersions[idx], seqnums)
+	blockWriter, err := blockio.NewBlockWriterNew(
+		s3,
+		obj,
+		writer.schemaVersions[idx],
+		seqnums,
+		isDelete,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +59,6 @@ func generateBlockWriter(writer *s3Writer,
 	}
 
 	if isDelete {
-		blockWriter.SetDataType(objectio.SchemaTombstone)
 		if writer.pkIdxs[idx] > -1 {
 			blockWriter.SetPrimaryKeyWithType(
 				uint16(writer.pkIdxs[idx]),
@@ -63,7 +68,6 @@ func generateBlockWriter(writer *s3Writer,
 			)
 		}
 	} else {
-		blockWriter.SetDataType(objectio.SchemaData)
 		if writer.pkIdxs[idx] > -1 {
 			blockWriter.SetPrimaryKey(uint16(writer.pkIdxs[idx]))
 		}
