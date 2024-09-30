@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -54,9 +53,6 @@ func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
 }
 
 func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
-	clientConn, serverConn := net.Pipe()
-	go startConsumeRead(clientConn)
-
 	var err error
 	var testPool *mpool.MPool
 	//parameter
@@ -75,7 +71,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	setGlobalSessionAlloc(newLeakCheckAllocator())
 	//io session
 
-	ioses, err := NewIOSession(serverConn, pu)
+	ioses, err := NewIOSession(&testConn{}, pu)
 	assert.Nil(t, err)
 	proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 
