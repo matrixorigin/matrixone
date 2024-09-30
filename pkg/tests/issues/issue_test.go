@@ -432,6 +432,7 @@ func TestDedupForAutoPk(t *testing.T) {
 					WithDatabase(db).
 					WithMinCommittedTS(committedAt),
 			)
+			require.NoError(t, err)
 
 			exec1 := testutils.GetSQLExecutor(cn1)
 			err = exec1.ExecTxn(
