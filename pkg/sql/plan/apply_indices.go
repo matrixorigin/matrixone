@@ -361,7 +361,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 	for i := range node.FilterList {
 		// if already in filterIdx, continue
 		applied := false
-		for j := range filterIdx {
+		for _, j := range filterIdx {
 			if i == j {
 				applied = true
 			}
@@ -371,6 +371,9 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		}
 
 		fn := node.FilterList[i].GetF()
+		if fn == nil {
+			continue
+		}
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			continue
@@ -381,19 +384,38 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 				continue
 			}
 			// it's an extra filter and can be applied on index
-			newFilter := DeepCopyExpr(node.FilterList[i])
-			idxColExpr := &plan.Expr{
-				Typ: idxTableNode.TableDef.Cols[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: idxTableNode.BindingTags[0],
-						ColPos: 0,
-					},
-				},
-			}
+			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
 			deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[0].Typ, int64(k))
+			newFilter := DeepCopyExpr(node.FilterList[i])
 			newFilter.GetF().Args[0] = deserialExpr
 			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
+			applied = true
+		}
+		if applied {
+			continue
+		}
+
+		//if this is extra filter on PK
+		if len(node.TableDef.Pkey.Names) == 1 {
+			//single pk
+			if col.Name == node.TableDef.Pkey.PkeyColName {
+				idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
+				newFilter := DeepCopyExpr(node.FilterList[i])
+				newFilter.GetF().Args[0] = idxColExpr
+				idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
+			}
+		} else {
+			//composite pk
+			for k := range node.TableDef.Pkey.Names {
+				if col.Name == node.TableDef.Pkey.Names[k] {
+					idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
+					deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[0].Typ, int64(k))
+					newFilter := DeepCopyExpr(node.FilterList[i])
+					newFilter.GetF().Args[0] = deserialExpr
+					idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
+					continue
+				}
+			}
 		}
 	}
 }
@@ -504,18 +526,8 @@ func (builder *QueryBuilder) tryIndexOnlyScan(indexes []*IndexDef, node *plan.No
 
 		idxTag := builder.genNewTag()
 		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
-
 		builder.addNameByColRef(idxTag, idxTableDef)
-
-		idxColExpr := &plan.Expr{
-			Typ: idxTableDef.Cols[0].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag,
-					ColPos: 0,
-				},
-			},
-		}
+		idxColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 
 		if colPos != -1 { // a IN (1, 2, 3), a BETWEEN 1 AND 2
 			if numParts > 1 {
@@ -579,15 +591,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(indexes []*IndexDef, node *plan.No
 					funcName = "prefix_eq"
 				}
 				idxFilter, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
-					{
-						Typ: idxTableDef.Cols[0].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: idxTag,
-								ColPos: 0,
-							},
-						},
-					},
+					GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0),
 					rightArg,
 				})
 				idxFilter.Selectivity = compositeFilterSel
@@ -696,27 +700,11 @@ func (builder *QueryBuilder) applyIndexForNonEquiCond(idxDef *IndexDef, node *pl
 	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[node.NodeId])
 
 	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
-	pkExpr := &plan.Expr{
-		Typ: node.TableDef.Cols[pkIdx].Typ,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: node.BindingTags[0],
-				ColPos: pkIdx,
-			},
-		},
-	}
+	pkExpr := GetColExpr(node.TableDef.Cols[pkIdx].Typ, node.BindingTags[0], pkIdx)
 
 	joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		DeepCopyExpr(pkExpr),
-		{
-			Typ: pkExpr.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag,
-					ColPos: 1,
-				},
-			},
-		},
+		GetColExpr(pkExpr.Typ, idxTag, 1),
 	})
 	joinNode := &plan.Node{
 		NodeType: plan.Node_JOIN,
@@ -765,15 +753,7 @@ func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *pl
 			funcName = "prefix_eq"
 		}
 		idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
-			{
-				Typ: idxTableDef.Cols[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: idxTag,
-						ColPos: 0,
-					},
-				},
-			},
+			GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0),
 			rightArg,
 		})
 		idxFilter.Selectivity = idxSel
@@ -792,27 +772,11 @@ func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *pl
 	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[node.NodeId])
 
 	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
-	pkExpr := &plan.Expr{
-		Typ: node.TableDef.Cols[pkIdx].Typ,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: node.BindingTags[0],
-				ColPos: pkIdx,
-			},
-		},
-	}
+	pkExpr := GetColExpr(node.TableDef.Cols[pkIdx].Typ, node.BindingTags[0], pkIdx)
 
 	joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		pkExpr,
-		{
-			Typ: pkExpr.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag,
-					ColPos: 1,
-				},
-			},
-		},
+		GetColExpr(pkExpr.Typ, idxTag, 1),
 	})
 
 	joinNode := &plan.Node{

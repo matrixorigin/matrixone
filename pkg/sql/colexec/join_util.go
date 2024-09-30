@@ -82,7 +82,11 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 		if lenBuf > 0 && bs.Buf[lenBuf-1].RowCount() != DefaultBatchSize {
 			tmp = bs.Buf[lenBuf-1]
 		} else {
-			tmp, err = proc.NewBatchFromSrc(src, 0)
+			preAllocSize := length - offset
+			if len(bs.Buf) > 1 {
+				preAllocSize = DefaultBatchSize
+			}
+			tmp, err = proc.NewBatchFromSrc(src, preAllocSize)
 			if err != nil {
 				return err
 			}
