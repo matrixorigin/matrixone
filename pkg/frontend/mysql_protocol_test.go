@@ -1888,17 +1888,6 @@ func closeDbConn(t *testing.T, db *sql.DB) {
 //
 // }
 
-func startConsumeRead(conn net.Conn) {
-	to := NewTimeout(5*time.Minute, false)
-	buf := make([]byte, 1024)
-	for !to.isTimeout() {
-		_, err := conn.Read(buf)
-		if err != nil {
-			return
-		}
-	}
-}
-
 func writeExceptResult(clientConn net.Conn, packets []*Packet) {
 	for _, packet := range packets {
 		header := make([]byte, HeaderLengthOfTheProtocol)
