@@ -181,6 +181,23 @@ func (p *PitrInfo) IsEmpty() bool {
 		len(p.tables) == 0
 }
 
+func (p *PitrInfo) ToTsList() []types.TS {
+	tsList := make([]types.TS, 0, len(p.account)+len(p.database)+len(p.tables)+1)
+	for _, ts := range p.account {
+		tsList = append(tsList, ts)
+	}
+	for _, ts := range p.database {
+		tsList = append(tsList, ts)
+	}
+	for _, ts := range p.tables {
+		tsList = append(tsList, ts)
+	}
+	if !p.cluster.IsEmpty() {
+		tsList = append(tsList, p.cluster)
+	}
+	return tsList
+}
+
 type SnapshotMeta struct {
 	sync.RWMutex
 
@@ -328,7 +345,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 			sm.aobjDelTsMap[info.deleteAt] = struct{}{}
 		}
 		objectBat, _, err := blockio.LoadOneBlock(
-			ctx, fs, info.stats.ObjectLocation(), objectio.SchemaData)
+			ctx,
+			fs,
+			info.stats.ObjectLocation(),
+			objectio.SchemaData,
+		)
 		if err != nil {
 			return err
 		}
@@ -405,7 +426,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 				info.stats.ObjectName(), info.stats.BlkCnt()))
 		}
 		objectBat, _, err := blockio.LoadOneBlock(
-			ctx, fs, info.stats.ObjectLocation(), objectio.SchemaData)
+			ctx,
+			fs,
+			info.stats.ObjectLocation(),
+			objectio.SchemaData,
+		)
 		if err != nil {
 			return err
 		}
@@ -796,7 +821,7 @@ func (sm *SnapshotMeta) SetTid(tid uint64) {
 }
 
 func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint32, error) {
-	if len(sm.objects) == 0 {
+	if len(sm.objects) == 0 && len(sm.pitr.objects) == 0 {
 		return 0, nil
 	}
 	bat := containers.NewBatch()
@@ -1083,6 +1108,7 @@ func (sm *SnapshotMeta) Rebuild(
 			(*objects)[tid] = make(map[objectio.Segmentid]*objectInfo)
 		}
 		if (*objects)[tid][objectStats.ObjectName().SegmentId()] == nil {
+
 			(*objects)[tid][objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,

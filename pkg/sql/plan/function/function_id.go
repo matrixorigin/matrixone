@@ -126,7 +126,7 @@ const (
 	FIRST_VALUE
 	FLOOR
 	GREATEST
-	GROUPING_ID
+	GROUPING
 	HASH
 	HASH_AGG
 	HEX_DECODE
@@ -320,7 +320,7 @@ const (
 
 	MO_SHOW_VISIBLE_BIN      // parse type/onUpdate/default []byte to visible string
 	MO_SHOW_VISIBLE_BIN_ENUM //  parse type/onUpdate/default []byte to visible string for enum
-	MO_SHOW_COL_QUNIQUE      // show column whether unique key
+	MO_SHOW_COL_UNIQUE       // show column whether unique key
 
 	MO_TABLE_ROWS    // table rows
 	MO_TABLE_SIZE    // table size
@@ -460,6 +460,7 @@ var functionIdRegister = map[string]int32{
 	"min":                   MIN,
 	"sum":                   SUM,
 	"group_concat":          GROUP_CONCAT,
+	"grouping":              GROUPING,
 	"avg":                   AVG,
 	"avg_tw_cache":          AVG_TW_CACHE,
 	"avg_tw_result":         AVG_TW_RESULT,
@@ -638,7 +639,7 @@ var functionIdRegister = map[string]int32{
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
-	"mo_show_col_unique":             MO_SHOW_COL_QUNIQUE,
+	"mo_show_col_unique":             MO_SHOW_COL_UNIQUE,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 	"format":                         FORMAT,

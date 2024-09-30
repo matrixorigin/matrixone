@@ -346,7 +346,7 @@ func doTransferRowids(
 	); err != nil {
 		return
 	}
-	relData := NewBlockListRelationData(1)
+	relData := engine_util.NewBlockListRelationData(1)
 	for i, end := 0, blockList.Len(); i < end; i++ {
 		relData.AppendBlockInfo(blockList.Get(i))
 	}

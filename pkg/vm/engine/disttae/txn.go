@@ -107,7 +107,6 @@ func (txn *Transaction) WriteBatch(
 	}()
 
 	txn.readOnly.Store(false)
-	bat.Cnt = 1
 	txn.Lock()
 	defer txn.Unlock()
 	// generate rowid for insert
@@ -1101,13 +1100,13 @@ func (txn *Transaction) compactionBlksLocked() error {
 
 // TODO::remove it after workspace refactor.
 func (txn *Transaction) getUncommittedS3Tombstone(
-	statsSlice *objectio.ObjectStatsSlice,
+	appendTo func(stats *objectio.ObjectStats),
 ) (err error) {
 	txn.cn_flushed_s3_tombstone_object_stats_list.RLock()
 	defer txn.cn_flushed_s3_tombstone_object_stats_list.RUnlock()
 
 	for _, stats := range txn.cn_flushed_s3_tombstone_object_stats_list.data {
-		statsSlice.Append(stats[:])
+		appendTo(&stats)
 	}
 
 	return nil

@@ -639,25 +639,9 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	// deal with: col1 prefix_in serial([?,?,?,?,?])
-	paramRowCount := 1
-	if len(expr.parameterResults) > 0 {
-		if !expr.parameterResults[0].IsConst() {
-			paramRowCount = expr.parameterResults[0].Length()
-		}
-	}
-	if paramRowCount > 1 && batches[0].RowCount() == 1 {
-		if err = expr.resultVector.PreExtendAndReset(paramRowCount); err != nil {
-			return nil, err
-		}
-		if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, paramRowCount, nil); err != nil {
-			return nil, err
-		}
-	} else {
-		if err = expr.evalFn(
-			expr.parameterResults, expr.resultVector, proc, batches[0].RowCount(), &expr.selectList); err != nil {
-			return nil, err
-		}
+	if err = expr.evalFn(
+		expr.parameterResults, expr.resultVector, proc, batches[0].RowCount(), &expr.selectList); err != nil {
+		return nil, err
 	}
 
 	return expr.resultVector.GetResultVector(), nil
@@ -705,17 +689,16 @@ func (expr *FunctionExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
-func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	relIndex := expr.relIndex
 	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
 	if len(batches) == 1 {
 		relIndex = 0
 	}
 
-	// protected code. In fact, we shouldn't receive a wrong index here.
-	// if happens, it means it's a bad expression for the input data that we cannot calculate it.
-	if len(batches) <= relIndex || len(batches[relIndex].Vecs) <= expr.colIndex {
-		return nil, moerr.NewInternalError(proc.Ctx, "unexpected input batch for column expression")
+	// [hack-#002] our `select * from external table` is `select * from EmptyForConstFoldBatch`.
+	if batches[relIndex] == batch.EmptyForConstFoldBatch {
+		return expr.getConstNullVec(expr.typ, 1), nil
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]

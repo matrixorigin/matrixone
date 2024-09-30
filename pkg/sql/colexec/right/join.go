@@ -235,7 +235,10 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 	}
 	count := ap.ctr.buf.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+	itr := ctr.itr
 
 	rowCountIncrese := 0
 	for i := ap.ctr.lastpos; i < count; i += hashmap.UnitLimit {
