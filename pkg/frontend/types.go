@@ -370,7 +370,6 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
 	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.SetCnt(1)
 		prepareStmt.InsertBat.Clean(prepareStmt.proc.Mp())
 		prepareStmt.InsertBat = nil
 	}
