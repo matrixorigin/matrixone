@@ -209,7 +209,7 @@ func TestObjectStatsToBlockInfoSlice(t *testing.T) {
 		require.True(t, blk.IsAppendable())
 		require.True(t, blk.IsSorted())
 		require.True(t, blk.IsCNCreated())
-		require.True(t, blk.BlockID.Object().Eq(*obj1))
+		require.True(t, blk.BlockID.Object().EQ(obj1))
 		require.Equal(t, uint16(i), blk.BlockID.Sequence())
 		if i == int(blkCnt)-1 {
 			require.Equal(t, uint32(1), blk.MetaLocation().Rows())
@@ -229,7 +229,7 @@ func TestObjectStatsToBlockInfoSlice(t *testing.T) {
 		require.True(t, blk.IsAppendable())
 		require.True(t, blk.IsSorted())
 		require.True(t, blk.IsCNCreated())
-		require.True(t, blk.BlockID.Object().Eq(*obj1))
+		require.True(t, blk.BlockID.Object().EQ(obj1))
 		require.Equal(t, uint16(i-1), blk.BlockID.Sequence())
 		if i == int(blkCnt) {
 			require.Equal(t, uint32(1), blk.MetaLocation().Rows())

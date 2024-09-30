@@ -103,7 +103,7 @@ func (d *BackupDeltaLocDataSource) Close() {
 
 func (d *BackupDeltaLocDataSource) ApplyTombstones(
 	_ context.Context,
-	_ objectio.Blockid,
+	_ *objectio.Blockid,
 	_ []int64,
 	_ engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
@@ -148,7 +148,7 @@ func buildDS(
 }
 
 func GetTombstonesByBlockId(
-	bid objectio.Blockid,
+	bid *objectio.Blockid,
 	deleteMask *nulls.Nulls,
 	scanOp func(func(tombstone *objData) (bool, error)) error,
 	needShrink bool,
@@ -168,7 +168,7 @@ func GetTombstonesByBlockId(
 
 		for idx := 0; idx < int(obj.BlkCnt()); idx++ {
 			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](oData.data[idx].Vecs[0])
-			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, &bid)
+			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, bid)
 			if start == end {
 				continue
 			}
@@ -193,7 +193,7 @@ func GetTombstonesByBlockId(
 }
 
 func (d *BackupDeltaLocDataSource) GetTombstones(
-	ctx context.Context, bid objectio.Blockid,
+	ctx context.Context, bid *objectio.Blockid,
 ) (deletedRows *nulls.Nulls, err error) {
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)
@@ -220,7 +220,7 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 						if err != nil {
 							return false, err
 						}
-						if commitTs.Greater(&d.ts) {
+						if commitTs.GT(&d.ts) {
 							logutil.Debugf("delete row %v, commitTs %v, location %v",
 								v, commitTs.ToString(), name.String())
 						} else {
@@ -333,7 +333,7 @@ func trimTombstoneData(
 			if err != nil {
 				return err
 			}
-			if commitTs.Greater(&ts) {
+			if commitTs.GT(&ts) {
 				logutil.Debugf("delete row %v, commitTs %v, location %v",
 					v, commitTs.ToString(), (*objectsData)[name].stats.ObjectLocation().String())
 			} else {
@@ -426,7 +426,7 @@ func LoadCheckpointEntriesFromKey(
 			DropTS:   deletedAt,
 		}
 		if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
-			(createAt.GreaterEq(baseTS) || commitAt.GreaterEq(baseTS))) {
+			(createAt.GE(baseTS) || commitAt.GE(baseTS))) {
 			bo.NeedCopy = true
 		}
 		locations = append(locations, bo)
@@ -452,7 +452,7 @@ func LoadCheckpointEntriesFromKey(
 			CrateTS:  commitTS,
 		}
 		if baseTS.IsEmpty() ||
-			(!baseTS.IsEmpty() && commitTS.GreaterEq(baseTS)) {
+			(!baseTS.IsEmpty() && commitTS.GE(baseTS)) {
 			bo.NeedCopy = true
 		}
 		locations = append(locations, bo)
@@ -527,13 +527,13 @@ func ReWriteCheckpointAndBlockFromKey(
 			commitTS := objInfoCommit.Get(i).(types.TS)
 			createAt := objInfoCreate.Get(i).(types.TS)
 			tid := objInfoTid.Get(i).(uint64)
-			if commitTS.Less(&ts) {
+			if commitTS.LT(&ts) {
 				panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commitTS.ToString(), ts.ToString())))
 			}
 			if deleteAt.IsEmpty() {
 				continue
 			}
-			if createAt.GreaterEq(&ts) {
+			if createAt.GE(&ts) {
 				panic(any(fmt.Sprintf("createAt equal to ts: %v-%v", createAt.ToString(), ts.ToString())))
 			}
 			addObjectToObjectData(stats, appendable, i, tid, dataType, od)
@@ -669,7 +669,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					zap.Uint64("tid", oData.tid))
 				return true, nil
 			}
-			writer.SetDataType(objectio.SchemaTombstone)
+			writer.SetTombstone()
 			writer.SetPrimaryKeyWithType(
 				uint16(objectio.TombstonePrimaryKeyIdx),
 				index.HBF,

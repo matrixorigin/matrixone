@@ -343,7 +343,6 @@ func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputa
 	// The default count is 1. Setting it to 2 ensures that memory will not be reclaimed.
 	//  Convenient to reuse memory next time
 	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.SetCnt(1000) // we will make sure :  when retry in lock error, we will not clean up this batch
 		cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
 		for i := 0; i < len(prepareStmt.exprList); i++ {
 			for j := range prepareStmt.exprList[i] {

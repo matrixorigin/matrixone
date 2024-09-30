@@ -557,7 +557,7 @@ func Test_GatherSpecialSize(t *testing.T) {
 				vec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 				vec.Append(stats.Clone().Marshal(), false)
 
-				rel.AddObjsWithMetaLoc(ctx, vec)
+				rel.AddDataFiles(ctx, vec)
 				vec.Close()
 			}
 

@@ -113,7 +113,7 @@ func (catalog *Catalog) checkObject(o *ObjectEntry) error {
 		if o.DeletedAt.Equal(&txnif.UncommitTS) || o.DeletedAt.IsEmpty() {
 			logutil.Warnf("[MetadataCheck] wrong delete ts %v, obj %v", o.DeletedAt.ToString(), o.StringWithLevel(3))
 		}
-		if o.DeletedAt.Less(&o.CreatedAt) {
+		if o.DeletedAt.LT(&o.CreatedAt) {
 			logutil.Warnf("[MetadataCheck] wrong delete ts %v, obj %v", o.DeletedAt.ToString(), o.StringWithLevel(3))
 		}
 		if o.ObjectMVCCNode.IsEmpty() {

@@ -1692,6 +1692,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	var unionTypes []plan.Node_NodeType
 
 	// get Union selectStmts
+
 	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
@@ -2226,6 +2227,63 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 	}
 
+	if selectClause, ok := stmt.Select.(*tree.SelectClause); ok {
+		if selectClause.GroupBy != nil {
+			if selectClause.GroupBy.Rollup {
+				for i := len(selectClause.GroupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
+					selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, selectClause.GroupBy.GroupByExprsList[0][0:i])
+				}
+				selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, nil)
+			}
+			if selectClause.GroupBy.Cube {
+				subsets := func(Exprs []tree.Expr) [][]tree.Expr {
+					result := [][]tree.Expr{}
+					var backtrack func(start int, current []tree.Expr)
+					backtrack = func(start int, current []tree.Expr) {
+						result = append(result, append([]tree.Expr{}, current...))
+						for i := start; i < len(Exprs); i++ {
+							current = append(current, Exprs[i])
+							backtrack(i+1, current)
+							current = current[:len(current)-1]
+						}
+					}
+					backtrack(0, []tree.Expr{})
+					return result
+				}
+				Exprs := selectClause.GroupBy.GroupByExprsList[0]
+				selectClause.GroupBy.GroupByExprsList = nil
+				for _, subset := range subsets(Exprs) {
+					selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, subset)
+				}
+			}
+			if len(selectClause.GroupBy.GroupByExprsList) > 1 && !selectClause.GroupBy.Apart {
+				groupingCount := len(selectClause.GroupBy.GroupByExprsList)
+				selectStmts := make([]*tree.SelectClause, groupingCount)
+				if groupingCount > 1 {
+					for i, list := range selectClause.GroupBy.GroupByExprsList {
+						selectStmts[i] = &tree.SelectClause{
+							Distinct: selectClause.Distinct,
+							Exprs:    selectClause.Exprs,
+							From:     selectClause.From,
+							Where:    selectClause.Where,
+							GroupBy:  &tree.GroupByClause{GroupByExprsList: selectClause.GroupBy.GroupByExprsList, GroupingSet: list, Apart: true, Cube: false, Rollup: false},
+							Having:   selectClause.Having,
+							Option:   selectClause.Option,
+						}
+					}
+				}
+				leftClause := &tree.UnionClause{Type: tree.UNION, Left: selectStmts[0], Right: selectStmts[1], All: true}
+				for i, stmt := range selectStmts {
+					if i == 0 || i == 1 {
+						continue
+					}
+					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
+				}
+				return builder.buildUnion(leftClause, astOrderBy, astLimit, ctx, isRoot)
+			}
+		}
+	}
+
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		clause = selectClause
@@ -2454,6 +2512,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				if detectedExprWhetherTimeRelated(filter) {
 					notCacheable = true
 				}
+				if err := checkGrouping(ctx.binder.GetContext(), filter); err != nil {
+					return 0, err
+				}
 			}
 
 			nodeID = builder.appendNode(&plan.Node{
@@ -2506,19 +2567,34 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 			groupBinder := NewGroupBinder(builder, ctx, selectList)
 			if clause.GroupBy != nil {
-				for _, group := range clause.GroupBy.GroupByExprs {
-					group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
-					if err != nil {
-						return 0, err
-					}
+				for _, list := range clause.GroupBy.GroupByExprsList {
+					for _, group := range list {
+						group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
+						if err != nil {
+							return 0, err
+						}
 
-					_, err = groupBinder.BindExpr(group, 0, true)
-					if err != nil {
-						return 0, err
+						_, err = groupBinder.BindExpr(group, 0, true)
+						if err != nil {
+							return 0, err
+						}
+					}
+				}
+				ctx.groupingFlag = make([]bool, len(ctx.groups))
+				if clause.GroupBy.Apart {
+					ctx.isGroupingSet = true
+					for _, group := range clause.GroupBy.GroupingSet {
+						_, err = groupBinder.BindExpr(group, 0, true)
+						if err != nil {
+							return 0, err
+						}
+					}
+				} else {
+					for i := range ctx.groupingFlag {
+						ctx.groupingFlag[i] = true
 					}
 				}
 			}
-
 			if astTimeWindow != nil {
 				group, err := ctx.qualifyColumnNames(helpFunc.truncate, AliasAfterColumn)
 				if err != nil {
@@ -2849,11 +2925,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			if ctx.forceWindows {
 			} else {
 				nodeID = builder.appendNode(&plan.Node{
-					NodeType:    plan.Node_AGG,
-					Children:    []int32{nodeID},
-					GroupBy:     ctx.groups,
-					AggList:     ctx.aggregates,
-					BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
+					NodeType:     plan.Node_AGG,
+					Children:     []int32{nodeID},
+					GroupBy:      ctx.groups,
+					GroupingFlag: ctx.groupingFlag,
+					AggList:      ctx.aggregates,
+					BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
 				}, ctx)
 			}
 			if len(havingList) > 0 {

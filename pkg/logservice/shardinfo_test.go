@@ -25,6 +25,7 @@ import (
 
 func TestGetShardInfo(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		testServiceAddress := s.cfg.LogServiceServiceAddr()
 		done := false
 		for i := 0; i < 1000; i++ {
 			si, ok, err := GetShardInfo("", testServiceAddress, 1)

@@ -73,7 +73,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
 		objNames = append(objNames, name)
-		writer, err := blockio.NewBlockWriterNew(fs, objNames[i], 0, nil)
+		writer, err := blockio.NewBlockWriterNew(fs, objNames[i], 0, nil, false)
 		assert.Nil(t, err)
 		for j := 0; j < 50; j++ {
 			_, err = writer.WriteBatch(containers.ToCNBatch(taeBats[offset+j]))
@@ -221,7 +221,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//write taeBats[0], taeBats[1] two blocks into file service
 	objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(fs, objName1, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(fs, objName1, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
 	for i, bat := range taeBats {
@@ -240,7 +240,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//write taeBats[3] into file service
 	objName2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err = blockio.NewBlockWriterNew(fs, objName2, 0, nil)
+	writer, err = blockio.NewBlockWriterNew(fs, objName2, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
 	_, err = writer.WriteBatch(containers.ToCNBatch(taeBats[3]))
@@ -430,9 +430,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//write deleted row ids into FS
 	objName3 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err = blockio.NewBlockWriterNew(fs, objName3, 0, nil)
+	writer, err = blockio.NewBlockWriterNew(fs, objName3, 0, nil, true)
 	assert.Nil(t, err)
-	writer.SetDataType(objectio.SchemaTombstone)
 	writer.SetPrimaryKeyWithType(uint16(objectio.TombstonePrimaryKeyIdx), index.HBF,
 		index.ObjectPrefixFn,
 		index.BlockPrefixFn)

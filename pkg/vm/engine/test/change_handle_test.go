@@ -33,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -322,7 +324,7 @@ func TestChangesHandle3(t *testing.T) {
 			if tombstone != nil {
 				assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-				// assert.Equal(t, tombstone.Vecs[0].Length(), 20)// tombstone may transfer
+				assert.Equal(t, tombstone.Vecs[0].Length(), 20)
 				tombstone.Clean(mp)
 			}
 			if data != nil {
@@ -560,8 +562,8 @@ func (c *checkHelper) check(data, tombstone *batch.Batch, t *testing.T) {
 		commitTSVec := data.Vecs[len(data.Vecs)-1]
 		commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec)
 		for _, ts := range commitTSs {
-			assert.True(t, ts.GreaterEq(&c.prevTombstoneTS))
-			if ts.Greater(&maxTS) {
+			assert.True(t, ts.GE(&c.prevTombstoneTS))
+			if ts.GT(&maxTS) {
 				maxTS = ts
 			}
 		}
@@ -573,8 +575,8 @@ func (c *checkHelper) check(data, tombstone *batch.Batch, t *testing.T) {
 		commitTSVec := data.Vecs[len(tombstone.Vecs)-1]
 		commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec)
 		for _, ts := range commitTSs {
-			assert.True(t, ts.Greater(&c.prevDataTS))
-			if ts.Greater(&maxTS) {
+			assert.True(t, ts.GT(&c.prevDataTS))
+			if ts.GT(&maxTS) {
 				maxTS = ts
 			}
 		}
@@ -586,4 +588,202 @@ func (c *checkHelper) check(data, tombstone *batch.Batch, t *testing.T) {
 func (c *checkHelper) checkRows(data, tombstone int, t *testing.T) {
 	assert.Equal(t, data, c.totalDataRows)
 	assert.Equal(t, tombstone, c.totalTombstoneRows)
+}
+
+func TestChangesHandle5(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	startTS := taeHandler.GetDB().TxnMgr.Now()
+	schema := catalog2.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 10)
+
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, rel.Append(ctx, bat))
+	require.Nil(t, txn.Commit(ctx))
+
+	flushTxn, flushRel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	obj := testutil2.GetOneBlockMeta(flushRel)
+	{
+		txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+		obj := testutil2.GetOneBlockMeta(rel)
+		err = rel.RangeDelete(obj.AsCommonID(), 0, 0, handle.DT_Normal)
+		require.Nil(t, err)
+		require.Nil(t, txn.Commit(ctx))
+	}
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, []*catalog2.ObjectEntry{obj}, nil, taeHandler.GetDB().Runtime)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	assert.NoError(t, flushTxn.Commit(context.Background()))
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	mp := common.DebugAllocator
+
+	// check partition state, before flush
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		assert.NoError(t, err)
+		totalRows := 0
+		for {
+			data, tombstone, hint, err := handle.Next(ctx, mp)
+			if data == nil && tombstone == nil {
+				break
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
+			assert.Nil(t, tombstone)
+			t.Log(data.Attrs)
+			checkInsertBatch(bat, data, t)
+			assert.NotEqual(t, data.Vecs[0].Length(), 0)
+			totalRows += data.Vecs[0].Length()
+		}
+		assert.Equal(t, totalRows, 9)
+		assert.NoError(t, handle.Close())
+
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		assert.NoError(t, err)
+		for {
+			data, tombstone, hint, err := handle.Next(ctx, mp)
+			if data == nil && tombstone == nil {
+				break
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
+			t.Log(tombstone.Attrs)
+			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
+			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
+			tombstone.Clean(mp)
+			t.Log(data.Attrs)
+			checkInsertBatch(bat, data, t)
+			assert.Equal(t, data.Vecs[0].Length(), 10)
+			data.Clean(mp)
+		}
+		assert.NoError(t, handle.Close())
+	}
+}
+
+func TestChangesHandle6(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	startTS := taeHandler.GetDB().TxnMgr.Now()
+	schema := catalog2.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 10)
+
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, rel.Append(ctx, bat))
+	require.Nil(t, txn.Commit(ctx))
+
+	flushTxn, flushRel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	obj := testutil2.GetOneBlockMeta(flushRel)
+	{
+		txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+		obj := testutil2.GetOneBlockMeta(rel)
+		err = rel.RangeDelete(obj.AsCommonID(), 0, 0, handle.DT_Normal)
+		require.Nil(t, err)
+		require.Nil(t, txn.Commit(ctx))
+	}
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, []*catalog2.ObjectEntry{obj}, nil, taeHandler.GetDB().Runtime)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	assert.NoError(t, flushTxn.Commit(context.Background()))
+
+	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	mp := common.DebugAllocator
+
+	// check partition state, before flush
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		assert.NoError(t, err)
+		totalRows := 0
+		for {
+			data, tombstone, hint, err := handle.Next(ctx, mp)
+			if data == nil && tombstone == nil {
+				break
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
+			assert.Nil(t, tombstone)
+			t.Log(data.Attrs)
+			checkInsertBatch(bat, data, t)
+			assert.NotEqual(t, data.Vecs[0].Length(), 0)
+			totalRows += data.Vecs[0].Length()
+		}
+		assert.Equal(t, totalRows, 9)
+		assert.NoError(t, handle.Close())
+
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		assert.NoError(t, err)
+		for {
+			data, tombstone, hint, err := handle.Next(ctx, mp)
+			if data == nil && tombstone == nil {
+				break
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
+			t.Log(tombstone.Attrs)
+			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
+			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
+			tombstone.Clean(mp)
+			t.Log(data.Attrs)
+			checkInsertBatch(bat, data, t)
+			assert.Equal(t, data.Vecs[0].Length(), 10)
+			data.Clean(mp)
+		}
+		assert.NoError(t, handle.Close())
+	}
 }

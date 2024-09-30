@@ -159,7 +159,7 @@ func (r *objectReaderV1) ReadOneBlock(
 	typs []types.Type,
 	blk uint16,
 	m *mpool.MPool,
-) (ioVec *fileservice.IOVector, err error) {
+) (ioVec fileservice.IOVector, err error) {
 	var metaHeader ObjectMeta
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
@@ -174,15 +174,15 @@ func (r *objectReaderV1) ReadSubBlock(
 	typs []types.Type,
 	blk uint16,
 	m *mpool.MPool,
-) (ioVecs []*fileservice.IOVector, err error) {
+) (ioVecs []fileservice.IOVector, err error) {
 	var metaHeader ObjectMeta
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
 	meta, _ := metaHeader.SubMeta(blk)
-	ioVecs = make([]*fileservice.IOVector, 0)
+	ioVecs = make([]fileservice.IOVector, 0, meta.BlockCount())
 	for i := uint32(0); i < meta.BlockCount(); i++ {
-		var ioVec *fileservice.IOVector
+		var ioVec fileservice.IOVector
 		ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, meta.BlockHeader().StartID()+uint16(i), idxs, typs, m, r.fs, constructorFactory, fileservice.Policy(0))
 		if err != nil {
 			return
@@ -199,7 +199,7 @@ func (r *objectReaderV1) ReadOneSubBlock(
 	dataType uint16,
 	blk uint16,
 	m *mpool.MPool,
-) (ioVec *fileservice.IOVector, err error) {
+) (ioVec fileservice.IOVector, err error) {
 	var metaHeader ObjectMeta
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
@@ -216,7 +216,7 @@ func (r *objectReaderV1) ReadAll(
 	ctx context.Context,
 	idxs []uint16,
 	m *mpool.MPool,
-) (ioVec *fileservice.IOVector, err error) {
+) (ioVec fileservice.IOVector, err error) {
 	var metaHeader ObjectMeta
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
@@ -289,24 +289,6 @@ func (r *objectReaderV1) ReadExtent(
 	}
 
 	return obj.([]byte), nil
-}
-
-func (r *objectReaderV1) ReadMultiBlocks(
-	ctx context.Context,
-	opts map[uint16]*ReadBlockOptions,
-	m *mpool.MPool,
-) (ioVec *fileservice.IOVector, err error) {
-	var objectMeta ObjectMeta
-	if objectMeta, err = r.ReadMeta(ctx, m); err != nil {
-		return
-	}
-	return ReadMultiBlocksWithMeta(
-		ctx,
-		r.name,
-		objectMeta,
-		opts,
-		r.fs,
-		constructorFactory)
 }
 
 func (r *objectReaderV1) ReadMultiSubBlocks(

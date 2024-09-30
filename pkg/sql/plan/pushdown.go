@@ -33,7 +33,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		aggregateTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, aggregateTag) {
+			if !containsTag(filter, aggregateTag) && !containGrouping(filter) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -469,13 +469,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	case plan.Node_APPLY:
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], filters, separateNonEquiConds)
 
-		if len(cantPushdownChild) > 0 {
-			childID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{node.Children[0]},
-				FilterList: cantPushdownChild,
-			}, nil)
-		}
+		cantPushdown = cantPushdownChild
 
 		node.Children[0] = childID
 	default:

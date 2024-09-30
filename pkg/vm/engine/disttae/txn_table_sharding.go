@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -37,6 +36,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -308,7 +308,7 @@ func (tbl *txnTableDelegate) Ranges(
 			param.RangesParam.Exprs = exprs
 		},
 		func(resp []byte) {
-			data, err := UnmarshalRelationData(resp)
+			data, err := engine_util.UnmarshalRelationData(resp)
 			if err != nil {
 				panic(err)
 			}
@@ -319,9 +319,17 @@ func (tbl *txnTableDelegate) Ranges(
 		return nil, err
 	}
 
-	ret := NewBlockListRelationData(0)
-	ret.blklist.Append(rs.GetBlockInfoSlice())
-	ret.blklist.Append(blocks)
+	ret := engine_util.NewBlockListRelationData(0)
+
+	for i := 0; i < rs.DataCnt(); i++ {
+		blk := rs.GetBlockInfo(i)
+		ret.AppendBlockInfo(&blk)
+	}
+
+	for i := 0; i < len(blocks); i++ {
+		ret.AppendBlockInfo(blocks.Get(i))
+	}
+
 	return ret, nil
 }
 
@@ -357,7 +365,7 @@ func (tbl *txnTableDelegate) CollectTombstones(
 			param.CollectTombstonesParam.CollectPolicy = engine.Policy_CollectCommittedTombstones
 		},
 		func(resp []byte) {
-			tombstones, err := UnmarshalTombstoneData(resp)
+			tombstones, err := engine_util.UnmarshalTombstoneData(resp)
 			if err != nil {
 				panic(err)
 			}
@@ -634,7 +642,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	proc := p.(*process.Process)
 
 	if plan2.IsFalseExpr(expr) {
-		return []engine.Reader{new(emptyReader)}, nil
+		return []engine.Reader{new(engine_util.EmptyReader)}, nil
 	}
 
 	if orderBy && num != 1 {
@@ -670,7 +678,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = NewBlockListRelationData(1)
+		relData = engine_util.NewBlockListRelationData(1)
 	}
 
 	blkCnt := relData.DataCnt()
@@ -678,7 +686,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	if blkCnt < num {
 		newNum = blkCnt
 		for i := 0; i < num-blkCnt; i++ {
-			rds = append(rds, new(emptyReader))
+			rds = append(rds, new(engine_util.EmptyReader))
 		}
 	}
 
@@ -714,10 +722,11 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 			if err != nil {
 				return nil, err
 			}
-			lrd, err := NewReader(
+			lrd, err := engine_util.NewReader(
 				ctx,
 				proc.Mp(),
-				tbl.origin.getTxn().engine,
+				tbl.origin.getTxn().engine.packerPool,
+				tbl.origin.getTxn().engine.fs,
 				tbl.origin.GetTableDef(ctx),
 				tbl.origin.db.op.SnapshotTS(),
 				expr,
@@ -726,7 +735,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 			if err != nil {
 				return nil, err
 			}
-			lrd.scanType = scanType
+			lrd.SetScanType(scanType)
 			srd.lrd = lrd
 		}
 

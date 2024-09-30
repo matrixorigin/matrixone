@@ -151,7 +151,12 @@ const (
 	MO_SNAPSHOTS = "mo_snapshots"
 
 	//MO_Pitr
-	MO_PITR = "mo_pitr"
+	MO_PITR               = "mo_pitr"
+	MO_PITR_OBJECT_ID     = "obj_id"
+	MO_PITR_MODIFIED_TIME = "modified_time"
+	MO_PITR_ACCOUNT_ID    = "account_id"
+	MO_PITR_DB_NAME       = "database_name"
+	MO_PITR_TABLE_NAME    = "table_name"
 
 	MO_RETENTION = "mo_retention"
 

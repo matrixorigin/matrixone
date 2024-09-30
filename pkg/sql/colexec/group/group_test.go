@@ -57,7 +57,6 @@ func TestGroupOperatorBehavior1(t *testing.T) {
 		for k := 2; k > 0; k-- {
 			inputs := []*batch.Batch{
 				{
-					Cnt: 1,
 					Vecs: []*vector.Vector{
 						testutil.NewInt64Vector(10, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
 					},
@@ -121,7 +120,6 @@ func TestGroupOperatorBehavior1(t *testing.T) {
 		for k := 2; k > 0; k-- {
 			inputs := []*batch.Batch{
 				{
-					Cnt: 1,
 					Vecs: []*vector.Vector{
 						testutil.NewInt64Vector(10, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3, 4, 5}),
 					},
@@ -198,7 +196,6 @@ func TestGroupOperatorBehavior2(t *testing.T) {
 		for k := 2; k > 0; k-- {
 			inputs := []*batch.Batch{
 				{
-					Cnt: 1,
 					Vecs: []*vector.Vector{
 						testutil.NewInt64Vector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 1}),
 						testutil.NewInt64Vector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 3, 2}),
@@ -271,7 +268,6 @@ func TestGroupOperatorBehavior2(t *testing.T) {
 		for k := 2; k > 0; k-- {
 			inputs := []*batch.Batch{
 				{
-					Cnt: 1,
 					Vecs: []*vector.Vector{
 						testutil.NewInt64Vector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
 						testutil.NewInt64Vector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 3}),
