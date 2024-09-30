@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -398,7 +397,15 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 }
 
-var _ buf.Allocator = &SessionAllocator{}
+type Allocator interface {
+	// Alloc allocate a []byte with len(data) >= size, and the returned []byte cannot
+	// be expanded in use.
+	Alloc(capacity int) ([]byte, error)
+	// Free the allocated memory
+	Free([]byte)
+}
+
+var _ Allocator = &SessionAllocator{}
 
 type SessionAllocator struct {
 	allocator *malloc.ManagedAllocator[malloc.Allocator]
@@ -1153,6 +1160,7 @@ type MysqlReader interface {
 	Property
 	Read() ([]byte, error)
 	ReadLoadLocalPacket() ([]byte, error)
+	FreeLoadLocal()
 	Free(buf []byte)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error
