@@ -53,12 +53,6 @@ func TestBuildHashMap(t *testing.T) {
 	inputBatch.Clean(proc.Mp())
 	require.NoError(t, err)
 
-	rf := &plan.RuntimeFilterSpec{
-		Tag:         0,
-		MatchPrefix: false,
-		UpperLimit:  0,
-		Expr:        nil,
-	}
 	err = hb.BuildHashmap(false, true, true, proc)
 	require.NoError(t, err)
 	require.Less(t, int64(0), hb.GetSize())
