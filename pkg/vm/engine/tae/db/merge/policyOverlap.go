@@ -64,7 +64,7 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	if len(m.objects) < 2 {
 		return nil
 	}
-	if cpu > 95 {
+	if cpu > 90 {
 		return nil
 	}
 	objs, taskHostKind := m.reviseDataObjs(config)
