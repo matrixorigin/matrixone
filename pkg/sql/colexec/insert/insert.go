@@ -285,9 +285,14 @@ func flushTailBatch(proc *process.Process, writer *colexec.S3Writer, result *vm.
 	if err != nil {
 		return err
 	}
-	err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
-	if err != nil {
-		return err
+
+	// if stats is not zero, then the blockInfos must not be nil
+	if !stats.IsZero() {
+		err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
+		if err != nil {
+			return err
+		}
 	}
+
 	return writer.Output(proc, result)
 }
