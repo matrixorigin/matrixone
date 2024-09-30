@@ -28,6 +28,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -4287,7 +4288,151 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	updateColLength int, sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
 
-	return nil
+	isUpdate := (updateColLength > 0)
+
+	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
+
+	pkName := tableDef.Pkey.PkeyColName
+	var pkPos int32 = -1
+	for i, col := range tableDef.Cols {
+		if col.Name == pkName {
+			pkPos = int32(i)
+			break
+		}
+	}
+
+	var partPos []int32
+	for i, p := range indexdef.Parts {
+		for _, col := range tableDef.Cols {
+			if col.Name == p {
+				partPos = append(partPos, int32(i))
+			}
+		}
+	}
+
+	logutil.Infof("lastnode %d, params = %s\n", lastNodeId, indexdef.IndexAlgoParams)
+
+	// TODO: delete plan if update
+
+	// CROSS APPLY (sink_scan, fulltext_index_tokenize(algoParams, pk, col1, col2,...)
+
+	// TableFunc fulltext_index_tokenize
+	args := []*plan.Expr{
+		{
+			Typ: tableDef.Cols[pkPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: pkPos,
+				},
+			},
+		}}
+
+	for _, pos := range partPos {
+		args = append(args, &plan.Expr{
+			Typ: tableDef.Cols[pos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: pos,
+				},
+			},
+		})
+	}
+
+	ftcols := _getColDefs(tokenizeColDefs)
+	ftcols[0].Typ = tableDef.Cols[pkPos].Typ
+
+	tablefunc := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table",
+			TblFunc: &plan.TableFunction{
+				Name:  fulltext_index_tokenize_func_name,
+				Param: []byte(indexdef.IndexAlgoParams),
+			},
+			Cols: ftcols,
+		},
+		BindingTags:     []int32{builder.genNewTag()},
+		TblFuncExprList: args,
+		//Children:        []int32{lastNodeId},
+	}
+	tableFuncId := builder.appendNode(tablefunc, bindCtx)
+
+	lastNodeId = builder.appendNode(&plan.Node{
+		NodeType:  plan.Node_APPLY,
+		Children:  []int32{lastNodeId, tableFuncId},
+		ApplyType: plan.Node_CROSSAPPLY,
+	}, bindCtx)
+
+	// projection
+	project := make([]*plan.Expr, 0, 3)
+	for i := range ftcols {
+		project[i] = &plan.Expr{
+			Typ: ftcols[i].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: tablefunc.BindingTags[0],
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+
+	projectNode := &plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		ProjectList: project,
+	}
+
+	lastNodeId = builder.appendNode(projectNode, bindCtx)
+
+	indexObjRef, indexTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName, nil)
+	if indexTableDef == nil {
+		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, indexdef.IndexName)
+	}
+
+	insertEntriesTableDef := DeepCopyTableDef(indexTableDef, false)
+	for _, col := range indexTableDef.Cols {
+		if col.Name != catalog.Row_ID {
+			insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
+		}
+	}
+
+	// add lock
+	if lockNodeId, ok := appendLockNode(
+		builder,
+		bindCtx,
+		lastNodeId,
+		indexTableDef,
+		false,
+		false,
+		-1,
+		nil,
+		isUpdate,
+	); ok {
+		lastNodeId = lockNodeId
+	}
+
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	newSourceStep := builder.appendStep(lastNodeId)
+
+	addAffectedRows := false
+	isFkRecursionCall := false
+	updatePkCol := true
+	ifExistAutoPkCol := false
+	ifCheckPkDup := false
+	ifInsertFromUnique := false
+	var pkFilterExprs []*Expr
+	var partitionExpr *Expr
+	var indexSourceColTypes []*Type
+	var fuzzymessage *OriginTableMessageForFuzzy
+	err := makeOneInsertPlan(ctx, builder, bindCtx, indexObjRef, insertEntriesTableDef,
+		updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
+		pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup, ifInsertFromUnique,
+		indexSourceColTypes, fuzzymessage)
+	return err
 }
 
 // build post insert fulltext index plan
