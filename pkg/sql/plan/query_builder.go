@@ -1639,29 +1639,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_PRE_INSERT:
-		if node.PreInsertCtx.CompPkeyExpr != nil {
-			increaseRefCnt(node.PreInsertCtx.CompPkeyExpr, 1, colRefCnt)
-		} else if node.PreInsertCtx.ClusterByExpr != nil {
-			increaseRefCnt(node.PreInsertCtx.ClusterByExpr, 1, colRefCnt)
-		}
-
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
-		}
-
-		if node.PreInsertCtx.CompPkeyExpr != nil {
-			increaseRefCnt(node.PreInsertCtx.CompPkeyExpr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(node.PreInsertCtx.CompPkeyExpr, childRemapping.globalToLocal, &remapInfo)
-			if err != nil {
-				return nil, err
-			}
-		} else if node.PreInsertCtx.ClusterByExpr != nil {
-			increaseRefCnt(node.PreInsertCtx.ClusterByExpr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(node.PreInsertCtx.ClusterByExpr, childRemapping.globalToLocal, &remapInfo)
-			if err != nil {
-				return nil, err
-			}
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList

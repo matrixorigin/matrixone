@@ -500,13 +500,12 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 	}
 
 	selectTag := lastNode.BindingTags[0]
-	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
-	insertColToExpr := make(map[string]*Expr)
+	insertColToExpr := make(map[string]*plan.Expr)
 	for i, column := range insertColumns {
 		colIdx := tableDef.Name2ColIndex[column]
 		projExpr := &plan.Expr{
-			Typ: oldProject[i].Typ,
+			Typ: lastNode.ProjectList[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: selectTag,
@@ -536,8 +535,8 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		}
 	}
 
-	projList1 := make([]*Expr, 0, len(tableDef.Cols)-1)
-	projList2 := make([]*Expr, 0, len(tableDef.Cols)-1)
+	projList1 := make([]*plan.Expr, 0, len(tableDef.Cols)-1)
+	projList2 := make([]*plan.Expr, 0, len(tableDef.Cols)-1)
 	projTag1 := builder.genNewTag()
 	preInsertTag := builder.genNewTag()
 
@@ -561,13 +560,14 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
-			args := make([]*plan.Expr, len(tableDef.Pkey.Names))
-
-			for k, part := range tableDef.Pkey.Names {
-				args[k] = DeepCopyExpr(insertColToExpr[part])
-			}
-
-			compPkeyExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			//args := make([]*plan.Expr, len(tableDef.Pkey.Names))
+			//
+			//for k, part := range tableDef.Pkey.Names {
+			//	args[k] = DeepCopyExpr(insertColToExpr[part])
+			//}
+			//
+			//compPkeyExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			compPkeyExpr = makeCompPkeyExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: compPkeyExpr.Typ,
 				Expr: &plan.Expr_Col{
@@ -578,14 +578,15 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 				},
 			})
 		} else if tableDef.ClusterBy != nil && col.Name == tableDef.ClusterBy.Name {
-			names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
-			args := make([]*plan.Expr, len(names))
-
-			for k, part := range names {
-				args[k] = DeepCopyExpr(insertColToExpr[part])
-			}
-
-			clusterByExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+			//names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+			//args := make([]*plan.Expr, len(names))
+			//
+			//for k, part := range names {
+			//	args[k] = DeepCopyExpr(insertColToExpr[part])
+			//}
+			//
+			//clusterByExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+			clusterByExpr = makeClusterByExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: clusterByExpr.Typ,
 				Expr: &plan.Expr_Col{
@@ -616,7 +617,6 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
 	}
 
-	// append ProjectNode
 	tmpCtx := NewBindContext(builder, bindCtx)
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
