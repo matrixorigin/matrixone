@@ -87,9 +87,7 @@ func (s *SearchAccum) PatternAnyPlus() bool {
 	return false
 }
 
-// $(IDF) = LOG10(#word in collection/sum(doc_count))
-// $(TF) = number of nword match in record (doc_count)
-// $(rank) = $(TF) * $(IDF) * %(IDF)
+// Evaluate the search string
 func (s *SearchAccum) Eval() (map[any]float32, error) {
 	var result map[any]float32
 	var err error
@@ -126,6 +124,7 @@ func (p *Pattern) String() string {
 	return str
 }
 
+// Get the text of leaf nodes with operator specified. Either TEXT or STAR as operator.
 func (p *Pattern) GetLeafText(operator int) []string {
 	if p.Operator == operator {
 		return []string{p.Text}
@@ -140,10 +139,11 @@ func (p *Pattern) GetLeafText(operator int) []string {
 
 // Eval leaf node.  compute the tfidf from the data in WordAccums and return result as map[doc_id]float32
 func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
-
 	key := p.Text
 	acc, ok := s.WordAccums[key]
 	if !ok {
+		// never return nil result
+		result = make(map[any]float32)
 		return result, nil
 	}
 
@@ -165,9 +165,9 @@ func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float3
 // Eval Plus Plus operation.  Basically AND operation between input argument and result from the previous Eval()
 // e.g. (+ (text apple)) (+ (text banana))
 func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
-
 	if result == nil {
-		return nil, nil
+		result = make(map[any]float32)
+		return result, nil
 	}
 
 	keys := make([]any, 0, len(result))
@@ -188,9 +188,9 @@ func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map
 // Eval Plus OR.  The previous result from Eval() is a Plus Operator and current Pattern is a Text or Star.
 // e.g. (+ (text apple)) (text banana)
 func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
-
 	if result == nil {
-		return nil, nil
+		result = make(map[any]float32)
+		return result, nil
 	}
 
 	keys := make([]any, 0, len(result))
@@ -209,8 +209,8 @@ func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[a
 // Minus operation.  Remove the result when doc_id is present in argument
 // e.g. (+ (text apple)) (- (text banana))
 func (p *Pattern) EvalMinus(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
-
 	if result == nil {
+		result = make(map[any]float32)
 		return result, nil
 	}
 
@@ -260,9 +260,10 @@ func (p *Pattern) GetWeight() float32 {
 	}
 }
 
+// Combine two score maps into single map. max(float32) will return when same doc_id (key) exists in both arg and result.
 func (p *Pattern) Combine(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
 	if result == nil {
-		result = make(map[any]float32)
+		return arg, nil
 	}
 	for k1 := range arg {
 		v1 := arg[k1]
@@ -281,9 +282,8 @@ func (p *Pattern) Combine(s *SearchAccum, arg, result map[any]float32) (map[any]
 
 // Eval() function to evaluate the previous result from Eval and the current pattern (with data from datasource)  and return map[doc_id]float32
 func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
-	nchild := len(p.Children)
-
-	if nchild == 0 {
+	switch p.Operator {
+	case TEXT, STAR:
 		// leaf node: TEXT, STAR
 		// calculate the score with weight
 		if result == nil {
@@ -300,95 +300,110 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 			}
 		}
 
-	} else if nchild == 1 {
-		// PLUS, MINUS, LESSTHAN, GREATERTHAN, RANKLESS
-		// get weight by type
-		weight := p.GetWeight()
-
+	case PLUS:
 		if result == nil {
-			// LESSTHAN, GREATERTHAN and RANKLESS
 			return p.Children[0].Eval(accum, weight, nil)
-
 		} else {
 			child_result, err := p.Children[0].Eval(accum, weight, nil)
 			if err != nil {
 				return nil, err
 			}
 
-			// do PLUS (AND) and MINUS operation (REMOVE HASH) and OR operation
-			switch p.Operator {
-			case PLUS:
-				// AND
-				return p.EvalPlusPlus(accum, child_result, result)
-			case MINUS:
-				// MINUS
-				return p.EvalMinus(accum, child_result, result)
+			return p.EvalPlusPlus(accum, child_result, result)
+		}
+	case MINUS:
+		if result == nil {
+			result = make(map[any]float32)
+			return result, nil
+		} else {
+			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
 
-			case GROUP, LESSTHAN, GREATERTHAN:
+			return p.EvalMinus(accum, child_result, result)
+		}
+
+	case LESSTHAN, GREATERTHAN:
+		// get weight by type
+		weight *= p.GetWeight()
+
+		if result == nil {
+			return p.Children[0].Eval(accum, weight, nil)
+		} else {
+			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			return p.EvalOR(accum, child_result, result)
+		}
+	case RANKLESS:
+		// get weight by type
+		weight *= p.GetWeight()
+
+		if result == nil {
+			return p.Children[0].Eval(accum, weight, nil)
+		} else {
+			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			// OR
+			if accum.PatternAnyPlus() {
+				return p.EvalPlusOR(accum, child_result, result)
+			} else {
 				return p.EvalOR(accum, child_result, result)
-			default:
-				// OR
-				if accum.PatternAnyPlus() {
-					return p.EvalPlusOR(accum, child_result, result)
-				} else {
-					return p.EvalOR(accum, child_result, result)
-				}
 			}
 		}
-	} else {
-		// GROUP, PHRASE
+	case GROUP:
+		result := make(map[any]float32)
+		for _, c := range p.Children {
+			child_result, err := c.Eval(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
 
-		if p.Operator == GROUP {
-			result := make(map[any]float32)
-			for _, c := range p.Children {
-				child_result, err := c.Eval(accum, weight, nil)
+			// COMBINE results from children
+			result, err = p.Combine(accum, child_result, result)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		return result, nil
+	case PHRASE:
+		// all children are TEXT and AND operations
+		for i, c := range p.Children {
+			child_result, err := c.Eval(accum, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			if i == 0 {
+				result = child_result
+			} else {
+				// AND operators with the results
+				result, err = c.EvalPlusPlus(accum, child_result, result)
 				if err != nil {
 					return nil, err
 				}
-
-				// COMBINE results from children
-				result, err = p.Combine(accum, child_result, result)
-				if err != nil {
-					return nil, err
-				}
 			}
-
-			return result, nil
 		}
 
-		if p.Operator == PHRASE {
-			// all children are TEXT and AND operations
-			for i, c := range p.Children {
-				child_result, err := c.Eval(accum, weight, nil)
-				if err != nil {
-					return nil, err
-				}
-
-				if i == 0 {
-					result = child_result
-				} else {
-					// AND operators with the results
-					result, err = c.EvalPlusPlus(accum, child_result, result)
-					if err != nil {
-						return nil, err
-					}
-				}
-			}
-
-			return result, nil
-		}
-
+		return result, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("Eval() not handled")
 	}
-
-	return nil, moerr.NewInternalErrorNoCtx("Eval() not handled")
 }
 
 // validate the Pattern
 func (p *Pattern) Validate() error {
 	switch p.Operator {
 	case PLUS, MINUS:
-		if len(p.Children) == 0 {
-			return moerr.NewInternalErrorNoCtx("+/- must have children with value")
+		if len(p.Children) != 1 {
+			return moerr.NewInternalErrorNoCtx("+/- must have single child with value")
 		}
 		for _, c := range p.Children {
 			if c.Operator == PLUS || c.Operator == MINUS || c.Operator == PHRASE {
@@ -432,6 +447,9 @@ func (p *Pattern) Validate() error {
 		}
 	default:
 		// LESSTHAN, GREATERTHAN, RANKLESS
+		if len(p.Children) != 1 {
+			return moerr.NewInternalErrorNoCtx("LESSTHAN, GREATERTHAN, RANKLESS must have single child only")
+		}
 		for _, c := range p.Children {
 			if c.Operator != GROUP && c.Operator != TEXT && c.Operator != STAR {
 				return moerr.NewInternalErrorNoCtx("double operator")
@@ -524,6 +542,7 @@ func CreatePattern(pattern string) (*Pattern, error) {
 	return &Pattern{Text: pattern, Operator: operator, Children: p}, nil
 }
 
+// Parse the search string in boolean mode
 func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 
 	if strings.HasPrefix(pattern, "\"") && strings.HasSuffix(pattern, "\"") {
@@ -634,6 +653,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 	return tokens, nil
 }
 
+// Parse search string in natural language mode
 func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 	runeSlice := []rune(pattern)
 	ngram_size := 3
@@ -655,6 +675,7 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 	return list, nil
 }
 
+// Parse search string into list of patterns
 func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 	switch mode {
 	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
@@ -684,7 +705,7 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 			}
 		}
 
-		// re-order the pattern with the precedency PHRASE > PLUS > TEXT,STAR,GROUP,RANKLESS > MINUS
+		// re-order the pattern with the precedency PHRASE, PLUS > TEXT,STAR,GROUP,RANKLESS > MINUS
 		// GROUP can only have LESSTHAN and GREATERTHAN children
 		// PLUS, MINUS, RANKLESS can only have TEXT, STAR and GROUP Children and only have Single Child
 		plus := findPatternByOperator(ps, PLUS)
