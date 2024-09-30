@@ -724,10 +724,6 @@ func (builder *QueryBuilder) buildValueScan(
 		col := tableDef.Cols[tableDef.Name2ColIndex[colName]]
 		colTyp := makeTypeByPlan2Type(col.Typ)
 		vec := vector.NewVec(colTyp)
-		if err := vector.AppendMultiBytes(vec, nil, true, len(stmt.Rows), proc.Mp()); err != nil {
-			bat.Clean(proc.Mp())
-			return 0, err
-		}
 		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
 			Typ: col.Typ,
@@ -737,6 +733,10 @@ func (builder *QueryBuilder) buildValueScan(
 		}
 		var defExpr *Expr
 		if isAllDefault {
+			if err := vector.AppendMultiBytes(vec, nil, true, len(stmt.Rows), proc.Mp()); err != nil {
+				bat.Clean(proc.Mp())
+				return 0, err
+			}
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
 				return 0, err
@@ -767,10 +767,10 @@ func (builder *QueryBuilder) buildValueScan(
 					}
 				}
 
-				//if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
-				//	bat.Clean(proc.Mp())
-				//	return 0, err
-				//}
+				if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
+					bat.Clean(proc.Mp())
+					return 0, err
+				}
 				if _, ok := r[i].(*tree.DefaultVal); ok {
 					defExpr, err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
