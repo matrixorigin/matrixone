@@ -67,6 +67,6 @@ func TestCreateCloudCtrlPlaneDashboard(t *testing.T) {
 
 func Test_InitFrontendSQLLength(t *testing.T) {
 	c := NewLocalDashboardCreator("http://127.0.0.1", "admin", "admin",
-		localFolderName)
+		"Prometheus")
 	c.initFrontendSQLLength()
 }
