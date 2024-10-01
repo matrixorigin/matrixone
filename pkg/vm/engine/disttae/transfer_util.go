@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -99,12 +100,13 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		end.ToTimestamp(),
 		engine_util.WithColumns(
 			[]uint16{0, 1},
-			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)}),
+			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)},
+		),
 	)
 
 	return ConstructTransferFlow(
 		table,
-		false,
+		objectio.HiddenColumnSelection_None,
 		r,
 		isObjectDeletedFn,
 		newDataObjects,
@@ -114,7 +116,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 func ConstructTransferFlow(
 	table *txnTable,
-	withHidden bool,
+	hiddenSelection objectio.HiddenColumnSelection,
 	sourcer engine.Reader,
 	isObjectDeletedFn func(*objectio.ObjectId) bool,
 	newDataObjects []objectio.ObjectStats,
@@ -124,7 +126,7 @@ func ConstructTransferFlow(
 ) *TransferFlow {
 	flow := &TransferFlow{
 		table:             table,
-		withHidden:        withHidden,
+		hiddenSelection:   hiddenSelection,
 		sourcer:           sourcer,
 		isObjectDeletedFn: isObjectDeletedFn,
 		newDataObjects:    newDataObjects,
@@ -140,7 +142,7 @@ func ConstructTransferFlow(
 
 type TransferFlow struct {
 	table             *txnTable
-	withHidden        bool
+	hiddenSelection   objectio.HiddenColumnSelection
 	sourcer           engine.Reader
 	isObjectDeletedFn func(*objectio.ObjectId) bool
 	newDataObjects    []objectio.ObjectStats
@@ -156,7 +158,7 @@ func (flow *TransferFlow) fillDefaults() {
 	pkType := plan2.ExprType2Type(&flow.table.tableDef.Cols[flow.table.primaryIdx].Typ)
 	if flow.buffer == nil {
 		attrs, attrTypes := objectio.GetTombstoneSchema(
-			pkType, flow.withHidden,
+			pkType, flow.hiddenSelection,
 		)
 		flow.buffer = containers.NewOneSchemaBatchBuffer(
 			mpool.MB*8,
@@ -166,7 +168,7 @@ func (flow *TransferFlow) fillDefaults() {
 	}
 	if flow.sinker == nil {
 		flow.sinker = engine_util.NewTombstoneSinker(
-			flow.withHidden,
+			flow.hiddenSelection,
 			pkType,
 			flow.mp,
 			flow.fs,
