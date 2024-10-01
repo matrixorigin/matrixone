@@ -143,7 +143,6 @@ func ConstructTransferFlow(
 type TransferFlow struct {
 	table             *txnTable
 	hiddenSelection   objectio.HiddenColumnSelection
-	withTombstone     bool
 	sourcer           engine.Reader
 	isObjectDeletedFn func(*objectio.ObjectId) bool
 	newDataObjects    []objectio.ObjectStats
