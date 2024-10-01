@@ -18,15 +18,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func generateBlockWriter(writer *s3Writer,
@@ -285,4 +289,33 @@ func syncThenGetBlockInfoAndStats(proc *process.Process, blockWriter *blockio.Bl
 	}
 
 	return blkInfos, stats, err
+}
+
+func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
+	if bat.Attrs[len(bat.Attrs)-1] != catalog.ObjectMeta_ObjectStats {
+		// bat comes from old CN, no object stats vec in it
+		bat.Attrs = append(bat.Attrs, catalog.ObjectMeta_ObjectStats)
+		bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_binary.ToType()))
+
+		blkVec := bat.Vecs[0]
+		destVec := bat.Vecs[1]
+		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
+		if err != nil {
+			logutil.Error("get fs failed when split object stats. ", zap.Error(err))
+			return err
+		}
+		// var objDataMeta objectio.ObjectDataMeta
+		var objStats objectio.ObjectStats
+		for idx := 0; idx < bat.RowCount(); idx++ {
+			blkInfo := objectio.DecodeBlockInfo(blkVec.GetBytesAt(idx))
+			objStats, _, err = disttae.ConstructObjStatsByLoadObjMeta(proc.Ctx, blkInfo.MetaLocation(), fs)
+			if err != nil {
+				return err
+			}
+			vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
+		}
+
+		vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
+	}
+	return nil
 }
