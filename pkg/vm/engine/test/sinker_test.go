@@ -95,7 +95,7 @@ func Test_Sinker(t *testing.T) {
 
 	require.Equal(t, bat1.RowCount(), rows)
 
-	hidden := objectio.HiddenColumnSelection_None
+	hidden := objectio.HiddenColumnSelection_PhysicalAddr
 
 	r := engine_util.SimpleMultiObjectsReader(
 		ctx, fs, objs, timestamp.Timestamp{},
@@ -113,6 +113,11 @@ func Test_Sinker(t *testing.T) {
 		require.NoError(t, err)
 		if done {
 			break
+		}
+		phyAddrs := vector.MustFixedColWithTypeCheck[types.Rowid](buffer.Vecs[2])
+		for i := range phyAddrs {
+			rowOff := int(phyAddrs[i].GetRowOffset())
+			require.Equal(t, i, rowOff)
 		}
 		rowIds := vector.MustFixedColWithTypeCheck[types.Rowid](buffer.Vecs[0])
 		var (
