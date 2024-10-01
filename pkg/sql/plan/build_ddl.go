@@ -1693,14 +1693,14 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		}
 		tableDef.Cols = append(tableDef.Cols, colDef)
 
-		// position (int64)
+		// position (int32)
 		keyName = catalog.FullTextIndex_TabCol_Position
 		colDef = &ColDef{
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_int64),
-				Width: 64,
+				Id:    int32(types.T_int32),
+				Width: 32,
 				Scale: -1,
 			},
 			Default: &plan.Default{
