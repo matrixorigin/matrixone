@@ -2685,6 +2685,11 @@ func TestCdcTask_Pause(t *testing.T) {
 }
 
 func TestCdcTask_Cancel(t *testing.T) {
+	ch := make(chan int, 1)
+	go func() {
+		<-ch
+	}()
+
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
@@ -2700,6 +2705,7 @@ func TestCdcTask_Cancel(t *testing.T) {
 			"taskID-1",
 			tie,
 		),
+		holdCh: ch,
 	}
 	err = cdc.Cancel()
 	assert.NoErrorf(t, err, "Pause()")
