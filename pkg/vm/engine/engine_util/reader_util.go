@@ -16,7 +16,6 @@ package engine_util
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -28,21 +27,15 @@ import (
 type ReaderOption func(*reader)
 
 func WithColumns(
-	seqnums []uint16, colTypes []types.Type, phyAddrPos int,
+	seqnums []uint16, colTypes []types.Type,
 ) ReaderOption {
 	return func(r *reader) {
 		if len(seqnums) != len(colTypes) {
 			panic("seqnums and colTypes should have the same length")
 		}
-		if phyAddrPos >= len(seqnums) {
-			panic(fmt.Sprintf("phyAddrPos %d should be less than %d", phyAddrPos, len(seqnums)))
-		}
-		if phyAddrPos >= 0 && colTypes[phyAddrPos] != objectio.RowidType {
-			panic(fmt.Sprintf("phyAddrPos %d should be rowid but got %s", phyAddrPos, colTypes[phyAddrPos]))
-		}
 		r.columns.seqnums = seqnums
 		r.columns.colTypes = colTypes
-		r.columns.phyAddrPos = phyAddrPos
+		r.columns.phyAddrPos = objectio.MustGetPhysicalColumnPosition(seqnums, colTypes)
 	}
 }
 
@@ -59,12 +52,6 @@ func WithBlockFilter(
 func WithMemFilter(filter MemPKFilter) ReaderOption {
 	return func(r *reader) {
 		r.memFilter = filter
-	}
-}
-
-func WithTombstone() ReaderOption {
-	return func(r *reader) {
-		r.isTombstone = true
 	}
 }
 
@@ -112,7 +99,6 @@ func SimpleTombstoneObjectReader(
 	ts timestamp.Timestamp, // only used for appendable object
 	opts ...ReaderOption,
 ) engine.Reader {
-	opts = append(opts, WithTombstone())
 	return SimpleObjectReader(
 		ctx, fs, obj, ts, opts...,
 	)

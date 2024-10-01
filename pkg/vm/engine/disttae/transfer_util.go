@@ -101,7 +101,6 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		engine_util.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)},
-			-1,
 		),
 	)
 

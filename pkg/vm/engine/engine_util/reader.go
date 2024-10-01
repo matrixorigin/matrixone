@@ -226,8 +226,7 @@ type withFilterMixin struct {
 type reader struct {
 	withFilterMixin
 
-	isTombstone bool
-	source      engine.DataSource
+	source engine.DataSource
 
 	memFilter MemPKFilter
 

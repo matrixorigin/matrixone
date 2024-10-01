@@ -115,3 +115,15 @@ func GetTombstoneTypes(pk types.Type, withHidden bool) []types.Type {
 		pk,
 	}
 }
+
+func MustGetPhysicalColumnPosition(seqnums []uint16, colTypes []types.Type) int {
+	for i, seqnum := range seqnums {
+		if seqnum == SEQNUM_ROWID {
+			if colTypes[i] != RowidType {
+				panic(fmt.Sprintf("rowid column should be rowid type but got %s", colTypes[i]))
+			}
+			return i
+		}
+	}
+	return -1
+}
