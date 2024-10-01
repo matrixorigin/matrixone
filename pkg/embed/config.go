@@ -410,12 +410,6 @@ func (c *ServiceConfig) getCNServiceConfig() cnservice.Config {
 	return cfg
 }
 
-func (c *ServiceConfig) getProxyConfig() proxy.Config {
-	cfg := c.ProxyConfig
-	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
-	return cfg
-}
-
 // memberlist requires all gossip seed addresses to be provided as IP:PORT
 func (c *ServiceConfig) resolveGossipSeedAddresses() error {
 	result := make([]string, 0)

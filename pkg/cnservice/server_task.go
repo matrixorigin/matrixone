@@ -242,6 +242,10 @@ func (s *service) stopTask() error {
 
 	s.task.Lock()
 	defer s.task.Unlock()
+	if s.task.holder == nil {
+		return nil
+	}
+
 	if err := s.task.holder.Close(); err != nil {
 		return err
 	}
