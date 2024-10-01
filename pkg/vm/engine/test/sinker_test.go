@@ -61,7 +61,7 @@ func Test_Sinker(t *testing.T) {
 		blkCnt, blkRows, true, mp,
 	)
 	require.NoError(t, err)
-	bat1 := engine_util.NewCNTombstoneBatch(&pkType)
+	bat1 := engine_util.NewCNTombstoneBatch(&pkType, objectio.HiddenColumnSelection_None)
 	bat1.SetVector(0, rowIDVec)
 	bat1.SetVector(1, pkVec.GetDownstreamVector())
 	bat1.SetRowCount(rowIDVec.Length())
@@ -95,17 +95,19 @@ func Test_Sinker(t *testing.T) {
 
 	require.Equal(t, bat1.RowCount(), rows)
 
+	hidden := objectio.HiddenColumnSelection_None
+
 	r := engine_util.SimpleMultiObjectsReader(
 		ctx, fs, objs, timestamp.Timestamp{},
 		engine_util.WithColumns(
-			objectio.GetTombstoneSeqnums(objectio.HiddenColumnSelection_None),
-			objectio.GetTombstoneTypes(pkType, objectio.HiddenColumnSelection_None),
+			objectio.GetTombstoneSeqnums(hidden),
+			objectio.GetTombstoneTypes(pkType, hidden),
 		),
 	)
 	blockio.Start("")
 	defer blockio.Stop("")
-	bat2 := engine_util.NewCNTombstoneBatch(&pkType)
-	buffer := engine_util.NewCNTombstoneBatch(&pkType)
+	bat2 := engine_util.NewCNTombstoneBatch(&pkType, hidden)
+	buffer := engine_util.NewCNTombstoneBatch(&pkType, hidden)
 	for {
 		done, err := r.Read(ctx, buffer.Attrs, nil, mp, buffer)
 		require.NoError(t, err)
