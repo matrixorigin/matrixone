@@ -95,19 +95,19 @@ func Test_Sinker(t *testing.T) {
 
 	require.Equal(t, bat1.RowCount(), rows)
 
-	hidden := objectio.HiddenColumnSelection_PhysicalAddr
+	hiddenSels := objectio.HiddenColumnSelection_PhysicalAddr
 
 	r := engine_util.SimpleMultiObjectsReader(
 		ctx, fs, objs, timestamp.Timestamp{},
 		engine_util.WithColumns(
-			objectio.GetTombstoneSeqnums(hidden),
-			objectio.GetTombstoneTypes(pkType, hidden),
+			objectio.GetTombstoneSeqnums(hiddenSels),
+			objectio.GetTombstoneTypes(pkType, hiddenSels),
 		),
 	)
 	blockio.Start("")
 	defer blockio.Stop("")
-	bat2 := engine_util.NewCNTombstoneBatch(&pkType, hidden)
-	buffer := engine_util.NewCNTombstoneBatch(&pkType, hidden)
+	bat2 := engine_util.NewCNTombstoneBatch(&pkType, hiddenSels)
+	buffer := engine_util.NewCNTombstoneBatch(&pkType, hiddenSels)
 	for {
 		done, err := r.Read(ctx, buffer.Attrs, nil, mp, buffer)
 		require.NoError(t, err)
