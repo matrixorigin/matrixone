@@ -641,21 +641,21 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 			common.OperationField("MergeCheckpointFiles"),
 			common.OperandField(stage.ToString()),
 			common.OperandField(idx))
-		delFiles, mergeFile, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList, &pitr)
+		dFiles, mergeFiles, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList, &pitr)
 		if err != nil {
 			return err
 		}
 		ckpGC = new(types.TS)
-		deleteFiles = append(deleteFiles, delFiles...)
+		deleteFiles = append(deleteFiles, dFiles...)
 		var newName string
-		delFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFile, c.GetInputs(), c.mPool)
+		dFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFiles, c.GetInputs(), c.mPool)
 		if err != nil {
 			return err
 		}
 		if newName != "" {
 			c.ckpClient.AddCheckpointMetaFile(newName)
 		}
-		deleteFiles = append(deleteFiles, delFiles...)
+		deleteFiles = append(deleteFiles, dFiles...)
 	}
 
 	logutil.Info("[MergeCheckpoint]",
