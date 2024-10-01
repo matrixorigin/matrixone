@@ -15,6 +15,7 @@
 package shardservice
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 
@@ -435,7 +436,13 @@ func (t *table) valid(
 			}
 
 			if replica.Version > r.Version {
-				panic("BUG: receive newer shard replica version than current")
+				panic(
+					fmt.Sprintf(
+						"BUG: receive newer shard replica version %d than current %d",
+						replica.Version,
+						r.Version,
+					),
+				)
 			}
 		}
 		return true
