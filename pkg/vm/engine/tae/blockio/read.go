@@ -147,6 +147,7 @@ func BlockDataReadNoCopy(
 	}
 	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
 	if err != nil {
+		release()
 		return nil, nil, nil, err
 	}
 
@@ -155,10 +156,11 @@ func BlockDataReadNoCopy(
 
 	// build rowid column if needed
 	if phyAddrColumnPos >= 0 {
-		if loaded.Vecs[phyAddrColumnPos], err = buildRowidColumn(
-			info, nil, mp,
+		loaded.Vecs[phyAddrColumnPos] = vector.NewVec(objectio.RowidType)
+		if err = buildRowidColumn(
+			info, loaded.Vecs[phyAddrColumnPos], nil, mp,
 		); err != nil {
-
+			release()
 			return nil, nil, nil, err
 		}
 		release = func() {
@@ -401,25 +403,15 @@ func BlockDataReadInner(
 
 		// build rowid column if needed
 		if phyAddrColumnPos >= 0 {
-			if loaded.Vecs[phyAddrColumnPos], err = buildRowidColumn(
-				info, selectRows, mp,
+			if err = buildRowidColumn(
+				info, bat.Vecs[phyAddrColumnPos], selectRows, mp,
 			); err != nil {
 				return
 			}
-			defer func() {
-				loaded.Vecs[phyAddrColumnPos].Free(mp)
-			}()
 		}
 
 		// assemble result batch only with selected rows
 		for i, col := range loaded.Vecs {
-			if i == phyAddrColumnPos {
-				err = bat.Vecs[i].UnionBatch(col, 0, col.Length(), nil, mp)
-				if err != nil {
-					return
-				}
-				continue
-			}
 			if err = bat.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
 				break
 			}
@@ -452,14 +444,11 @@ func BlockDataReadInner(
 
 	// build rowid column if needed
 	if phyAddrColumnPos >= 0 {
-		if loaded.Vecs[phyAddrColumnPos], err = buildRowidColumn(
-			info, nil, mp,
+		if err = buildRowidColumn(
+			info, bat.Vecs[phyAddrColumnPos], nil, mp,
 		); err != nil {
 			return
 		}
-		defer func() {
-			loaded.Vecs[phyAddrColumnPos].Free(mp)
-		}()
 	}
 
 	// assemble result batch
@@ -491,13 +480,13 @@ func excludePhyAddrColumn(
 
 func buildRowidColumn(
 	info *objectio.BlockInfo,
+	vec *vector.Vector,
 	sels []int64,
 	m *mpool.MPool,
-) (col *vector.Vector, err error) {
-	col = vector.NewVec(objectio.RowidType)
+) (err error) {
 	if len(sels) == 0 {
 		err = objectio.ConstructRowidColumnTo(
-			col,
+			vec,
 			&info.BlockID,
 			0,
 			info.MetaLocation().Rows(),
@@ -505,15 +494,11 @@ func buildRowidColumn(
 		)
 	} else {
 		err = objectio.ConstructRowidColumnToWithSels(
-			col,
+			vec,
 			&info.BlockID,
 			sels,
 			m,
 		)
-	}
-	if err != nil {
-		col.Free(m)
-		col = nil
 	}
 	return
 }
