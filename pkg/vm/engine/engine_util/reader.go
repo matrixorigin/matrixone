@@ -52,7 +52,6 @@ const (
 
 func (mixin *withFilterMixin) reset() {
 	mixin.filterState.filter = objectio.BlockReadFilter{}
-	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
 	mixin.columns.colTypes = nil
@@ -102,8 +101,9 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
 	// mixin.columns.colNulls = make([]bool, len(cols))
-	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
+
+	pkPos := -1
 
 	if slices.Equal(cols, objectio.TombstoneAttrs_CN_Created) ||
 		slices.Equal(cols, objectio.TombstoneAttrs_TN_Created) {
@@ -116,6 +116,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 		if column == catalog.Row_ID {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
+			mixin.columns.phyAddrPos = i
 		} else {
 			if plan2.GetSortOrderByName(mixin.tableDef, column) == 0 {
 				mixin.columns.indexOfFirstSortedColumn = i
@@ -126,7 +127,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 
 			if mixin.tableDef.Pkey != nil && mixin.tableDef.Pkey.PkeyColName == column {
 				// primary key is in the cols
-				mixin.columns.pkPos = i
+				pkPos = i
 			}
 			mixin.columns.colTypes[i] = plan2.ExprType2Type(&colDef.Typ)
 			mixin.columns.colTypes[i].Scale = colDef.Typ.Scale
@@ -134,13 +135,13 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 		}
 	}
 
-	if mixin.columns.pkPos != -1 {
+	if pkPos != -1 {
 		// here we will select the primary key column from the vectors, and
 		// use the search function to find the offset of the primary key.
 		// it returns the offset of the primary key in the pk vector.
 		// if the primary key is not found, it returns empty slice
-		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
-		mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
+		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
+		mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
 	}
 }
 
@@ -206,10 +207,10 @@ type withFilterMixin struct {
 
 	// columns used for reading
 	columns struct {
-		seqnums  []uint16
-		colTypes []types.Type
+		seqnums    []uint16
+		colTypes   []types.Type
+		phyAddrPos int
 
-		pkPos                    int // -1 means no primary key in columns
 		indexOfFirstSortedColumn int
 	}
 
@@ -225,8 +226,7 @@ type withFilterMixin struct {
 type reader struct {
 	withFilterMixin
 
-	isTombstone bool
-	source      engine.DataSource
+	source engine.DataSource
 
 	memFilter MemPKFilter
 
@@ -361,6 +361,7 @@ func NewReader(
 		memFilter: memFilter,
 		source:    source,
 	}
+	r.columns.phyAddrPos = -1
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
 	return r, nil
@@ -453,11 +454,11 @@ func (r *reader) Read(
 
 	err = blockio.BlockDataRead(
 		statsCtx,
-		r.isTombstone,
 		blkInfo,
 		r.source,
 		r.columns.seqnums,
 		r.columns.colTypes,
+		r.columns.phyAddrPos,
 		r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
