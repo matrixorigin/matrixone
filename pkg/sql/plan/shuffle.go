@@ -38,6 +38,7 @@ const (
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
+	shuffleBucket                   = 1024 * 1024 * 2
 )
 
 const (
@@ -466,7 +467,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 }
 
 func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
-	num := int(hashmapSize / float64(lencn) / 5000000)
+	num := int(hashmapSize/float64(lencn)/shuffleBucket + 1)
 	if num <= ncpu {
 		return ncpu
 	}
