@@ -98,8 +98,10 @@ func Test_Sinker(t *testing.T) {
 	r := engine_util.SimpleMultiObjectsReader(
 		ctx, fs, objs, timestamp.Timestamp{},
 		engine_util.WithColumns(
-			objectio.TombstoneSeqnums_CN_Created,
-			objectio.GetTombstoneTypes(pkType, false),
+			objectio.GetTombstoneSchema(
+				pkType,
+				objectio.HiddenColumnSelection_None,
+			),
 		),
 	)
 	blockio.Start("")

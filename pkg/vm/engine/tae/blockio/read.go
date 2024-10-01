@@ -710,7 +710,12 @@ func IsRowDeletedByLocation(
 	fs fileservice.FileService,
 	createdByCN bool,
 ) (deleted bool, err error) {
-	attrs := objectio.GetTombstoneAttrs(!createdByCN)
+	var hidden objectio.HiddenColumnSelection
+	if !createdByCN {
+		hidden = hidden | objectio.HiddenColumnSelection_CommitTS
+	}
+
+	attrs := objectio.GetTombstoneAttrs(hidden)
 	data := batch.EmptyBatchWithAttrs(attrs)
 	_, release, err := ReadDeletes(ctx, location, fs, createdByCN, &data)
 	if err != nil {
@@ -753,9 +758,14 @@ func FillBlockDeleteMask(
 		rows    *nulls.Nulls
 		release func()
 		meta    objectio.ObjectDataMeta
+		hidden  objectio.HiddenColumnSelection
 	)
 
-	attrs := objectio.GetTombstoneAttrs(!createdByCN)
+	if !createdByCN {
+		hidden = hidden | objectio.HiddenColumnSelection_CommitTS
+	}
+
+	attrs := objectio.GetTombstoneAttrs(hidden)
 	persistedDeletes := batch.EmptyBatchWithAttrs(attrs)
 
 	if !location.IsEmpty() {

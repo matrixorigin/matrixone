@@ -106,7 +106,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	return ConstructTransferFlow(
 		table,
-		false,
+		objectio.HiddenColumnSelection_None,
 		r,
 		isObjectDeletedFn,
 		newDataObjects,
@@ -116,7 +116,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 func ConstructTransferFlow(
 	table *txnTable,
-	withHidden bool,
+	hiddenSelection objectio.HiddenColumnSelection,
 	sourcer engine.Reader,
 	isObjectDeletedFn func(*objectio.ObjectId) bool,
 	newDataObjects []objectio.ObjectStats,
@@ -126,7 +126,7 @@ func ConstructTransferFlow(
 ) *TransferFlow {
 	flow := &TransferFlow{
 		table:             table,
-		withHidden:        withHidden,
+		hiddenSelection:   hiddenSelection,
 		sourcer:           sourcer,
 		isObjectDeletedFn: isObjectDeletedFn,
 		newDataObjects:    newDataObjects,
@@ -142,7 +142,8 @@ func ConstructTransferFlow(
 
 type TransferFlow struct {
 	table             *txnTable
-	withHidden        bool
+	hiddenSelection   objectio.HiddenColumnSelection
+	withTombstone     bool
 	sourcer           engine.Reader
 	isObjectDeletedFn func(*objectio.ObjectId) bool
 	newDataObjects    []objectio.ObjectStats
@@ -158,7 +159,7 @@ func (flow *TransferFlow) fillDefaults() {
 	pkType := plan2.ExprType2Type(&flow.table.tableDef.Cols[flow.table.primaryIdx].Typ)
 	if flow.buffer == nil {
 		attrs, attrTypes := objectio.GetTombstoneSchema(
-			pkType, flow.withHidden,
+			pkType, flow.hiddenSelection,
 		)
 		flow.buffer = containers.NewOneSchemaBatchBuffer(
 			mpool.MB*8,
@@ -168,7 +169,7 @@ func (flow *TransferFlow) fillDefaults() {
 	}
 	if flow.sinker == nil {
 		flow.sinker = engine_util.NewTombstoneSinker(
-			flow.withHidden,
+			flow.hiddenSelection,
 			pkType,
 			flow.mp,
 			flow.fs,
