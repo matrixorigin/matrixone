@@ -35,7 +35,6 @@ const (
 	threshHoldForShuffleJoin        = 120000
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 8000000
-	MAXShuffleDOP                   = 64
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
@@ -466,11 +465,15 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 
 }
 
-func GetShuffleDop(cpunum int) (dop int) {
-	if cpunum < MAXShuffleDOP {
-		return cpunum
+func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
+	num := int(hashmapSize / float64(lencn) / 5000000)
+	if num <= ncpu {
+		return ncpu
 	}
-	return MAXShuffleDOP
+	if num >= ncpu*4 {
+		return ncpu * 4
+	}
+	return num
 }
 
 // default shuffle type for scan is hash
