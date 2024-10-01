@@ -24,13 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.ObjectRef, []*plan.TableDef, error) {
+/*func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.ObjectRef, []*plan.TableDef, error) {
 	objRefs := make([]*plan.ObjectRef, len(tables))
 	tableDefs := make([]*plan.TableDef, len(tables))
 	for i, tbl := range tables {
@@ -64,9 +63,6 @@ func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.Objec
 			}
 		}
 
-		if tableDefs[i].Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-			return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "fake primary key")
-		}
 		if len(tableDefs[i].Name2ColIndex) == 0 {
 			tableDefs[i].Name2ColIndex = make(map[string]int32)
 			for colIdx, col := range tableDefs[i].Cols {
@@ -76,7 +72,7 @@ func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.Objec
 	}
 
 	return objRefs, tableDefs, nil
-}
+}*/
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (int32, error) {
 	var onDupAction plan.Node_OnDuplicateAction
@@ -89,7 +85,8 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "on duplicate key update")
 	}
 
-	objRefs, tableDefs, err := builder.getTableDefs(tree.TableExprs{stmt.Table})
+	dmlCtx := NewDMLContext()
+	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -116,16 +113,16 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		}()
 	}
 
-	lastNodeID, colName2Idx, err := builder.initInsertStmt(ctx, stmt, objRefs[0], tableDefs[0])
+	lastNodeID, colName2Idx, err := builder.initInsertStmt(ctx, stmt, dmlCtx.objRefs[0], dmlCtx.tableDefs[0])
 	if err != nil {
 		return 0, err
 	}
 
 	selectNode := builder.qry.Nodes[lastNodeID]
-	idxObjRefs := make([][]*plan.ObjectRef, len(tableDefs))
-	idxTableDefs := make([][]*plan.TableDef, len(tableDefs))
+	idxObjRefs := make([][]*plan.ObjectRef, len(dmlCtx.tableDefs))
+	idxTableDefs := make([][]*plan.TableDef, len(dmlCtx.tableDefs))
 
-	for _, tableDef := range tableDefs {
+	for _, tableDef := range dmlCtx.tableDefs {
 		for _, idxDef := range tableDef.Indexes {
 			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
 				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
@@ -135,7 +132,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 	}
 
 	// handle primary/unique key confliction
-	for i, tableDef := range tableDefs {
+	for i, tableDef := range dmlCtx.tableDefs {
 		pkName := tableDef.Pkey.PkeyColName
 		pkPos := tableDef.Name2ColIndex[pkName]
 		if pkName != catalog.FakePrimaryKeyColName {
@@ -145,7 +142,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			scanNodeID := builder.appendNode(&plan.Node{
 				NodeType:     plan.Node_TABLE_SCAN,
 				TableDef:     DeepCopyTableDef(tableDef, true),
-				ObjRef:       objRefs[i],
+				ObjRef:       dmlCtx.objRefs[i],
 				BindingTags:  []int32{scanTag},
 				ScanSnapshot: ctx.snapshot,
 			}, ctx)
@@ -194,7 +191,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				continue
 			}
 
-			idxObjRefs[i][j], idxTableDefs[i][j] = builder.compCtx.Resolve(objRefs[i].SchemaName, idxDef.IndexTableName, nil)
+			idxObjRefs[i][j], idxTableDefs[i][j] = builder.compCtx.Resolve(dmlCtx.objRefs[i].SchemaName, idxDef.IndexTableName, nil)
 			colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTablePrimaryColName] = pkPos
 
 			argsLen := len(idxDef.Parts)
@@ -289,15 +286,15 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 	selectNodeTag := selectNode.BindingTags[0]
 	var partitionExpr *Expr
 
-	for i, tableDef := range tableDefs {
+	for i, tableDef := range dmlCtx.tableDefs {
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
 		updateCtx := &plan.UpdateCtx{
-			ObjRef:     objRefs[i],
+			ObjRef:     dmlCtx.objRefs[i],
 			TableDef:   tableDef,
 			InsertCols: insertCols,
 		}
 		if tableDef.Partition != nil {
-			partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, objRefs[i], tableDef)
+			partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[i], tableDef)
 			updateCtx.PartitionIdx = int32(len(colName2Idx))
 			updateCtx.PartitionTableIds = partitionTableIDs
 			updateCtx.PartitionTableNames = partitionTableNames
@@ -421,7 +418,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 
 	}
 
-	if lockOpNode != nil {
+	if lockOpNode != nil && len(lockOpNode.LockTargets) > 0 {
 		lastNodeID = builder.appendNode(lockOpNode, ctx)
 		reCheckifNeedLockWholeTable(builder)
 	}
