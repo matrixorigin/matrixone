@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -99,7 +100,9 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		end.ToTimestamp(),
 		engine_util.WithColumns(
 			[]uint16{0, 1},
-			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)}),
+			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)},
+			-1,
+		),
 	)
 
 	return ConstructTransferFlow(

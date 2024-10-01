@@ -1339,6 +1339,7 @@ func Test_SimpleReader(t *testing.T) {
 		engine_util.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
+			-1,
 		),
 	)
 	blockio.Start("")
@@ -1369,6 +1370,7 @@ func Test_SimpleReader(t *testing.T) {
 		engine_util.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
+			-1,
 		),
 		engine_util.WithTombstone(),
 	)

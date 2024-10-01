@@ -116,6 +116,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 		if column == catalog.Row_ID {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
+			mixin.columns.phyAddrPos = i
 		} else {
 			if plan2.GetSortOrderByName(mixin.tableDef, column) == 0 {
 				mixin.columns.indexOfFirstSortedColumn = i
@@ -206,8 +207,9 @@ type withFilterMixin struct {
 
 	// columns used for reading
 	columns struct {
-		seqnums  []uint16
-		colTypes []types.Type
+		seqnums    []uint16
+		colTypes   []types.Type
+		phyAddrPos int
 
 		indexOfFirstSortedColumn int
 	}
@@ -360,6 +362,7 @@ func NewReader(
 		memFilter: memFilter,
 		source:    source,
 	}
+	r.columns.phyAddrPos = -1
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
 	return r, nil
@@ -452,11 +455,11 @@ func (r *reader) Read(
 
 	err = blockio.BlockDataRead(
 		statsCtx,
-		r.isTombstone,
 		blkInfo,
 		r.source,
 		r.columns.seqnums,
 		r.columns.colTypes,
+		r.columns.phyAddrPos,
 		r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,

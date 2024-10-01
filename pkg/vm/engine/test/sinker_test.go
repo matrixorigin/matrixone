@@ -100,6 +100,7 @@ func Test_Sinker(t *testing.T) {
 		engine_util.WithColumns(
 			objectio.TombstoneSeqnums_CN_Created,
 			objectio.GetTombstoneTypes(pkType, false),
+			-1,
 		),
 		engine_util.WithTombstone(),
 	)
