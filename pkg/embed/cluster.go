@@ -82,7 +82,11 @@ func NewCluster(
 	}
 	c.adjust()
 
-	if err := c.createServiceOperators(); err != nil {
+	if err := c.initConfigs(); err != nil {
+		return nil, err
+	}
+
+	if err := c.createServiceOperators(0); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -100,13 +104,19 @@ func (c *cluster) Start() error {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
 
+	c.doStartLocked(0)
+	c.state = started
+	return nil
+}
+
+func (c *cluster) doStartLocked(from int) {
 	var wg sync.WaitGroup
 	errC := make(chan error, 1)
 	defer close(errC)
-	for _, s := range c.services {
+	for _, s := range c.services[from:] {
 		if s.serviceType != metadata.ServiceType_CN {
 			if err := s.Start(); err != nil {
-				return err
+				panic(err)
 			}
 			continue
 		}
@@ -115,25 +125,12 @@ func (c *cluster) Start() error {
 		go func(s *operator) {
 			defer wg.Done()
 			if err := s.Start(); err != nil {
-				select {
-				case errC <- err:
-					return
-				default:
-				}
-				return
+				panic(err)
 			}
 		}(s)
 	}
+
 	wg.Wait()
-
-	select {
-	case err := <-errC:
-		return err
-	default:
-	}
-
-	c.state = started
-	return nil
 }
 
 func (c *cluster) Close() error {
@@ -211,6 +208,29 @@ func (c *cluster) GetCNService(
 	return v, nil
 }
 
+func (c *cluster) StartNewCNService(n int) error {
+	c.Lock()
+	defer c.Unlock()
+
+	if c.state != started {
+		panic("cannot start cn services in stopped cluster")
+	}
+
+	serviceFrom := len(c.services)
+	cnFrom := c.options.cn
+	c.options.cn += n
+
+	if err := c.initCNConfigs(cnFrom); err != nil {
+		return err
+	}
+	if err := c.createServiceOperators(serviceFrom); err != nil {
+		return err
+	}
+
+	c.doStartLocked(serviceFrom)
+	return nil
+}
+
 func (c *cluster) adjust() {
 	if c.options.cn == 0 {
 		c.options.cn = 1
@@ -229,12 +249,8 @@ func (c *cluster) adjust() {
 	c.ports.gossipPort = getNextBasePort()
 }
 
-func (c *cluster) createServiceOperators() error {
-	if err := c.initConfigs(); err != nil {
-		return err
-	}
-
-	for i, f := range c.files {
+func (c *cluster) createServiceOperators(from int) error {
+	for i, f := range c.files[from:] {
 		s, err := newService(
 			f,
 			i,
@@ -265,10 +281,6 @@ func (c *cluster) createServiceOperators() error {
 }
 
 func (c *cluster) initConfigs() error {
-	if len(c.files) > 0 {
-		return nil
-	}
-
 	if err := c.initLogServiceConfig(); err != nil {
 		return err
 	}
@@ -277,17 +289,29 @@ func (c *cluster) initConfigs() error {
 		return err
 	}
 
-	if c.options.withProxy {
-		if err := c.initProxyServiceConfig(); err != nil {
+	return c.initCNConfigs(0)
+}
+
+func (c *cluster) initCNConfigs(from int) error {
+	for i := from; i < c.options.cn; i++ {
+		file := filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i))
+		c.files = append(c.files, file)
+		err := genConfig(
+			file,
+			genConfigText(
+				cnConfig,
+				templateArgs{
+					I:           i,
+					ID:          c.id,
+					DataDir:     c.options.dataPath,
+					ServicePort: c.ports.servicePort,
+				},
+			),
+		)
+		if err != nil {
 			return err
 		}
-
 	}
-
-	if err := c.initCNServiceConfig(); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -314,43 +338,6 @@ func (c *cluster) initTNServiceConfig() error {
 		file,
 		genConfigText(
 			tnConfig,
-			templateArgs{
-				ID:          c.id,
-				DataDir:     c.options.dataPath,
-				ServicePort: c.ports.servicePort,
-			},
-		),
-	)
-}
-
-func (c *cluster) initCNServiceConfig() error {
-	for i := 0; i < c.options.cn; i++ {
-		file := filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i))
-		c.files = append(c.files, file)
-		err := genConfig(
-			file,
-			genConfigText(
-				cnConfig,
-				templateArgs{
-					I:           i,
-					ID:          c.id,
-					DataDir:     c.options.dataPath,
-					ServicePort: c.ports.servicePort,
-				},
-			),
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *cluster) initProxyServiceConfig() error {
-	return genConfig(
-		filepath.Join(c.options.dataPath, "proxy.toml"),
-		genConfigText(
-			proxyConfig,
 			templateArgs{
 				ID:          c.id,
 				DataDir:     c.options.dataPath,
