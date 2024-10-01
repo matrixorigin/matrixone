@@ -1639,6 +1639,19 @@ func nanoTimeFormat(ts int64) string {
 // then return an error
 // if the ts bigger than now(), then return an error
 func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
+	// if the timestamp time less than the pitrRecord modified time, then return error
+	// modified time is utc time string, ts is coverted to utc too
+	modifiedTimeStr := pitrRecord.modifiedTime
+	// parse modifiedTimeStr to utc time
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", modifiedTimeStr, time.UTC)
+	if err != nil {
+		return
+	}
+	utcNano := t.UTC().UnixNano()
+	if ts <= utcNano {
+		moerr.NewInternalErrorNoCtxf("input timestamp %v is less than the pitr valid time %v", nanoTimeFormat(ts), nanoTimeFormat(utcNano))
+	}
+
 	// use utc time now sub pitr during time get the minest time
 	// is ts time less than the minest time, then return error
 	pitrValue := pitrRecord.pitrValue
