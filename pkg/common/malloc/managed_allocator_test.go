@@ -100,3 +100,15 @@ func BenchmarkManagedAllocator(b *testing.B) {
 	}
 
 }
+
+func BenchmarkManagedAllocatorLargeAmount(b *testing.B) {
+	allocator := NewManagedAllocator(
+		newUpstreamAllocatorForTest(),
+	)
+	for range b.N {
+		_, err := allocator.Allocate(1, NoHints)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
