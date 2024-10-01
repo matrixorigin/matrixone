@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
@@ -62,6 +63,7 @@ func MakeBloomfilterCoarseFilter(
 		bat *batch.Batch,
 		mp *mpool.MPool,
 	) (err error) {
+		logutil.Infof("bloomfilter coarse filter is %d", bat.Vecs[0].Length())
 		bf.Test(
 			bat.Vecs[0],
 			func(exists bool, i int) {
@@ -70,6 +72,7 @@ func MakeBloomfilterCoarseFilter(
 				}
 			},
 		)
+		logutil.Infof("bm is %d", len(bm.ToArray()))
 		return nil
 
 	}, nil

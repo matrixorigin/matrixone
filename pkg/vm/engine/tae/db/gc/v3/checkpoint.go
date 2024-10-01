@@ -852,20 +852,38 @@ func (c *checkpointCleaner) CheckGC() error {
 		return moerr.NewInternalErrorNoCtxf("processing clean GetPITRs %s: %v", debugCandidates[0].String(), err)
 	}
 	location := gCkp.GetLocation()
-	debugTable.SoftGC(c.ctx, &location, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
 	mergeTable := NewGCTable(c.fs.Service, c.mPool)
 	for _, table := range c.inputs.tables {
+		if len(table.files.stats) == 0 {
+			logutil.Infof("mergeTable is empty")
+		} else {
+			logutil.Infof("mergeTable is %d, stats is %v", len(table.files.stats), table.files.stats[0].ObjectName().String())
+		}
 		mergeTable.Merge(table)
 	}
 	defer mergeTable.Close()
-	mergeTable.SoftGC(c.ctx, &location, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
-	if !mergeTable.Compare(debugTable) {
-		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
-		logutil.Errorf("debugTable :%v", debugTable.String())
+	logutil.Infof("merge table is %d, stats is %v", len(mergeTable.files.stats), mergeTable.files.stats[0].ObjectName().String())
+	_, _, err = mergeTable.SoftGC(c.ctx, &location, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
+	if err != nil {
+		logutil.Infof("err is %v", err)
+		return err
+	}
+	logutil.Infof("merge table2 is %d, stats is %v", len(mergeTable.files.stats), mergeTable.files.stats[0].ObjectName().String())
+	//logutil.Infof("debug table is %d, stats is %v", len(debugTable.files.stats), debugTable.files.stats[0].ObjectName().String())
+	_, _, err = debugTable.SoftGC(c.ctx, &location, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
+	if err != nil {
+		logutil.Infof("err is %v", err)
+		return err
+	}
+	//logutil.Infof("debug table2 is %d, stats is %v", len(debugTable.files.stats), debugTable.files.stats[0].ObjectName().String())
+	objects1, objects2, compare := mergeTable.Compare(debugTable)
+	if !compare {
+		logutil.Errorf("inputs :%v", c.inputs.tables[0].String(objects1))
+		logutil.Errorf("debugTable :%v", debugTable.String(objects2))
 		return moerr.NewInternalErrorNoCtx("Compare is failed")
 	} else {
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare is End"),
-			common.AnyField("table :", debugTable.String()),
+			common.AnyField("table :", debugTable.String(objects2)),
 			common.OperandField(start1.ToString()))
 	}
 	return nil

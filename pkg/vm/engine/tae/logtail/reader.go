@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -166,6 +167,11 @@ func MakeGlobalCheckpointDataReader(
 	return metadata, nil
 }
 
+func GetDataSchema() ([]string, []types.Type) {
+	return checkpointDataReferVersions[CheckpointCurrentVersion][ObjectInfoIDX].attrs,
+		checkpointDataReferVersions[CheckpointCurrentVersion][ObjectInfoIDX].types
+}
+
 func (r *CheckpointReader) LoadBatchData(
 	ctx context.Context,
 	_ []string, _ *plan.Expr,
@@ -176,18 +182,21 @@ func (r *CheckpointReader) LoadBatchData(
 		return true, nil
 	}
 	key := r.locations[0]
+	logutil.Infof("key is %v", key.String())
 	var reader *blockio.BlockReader
 	reader, err := blockio.NewObjectReader(r.sid, r.fs, *key)
 	if err != nil {
 		return false, err
 	}
 	var bats []*containers.Batch
-	for idx := range checkpointDataReferVersions[r.version] {
+	for idx := range checkpointDataReferVersions[CheckpointCurrentVersion] {
 		if uint16(idx) != ObjectInfoIDX &&
 			uint16(idx) != TombstoneObjectInfoIDX {
 			continue
 		}
 		item := checkpointDataReferVersions[CheckpointCurrentVersion][idx]
+		logutil.Infof("item is %v", item.attrs)
+		logutil.Infof("bat  is %v", bat.Attrs)
 		if bats, err = LoadBlkColumnsByMeta(
 			CheckpointCurrentVersion, ctx, item.types, item.attrs, uint16(idx), reader, mp,
 		); err != nil {
@@ -195,8 +204,14 @@ func (r *CheckpointReader) LoadBatchData(
 		}
 		for i := range bats {
 			cnBat := containers.ToCNBatch(bats[i])
-			bat.Append(ctx, mp, cnBat)
-			bats[i].Close()
+			logutil.Infof("cnBat is %d, bat is %d", cnBat.Vecs[0].Length(), len(bat.Vecs))
+			bat, err = bat.Append(ctx, mp, cnBat)
+			if err != nil {
+				logutil.Infof("err is %v", err)
+				return false, err
+			}
+			//bats[i].Close()
+			logutil.Infof("bat is %d", bat.RowCount())
 		}
 	}
 	r.locations = r.locations[1:]

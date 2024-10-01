@@ -15,7 +15,9 @@
 package gc
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"sync"
 
@@ -170,10 +172,11 @@ func (t *GCTable) SoftGC(
 	pitrs *logtail.PitrInfo,
 	meta *logtail.SnapshotMeta,
 ) ([]string, map[uint32][]types.TS, error) {
+	attr, tye := logtail.GetDataSchema()
 	filterBuffer := containers.NewOneSchemaBatchBuffer(
 		mpool.MB*32,
-		logtail.ObjectInfoSchema.Attrs(),
-		logtail.ObjectInfoSchema.Types(),
+		attr,
+		tye,
 	)
 	defer filterBuffer.Close(t.mp)
 	constructCoreseFilter, err := MakeBloomfilterCoarseFilter(ctx,
@@ -186,6 +189,7 @@ func (t *GCTable) SoftGC(
 		bat *batch.Batch,
 		mp *mpool.MPool,
 	) error {
+		logutil.Infof("constructFineFilter bat is %d", bat.Vecs[0].Length())
 		objects := make(map[string]*ObjectEntry)
 		for accountId, snapshot := range snapShotList {
 			snapList[accountId] = vector.MustFixedColWithTypeCheck[types.TS](snapshot.GetDownstreamVector())
@@ -212,23 +216,45 @@ func (t *GCTable) SoftGC(
 				objects[name] = object
 				continue
 			}
-			if objects[name] != nil && objects[name].dropTS.IsEmpty() {
+			if objects[name] != nil {
 				objects[name].dropTS = dropTs
 				objects[name].rows = append(objects[name].rows, uint32(i))
+				continue
 			}
+			logutil.Infof("namessss is %v", name)
 			tsList := meta.GetSnapshotListLocked(snapList, tid)
 			pitr := meta.GetPitrLocked(pitrs, dbs[i], tid)
 			if tsList == nil && pitr.IsEmpty() {
 				if createTs.LT(&ts) && dropTs.LT(&ts) {
-					for _, row := range objects[name].rows {
-						bm.Add(uint64(row))
-					}
+					bm.Add(uint64(i))
 				}
 				continue
 			}
 			if createTs.LT(&ts) &&
 				dropTs.LT(&ts) &&
 				!isSnapshotRefers(&createTs, &dropTs, tsList, &pitr, name) {
+				bm.Add(uint64(i))
+			}
+		}
+		logutil.Infof("objects is %d", len(objects))
+		for name, object := range objects {
+			if object.dropTS.IsEmpty() {
+				logutil.Infof("object dropts is %v", name)
+				continue
+			}
+			tsList := meta.GetSnapshotListLocked(snapList, object.table)
+			pitr := meta.GetPitrLocked(pitrs, object.db, object.table)
+			if tsList == nil && pitr.IsEmpty() {
+				if object.createTS.LT(&ts) && object.dropTS.LT(&ts) {
+					for _, row := range objects[name].rows {
+						bm.Add(uint64(row))
+					}
+				}
+				continue
+			}
+			if object.createTS.LT(&ts) &&
+				object.dropTS.LT(&ts) &&
+				!isSnapshotRefers(&object.createTS, &object.dropTS, tsList, &pitr, name) {
 				for _, row := range objects[name].rows {
 					bm.Add(uint64(row))
 				}
@@ -248,6 +274,7 @@ func (t *GCTable) SoftGC(
 		for name := range names {
 			gcFiles = append(gcFiles, name)
 		}
+		logutil.Infof("SoftGC1111: %d, files %d", bat.Vecs[0].Length(), len(gcFiles))
 		return nil
 	}
 
@@ -265,8 +292,12 @@ func (t *GCTable) SoftGC(
 	if err != nil {
 		return nil, nil, err
 	}
-	t.files.stats = t.files.stats[0:]
+	t.files.stats = make([]objectio.ObjectStats, 0, len(gcStats))
 	t.files.stats = append(t.files.stats, gcStats...)
+	logutil.Infof("SoftGC sss %d", len(gcStats))
+	for _, file := range t.files.stats {
+		logutil.Infof("SoftGC sss file %v", file.ObjectName().String())
+	}
 	return gcFiles, snapList, err
 }
 
@@ -497,6 +528,12 @@ func (t *GCTable) LoadBatchData(
 	if len(t.files.stats) == 0 {
 		return true, nil
 	}
+	bat.CleanOnlyData()
+	pint := "LoadBatchData is "
+	for _, s := range t.files.stats {
+		pint += s.ObjectName().String() + ";"
+	}
+	logutil.Infof(pint)
 	err := loader(ctx, t.fs, &t.files.stats[0], bat, mp)
 	if err != nil {
 		return false, err
@@ -536,22 +573,21 @@ func (t *GCTable) rebuildTable(bat *batch.Batch) {
 
 func (t *GCTable) replayData(
 	ctx context.Context,
-	bat *batch.Batch,
 	bs []objectio.BlockObject,
-	reader *blockio.BlockReader) (func(), error) {
+	reader *blockio.BlockReader) (*batch.Batch, func(), error) {
 	idxes := []uint16{0}
-	var release func()
-	var err error
-	bat, release, err = reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DefaultAllocator)
+	bat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DefaultAllocator)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return release, nil
+	logutil.Infof("Replaying data for table %s", bat.String())
+	return bat, release, nil
 }
 
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS, ts types.TS) error {
 	var release1 func()
+	var buffer *batch.Batch
 	defer func() {
 		if release1 != nil {
 			release1()
@@ -568,9 +604,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	if err != nil {
 		return err
 	}
-	buffer := t.fetchBuffer()
-	defer t.putBuffer(buffer)
-	release1, err = t.replayData(ctx, buffer, bs, reader)
+	buffer, release1, err = t.replayData(ctx, bs, reader)
 	if err != nil {
 		return err
 	}
@@ -582,12 +616,58 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 
 // For test
 
-func (t *GCTable) Compare(table *GCTable) bool {
-	//if !t.compareObjects(t.objects, table.objects) {
-	//	logutil.Infof("objects are not equal")
-	//	return false
-	//}
-	return true
+func (t *GCTable) Compare(table *GCTable) (map[string]*ObjectEntry, map[string]*ObjectEntry, bool) {
+	bat := t.fetchBuffer()
+	defer t.putBuffer(bat)
+	objects := make(map[string]*ObjectEntry)
+	objects2 := make(map[string]*ObjectEntry)
+
+	buildObjects := func(table *GCTable,
+		objects map[string]*ObjectEntry,
+		loadfn func(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error),
+	) error {
+		for {
+			bat.CleanOnlyData()
+			done, err := loadfn(context.Background(), nil, nil, t.mp, bat)
+			if err != nil {
+				logutil.Infof("load data error")
+				return err
+			}
+
+			if done {
+				break
+			}
+
+			creates := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+			deletes := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+			dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
+			tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
+			for i := 0; i < bat.Vecs[0].Length(); i++ {
+				name := bat.Vecs[0].GetStringAt(i)
+				tid := tids[i]
+				createTs := creates[i]
+				dropTs := deletes[i]
+				object := &ObjectEntry{
+					createTS: createTs,
+					dropTS:   dropTs,
+					db:       dbs[i],
+					table:    tid,
+					rows:     make([]uint32, 0),
+				}
+				object.rows = append(object.rows, uint32(i))
+				objects[name] = object
+			}
+		}
+		return nil
+	}
+	buildObjects(t, objects, t.LoadBatchData)
+	buildObjects(table, objects2, table.LoadBatchData)
+	if !t.compareObjects(objects, objects2) {
+		logutil.Infof("objects are not equal")
+		return objects, objects2, false
+	}
+	logutil.Infof("objects len %d", len(objects))
+	return objects, objects2, true
 }
 
 func (t *GCTable) compareObjects(objects, compareObjects map[string]*ObjectEntry) bool {
@@ -607,16 +687,16 @@ func (t *GCTable) compareObjects(objects, compareObjects map[string]*ObjectEntry
 	return len(compareObjects) == len(objects)
 }
 
-func (t *GCTable) String() string {
-	//if len(t.objects) == 0 {
-	//	return ""
-	//}
-	//var w bytes.Buffer
-	//_, _ = w.WriteString("objects:[\n")
-	//for name, entry := range t.objects {
-	//	_, _ = w.WriteString(fmt.Sprintf("name: %s, createTS: %v ", name, entry.createTS.ToString()))
-	//}
-	//_, _ = w.WriteString("]\n")
-	//return w.String()
+func (t *GCTable) String(objects map[string]*ObjectEntry) string {
+	if len(objects) == 0 {
+		return ""
+	}
+	var w bytes.Buffer
+	_, _ = w.WriteString("objects:[\n")
+	for name, entry := range objects {
+		_, _ = w.WriteString(fmt.Sprintf("name: %s, createTS: %v ", name, entry.createTS.ToString()))
+	}
+	_, _ = w.WriteString("]\n")
+	return w.String()
 	return ""
 }

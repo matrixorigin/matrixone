@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
@@ -51,11 +52,7 @@ func BuildBloomfilter(
 		if done, err = sourcer(ctx, bat.Attrs, nil, mp, bat); err != nil {
 			return
 		}
-		if bf == nil {
-			bf = bloomfilter.New(int64(bat.Vecs[0].Length()), probability)
-		} else {
-			bf.Add(bat.Vecs[0])
-		}
+		logutil.Infof("BuildBloomfilter: %d", bat.Vecs[0].Length())
 		if done {
 			break
 		}
@@ -129,7 +126,8 @@ func (exec *GCExecutor) doFilter(
 			return err
 		}
 		// remove the GC'ed rows from the batch
-		bat.Shrink(exec.sels, true)
+		bat.Shrink(exec.sels, false)
+		logutil.Infof("doFilter: %d, bat is %d", len(exec.sels), bat.Vecs[0].Length())
 		if err := canGCSinker(ctx, bat); err != nil {
 			return err
 		}
@@ -160,8 +158,8 @@ func (exec *GCExecutor) Run(
 		ctx,
 		sourcer,
 		corseFilter,
-		canGCSinker.Write,
 		cannotGCSinker.Write,
+		canGCSinker.Write,
 	); err != nil {
 		return
 	}
@@ -171,6 +169,7 @@ func (exec *GCExecutor) Run(
 		return
 	}
 	canGCObjects, canGCMemTable := canGCSinker.GetResult()
+	logutil.Infof("canGCMemTable is %d, canGCObjects is %d", len(canGCMemTable), len(canGCObjects))
 	fineSourcer, release := MakeLoadFunc(
 		ctx,
 		canGCMemTable,

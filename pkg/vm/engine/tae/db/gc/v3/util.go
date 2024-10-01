@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,6 +44,7 @@ func MakeLoadFunc(
 		reader engine.Reader
 	)
 	if len(objects) > 0 {
+		logutil.Infof("load from objects %d", len(objects))
 		reader = engine_util.SimpleMultiObjectsReader(
 			ctx, fs, objects, ts, opts...,
 		)
@@ -56,9 +58,10 @@ func MakeLoadFunc(
 		ctx context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch,
 	) (bool, error) {
 		if cursor < len(tail) {
-			if _, err := bat.AppendWithCopy(ctx, mp, bat); err != nil {
+			if _, err := bat.AppendWithCopy(ctx, mp, tail[cursor]); err != nil {
 				return false, err
 			}
+			logutil.Infof("load batch from tail, bat %d", bat.Vecs[0].Length())
 			cursor++
 			return false, nil
 		}
