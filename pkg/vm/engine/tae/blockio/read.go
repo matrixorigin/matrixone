@@ -457,10 +457,10 @@ func BlockDataReadInner(
 	// assemble result batch
 	for i, col := range loaded.Vecs {
 		if i == phyAddrColumnPos {
-			continue
-		}
-		if err = bat.Vecs[i].UnionBatch(col, 0, col.Length(), nil, mp); err != nil {
-			break
+		} else {
+			if err = bat.Vecs[i].UnionBatch(col, 0, col.Length(), nil, mp); err != nil {
+				break
+			}
 		}
 		if len(deletedRows) > 0 {
 			bat.Vecs[i].Shrink(deletedRows, true)
