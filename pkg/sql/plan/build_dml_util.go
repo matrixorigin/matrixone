@@ -857,7 +857,13 @@ func buildInsertPlansWithRelatedHiddenTable(
 				if err != nil {
 					return err
 				}
+			} else if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+				err = buildPostInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx)
+				if err != nil {
+					return err
+				}
 			}
+
 		}
 	}
 
@@ -881,11 +887,13 @@ func buildInsertPlansWithRelatedHiddenTable(
 		return err
 	}
 
-	// ERIC
-	err = buildPostInsertIndexPlans(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap)
-	if err != nil {
-		return err
-	}
+	/*
+		// ERIC
+		err = buildPostInsertIndexPlans(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap)
+		if err != nil {
+			return err
+		}
+	*/
 
 	return nil
 }
@@ -4302,8 +4310,8 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 	}
 
 	var partPos []int32
-	for i, p := range indexdef.Parts {
-		for _, col := range tableDef.Cols {
+	for _, p := range indexdef.Parts {
+		for i, col := range tableDef.Cols {
 			if col.Name == p {
 				partPos = append(partPos, int32(i))
 			}
@@ -4314,7 +4322,7 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 
 	// TODO: delete plan if update
 
-	// CROSS APPLY (sink_scan, fulltext_index_tokenize(algoParams, pk, col1, col2,...)
+	// INSERT INTO index_table SELECT f.* from sink_scan CROSS APPLY fulltext_index_tokenize(algoParams, pk, col1, col2,...) as f;
 
 	// TableFunc fulltext_index_tokenize
 	args := []*plan.Expr{
@@ -4360,16 +4368,10 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 	}
 	tableFuncId := builder.appendNode(tablefunc, bindCtx)
 
-	lastNodeId = builder.appendNode(&plan.Node{
-		NodeType:  plan.Node_APPLY,
-		Children:  []int32{lastNodeId, tableFuncId},
-		ApplyType: plan.Node_CROSSAPPLY,
-	}, bindCtx)
-
-	// projection
-	project := make([]*plan.Expr, 0, 3)
+	// cross apply projection
+	apply_project := make([]*plan.Expr, len(ftcols))
 	for i := range ftcols {
-		project[i] = &plan.Expr{
+		apply_project[i] = &plan.Expr{
 			Typ: ftcols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -4379,6 +4381,47 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 			},
 		}
 	}
+
+	lastNodeId = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_APPLY,
+		Children:    []int32{lastNodeId, tableFuncId},
+		ApplyType:   plan.Node_CROSSAPPLY,
+		BindingTags: []int32{builder.genNewTag()},
+		ProjectList: apply_project,
+	}, bindCtx)
+
+	crossapply := builder.qry.Nodes[lastNodeId]
+
+	// projection
+	project := make([]*plan.Expr, len(ftcols))
+	for i := range ftcols {
+		project[i] = &plan.Expr{
+			Typ: ftcols[i].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: crossapply.BindingTags[0],
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+
+	/*
+		// fake pk
+		project = append(project, &plan.Expr{
+			Typ: ftcols[0].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: crossapply.BindingTags[0],
+					ColPos: int32(0),
+				},
+			},
+		})
+	*/
+
+	logutil.Infof("Binding Tag %d", tablefunc.BindingTags[0])
+	logutil.Infof("PROJECT HERE. %v", project)
+	logutil.Infof("APPLY HERE. %d", lastNodeId)
 
 	projectNode := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
@@ -4393,9 +4436,24 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, indexdef.IndexName)
 	}
 
+	/*
+		insertEntriesTableDef := DeepCopyTableDef(indexTableDef, false)
+		for _, col := range indexTableDef.Cols {
+			if col.Name != catalog.Row_ID {
+				insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
+			}
+		}
+	*/
+
+	/*
+		indexTableDef.Cols = RemoveIf[*ColDef](indexTableDef.Cols, func(colVal *ColDef) bool {
+			return colVal.Name == catalog.Row_ID || colVal.Name == catalog.FakePrimaryKeyColName
+		})
+	*/
+
 	insertEntriesTableDef := DeepCopyTableDef(indexTableDef, false)
 	for _, col := range indexTableDef.Cols {
-		if col.Name != catalog.Row_ID {
+		if col.Name != catalog.Row_ID && col.Name != catalog.FakePrimaryKeyColName {
 			insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
 		}
 	}
@@ -4421,7 +4479,7 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 	addAffectedRows := false
 	isFkRecursionCall := false
 	updatePkCol := true
-	ifExistAutoPkCol := false
+	ifExistAutoPkCol := true
 	ifCheckPkDup := false
 	ifInsertFromUnique := false
 	var pkFilterExprs []*Expr
