@@ -18,13 +18,28 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var allocator = sync.OnceValue(func() *malloc.ManagedAllocator[malloc.Allocator] {
 	// default
 	allocator := malloc.GetDefault(nil)
-	//TODO metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounter.WithLabelValues("mpool-allocate"),
+		metric.MallocGauge.WithLabelValues("mpool-inuse"),
+		metric.MallocCounter.WithLabelValues("mpool-allocate-objects"),
+		metric.MallocGauge.WithLabelValues("mpool-inuse-objects"),
+	)
 	//TODO peak in-use
 	// managed
 	return malloc.NewManagedAllocator(allocator)
 })
+
+func MakeBytes(size int) ([]byte, error) {
+	return allocator().Allocate(uint64(size), malloc.NoHints)
+}
+
+func FreeBytes(bs []byte) {
+	allocator().Deallocate(bs, malloc.NoHints)
+}

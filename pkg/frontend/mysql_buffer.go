@@ -18,6 +18,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 const (
@@ -46,8 +48,10 @@ type SessionConn interface {
 	RemoteAddress() string
 }
 
+var _ Allocator = new(BufferAllocator)
+
 type BufferAllocator struct {
-	allocator *SessionAllocator
+	allocator Allocator
 }
 
 func (ba *BufferAllocator) Alloc(size int) ([]byte, error) {
@@ -58,31 +62,116 @@ func (ba *BufferAllocator) Alloc(size int) ([]byte, error) {
 }
 
 func (ba *BufferAllocator) Free(buf []byte) {
-	if buf == nil || cap(buf) == 0 {
+	if len(buf) == 0 || cap(buf) == 0 {
 		return
 	}
 	ba.allocator.Free(buf)
 }
 
-type ListBlock struct {
+type MemBlock struct {
 	data       []byte
 	writeIndex int
 	readIndex  int
 }
+
+func (block *MemBlock) freeBuffUnsafe(alloc Allocator) {
+	if block == nil {
+		return
+	}
+	// Free all allocated memory
+	alloc.Free(block.data)
+	block.data = nil
+}
+
+// IncReadIndex increase the read index of read buffer
+func (block *MemBlock) IncReadIndex(n int) {
+	block.readIndex += n
+}
+
+func (block *MemBlock) IncWriteIndex(len int) {
+	block.writeIndex += len
+}
+
+// ResetIndices set read and write index = 0
+func (block *MemBlock) ResetIndices() {
+	block.readIndex = 0
+	block.writeIndex = 0
+}
+
+// IsFull check read buf full or not
+func (block *MemBlock) IsFull() bool {
+	return block.writeIndex == fixBufferSize
+}
+
+func (block *MemBlock) BufferLen() int {
+	return len(block.data)
+}
+
+// AvailableDataLen get unconsumed byte from the read buf
+func (block *MemBlock) AvailableDataLen() int {
+	return block.writeIndex - block.readIndex
+}
+
+/*
+AvailableData return the slice of data[readIndex : writeIndex]
+*/
+func (block *MemBlock) AvailableData() []byte {
+	return block.data[block.readIndex:block.writeIndex]
+}
+
+func (block *MemBlock) Head() []byte {
+	return block.data[block.readIndex : block.readIndex+HeaderLengthOfTheProtocol]
+}
+
+func (block *MemBlock) AvailableDataAfterHead() []byte {
+	return block.data[block.readIndex+HeaderLengthOfTheProtocol : block.writeIndex]
+}
+
+func (block *MemBlock) AvailableSpace() []byte {
+	return block.data[block.writeIndex:]
+}
+
+func (block *MemBlock) AvailableSpaceLen() int {
+	return len(block.data) - block.writeIndex
+}
+
+func (block *MemBlock) ReserveHead() []byte {
+	return block.data[block.writeIndex : block.writeIndex+HeaderLengthOfTheProtocol]
+}
+
+// CopyDataAfterHeadOutTo copy the data in read buf to output buffer
+func (block *MemBlock) CopyDataAfterHeadOutTo(output []byte) {
+	copy(output, block.AvailableDataAfterHead())
+}
+
+func (block *MemBlock) CopyDataIn(input []byte) {
+	copy(block.AvailableSpace(), input)
+}
+
+// Adjust clean up the packet that have been consumed and
+// move the data forward that has not been consumed
+func (block *MemBlock) Adjust() {
+	if block.readIndex != 0 {
+		copy(block.data, block.AvailableData())
+		block.writeIndex -= block.readIndex
+		block.readIndex = 0
+	}
+}
+
 type Conn struct {
 	id                    uint64
 	conn                  net.Conn
 	localAddr, remoteAddr string
 	sequenceId            uint8
 	header                [4]byte
-	// static buffer block
-	fixBuf *ListBlock
-	// dynamic buffer block is organized by a list
-	dynamicBuf *list.List
-	// just for load local
-	loadLocalBuf []byte
+	// static buffer block for read & write in general cases
+	fixBuf MemBlock
+	// dynamic write buffer block is organized by a list
+	dynamicWrBuf *list.List
+	// just for load local read
+	loadLocalBuf MemBlock
 	// current block pointer being written
-	curBuf *ListBlock
+	curBuf *MemBlock
 	// current packet header pointer
 	curHeader []byte
 	// current block write pointer
@@ -96,14 +185,13 @@ type Conn struct {
 	timeout           time.Duration
 	allocator         *BufferAllocator
 	ses               *Session
-	mu                sync.Mutex
 	closeFunc         sync.Once
 }
 
 // NewIOSession create a new io session
-func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
+func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (_ *Conn, err error) {
 	// just for ut
-	_, ok := globalSessionAlloc.Load().(*SessionAllocator)
+	_, ok := globalSessionAlloc.Load().(Allocator)
 	if !ok {
 		allocator := NewSessionAllocator(pu)
 		setGlobalSessionAlloc(allocator)
@@ -113,21 +201,27 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 		conn:              conn,
 		localAddr:         conn.LocalAddr().String(),
 		remoteAddr:        conn.RemoteAddr().String(),
-		fixBuf:            &ListBlock{},
-		dynamicBuf:        list.New(),
+		fixBuf:            MemBlock{},
+		dynamicWrBuf:      list.New(),
 		allocator:         &BufferAllocator{allocator: getGlobalSessionAlloc()},
 		timeout:           pu.SV.SessionTimeout.Duration,
 		maxBytesToFlush:   int(pu.SV.MaxBytesInOutbufToFlush * 1024),
 		allowedPacketSize: int(MaxPayloadSize),
 	}
-	var err error
+
+	defer func() {
+		if err != nil {
+			c.freeBuffUnsafe()
+		}
+	}()
+
 	c.fixBuf.data, err = c.allocator.Alloc(fixBufferSize)
 	if err != nil {
 		return nil, err
 	}
 
 	c.curHeader = c.fixBuf.data[:HeaderLengthOfTheProtocol]
-	c.curBuf = c.fixBuf
+	c.curBuf = &c.fixBuf
 	return c, err
 }
 
@@ -143,21 +237,40 @@ func (c *Conn) UseConn(conn net.Conn) {
 	c.conn = conn
 }
 
+func (c *Conn) freeDynamicBuffUnsafe() {
+	if c != nil && c.dynamicWrBuf != nil {
+		for e := c.dynamicWrBuf.Front(); e != nil; e = e.Next() {
+			if block, ok := e.Value.(*MemBlock); ok && block != nil {
+				block.freeBuffUnsafe(c.allocator)
+				block.data = nil
+			}
+		}
+		c.dynamicWrBuf.Init()
+	}
+}
+
+func (c *Conn) freeBuffUnsafe() {
+	if c == nil {
+		return
+	}
+	c.fixBuf.freeBuffUnsafe(c.allocator)
+	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
+	c.freeDynamicBuffUnsafe()
+}
+
+func (c *Conn) freeNoFixBuffUnsafe() {
+	if c == nil {
+		return
+	}
+	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
+	c.freeDynamicBuffUnsafe()
+}
+
 func (c *Conn) Close() error {
 	var err error
 	c.closeFunc.Do(func() {
 		defer func() {
-			if c.fixBuf != nil && len(c.fixBuf.data) > 0 {
-				// Free all allocated memory
-				c.allocator.Free(c.fixBuf.data)
-				c.fixBuf.data = nil
-			}
-			if c.dynamicBuf != nil {
-				for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
-					c.allocator.Free(e.Value.([]byte))
-				}
-				c.dynamicBuf.Init()
-			}
+			c.freeBuffUnsafe()
 		}()
 
 		err = c.closeConn()
@@ -187,136 +300,165 @@ func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
 }
 
 // ReadLoadLocalPacket just for processLoadLocal, reuse memory, and not merge 16MB packets
-func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
-
-	var err error
+func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 	var packetLength int
 	defer func() {
+		if rErr := recover(); rErr != nil {
+			_, ok := rErr.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
+			} else {
+				err = errors.Join(err, rErr.(error))
+			}
+		}
 		if err != nil {
-			c.allocator.Free(c.loadLocalBuf)
-			c.loadLocalBuf = nil
+			c.FreeLoadLocal()
 		}
 	}()
-	err = c.ReadIntoSlices(c.header[:], HeaderLengthOfTheProtocol)
+	err = c.ReadNBytesIntoBuf(c.header[:], HeaderLengthOfTheProtocol)
 	if err != nil {
-		return nil, err
+		return
 	}
 	packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
 	sequenceId := c.header[3]
 	c.sequenceId = sequenceId + 1
 
-	if c.loadLocalBuf == nil {
-		c.loadLocalBuf, err = c.allocator.Alloc(packetLength)
+	if c.loadLocalBuf.data == nil {
+		c.loadLocalBuf.data, err = c.allocator.Alloc(packetLength)
 		if err != nil {
-			return nil, err
+			return
 		}
-	} else if len(c.loadLocalBuf) < packetLength {
-		c.allocator.Free(c.loadLocalBuf)
-		c.loadLocalBuf = nil
-		c.loadLocalBuf, err = c.allocator.Alloc(packetLength)
+	} else if len(c.loadLocalBuf.data) < packetLength {
+		c.loadLocalBuf.freeBuffUnsafe(c.allocator)
+		c.loadLocalBuf.data, err = c.allocator.Alloc(packetLength)
 		if err != nil {
-			return nil, err
+			return
 		}
 	}
 
-	err = c.ReadIntoSlices(c.loadLocalBuf, packetLength)
+	err = c.ReadNBytesIntoBuf(c.loadLocalBuf.data, packetLength)
 	if err != nil {
-		return nil, err
+		return
 	}
-	return c.loadLocalBuf[:packetLength], nil
+	return c.loadLocalBuf.data[:packetLength], err
+}
+
+func (c *Conn) FreeLoadLocal() {
+	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
 }
 
 // Read reads the complete packet including process the > 16MB packet. return the payload
-func (c *Conn) Read() ([]byte, error) {
+// packet format:
+//
+// |------packet------------------------------------------------------------------|
+// |---3-bytes-payload length---+---1 byte sequence_id---+----------payload-------|
+// if the length pf packet is more that 16MB. there are multiple packets for the same packet.
+func (c *Conn) Read() (_ []byte, err error) {
 	// Requests > 16MB
 	payloads := make([][]byte, 0)
 	var firstPayload []byte
 	var finalPayload []byte
 	var payload []byte
-	var err error
-	var packetLength, totalLength int
+	var payloadLength, totalLength int
 	var headerPrepared bool
 	defer func() {
+		if rErr := recover(); rErr != nil {
+			_, ok := rErr.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
+			} else {
+				err = errors.Join(err, rErr.(error))
+			}
+		}
 		for i := range payloads {
 			c.allocator.Free(payloads[i])
 		}
+		payloads = nil
+		//release related buffer if there is an error
+		if err != nil {
+			firstPayload = nil
+			finalPayload = nil
+			payload = nil
+			c.fixBuf.ResetIndices()
+		}
 	}()
-	packetLength, headerPrepared = c.GetPacketLengthFromReadBuf()
+	payloadLength, headerPrepared = c.GetPayloadLength()
 
-	if c.ReadBufLen() < HeaderLengthOfTheProtocol+packetLength {
-		c.CleanConsumedPacket()
+	if c.fixBuf.AvailableDataLen() < HeaderLengthOfTheProtocol+payloadLength {
+		c.fixBuf.Adjust()
 	}
 
-	// Read at least 1 packet or until there is no space in the buffer
-	for c.ReadBufLen() < HeaderLengthOfTheProtocol+packetLength && !c.ReadBufIsFull() {
-		err = c.ReadIntoBuf()
+	// Read at least 1 packet or until there is no space in the read buffer
+	for c.fixBuf.AvailableDataLen() < HeaderLengthOfTheProtocol+payloadLength && !c.fixBuf.IsFull() {
+		err = c.ReadIntoReadBuf()
 		if err != nil {
 			return nil, err
 		}
 		// Check if the packet header has been read into buffer
 		if !headerPrepared {
-			packetLength, headerPrepared = c.GetPacketLengthFromReadBuf()
+			payloadLength, headerPrepared = c.GetPayloadLength()
 		}
 	}
 
-	totalLength += packetLength
+	totalLength += payloadLength
 	err = c.CheckAllowedPacketSize(totalLength)
 	if err != nil {
 		return nil, err
 	}
 
-	firstPayload = c.CopyFromBuf(packetLength)
+	firstPayload = make([]byte, payloadLength)
+	c.fixBuf.CopyDataAfterHeadOutTo(firstPayload)
 
-	if packetLength+HeaderLengthOfTheProtocol < c.ReadBufLen() {
-		// CASE 1: packet length < 1MB, fixBuf have more than 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol + packetLength
+	if payloadLength+HeaderLengthOfTheProtocol < c.fixBuf.AvailableDataLen() {
+		// CASE 1: packet length < 1MB, fixBuf have more than 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol + payloadLength
 		// So we keep next packet data
-		c.IncReadIndex(packetLength + HeaderLengthOfTheProtocol)
-	} else if packetLength+HeaderLengthOfTheProtocol == c.ReadBufLen() {
-		// CASE 2: packet length < 1MB, fixBuf just have 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol = packetLength
+		c.fixBuf.IncReadIndex(payloadLength + HeaderLengthOfTheProtocol)
+	} else if payloadLength+HeaderLengthOfTheProtocol == c.fixBuf.AvailableDataLen() {
+		// CASE 2: packet length < 1MB, fixBuf just have 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol = payloadLength
 		// indicates that fixBuf have no data, clean it
-		c.ResetReadBufIndex()
+		c.fixBuf.ResetIndices()
 	} else {
-		// CASE 3: packet length > 1MB, c.fixBuf.writeIndex < HeaderLengthOfTheProtocol + packetLength
+		// CASE 3: packet length > 1MB, c.fixBuf.writeIndex < HeaderLengthOfTheProtocol + payloadLength
 		// NOTE: only read the remaining bytes of the current packet, do not read the next packet
-		hasPayloadLen := c.ReadBufLen() - HeaderLengthOfTheProtocol
-		err = c.ReadIntoSlices(firstPayload[hasPayloadLen:], packetLength-hasPayloadLen)
+		hasPayloadLen := c.fixBuf.AvailableDataLen() - HeaderLengthOfTheProtocol
+		err = ReadNBytesIntoBuf(c, firstPayload[hasPayloadLen:], payloadLength-hasPayloadLen)
 		if err != nil {
 			return nil, err
 		}
-		c.ResetReadBufIndex()
+		c.fixBuf.ResetIndices()
 	}
 
-	if packetLength != int(MaxPayloadSize) {
+	if payloadLength != int(MaxPayloadSize) {
 		return firstPayload, nil
 	}
 
 	// ======================== Packet > 16MB ========================
 	for {
 		// If total package length > 16MB, only one package will be read each iter
-		err = c.ReadIntoSlices(c.header[:], HeaderLengthOfTheProtocol)
+		err = ReadNBytesIntoBuf(c, c.header[:], HeaderLengthOfTheProtocol)
 		if err != nil {
 			return nil, err
 		}
-		packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
+		payloadLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
 		c.sequenceId = c.header[3] + 1
 
-		if packetLength == 0 {
+		if payloadLength == 0 {
 			break
 		}
-		totalLength += packetLength
+		totalLength += payloadLength
 		err = c.CheckAllowedPacketSize(totalLength)
 		if err != nil {
 			return nil, err
 		}
 
-		payload, err = c.ReadOnePayload(packetLength)
+		payload, err = ReadOnePayload(c, payloadLength)
 		if err != nil {
 			return nil, err
 		}
 
 		payloads = append(payloads, payload)
 
-		if uint32(packetLength) != MaxPayloadSize {
+		if uint32(payloadLength) != MaxPayloadSize {
 			break
 		}
 	}
@@ -335,103 +477,85 @@ func (c *Conn) Read() ([]byte, error) {
 	return finalPayload, nil
 }
 
-// IncReadIndex increase the read index of read buffer
-func (c *Conn) IncReadIndex(n int) {
-	c.fixBuf.readIndex += n
-}
-
-// ReadBufLen get unconsumed byte from the read buf
-func (c *Conn) ReadBufLen() int {
-	return c.fixBuf.writeIndex - c.fixBuf.readIndex
-}
-
-// GetPacketLengthFromReadBuf try to get packet header from read buf
-func (c *Conn) GetPacketLengthFromReadBuf() (int, bool) {
-	if c.ReadBufLen() < HeaderLengthOfTheProtocol {
+// GetPayloadLength try to get packet header from read buf
+// return:
+//
+//	the packet length
+//	the header is ready or not
+func (c *Conn) GetPayloadLength() (int, bool) {
+	if c.fixBuf.AvailableDataLen() < HeaderLengthOfTheProtocol {
 		return int(MaxPayloadSize), false
 	}
-	header := c.fixBuf.data[c.fixBuf.readIndex : c.fixBuf.readIndex+HeaderLengthOfTheProtocol]
-	packetLength := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+	header := c.fixBuf.Head()
+	payloadLength := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
 	c.sequenceId = header[3] + 1
-	return packetLength, true
+	return payloadLength, true
 }
 
-// CleanConsumedPacket clean up the packet that have been consumed and move that have not been consumed forward
-func (c *Conn) CleanConsumedPacket() {
-	if c.fixBuf.readIndex != 0 {
-		copy(c.fixBuf.data, c.fixBuf.data[c.fixBuf.readIndex:c.fixBuf.writeIndex])
-		c.fixBuf.writeIndex -= c.fixBuf.readIndex
-		c.fixBuf.readIndex = 0
-	}
-}
-
-// ResetReadBufIndex set read and write index = 0
-func (c *Conn) ResetReadBufIndex() {
-	c.fixBuf.readIndex = 0
-	c.fixBuf.writeIndex = 0
-}
-
-// ReadBufIsFull check read buf full or not
-func (c *Conn) ReadBufIsFull() bool {
-	return c.fixBuf.writeIndex == fixBufferSize
-}
-
-// CopyFromBuf make memory for a payload and copy from read buf
-func (c *Conn) CopyFromBuf(packetLength int) []byte {
-	data := make([]byte, packetLength)
-	copy(data, c.fixBuf.data[c.fixBuf.readIndex+HeaderLengthOfTheProtocol:])
-	return data
+var ReadOnePayload = func(c *Conn, payloadLength int) ([]byte, error) {
+	return c.ReadOnePayload(payloadLength)
 }
 
 // ReadOnePayload allocates memory for a payload and reads it
-func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
-	var err error
-	var payload []byte
-	defer func(payload []byte, err error) {
+func (c *Conn) ReadOnePayload(payloadLength int) (payload []byte, err error) {
+	defer func() {
+		if rErr := recover(); rErr != nil {
+			_, ok := rErr.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
+			} else {
+				err = errors.Join(err, rErr.(error))
+			}
+		}
 		if err != nil {
 			c.allocator.Free(payload)
+			payload = nil
 		}
-	}(payload, err)
+	}()
 
-	if packetLength == 0 {
-		return nil, nil
+	if payloadLength == 0 {
+		return
 	}
 
-	payload, err = c.allocator.Alloc(packetLength)
+	payload, err = c.allocator.Alloc(payloadLength)
 	if err != nil {
-		return nil, err
+		return
 	}
 
-	err = c.ReadIntoSlices(payload, packetLength)
+	err = ReadNBytesIntoBuf(c, payload, payloadLength)
 	if err != nil {
-		return nil, err
+		return
 	}
 
-	return payload, nil
+	return
 }
 
-// ReadIntoSlices reads specified bytes from the network
-func (c *Conn) ReadIntoSlices(buf []byte, Length int) error {
+var ReadNBytesIntoBuf = func(c *Conn, buf []byte, n int) error {
+	return c.ReadNBytesIntoBuf(buf, n)
+}
+
+// ReadNBytesIntoBuf reads specified bytes from the network
+func (c *Conn) ReadNBytesIntoBuf(buf []byte, n int) error {
 	var err error
-	var n int
+	var read int
 	var readLength int
-	for readLength < Length {
-		n, err = c.ReadFromConn(buf[readLength:Length])
+	for readLength < n {
+		read, err = c.ReadFromConn(buf[readLength:n])
 		if err != nil {
 			return err
 		}
-		readLength += n
+		readLength += read
 
 	}
 	return err
 }
 
-func (c *Conn) ReadIntoBuf() error {
-	n, err := c.ReadFromConn(c.fixBuf.data[c.fixBuf.writeIndex:])
+func (c *Conn) ReadIntoReadBuf() error {
+	n, err := c.ReadFromConn(c.fixBuf.AvailableSpace())
 	if err != nil {
 		return err
 	}
-	c.fixBuf.writeIndex += n
+	c.fixBuf.IncWriteIndex(n)
 	return nil
 }
 
@@ -449,29 +573,28 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 }
 
 // Append Add bytes to buffer
-func (c *Conn) Append(elems ...byte) error {
-	var err error
-	defer func(err error) {
+func (c *Conn) Append(elems ...byte) (err error) {
+	defer func() {
 		if err != nil {
 			c.Reset()
 		}
-	}(err)
+	}()
 	cutIndex := 0
 	for cutIndex < len(elems) {
 		// if bufferLength > 16MB, split packet
 		remainPacketSpace := int(MaxPayloadSize) - c.packetLength
 		writeLength := Min(remainPacketSpace, len(elems[cutIndex:]))
-		err = c.AppendPart(elems[cutIndex : cutIndex+writeLength])
+		err = AppendPart(c, elems[cutIndex:cutIndex+writeLength])
 		if err != nil {
 			return err
 		}
 		if c.packetLength == int(MaxPayloadSize) {
-			err = c.FinishedPacket()
+			err = FinishedPacket(c)
 			if err != nil {
 				return err
 			}
 
-			err = c.BeginPacket()
+			err = BeginPacket(c)
 			if err != nil {
 				return err
 			}
@@ -483,6 +606,10 @@ func (c *Conn) Append(elems ...byte) error {
 	return err
 }
 
+var AppendPart = func(c *Conn, elems []byte) error {
+	return c.AppendPart(elems)
+}
+
 // AppendPart is the base method of adding bytes to buffer
 func (c *Conn) AppendPart(elems []byte) error {
 
@@ -490,8 +617,8 @@ func (c *Conn) AppendPart(elems []byte) error {
 	curBufRemainSpace := len(c.curBuf.data) - c.curBuf.writeIndex
 	if len(elems) > curBufRemainSpace {
 		if curBufRemainSpace > 0 {
-			copy(c.curBuf.data[c.curBuf.writeIndex:], elems[:curBufRemainSpace])
-			c.curBuf.writeIndex += curBufRemainSpace
+			c.curBuf.CopyDataIn(elems[:curBufRemainSpace])
+			c.curBuf.IncWriteIndex(curBufRemainSpace)
 		}
 		curElemsRemainSpace := len(elems) - curBufRemainSpace
 
@@ -500,56 +627,75 @@ func (c *Conn) AppendPart(elems []byte) error {
 			allocLength += fixBufferSize - allocLength%fixBufferSize
 		}
 
-		err = c.PushNewBlock(allocLength)
+		err = AllocNewBlock(c, allocLength)
 		if err != nil {
 			return err
 		}
-		copy(c.curBuf.data[c.curBuf.writeIndex:], elems[curBufRemainSpace:])
-		c.curBuf.writeIndex += len(elems[curBufRemainSpace:])
+		c.curBuf.CopyDataIn(elems[curBufRemainSpace:])
+		c.curBuf.IncWriteIndex(len(elems[curBufRemainSpace:]))
 	} else {
-		copy(c.curBuf.data[c.curBuf.writeIndex:], elems)
-		c.curBuf.writeIndex += len(elems)
+		c.curBuf.CopyDataIn(elems)
+		c.curBuf.IncWriteIndex(len(elems))
 	}
 	c.bufferLength += len(elems)
 	c.packetLength += len(elems)
 	return err
 }
 
-// PushNewBlock allocates memory and push it into the dynamic buffer
-func (c *Conn) PushNewBlock(allocLength int) error {
+var AllocNewBlock = func(c *Conn, allocLength int) error {
+	return c.AllocNewBlock(allocLength)
+}
 
-	var err error
+// AllocNewBlock allocates memory and push it into the dynamic buffer
+func (c *Conn) AllocNewBlock(allocLength int) (err error) {
 	var buf []byte
 
-	defer func(buf []byte, err error) {
+	defer func() {
+		if rErr := recover(); rErr != nil {
+			_, ok := rErr.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
+			} else {
+				err = errors.Join(err, rErr.(error))
+			}
+		}
+
 		if err != nil {
 			c.allocator.Free(buf)
 		}
-	}(buf, err)
+	}()
 
 	buf, err = c.allocator.Alloc(allocLength)
 	if err != nil {
-		return err
+		return
 	}
-	newBlock := &ListBlock{}
+	newBlock := &MemBlock{}
 	newBlock.data = buf
-	c.dynamicBuf.PushBack(newBlock)
+	c.dynamicWrBuf.PushBack(newBlock)
 	c.curBuf = newBlock
-	return nil
+	return
+}
+
+var BeginPacket = func(c *Conn) error {
+	return c.BeginPacket()
 }
 
 // BeginPacket Reserve Header in the buffer
 func (c *Conn) BeginPacket() error {
-	if len(c.curBuf.data)-c.curBuf.writeIndex < HeaderLengthOfTheProtocol {
-		err := c.PushNewBlock(fixBufferSize)
+	if c.curBuf.AvailableSpaceLen() < HeaderLengthOfTheProtocol {
+		err := AllocNewBlock(c, fixBufferSize)
 		if err != nil {
 			return err
 		}
 	}
-	c.curHeader = c.curBuf.data[c.curBuf.writeIndex : c.curBuf.writeIndex+HeaderLengthOfTheProtocol]
-	c.curBuf.writeIndex += HeaderLengthOfTheProtocol
+	c.curHeader = c.curBuf.ReserveHead()
+	c.curBuf.IncWriteIndex(HeaderLengthOfTheProtocol)
 	c.bufferLength += HeaderLengthOfTheProtocol
 	return nil
+}
+
+var FinishedPacket = func(c *Conn) error {
+	return c.FinishedPacket()
 }
 
 // FinishedPacket Fill in the header and flush if buffer full
@@ -588,14 +734,14 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
-	err = c.WriteToConn(c.fixBuf.data[:c.fixBuf.writeIndex])
+	err = c.WriteToConn(c.fixBuf.AvailableData())
 	if err != nil {
 		return err
 	}
 
-	for node := c.dynamicBuf.Front(); node != nil; node = node.Next() {
-		block := node.Value.(*ListBlock)
-		err = c.WriteToConn(block.data[:block.writeIndex])
+	for node := c.dynamicWrBuf.Front(); node != nil; node = node.Next() {
+		block := node.Value.(*MemBlock)
+		err = c.WriteToConn(block.AvailableData())
 		if err != nil {
 			return err
 		}
@@ -613,14 +759,13 @@ func (c *Conn) Write(payload []byte) error {
 	var header [4]byte
 	length := len(payload)
 	binary.LittleEndian.PutUint32(header[:], uint32(length))
-	if payload[0] == 0xFF {
-		if c.packetInBuf != 0 && len(c.fixBuf.data) >= HeaderLengthOfTheProtocol {
+	if payload[0] == defines.ErrHeader {
+		if c.packetInBuf != 0 && c.fixBuf.BufferLen() >= HeaderLengthOfTheProtocol {
 			c.sequenceId = c.fixBuf.data[3]
 		}
 		header[3] = c.sequenceId
 		c.sequenceId += 1
-		err = c.WriteToConn(append(header[:], payload...))
-		return err
+		return c.WriteToConn(append(header[:], payload...))
 	}
 	header[3] = c.sequenceId
 	c.sequenceId += 1
@@ -653,8 +798,6 @@ func (c *Conn) RemoteAddress() string {
 }
 
 func (c *Conn) closeConn() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	var err error
 	if c.conn != nil {
 		if err = c.conn.Close(); err != nil {
@@ -664,18 +807,14 @@ func (c *Conn) closeConn() error {
 	return err
 }
 
+// Reset does not release fix buffer but release dynamical buffer
+// and load data local buffer
 func (c *Conn) Reset() {
 	c.bufferLength = 0
 	c.packetLength = 0
-	c.curBuf = c.fixBuf
-	c.fixBuf.writeIndex = 0
-	c.fixBuf.readIndex = 0
-	for node := c.dynamicBuf.Front(); node != nil; node = node.Next() {
-		c.allocator.Free(node.Value.(*ListBlock).data)
-	}
-	c.dynamicBuf.Init()
+	c.curBuf = &c.fixBuf
+	c.fixBuf.ResetIndices()
+	c.freeDynamicBuffUnsafe()
 	c.packetInBuf = 0
-	c.allocator.Free(c.loadLocalBuf)
-	c.loadLocalBuf = nil
-
+	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
 }
