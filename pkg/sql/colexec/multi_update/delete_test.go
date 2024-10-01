@@ -128,7 +128,6 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		bat := &batch.Batch{
 			Vecs:  []*vector.Vector{columnRowID, columnA},
 			Attrs: attrs,
-			Cnt:   1,
 		}
 
 		if hasUniqueKey {
