@@ -364,7 +364,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 		if len(bats) == 1 {
 			// normal table
 			if bats[0] != nil && bats[0].RowCount() > 0 {
-				buildMergeBlock(proc, bats[0])
+				resetMergeBlockForOldCN(proc, bats[0])
 				err = writer.updateCtxs[i].Source.Write(proc.Ctx, bats[0])
 				if err != nil {
 					return
@@ -374,7 +374,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// partition table
 			for partIdx, bat := range bats {
 				if bat != nil && bat.RowCount() > 0 {
-					buildMergeBlock(proc, bat)
+					resetMergeBlockForOldCN(proc, bat)
 					err = writer.updateCtxs[i].PartitionSources[partIdx].Write(proc.Ctx, bat)
 					if err != nil {
 						return
@@ -387,7 +387,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 		if len(bats) == 1 {
 			// normal table
 			if bats[0] != nil && bats[0].RowCount() > 0 {
-				buildMergeBlock(proc, bats[0])
+				resetMergeBlockForOldCN(proc, bats[0])
 				err = writer.updateCtxs[i].Source.Write(proc.Ctx, bats[0])
 				if err != nil {
 					return
@@ -397,7 +397,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// partition table
 			for partIdx, bat := range bats {
 				if bat != nil && bat.RowCount() > 0 {
-					buildMergeBlock(proc, bat)
+					resetMergeBlockForOldCN(proc, bat)
 					err = writer.updateCtxs[i].PartitionSources[partIdx].Write(proc.Ctx, bat)
 					if err != nil {
 						return

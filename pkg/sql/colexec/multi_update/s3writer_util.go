@@ -291,7 +291,7 @@ func syncThenGetBlockInfoAndStats(proc *process.Process, blockWriter *blockio.Bl
 	return blkInfos, stats, err
 }
 
-func buildMergeBlock(proc *process.Process, bat *batch.Batch) error {
+func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
 	if bat.Attrs[len(bat.Attrs)-1] != catalog.ObjectMeta_ObjectStats {
 		// bat comes from old CN, no object stats vec in it
 		bat.Attrs = append(bat.Attrs, catalog.ObjectMeta_ObjectStats)
