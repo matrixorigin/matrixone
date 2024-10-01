@@ -180,6 +180,9 @@ func getJoinCondCol(cond *Expr, leftTag int32, rightTag int32) (*plan.Expr_Col, 
 
 func replaceAllColRefInExprList(exprlist []*plan.Expr, from []*plan.Expr_Col, to []*plan.Expr_Col) {
 	for _, expr := range exprlist {
+		if expr == nil {
+			continue
+		}
 		for i := range from {
 			replaceCol(expr, from[i].Col.RelPos, from[i].Col.ColPos, to[i].Col.RelPos, to[i].Col.ColPos)
 		}
@@ -202,7 +205,6 @@ func replaceAllColRefInPlan(nodeID int32, exceptID int32, from []*plan.Expr_Col,
 	replaceAllColRefInExprList(node.FilterList, from, to)
 	replaceAllColRefInExprList(node.AggList, from, to)
 	replaceAllColRefInExprList(node.GroupBy, from, to)
-	replaceAllColRefInExprList(node.GroupingSet, from, to)
 	for _, orderby := range node.OrderBy {
 		for i := range from {
 			replaceCol(orderby.Expr, from[i].Col.RelPos, from[i].Col.ColPos, to[i].Col.RelPos, to[i].Col.ColPos)
@@ -260,6 +262,9 @@ func addAnyValueForNonPKCol(expr *plan.Expr, cols []*plan.Expr_Col, agg *plan.No
 
 func addAnyValueForNonPKInExprList(exprlist []*plan.Expr, cols []*plan.Expr_Col, agg *plan.Node, builder *QueryBuilder) {
 	for _, expr := range exprlist {
+		if expr == nil {
+			continue
+		}
 		addAnyValueForNonPKCol(expr, cols, agg, builder)
 	}
 }
@@ -281,7 +286,6 @@ func addAnyValueForNonPKInPlan(nodeID int32, exceptID int32, cols []*plan.Expr_C
 	addAnyValueForNonPKInExprList(node.FilterList, cols, agg, builder)
 	addAnyValueForNonPKInExprList(node.AggList, cols, agg, builder)
 	addAnyValueForNonPKInExprList(node.GroupBy, cols, agg, builder)
-	addAnyValueForNonPKInExprList(node.GroupingSet, cols, agg, builder)
 	for _, orderby := range node.OrderBy {
 		addAnyValueForNonPKCol(orderby.Expr, cols, agg, builder)
 	}

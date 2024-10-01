@@ -175,7 +175,13 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		return moerr.GetOkExpectedEOF()
 	}
 	currentObject := h.objects[h.objectOffsetCursor].ObjectStats
-	data, err := readObjects(currentObject, uint32(h.blkOffsetCursor), h.fs, h.isTombstone, ctx)
+	data, err := readObjects(
+		ctx,
+		h.isTombstone,
+		uint32(h.blkOffsetCursor),
+		&currentObject,
+		h.fs,
+	)
 	if h.isTombstone {
 		updateCNTombstoneBatch(
 			data,
@@ -240,9 +246,10 @@ type AObjectHandle struct {
 	quick              bool
 	fs                 fileservice.FileService
 	mp                 *mpool.MPool
+	p                  *baseHandle
 }
 
-func NewAObjectHandle(ctx context.Context, isTombstone bool, start, end types.TS, objects []*ObjectEntry, fs fileservice.FileService, mp *mpool.MPool) *AObjectHandle {
+func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, start, end types.TS, objects []*ObjectEntry, fs fileservice.FileService, mp *mpool.MPool) *AObjectHandle {
 	handle := &AObjectHandle{
 		isTombstone: isTombstone,
 		start:       start,
@@ -250,6 +257,7 @@ func NewAObjectHandle(ctx context.Context, isTombstone bool, start, end types.TS
 		objects:     objects,
 		fs:          fs,
 		mp:          mp,
+		p:           p,
 	}
 	return handle
 }
@@ -274,9 +282,15 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 			return
 		}
 		currentObjectStats := h.objects[h.objectOffsetCursor].ObjectStats
-		h.currentBatch, err = readObjects(currentObjectStats, 0, h.fs, h.isTombstone, ctx)
+		h.currentBatch, err = readObjects(
+			ctx,
+			h.isTombstone,
+			0,
+			&currentObjectStats,
+			h.fs,
+		)
 		if h.isTombstone {
-			updateTombstoneBatch(h.currentBatch, h.start, h.end, !h.quick, h.mp)
+			updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, h.mp)
 		} else {
 			updateDataBatch(h.currentBatch, h.start, h.end, h.mp)
 		}
@@ -350,6 +364,8 @@ type baseHandle struct {
 	aobjHandle     *AObjectHandle
 	cnObjectHandle *CNObjectHandle
 	inMemoryHandle *BatchHandle
+
+	skipTS map[types.TS]struct{}
 }
 
 const (
@@ -362,7 +378,9 @@ const (
 )
 
 func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, tombstone bool, fs fileservice.FileService, ctx context.Context) (p *baseHandle, err error) {
-	p = &baseHandle{}
+	p = &baseHandle{
+		skipTS: make(map[types.TS]struct{}),
+	}
 	var iter btree.IterG[ObjectEntry]
 	if tombstone {
 		iter = state.tombstoneObjectsNameIndex.Copy().Iter()
@@ -370,11 +388,16 @@ func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool,
 		iter = state.dataObjectsNameIndex.Copy().Iter()
 	}
 	defer iter.Release()
+	if tombstone {
+		dataIter := state.dataObjectsNameIndex.Copy().Iter()
+		p.fillInSkipTS(dataIter, start, end)
+		dataIter.Release()
+	}
 	rowIter := state.rows.Copy().Iter()
 	defer rowIter.Release()
 	p.inMemoryHandle = p.newBatchHandleWithRowIterator(ctx, rowIter, start, end, tombstone, mp)
 	aobj, cnObj := p.getObjectEntries(iter, start, end)
-	p.aobjHandle = NewAObjectHandle(ctx, tombstone, start, end, aobj, fs, mp)
+	p.aobjHandle = NewAObjectHandle(ctx, p, tombstone, start, end, aobj, fs, mp)
 	p.cnObjectHandle = NewCNObjectHandle(tombstone, cnObj, fs, mp)
 	return
 }
@@ -385,6 +408,17 @@ func (p *baseHandle) init(ctx context.Context, quick bool, mp *mpool.MPool) (err
 	}
 	err = p.inMemoryHandle.init(quick, mp)
 	return
+}
+func (p *baseHandle) fillInSkipTS(iter btree.IterG[ObjectEntry], start, end types.TS) {
+	for iter.Next() {
+		obj := iter.Item()
+		if !obj.DeleteTime.IsEmpty() {
+			ts := obj.DeleteTime
+			if ts.GE(&start) && ts.LE(&end) {
+				p.skipTS[obj.DeleteTime] = struct{}{}
+			}
+		}
+	}
 }
 func (p *baseHandle) IsEmpty() bool {
 	return p.aobjHandle.IsEmpty() && p.inMemoryHandle.IsEmpty() && p.cnObjectHandle.IsEmpty()
@@ -486,6 +520,12 @@ func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[RowEntry], start
 				fillInInsertBatch(&bat, &entry, mp)
 			}
 			if entry.Deleted && tombstone {
+				if p.skipTS != nil {
+					_, ok := p.skipTS[entry.Time]
+					if ok {
+						continue
+					}
+				}
 				fillInDeleteBatch(&bat, &entry, mp)
 			}
 		}
@@ -628,7 +668,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	}
 }
 
-func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, start, end types.TS) error {
+func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, skipTS map[types.TS]struct{}, start, end types.TS) error {
 	if bat == nil {
 		return nil
 	}
@@ -640,6 +680,13 @@ func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, start, end types.TS) e
 	for i, ts := range commitTSs {
 		if ts.LT(&start) || ts.GT(&end) {
 			deletes = append(deletes, int64(i))
+		} else {
+			if skipTS != nil {
+				_, ok := skipTS[ts]
+				if ok {
+					deletes = append(deletes, int64(i))
+				}
+			}
 		}
 	}
 	for _, vec := range bat.Vecs {
@@ -798,28 +845,31 @@ func checkTS(start, end types.TS, ts types.TS) bool {
 	return ts.LE(&end) && ts.GE(&start)
 }
 
-func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.FileService, isTombstone bool, ctx context.Context) (bat *batch.Batch, err error) {
-	metaType := objectio.SchemaData
-	if isTombstone {
-		metaType = objectio.SchemaTombstone
-	}
+func readObjects(
+	ctx context.Context,
+	isTombstone bool,
+	blockID uint32,
+	stats *objectio.ObjectStats,
+	fs fileservice.FileService,
+) (bat *batch.Batch, err error) {
 	loc := stats.BlockLocation(uint16(blockID), 8192)
 	bat, _, err = blockio.LoadOneBlock(
 		ctx,
 		fs,
 		loc,
-		metaType)
+		objectio.SchemaData,
+	)
 	return
 }
 
-func updateTombstoneBatch(bat *batch.Batch, start, end types.TS, sort bool, mp *mpool.MPool) {
+func updateTombstoneBatch(bat *batch.Batch, start, end types.TS, skipTS map[types.TS]struct{}, sort bool, mp *mpool.MPool) {
 	bat.Vecs[0].Free(mp) // rowid
 	//bat.Vecs[2].Free(mp) // phyaddr
 	bat.Vecs = []*vector.Vector{bat.Vecs[1], bat.Vecs[2]}
 	bat.Attrs = []string{
 		objectio.TombstoneAttr_PK_Attr,
 		objectio.DefaultCommitTS_Attr}
-	applyTSFilterForBatch(bat, 1, start, end)
+	applyTSFilterForBatch(bat, 1, skipTS, start, end)
 	if sort {
 		sortBatch(bat, 1, mp)
 	}
@@ -827,7 +877,7 @@ func updateTombstoneBatch(bat *batch.Batch, start, end types.TS, sort bool, mp *
 func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 	bat.Vecs[len(bat.Vecs)-2].Free(mp) // rowid
 	bat.Vecs = append(bat.Vecs[:len(bat.Vecs)-2], bat.Vecs[len(bat.Vecs)-1])
-	applyTSFilterForBatch(bat, len(bat.Vecs)-1, start, end)
+	applyTSFilterForBatch(bat, len(bat.Vecs)-1, nil, start, end)
 }
 func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool) {
 	var pk *vector.Vector

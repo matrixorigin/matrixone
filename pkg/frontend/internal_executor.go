@@ -223,6 +223,8 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//make sure init tasks can see the prev task's data
 	now, _ := runtime.ServiceRuntime(ie.service).Clock().Now()
 	sess.lastCommitTS = now
+
+	sess.initLogger()
 	return sess
 }
 
@@ -244,6 +246,9 @@ type internalProtocol struct {
 	result      *internalExecResult
 	database    string
 	username    string
+}
+
+func (ip *internalProtocol) FreeLoadLocal() {
 }
 
 func (ip *internalProtocol) GetStr(id PropertyID) string {

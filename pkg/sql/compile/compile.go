@@ -78,6 +78,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -1497,6 +1498,14 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ret.DataSource = &Source{isConst: true, node: n}
 
 		currentFirstFlag := c.anal.isFirst
+
+		// bad here.
+		// this will generate a pipeline `value_scan(empty batch, nil) -> projection(1, a, b) -> output.`
+		//
+		// we cannot ensure empty batch has enough count of vectors for column projection.
+		// for resolve this bug, I do a hack at method `ColumnExpressionExecutor.Eval` with `[hack-#002]` Flag.
+		//
+		// build a value scan from an EmptyTable with same table structure is the correct way.
 		op := constructValueScan()
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ret.setRootOperator(op)
@@ -1696,7 +1705,6 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	op := constructValueScan()
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	op.NodeType = n.NodeType
 	if n.RowsetData != nil {
 		op.RowsetData = n.RowsetData
 		op.ColCount = len(n.TableDef.Cols)
@@ -1710,6 +1718,12 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
+	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
+	compileStart := time.Now()
+	defer func() {
+		stats.AddCompileTableScanConsumption(time.Since(compileStart))
+	}()
+
 	nodes, partialResults, partialResultTypes, err := c.generateNodes(n)
 	if err != nil {
 		return nil, err
@@ -3651,6 +3665,9 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 	}
 	ret := blocks/16 + 1
 	if ret < cpunum {
+		if cpunum > 4 && ret < 4 {
+			return 4
+		}
 		return ret
 	}
 	return cpunum

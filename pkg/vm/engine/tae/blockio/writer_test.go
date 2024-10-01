@@ -69,7 +69,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 			}
 			service, err := fileservice.NewFileService(ctx, c, nil)
 			assert.Nil(t, err)
-			writer, _ := NewBlockWriterNew(service, name, 0, nil)
+			writer, _ := NewBlockWriterNew(service, name, 0, nil, false)
 
 			schema := catalog.MockSchemaAll(13, 2)
 			bats := catalog.MockBatch(schema, 40000*2).Split(2)
@@ -178,7 +178,7 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 				40000*2,
 				schema.GetSingleSortKey().Idx, nil).Split(2)
 
-			writer, _ := NewBlockWriterNew(service, name, 1, seqnums)
+			writer, _ := NewBlockWriterNew(service, name, 1, seqnums, false)
 			_, err = writer.WriteBatch(containers.ToCNBatch(bats[0]))
 			assert.Nil(t, err)
 			_, err = writer.WriteBatch(containers.ToCNBatch(bats[1]))
@@ -250,7 +250,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			}
 			service, err := fileservice.NewFileService(ctx, c, nil)
 			assert.Nil(t, err)
-			writer, _ := NewBlockWriterNew(service, name, 0, nil)
+			writer, _ := NewBlockWriterNew(service, name, 0, nil, false)
 
 			schema := catalog.MockSchemaAll(4, 2)
 			bat := catalog.MockBatch(schema, 100)
@@ -280,7 +280,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, res)
 			name = objectio.BuildObjectName(objectio.NewSegmentid(), 1)
-			writer2, _ := NewBlockWriterNew(service, name, 0, nil)
+			writer2, _ := NewBlockWriterNew(service, name, 0, nil, false)
 			writer2.SetPrimaryKeyWithType(2, 1, index.PrefixFn{
 				Id: 88,
 				Fn: func(in []byte) []byte {
@@ -303,7 +303,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			assert.Equal(t, uint8(88), bf.PrefixFnId(1))
 
 			name = objectio.BuildObjectName(objectio.NewSegmentid(), 2)
-			writer2, _ = NewBlockWriterNew(service, name, 0, nil)
+			writer2, _ = NewBlockWriterNew(service, name, 0, nil, false)
 			writer2.SetPrimaryKeyWithType(2, 2, index.PrefixFn{
 				Id: 123,
 				Fn: func(in []byte) []byte {
@@ -312,7 +312,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			})
 			_, err = writer2.WriteBatch(containers.ToCNBatch(bat))
 			assert.Equal(t, index.ErrPrefix, err)
-			writer2, _ = NewBlockWriterNew(service, name, 0, nil)
+			writer2, _ = NewBlockWriterNew(service, name, 0, nil, false)
 			writer2.SetPrimaryKeyWithType(2, 2, index.PrefixFn{
 				Id: 123,
 				Fn: func(in []byte) []byte {
@@ -347,7 +347,7 @@ func TestConstructTombstoneWriter(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	fs := testutil.NewSharedFS()
-	writer := ConstructTombstoneWriter(false, fs)
+	writer := ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	assert.NotNil(t, writer)
 
 	bat := batch.NewWithSize(2)

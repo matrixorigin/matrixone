@@ -711,23 +711,6 @@ func (e *concurrentExecutor) GetConcurrency() int {
 	return e.concurrency
 }
 
-// removeIf removes the elements that pred is true.
-func removeIf[T any](data []T, pred func(t T) bool) []T {
-	if len(data) == 0 {
-		return data
-	}
-	res := 0
-	for i := 0; i < len(data); i++ {
-		if !pred(data[i]) {
-			if res != i {
-				data[res] = data[i]
-			}
-			res++
-		}
-	}
-	return data[:res]
-}
-
 func stringifySlice(req any, f func(any) string) string {
 	buf := &bytes.Buffer{}
 	v := reflect.ValueOf(req)

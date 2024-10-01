@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"strings"
 	"sync/atomic"
 
@@ -77,7 +78,7 @@ func newCNMergeTask(
 	targets []objectio.ObjectStats,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
-	relData := NewBlockListRelationData(1)
+	relData := engine_util.NewBlockListRelationData(1)
 	source, err := tbl.buildLocalDataSource(
 		ctx,
 		0,

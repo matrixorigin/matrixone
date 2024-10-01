@@ -30,7 +30,6 @@ import (
 
 func LoadColumnsData(
 	ctx context.Context,
-	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
@@ -41,16 +40,16 @@ func LoadColumnsData(
 ) (dataMeta objectio.ObjectDataMeta, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
-	var ioVectors *fileservice.IOVector
+	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	dataMeta = meta.MustGetMeta(metaType)
+	dataMeta = meta.MustGetMeta(objectio.SchemaData)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
 		return
 	}
 	release = func() {
-		objectio.ReleaseIOVector(ioVectors)
+		objectio.ReleaseIOVector(&ioVectors)
 		cacheBat.FreeColumns(m)
 	}
 	for i := range cols {
@@ -66,7 +65,6 @@ func LoadColumnsData(
 
 func LoadColumnsData2(
 	ctx context.Context,
-	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
@@ -77,22 +75,22 @@ func LoadColumnsData2(
 ) (vectors []containers.Vector, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
-	var ioVectors *fileservice.IOVector
+	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	dataMeta := meta.MustGetMeta(metaType)
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
 	}
 	vectors = make([]containers.Vector, len(cols))
 	defer func() {
 		if needCopy {
-			objectio.ReleaseIOVector(ioVectors)
+			objectio.ReleaseIOVector(&ioVectors)
 			return
 		}
 		release = func() {
-			objectio.ReleaseIOVector(ioVectors)
+			objectio.ReleaseIOVector(&ioVectors)
 			for _, vec := range vectors {
 				vec.Close()
 			}
@@ -141,7 +139,7 @@ func LoadTombstoneColumns(
 	policy fileservice.Policy,
 ) (meta objectio.ObjectDataMeta, release func(), err error) {
 	return LoadColumnsData(
-		ctx, objectio.SchemaTombstone, cols, typs, fs, location, cacheBat, m, policy,
+		ctx, cols, typs, fs, location, cacheBat, m, policy,
 	)
 }
 
@@ -156,7 +154,7 @@ func LoadColumns(
 	policy fileservice.Policy,
 ) (release func(), err error) {
 	_, release, err = LoadColumnsData(
-		ctx, objectio.SchemaData, cols, typs, fs, location, cacheBat, m, policy,
+		ctx, cols, typs, fs, location, cacheBat, m, policy,
 	)
 	return
 }
@@ -173,7 +171,7 @@ func LoadColumns2(
 	needCopy bool,
 	vPool *containers.VectorPool,
 ) (vectors []containers.Vector, release func(), err error) {
-	return LoadColumnsData2(ctx, objectio.SchemaData, cols, typs, fs, location, policy, needCopy, vPool)
+	return LoadColumnsData2(ctx, cols, typs, fs, location, policy, needCopy, vPool)
 }
 
 func LoadOneBlock(

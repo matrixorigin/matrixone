@@ -37,55 +37,75 @@ var (
 func runShardClusterTest(
 	fn func(embed.Cluster),
 ) error {
+	return runShardClusterTestWithReuse(
+		fn,
+		true,
+	)
+}
+
+func runShardClusterTestWithReuse(
+	fn func(embed.Cluster),
+	reuse bool,
+) error {
 	mu.Lock()
 	defer mu.Unlock()
 
 	var err error
+	var cluster embed.Cluster
 	var c embed.Cluster
-	once.Do(
-		func() {
-			c, err = embed.NewCluster(
-				embed.WithCNCount(3),
-				embed.WithTesting(),
-				embed.WithPreStart(
-					func(op embed.ServiceOperator) {
-						op.Adjust(
-							func(sc *embed.ServiceConfig) {
-								if op.ServiceType() == metadata.ServiceType_CN {
-									sc.CN.ShardService.Enable = true
-									sc.CN.HAKeeper.HeatbeatInterval.Duration = time.Second
-								} else if op.ServiceType() == metadata.ServiceType_TN {
-									if sc.TNCompatible != nil {
-										sc.TNCompatible.ShardService.Enable = true
-										sc.TNCompatible.ShardService.FreezeCNTimeout.Duration = time.Second
-									}
-									if sc.TN_please_use_getTNServiceConfig != nil {
-										sc.TN_please_use_getTNServiceConfig.ShardService.Enable = true
-										sc.TN_please_use_getTNServiceConfig.ShardService.FreezeCNTimeout.Duration = time.Second
-									}
-								} else if op.ServiceType() == metadata.ServiceType_LOG {
-									sc.LogService.HAKeeperConfig.CNStoreTimeout.Duration = time.Second * 5
+	createFunc := func() {
+		c, err = embed.NewCluster(
+			embed.WithCNCount(3),
+			embed.WithTesting(),
+			embed.WithPreStart(
+				func(op embed.ServiceOperator) {
+					op.Adjust(
+						func(sc *embed.ServiceConfig) {
+							if op.ServiceType() == metadata.ServiceType_CN {
+								sc.CN.ShardService.Enable = true
+								sc.CN.HAKeeper.HeatbeatInterval.Duration = time.Second
+							} else if op.ServiceType() == metadata.ServiceType_TN {
+								if sc.TNCompatible != nil {
+									sc.TNCompatible.ShardService.Enable = true
+									sc.TNCompatible.ShardService.FreezeCNTimeout.Duration = time.Second
 								}
-							},
-						)
-					},
-				),
-			)
-			if err != nil {
-				return
-			}
-			err = c.Start()
-			if err != nil {
-				return
-			}
-			shardingCluster = c
-		},
-	)
+								if sc.TN_please_use_getTNServiceConfig != nil {
+									sc.TN_please_use_getTNServiceConfig.ShardService.Enable = true
+									sc.TN_please_use_getTNServiceConfig.ShardService.FreezeCNTimeout.Duration = time.Second
+								}
+							} else if op.ServiceType() == metadata.ServiceType_LOG {
+								sc.LogService.HAKeeperConfig.CNStoreTimeout.Duration = time.Second * 5
+							}
+						},
+					)
+				},
+			),
+		)
+		if err != nil {
+			return
+		}
+		err = c.Start()
+		if err != nil {
+			return
+		}
+		cluster = c
+		if reuse {
+			shardingCluster = cluster
+		}
+	}
+
 	if err != nil {
 		return err
 	}
 
-	fn(shardingCluster)
+	if reuse {
+		once.Do(createFunc)
+		cluster = shardingCluster
+	} else {
+		createFunc()
+	}
+
+	fn(cluster)
 	return nil
 }
 
@@ -230,24 +250,25 @@ func waitReplica(
 	tableID uint64,
 	replicas []int64,
 ) {
-	cn1, err := c.GetCNService(0)
-	require.NoError(t, err)
-	cn2, err := c.GetCNService(1)
-	require.NoError(t, err)
-	cn3, err := c.GetCNService(2)
-	require.NoError(t, err)
+	checkCNs := make([]shardservice.ShardService, 0, len(replicas))
+	for i := range replicas {
+		cn, err := c.GetCNService(i)
+		require.NoError(t, err)
 
-	s1 := shardservice.GetService(cn1.RawService().(cnservice.Service).ID())
-	s2 := shardservice.GetService(cn2.RawService().(cnservice.Service).ID())
-	s3 := shardservice.GetService(cn3.RawService().(cnservice.Service).ID())
+		checkCNs = append(
+			checkCNs,
+			shardservice.GetService(cn.RawService().(cnservice.Service).ID()))
+	}
 
 	for {
-		n1 := s1.TableReplicaCount(tableID)
-		n2 := s2.TableReplicaCount(tableID)
-		n3 := s3.TableReplicaCount(tableID)
-		if n1 == replicas[0] &&
-			n2 == replicas[1] &&
-			n3 == replicas[2] {
+		matches := 0
+		for i, v := range replicas {
+			if v == checkCNs[i].TableReplicaCount(tableID) {
+				matches++
+			}
+		}
+
+		if matches == len(replicas) {
 			return
 		}
 		time.Sleep(time.Second)
