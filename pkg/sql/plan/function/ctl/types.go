@@ -28,38 +28,34 @@ var (
 	tn serviceType = "DN"
 	cn serviceType = "CN"
 
-	PingMethod             = "PING"
-	FlushMethod            = "FLUSH"
-	TaskMethod             = "TASK"
-	UseSnapshotMethod      = "USESNAPSHOT"
-	GetSnapshotMethod      = "GETSNAPSHOT"
-	CheckpointMethod       = "CHECKPOINT"
-	GlobalCheckpointMethod = "GLOBALCHECKPOINT"
-	ForceGCMethod          = "FORCEGC"
-	InspectMethod          = "INSPECT"
-	LabelMethod            = "LABEL"
-	WorkStateMethod        = "WORKSTATE"
-	SyncCommitMethod       = "SYNCCOMMIT"
-	AddFaultPointMethod    = "ADDFAULTPOINT"
-	BackupMethod           = "BACKUP"
-	TraceSpanMethod        = "TRACESPAN"
-	CoreDumpMethod         = "COREDUMP"
-	InterceptCommitMethod  = "INTERCEPTCOMMIT"
-	MergeObjectsMethod     = "MERGEOBJECTS"
-	DiskCleanerMethod      = "DISKCLEANER"
-
+	PingMethod               = "PING"
+	FlushMethod              = "FLUSH"
+	TaskMethod               = "TASK"
+	UseSnapshotMethod        = "USESNAPSHOT"
+	GetSnapshotMethod        = "GETSNAPSHOT"
+	CheckpointMethod         = "CHECKPOINT"
+	GlobalCheckpointMethod   = "GLOBALCHECKPOINT"
+	ForceGCMethod            = "FORCEGC"
+	InspectMethod            = "INSPECT"
+	LabelMethod              = "LABEL"
+	WorkStateMethod          = "WORKSTATE"
+	SyncCommitMethod         = "SYNCCOMMIT"
+	AddFaultPointMethod      = "ADDFAULTPOINT"
+	BackupMethod             = "BACKUP"
+	TraceSpanMethod          = "TRACESPAN"
+	CoreDumpMethod           = "COREDUMP"
+	InterceptCommitMethod    = "INTERCEPTCOMMIT"
+	MergeObjectsMethod       = "MERGEOBJECTS"
+	DiskCleanerMethod        = "DISKCLEANER"
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
-
-	RemoveRemoteLockTable = strings.ToUpper("RemoveRemoteLockTable")
-	GetLatestBind         = strings.ToUpper("GetLatestBind")
-	UnsubscribeTable      = "UNSUBSCRIBE_TABLE"
-
-	HandleTxnTrace = strings.ToUpper("txn-trace")
-
+	RemoveRemoteLockTable    = strings.ToUpper("RemoveRemoteLockTable")
+	GetLatestBind            = strings.ToUpper("GetLatestBind")
+	UnsubscribeTable         = "UNSUBSCRIBE_TABLE"
+	HandleTxnTrace           = strings.ToUpper("txn-trace")
 	ReloadAutoIncrementCache = strings.ToUpper("reload-auto-increment-cache")
-
-	CtlReaderMethod = strings.ToUpper("reader")
+	CtlReaderMethod          = strings.ToUpper("reader")
+	GetTableShards           = strings.ToUpper("get-table-shards")
 )
 
 var (
@@ -72,36 +68,34 @@ var (
 var (
 	// register all supported debug command here
 	supportedCmds = map[string]handleFunc{
-		PingMethod:             handlePing(),
-		FlushMethod:            handleFlush(),
-		TaskMethod:             handleTask,
-		UseSnapshotMethod:      handleUseSnapshotTS,
-		GetSnapshotMethod:      handleGetSnapshotTS,
-		CheckpointMethod:       handleCheckpoint(),
-		GlobalCheckpointMethod: handleGlobalCheckpoint(),
-		ForceGCMethod:          handleCNGC,
-		InspectMethod:          handleInspectTN(),
-		LabelMethod:            handleSetLabel,
-		WorkStateMethod:        handleSetWorkState,
-		SyncCommitMethod:       handleSyncCommit,
-		AddFaultPointMethod:    handleAddFaultPoint(),
-		BackupMethod:           handleBackup(),
-		TraceSpanMethod:        handleTraceSpan,
-		CoreDumpMethod:         handleCoreDump,
-		InterceptCommitMethod:  handleInterceptCommit(),
-		MergeObjectsMethod:     handleCNMerge,
-		DiskCleanerMethod:      handleDiskCleaner(),
-
+		PingMethod:               handlePing(),
+		FlushMethod:              handleFlush(),
+		TaskMethod:               handleTask,
+		UseSnapshotMethod:        handleUseSnapshotTS,
+		GetSnapshotMethod:        handleGetSnapshotTS,
+		CheckpointMethod:         handleCheckpoint(),
+		GlobalCheckpointMethod:   handleGlobalCheckpoint(),
+		ForceGCMethod:            handleCNGC,
+		InspectMethod:            handleInspectTN(),
+		LabelMethod:              handleSetLabel,
+		WorkStateMethod:          handleSetWorkState,
+		SyncCommitMethod:         handleSyncCommit,
+		AddFaultPointMethod:      handleAddFaultPoint(),
+		BackupMethod:             handleBackup(),
+		TraceSpanMethod:          handleTraceSpan,
+		CoreDumpMethod:           handleCoreDump,
+		InterceptCommitMethod:    handleInterceptCommit(),
+		MergeObjectsMethod:       handleCNMerge,
+		DiskCleanerMethod:        handleDiskCleaner(),
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
 		RemoveRemoteLockTable:    handleRemoveRemoteLockTable,
 		GetLatestBind:            handleGetLatestBind,
 		UnsubscribeTable:         handleUnsubscribeTable,
 		HandleTxnTrace:           handleTxnTrace,
-
 		ReloadAutoIncrementCache: handleReloadAutoIncrementCache,
-
-		CtlReaderMethod: handleCtlReader,
+		CtlReaderMethod:          handleCtlReader,
+		GetTableShards:           handleGetTableShards,
 	}
 )
 
