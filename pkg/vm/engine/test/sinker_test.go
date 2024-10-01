@@ -42,7 +42,7 @@ func Test_Sinker(t *testing.T) {
 	require.NoError(t, err)
 
 	sinker1 := engine_util.NewTombstoneSinker(
-		false,
+		objectio.HiddenColumnSelection_None,
 		pkType,
 		mp,
 		fs,
@@ -98,10 +98,8 @@ func Test_Sinker(t *testing.T) {
 	r := engine_util.SimpleMultiObjectsReader(
 		ctx, fs, objs, timestamp.Timestamp{},
 		engine_util.WithColumns(
-			objectio.GetTombstoneSchema(
-				pkType,
-				objectio.HiddenColumnSelection_None,
-			),
+			objectio.GetTombstoneSeqnums(objectio.HiddenColumnSelection_None),
+			objectio.GetTombstoneTypes(pkType, objectio.HiddenColumnSelection_None),
 		),
 	)
 	blockio.Start("")
