@@ -282,9 +282,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		NodeType:    plan.Node_MULTI_UPDATE,
 		BindingTags: []int32{builder.genNewTag()},
 	}
-	var lockOpNode *Node
 	selectNodeTag := selectNode.BindingTags[0]
-	var partitionExpr *Expr
+	var partitionExpr *plan.Expr
+	var lockTargets []*plan.LockTarget
 
 	for i, tableDef := range dmlCtx.tableDefs {
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
@@ -303,7 +303,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				return -1, err
 			}
 
-			projectList := make([]*Expr, len(selectNode.ProjectList)+1)
+			projectList := make([]*plan.Expr, len(selectNode.ProjectList)+1)
 			for i := range selectNode.ProjectList {
 				projectList[i] = &plan.Expr{
 					Typ: selectNode.ProjectList[i].Typ,
@@ -326,13 +326,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			dmlNode.BindingTags = append(dmlNode.BindingTags, selectNodeTag)
 		}
 
-		lockOpNode = &Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{lastNodeID},
-			TableDef:    tableDef,
-			BindingTags: []int32{builder.genNewTag(), selectNodeTag},
-		}
-
 		for k, col := range tableDef.Cols {
 			if col.Name == catalog.Row_ID {
 				continue
@@ -348,7 +341,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 					lockTarget.PartitionTableIds = updateCtx.PartitionTableIds
 					lockTarget.FilterColIdxInBat = updateCtx.PartitionIdx
 				}
-				lockOpNode.LockTargets = append(lockOpNode.LockTargets, lockTarget)
+				lockTargets = append(lockTargets, lockTarget)
 			}
 
 			insertCols[k].RelPos = selectNodeTag
@@ -380,7 +373,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 					continue
 				}
 				if tableDef.Indexes[j].Unique && col.Name == idxTableDef.Pkey.PkeyColName {
-					lockOpNode.LockTargets = append(lockOpNode.LockTargets, &plan.LockTarget{
+					lockTargets = append(lockTargets, &plan.LockTarget{
 						TableId:            idxTableDef.TblId,
 						PrimaryColIdxInBat: int32(colName2Idx[idxTableDef.Name+"."+col.Name]),
 						PrimaryColTyp:      col.Typ,
@@ -418,10 +411,18 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 
 	}
 
-	if lockOpNode != nil && len(lockOpNode.LockTargets) > 0 {
-		lastNodeID = builder.appendNode(lockOpNode, ctx)
+	if len(lockTargets) > 0 {
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lastNodeID},
+			TableDef:    dmlCtx.tableDefs[0],
+			BindingTags: []int32{builder.genNewTag(), selectNodeTag},
+			LockTargets: lockTargets,
+		}, ctx)
+
 		reCheckifNeedLockWholeTable(builder)
 	}
+
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, ctx)
 
@@ -714,7 +715,7 @@ func (builder *QueryBuilder) buildValueScan(
 		Name:  "",
 		Cols:  make([]*plan.ColDef, colCount),
 	}
-	projectList := make([]*Expr, colCount)
+	projectList := make([]*plan.Expr, colCount)
 	bat := batch.NewWithSize(len(colNames))
 
 	for i, colName := range colNames {
@@ -728,7 +729,7 @@ func (builder *QueryBuilder) buildValueScan(
 				T: &plan.TargetType{},
 			},
 		}
-		var defExpr *Expr
+		var defExpr *plan.Expr
 		if isAllDefault {
 			if err := vector.AppendMultiBytes(vec, nil, true, len(stmt.Rows), proc.Mp()); err != nil {
 				bat.Clean(proc.Mp())

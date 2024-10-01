@@ -73,6 +73,7 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		if len(updateExpr.Names) > 1 {
 			return moerr.NewNYI(ctx.GetContext(), "unsupport expr")
 		}
+
 		parts := updateExpr.Names[0]
 		expr := updateExpr.Expr
 		if parts.NumParts > 1 {
@@ -89,11 +90,10 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 			}
 		} else {
 			colName := parts.ColName()
-			tblName := ""
 			found := false
 			for alias, columns := range allColumns {
 				if columns[colName] {
-					if tblName != "" {
+					if found {
 						return moerr.NewInternalErrorf(ctx.GetContext(), "Column '%v' in field list is ambiguous", parts.ColNameOrigin())
 					}
 					found = true
@@ -110,7 +110,7 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 				}
 				return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
 			} else if !found {
-				return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), tblName)
+				return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table", parts.ColNameOrigin())
 			}
 		}
 	}

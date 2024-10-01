@@ -130,6 +130,44 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	}, err
 }
 
+func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepareStmt bool, skipStats bool, isExplain bool) (*Plan, error) {
+	if !isExplain {
+		return buildTableUpdate(stmt, ctx, isPrepareStmt)
+	}
+
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, true)
+	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+
+	rootId, err := builder.bindUpdate(stmt, bindCtx)
+	if err != nil {
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+			return buildTableUpdate(stmt, ctx, isPrepareStmt)
+		}
+		return nil, err
+	}
+	ctx.SetViews(bindCtx.views)
+
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	builder.skipStats = skipStats
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, err
+}
+
 func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, isExplain bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -190,7 +228,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, isE
 	case *tree.Replace:
 		return buildReplace(stmt, ctx, isPrepareStmt, false)
 	case *tree.Update:
-		return buildTableUpdate(stmt, ctx, isPrepareStmt)
+		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false, isExplain)
 	case *tree.Delete:
 		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false, isExplain)
 	case *tree.BeginTransaction:
