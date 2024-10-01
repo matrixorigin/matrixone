@@ -306,44 +306,32 @@ func (writer *s3Writer) fillBlockInfoBat(
 	objStats objectio.ObjectStats,
 	isDelete bool) (err error) {
 
+	createBat := func() *batch.Batch {
+		attrs := []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+		blockInfoBat := batch.NewWithSize(len(attrs))
+		blockInfoBat.Attrs = attrs
+		blockInfoBat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		blockInfoBat.Vecs[1] = vector.NewVec(types.T_binary.ToType())
+		return blockInfoBat
+	}
+
 	// init buf
 	var targetBat *batch.Batch
 	if isDelete {
 		if writer.deleteBlockInfo[idx][partitionIdx] == nil {
-			attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-			blockInfoBat := batch.NewWithSize(len(attrs))
-			blockInfoBat.Attrs = attrs
-			blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-			blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
-			blockInfoBat.Vecs[2] = vector.NewVec(types.T_binary.ToType())
-			writer.deleteBlockInfo[idx][partitionIdx] = blockInfoBat
+			writer.deleteBlockInfo[idx][partitionIdx] = createBat()
 		}
 		targetBat = writer.deleteBlockInfo[idx][partitionIdx]
 	} else {
 		if writer.insertBlockInfo[idx][partitionIdx] == nil {
-			attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-			blockInfoBat := batch.NewWithSize(len(attrs))
-			blockInfoBat.Attrs = attrs
-			blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-			blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
-			blockInfoBat.Vecs[2] = vector.NewVec(types.T_binary.ToType())
-			writer.insertBlockInfo[idx][partitionIdx] = blockInfoBat
+			writer.insertBlockInfo[idx][partitionIdx] = createBat()
 		}
 		targetBat = writer.insertBlockInfo[idx][partitionIdx]
-
 	}
 
 	for _, blkInfo := range blockInfos {
-		if err = vector.AppendFixed(
-			targetBat.Vecs[0],
-			partitionIdx,
-			false,
-			proc.GetMPool()); err != nil {
-			return
-		}
-
 		if err = vector.AppendBytes(
-			targetBat.Vecs[1],
+			targetBat.Vecs[0],
 			objectio.EncodeBlockInfo(&blkInfo),
 			false,
 			proc.GetMPool()); err != nil {
@@ -351,7 +339,7 @@ func (writer *s3Writer) fillBlockInfoBat(
 		}
 	}
 
-	if err = vector.AppendBytes(targetBat.Vecs[2],
+	if err = vector.AppendBytes(targetBat.Vecs[1],
 		objStats.Marshal(), false, proc.GetMPool()); err != nil {
 		return
 	}
@@ -376,6 +364,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 		if len(bats) == 1 {
 			// normal table
 			if bats[0] != nil && bats[0].RowCount() > 0 {
+				buildMergeBlock(proc, bats[0])
 				err = writer.updateCtxs[i].Source.Write(proc.Ctx, bats[0])
 				if err != nil {
 					return
@@ -385,6 +374,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// partition table
 			for partIdx, bat := range bats {
 				if bat != nil && bat.RowCount() > 0 {
+					buildMergeBlock(proc, bat)
 					err = writer.updateCtxs[i].PartitionSources[partIdx].Write(proc.Ctx, bat)
 					if err != nil {
 						return
@@ -397,6 +387,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 		if len(bats) == 1 {
 			// normal table
 			if bats[0] != nil && bats[0].RowCount() > 0 {
+				buildMergeBlock(proc, bats[0])
 				err = writer.updateCtxs[i].Source.Write(proc.Ctx, bats[0])
 				if err != nil {
 					return
@@ -406,6 +397,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// partition table
 			for partIdx, bat := range bats {
 				if bat != nil && bat.RowCount() > 0 {
+					buildMergeBlock(proc, bat)
 					err = writer.updateCtxs[i].PartitionSources[partIdx].Write(proc.Ctx, bat)
 					if err != nil {
 						return
