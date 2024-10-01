@@ -171,8 +171,8 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 	//}
 
 	if baseTbl, ok := tbl.(*tree.TableName); ok {
-		tblName = string(baseTbl.ObjectName)
 		dbName = string(baseTbl.SchemaName)
+		tblName = string(baseTbl.ObjectName)
 	} else {
 		return moerr.NewUnsupportedDML(ctx.GetContext(), "unsupported table type")
 	}
@@ -188,7 +188,7 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 	}
 
 	if len(tblName) == 0 {
-		return nil
+		return moerr.NewUnsupportedDML(ctx.GetContext(), "empty table name")
 	}
 
 	if len(dbName) == 0 {
@@ -210,16 +210,13 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewInvalidInput(ctx.GetContext(), "Cannot insert/update/delete from sequence")
 	}
 
+	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return moerr.NewUnsupportedDML(ctx.GetContext(), "no primary key")
+	}
+
 	for _, col := range tableDef.Cols {
 		if types.T(col.Typ.Id).IsArrayRelate() {
 			return moerr.NewUnsupportedDML(ctx.GetContext(), "vector column")
-		}
-	}
-
-	if len(tableDef.Name2ColIndex) == 0 {
-		tableDef.Name2ColIndex = make(map[string]int32)
-		for colIdx, col := range tableDef.Cols {
-			tableDef.Name2ColIndex[col.Name] = int32(colIdx)
 		}
 	}
 
@@ -237,6 +234,13 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 	}
 	if objRef.PubInfo != nil {
 		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
+	}
+
+	if len(tableDef.Name2ColIndex) == 0 {
+		tableDef.Name2ColIndex = make(map[string]int32)
+		for colIdx, col := range tableDef.Cols {
+			tableDef.Name2ColIndex[col.Name] = int32(colIdx)
+		}
 	}
 
 	nowIdx := len(dmlCtx.tableDefs)
