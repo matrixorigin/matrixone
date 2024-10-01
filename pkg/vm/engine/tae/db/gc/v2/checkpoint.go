@@ -618,7 +618,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 	if ckpGC == nil {
 		ckpGC = new(types.TS)
 	}
-	deleteFiles := make([]string, 0)
+	delFiles := make([]string, 0)
 	ckpSnapList := make([]types.TS, 0)
 	for _, ts := range snapshotList {
 		ckpSnapList = append(ckpSnapList, ts...)
@@ -646,7 +646,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 			return err
 		}
 		ckpGC = new(types.TS)
-		deleteFiles = append(deleteFiles, dFiles...)
+		delFiles = append(delFiles, dFiles...)
 		var newName string
 		dFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFiles, c.GetInputs(), c.mPool)
 		if err != nil {
@@ -655,19 +655,19 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		if newName != "" {
 			c.ckpClient.AddCheckpointMetaFile(newName)
 		}
-		deleteFiles = append(deleteFiles, dFiles...)
+		delFiles = append(delFiles, dFiles...)
 	}
 
 	logutil.Info("[MergeCheckpoint]",
-		common.OperationField("CKP GC"),
-		common.OperandField(deleteFiles))
+		common.OperationField("Checkpoint-GC"),
+		common.OperandField(delFiles))
 	if !c.disableGC {
-		err = c.fs.DelFiles(c.ctx, deleteFiles)
+		err = c.fs.DelFiles(c.ctx, delFiles)
 		if err != nil {
 			logutil.Errorf("DelFiles failed: %v", err.Error())
 			return err
 		}
-		for _, file := range deleteFiles {
+		for _, file := range delFiles {
 			if strings.Contains(file, checkpoint.PrefixMetadata) {
 				info := strings.Split(file, checkpoint.CheckpointDir+"/")
 				name := info[1]
