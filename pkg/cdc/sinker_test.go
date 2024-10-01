@@ -43,6 +43,7 @@ func TestNewSinker(t *testing.T) {
 		tableDef         *plan.TableDef
 		retryTimes       int
 		retryDuration    time.Duration
+		ar               *ActiveRoutine
 	}
 	tests := []struct {
 		name    string
@@ -60,6 +61,7 @@ func TestNewSinker(t *testing.T) {
 				tableDef:         nil,
 				retryTimes:       0,
 				retryDuration:    0,
+				ar:               NewCdcActiveRoutine(),
 			},
 			want: &consoleSinker{
 				dbTblInfo:        &DbTableInfo{},
@@ -88,14 +90,14 @@ func TestNewSinker(t *testing.T) {
 	})
 	defer sinkStub.Reset()
 
-	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef) Sinker {
+	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef, _ *ActiveRoutine) Sinker {
 		return nil
 	})
 	defer sinkerStub.Reset()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)
+			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewSinker(%v, %v, %v, %v, %v, %v)", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -288,7 +290,7 @@ func Test_mysqlSink_Send(t *testing.T) {
 		retryDuration: DefaultRetryDuration,
 		conn:          db,
 	}
-	err = sink.Send(context.Background(), "sql")
+	err = sink.Send(context.Background(), NewCdcActiveRoutine(), "sql")
 	assert.NoError(t, err)
 }
 
@@ -324,7 +326,7 @@ func TestNewMysqlSinker(t *testing.T) {
 			Names: []string{"pk"},
 		},
 	}
-	NewMysqlSinker(sink, dbTblInfo, nil, tableDef)
+	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine())
 }
 
 func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
@@ -352,6 +354,7 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 		tsInsertPrefix: []byte(tsInsertPrefix),
 		tsDeletePrefix: []byte(tsDeletePrefix),
 		preRowType:     NoOp,
+		ar:             NewCdcActiveRoutine(),
 	}
 
 	// test insert
@@ -472,7 +475,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 		},
 	}
 
-	sinker := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef)
+	sinker := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, NewCdcActiveRoutine())
 
 	packerPool := fileservice.NewPool(
 		128,
@@ -511,14 +514,14 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	assert.NoError(t, err)
 
 	// receive a tail
-	insertAtomicBat := NewAtomicBatch(nil, t1, t2)
+	insertAtomicBat := NewAtomicBatch(testutil.TestUtilMp, t1, t2)
 	insertBat := batch.New(true, []string{"a", "ts"})
 	insertBat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil)
 	insertBat.Vecs[1] = testutil.MakeTSVector([]types.TS{t1}, nil)
 	insertBat.SetRowCount(3)
 	insertAtomicBat.Append(packer, insertBat, 1, 0)
 
-	deleteAtomicBat := NewAtomicBatch(nil, t1, t2)
+	deleteAtomicBat := NewAtomicBatch(testutil.TestUtilMp, t1, t2)
 	deleteBat := batch.New(true, []string{"a", "ts"})
 	deleteBat.Vecs[0] = testutil.MakeUint64Vector([]uint64{4}, nil)
 	deleteBat.Vecs[1] = testutil.MakeTSVector([]types.TS{t1}, nil)
@@ -764,7 +767,7 @@ func Test_mysqlSinker_sinkRemain(t *testing.T) {
 	fromTs := types.BuildTS(1, 1)
 	toTs := types.BuildTS(2, 1)
 	atomicBat := &AtomicBatch{
-		Mp:      nil,
+		Mp:      testutil.TestUtilMp,
 		From:    fromTs,
 		To:      toTs,
 		Batches: []*batch.Batch{bat},
