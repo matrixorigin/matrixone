@@ -412,6 +412,9 @@ func BlockDataReadInner(
 
 		// assemble result batch only with selected rows
 		for i, col := range loaded.Vecs {
+			if phyAddrColumnPos == i {
+				continue
+			}
 			if err = bat.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
 				break
 			}
@@ -453,6 +456,9 @@ func BlockDataReadInner(
 
 	// assemble result batch
 	for i, col := range loaded.Vecs {
+		if i == phyAddrColumnPos {
+			continue
+		}
 		if err = bat.Vecs[i].UnionBatch(col, 0, col.Length(), nil, mp); err != nil {
 			break
 		}
