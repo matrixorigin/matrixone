@@ -31,7 +31,7 @@ const (
 	// for schema
 	PropSchemaExtra = "schema_extra"
 
-	Row_ID           = objectio.DefaultRowid_Attr
+	Row_ID           = objectio.PhysicalAddr_Attr
 	PrefixPriColName = "__mo_cpkey_"
 	PrefixCBColName  = "__mo_cbkey_"
 
