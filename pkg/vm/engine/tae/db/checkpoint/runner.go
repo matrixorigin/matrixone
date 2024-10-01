@@ -963,11 +963,7 @@ func (r *runner) collectTableMemUsage(entry *logtail.DirtyTreeEntry) (memPressur
 		if err != nil {
 			panic(err)
 		}
-		if !table.Stats.Inited {
-			table.Stats.Lock()
-			table.Stats.InitWithLock(r.options.maxFlushInterval)
-			table.Stats.Unlock()
-		}
+		table.Stats.Init(r.options.maxFlushInterval)
 		dirtyTree := entry.GetTree().GetTable(tid)
 		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
 		totalSize += asize + dsize
@@ -1001,14 +997,10 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 		table, asize, dsize := ticket.tbl, ticket.asize, ticket.dsize
 		dirtyTree := entry.GetTree().GetTable(table.ID)
 
-		stats := table.Stats
-		stats.Lock()
-		defer stats.Unlock()
-
 		if force {
 			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				stats.ResetDeadlineWithLock()
+				table.Stats.ResetDeadline(r.options.maxFlushInterval)
 			}
 			continue
 		}
@@ -1025,11 +1017,11 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 				return false
 			}
 			// time to flush
-			if stats.FlushDeadline.Before(time.Now()) {
+			if table.Stats.GetFlushDeadline().Before(time.Now()) {
 				return true
 			}
 			// this table is too large, flush it
-			if asize+dsize > stats.FlushMemCapacity {
+			if asize+dsize > int(common.FlushMemCapacity.Load()) {
 				return true
 			}
 			// unflushed data is too large, flush it
@@ -1041,19 +1033,19 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 
 		ready := flushReady()
 
-		if stats.Inited && asize+dsize > 2*1000*1024 {
+		if asize+dsize > 2*1000*1024 {
 			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v, flushReady %v",
 				table.GetLastestSchemaLocked(false).Name,
 				common.HumanReadableBytes(asize+dsize),
 				common.HumanReadableBytes(dsize),
-				time.Until(stats.FlushDeadline),
+				time.Until(table.Stats.GetFlushDeadline()),
 				ready,
 			)
 		}
 
 		if ready {
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				stats.ResetDeadlineWithLock()
+				table.Stats.ResetDeadline(r.options.maxFlushInterval)
 			}
 		}
 	}
