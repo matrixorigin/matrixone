@@ -38,7 +38,7 @@ BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 
 
 LOG="$G_TS-$TEST_TYPE.log"
-UT_TIMEOUT=${UT_TIMEOUT:-"30"}
+UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
@@ -96,51 +96,23 @@ function run_tests(){
     make cgo
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
+        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -json -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
 
     else
         logger "INF" "Run UT with race check"
-        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
+        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -json -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
     fi
-    IS_BUILD_FAIL=$(egrep "^FAIL.*\ \[build\ failed\]$" $UT_REPORT)
-    egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test|^\-\-\- SKIP: *Test'  $UT_REPORT > $UT_FILTER
-    logger "INF" "Refer to $UT_REPORT for details"
-
 }
 
 function ut_summary(){
-    cd $BUILD_WKSP
-    local total=$(cat "$UT_FILTER" | egrep '^=== RUN *Test' | wc -l | xargs)
-    local pass=$(cat "$UT_FILTER" | egrep "^\-\-\- PASS: *Test" | wc -l | xargs)
-    local skip=$(cat "$UT_FILTER" | egrep "^\-\-\- SKIP: *Test" | wc -l | xargs)
-    local fail=$(cat "$UT_FILTER" | egrep "^\-\-\- FAIL: *Test" | wc -l | xargs)
-    local unknown=$(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | grep -v '^$' | wc -l | xargs)
-    cat << EOF > $UT_COUNT
-# Total: $total; Passed: $pass; Skipped: $skip; Failed: $fail; Unknown: $unknown
-#
-# SKIPPED CASES:
-$(cat "$UT_FILTER" | egrep "^\-\-\- SKIP: *Test")
-
-# FAILED CASES:
-$(cat "$UT_FILTER" | egrep "^\-\-\- FAIL: *Test")
-
-# UNKNOWN CASES:
-$(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | grep -v '^$')
-
-# BUILD FAILED in UT:
-echo "${IS_BUILD_FAIL[@]}"
-
-
-EOF
-    horiz_rule
-    cat "$UT_COUNT"
-    horiz_rule
-    if (( $fail > 0 )) || (( $unknown > 0 )) || [[ -n "$IS_BUILD_FAIL" ]]; then
-      logger "INF" "UNIT TESTING FAILED !!!"
-      exit 1
-    else
-      logger "INF" "UNIT TESTING SUCCEEDED !!!"
-    fi
+  go install github.com/matrixorigin/go-ut-analysis@latest
+  go-ut-analysis test -f "${UT_REPORT}" --first 10 --report-path  "${BUILD_WKSP}/ut-report" --stdout=false;
+  if find ut-report > /dev/null 2>&1 && ! find ut-report/failed/outputs > /dev/null 2>&1; then
+    logger "INF" "UNIT TESTING SUCCEEDED !!!"
+  else
+    logger "INF" "UNIT TESTING FAILED !!!"
+    exit 1;
+  fi
 }
 
 function post_test(){
