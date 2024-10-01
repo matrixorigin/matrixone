@@ -1017,7 +1017,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 		return false
 	}
 
-	attrs := objectio.GetTombstoneAttrs(true)
+	attrs := objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_CommitTS)
 	emptyBatch := batch.EmptyBatchWithAttrs(attrs)
 
 	for iter.Next() && len(deleted) < len(rowIds) {
