@@ -214,6 +214,10 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewUnsupportedDML(ctx.GetContext(), "no primary key")
 	}
 
+	if len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0 {
+		return moerr.NewUnsupportedDML(ctx.GetContext(), "foreign key constraint")
+	}
+
 	for _, col := range tableDef.Cols {
 		if types.T(col.Typ.Id).IsArrayRelate() {
 			return moerr.NewUnsupportedDML(ctx.GetContext(), "vector column")
