@@ -137,14 +137,14 @@ func (t *GCTable) objectsComparedAndDeleteLocked(
 	objects, comparedObjects map[string]*ObjectEntry,
 	meta *logtail.SnapshotMeta,
 	snapList map[uint32][]types.TS,
-	pitrList *logtail.PitrInfo,
+	pitrInfo *logtail.PitrInfo,
 	ts types.TS,
 ) []string {
 	gc := make([]string, 0)
 	for name, entry := range objects {
 		objectEntry := comparedObjects[name]
 		tsList := meta.GetSnapshotListLocked(snapList, entry.table)
-		pList := meta.GetPitrLocked(pitrList, entry.db, entry.table)
+		pList := meta.GetPitrByTable(pitrInfo, entry.db, entry.table)
 		if tsList == nil && pList.IsEmpty() {
 			if objectEntry == nil && entry.commitTS.LT(&ts) {
 				gc = append(gc, name)

@@ -180,83 +180,45 @@ func (t *GCTable) SoftGC(
 		tye,
 	)
 	defer filterBuffer.Close(t.mp)
+
 	objects := make(map[string]*ObjectEntry)
-	constructCoreseFilter, err := MakeBloomfilterCoarseFilter(ctx,
-		10000000, 0.00001, filterBuffer, location, &ts, objects, t.mp, t.fs)
-
-	tableSnapshotList, pitrList := meta.AccountToTableSnapshots(
-		accountSnapshots, pitrs,
+	coarseFilter, err := MakeBloomfilterCoarseFilter(
+		ctx,
+		10000000,
+		0.00001,
+		filterBuffer,
+		location,
+		&ts,
+		&objects,
+		t.mp,
+		t.fs,
 	)
-	constructFineFilter := func(
-		ctx context.Context,
-		bm *bitmap.Bitmap,
-		bat *batch.Batch,
-		_ bool,
-		mp *mpool.MPool,
-	) error {
-		creates := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
-		deletes := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
-		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
-		bmAdd := func(name string, tsList []types.TS, pitr, createTS, dropTS *types.TS, row int) {
-			if tsList == nil && (pitr == nil || pitr.IsEmpty()) {
-				bm.Add(uint64(row))
-				return
-			}
-			if !isSnapshotRefers(createTS, dropTS, tsList, pitr, name) {
-				bm.Add(uint64(row))
-			}
-		}
-		for i := 0; i < bat.Vecs[0].Length(); i++ {
-			buf := bat.Vecs[0].GetRawBytesAt(i)
-			stats := (objectio.ObjectStats)(buf)
-			name := stats.ObjectName().String()
-			tid := tids[i]
-			createTs := creates[i]
-			dropTs := deletes[i]
-
-			tsList := tableSnapshotList[tid]
-			pitr := pitrList[tid]
-
-			entry := objects[name]
-			if entry != nil {
-				bmAdd(name, tsList, pitr, &entry.createTS, &entry.dropTS, i)
-				continue
-			}
-			if !createTs.LT(&ts) ||
-				!dropTs.LT(&ts) {
-				continue
-			}
-			if dropTs.IsEmpty() {
-				panic(fmt.Sprintf("dropTs is empty, name: %s, createTs: %s", name, createTs.ToString()))
-			}
-			bmAdd(name, tsList, pitr, &createTs, &dropTs, i)
-		}
-		return nil
+	if err != nil {
+		return nil, err
 	}
 
-	gcFiles := make([]string, 0)
-	canGC := func(ctx context.Context, bat *batch.Batch) error {
-		names := make(map[string]struct{})
-		for i := 0; i < bat.Vecs[0].Length(); i++ {
-			buf := bat.Vecs[0].GetRawBytesAt(i)
-			stats := (objectio.ObjectStats)(buf)
-			name := stats.ObjectName().String()
-			names[name] = struct{}{}
-		}
-
-		for name := range names {
-			gcFiles = append(gcFiles, name)
-		}
-		return nil
+	fineFilter, err := MakeSnapshotAndPitrFineFilter(
+		&ts,
+		accountSnapshots,
+		pitrs,
+		meta,
+		objects,
+	)
+	if err != nil {
+		return nil, err
 	}
+
+	gcFiles := make([]string, 0, 20)
+	finalGCSinker, err := MakeFinalCanGCSinker(&gcFiles)
 
 	executor := NewGCExecutor(t.buffer, true, t.mp, t.fs)
 	gcStats, err := executor.Run(
 		ctx,
 		t.LoadBatchData,
-		constructCoreseFilter,
-		constructFineFilter,
-		canGC)
+		coarseFilter,
+		fineFilter,
+		finalGCSinker,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -329,39 +291,59 @@ func (t *GCTable) Process(
 	return t.doneAllBatches(ctx, &start, &end, stats)
 }
 
-func isSnapshotRefers(createTS, dropTS *types.TS, snapVec []types.TS, pitr *types.TS, name string) bool {
-	if len(snapVec) == 0 &&
-		pitr.IsEmpty() {
+func isSnapshotRefers(
+	obj *objectio.ObjectStats,
+	pitr, createTS, dropTS *types.TS,
+	snapshots []types.TS,
+) bool {
+	// no snapshot and no pitr
+	if len(snapshots) == 0 && (pitr == nil || pitr.IsEmpty()) {
 		return false
 	}
+
+	// if dropTS is empty, it means the object is not dropped
 	if dropTS.IsEmpty() {
-		logutil.Debug("[soft GC]Snapshot Refers",
-			zap.String("name", name),
-			zap.String("createTS", createTS.ToString()),
-			zap.String("dropTS", createTS.ToString()))
+		common.DoIfDebugEnabled(func() {
+			logutil.Debug(
+				"GCJOB-DEBUG-1",
+				zap.String("obj", obj.ObjectName().String()),
+				zap.String("create-ts", createTS.ToString()),
+				zap.String("drop-ts", createTS.ToString()),
+			)
+		})
 		return true
 	}
-	if !pitr.IsEmpty() {
+
+	// if pitr is not empty, and pitr is greater than dropTS, it means the object is not dropped
+	if pitr != nil && !pitr.IsEmpty() {
 		if dropTS.GT(pitr) {
-			logutil.Info("[soft GC]Pitr Refers",
-				zap.String("name", name),
-				zap.String("snapTS", pitr.ToString()),
-				zap.String("createTS", createTS.ToString()),
-				zap.String("dropTS", dropTS.ToString()))
+			common.DoIfDebugEnabled(func() {
+				logutil.Debug(
+					"GCJOB-PITR-PIN",
+					zap.String("name", obj.ObjectName().String()),
+					zap.String("pitr", pitr.ToString()),
+					zap.String("create-ts", createTS.ToString()),
+					zap.String("drop-ts", dropTS.ToString()),
+				)
+			})
 			return true
 		}
 	}
 
-	left, right := 0, len(snapVec)-1
+	left, right := 0, len(snapshots)-1
 	for left <= right {
 		mid := left + (right-left)/2
-		snapTS := snapVec[mid]
+		snapTS := snapshots[mid]
 		if snapTS.GE(createTS) && snapTS.LT(dropTS) {
-			logutil.Debug("[soft GC]Snapshot Refers",
-				zap.String("name", name),
-				zap.String("snapTS", snapTS.ToString()),
-				zap.String("createTS", createTS.ToString()),
-				zap.String("dropTS", dropTS.ToString()))
+			common.DoIfDebugEnabled(func() {
+				logutil.Debug(
+					"GCJOB-DEBUG-2",
+					zap.String("name", obj.ObjectName().String()),
+					zap.String("pitr", snapTS.ToString()),
+					zap.String("create-ts", createTS.ToString()),
+					zap.String("drop-ts", dropTS.ToString()),
+				)
+			})
 			return true
 		} else if snapTS.LT(createTS) {
 			left = mid + 1
@@ -427,7 +409,7 @@ func collectObjectsWithCkp(data *logtail.CheckpointData, objects map[string]*Obj
 	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
 	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
 	dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
-	tid := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
+	tableID := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
 
 	for i := 0; i < ins.Length(); i++ {
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
@@ -440,7 +422,7 @@ func collectObjectsWithCkp(data *logtail.CheckpointData, objects map[string]*Obj
 			createTS: createTS,
 			dropTS:   deleteTS,
 			db:       vector.GetFixedAtNoTypeCheck[uint64](dbid, i),
-			table:    vector.GetFixedAtNoTypeCheck[uint64](tid, i),
+			table:    vector.GetFixedAtNoTypeCheck[uint64](tableID, i),
 		}
 		objects[name] = object
 	}
@@ -608,22 +590,22 @@ func (t *GCTable) Compare(table *GCTable) (map[string]*ObjectEntry, map[string]*
 				break
 			}
 
-			creates := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
-			deletes := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+			createTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+			deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 			dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
-			tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
 			for i := 0; i < bat.Vecs[0].Length(); i++ {
 				buf := bat.Vecs[0].GetRawBytesAt(i)
 				stats := (objectio.ObjectStats)(buf)
 				name := stats.ObjectName().String()
-				tid := tids[i]
-				createTs := creates[i]
-				dropTs := deletes[i]
+				tableID := tableIDs[i]
+				createTS := createTSs[i]
+				dropTS := deleteTSs[i]
 				object := &ObjectEntry{
-					createTS: createTs,
-					dropTS:   dropTs,
+					createTS: createTS,
+					dropTS:   dropTS,
 					db:       dbs[i],
-					table:    tid,
+					table:    tableID,
 				}
 				objects[name] = object
 			}
