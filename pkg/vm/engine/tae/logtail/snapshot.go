@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -179,6 +180,57 @@ func (p *PitrInfo) IsEmpty() bool {
 		len(p.account) == 0 &&
 		len(p.database) == 0 &&
 		len(p.tables) == 0
+}
+
+func (p *PitrInfo) GetTS(
+	accountID uint32,
+	dbID uint64,
+	tableID uint64,
+) (ts types.TS) {
+	ts = p.cluster
+	accountTS := p.account[accountID]
+	if !accountTS.IsEmpty() && (ts.IsEmpty() || accountTS.LT(&ts)) {
+		ts = accountTS
+	}
+
+	dbTS := p.database[dbID]
+	if !dbTS.IsEmpty() && (ts.IsEmpty() || dbTS.LT(&ts)) {
+		ts = dbTS
+	}
+
+	tableTS := p.tables[tableID]
+	if !tableTS.IsEmpty() && (ts.IsEmpty() || tableTS.LT(&ts)) {
+		ts = tableTS
+	}
+	return
+}
+
+func (p *PitrInfo) MinTS() (ts types.TS) {
+	if !p.cluster.IsEmpty() {
+		ts = p.cluster
+	}
+
+	// find the minimum account ts
+	for _, p := range p.account {
+		if ts.IsEmpty() || p.LT(&ts) {
+			ts = p
+		}
+	}
+
+	// find the minimum database ts
+	for _, p := range p.database {
+		if ts.IsEmpty() || p.LT(&ts) {
+			ts = p
+		}
+	}
+
+	// find the minimum table ts
+	for _, p := range p.tables {
+		if ts.IsEmpty() || p.LT(&ts) {
+			ts = p
+		}
+	}
+	return
 }
 
 func (p *PitrInfo) ToTsList() []types.TS {
@@ -1273,86 +1325,73 @@ func (sm *SnapshotMeta) TableInfoString() string {
 	return buf.String()
 }
 
-func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
-	sm.RLock()
-	defer sm.RUnlock()
+func (sm *SnapshotMeta) GetSnapshotListLocked(snapshotList map[uint32][]types.TS, tid uint64) []types.TS {
 	if sm.acctIndexes[tid] == nil {
 		return nil
 	}
 	accID := sm.acctIndexes[tid].accountID
-	return SnapshotList[accID]
+	return snapshotList[accID]
 }
 
-func (sm *SnapshotMeta) GetSysTableListLocked(SnapshotList map[uint32][]types.TS) []types.TS {
-	allSnapshot := make(map[types.TS]struct{}, 0)
-	snapshotList := make([]types.TS, 0)
-	for _, snapshots := range SnapshotList {
-		for _, snapshot := range snapshots {
-			allSnapshot[snapshot] = struct{}{}
+// AccountToTableSnapshots returns a map from table id to its snapshots.
+// The snapshotList is a map from account id to its snapshots.
+// The pitr is the pitr info.
+func (sm *SnapshotMeta) AccountToTableSnapshots(
+	accountSnapshots map[uint32][]types.TS,
+	pitr *PitrInfo,
+) (
+	tableSnapshots map[uint64][]types.TS,
+	tablePitrs map[uint64]*types.TS,
+) {
+	tableSnapshots = make(map[uint64][]types.TS, 100)
+	tablePitrs = make(map[uint64]*types.TS, 100)
+
+	// 1. for system tables, flatten the accountSnapshots to tableSnapshots
+	var flattenSnapshots []types.TS
+	{
+		var cnt int
+		for _, tss := range accountSnapshots {
+			cnt += len(tss)
 		}
+		flattenSnapshots = make([]types.TS, 0, cnt)
+
+		for _, tss := range accountSnapshots {
+			flattenSnapshots = append(flattenSnapshots, tss...)
+		}
+		flattenSnapshots = compute.SortAndDedup(
+			flattenSnapshots,
+			func(a, b *types.TS) bool {
+				return a.LT(b)
+			},
+			func(a, b *types.TS) bool {
+				return a.EQ(b)
+			},
+		)
 	}
 
-	for snapshot := range allSnapshot {
-		snapshotList = append(snapshotList, snapshot)
-	}
-	sort.Slice(snapshotList, func(i, j int) bool {
-		return snapshotList[i].LT(&snapshotList[j])
-	})
-	return snapshotList
-}
+	// 2. get the pitr.MinTS as the pitr for system tables
+	sysPitr := pitr.MinTS()
 
-func (sm *SnapshotMeta) GetSnapshotListLocked(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
-	if sm.acctIndexes[tid] == nil {
-		return nil
-	}
-	accID := sm.acctIndexes[tid].accountID
-	return SnapshotList[accID]
-}
-
-func (sm *SnapshotMeta) GetSnapshotPitrList(SnapshotList map[uint32][]types.TS, pitr *PitrInfo) (map[uint64][]types.TS, map[uint64]*types.TS) {
-	list := make(map[uint64][]types.TS)
-	pitrs := make(map[uint64]*types.TS)
-	sysList := sm.GetSysTableListLocked(SnapshotList)
-	sysPitr := sm.GetSysPitrLocked(pitr)
-	list[catalog2.MO_DATABASE_ID] = sysList
-	list[catalog2.MO_TABLES_ID] = sysList
-	list[catalog2.MO_COLUMNS_ID] = sysList
-	pitrs[catalog2.MO_DATABASE_ID] = sysPitr
-	pitrs[catalog2.MO_TABLES_ID] = sysPitr
-	pitrs[catalog2.MO_COLUMNS_ID] = sysPitr
+	tableSnapshots[catalog2.MO_DATABASE_ID] = flattenSnapshots
+	tableSnapshots[catalog2.MO_TABLES_ID] = flattenSnapshots
+	tableSnapshots[catalog2.MO_COLUMNS_ID] = flattenSnapshots
+	tablePitrs[catalog2.MO_DATABASE_ID] = &sysPitr
+	tablePitrs[catalog2.MO_TABLES_ID] = &sysPitr
+	tablePitrs[catalog2.MO_COLUMNS_ID] = &sysPitr
 
 	for tid, info := range sm.acctIndexes {
 		if catalog2.IsSystemTable(tid) {
 			continue
 		}
-		list[tid] = sm.GetSnapshotList(SnapshotList, tid)
-		pitrs[tid] = sm.GetPitrLocked(pitr, info.dbID, tid)
-	}
-	return list, pitrs
-}
+		// use the account snapshots as the table snapshots
+		accountID := info.accountID
+		tableSnapshots[tid] = accountSnapshots[accountID]
 
-func (sm *SnapshotMeta) GetSysPitrLocked(pitr *PitrInfo) *types.TS {
-	var ts types.TS
-	if !pitr.cluster.IsEmpty() {
-		ts = pitr.cluster
+		// get the pitr for the table
+		ts := pitr.GetTS(accountID, info.dbID, tid)
+		tablePitrs[tid] = &ts
 	}
-	for _, p := range pitr.account {
-		if ts.IsEmpty() || p.LT(&ts) {
-			ts = p
-		}
-	}
-	for _, p := range pitr.database {
-		if ts.IsEmpty() || p.LT(&ts) {
-			ts = p
-		}
-	}
-
-	for _, p := range pitr.tables {
-		if ts.IsEmpty() || p.LT(&ts) {
-			ts = p
-		}
-	}
-	return &ts
+	return
 }
 
 func (sm *SnapshotMeta) GetPitrLocked(pitr *PitrInfo, db, tid uint64) *types.TS {
@@ -1380,7 +1419,7 @@ func (sm *SnapshotMeta) GetPitrLocked(pitr *PitrInfo, db, tid uint64) *types.TS 
 }
 
 func (sm *SnapshotMeta) MergeTableInfo(
-	SnapshotList map[uint32][]types.TS,
+	accountSnapshots map[uint32][]types.TS,
 	pitr *PitrInfo,
 ) error {
 	sm.Lock()
@@ -1389,7 +1428,7 @@ func (sm *SnapshotMeta) MergeTableInfo(
 		return nil
 	}
 	for accID, tables := range sm.tables {
-		if SnapshotList[accID] == nil && pitr.IsEmpty() {
+		if accountSnapshots[accID] == nil && pitr.IsEmpty() {
 			for _, table := range tables {
 				if !table.deleteAt.IsEmpty() {
 					delete(sm.tables[accID], table.tid)
@@ -1404,7 +1443,7 @@ func (sm *SnapshotMeta) MergeTableInfo(
 		for _, table := range tables {
 			ts := sm.GetPitrLocked(pitr, table.dbID, table.tid)
 			if !table.deleteAt.IsEmpty() &&
-				!isSnapshotRefers(table, SnapshotList[accID], ts) {
+				!isSnapshotRefers(table, accountSnapshots[accID], ts) {
 				delete(sm.tables[accID], table.tid)
 				delete(sm.acctIndexes, table.tid)
 				if sm.objects[table.tid] != nil {

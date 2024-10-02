@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
@@ -168,10 +169,10 @@ func (t *GCTable) SoftGC(
 	ctx context.Context,
 	location *objectio.Location,
 	ts types.TS,
-	snapShotList map[uint32]containers.Vector,
+	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
 	meta *logtail.SnapshotMeta,
-) ([]string, map[uint32][]types.TS, error) {
+) ([]string, error) {
 	attr, tye := logtail.GetDataSchema()
 	filterBuffer := containers.NewOneSchemaBatchBuffer(
 		mpool.MB*32,
@@ -183,12 +184,9 @@ func (t *GCTable) SoftGC(
 	constructCoreseFilter, err := MakeBloomfilterCoarseFilter(ctx,
 		10000000, 0.00001, filterBuffer, location, &ts, objects, t.mp, t.fs)
 
-	snapList := make(map[uint32][]types.TS)
-	for accountId, snapshot := range snapShotList {
-		logutil.Infof("accountId: %d, snapshot: %v", accountId, snapshot.GetDownstreamVector())
-		snapList[accountId] = vector.MustFixedColWithTypeCheck[types.TS](snapshot.GetDownstreamVector())
-	}
-	tableSnapshotList, pitrList := meta.GetSnapshotPitrList(snapList, pitrs)
+	tableSnapshotList, pitrList := meta.AccountToTableSnapshots(
+		accountSnapshots, pitrs,
+	)
 	constructFineFilter := func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
@@ -260,16 +258,16 @@ func (t *GCTable) SoftGC(
 		constructFineFilter,
 		canGC)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	objects = nil
 	err = t.doneAllBatches(ctx, &t.tsRange.start, &t.tsRange.end, gcStats)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	t.files.stats = make([]objectio.ObjectStats, 0, len(gcStats))
 	t.files.stats = append(t.files.stats, gcStats...)
-	return gcFiles, snapList, err
+	return gcFiles, err
 }
 
 func (t *GCTable) Process(

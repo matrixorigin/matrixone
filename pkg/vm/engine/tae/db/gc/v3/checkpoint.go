@@ -619,7 +619,10 @@ func (c *checkpointCleaner) getDeleteFile(
 	return deleteFiles, mergeFiles, nil
 }
 
-func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS) error {
+func (c *checkpointCleaner) mergeCheckpointFiles(
+	stage types.TS,
+	accoutSnapshots map[uint32][]types.TS,
+) error {
 	if stage.IsEmpty() ||
 		(c.GeteCkpStage() != nil && c.GeteCkpStage().GE(&stage)) {
 		return nil
@@ -640,7 +643,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 	}
 	deleteFiles := make([]string, 0)
 	ckpSnapList := make([]types.TS, 0)
-	for _, ts := range snapshotList {
+	for _, ts := range accoutSnapshots {
 		ckpSnapList = append(ckpSnapList, ts...)
 	}
 	sort.Slice(ckpSnapList, func(i, j int) bool {
@@ -729,7 +732,8 @@ func (c *checkpointCleaner) tryGC(location *objectio.Location, gckp *checkpoint.
 		logutil.Errorf("[DiskCleaner] GetSnapshot failed: %v", err.Error())
 		return nil
 	}
-	gc, snapshotList, err := c.softGC(location, gckp, snapshots, pitrs)
+	accountSnapshots := TransformToTSList(snapshots)
+	gc, err := c.softGC(location, gckp, accountSnapshots, pitrs)
 	if err != nil {
 		logutil.Errorf("[DiskCleaner] softGC failed: %v", err.Error())
 		return err
@@ -741,7 +745,7 @@ func (c *checkpointCleaner) tryGC(location *objectio.Location, gckp *checkpoint.
 		logutil.Infof("[DiskCleaner] ExecDelete failed: %v", err.Error())
 		return err
 	}
-	err = c.mergeCheckpointFiles(c.ckpClient.GetStage(), snapshotList)
+	err = c.mergeCheckpointFiles(c.ckpClient.GetStage(), accountSnapshots)
 
 	if err != nil {
 		// TODO: Error handle
@@ -754,9 +758,9 @@ func (c *checkpointCleaner) tryGC(location *objectio.Location, gckp *checkpoint.
 func (c *checkpointCleaner) softGC(
 	location *objectio.Location,
 	gckp *checkpoint.CheckpointEntry,
-	snapshots map[uint32]containers.Vector,
+	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
-) ([]string, map[uint32][]types.TS, error) {
+) ([]string, error) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
 	now := time.Now()
@@ -767,7 +771,7 @@ func (c *checkpointCleaner) softGC(
 			zap.String("merge-table cost", mergeCost.String()))
 	}()
 	if len(c.inputs.tables) < 2 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	mergeTable := c.inputs.tables[0]
 	for i, table := range c.inputs.tables {
@@ -778,19 +782,26 @@ func (c *checkpointCleaner) softGC(
 		table.Close()
 		c.inputs.tables[i] = nil
 	}
-	gc, snapList, err := mergeTable.SoftGC(c.ctx, location, gckp.GetEnd(), snapshots, pitrs, c.snapshotMeta)
+	gc, err := mergeTable.SoftGC(
+		c.ctx,
+		location,
+		gckp.GetEnd(),
+		accountSnapshots,
+		pitrs,
+		c.snapshotMeta,
+	)
 	if err != nil {
 		logutil.Errorf("softGC failed: %v", err.Error())
-		return nil, nil, err
+		return nil, err
 	}
 	softCost = time.Since(now)
 	now = time.Now()
 	c.inputs.tables = make([]*GCTable, 0)
 	c.inputs.tables = append(c.inputs.tables, mergeTable)
 	c.updateMaxCompared(gckp)
-	c.snapshotMeta.MergeTableInfo(snapList, pitrs)
+	c.snapshotMeta.MergeTableInfo(accountSnapshots, pitrs)
 	mergeCost = time.Since(now)
-	return gc, snapList, nil
+	return gc, nil
 }
 
 func (c *checkpointCleaner) createDebugInput(
@@ -866,16 +877,30 @@ func (c *checkpointCleaner) CheckGC() error {
 		mergeTable.Merge(table)
 	}
 	defer mergeTable.Close()
+
+	accoutSnapshots := TransformToTSList(snapshots)
 	logutil.Infof("merge table is %d, stats is %v", len(mergeTable.files.stats), mergeTable.files.stats[0].ObjectName().String())
-	_, _, err = mergeTable.SoftGC(c.ctx, &location, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
-	if err != nil {
+	if _, err = mergeTable.SoftGC(
+		c.ctx,
+		&location,
+		gCkp.GetEnd(),
+		accoutSnapshots,
+		pitr,
+		c.snapshotMeta,
+	); err != nil {
 		logutil.Infof("err is %v", err)
 		return err
 	}
 	logutil.Infof("merge table2 is %d, stats is %v", len(mergeTable.files.stats), mergeTable.files.stats[0].ObjectName().String())
 	//logutil.Infof("debug table is %d, stats is %v", len(debugTable.files.stats), debugTable.files.stats[0].ObjectName().String())
-	_, _, err = debugTable.SoftGC(c.ctx, &location, gCkp.GetEnd(), snapshots, pitr, c.snapshotMeta)
-	if err != nil {
+	if _, err = debugTable.SoftGC(
+		c.ctx,
+		&location,
+		gCkp.GetEnd(),
+		accoutSnapshots,
+		pitr,
+		c.snapshotMeta,
+	); err != nil {
 		logutil.Infof("err is %v", err)
 		return err
 	}

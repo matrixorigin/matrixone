@@ -16,16 +16,20 @@ package gc
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 func MakeLoadFunc(
@@ -70,4 +74,14 @@ func MakeLoadFunc(
 		}
 		return true, nil
 	}, releaseFn
+}
+
+func TransformToTSList(
+	fromKV map[uint32]containers.Vector,
+) map[uint32][]types.TS {
+	newKV := make(map[uint32][]types.TS, len(fromKV))
+	for k, v := range fromKV {
+		newKV[k] = vector.MustFixedColWithTypeCheck[types.TS](v.GetDownstreamVector())
+	}
+	return newKV
 }
