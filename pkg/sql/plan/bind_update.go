@@ -73,6 +73,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName && colDef.Typ.Id == int32(types.T_enum) {
+					if colDef.Typ.AutoIncr {
+						return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
+					}
+
 					binder := NewDefaultBinder(builder.GetContext(), nil, nil, colDef.Typ, nil)
 					updateKeyExpr, err := binder.BindExpr(updateExpr, 0, false)
 					if err != nil {
@@ -265,10 +269,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
-	var (
-		lockTargets   []*plan.LockTarget
-		updateCtxList []*plan.UpdateCtx
-	)
+	lockTargets := make([]*plan.LockTarget, 0)
+	updateCtxList := make([]*plan.UpdateCtx, 0)
 
 	finalProjTag := builder.genNewTag()
 	finalColName2Idx := make(map[string]int)
