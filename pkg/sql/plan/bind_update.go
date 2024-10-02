@@ -30,11 +30,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 
 	var selectList []tree.SelectExpr
-	updateColPosMap := make(map[string]int)
-	tableOffsetList := make([]int, len(dmlCtx.tableDefs))
+	colName2Idx := make(map[string]int)
+	updateColName2Idx := make(map[string]int)
 
 	for i, alias := range dmlCtx.aliases {
-		tableOffsetList[i] = len(selectList)
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
 		}
@@ -43,6 +42,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		// append  table.* to project list
 		for _, col := range tableDef.Cols {
+			colName2Idx[alias+"."+col.Name] = len(selectList)
 			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: e,
@@ -50,20 +50,24 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 
 		// TODO: support update primary key or unique key or secondary key
-		var pkAndIndexCols = make(map[string]bool)
+		var pkAndUkCols = make(map[string]bool)
 		if tableDef.Pkey != nil {
 			for _, colName := range tableDef.Pkey.Names {
-				pkAndIndexCols[colName] = true
+				pkAndUkCols[colName] = true
 			}
 		}
 		for _, idxDef := range tableDef.Indexes {
+			if !idxDef.TableExist || !idxDef.Unique {
+				continue
+			}
+
 			for _, colName := range idxDef.Parts {
-				pkAndIndexCols[colName] = true
+				pkAndUkCols[colName] = true
 			}
 		}
 
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
-			if pkAndIndexCols[colName] {
+			if pkAndUkCols[colName] {
 				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update primary key or unique key")
 			}
 
@@ -74,10 +78,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					if err != nil {
 						return 0, err
 					}
+
 					exprs := []tree.Expr{
 						tree.NewNumVal(colDef.Typ.Enumvalues, colDef.Typ.Enumvalues, false, tree.P_char),
 						updateExpr,
 					}
+
 					if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {
 						updateExpr = &tree.FuncExpr{
 							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastIndexValueToIndexFun)),
@@ -94,7 +100,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				}
 			}
 
-			updateColPosMap[alias+"."+colName] = len(selectList)
+			updateColName2Idx[alias+"."+colName] = len(selectList)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateExpr,
 			})
@@ -127,11 +133,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 
 		tableDef := dmlCtx.tableDefs[i]
-		tableIdx := tableOffsetList[i]
 
-		for colIdx, col := range tableDef.Cols {
-			if offset, ok := updateColPosMap[alias+"."+col.Name]; ok {
-				updateExpr := selectNode.ProjectList[offset]
+		for _, col := range tableDef.Cols {
+			if colPos, ok := updateColName2Idx[alias+"."+col.Name]; ok {
+				updateExpr := selectNode.ProjectList[colPos]
 				if isDefaultValExpr(updateExpr) { // set col = default
 					updateExpr, err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
@@ -143,34 +148,120 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					return 0, err
 				}
 				if col != nil && col.Typ.Id == int32(types.T_enum) {
-					selectNode.ProjectList[offset], err = funcCastForEnumType(builder.GetContext(), updateExpr, col.Typ)
+					selectNode.ProjectList[colPos], err = funcCastForEnumType(builder.GetContext(), updateExpr, col.Typ)
 					if err != nil {
 						return 0, err
 					}
 				} else {
-					selectNode.ProjectList[offset], err = forceCastExpr(builder.GetContext(), updateExpr, col.Typ)
+					selectNode.ProjectList[colPos], err = forceCastExpr(builder.GetContext(), updateExpr, col.Typ)
 					if err != nil {
 						return 0, err
 					}
 				}
 			} else {
-				pos := tableIdx + colIdx
 				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-					selectNode.ProjectList[pos] = col.OnUpdate.Expr
-
-					if col.Typ.Id == int32(types.T_enum) {
-						selectNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[pos], col.Typ)
-						if err != nil {
-							return 0, err
-						}
-					} else {
-						selectNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), selectNode.ProjectList[pos], col.Typ)
-						if err != nil {
-							return 0, err
-						}
-					}
+					//pos := colName2Idx[alias+"."+col.Name]
+					//selectNode.ProjectList[pos] = col.OnUpdate.Expr
+					//
+					//if col.Typ.Id == int32(types.T_enum) {
+					//	selectNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[pos], col.Typ)
+					//	if err != nil {
+					//		return 0, err
+					//	}
+					//} else {
+					//	selectNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), selectNode.ProjectList[pos], col.Typ)
+					//	if err != nil {
+					//		return 0, err
+					//	}
+					//}
+					return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update column with on update")
 				}
 			}
+		}
+	}
+
+	selectNodeTag := selectNode.BindingTags[0]
+	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
+	idxNeedUpdate := make([][]bool, len(dmlCtx.tableDefs))
+
+	for i, tableDef := range dmlCtx.tableDefs {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+
+		alias := dmlCtx.aliases[i]
+		idxScanNodes[i] = make([]*plan.Node, len(tableDef.Indexes))
+		idxNeedUpdate[i] = make([]bool, len(tableDef.Indexes))
+
+		for j, idxDef := range tableDef.Indexes {
+			if !idxDef.TableExist || idxDef.Unique {
+				continue
+			}
+
+			for _, colName := range idxDef.Parts {
+				if _, ok := updateColName2Idx[alias+"."+colName]; ok {
+					idxNeedUpdate[i][j] = true
+					break
+				}
+			}
+			if !idxNeedUpdate[i][j] {
+				continue
+			}
+
+			idxObjRef, idxTableDef := builder.compCtx.Resolve(dmlCtx.objRefs[i].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
+			idxTag := builder.genNewTag()
+			builder.addNameByColRef(idxTag, idxTableDef)
+
+			idxScanNodes[i][j] = &plan.Node{
+				NodeType:     plan.Node_TABLE_SCAN,
+				TableDef:     idxTableDef,
+				ObjRef:       idxObjRef,
+				BindingTags:  []int32{idxTag},
+				ScanSnapshot: bindCtx.snapshot,
+			}
+			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], bindCtx)
+
+			rightPkPos := idxTableDef.Name2ColIndex[catalog.IndexTableIndexColName]
+			pkTyp := idxTableDef.Cols[rightPkPos].Typ
+
+			rightExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag,
+						ColPos: rightPkPos,
+					},
+				},
+			}
+
+			args := make([]*plan.Expr, len(idxDef.Parts))
+
+			for k, colName := range idxDef.Parts {
+				colPos := int32(colName2Idx[alias+"."+colName])
+				args[k] = &plan.Expr{
+					Typ: selectNode.ProjectList[colPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNodeTag,
+							ColPos: colPos,
+						},
+					},
+				}
+			}
+
+			leftExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+
+			joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+				leftExpr,
+				rightExpr,
+			})
+
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{lastNodeID, idxTableNodeID},
+				JoinType: plan.Node_INNER,
+				OnList:   []*plan.Expr{joinCond},
+			}, bindCtx)
 		}
 	}
 
@@ -179,36 +270,49 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		updateCtxList []*plan.UpdateCtx
 	)
 
-	selectNodeTag := selectNode.BindingTags[0]
+	finalProjTag := builder.genNewTag()
+	finalColName2Idx := make(map[string]int)
+	var finalProjList []*plan.Expr
 
 	for i, tableDef := range dmlCtx.tableDefs {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
 		}
 
+		alias := dmlCtx.aliases[i]
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
-		tableOffset := tableOffsetList[i]
 
-		for k, col := range tableDef.Cols {
-			if col.Name == catalog.Row_ID {
-				continue
-			}
+		for j, col := range tableDef.Cols {
+			finalColIdx := len(finalProjList)
 			if col.Name == tableDef.Pkey.PkeyColName && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
-					PrimaryColIdxInBat: int32(tableOffsetList[i] + k),
+					PrimaryColIdxInBat: int32(finalColIdx),
 					PrimaryColTyp:      col.Typ,
 				}
 				lockTargets = append(lockTargets, lockTarget)
 			}
 
-			insertCols[k].RelPos = selectNodeTag
-
-			if offset, ok := updateColPosMap[dmlCtx.aliases[i]+"."+col.Name]; ok {
-				insertCols[k].ColPos = int32(offset)
-			} else {
-				insertCols[k].ColPos = int32(tableOffset + k)
+			if col.Name != catalog.Row_ID {
+				insertCols[j].RelPos = finalProjTag
+				insertCols[j].ColPos = int32(finalColIdx)
 			}
+
+			colIdx := colName2Idx[alias+"."+col.Name]
+			if updateIdx, ok := updateColName2Idx[alias+"."+col.Name]; ok {
+				colIdx = updateIdx
+			}
+
+			finalColName2Idx[alias+"."+col.Name] = finalColIdx
+			finalProjList = append(finalProjList, &plan.Expr{
+				Typ: selectNode.ProjectList[colIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectNodeTag,
+						ColPos: int32(colIdx),
+					},
+				},
+			})
 		}
 
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
@@ -217,17 +321,97 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			InsertCols: insertCols,
 			DeleteCols: []plan.ColRef{
 				{
-					RelPos: selectNodeTag,
-					ColPos: int32(tableOffset) + tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName],
+					RelPos: finalProjTag,
+					ColPos: int32(finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]),
 				},
 				{
-					RelPos: selectNodeTag,
-					ColPos: int32(tableOffset) + tableDef.Name2ColIndex[catalog.Row_ID],
+					RelPos: finalProjTag,
+					ColPos: int32(finalColName2Idx[alias+"."+catalog.Row_ID]),
 				},
 			},
 		})
 
+		for j, idxNode := range idxScanNodes[i] {
+			if !idxNeedUpdate[i][j] {
+				continue
+			}
+
+			insertCols := make([]plan.ColRef, 2)
+			deleteCols := make([]plan.ColRef, 2)
+
+			idxNodeTag := idxNode.BindingTags[0]
+
+			oldIdx := len(finalProjList)
+			idxColIdx := idxNode.TableDef.Name2ColIndex[catalog.IndexTableIndexColName]
+			finalProjList = append(finalProjList, &plan.Expr{
+				Typ: idxNode.TableDef.Cols[idxColIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxNodeTag,
+						ColPos: idxColIdx,
+					},
+				},
+			})
+			deleteCols[0].RelPos = finalProjTag
+			deleteCols[0].ColPos = int32(oldIdx)
+
+			oldIdx = len(finalProjList)
+			rowIDIdx := idxNode.TableDef.Name2ColIndex[catalog.Row_ID]
+			finalProjList = append(finalProjList, &plan.Expr{
+				Typ: idxNode.TableDef.Cols[rowIDIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxNodeTag,
+						ColPos: rowIDIdx,
+					},
+				},
+			})
+			deleteCols[1].RelPos = finalProjTag
+			deleteCols[1].ColPos = int32(oldIdx)
+
+			oldIdx = len(finalProjList)
+			idxDef := tableDef.Indexes[j]
+			args := make([]*plan.Expr, len(idxDef.Parts))
+
+			for k, colName := range idxDef.Parts {
+				colPos := int32(colName2Idx[alias+"."+colName])
+				if updateIdx, ok := updateColName2Idx[alias+"."+colName]; ok {
+					colPos = int32(updateIdx)
+				}
+				args[k] = &plan.Expr{
+					Typ: selectNode.ProjectList[colPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNodeTag,
+							ColPos: colPos,
+						},
+					},
+				}
+			}
+
+			newIdxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+			finalProjList = append(finalProjList, newIdxExpr)
+			insertCols[0].RelPos = finalProjTag
+			insertCols[0].ColPos = int32(oldIdx)
+
+			insertCols[1].RelPos = finalProjTag
+			insertCols[1].ColPos = int32(finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName])
+
+			updateCtxList = append(updateCtxList, &plan.UpdateCtx{
+				ObjRef:     idxNode.ObjRef,
+				TableDef:   idxNode.TableDef,
+				InsertCols: insertCols,
+				DeleteCols: deleteCols,
+			})
+		}
 	}
+
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: finalProjList,
+		Children:    []int32{lastNodeID},
+		BindingTags: []int32{finalProjTag},
+	}, bindCtx)
 
 	if len(lockTargets) > 0 {
 		lastNodeID = builder.appendNode(&plan.Node{
