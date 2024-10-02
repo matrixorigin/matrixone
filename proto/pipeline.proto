@@ -428,8 +428,9 @@ message HashBuild {
 	int32 JoinMapTag = 6;
 	int32 JoinMapRefCnt = 7;
 	plan.RuntimeFilterSpec RuntimeFilterSpec = 8;
-  plan.Node.OnDuplicateAction on_duplicate_action = 9;
-  string dedup_col_name = 10;
+  bool is_dedup = 9;
+  plan.Node.OnDuplicateAction on_duplicate_action = 10;
+  string dedup_col_name = 11;
 }
 
 message Shufflebuild {
@@ -440,6 +441,9 @@ message Shufflebuild {
 	plan.RuntimeFilterSpec RuntimeFilterSpec = 5;
 	int32 JoinMapTag = 6;
 	int32 ShuffleIdx = 7;
+  bool is_dedup = 8;
+  plan.Node.OnDuplicateAction on_duplicate_action = 9;
+  string dedup_col_name = 10;
 }
 
 message Indexbuild {

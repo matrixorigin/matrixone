@@ -46,6 +46,11 @@ type ShuffleBuild struct {
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	JoinMapTag        int32
 	ShuffleIdx        int32
+
+	IsDedup           bool
+	OnDuplicateAction pbplan.Node_OnDuplicateAction
+	DedupColName      string
+
 	vm.OperatorBase
 }
 

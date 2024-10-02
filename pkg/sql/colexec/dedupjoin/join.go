@@ -245,7 +245,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 				continue
 			}
 
-			switch ap.OnDupAction {
+			switch ap.OnDuplicateAction {
 			case plan.Node_ERROR:
 				return moerr.NewDuplicateEntry(proc.Ctx, ctr.vecs[0].RowToString(i+k), ap.DedupColName)
 			case plan.Node_IGNORE:

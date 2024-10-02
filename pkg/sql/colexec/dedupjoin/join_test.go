@@ -127,7 +127,7 @@ func TestDedupJoin(t *testing.T) {
 		resetChildren(tc.arg)
 		resetHashBuildChildren(tc.barg)
 		tc.proc.GetMessageBoard().Reset()
-		tc.arg.OnDupAction = plan.Node_IGNORE
+		tc.arg.OnDuplicateAction = plan.Node_IGNORE
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.barg.IsDedup = true

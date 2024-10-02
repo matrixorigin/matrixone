@@ -578,7 +578,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.ShuffleIdx = t.ShuffleIdx
 		op.RuntimeFilterSpecs = append(op.RuntimeFilterSpecs, t.RuntimeFilterSpecs...)
 		op.JoinMapTag = t.JoinMapTag
-		op.OnDupAction = t.OnDupAction
+		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColName = t.DedupColName
 		return op
 	}
@@ -1100,7 +1100,7 @@ func constructDedupJoin(n *plan.Node, right_typs []types.Type, proc *process.Pro
 	arg.Result = result
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	arg.OnDupAction = n.OnDuplicateAction
+	arg.OnDuplicateAction = n.OnDuplicateAction
 	arg.DedupColName = n.DedupColName
 	//arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
@@ -1772,7 +1772,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
 		ret.IsDedup = true
-		ret.OnDuplicateAction = arg.OnDupAction
+		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
@@ -1891,6 +1891,21 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 			ret.NeedBatches = true
 			ret.NeedAllocateSels = true
 		}
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
+		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
+
+	case vm.DedupJoin:
+		arg := op.(*dedupjoin.DedupJoin)
+		ret.Conditions = arg.Conditions[1]
+		ret.NeedBatches = true
+		//ret.HashOnPK = arg.HashOnPK
+		ret.NeedBatches = true
+		ret.IsDedup = true
+		ret.OnDuplicateAction = arg.OnDuplicateAction
+		ret.DedupColName = arg.DedupColName
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}

@@ -77,8 +77,8 @@ type DedupJoin struct {
 	NumCPU   uint64
 	IsMerger bool
 
-	OnDupAction  plan.Node_OnDuplicateAction
-	DedupColName string
+	OnDuplicateAction plan.Node_OnDuplicateAction
+	DedupColName      string
 
 	vm.OperatorBase
 	colexec.Projection

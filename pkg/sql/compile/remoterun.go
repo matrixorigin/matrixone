@@ -789,6 +789,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:        t.JoinMapTag,
 			JoinMapRefCnt:     t.JoinMapRefCnt,
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
+			IsDedup:           t.IsDedup,
 			OnDuplicateAction: t.OnDuplicateAction,
 			DedupColName:      t.DedupColName,
 		}
@@ -801,6 +802,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
 			JoinMapTag:        t.JoinMapTag,
 			ShuffleIdx:        t.ShuffleIdx,
+			IsDedup:           t.IsDedup,
+			OnDuplicateAction: t.OnDuplicateAction,
+			DedupColName:      t.DedupColName,
 		}
 	case *indexbuild.IndexBuild:
 		in.IndexBuild = &pipeline.Indexbuild{
@@ -811,7 +815,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
-			OnDuplicateAction:      t.OnDupAction,
+			OnDuplicateAction:      t.OnDuplicateAction,
 			DedupColName:           t.DedupColName,
 			IsShuffle:              t.IsShuffle,
 			JoinMapTag:             t.JoinMapTag,
@@ -1297,6 +1301,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.JoinMapRefCnt = t.JoinMapRefCnt
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
+		arg.IsDedup = t.IsDedup
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		op = arg
@@ -1310,6 +1315,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx
+		arg.IsDedup = t.IsDedup
+		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.DedupColName = t.DedupColName
 		op = arg
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
@@ -1320,7 +1328,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetDedupJoin()
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
-		arg.OnDupAction = t.OnDuplicateAction
+		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.IsShuffle = t.IsShuffle
 		arg.JoinMapTag = t.JoinMapTag

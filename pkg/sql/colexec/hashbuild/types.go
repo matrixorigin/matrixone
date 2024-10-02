@@ -52,6 +52,7 @@ type HashBuild struct {
 	IsDedup           bool
 	OnDuplicateAction pbplan.Node_OnDuplicateAction
 	DedupColName      string
+
 	vm.OperatorBase
 }
 
