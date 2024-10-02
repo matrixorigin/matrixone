@@ -18,7 +18,6 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
@@ -28,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
+
+const statsIdx = 2
 
 func MakeBloomfilterCoarseFilter(
 	ctx context.Context,
@@ -51,7 +52,7 @@ func MakeBloomfilterCoarseFilter(
 		ctx,
 		rowCount,
 		probability,
-		2,
+		statsIdx,
 		reader.LoadBatchData,
 		buffer,
 		mp,
@@ -68,7 +69,6 @@ func MakeBloomfilterCoarseFilter(
 		buildMap bool,
 		mp *mpool.MPool,
 	) (err error) {
-		logutil.Infof("bloomfilter coarse filter is %d", bat.Vecs[0].Length())
 		creates := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
 		deletes := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
@@ -88,7 +88,6 @@ func MakeBloomfilterCoarseFilter(
 					createTs := creates[i]
 					dropTs := deletes[i]
 					if !createTs.LT(ts) || !dropTs.LT(ts) {
-						logutil.Infof("name is %s, createTs is %s, dropTs is %s ts %s, i is %d", name, createTs.ToString(), dropTs.ToString(), ts.ToString(), i)
 						return
 					}
 					if dropTs.IsEmpty() && objects[name] == nil {
@@ -100,18 +99,15 @@ func MakeBloomfilterCoarseFilter(
 							table:    tid,
 						}
 						objects[name] = object
-						logutil.Infof("name is %s, createTs is %s, dropTs is %s i is %d", name, objects[name].createTS.ToString(), objects[name].dropTS.ToString(), i)
 						return
 					}
 					if objects[name] != nil {
 						objects[name].dropTS = dropTs
-						logutil.Infof("name is %s, createTs is %s, dropTs is %s i is %d", name, objects[name].createTS.ToString(), objects[name].dropTS.ToString(), i)
 						return
 					}
 				}
 			},
 		)
-		logutil.Infof("bm is %d", len(bm.ToArray()))
 		return nil
 
 	}, nil

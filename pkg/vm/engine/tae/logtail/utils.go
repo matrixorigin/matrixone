@@ -1176,7 +1176,6 @@ func (data *CheckpointData) WriteTo(
 	blks2, _, err := writer2.Sync(context.Background())
 	CNLocation = objectio.BuildLocation(name2, blks2[0].GetExtent(), 0, blks2[0].GetID())
 	TNLocation = objectio.BuildLocation(name2, blks2[1].GetExtent(), 0, blks2[1].GetID())
-	logutil.Infof("write meta to %v, %v", CNLocation.String(), TNLocation.String())
 	return
 }
 
@@ -1877,7 +1876,6 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 			continue
 		}
 		create := node.End.Equal(&entry.CreatedAt)
-		logutil.Infof("fillObjectInfoBatch entry:%v, node:%v, create:%v", entry.ObjectName().String(), node.String(), entry.CreatedAt.ToString())
 		if entry.IsTombstone {
 			visitObject(collector.data.bats[TombstoneObjectInfoIDX], entry, node, create, false, types.TS{})
 		} else {

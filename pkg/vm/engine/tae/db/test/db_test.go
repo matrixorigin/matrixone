@@ -6397,7 +6397,6 @@ func TestAppendAndGC(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	logutil.Infof("append done")
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -6409,27 +6408,9 @@ func TestAppendAndGC(t *testing.T) {
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
-	return
 	testutils.WaitExpect(10000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
-	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
-	tae.Restart(ctx)
-	db = tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
-	testutils.WaitExpect(5000, func() bool {
-		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
-			return false
-		}
-		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
-		minEnd := minMerged.GetEnd()
-		return end.GE(&minEnd)
-	})
-	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
-	minEnd := minMerged.GetEnd()
-	assert.True(t, end.GE(&minEnd))
-	err = db.DiskCleaner.GetCleaner().CheckGC()
-	assert.Nil(t, err)
 
 }
 
