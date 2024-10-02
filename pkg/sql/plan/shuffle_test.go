@@ -199,4 +199,6 @@ func TestRangeShuffleSlice(t *testing.T) {
 func TestGetShuffleDop(t *testing.T) {
 	n := GetShuffleDop(4, 2, 100000000000)
 	require.Equal(t, 16, n)
+	n := GetShuffleDop(64, 2, 100000000000)
+	require.Equal(t, 64, n)
 }
