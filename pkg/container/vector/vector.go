@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -2610,74 +2611,150 @@ func (v *Vector) String() string {
 	}
 }
 
-func implRowToString[T types.FixedSizeT](v *Vector, idx int) string {
+func implFixedRowToString[T types.FixedSizeT](v *Vector, idx int) string {
 	if v.IsConstNull() {
 		return "null"
 	}
 
-	col := MustFixedColNoTypeCheck[T](v)
-	if len(col) == 1 {
+	if v.IsConst() {
 		if nulls.Contains(v.nsp, 0) {
 			return "null"
 		} else {
-			return fmt.Sprintf("%v", col[0])
+			return fmt.Sprintf("%v", GetFixedAtNoTypeCheck[T](v, 0))
 		}
 	}
 	if v.nsp.Contains(uint64(idx)) {
 		return "null"
 	} else {
-		return fmt.Sprintf("%v", col[idx])
+		return fmt.Sprintf("%v", GetFixedAtNoTypeCheck[T](v, idx))
+	}
+}
+
+func implTimestampRowToString(v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+
+	loc := time.Local
+	if v.IsConst() {
+		if nulls.Contains(v.nsp, 0) {
+			return "null"
+		} else {
+			return GetFixedAtNoTypeCheck[types.Timestamp](v, 0).String2(loc, v.typ.Scale)
+		}
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	} else {
+		return GetFixedAtNoTypeCheck[types.Timestamp](v, idx).String2(loc, v.typ.Scale)
+	}
+}
+
+func implDatetimeRowToString(v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+
+	if v.IsConst() {
+		if nulls.Contains(v.nsp, 0) {
+			return "null"
+		} else {
+			return GetFixedAtNoTypeCheck[types.Datetime](v, 0).String2(v.typ.Scale)
+		}
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	} else {
+		return GetFixedAtNoTypeCheck[types.Datetime](v, idx).String2(v.typ.Scale)
+	}
+}
+
+func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+
+	if v.IsConst() {
+		if nulls.Contains(v.nsp, 0) {
+			return "null"
+		} else {
+			return GetFixedAtNoTypeCheck[T](v, 0).Format(v.typ.Scale)
+		}
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	} else {
+		return GetFixedAtNoTypeCheck[T](v, idx).Format(v.typ.Scale)
+	}
+}
+
+func implArrayRowToString[T types.RealNumbers](v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+
+	if v.IsConst() {
+		if nulls.Contains(v.nsp, 0) {
+			return "null"
+		} else {
+			return types.ArrayToString(GetArrayAt[T](v, 0))
+		}
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	} else {
+		return types.ArrayToString(GetArrayAt[T](v, idx))
 	}
 }
 
 func (v *Vector) RowToString(idx int) string {
 	switch v.typ.Oid {
 	case types.T_bool:
-		return implRowToString[bool](v, idx)
+		return implFixedRowToString[bool](v, idx)
 	case types.T_bit:
-		return implRowToString[uint64](v, idx)
+		return implFixedRowToString[uint64](v, idx)
 	case types.T_int8:
-		return implRowToString[int8](v, idx)
+		return implFixedRowToString[int8](v, idx)
 	case types.T_int16:
-		return implRowToString[int16](v, idx)
+		return implFixedRowToString[int16](v, idx)
 	case types.T_int32:
-		return implRowToString[int32](v, idx)
+		return implFixedRowToString[int32](v, idx)
 	case types.T_int64:
-		return implRowToString[int64](v, idx)
+		return implFixedRowToString[int64](v, idx)
 	case types.T_uint8:
-		return implRowToString[uint8](v, idx)
+		return implFixedRowToString[uint8](v, idx)
 	case types.T_uint16:
-		return implRowToString[uint16](v, idx)
+		return implFixedRowToString[uint16](v, idx)
 	case types.T_uint32:
-		return implRowToString[uint32](v, idx)
+		return implFixedRowToString[uint32](v, idx)
 	case types.T_uint64:
-		return implRowToString[uint64](v, idx)
+		return implFixedRowToString[uint64](v, idx)
 	case types.T_float32:
-		return implRowToString[float32](v, idx)
+		return implFixedRowToString[float32](v, idx)
 	case types.T_float64:
-		return implRowToString[float64](v, idx)
+		return implFixedRowToString[float64](v, idx)
 	case types.T_date:
-		return implRowToString[types.Date](v, idx)
+		return implFixedRowToString[types.Date](v, idx)
 	case types.T_datetime:
-		return implRowToString[types.Datetime](v, idx)
+		return implDatetimeRowToString(v, idx)
 	case types.T_time:
-		return implRowToString[types.Time](v, idx)
+		return implFixedRowToString[types.Time](v, idx)
 	case types.T_timestamp:
-		return implRowToString[types.Timestamp](v, idx)
+		return implTimestampRowToString(v, idx)
 	case types.T_enum:
-		return implRowToString[types.Enum](v, idx)
+		return implFixedRowToString[types.Enum](v, idx)
 	case types.T_decimal64:
-		return implRowToString[types.Decimal64](v, idx)
+		return implDecimalRowToString[types.Decimal64](v, idx)
 	case types.T_decimal128:
-		return implRowToString[types.Decimal128](v, idx)
+		return implDecimalRowToString[types.Decimal128](v, idx)
 	case types.T_uuid:
-		return implRowToString[types.Uuid](v, idx)
+		return implFixedRowToString[types.Uuid](v, idx)
 	case types.T_TS:
-		return implRowToString[types.TS](v, idx)
+		return implFixedRowToString[types.TS](v, idx)
 	case types.T_Rowid:
-		return implRowToString[types.Rowid](v, idx)
+		return implFixedRowToString[types.Rowid](v, idx)
 	case types.T_Blockid:
-		return implRowToString[types.Blockid](v, idx)
+		return implFixedRowToString[types.Blockid](v, idx)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
 		col := MustFixedColNoTypeCheck[types.Varlena](v)
 		if len(col) == 1 {
@@ -2694,37 +2771,9 @@ func (v *Vector) RowToString(idx int) string {
 		}
 		//return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
 	case types.T_array_float32:
-		//NOTE: Don't merge this with T_Varchar. We need to retrieve the Array and print the values.
-		col := MustArrayCol[float32](v)
-		if len(col) == 1 {
-			if nulls.Contains(v.nsp, 0) {
-				return "null"
-			} else {
-				return types.ArrayToString(col[0])
-			}
-		}
-
-		if v.nsp.Contains(uint64(idx)) {
-			return "null"
-		} else {
-			return types.ArrayToString(col[idx])
-		}
+		return implArrayRowToString[float32](v, idx)
 	case types.T_array_float64:
-		//NOTE: Don't merge this with T_Varchar. We need to retrieve the Array and print the values.
-		col := MustArrayCol[float64](v)
-		if len(col) == 1 {
-			if nulls.Contains(v.nsp, 0) {
-				return "null"
-			} else {
-				return types.ArrayToString(col[0])
-			}
-		}
-
-		if v.nsp.Contains(uint64(idx)) {
-			return "null"
-		} else {
-			return types.ArrayToString(col[idx])
-		}
+		return implArrayRowToString[float64](v, idx)
 	default:
 		panic("vec to string unknown types.")
 	}
