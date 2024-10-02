@@ -44,6 +44,7 @@ import (
 )
 
 type ObjectEntry struct {
+	stats    *objectio.ObjectStats
 	createTS types.TS
 	dropTS   types.TS
 	db       uint64
@@ -208,7 +209,9 @@ func (t *GCTable) SoftGC(
 			}
 		}
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
-			name := bat.Vecs[0].GetStringAt(i)
+			buf := bat.Vecs[0].GetRawBytesAt(i)
+			stats := (objectio.ObjectStats)(buf)
+			name := stats.ObjectName().String()
 			tid := tids[i]
 			createTs := creates[i]
 			dropTs := deletes[i]
@@ -226,7 +229,7 @@ func (t *GCTable) SoftGC(
 				continue
 			}
 			if dropTs.IsEmpty() {
-				panic("dropTs is empty")
+				panic(fmt.Sprintf("dropTs is empty, name: %s, createTs: %s", name, createTs.ToString()))
 			}
 			bmAdd(name, tsList, pitr, &createTs, &dropTs, i)
 		}
@@ -237,7 +240,9 @@ func (t *GCTable) SoftGC(
 	canGC := func(ctx context.Context, bat *batch.Batch) error {
 		names := make(map[string]struct{})
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
-			name := bat.Vecs[0].GetStringAt(i)
+			buf := bat.Vecs[0].GetRawBytesAt(i)
+			stats := (objectio.ObjectStats)(buf)
+			name := stats.ObjectName().String()
 			names[name] = struct{}{}
 		}
 
@@ -264,10 +269,6 @@ func (t *GCTable) SoftGC(
 	}
 	t.files.stats = make([]objectio.ObjectStats, 0, len(gcStats))
 	t.files.stats = append(t.files.stats, gcStats...)
-	logutil.Infof("SoftGC sss %d", len(gcStats))
-	for _, file := range t.files.stats {
-		logutil.Infof("SoftGC sss file %v", file.ObjectName().String())
-	}
 	return gcFiles, snapList, err
 }
 
@@ -431,18 +432,19 @@ func collectObjectsWithCkp(data *logtail.CheckpointData, objects map[string]*Obj
 	tid := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
 
 	for i := 0; i < ins.Length(); i++ {
-		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-		objectStats.UnMarshal(buf)
+		stats := (objectio.ObjectStats)(buf)
+		name := stats.ObjectName().String()
 		deleteTS := vector.GetFixedAtNoTypeCheck[types.TS](insDeleteTSVec, i)
 		createTS := vector.GetFixedAtNoTypeCheck[types.TS](insCreateTSVec, i)
 		object := &ObjectEntry{
+			stats:    &stats,
 			createTS: createTS,
 			dropTS:   deleteTS,
 			db:       vector.GetFixedAtNoTypeCheck[uint64](dbid, i),
 			table:    vector.GetFixedAtNoTypeCheck[uint64](tid, i),
 		}
-		objects[objectStats.ObjectName().String()] = object
+		objects[name] = object
 	}
 }
 
@@ -462,8 +464,8 @@ func collectMapData(
 	if len(objects) == 0 {
 		return nil
 	}
-	for name, entry := range objects {
-		err := addObjectToBatch(bat, name, entry, mp)
+	for _, entry := range objects {
+		err := addObjectToBatch(bat, entry.stats, entry, mp)
 		if err != nil {
 			return err
 		}
@@ -613,7 +615,9 @@ func (t *GCTable) Compare(table *GCTable) (map[string]*ObjectEntry, map[string]*
 			dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
 			tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
 			for i := 0; i < bat.Vecs[0].Length(); i++ {
-				name := bat.Vecs[0].GetStringAt(i)
+				buf := bat.Vecs[0].GetRawBytesAt(i)
+				stats := (objectio.ObjectStats)(buf)
+				name := stats.ObjectName().String()
 				tid := tids[i]
 				createTs := creates[i]
 				dropTs := deletes[i]

@@ -199,7 +199,7 @@ func init() {
 		"table_id",
 	}
 	ObjectTableTypes = []types.Type{
-		objectio.VarcharType,
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		objectio.TSType,
 		objectio.TSType,
 		objectio.Uint64Type,
@@ -236,11 +236,11 @@ func NewObjectTableBatch() *batch.Batch {
 
 func addObjectToBatch(
 	bat *batch.Batch,
-	name string,
+	stats *objectio.ObjectStats,
 	object *ObjectEntry,
 	mPool *mpool.MPool,
 ) error {
-	err := vector.AppendBytes(bat.Vecs[0], []byte(name), false, mPool)
+	err := vector.AppendBytes(bat.Vecs[0], stats[:], false, mPool)
 	if err != nil {
 		return err
 	}

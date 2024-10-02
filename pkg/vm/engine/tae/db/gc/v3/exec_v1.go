@@ -51,7 +51,7 @@ func MakeBloomfilterCoarseFilter(
 		ctx,
 		rowCount,
 		probability,
-		0,
+		2,
 		reader.LoadBatchData,
 		buffer,
 		mp,
@@ -81,16 +81,19 @@ func MakeBloomfilterCoarseFilter(
 					if !buildMap {
 						return
 					}
-					name := bat.Vecs[0].GetStringAt(i)
+					buf := bat.Vecs[0].GetRawBytesAt(i)
+					stats := (objectio.ObjectStats)(buf)
+					name := stats.ObjectName().String()
 					tid := tids[i]
 					createTs := creates[i]
 					dropTs := deletes[i]
 					if !createTs.LT(ts) || !dropTs.LT(ts) {
-						//logutil.Infof("name is %s, createTs is %s, dropTs is %s ts %s, i is %d", name, createTs.ToString(), dropTs.ToString(), ts.ToString(), i)
+						logutil.Infof("name is %s, createTs is %s, dropTs is %s ts %s, i is %d", name, createTs.ToString(), dropTs.ToString(), ts.ToString(), i)
 						return
 					}
 					if dropTs.IsEmpty() && objects[name] == nil {
 						object := &ObjectEntry{
+							stats:    &stats,
 							createTS: createTs,
 							dropTS:   dropTs,
 							db:       dbs[i],

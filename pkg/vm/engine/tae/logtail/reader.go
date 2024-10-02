@@ -195,8 +195,6 @@ func (r *CheckpointReader) LoadBatchData(
 			continue
 		}
 		item := checkpointDataReferVersions[CheckpointCurrentVersion][idx]
-		logutil.Infof("item is %v", item.attrs)
-		logutil.Infof("bat  is %v", bat.Attrs)
 		if bats, err = LoadBlkColumnsByMeta(
 			CheckpointCurrentVersion, ctx, item.types, item.attrs, uint16(idx), reader, mp,
 		); err != nil {
