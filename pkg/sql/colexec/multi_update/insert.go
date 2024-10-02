@@ -222,6 +222,7 @@ func (update *MultiUpdate) check_null_and_insert_table(
 			}
 		}
 
+		insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
 		err = updateCtx.Source.Write(proc.Ctx, insertBatch)
 	}
 	return
