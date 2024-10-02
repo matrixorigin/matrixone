@@ -565,6 +565,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.DedupJoin:
 		t := sourceOp.(*dedupjoin.DedupJoin)
 		op := dedupjoin.NewArgument()
+		if t.Channel == nil {
+			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+		}
+		op.Channel = t.Channel
+		op.NumCPU = uint64(maxParallel)
+		op.IsMerger = (index == 0)
 		op.Result = append(op.Result, t.Result...)
 		op.RightTypes = append(op.RightTypes, t.RightTypes...)
 		op.Conditions = append(op.Conditions, t.Conditions...)

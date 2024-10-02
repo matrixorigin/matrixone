@@ -73,6 +73,10 @@ type DedupJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 
+	Channel  chan *bitmap.Bitmap
+	NumCPU   uint64
+	IsMerger bool
+
 	OnDupAction  plan.Node_OnDuplicateAction
 	DedupColName string
 
@@ -85,7 +89,7 @@ func (dedupJoin *DedupJoin) GetOperatorBase() *vm.OperatorBase {
 }
 
 func init() {
-	reuse.CreatePool[DedupJoin](
+	reuse.CreatePool(
 		func() *DedupJoin {
 			return &DedupJoin{}
 		},
