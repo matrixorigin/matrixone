@@ -85,7 +85,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = Probe
 
 		case Probe:
-			result, err = dedupJoin.Children[0].Call(proc)
+			result, err = vm.ChildrenCall(dedupJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
