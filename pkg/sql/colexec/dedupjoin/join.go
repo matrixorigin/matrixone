@@ -164,6 +164,23 @@ func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyzer 
 		return true, nil
 	}
 
+	if ap.NumCPU > 1 {
+		if !ap.IsMerger {
+			ap.Channel <- ctr.matched
+			return true, nil
+		} else {
+			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
+				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
+				if v != nil {
+					ctr.matched.Or(v)
+				} else {
+					return true, nil
+				}
+			}
+			close(ap.Channel)
+		}
+	}
+
 	if ctr.matched.Count() == 0 {
 		ap.ctr.buf = ctr.batches
 		ctr.batches = nil
