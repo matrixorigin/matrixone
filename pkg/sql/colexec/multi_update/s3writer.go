@@ -90,25 +90,29 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 	}
 	// main table allways at the end for s3writer.updateCtxs
 	// because main table will write to s3 at last
-	thisUpdateCtxs = append(thisUpdateCtxs, mainUpdateCtx)
-	appendCfgToWriter(writer, mainUpdateCtx.TableDef)
+	if mainUpdateCtx != nil {
+		// only insert into hidden table
+		thisUpdateCtxs = append(thisUpdateCtxs, mainUpdateCtx)
+		appendCfgToWriter(writer, mainUpdateCtx.TableDef)
+	}
 	writer.updateCtxs = thisUpdateCtxs
 
-	if len(mainUpdateCtx.DeleteCols) > 0 && len(mainUpdateCtx.InsertCols) > 0 {
+	upCtx := thisUpdateCtxs[len(thisUpdateCtxs)-1]
+	if len(upCtx.DeleteCols) > 0 && len(upCtx.InsertCols) > 0 {
 		//update
 		writer.action = actionUpdate
 		writer.flushThreshold = InsertWriteS3Threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, mainUpdateCtx.InsertCols...)
-	} else if len(mainUpdateCtx.InsertCols) > 0 {
+		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
+	} else if len(upCtx.InsertCols) > 0 {
 		//insert
 		writer.action = actionInsert
 		writer.flushThreshold = InsertWriteS3Threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, mainUpdateCtx.InsertCols...)
+		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
 	} else {
 		//delete
 		writer.action = actionDelete
 		writer.flushThreshold = DeleteWriteS3Threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, mainUpdateCtx.DeleteCols...)
+		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.DeleteCols...)
 	}
 
 	return writer, nil

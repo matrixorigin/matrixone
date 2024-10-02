@@ -562,6 +562,19 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Engine = t.Engine
 		op.SetInfo(&info)
 		return op
+	case vm.DedupJoin:
+		t := sourceOp.(*dedupjoin.DedupJoin)
+		op := dedupjoin.NewArgument()
+		op.Result = append(op.Result, t.Result...)
+		op.RightTypes = append(op.RightTypes, t.RightTypes...)
+		op.Conditions = append(op.Conditions, t.Conditions...)
+		op.IsShuffle = t.IsShuffle
+		op.ShuffleIdx = t.ShuffleIdx
+		op.RuntimeFilterSpecs = append(op.RuntimeFilterSpecs, t.RuntimeFilterSpecs...)
+		op.JoinMapTag = t.JoinMapTag
+		op.OnDupAction = t.OnDupAction
+		op.DedupColName = t.DedupColName
+		return op
 	}
 	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 }

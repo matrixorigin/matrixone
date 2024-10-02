@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+//@todo add test case: only insert hidden table
+
 func (update *MultiUpdate) insert_main_table(
 	proc *process.Process,
 	tableIndex int,
