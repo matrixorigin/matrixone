@@ -136,6 +136,7 @@ func buildInsertPlans(
 			return err
 		}
 
+		logutil.Infof("ERIC BUILd Insert Plan: insert cols : %v", insertColsNameFromStmt)
 		// try to build pk filter epxr for origin table
 		if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsNameFromStmt, nil) {
 			pkLocationMap := newLocationMap(tableDef, nil)
@@ -1739,6 +1740,10 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	preInsertProjection := getProjectionByLastNode(builder, lastNodeId)
 	hiddenColumnTyp, hiddenColumnName := getHiddenColumnForPreInsert(tableDef)
 
+	for i, c := range preInsertProjection {
+		logutil.Infof("PreInsertProject: %d %v", i, *c)
+	}
+
 	hashAutoCol := false
 	for _, col := range tableDef.Cols {
 		if col.Typ.AutoIncr {
@@ -1775,6 +1780,10 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 				})
 			}
 		}
+	}
+
+	for i, c := range preInsertProjection {
+		logutil.Infof("AFTER PreInsertProject: %d %v", i, *c)
 	}
 
 	name2ColIndex := make(map[string]int32, len(tableDef.Cols))
@@ -4406,18 +4415,18 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 		}
 	}
 
-	/*
-		// fake pk
-		project = append(project, &plan.Expr{
-			Typ: ftcols[0].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: crossapply.BindingTags[0],
-					ColPos: int32(0),
-				},
+	// fake primary key hidden column must be a NULL constant
+	project = append(project, &plan.Expr{
+		Typ: plan.Type{
+			Id:          int32(types.T_uint64),
+			NotNullable: false,
+		},
+		Expr: &plan.Expr_Lit{
+			Lit: &Const{
+				Isnull: true,
 			},
-		})
-	*/
+		},
+	})
 
 	logutil.Infof("Binding Tag %d", tablefunc.BindingTags[0])
 	logutil.Infof("PROJECT HERE. %v", project)
@@ -4436,27 +4445,28 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, indexdef.IndexName)
 	}
 
-	/*
-		insertEntriesTableDef := DeepCopyTableDef(indexTableDef, false)
-		for _, col := range indexTableDef.Cols {
-			if col.Name != catalog.Row_ID {
-				insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
-			}
-		}
-	*/
-
-	/*
-		indexTableDef.Cols = RemoveIf[*ColDef](indexTableDef.Cols, func(colVal *ColDef) bool {
-			return colVal.Name == catalog.Row_ID || colVal.Name == catalog.FakePrimaryKeyColName
-		})
-	*/
-
+	logutil.Infof("TABLEID = %d", indexTableDef.TblId)
 	insertEntriesTableDef := DeepCopyTableDef(indexTableDef, false)
 	for _, col := range indexTableDef.Cols {
-		if col.Name != catalog.Row_ID && col.Name != catalog.FakePrimaryKeyColName {
+		if col.Name != catalog.Row_ID {
 			insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
 		}
 	}
+
+	preInsertNode := &Node{
+		NodeType:    plan.Node_PRE_INSERT,
+		Children:    []int32{lastNodeId},
+		ProjectList: project,
+		PreInsertCtx: &plan.PreInsertCtx{
+			Ref:           indexObjRef,
+			TableDef:      DeepCopyTableDef(indexTableDef, true),
+			HasAutoCol:    true,
+			IsUpdate:      false,
+			CompPkeyExpr:  nil,
+			ClusterByExpr: nil,
+		},
+	}
+	lastNodeId = builder.appendNode(preInsertNode, bindCtx)
 
 	// add lock
 	if lockNodeId, ok := appendLockNode(
