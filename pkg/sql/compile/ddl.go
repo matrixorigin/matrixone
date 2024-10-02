@@ -1204,6 +1204,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
+		err = maybeCreateAutoIncrement(
+			c.proc.Ctx,
+			c.proc.GetService(),
+			dbSource,
+			def,
+			c.proc.GetTxnOperator(),
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+
 		var initSQL string
 		switch def.TableType {
 		case catalog.SystemSI_IVFFLAT_TblType_Metadata:
@@ -1518,6 +1530,19 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		if err := tmpDBSource.Create(c.proc.Ctx, engine.GetTempTableName(dbName, def.Name), append(exeCols, exeDefs...)); err != nil {
 			return err
 		}
+
+		err = maybeCreateAutoIncrement(
+			c.proc.Ctx,
+			c.proc.GetService(),
+			tmpDBSource,
+			def,
+			c.proc.GetTxnOperator(),
+			func() string {
+				return engine.GetTempTableName(dbName, tblName)
+			})
+		if err != nil {
+			return err
+		}
 	}
 
 	return maybeCreateAutoIncrement(
@@ -1748,6 +1773,8 @@ func (s *Scope) DropIndex(c *Compile) error {
 		if err = d.Delete(c.proc.Ctx, qry.IndexTableName); err != nil {
 			return err
 		}
+
+		// ERIC TODO: delete auto increment
 	}
 
 	//3. delete index object from mo_catalog.mo_indexes
@@ -2023,6 +2050,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
+
+		// ERIC TODO: reset auto increment
 	}
 
 	//Truncate Partition subtable if needed
@@ -2275,6 +2304,8 @@ func (s *Scope) DropTable(c *Compile) error {
 			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
 				return err
 			}
+
+			// ERIC TODO: delete autoincrement
 		}
 
 		//delete partition table
@@ -2320,6 +2351,8 @@ func (s *Scope) DropTable(c *Compile) error {
 			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
 				return err
 			}
+
+			// ERIC: TODO delete autoincrement
 		}
 
 		// delete partition subtable
