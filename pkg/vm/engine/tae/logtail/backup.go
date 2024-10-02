@@ -669,7 +669,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					zap.Uint64("tid", oData.tid))
 				return true, nil
 			}
-			writer.SetDataType(objectio.SchemaTombstone)
+			writer.SetTombstone()
 			writer.SetPrimaryKeyWithType(
 				uint16(objectio.TombstonePrimaryKeyIdx),
 				index.HBF,

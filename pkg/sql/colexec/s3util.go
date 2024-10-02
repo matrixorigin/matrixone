@@ -379,7 +379,9 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 	if err != nil {
 		return nil, err
 	}
-	w.writer, err = blockio.NewBlockWriterNew(s3, obj, w.schemaVersion, w.seqnums)
+	w.writer, err = blockio.NewBlockWriterNew(
+		s3, obj, w.schemaVersion, w.seqnums, w.isTombstone,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +391,6 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 	}
 
 	if w.isTombstone {
-		w.writer.SetDataType(objectio.SchemaTombstone)
 		if w.pk > -1 {
 			w.writer.SetPrimaryKeyWithType(
 				uint16(w.pk),
@@ -399,7 +400,6 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 			)
 		}
 	} else {
-		w.writer.SetDataType(objectio.SchemaData)
 		if w.pk > -1 {
 			w.writer.SetPrimaryKey(uint16(w.pk))
 		}

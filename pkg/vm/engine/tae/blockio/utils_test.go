@@ -16,6 +16,9 @@ package blockio
 
 import (
 	"context"
+	"math/rand"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"math/rand"
-	"testing"
 )
 
 func TestCoarseFilterTombstoneObject(t *testing.T) {
@@ -39,8 +40,7 @@ func TestCoarseFilterTombstoneObject(t *testing.T) {
 	rowids := make([]types.Rowid, rowCnt)
 	oss := make([]objectio.ObjectStats, ssCnt)
 	for i := 0; i < ssCnt; i++ {
-		writer := ConstructTombstoneWriter(false, fs)
-		writer.SetDataType(objectio.SchemaTombstone)
+		writer := ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 		assert.NotNil(t, writer)
 
 		bat := batch.NewWithSize(2)

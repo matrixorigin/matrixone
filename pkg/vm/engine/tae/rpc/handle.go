@@ -387,10 +387,7 @@ func (h *Handle) HandleCommit(
 	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
 	start := time.Now()
 	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("HandleCommit start : %X",
-			string(meta.GetID()))
-	})
+	var txn txnif.AsyncTxn
 	var releaseF []func()
 	defer func() {
 		for _, f := range releaseF {
@@ -402,15 +399,19 @@ func (h *Handle) HandleCommit(
 		}
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
+				var tnTxnInfo string
+				if txn != nil {
+					tnTxnInfo = txn.String()
+				}
 				logutil.Warn(
 					"SLOW-LOG",
 					zap.Duration("commit-latency", time.Since(start)),
-					zap.String("txn", meta.DebugString()),
+					zap.String("cn-txn", meta.DebugString()),
+					zap.String("tn-txn", tnTxnInfo),
 				)
 			}
 		})
 	}()
-	var txn txnif.AsyncTxn
 	if ok {
 		//Handle precommit-write command for 1PC
 		txn, err = h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
