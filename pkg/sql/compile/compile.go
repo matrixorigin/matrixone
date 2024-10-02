@@ -3011,8 +3011,9 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 	}
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
+	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
 	for _, cn := range c.cnList {
-		scopes := c.newScopeListWithNode(plan2.GetShuffleDop(cn.Mcpu), len(inputSS), cn.Addr)
+		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
 				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
@@ -3613,7 +3614,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
 
-	dop := plan2.GetShuffleDop(ncpu)
+	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
 	shuffleJoins := make([]*Scope, 0, len(c.cnList)*dop)
 	shuffleBuilds := make([]*Scope, 0, len(c.cnList)*dop)
 
