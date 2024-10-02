@@ -115,6 +115,10 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		}
 	}
 
+	if len(usedTbl) > 1 {
+		return moerr.NewUnsupportedDML(ctx.GetContext(), "multi-table update")
+	}
+
 	dmlCtx.updateCol2Expr = make([]map[string]tree.Expr, len(dmlCtx.tableDefs))
 	for alias, columnMap := range usedTbl {
 		idx := dmlCtx.aliasMap[alias]

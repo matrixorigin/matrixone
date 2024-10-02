@@ -29,51 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-/*func (builder *QueryBuilder) getTableDefs(tables tree.TableExprs) ([]*plan.ObjectRef, []*plan.TableDef, error) {
-	objRefs := make([]*plan.ObjectRef, len(tables))
-	tableDefs := make([]*plan.TableDef, len(tables))
-	for i, tbl := range tables {
-		tn, ok := tbl.(*tree.TableName)
-		if !ok {
-			return nil, nil, moerr.NewUnsupportedDML(builder.GetContext(), "insert not into single table")
-		}
-		dbName := string(tn.SchemaName)
-		tblName := string(tn.ObjectName)
-		if len(dbName) == 0 {
-			dbName = builder.compCtx.DefaultDatabase()
-		}
-
-		objRefs[i], tableDefs[i] = builder.compCtx.Resolve(dbName, tblName, nil)
-		if tableDefs[i] == nil {
-			return nil, nil, moerr.NewNoSuchTable(builder.compCtx.GetContext(), dbName, tblName)
-		}
-		if tableDefs[i].TableType == catalog.SystemSourceRel {
-			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from source")
-		} else if tableDefs[i].TableType == catalog.SystemExternalRel {
-			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from external table")
-		} else if tableDefs[i].TableType == catalog.SystemViewRel {
-			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "cannot insert/update/delete from view")
-		} else if tableDefs[i].TableType == catalog.SystemSequenceRel && builder.compCtx.GetContext().Value(defines.BgKey{}) == nil {
-			return nil, nil, moerr.NewInvalidInput(builder.compCtx.GetContext(), "Cannot insert/update/delete from sequence")
-		}
-
-		for _, col := range tableDefs[i].Cols {
-			if types.T(col.Typ.Id).IsArrayRelate() {
-				return nil, nil, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "vector column")
-			}
-		}
-
-		if len(tableDefs[i].Name2ColIndex) == 0 {
-			tableDefs[i].Name2ColIndex = make(map[string]int32)
-			for colIdx, col := range tableDefs[i].Cols {
-				tableDefs[i].Name2ColIndex[col.Name] = int32(colIdx)
-			}
-		}
-	}
-
-	return objRefs, tableDefs, nil
-}*/
-
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (int32, error) {
 	var onDupAction plan.Node_OnDuplicateAction
 	if len(stmt.OnDuplicateUpdate) == 0 {
@@ -81,7 +36,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 	} else if len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil {
 		onDupAction = plan.Node_IGNORE
 	} else {
-		//onDupAction = plan.Node_UPDATE
+		onDupAction = plan.Node_UPDATE
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "on duplicate key update")
 	}
 

@@ -158,7 +158,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 					selectNode.ProjectList[pos] = col.OnUpdate.Expr
 
-					if col != nil && col.Typ.Id == int32(types.T_enum) {
+					if col.Typ.Id == int32(types.T_enum) {
 						selectNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[pos], col.Typ)
 						if err != nil {
 							return 0, err
@@ -174,11 +174,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
-	var lockTargets []*plan.LockTarget
-	dmlNode := &plan.Node{
-		NodeType:    plan.Node_MULTI_UPDATE,
-		BindingTags: []int32{builder.genNewTag()},
-	}
+	var (
+		lockTargets   []*plan.LockTarget
+		updateCtxList []*plan.UpdateCtx
+	)
+
 	selectNodeTag := selectNode.BindingTags[0]
 
 	for i, tableDef := range dmlCtx.tableDefs {
@@ -211,7 +211,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 
-		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
+		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
 			ObjRef:     dmlCtx.objRefs[i],
 			TableDef:   tableDef,
 			InsertCols: insertCols,
@@ -241,8 +241,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		reCheckifNeedLockWholeTable(builder)
 	}
 
-	dmlNode.Children = append(dmlNode.Children, lastNodeID)
-	lastNodeID = builder.appendNode(dmlNode, bindCtx)
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:      plan.Node_MULTI_UPDATE,
+		Children:      []int32{lastNodeID},
+		BindingTags:   []int32{builder.genNewTag()},
+		UpdateCtxList: updateCtxList,
+	}, bindCtx)
 
 	return lastNodeID, err
 }
