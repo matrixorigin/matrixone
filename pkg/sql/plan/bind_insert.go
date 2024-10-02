@@ -250,7 +250,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		}
 		if tableDef.Partition != nil {
 			partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[i], tableDef)
-			updateCtx.PartitionIdx = int32(len(colName2Idx))
+			updateCtx.PartitionIdx = int32(len(selectNode.ProjectList))
 			updateCtx.PartitionTableIds = partitionTableIDs
 			updateCtx.PartitionTableNames = partitionTableNames
 			partitionExpr, err = getRemapParitionExpr(tableDef, selectNodeTag, colName2Idx)
