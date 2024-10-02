@@ -1283,24 +1283,25 @@ func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid 
 	return SnapshotList[accID]
 }
 
-func (sm *SnapshotMeta) GetSnapshotListLocked(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
-	if isMoTable(tid) || isMoDB(tid) || isMoCol(tid) {
-		allSnapshot := make(map[types.TS]struct{}, 0)
-		snapshotList := make([]types.TS, 0)
-		for _, snapshots := range SnapshotList {
-			for _, snapshot := range snapshots {
-				allSnapshot[snapshot] = struct{}{}
-			}
+func (sm *SnapshotMeta) GetSysTableListLocked(SnapshotList map[uint32][]types.TS) []types.TS {
+	allSnapshot := make(map[types.TS]struct{}, 0)
+	snapshotList := make([]types.TS, 0)
+	for _, snapshots := range SnapshotList {
+		for _, snapshot := range snapshots {
+			allSnapshot[snapshot] = struct{}{}
 		}
-
-		for snapshot := range allSnapshot {
-			snapshotList = append(snapshotList, snapshot)
-		}
-		sort.Slice(snapshotList, func(i, j int) bool {
-			return snapshotList[i].LT(&snapshotList[j])
-		})
-		return snapshotList
 	}
+
+	for snapshot := range allSnapshot {
+		snapshotList = append(snapshotList, snapshot)
+	}
+	sort.Slice(snapshotList, func(i, j int) bool {
+		return snapshotList[i].LT(&snapshotList[j])
+	})
+	return snapshotList
+}
+
+func (sm *SnapshotMeta) GetSnapshotListLocked(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
 	if sm.acctIndexes[tid] == nil {
 		return nil
 	}
@@ -1308,29 +1309,56 @@ func (sm *SnapshotMeta) GetSnapshotListLocked(SnapshotList map[uint32][]types.TS
 	return SnapshotList[accID]
 }
 
-func (sm *SnapshotMeta) GetPitrLocked(pitr *PitrInfo, db, tid uint64) types.TS {
+func (sm *SnapshotMeta) GetSnapshotPitrList(SnapshotList map[uint32][]types.TS, pitr *PitrInfo) (map[uint64][]types.TS, map[uint64]*types.TS) {
+	list := make(map[uint64][]types.TS)
+	pitrs := make(map[uint64]*types.TS)
+	sysList := sm.GetSysTableListLocked(SnapshotList)
+	sysPitr := sm.GetSysPitrLocked(pitr)
+	list[catalog2.MO_DATABASE_ID] = sysList
+	list[catalog2.MO_TABLES_ID] = sysList
+	list[catalog2.MO_COLUMNS_ID] = sysList
+	pitrs[catalog2.MO_DATABASE_ID] = sysPitr
+	pitrs[catalog2.MO_TABLES_ID] = sysPitr
+	pitrs[catalog2.MO_COLUMNS_ID] = sysPitr
+
+	for tid, info := range sm.acctIndexes {
+		if catalog2.IsSystemTable(tid) {
+			continue
+		}
+		list[tid] = sm.GetSnapshotList(SnapshotList, tid)
+		pitrs[tid] = sm.GetPitrLocked(pitr, info.dbID, tid)
+	}
+	return list, pitrs
+}
+
+func (sm *SnapshotMeta) GetSysPitrLocked(pitr *PitrInfo) *types.TS {
 	var ts types.TS
 	if !pitr.cluster.IsEmpty() {
 		ts = pitr.cluster
 	}
-	if isMoTable(tid) || isMoDB(tid) || isMoCol(tid) {
-		for _, p := range pitr.account {
-			if ts.IsEmpty() || p.LT(&ts) {
-				ts = p
-			}
+	for _, p := range pitr.account {
+		if ts.IsEmpty() || p.LT(&ts) {
+			ts = p
 		}
-		for _, p := range pitr.database {
-			if ts.IsEmpty() || p.LT(&ts) {
-				ts = p
-			}
+	}
+	for _, p := range pitr.database {
+		if ts.IsEmpty() || p.LT(&ts) {
+			ts = p
 		}
+	}
 
-		for _, p := range pitr.tables {
-			if ts.IsEmpty() || p.LT(&ts) {
-				ts = p
-			}
+	for _, p := range pitr.tables {
+		if ts.IsEmpty() || p.LT(&ts) {
+			ts = p
 		}
-		return ts
+	}
+	return &ts
+}
+
+func (sm *SnapshotMeta) GetPitrLocked(pitr *PitrInfo, db, tid uint64) *types.TS {
+	var ts types.TS
+	if !pitr.cluster.IsEmpty() {
+		ts = pitr.cluster
 	}
 	if sm.acctIndexes[tid] != nil {
 		account := sm.acctIndexes[tid].accountID
@@ -1347,7 +1375,7 @@ func (sm *SnapshotMeta) GetPitrLocked(pitr *PitrInfo, db, tid uint64) types.TS {
 	if !p.IsEmpty() && (ts.IsEmpty() || p.LT(&ts)) {
 		ts = p
 	}
-	return ts
+	return &ts
 
 }
 
@@ -1401,9 +1429,9 @@ func (sm *SnapshotMeta) String() string {
 		len(sm.tables), len(sm.acctIndexes), len(sm.objects))
 }
 
-func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr types.TS) bool {
+func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr *types.TS) bool {
 	if !pitr.IsEmpty() {
-		if table.deleteAt.GT(&pitr) {
+		if table.deleteAt.GT(pitr) {
 			return true
 		}
 	}

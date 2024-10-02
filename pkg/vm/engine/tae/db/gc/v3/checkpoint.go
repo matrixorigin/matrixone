@@ -724,7 +724,11 @@ func (c *checkpointCleaner) tryGC(location *objectio.Location, gckp *checkpoint.
 		logutil.Errorf("[DiskCleaner] GetPitrs failed: %v", err.Error())
 		return nil
 	}
-
+	snapshots, err = c.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mPool)
+	if err != nil {
+		logutil.Errorf("[DiskCleaner] GetSnapshot failed: %v", err.Error())
+		return nil
+	}
 	gc, snapshotList, err := c.softGC(location, gckp, snapshots, pitrs)
 	if err != nil {
 		logutil.Errorf("[DiskCleaner] softGC failed: %v", err.Error())

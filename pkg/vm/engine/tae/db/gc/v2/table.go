@@ -152,7 +152,7 @@ func (t *GCTable) objectsComparedAndDeleteLocked(
 			}
 			continue
 		}
-		if objectEntry == nil && entry.commitTS.LT(&ts) && !isSnapshotRefers(entry, tsList, pList, name) {
+		if objectEntry == nil && entry.commitTS.LT(&ts) && !isSnapshotRefers(entry, tsList, *pList, name) {
 			gc = append(gc, name)
 			delete(t.objects, name)
 		}

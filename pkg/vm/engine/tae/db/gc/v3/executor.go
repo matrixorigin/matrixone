@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-type FilterFn func(context.Context, *bitmap.Bitmap, *batch.Batch, *mpool.MPool) error
+type FilterFn func(context.Context, *bitmap.Bitmap, *batch.Batch, bool, *mpool.MPool) error
 type SourerFn func(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)
 type SinkerFn func(context.Context, *batch.Batch) error
 
@@ -91,6 +91,7 @@ func (exec *GCExecutor) doFilter(
 	ctx context.Context,
 	sourcer SourerFn,
 	filter FilterFn,
+	buildMap bool,
 	cannotGCSinker SinkerFn,
 	canGCSinker SinkerFn,
 ) error {
@@ -110,10 +111,9 @@ func (exec *GCExecutor) doFilter(
 		//    bit 0 means the row cannot be GC'ed
 		exec.bm.Clear()
 		exec.bm.TryExpandWithSize(bat.RowCount())
-		if err := filter(ctx, &exec.bm, bat, exec.mp); err != nil {
+		if err := filter(ctx, &exec.bm, bat, buildMap, exec.mp); err != nil {
 			return err
 		}
-
 		// 3. sink the batch to the corresponding sinker
 		cannotGCBat := exec.getBuffer()
 		defer exec.putBuffer(cannotGCBat)
@@ -158,6 +158,7 @@ func (exec *GCExecutor) Run(
 		ctx,
 		sourcer,
 		corseFilter,
+		true,
 		cannotGCSinker.Write,
 		canGCSinker.Write,
 	); err != nil {
@@ -186,6 +187,7 @@ func (exec *GCExecutor) Run(
 		ctx,
 		fineSourcer,
 		fineFilter,
+		false,
 		cannotGCSinker.Write,
 		finalCanGCSinker,
 	); err != nil {

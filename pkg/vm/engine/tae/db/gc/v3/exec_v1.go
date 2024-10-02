@@ -16,6 +16,8 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -33,6 +35,8 @@ func MakeBloomfilterCoarseFilter(
 	probability float64,
 	buffer containers.IBatchBuffer,
 	location *objectio.Location,
+	ts *types.TS,
+	objects map[string]*ObjectEntry,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (
@@ -61,14 +65,46 @@ func MakeBloomfilterCoarseFilter(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
 		bat *batch.Batch,
+		buildMap bool,
 		mp *mpool.MPool,
 	) (err error) {
 		logutil.Infof("bloomfilter coarse filter is %d", bat.Vecs[0].Length())
+		creates := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+		deletes := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
+		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
 		bf.Test(
 			bat.Vecs[0],
 			func(exists bool, i int) {
 				if !exists {
 					bm.Add(uint64(i))
+					if !buildMap {
+						return
+					}
+					name := bat.Vecs[0].GetStringAt(i)
+					tid := tids[i]
+					createTs := creates[i]
+					dropTs := deletes[i]
+					if !createTs.LT(ts) || !dropTs.LT(ts) {
+						//logutil.Infof("name is %s, createTs is %s, dropTs is %s ts %s, i is %d", name, createTs.ToString(), dropTs.ToString(), ts.ToString(), i)
+						return
+					}
+					if dropTs.IsEmpty() && objects[name] == nil {
+						object := &ObjectEntry{
+							createTS: createTs,
+							dropTS:   dropTs,
+							db:       dbs[i],
+							table:    tid,
+						}
+						objects[name] = object
+						logutil.Infof("name is %s, createTs is %s, dropTs is %s i is %d", name, objects[name].createTS.ToString(), objects[name].dropTS.ToString(), i)
+						return
+					}
+					if objects[name] != nil {
+						objects[name].dropTS = dropTs
+						logutil.Infof("name is %s, createTs is %s, dropTs is %s i is %d", name, objects[name].createTS.ToString(), objects[name].dropTS.ToString(), i)
+						return
+					}
 				}
 			},
 		)

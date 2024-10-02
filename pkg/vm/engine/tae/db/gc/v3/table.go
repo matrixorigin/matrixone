@@ -48,7 +48,6 @@ type ObjectEntry struct {
 	dropTS   types.TS
 	db       uint64
 	table    uint64
-	rows     []uint32
 }
 
 type TableOption func(*GCTable)
@@ -179,86 +178,57 @@ func (t *GCTable) SoftGC(
 		tye,
 	)
 	defer filterBuffer.Close(t.mp)
+	objects := make(map[string]*ObjectEntry)
 	constructCoreseFilter, err := MakeBloomfilterCoarseFilter(ctx,
-		10000000, 0.00001, filterBuffer, location, t.mp, t.fs)
+		10000000, 0.00001, filterBuffer, location, &ts, objects, t.mp, t.fs)
 
 	snapList := make(map[uint32][]types.TS)
+	for accountId, snapshot := range snapShotList {
+		logutil.Infof("accountId: %d, snapshot: %v", accountId, snapshot.GetDownstreamVector())
+		snapList[accountId] = vector.MustFixedColWithTypeCheck[types.TS](snapshot.GetDownstreamVector())
+	}
+	tableSnapshotList, pitrList := meta.GetSnapshotPitrList(snapList, pitrs)
 	constructFineFilter := func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
 		bat *batch.Batch,
+		_ bool,
 		mp *mpool.MPool,
 	) error {
-		logutil.Infof("constructFineFilter bat is %d", bat.Vecs[0].Length())
-		objects := make(map[string]*ObjectEntry)
-		for accountId, snapshot := range snapShotList {
-			snapList[accountId] = vector.MustFixedColWithTypeCheck[types.TS](snapshot.GetDownstreamVector())
-		}
 		creates := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
 		deletes := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
-		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
 		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
+		bmAdd := func(name string, tsList []types.TS, pitr, createTS, dropTS *types.TS, row int) {
+			if tsList == nil && (pitr == nil || pitr.IsEmpty()) {
+				bm.Add(uint64(row))
+				return
+			}
+			if !isSnapshotRefers(createTS, dropTS, tsList, pitr, name) {
+				bm.Add(uint64(row))
+			}
+		}
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			name := bat.Vecs[0].GetStringAt(i)
 			tid := tids[i]
 			createTs := creates[i]
 			dropTs := deletes[i]
 
-			if dropTs.IsEmpty() && objects[name] == nil {
-				object := &ObjectEntry{
-					createTS: createTs,
-					dropTS:   dropTs,
-					db:       dbs[i],
-					table:    tid,
-					rows:     make([]uint32, 0),
-				}
-				object.rows = append(object.rows, uint32(i))
-				objects[name] = object
+			tsList := tableSnapshotList[tid]
+			pitr := pitrList[tid]
+
+			entry := objects[name]
+			if entry != nil {
+				bmAdd(name, tsList, pitr, &entry.createTS, &entry.dropTS, i)
 				continue
 			}
-			if objects[name] != nil {
-				objects[name].dropTS = dropTs
-				objects[name].rows = append(objects[name].rows, uint32(i))
+			if !createTs.LT(&ts) ||
+				!dropTs.LT(&ts) {
 				continue
 			}
-			logutil.Infof("namessss is %v", name)
-			tsList := meta.GetSnapshotListLocked(snapList, tid)
-			pitr := meta.GetPitrLocked(pitrs, dbs[i], tid)
-			if tsList == nil && pitr.IsEmpty() {
-				if createTs.LT(&ts) && dropTs.LT(&ts) {
-					bm.Add(uint64(i))
-				}
-				continue
+			if dropTs.IsEmpty() {
+				panic("dropTs is empty")
 			}
-			if createTs.LT(&ts) &&
-				dropTs.LT(&ts) &&
-				!isSnapshotRefers(&createTs, &dropTs, tsList, &pitr, name) {
-				bm.Add(uint64(i))
-			}
-		}
-		logutil.Infof("objects is %d", len(objects))
-		for name, object := range objects {
-			if object.dropTS.IsEmpty() {
-				logutil.Infof("object dropts is %v", name)
-				continue
-			}
-			tsList := meta.GetSnapshotListLocked(snapList, object.table)
-			pitr := meta.GetPitrLocked(pitrs, object.db, object.table)
-			if tsList == nil && pitr.IsEmpty() {
-				if object.createTS.LT(&ts) && object.dropTS.LT(&ts) {
-					for _, row := range objects[name].rows {
-						bm.Add(uint64(row))
-					}
-				}
-				continue
-			}
-			if object.createTS.LT(&ts) &&
-				object.dropTS.LT(&ts) &&
-				!isSnapshotRefers(&object.createTS, &object.dropTS, tsList, &pitr, name) {
-				for _, row := range objects[name].rows {
-					bm.Add(uint64(row))
-				}
-			}
+			bmAdd(name, tsList, pitr, &createTs, &dropTs, i)
 		}
 		return nil
 	}
@@ -274,7 +244,6 @@ func (t *GCTable) SoftGC(
 		for name := range names {
 			gcFiles = append(gcFiles, name)
 		}
-		logutil.Infof("SoftGC1111: %d, files %d", bat.Vecs[0].Length(), len(gcFiles))
 		return nil
 	}
 
@@ -288,6 +257,7 @@ func (t *GCTable) SoftGC(
 	if err != nil {
 		return nil, nil, err
 	}
+	objects = nil
 	err = t.doneAllBatches(ctx, &t.tsRange.start, &t.tsRange.end, gcStats)
 	if err != nil {
 		return nil, nil, err
@@ -652,9 +622,7 @@ func (t *GCTable) Compare(table *GCTable) (map[string]*ObjectEntry, map[string]*
 					dropTS:   dropTs,
 					db:       dbs[i],
 					table:    tid,
-					rows:     make([]uint32, 0),
 				}
-				object.rows = append(object.rows, uint32(i))
 				objects[name] = object
 			}
 		}
