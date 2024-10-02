@@ -474,8 +474,8 @@ func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 	if num >= ncpu*4 {
 		num = ncpu * 4
 	}
-	if num > 128 {
-		num = 128
+	if num > 64 {
+		num = 64
 	}
 	return num
 }
