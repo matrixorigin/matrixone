@@ -41,7 +41,7 @@ func (update *MultiUpdate) insert_main_table(
 				continue
 			}
 			bat.Vecs[len(attrs)] = vector.NewVec(plan.MakeTypeByPlan2Type(col.Typ))
-			attrs = append(attrs, col.Name)
+			attrs = append(attrs, col.GetOriginCaseName())
 		}
 		bat.SetAttributes(attrs)
 		ctr.insertBuf[tableIndex] = bat
