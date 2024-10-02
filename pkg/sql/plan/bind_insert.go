@@ -29,14 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (int32, error) {
+func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
 	var onDupAction plan.Node_OnDuplicateAction
 	if len(stmt.OnDuplicateUpdate) == 0 {
 		onDupAction = plan.Node_ERROR
 	} else if len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil {
 		onDupAction = plan.Node_IGNORE
 	} else {
-		onDupAction = plan.Node_UPDATE
+		//onDupAction = plan.Node_UPDATE
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "on duplicate key update")
 	}
 
@@ -68,7 +68,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 		}()
 	}
 
-	lastNodeID, colName2Idx, err := builder.initInsertStmt(ctx, stmt, dmlCtx.objRefs[0], dmlCtx.tableDefs[0])
+	lastNodeID, colName2Idx, err := builder.initInsertStmt(bindCtx, stmt, dmlCtx.objRefs[0], dmlCtx.tableDefs[0])
 	if err != nil {
 		return 0, err
 	}
@@ -99,8 +99,8 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				TableDef:     DeepCopyTableDef(tableDef, true),
 				ObjRef:       dmlCtx.objRefs[i],
 				BindingTags:  []int32{scanTag},
-				ScanSnapshot: ctx.snapshot,
-			}, ctx)
+				ScanSnapshot: bindCtx.snapshot,
+			}, bindCtx)
 
 			pkTyp := tableDef.Cols[pkPos].Typ
 			leftExpr := &plan.Expr{
@@ -135,7 +135,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				OnList:            []*plan.Expr{joinCond},
 				OnDuplicateAction: onDupAction,
 				DedupColName:      pkName,
-			}, ctx)
+			}, bindCtx)
 		}
 
 		idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
@@ -146,7 +146,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				continue
 			}
 
-			idxObjRefs[i][j], idxTableDefs[i][j] = builder.compCtx.Resolve(dmlCtx.objRefs[i].SchemaName, idxDef.IndexTableName, nil)
+			idxObjRefs[i][j], idxTableDefs[i][j] = builder.compCtx.Resolve(dmlCtx.objRefs[i].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
 			colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTablePrimaryColName] = pkPos
 
 			argsLen := len(idxDef.Parts)
@@ -190,9 +190,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				TableDef:     idxTableDefs[i][j],
 				ObjRef:       idxObjRefs[i][j],
 				BindingTags:  []int32{idxTag},
-				ScanSnapshot: ctx.snapshot,
+				ScanSnapshot: bindCtx.snapshot,
 			}
-			idxTableNodeID := builder.appendNode(idxScanNode, ctx)
+			idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
 
 			idxPkPos := idxTableDefs[i][j].Name2ColIndex[catalog.IndexTableIndexColName]
 			pkTyp := idxTableDefs[i][j].Cols[idxPkPos].Typ
@@ -229,7 +229,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				OnList:            []*plan.Expr{joinCond},
 				OnDuplicateAction: onDupAction,
 				DedupColName:      catalog.IndexTableIndexColName,
-			}, ctx)
+			}, bindCtx)
 		}
 	}
 
@@ -277,7 +277,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 				Children:    []int32{lastNodeID},
 				BindingTags: []int32{selectNodeTag},
 				ProjectList: projectList,
-			}, ctx)
+			}, bindCtx)
 			dmlNode.BindingTags = append(dmlNode.BindingTags, selectNodeTag)
 		}
 
@@ -373,13 +373,13 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, ctx *BindContext) (in
 			TableDef:    dmlCtx.tableDefs[0],
 			BindingTags: []int32{builder.genNewTag(), selectNodeTag},
 			LockTargets: lockTargets,
-		}, ctx)
+		}, bindCtx)
 
 		reCheckifNeedLockWholeTable(builder)
 	}
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
-	lastNodeID = builder.appendNode(dmlNode, ctx)
+	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
 }
