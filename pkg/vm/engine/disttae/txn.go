@@ -1101,12 +1101,18 @@ func (txn *Transaction) compactionBlksLocked() error {
 
 // TODO::remove it after workspace refactor.
 func (txn *Transaction) getUncommittedS3Tombstone(
+	tid uint64,
 	appendTo func(stats *objectio.ObjectStats),
 ) (err error) {
-	txn.cn_flushed_s3_tombstone_object_stats_list.RLock()
-	defer txn.cn_flushed_s3_tombstone_object_stats_list.RUnlock()
+	txn.tombstoneObjs.RLock()
+	defer txn.tombstoneObjs.RUnlock()
 
-	for _, stats := range txn.cn_flushed_s3_tombstone_object_stats_list.data {
+	tombstoneObjs, ok := txn.tombstoneObjs.data[tid]
+	if !ok {
+		return nil
+	}
+
+	for _, stats := range tombstoneObjs {
 		appendTo(&stats)
 	}
 
@@ -1267,7 +1273,7 @@ func (txn *Transaction) delTransaction() {
 	txn.tableOps = nil
 	txn.databaseMap = nil
 	txn.deletedDatabaseMap = nil
-	txn.cn_flushed_s3_tombstone_object_stats_list.data = nil
+	txn.tombstoneObjs.data = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
@@ -1398,6 +1404,9 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		batchSelectList: make(map[*batch.Batch][]int64),
 		toFreeBatches:   make(map[tableKey][]*batch.Batch),
 	}
+
+	objs := make(map[uint64][]objectio.ObjectStats)
+	ws.tombstoneObjs.data = objs
 
 	ws.readOnly.Store(true)
 

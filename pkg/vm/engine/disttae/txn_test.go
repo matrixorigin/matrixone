@@ -18,9 +18,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_GetUncommittedS3Tombstone(t *testing.T) {
@@ -32,21 +33,23 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 		statsList = append(statsList, *stats)
 	}
 
+	var tid uint64
 	txn := &Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: struct {
+		tombstoneObjs: struct {
 			sync.RWMutex
-			data []objectio.ObjectStats
-		}{data: []objectio.ObjectStats{statsList[0], statsList[1], statsList[2]}},
+			data map[uint64][]objectio.ObjectStats
+		}{data: make(map[uint64][]objectio.ObjectStats)},
 	}
+	txn.tombstoneObjs.data[tid] = []objectio.ObjectStats{statsList[0], statsList[1], statsList[2]}
 
 	objectSlice := objectio.ObjectStatsSlice{}
 
-	require.NoError(t, txn.getUncommittedS3Tombstone(func(stats *objectio.ObjectStats) {
+	require.NoError(t, txn.getUncommittedS3Tombstone(tid, func(stats *objectio.ObjectStats) {
 		objectSlice.Append(stats[:])
 	}))
 	require.Equal(t, len(statsList), objectSlice.Len())
 
-	for i, ss := range txn.cn_flushed_s3_tombstone_object_stats_list.data {
+	for i, ss := range txn.tombstoneObjs.data[tid] {
 		require.Equal(t, ss[:], objectSlice.Get(i)[:])
 	}
 

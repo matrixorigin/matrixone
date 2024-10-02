@@ -786,11 +786,16 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	leftRows = offsets
 
-	s3FlushedDeletes := &ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
+	s3FlushedDeletes := &ls.table.getTxn().tombstoneObjs
 	s3FlushedDeletes.RWMutex.Lock()
 	defer s3FlushedDeletes.RWMutex.Unlock()
 
-	if len(s3FlushedDeletes.data) == 0 || ls.pState.BlockPersisted(bid) {
+	tombstoneObjs, ok := s3FlushedDeletes.data[ls.table.tableId]
+	if !ok {
+		return
+	}
+
+	if ls.pState.BlockPersisted(bid) {
 		return
 	}
 
@@ -801,12 +806,12 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	var curr int
 	getTombstone := func() (*objectio.ObjectStats, error) {
-		if curr >= len(s3FlushedDeletes.data) {
+		if curr >= len(tombstoneObjs) {
 			return nil, nil
 		}
 		i := curr
 		curr++
-		return &s3FlushedDeletes.data[i], nil
+		return &tombstoneObjs[i], nil
 	}
 
 	if err = blockio.GetTombstonesByBlockId(
@@ -981,8 +986,8 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
 
-	ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RLock()
-	defer ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RUnlock()
+	ls.table.getTxn().tombstoneObjs.RLock()
+	defer ls.table.getTxn().tombstoneObjs.RUnlock()
 
 	ls.rc.batchPrefetchCursor = end
 }

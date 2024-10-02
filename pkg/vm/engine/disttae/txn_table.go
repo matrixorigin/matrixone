@@ -510,6 +510,7 @@ func (tbl *txnTable) CollectTombstones(
 
 		//collect uncommitted persisted tombstones.
 		if err := tbl.getTxn().getUncommittedS3Tombstone(
+			tbl.tableId,
 			func(stats *objectio.ObjectStats) {
 				tombstone.AppendFiles(*stats)
 			}); err != nil {
@@ -1486,7 +1487,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			return err
 		}
 
-		tbl.getTxn().StashFlushedTombstones(stats)
+		tbl.getTxn().StashFlushedTombstones(tbl.tableId, stats)
 
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
