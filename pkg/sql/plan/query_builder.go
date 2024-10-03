@@ -2705,6 +2705,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				projectList = append(projectList, partitionExpr)
 				newBindingTag := builder.genNewTag()
 				if binding, ok := ctx.bindingByTable[tableDef.Name]; ok {
+					//@xxx not a good choice
 					binding.tag = newBindingTag
 				}
 				nodeID = builder.appendNode(&plan.Node{
