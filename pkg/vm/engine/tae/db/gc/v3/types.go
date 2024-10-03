@@ -170,7 +170,7 @@ type Cleaner interface {
 	SetTid(tid uint64)
 	EnableGCForTest()
 	DisableGCForTest()
-	IsEnableGC() bool
+	GCEnabled() bool
 	SetCheckGC(enable bool)
 	GetMPool() *mpool.MPool
 	GetSnapshots() (map[uint32]containers.Vector, error)

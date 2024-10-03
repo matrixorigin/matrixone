@@ -94,8 +94,7 @@ type checkpointCleaner struct {
 	checkGC bool
 
 	option struct {
-		sync.RWMutex
-		enableGC bool
+		gcEnabled atomic.Bool
 	}
 
 	snapshotMeta *logtail.SnapshotMeta
@@ -122,7 +121,7 @@ func NewCheckpointCleaner(
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.minMergeCount.count = MinMergeCount
 	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
-	cleaner.option.enableGC = true
+	cleaner.option.gcEnabled.Store(true)
 	cleaner.mPool = common.CheckpointAllocator
 	cleaner.checker.extras = make(map[string]func(item any) bool)
 	return cleaner
@@ -142,25 +141,19 @@ func (c *checkpointCleaner) SetTid(tid uint64) {
 }
 
 func (c *checkpointCleaner) EnableGCForTest() {
-	c.option.Lock()
-	defer c.option.Unlock()
-	c.option.enableGC = true
+	c.option.gcEnabled.Store(true)
 }
 
 func (c *checkpointCleaner) DisableGCForTest() {
-	c.option.Lock()
-	defer c.option.Unlock()
-	c.option.enableGC = false
+	c.option.gcEnabled.Store(false)
 }
 
-func (c *checkpointCleaner) isEnableGC() bool {
-	c.option.Lock()
-	defer c.option.Unlock()
-	return c.option.enableGC
+func (c *checkpointCleaner) GCEnabled() bool {
+	return c.option.gcEnabled.Load()
 }
 
 func (c *checkpointCleaner) IsEnableGC() bool {
-	return c.isEnableGC()
+	return c.GCEnabled()
 }
 
 func (c *checkpointCleaner) SetCheckGC(enable bool) {
@@ -698,18 +691,13 @@ func (c *checkpointCleaner) GetPITRs() (*logtail.PitrInfo, error) {
 }
 
 func (c *checkpointCleaner) TryGC() error {
-	maxGlobalCKP := c.ckpClient.MaxGlobalCheckpoint()
-	if maxGlobalCKP != nil {
-		location := maxGlobalCKP.GetLocation()
-		err := c.tryGC(&location, maxGlobalCKP)
-		if err != nil {
-			return err
-		}
+	if maxGlobalCKP := c.ckpClient.MaxGlobalCheckpoint(); maxGlobalCKP != nil {
+		return c.tryGCAgainstGlobalCheckpoint(maxGlobalCKP)
 	}
 	return nil
 }
 
-func (c *checkpointCleaner) tryGC(location *objectio.Location, gckp *checkpoint.CheckpointEntry) error {
+func (c *checkpointCleaner) tryGCAgainstGlobalCheckpoint(gckp *checkpoint.CheckpointEntry) error {
 	if !c.delWorker.Start() {
 		return nil
 	}
@@ -717,7 +705,7 @@ func (c *checkpointCleaner) tryGC(location *objectio.Location, gckp *checkpoint.
 	var snapshots map[uint32]containers.Vector
 	defer func() {
 		if err != nil {
-			logutil.Errorf("[DiskCleaner] tryGC failed: %v", err.Error())
+			logutil.Errorf("[DiskCleaner] tryGCAgainstGlobalCheckpoint failed: %v", err.Error())
 			c.delWorker.Idle()
 		}
 		logtail.CloseSnapshotList(snapshots)
@@ -733,12 +721,12 @@ func (c *checkpointCleaner) tryGC(location *objectio.Location, gckp *checkpoint.
 		return nil
 	}
 	accountSnapshots := TransformToTSList(snapshots)
-	gc, err := c.softGC(location, gckp, accountSnapshots, pitrs)
+	gc, err := c.softGCAgainstGlobalCheckpoint(gckp, accountSnapshots, pitrs)
 	if err != nil {
-		logutil.Errorf("[DiskCleaner] softGC failed: %v", err.Error())
+		logutil.Errorf("[DiskCleaner] softGCAgainstGlobalCheckpoint failed: %v", err.Error())
 		return err
 	}
-	// Delete files after softGC
+	// Delete files after softGCAgainstGlobalCheckpoint
 	// TODO:Requires Physical Removal Policy
 	err = c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
 	if err != nil {
@@ -755,8 +743,7 @@ func (c *checkpointCleaner) tryGC(location *objectio.Location, gckp *checkpoint.
 	return nil
 }
 
-func (c *checkpointCleaner) softGC(
-	location *objectio.Location,
+func (c *checkpointCleaner) softGCAgainstGlobalCheckpoint(
 	gckp *checkpoint.CheckpointEntry,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
@@ -766,7 +753,7 @@ func (c *checkpointCleaner) softGC(
 	now := time.Now()
 	var softCost, mergeCost time.Duration
 	defer func() {
-		logutil.Info("[DiskCleaner] softGC cost",
+		logutil.Info("[DiskCleaner] softGCAgainstGlobalCheckpoint cost",
 			zap.String("soft-gc cost", softCost.String()),
 			zap.String("merge-table cost", mergeCost.String()))
 	}()
@@ -782,6 +769,7 @@ func (c *checkpointCleaner) softGC(
 		table.Close()
 		c.inputs.tables[i] = nil
 	}
+	location := gckp.GetLocation()
 	gc, err := mergeTable.SoftGC(
 		c.ctx,
 		location,
@@ -791,7 +779,7 @@ func (c *checkpointCleaner) softGC(
 		c.snapshotMeta,
 	)
 	if err != nil {
-		logutil.Errorf("softGC failed: %v", err.Error())
+		logutil.Errorf("softGCAgainstGlobalCheckpoint failed: %v", err.Error())
 		return nil, err
 	}
 	softCost = time.Since(now)
@@ -882,7 +870,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	logutil.Infof("merge table is %d, stats is %v", len(mergeTable.files.stats), mergeTable.files.stats[0].ObjectName().String())
 	if _, err = mergeTable.SoftGC(
 		c.ctx,
-		&location,
+		location,
 		gCkp.GetEnd(),
 		accoutSnapshots,
 		pitr,
@@ -895,7 +883,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	//logutil.Infof("debug table is %d, stats is %v", len(debugTable.files.stats), debugTable.files.stats[0].ObjectName().String())
 	if _, err = debugTable.SoftGC(
 		c.ctx,
-		&location,
+		location,
 		gCkp.GetEnd(),
 		accoutSnapshots,
 		pitr,
@@ -919,8 +907,7 @@ func (c *checkpointCleaner) CheckGC() error {
 }
 
 func (c *checkpointCleaner) Process() {
-	var ts types.TS
-	if !c.isEnableGC() {
+	if !c.GCEnabled() {
 		return
 	}
 
@@ -931,33 +918,43 @@ func (c *checkpointCleaner) Process() {
 			zap.Duration("duration", time.Since(now)),
 		)
 	}()
-	maxConsumed := c.maxConsumed.Load()
-	if maxConsumed != nil {
-		ts = maxConsumed.GetEnd()
+
+	// 1. get the max consumed timestamp water level
+	var tsWaterLevel types.TS
+	if maxConsumed := c.maxConsumed.Load(); maxConsumed != nil {
+		tsWaterLevel = maxConsumed.GetEnd()
 	}
 
-	checkpoints := c.ckpClient.ICKPSeekLT(ts, 10)
-
+	// 2. get up to 10 incremental checkpoints starting from the tsWaterLevel
+	checkpoints := c.ckpClient.ICKPSeekLT(tsWaterLevel, 10)
+	// if there is no incremental checkpoint, quickly return
 	if len(checkpoints) == 0 {
 		logutil.Info(
 			"DiskCleaner-Process-NoCheckpoint",
-			zap.String("ts", ts.ToString()),
+			zap.String("water-level", tsWaterLevel.ToString()),
 		)
 		return
 	}
-	candidates := make([]*checkpoint.CheckpointEntry, 0)
+
+	// 3. filter out the incremental checkpoints that do not meet the requirements
+	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
 	for _, ckp := range checkpoints {
+		// TODO:
+		// 1. break or continue?
+		// 2. use cases reveiw!
 		if !c.checkExtras(ckp) {
 			break
 		}
 		candidates = append(candidates, ckp)
 	}
-
 	if len(candidates) == 0 {
 		return
 	}
-	var input *GCTable
-	var err error
+
+	var (
+		input *GCTable
+		err   error
+	)
 	if input, err = c.createNewInput(candidates); err != nil {
 		logutil.Error(
 			"DiskCleaner-Process-CreateNewInput-Error",
@@ -970,15 +967,17 @@ func (c *checkpointCleaner) Process() {
 	c.updateInputs(input)
 	c.updateMaxConsumed(candidates[len(candidates)-1])
 
-	var compareTS types.TS
-	maxCompared := c.maxCompared.Load()
-	if maxCompared != nil {
-		compareTS = maxCompared.GetEnd()
-	}
-	maxGlobalCKP := c.ckpClient.MaxGlobalCheckpoint()
-	if maxGlobalCKP == nil {
+	var maxGlobalCKP *checkpoint.CheckpointEntry
+
+	if maxGlobalCKP = c.ckpClient.MaxGlobalCheckpoint(); maxGlobalCKP == nil {
 		return
 	}
+
+	var compareTS types.TS
+	if maxCompared := c.maxCompared.Load(); maxCompared != nil {
+		compareTS = maxCompared.GetEnd()
+	}
+
 	maxEnd := maxGlobalCKP.GetEnd()
 	if compareTS.LT(&maxEnd) {
 		logutil.Info(
@@ -986,9 +985,7 @@ func (c *checkpointCleaner) Process() {
 			zap.String("max-global :", maxGlobalCKP.String()),
 			zap.String("ts", compareTS.ToString()),
 		)
-		location := maxGlobalCKP.GetLocation()
-		err = c.tryGC(&location, maxGlobalCKP)
-		if err != nil {
+		if err = c.tryGCAgainstGlobalCheckpoint(maxGlobalCKP); err != nil {
 			logutil.Error(
 				"DiskCleaner-Process-TryGC-Error",
 				zap.Error(err),
@@ -997,8 +994,7 @@ func (c *checkpointCleaner) Process() {
 			return
 		}
 	}
-	err = c.mergeGCFile()
-	if err != nil {
+	if err = c.mergeGCFile(); err != nil {
 		// TODO: Error handle
 		return
 	}

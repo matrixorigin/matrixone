@@ -94,8 +94,7 @@ type checkpointCleaner struct {
 	checkGC bool
 
 	option struct {
-		sync.RWMutex
-		enableGC bool
+		gcEnabled atomic.Bool
 	}
 
 	snapshotMeta *logtail.SnapshotMeta
@@ -122,7 +121,7 @@ func NewCheckpointCleaner(
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.minMergeCount.count = MinMergeCount
 	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
-	cleaner.option.enableGC = true
+	cleaner.option.gcEnabled.Store(true)
 	cleaner.mPool = common.DebugAllocator
 	cleaner.checker.extras = make(map[string]func(item any) bool)
 	return cleaner
@@ -142,25 +141,15 @@ func (c *checkpointCleaner) SetTid(tid uint64) {
 }
 
 func (c *checkpointCleaner) EnableGCForTest() {
-	c.option.Lock()
-	defer c.option.Unlock()
-	c.option.enableGC = true
+	c.option.gcEnabled.Store(true)
 }
 
 func (c *checkpointCleaner) DisableGCForTest() {
-	c.option.Lock()
-	defer c.option.Unlock()
-	c.option.enableGC = false
+	c.option.gcEnabled.Store(false)
 }
 
-func (c *checkpointCleaner) isEnableGC() bool {
-	c.option.Lock()
-	defer c.option.Unlock()
-	return c.option.enableGC
-}
-
-func (c *checkpointCleaner) IsEnableGC() bool {
-	return c.isEnableGC()
+func (c *checkpointCleaner) GCEnabled() bool {
+	return c.option.gcEnabled.Load()
 }
 
 func (c *checkpointCleaner) SetCheckGC(enable bool) {
@@ -890,7 +879,7 @@ func (c *checkpointCleaner) CheckGC() error {
 
 func (c *checkpointCleaner) Process() {
 	var ts types.TS
-	if !c.isEnableGC() {
+	if !c.GCEnabled() {
 		return
 	}
 

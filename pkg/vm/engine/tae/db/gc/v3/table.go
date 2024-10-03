@@ -167,69 +167,37 @@ func (t *GCTable) filterGCProcessor(
 // SoftGC is to remove objectentry that can be deleted from GCTable
 func (t *GCTable) SoftGC(
 	ctx context.Context,
-	location *objectio.Location,
+	location objectio.Location,
 	ts types.TS,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
 	meta *logtail.SnapshotMeta,
 ) ([]string, error) {
-	attr, tye := logtail.GetDataSchema()
-	filterBuffer := containers.NewOneSchemaBatchBuffer(
-		mpool.MB*32,
-		attr,
-		tye,
-	)
-	defer filterBuffer.Close(t.mp)
 
-	objects := make(map[string]*ObjectEntry)
-	coarseFilter, err := MakeBloomfilterCoarseFilter(
-		ctx,
-		10000000,
-		0.00001,
-		filterBuffer,
-		location,
+	job := NewCheckpointBasedGCJob(
+		t.metaDir,
 		&ts,
-		&objects,
+		&t.tsRange.start,
+		&t.tsRange.end,
+		location,
+		t.files.stats,
+		pitrs,
+		accountSnapshots,
+		meta,
+		t.buffer,
+		false,
 		t.mp,
 		t.fs,
 	)
-	if err != nil {
+	defer job.Close()
+
+	if err := job.Execute(ctx); err != nil {
 		return nil, err
 	}
 
-	fineFilter, err := MakeSnapshotAndPitrFineFilter(
-		&ts,
-		accountSnapshots,
-		pitrs,
-		meta,
-		objects,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	gcFiles := make([]string, 0, 20)
-	finalGCSinker, err := MakeFinalCanGCSinker(&gcFiles)
-
-	executor := NewGCExecutor(t.buffer, true, t.mp, t.fs)
-	gcStats, err := executor.Run(
-		ctx,
-		t.LoadBatchData,
-		coarseFilter,
-		fineFilter,
-		finalGCSinker,
-	)
-	if err != nil {
-		return nil, err
-	}
-	objects = nil
-	err = t.doneAllBatches(ctx, &t.tsRange.start, &t.tsRange.end, gcStats)
-	if err != nil {
-		return nil, err
-	}
-	t.files.stats = make([]objectio.ObjectStats, 0, len(gcStats))
-	t.files.stats = append(t.files.stats, gcStats...)
-	return gcFiles, err
+	var gcFiles []string
+	gcFiles, t.files.stats = job.Result()
+	return gcFiles, nil
 }
 
 func (t *GCTable) Process(
