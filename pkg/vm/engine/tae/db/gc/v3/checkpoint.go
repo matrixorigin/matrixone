@@ -459,7 +459,8 @@ func (c *checkpointCleaner) mergeSnapshotFile(metas map[string]struct{}) error {
 
 func (c *checkpointCleaner) upgradeGCFiles(
 	metas map[string]struct{},
-	checker func(string) bool,
+	window *GCWindow,
+	checker func(string, *GCWindow) bool,
 ) error {
 	// get the scan watermark
 	scanWatermark := c.GetScanWatermark()
@@ -480,7 +481,7 @@ func (c *checkpointCleaner) upgradeGCFiles(
 	}()
 	deleteFiles := make([]string, 0)
 	for name := range metas {
-		if checker(name) {
+		if checker(name, window) {
 			deleteFiles = append(deleteFiles, GCMetaDir+name)
 			delete(c.metaFiles, name)
 		}
@@ -688,7 +689,31 @@ func (c *checkpointCleaner) GetPITRs() (*logtail.PitrInfo, error) {
 
 func (c *checkpointCleaner) TryGC() error {
 	if maxGlobalCKP := c.checkpointCli.MaxGlobalCheckpoint(); maxGlobalCKP != nil {
-		return c.tryGCAgainstGlobalCheckpoint(maxGlobalCKP)
+		if err := c.tryGCAgainstGlobalCheckpoint(
+			maxGlobalCKP,
+		); err != nil {
+			logutil.Error(
+				"DiskCleaner-Replay-TryGC-Error",
+				zap.Error(err),
+				zap.String("checkpoint", maxGlobalCKP.String()),
+			)
+			return err
+		}
+		if len(c.remainingObjects.windows) == 0 {
+			return nil
+		}
+		metas := make(map[string]struct{})
+		for name := range c.metaFiles {
+			metas[name] = struct{}{}
+		}
+		if err := c.upgradeGCFiles(metas, c.remainingObjects.windows[0], upgradeChecker); err != nil {
+			logutil.Error(
+				"DiskCleaner-Replay-UpgradeGC-Error",
+				zap.Error(err),
+			)
+			return err
+		}
+		return nil
 	}
 	return nil
 }
@@ -1057,19 +1082,8 @@ func (c *checkpointCleaner) Process() {
 			)
 			return
 		}
-		checker := func(name string) bool {
-			start, end, ext := blockio.DecodeGCMetadataFileName(name)
-			if ext == blockio.CheckpointExt {
-				window := c.remainingObjects.windows[0]
-				if !start.Equal(&window.tsRange.start) ||
-					!end.Equal(&window.tsRange.end) {
-					return true
-				}
-			}
-			return false
-		}
 
-		if err = c.upgradeGCFiles(metas, checker); err != nil {
+		if err = c.upgradeGCFiles(metas, c.remainingObjects.windows[0], upgradeChecker); err != nil {
 			logutil.Error(
 				"DiskCleaner-Process-UpgradeGC-Error",
 				zap.Error(err),
@@ -1086,6 +1100,17 @@ func (c *checkpointCleaner) Process() {
 	if !c.isEnableCheckGC() {
 		return
 	}
+}
+
+func upgradeChecker(name string, window *GCWindow) bool {
+	start, end, ext := blockio.DecodeGCMetadataFileName(name)
+	if ext == blockio.CheckpointExt {
+		if !start.Equal(&window.tsRange.start) ||
+			!end.Equal(&window.tsRange.end) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *checkpointCleaner) checkExtras(item any) bool {
