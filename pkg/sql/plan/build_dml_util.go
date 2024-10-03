@@ -4528,7 +4528,9 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		}, bindCtx)
 
 		deleteIdx := getRowIdPos(indexTableDef)
-		retPkPos, retPkTyp := getPkPos(indexTableDef, false)
+		retPkPos := 0 // doc_id
+		retPkTyp := indexTableDef.Cols[retPkPos].Typ
+
 		return lastNodeId, deleteIdx, retPkPos, retPkTyp, nil
 
 	} else {
