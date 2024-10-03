@@ -821,7 +821,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 ) (window *GCWindow, err error) {
 	window = NewGCWindow(c.mp, c.fs.Service, WithMetaPrefix("debug/"))
 	if err = window.ScanCheckpoints(
-		c.ctx, ckps, c.collectCkpData, nil, buffer,
+		c.ctx, ckps, c.collectCkpData, nil, nil, buffer,
 	); err != nil {
 		window.Close()
 		window = nil
@@ -1138,33 +1138,37 @@ func (c *checkpointCleaner) scanCheckpointsAsOneWindow(
 	}()
 	buffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer buffer.Close(c.mp)
+	saveSnapshot := func() error {
+		name := blockio.EncodeSnapshotMetadataFileName(GCMetaDir,
+			PrefixSnapMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
+		snapSize, err = c.snapshotMeta.SaveMeta(name, c.fs.Service)
+		if err != nil {
+			logutil.Error(
+				"DiskCleaner-Error-SaveMeta",
+				zap.Error(err),
+			)
+			return err
+		}
+		name = blockio.EncodeTableMetadataFileName(GCMetaDir,
+			PrefixAcctMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
+		tableSize, err = c.snapshotMeta.SaveTableInfo(name, c.fs.Service)
+		if err != nil {
+			logutil.Error(
+				"DiskCleaner-Error-SaveTableInfo",
+				zap.Error(err),
+			)
+			return err
+		}
+		return nil
+	}
 	if err = gcWindow.ScanCheckpoints(
 		c.ctx,
 		ckps,
 		c.collectCkpData,
 		c.updateSnapshot,
+		saveSnapshot,
 		buffer,
 	); err != nil {
-		return
-	}
-	name := blockio.EncodeSnapshotMetadataFileName(GCMetaDir,
-		PrefixSnapMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
-	snapSize, err = c.snapshotMeta.SaveMeta(name, c.fs.Service)
-	if err != nil {
-		logutil.Error(
-			"DiskCleaner-Error-SaveMeta",
-			zap.Error(err),
-		)
-		return
-	}
-	name = blockio.EncodeTableMetadataFileName(GCMetaDir,
-		PrefixAcctMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
-	tableSize, err = c.snapshotMeta.SaveTableInfo(name, c.fs.Service)
-	if err != nil {
-		logutil.Error(
-			"DiskCleaner-Error-SaveTableInfo",
-			zap.Error(err),
-		)
 		return
 	}
 	return

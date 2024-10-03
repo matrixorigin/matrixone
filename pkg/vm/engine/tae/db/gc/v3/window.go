@@ -157,6 +157,7 @@ func (t *GCWindow) ScanCheckpoints(
 	ckps []*checkpoint.CheckpointEntry,
 	collectCkpData func(*checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
 	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CheckpointData) error,
+	fineProcess func() error,
 	buffer *containers.OneSchemaBatchBuffer,
 ) error {
 	if len(ckps) == 0 {
@@ -205,6 +206,13 @@ func (t *GCWindow) ScanCheckpoints(
 	}
 	t.tsRange.start = start
 	t.tsRange.end = end
+
+	if fineProcess != nil {
+		if err := fineProcess(); err != nil {
+			return err
+		}
+	}
+
 	if err := sinker.Sync(ctx); err != nil {
 		return err
 	}
