@@ -161,8 +161,8 @@ func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
 				doc_id = key
 			}
 
-			// pos int64
-			pos := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[1], i)
+			// pos int32
+			pos := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[1], i)
 
 			// word string
 			word := bat.Vecs[2].GetStringAt(i)
@@ -178,7 +178,7 @@ func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
 				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
 				w.Words[doc_id].DocCount += 1
 			} else {
-				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: []int64{pos}, DocCount: 1}
+				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: []int32{pos}, DocCount: 1}
 			}
 		}
 

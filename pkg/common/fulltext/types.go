@@ -58,7 +58,7 @@ type FullTextParserParam struct {
 // Word is associated with particular DocId (index.doc_id) and could have multiple positions
 type Word struct {
 	DocId    any
-	Position []int64
+	Position []int32
 	DocCount int32
 }
 
