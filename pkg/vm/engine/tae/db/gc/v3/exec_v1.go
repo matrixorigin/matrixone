@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
@@ -56,8 +56,7 @@ type CheckpointBasedGCJob struct {
 		coarseEstimateRows int
 		coarseProbility    float64
 	}
-	// TODO: use reader to read the data
-	gcSourceFiles    []objectio.ObjectStats
+	sourcer          engine.BaseReader
 	snapshotMeta     *logtail.SnapshotMeta
 	accountSnapshots map[uint32][]types.TS
 	pitr             *logtail.PitrInfo
@@ -78,7 +77,7 @@ func NewCheckpointBasedGCJob(
 	ts *types.TS,
 	from, to *types.TS,
 	globalCkpLoc objectio.Location,
-	gcSourceFiles []objectio.ObjectStats,
+	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
 	accountSnapshots map[uint32][]types.TS,
 	snapshotMeta *logtail.SnapshotMeta,
@@ -90,7 +89,7 @@ func NewCheckpointBasedGCJob(
 ) *CheckpointBasedGCJob {
 	e := &CheckpointBasedGCJob{
 		GCExecutor:       *NewGCExecutor(buffer, isOwner, mp, fs),
-		gcSourceFiles:    gcSourceFiles,
+		sourcer:          sourcer,
 		snapshotMeta:     snapshotMeta,
 		accountSnapshots: accountSnapshots,
 		pitr:             pitr,
@@ -108,7 +107,10 @@ func NewCheckpointBasedGCJob(
 }
 
 func (e *CheckpointBasedGCJob) Close() error {
-	e.gcSourceFiles = nil
+	if e.sourcer != nil {
+		e.sourcer.Close()
+		e.sourcer = nil
+	}
 	e.snapshotMeta = nil
 	e.accountSnapshots = nil
 	e.pitr = nil
@@ -129,26 +131,6 @@ func (e *CheckpointBasedGCJob) fillDefaults() {
 	if e.config.coarseProbility <= 0 {
 		e.config.coarseProbility = Default_Coarse_Probility
 	}
-}
-
-func (e *CheckpointBasedGCJob) getNextCoarseBatch(
-	ctx context.Context,
-	_ []string,
-	_ *plan.Expr,
-	mp *mpool.MPool,
-	bat *batch.Batch,
-) (bool, error) {
-	if len(e.gcSourceFiles) == 0 {
-		return true, nil
-	}
-	bat.CleanOnlyData()
-	if err := loader(
-		ctx, e.fs, &e.gcSourceFiles[0], bat, mp,
-	); err != nil {
-		return false, err
-	}
-	e.gcSourceFiles = e.gcSourceFiles[1:]
-	return false, nil
 }
 
 func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
@@ -194,7 +176,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 
 	newFiles, err := e.Run(
 		ctx,
-		e.getNextCoarseBatch,
+		e.sourcer.Read,
 		coarseFilter,
 		fineFilter,
 		finalSinker,

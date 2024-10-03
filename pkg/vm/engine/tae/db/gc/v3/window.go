@@ -20,7 +20,9 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -88,6 +90,22 @@ type GCWindow struct {
 	}
 }
 
+func (t *GCWindow) MakeFilesReader(
+	ctx context.Context,
+	fs fileservice.FileService,
+) engine.Reader {
+	return engine_util.SimpleMultiObjectsReader(
+		ctx,
+		fs,
+		t.files,
+		timestamp.Timestamp{},
+		engine_util.WithColumns(
+			ObjectTableSeqnums,
+			ObjectTableTypes,
+		),
+	)
+}
+
 // ExecuteGlobalCheckpointBasedGC is to remove objectentry that can be deleted from GCWindow
 // it will refresh the files in GCWindow with the files that can not be GC'ed
 // it will return the files that could be GC'ed
@@ -102,6 +120,8 @@ func (t *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	fs fileservice.FileService,
 ) ([]string, error) {
 
+	sourcer := t.MakeFilesReader(ctx, fs)
+
 	gcTS := gCkp.GetEnd()
 	job := NewCheckpointBasedGCJob(
 		t.metaDir,
@@ -109,7 +129,7 @@ func (t *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		&t.tsRange.start,
 		&t.tsRange.end,
 		gCkp.GetLocation(),
-		t.files,
+		sourcer,
 		pitrs,
 		accountSnapshots,
 		snapshotMeta,
@@ -290,7 +310,6 @@ func (t *GCWindow) writeMetaAfterScan(
 		); err != nil {
 			return err
 		}
-		t.files = append(t.files, s)
 	}
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, t.fs)
 	if err != nil {
