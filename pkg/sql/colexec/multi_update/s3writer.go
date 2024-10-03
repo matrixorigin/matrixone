@@ -213,6 +213,9 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 	}
 
 	writer.batchSize = 0
+	for _, bat := range writer.cacheBatchs.TakeBatchs() {
+		bat.Clean(proc.GetMPool())
+	}
 	return
 }
 

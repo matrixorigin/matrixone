@@ -2670,14 +2670,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
 				RefreshTsIdxInBat:  -1, //unsupport now
-				FilterColIdxInBat:  -1, //unsupport now
 			}
 			if tableDef.Partition != nil {
 				lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
 				partTableIDs, _ := getPartTableIdsAndNames(builder.compCtx, objRef, tableDef)
 				lockTarget.IsPartitionTable = true
 				lockTarget.PartitionTableIds = partTableIDs
-				lockTarget.FilterColIdxInBat = -1
 
 				colPosMap := make(map[string]int32)
 				for idx, col := range tableDef.Cols {
@@ -2687,23 +2685,33 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				if err != nil {
 					return -1, err
 				}
-				projectList := make([]*Expr, len(tableDef.Cols)+1)
-				for i := range tableDef.Cols {
-					projectList[i] = &plan.Expr{
-						Typ: tableDef.Cols[i].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: lastTag,
-								ColPos: int32(i),
+				projectList := make([]*Expr, 0, len(tableDef.Cols)+1)
+				for i, col := range tableDef.Cols {
+					if !col.Hidden {
+						projectList = append(projectList, &plan.Expr{
+							Typ: col.Typ,
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									TblName: tableDef.Name,
+									Name:    col.Name,
+									RelPos:  lastTag,
+									ColPos:  int32(i),
+								},
 							},
-						},
+						})
 					}
 				}
-				projectList[len(tableDef.Cols)] = partitionExpr
+				lockTarget.FilterColIdxInBat = int32(len(projectList))
+				projectList = append(projectList, partitionExpr)
+				newBindingTag := builder.genNewTag()
+				if binding, ok := ctx.bindingByTable[tableDef.Name]; ok {
+					//@xxx not a good choice
+					binding.tag = newBindingTag
+				}
 				nodeID = builder.appendNode(&plan.Node{
 					NodeType:    plan.Node_PROJECT,
 					Children:    []int32{nodeID},
-					BindingTags: []int32{builder.genNewTag()},
+					BindingTags: []int32{newBindingTag},
 					ProjectList: projectList,
 				}, ctx)
 
