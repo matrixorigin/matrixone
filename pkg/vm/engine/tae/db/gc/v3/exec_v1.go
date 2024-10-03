@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -62,9 +61,6 @@ type CheckpointBasedGCJob struct {
 	pitr             *logtail.PitrInfo
 	ts               *types.TS
 	globalCkpLoc     objectio.Location
-	dir              string
-
-	from, to *types.TS
 
 	result struct {
 		filesToGC  []string
@@ -73,9 +69,7 @@ type CheckpointBasedGCJob struct {
 }
 
 func NewCheckpointBasedGCJob(
-	dir string,
 	ts *types.TS,
-	from, to *types.TS,
 	globalCkpLoc objectio.Location,
 	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
@@ -94,10 +88,7 @@ func NewCheckpointBasedGCJob(
 		accountSnapshots: accountSnapshots,
 		pitr:             pitr,
 		ts:               ts,
-		dir:              dir,
 		globalCkpLoc:     globalCkpLoc,
-		from:             from,
-		to:               to,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -116,9 +107,6 @@ func (e *CheckpointBasedGCJob) Close() error {
 	e.pitr = nil
 	e.ts = nil
 	e.globalCkpLoc = nil
-	e.dir = ""
-	e.from = nil
-	e.to = nil
 	e.result.filesToGC = nil
 	e.result.filesNotGC = nil
 	return e.GCExecutor.Close()
@@ -185,71 +173,14 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		return err
 	}
 	transObjects = nil
-	if err := WriteNewMetaFile(
-		ctx,
-		e.dir,
-		e.from,
-		e.to,
-		newFiles,
-		e.mp,
-		e.fs,
-	); err != nil {
-		return err
-	}
 
 	e.result.filesNotGC = make([]objectio.ObjectStats, 0, len(newFiles))
 	e.result.filesNotGC = append(e.result.filesNotGC, newFiles...)
-
 	return nil
 }
 
 func (e *CheckpointBasedGCJob) Result() ([]string, []objectio.ObjectStats) {
 	return e.result.filesToGC, e.result.filesNotGC
-}
-
-func WriteNewMetaFile(
-	ctx context.Context,
-	dir string,
-	from, to *types.TS,
-	newFiles []objectio.ObjectStats,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-) (err error) {
-	name := blockio.EncodeCheckpointMetadataFileName(
-		dir, PrefixGCMeta, *from, *to,
-	)
-	ret := batch.NewWithSchema(
-		false,
-		false,
-		ObjectTableMetaAttrs,
-		ObjectTableMetaTypes,
-	)
-	defer func() {
-		ret.FreeColumns(mp)
-	}()
-	for i := range newFiles {
-		if err = vector.AppendBytes(
-			ret.GetVector(0),
-			newFiles[i][:],
-			false,
-			mp,
-		); err != nil {
-			return
-		}
-	}
-
-	var writer *objectio.ObjectWriter
-	if writer, err = objectio.NewObjectWriterSpecial(
-		objectio.WriterGC, name, fs,
-	); err != nil {
-		return
-	}
-	if _, err = writer.WriteWithoutSeqnum(ret); err != nil {
-		return
-	}
-
-	_, err = writer.WriteEnd(ctx)
-	return
 }
 
 func MakeBloomfilterCoarseFilter(
