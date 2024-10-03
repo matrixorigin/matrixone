@@ -18,14 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -52,142 +49,74 @@ type ObjectEntry struct {
 	table    uint64
 }
 
-type TableOption func(*GCTable)
+type WindowOption func(*GCWindow)
 
-func WithBufferSize(size int) TableOption {
-	return func(table *GCTable) {
-		table.buffer = containers.NewOneSchemaBatchBuffer(
-			size,
-			ObjectTableAttrs,
-			ObjectTableTypes,
-		)
-	}
-}
-
-func WithMetaPrefix(prefix string) TableOption {
-	return func(table *GCTable) {
+func WithMetaPrefix(prefix string) WindowOption {
+	return func(table *GCWindow) {
 		table.metaDir = prefix
 	}
 }
 
-func NewGCTable(
-	fs fileservice.FileService,
+func NewGCWindow(
 	mp *mpool.MPool,
-	opts ...TableOption,
-) *GCTable {
-	table := GCTable{
-		fs: fs,
+	fs fileservice.FileService,
+	opts ...WindowOption,
+) *GCWindow {
+	window := GCWindow{
 		mp: mp,
+		fs: fs,
 	}
 	for _, opt := range opts {
-		opt(&table)
+		opt(&window)
 	}
-	WithBufferSize(64 * mpool.MB)(&table)
-	if table.metaDir == "" {
-		table.metaDir = GCMetaDir
+	if window.metaDir == "" {
+		window.metaDir = GCMetaDir
 	}
-	return &table
+	return &window
 }
 
-type GCTable struct {
-	sync.Mutex
-	mp *mpool.MPool
-	fs fileservice.FileService
+type GCWindow struct {
+	metaDir string
+	mp      *mpool.MPool
+	fs      fileservice.FileService
 
-	buffer *containers.OneSchemaBatchBuffer
-
-	files struct {
-		sync.Mutex
-		stats []objectio.ObjectStats
-	}
+	files []objectio.ObjectStats
 
 	tsRange struct {
 		start types.TS
 		end   types.TS
 	}
-
-	metaDir string
 }
 
-func (t *GCTable) fillDefaults() {
-	if t.buffer == nil {
-		t.buffer = containers.NewOneSchemaBatchBuffer(
-			mpool.MB*32,
-			ObjectTableAttrs,
-			ObjectTableTypes,
-		)
-	}
-}
-
-func (t *GCTable) fetchBuffer() *batch.Batch {
-	return t.buffer.Fetch()
-}
-
-func (t *GCTable) putBuffer(bat *batch.Batch) {
-	t.buffer.Putback(bat, t.mp)
-}
-
-func (t *GCTable) filterGCProcessor(
-	bm *bitmap.Bitmap,
-	sels *[]int64,
-	bf *bloomfilter.BloomFilter,
-	canGCSinker *engine_util.Sinker,
-) func(context.Context, *batch.Batch, *mpool.MPool) error {
-	return func(
-		ctx context.Context,
-		data *batch.Batch,
-		mp *mpool.MPool,
-	) error {
-		// reset bitmap for each batch
-		bm.Clear()
-		bm.TryExpandWithSize(data.RowCount())
-
-		bf.Test(data.Vecs[0], func(exits bool, i int) {
-			if !exits {
-				bm.Add(uint64(i))
-			}
-		})
-
-		// convert bitmap to slice
-		*sels = (*sels)[:0]
-		bitmap.ToArray(bm, sels)
-
-		tmpBat := t.fetchBuffer()
-		defer t.putBuffer(tmpBat)
-		if err := tmpBat.Union(data, *sels, mp); err != nil {
-			return err
-		}
-
-		// shrink data
-		data.Shrink(*sels, true)
-		return canGCSinker.Write(ctx, tmpBat)
-	}
-}
-
-// SoftGC is to remove objectentry that can be deleted from GCTable
-func (t *GCTable) SoftGC(
+// ExecuteGlobalCheckpointBasedGC is to remove objectentry that can be deleted from GCWindow
+// it will refresh the files in GCWindow with the files that can not be GC'ed
+// it will return the files that could be GC'ed
+func (t *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	ctx context.Context,
-	location objectio.Location,
-	ts types.TS,
+	gCkp *checkpoint.CheckpointEntry,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
-	meta *logtail.SnapshotMeta,
+	snapshotMeta *logtail.SnapshotMeta,
+	buffer *containers.OneSchemaBatchBuffer,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 ) ([]string, error) {
 
+	gcTS := gCkp.GetEnd()
 	job := NewCheckpointBasedGCJob(
 		t.metaDir,
-		&ts,
+		&gcTS,
 		&t.tsRange.start,
 		&t.tsRange.end,
-		location,
-		t.files.stats,
+		gCkp.GetLocation(),
+		t.files,
 		pitrs,
 		accountSnapshots,
-		meta,
-		t.buffer,
+		snapshotMeta,
+		buffer,
 		false,
-		t.mp,
-		t.fs,
+		mp,
+		fs,
 	)
 	defer job.Close()
 
@@ -196,22 +125,23 @@ func (t *GCTable) SoftGC(
 	}
 
 	var gcFiles []string
-	gcFiles, t.files.stats = job.Result()
+	gcFiles, t.files = job.Result()
 	return gcFiles, nil
 }
 
-func (t *GCTable) Process(
+func (t *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	ckps []*checkpoint.CheckpointEntry,
 	collectCkpData func(*checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
 	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CheckpointData) error,
+	buffer *containers.OneSchemaBatchBuffer,
 ) error {
 	if len(ckps) == 0 {
 		return nil
 	}
 	start := ckps[0].GetStart()
 	end := ckps[len(ckps)-1].GetEnd()
-	updateInput := func(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
+	getOneBatch := func(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
 		if len(ckps) == 0 {
 			return true, nil
 		}
@@ -234,18 +164,18 @@ func (t *GCTable) Process(
 		ckps = ckps[1:]
 		return false, nil
 	}
-	sinker := t.getSinker(0)
+	sinker := t.getSinker(0, buffer)
 	defer sinker.Close()
 	if err := engine_util.StreamBatchProcess(
 		ctx,
-		updateInput,
-		t.ProcessMapBatch,
+		getOneBatch,
+		t.sortOneBatch,
 		sinker.Write,
-		t.buffer,
+		buffer,
 		t.mp,
 	); err != nil {
 		logutil.Error(
-			"GCTable-createInput-SINK-ERROR",
+			"GCWindow-createInput-SINK-ERROR",
 			zap.Error(err),
 		)
 		return err
@@ -256,7 +186,13 @@ func (t *GCTable) Process(
 		return err
 	}
 	stats, _ := sinker.GetResult()
-	return t.doneAllBatches(ctx, &start, &end, stats)
+	if err := t.writeMetaAfterScan(
+		ctx, &start, &end, stats,
+	); err != nil {
+		return err
+	}
+	t.files = append(t.files, stats...)
+	return nil
 }
 
 func isSnapshotRefers(
@@ -322,7 +258,10 @@ func isSnapshotRefers(
 	return false
 }
 
-func (t *GCTable) getSinker(tailSize int) *engine_util.Sinker {
+func (t *GCWindow) getSinker(
+	tailSize int,
+	buffer *containers.OneSchemaBatchBuffer,
+) *engine_util.Sinker {
 	return engine_util.NewSinker(
 		ObjectTablePrimaryKeyIdx,
 		ObjectTableAttrs,
@@ -331,20 +270,28 @@ func (t *GCTable) getSinker(tailSize int) *engine_util.Sinker {
 		t.mp,
 		t.fs,
 		engine_util.WithTailSizeCap(tailSize),
-		engine_util.WithBuffer(t.buffer, false),
+		engine_util.WithBuffer(buffer, false),
 	)
 }
 
-func (t *GCTable) doneAllBatches(ctx context.Context, start, end *types.TS, stats []objectio.ObjectStats) error {
+func (t *GCWindow) writeMetaAfterScan(
+	ctx context.Context,
+	start, end *types.TS,
+	stats []objectio.ObjectStats,
+) error {
 	name := blockio.EncodeCheckpointMetadataFileName(t.metaDir, PrefixGCMeta, *start, *end)
-	ret := batch.New(false, ObjectTableMetaAttrs)
-	ret.SetVector(0, vector.NewVec(ObjectTableMetaTypes[0]))
-	t.files.Lock()
+	ret := batch.NewWithSchema(
+		false, false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
+	)
+	defer ret.Clean(t.mp)
 	for _, s := range stats {
-		vector.AppendBytes(ret.GetVector(0), s[:], false, t.mp)
-		t.files.stats = append(t.files.stats, s)
+		if err := vector.AppendBytes(
+			ret.GetVector(0), s[:], false, t.mp,
+		); err != nil {
+			return err
+		}
+		t.files = append(t.files, s)
 	}
-	t.files.Unlock()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, t.fs)
 	if err != nil {
 		return err
@@ -357,18 +304,26 @@ func (t *GCTable) doneAllBatches(ctx context.Context, start, end *types.TS, stat
 	return err
 }
 
-func (t *GCTable) Merge(table *GCTable) {
-	t.Lock()
-	defer t.Unlock()
-	for _, stats := range table.files.stats {
-		t.files.stats = append(t.files.stats, stats)
+func (t *GCWindow) Merge(o *GCWindow) {
+	if o == nil || (o.tsRange.start.IsEmpty() && o.tsRange.end.IsEmpty()) {
+		return
+	}
+	if t.tsRange.start.IsEmpty() && t.tsRange.end.IsEmpty() {
+		t.tsRange.start = o.tsRange.start
+		t.tsRange.end = o.tsRange.end
+		t.files = append(t.files, o.files...)
+		return
 	}
 
-	if t.tsRange.start.GT(&table.tsRange.start) {
-		t.tsRange.start = table.tsRange.start
+	for _, file := range o.files {
+		t.files = append(t.files, file)
 	}
-	if t.tsRange.end.LT(&table.tsRange.end) {
-		t.tsRange.end = table.tsRange.end
+
+	if t.tsRange.start.GT(&o.tsRange.start) {
+		t.tsRange.start = o.tsRange.start
+	}
+	if t.tsRange.end.LT(&o.tsRange.end) {
+		t.tsRange.end = o.tsRange.end
 	}
 }
 
@@ -396,11 +351,8 @@ func collectObjectsWithCkp(data *logtail.CheckpointData, objects map[string]*Obj
 	}
 }
 
-func (t *GCTable) Close() {
-	if t.buffer != nil {
-		t.buffer.Close(t.mp)
-		t.buffer = nil
-	}
+func (t *GCWindow) Close() {
+	t.files = nil
 }
 
 // collectData collects data from memory that can be written to s3
@@ -422,7 +374,7 @@ func collectMapData(
 	return nil
 }
 
-func (t *GCTable) ProcessMapBatch(
+func (t *GCWindow) sortOneBatch(
 	ctx context.Context,
 	data *batch.Batch,
 	mp *mpool.MPool,
@@ -438,27 +390,27 @@ func (t *GCTable) ProcessMapBatch(
 }
 
 // collectData collects data from memory that can be written to s3
-func (t *GCTable) LoadBatchData(
+func (t *GCWindow) LoadBatchData(
 	ctx context.Context,
 	_ []string,
 	_ *plan.Expr,
 	mp *mpool.MPool,
 	bat *batch.Batch,
 ) (bool, error) {
-	if len(t.files.stats) == 0 {
+	if len(t.files) == 0 {
 		return true, nil
 	}
 	bat.CleanOnlyData()
 	pint := "LoadBatchData is "
-	for _, s := range t.files.stats {
+	for _, s := range t.files {
 		pint += s.ObjectName().String() + ";"
 	}
 	logutil.Infof(pint)
-	err := loader(ctx, t.fs, &t.files.stats[0], bat, mp)
+	err := loader(ctx, t.fs, &t.files[0], bat, mp)
 	if err != nil {
 		return false, err
 	}
-	t.files.stats = t.files.stats[1:]
+	t.files = t.files[1:]
 	return false, nil
 }
 
@@ -481,17 +433,15 @@ func loader(
 
 }
 
-func (t *GCTable) rebuildTable(bat *batch.Batch) {
-	t.files.Lock()
-	defer t.files.Unlock()
+func (t *GCWindow) rebuildTable(bat *batch.Batch) {
 	for i := 0; i < bat.Vecs[0].Length(); i++ {
-		stats := objectio.NewObjectStats()
+		var stats objectio.ObjectStats
 		stats.UnMarshal(bat.Vecs[0].GetRawBytesAt(i))
-		t.files.stats = append(t.files.stats, *stats)
+		t.files = append(t.files, stats)
 	}
 }
 
-func (t *GCTable) replayData(
+func (t *GCWindow) replayData(
 	ctx context.Context,
 	bs []objectio.BlockObject,
 	reader *blockio.BlockReader) (*batch.Batch, func(), error) {
@@ -504,8 +454,8 @@ func (t *GCTable) replayData(
 	return bat, release, nil
 }
 
-// ReadTable reads an s3 file and replays a GCTable in memory
-func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS, ts types.TS) error {
+// ReadTable reads an s3 file and replays a GCWindow in memory
+func (t *GCWindow) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS, ts types.TS) error {
 	var release1 func()
 	var buffer *batch.Batch
 	defer func() {
@@ -528,21 +478,31 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	if err != nil {
 		return err
 	}
-	t.Lock()
 	t.rebuildTable(buffer)
-	t.Unlock()
 	return nil
 }
 
 // For test
 
-func (t *GCTable) Compare(table *GCTable) (map[string]*ObjectEntry, map[string]*ObjectEntry, bool) {
-	bat := t.fetchBuffer()
-	defer t.putBuffer(bat)
+func (t *GCWindow) Compare(
+	table *GCWindow,
+	buffer *containers.OneSchemaBatchBuffer,
+) (
+	map[string]*ObjectEntry,
+	map[string]*ObjectEntry,
+	bool,
+) {
+	if buffer == nil {
+		buffer = MakeGCWindowBuffer(mpool.MB)
+		defer buffer.Close(t.mp)
+	}
+	bat := buffer.Fetch()
+	defer buffer.Putback(bat, t.mp)
+
 	objects := make(map[string]*ObjectEntry)
 	objects2 := make(map[string]*ObjectEntry)
 
-	buildObjects := func(table *GCTable,
+	buildObjects := func(table *GCWindow,
 		objects map[string]*ObjectEntry,
 		loadfn func(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error),
 	) error {
@@ -590,7 +550,7 @@ func (t *GCTable) Compare(table *GCTable) (map[string]*ObjectEntry, map[string]*
 	return objects, objects2, true
 }
 
-func (t *GCTable) compareObjects(objects, compareObjects map[string]*ObjectEntry) bool {
+func (t *GCWindow) compareObjects(objects, compareObjects map[string]*ObjectEntry) bool {
 	for name, entry := range compareObjects {
 		object := objects[name]
 		if object == nil {
@@ -607,7 +567,7 @@ func (t *GCTable) compareObjects(objects, compareObjects map[string]*ObjectEntry
 	return len(compareObjects) == len(objects)
 }
 
-func (t *GCTable) String(objects map[string]*ObjectEntry) string {
+func (t *GCWindow) String(objects map[string]*ObjectEntry) string {
 	if len(objects) == 0 {
 		return ""
 	}

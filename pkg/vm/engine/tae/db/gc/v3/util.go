@@ -85,3 +85,9 @@ func TransformToTSList(
 	}
 	return newKV
 }
+
+func MakeGCWindowBuffer(size int) *containers.OneSchemaBatchBuffer {
+	return containers.NewOneSchemaBatchBuffer(
+		size, ObjectTableAttrs, ObjectTableTypes,
+	)
+}

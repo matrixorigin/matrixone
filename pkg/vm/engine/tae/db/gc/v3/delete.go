@@ -16,9 +16,10 @@ package gc
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -92,7 +93,7 @@ func (g *GCWorker) ExecDelete(ctx context.Context, names []string, disableGC boo
 		g.state = Idle
 		return err
 	}
-	g.cleaner.updateOutputs(g.objects)
+	g.cleaner.recordFilesGCed(g.objects)
 	g.resetObjects()
 	g.state = Idle
 	return nil

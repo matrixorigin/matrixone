@@ -159,14 +159,14 @@ type Cleaner interface {
 	TryGC() error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error
-	GetMaxConsumed() *checkpoint.CheckpointEntry
+	GetScanWatermark() *checkpoint.CheckpointEntry
+	GetFirstWindow() *GCWindow
 	Stop()
 	// for test
 	SetMinMergeCountForTest(count int)
 	GetMinMerged() *checkpoint.CheckpointEntry
 	CheckGC() error
 	GetPITRs() (*logtail.PitrInfo, error)
-	GetInputs() *GCTable
 	SetTid(tid uint64)
 	EnableGCForTest()
 	DisableGCForTest()

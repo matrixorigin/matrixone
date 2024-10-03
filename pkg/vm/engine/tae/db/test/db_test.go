@@ -5575,34 +5575,34 @@ func TestGCWithCheckpoint(t *testing.T) {
 			num := len(entries)
 			assert.Greater(t, num, 0)
 			testutils.WaitExpect(5000, func() bool {
-				if manager.GetCleaner().GetMaxConsumed() == nil {
+				if manager.GetCleaner().GetScanWatermark() == nil {
 					return false
 				}
 				end := entries[num-1].GetEnd()
-				maxEnd := manager.GetCleaner().GetMaxConsumed().GetEnd()
+				maxEnd := manager.GetCleaner().GetScanWatermark().GetEnd()
 				return end.Equal(&maxEnd)
 			})
 			end := entries[num-1].GetEnd()
-			maxEnd := manager.GetCleaner().GetMaxConsumed().GetEnd()
+			maxEnd := manager.GetCleaner().GetScanWatermark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
 			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, false)
 			manager2 := gc.NewDiskCleaner(cleaner2)
 			manager2.Start()
 			defer manager2.Stop()
 			testutils.WaitExpect(5000, func() bool {
-				if manager2.GetCleaner().GetMaxConsumed() == nil {
+				if manager2.GetCleaner().GetScanWatermark() == nil {
 					return false
 				}
 				end := entries[num-1].GetEnd()
-				maxEnd := manager2.GetCleaner().GetMaxConsumed().GetEnd()
+				maxEnd := manager2.GetCleaner().GetScanWatermark().GetEnd()
 				return end.Equal(&maxEnd)
 			})
 			end = entries[num-1].GetEnd()
-			maxEnd = manager2.GetCleaner().GetMaxConsumed().GetEnd()
+			maxEnd = manager2.GetCleaner().GetScanWatermark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
-			tables1 := manager.GetCleaner().GetInputs()
-			tables2 := manager2.GetCleaner().GetInputs()
-			_, _, b := tables1.Compare(tables2)
+			tables1 := manager.GetCleaner().GetFirstWindow()
+			tables2 := manager2.GetCleaner().GetFirstWindow()
+			_, _, b := tables1.Compare(tables2, nil)
 			assert.True(t, b)
 		},
 	)
@@ -5648,34 +5648,34 @@ func TestGCDropDB(t *testing.T) {
 			num := len(entries)
 			assert.Greater(t, num, 0)
 			testutils.WaitExpect(5000, func() bool {
-				if manager.GetCleaner().GetMaxConsumed() == nil {
+				if manager.GetCleaner().GetScanWatermark() == nil {
 					return false
 				}
 				end := entries[num-1].GetEnd()
-				maxEnd := manager.GetCleaner().GetMaxConsumed().GetEnd()
+				maxEnd := manager.GetCleaner().GetScanWatermark().GetEnd()
 				return end.Equal(&maxEnd)
 			})
 			end := entries[num-1].GetEnd()
-			maxEnd := manager.GetCleaner().GetMaxConsumed().GetEnd()
+			maxEnd := manager.GetCleaner().GetScanWatermark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
 			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, false)
 			manager2 := gc.NewDiskCleaner(cleaner2)
 			manager2.Start()
 			defer manager2.Stop()
 			testutils.WaitExpect(5000, func() bool {
-				if manager2.GetCleaner().GetMaxConsumed() == nil {
+				if manager2.GetCleaner().GetScanWatermark() == nil {
 					return false
 				}
 				end := entries[num-1].GetEnd()
-				maxEnd := manager2.GetCleaner().GetMaxConsumed().GetEnd()
+				maxEnd := manager2.GetCleaner().GetScanWatermark().GetEnd()
 				return end.Equal(&maxEnd)
 			})
 			end = entries[num-1].GetEnd()
-			maxEnd = manager2.GetCleaner().GetMaxConsumed().GetEnd()
+			maxEnd = manager2.GetCleaner().GetScanWatermark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
-			tables1 := manager.GetCleaner().GetInputs()
-			tables2 := manager2.GetCleaner().GetInputs()
-			_, _, b := tables1.Compare(tables2)
+			tables1 := manager.GetCleaner().GetFirstWindow()
+			tables2 := manager2.GetCleaner().GetFirstWindow()
+			_, _, b := tables1.Compare(tables2, nil)
 			assert.True(t, b)
 			tae.Restart(ctx)
 		},
@@ -5737,34 +5737,34 @@ func TestGCDropTable(t *testing.T) {
 			num := len(entries)
 			assert.Greater(t, num, 0)
 			testutils.WaitExpect(10000, func() bool {
-				if manager.GetCleaner().GetMaxConsumed() == nil {
+				if manager.GetCleaner().GetScanWatermark() == nil {
 					return false
 				}
 				end := entries[num-1].GetEnd()
-				maxEnd := manager.GetCleaner().GetMaxConsumed().GetEnd()
+				maxEnd := manager.GetCleaner().GetScanWatermark().GetEnd()
 				return end.Equal(&maxEnd)
 			})
 			end := entries[num-1].GetEnd()
-			maxEnd := manager.GetCleaner().GetMaxConsumed().GetEnd()
+			maxEnd := manager.GetCleaner().GetScanWatermark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
 			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, false)
 			manager2 := gc.NewDiskCleaner(cleaner2)
 			manager2.Start()
 			defer manager2.Stop()
 			testutils.WaitExpect(5000, func() bool {
-				if manager2.GetCleaner().GetMaxConsumed() == nil {
+				if manager2.GetCleaner().GetScanWatermark() == nil {
 					return false
 				}
 				end := entries[num-1].GetEnd()
-				maxEnd := manager2.GetCleaner().GetMaxConsumed().GetEnd()
+				maxEnd := manager2.GetCleaner().GetScanWatermark().GetEnd()
 				return end.Equal(&maxEnd)
 			})
 			end = entries[num-1].GetEnd()
-			maxEnd = manager2.GetCleaner().GetMaxConsumed().GetEnd()
+			maxEnd = manager2.GetCleaner().GetScanWatermark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
-			tables1 := manager.GetCleaner().GetInputs()
-			tables2 := manager2.GetCleaner().GetInputs()
-			_, _, b := tables1.Compare(tables2)
+			tables1 := manager.GetCleaner().GetFirstWindow()
+			tables2 := manager2.GetCleaner().GetFirstWindow()
+			_, _, b := tables1.Compare(tables2, nil)
 			assert.True(t, b)
 			tae.Restart(ctx)
 		},
@@ -6621,14 +6621,14 @@ func TestSnapshotGC(t *testing.T) {
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	testutils.WaitExpect(5000, func() bool {
-		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
+		if db.DiskCleaner.GetCleaner().GetScanWatermark() == nil {
 			return false
 		}
-		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
+		end := db.DiskCleaner.GetCleaner().GetScanWatermark().GetEnd()
 		minEnd := minMerged.GetEnd()
 		return end.GE(&minEnd)
 	})
-	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
+	end := db.DiskCleaner.GetCleaner().GetScanWatermark().GetEnd()
 	minEnd := minMerged.GetEnd()
 	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
@@ -6785,17 +6785,17 @@ func TestSnapshotMeta(t *testing.T) {
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	testutils.WaitExpect(10000, func() bool {
-		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
+		if db.DiskCleaner.GetCleaner().GetScanWatermark() == nil {
 			return false
 		}
-		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
+		end := db.DiskCleaner.GetCleaner().GetScanWatermark().GetEnd()
 		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 			return false
 		}
 		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
 		return end.GE(&minEnd)
 	})
-	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
+	end := db.DiskCleaner.GetCleaner().GetScanWatermark().GetEnd()
 	minEnd = db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
 	assert.True(t, end.GE(&minEnd))
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
@@ -6975,14 +6975,14 @@ func TestPitrMeta(t *testing.T) {
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 	testutils.WaitExpect(5000, func() bool {
-		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
+		if db.DiskCleaner.GetCleaner().GetScanWatermark() == nil {
 			return false
 		}
-		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
+		end := db.DiskCleaner.GetCleaner().GetScanWatermark().GetEnd()
 		minEnd := minMerged.GetEnd()
 		return end.GE(&minEnd)
 	})
-	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
+	end := db.DiskCleaner.GetCleaner().GetScanWatermark().GetEnd()
 	minEnd = minMerged.GetEnd()
 	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
