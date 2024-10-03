@@ -62,11 +62,6 @@ type checkpointCleaner struct {
 		gcWatermark atomic.Pointer[checkpoint.CheckpointEntry]
 	}
 
-	// minMerged is to mark at which checkpoint the full
-	// GCWindow in the current DiskCleaner is generated，
-	// UT case needs to use
-	minMerged atomic.Pointer[checkpoint.CheckpointEntry]
-
 	ckpStage atomic.Pointer[types.TS]
 	ckpGC    atomic.Pointer[types.TS]
 
@@ -187,27 +182,15 @@ func (c *checkpointCleaner) Replay() error {
 		return nil
 	}
 
-	minMergedStart := types.TS{}
-	minMergedEnd := types.TS{}
 	maxConsumedStart := types.TS{}
 	maxConsumedEnd := types.TS{}
 	maxSnapEnd := types.TS{}
 	maxAcctEnd := types.TS{}
-	var fullGCFile fileservice.DirEntry
 	// Get effective minMerged
 	var snapFile, acctFile string
 	for _, dir := range dirs {
 		c.metaFiles[dir.Name] = struct{}{}
-		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
-		if ext == blockio.GCFullExt {
-			if minMergedStart.IsEmpty() || minMergedStart.LT(&start) {
-				minMergedStart = start
-				minMergedEnd = end
-				maxConsumedStart = start
-				maxConsumedEnd = end
-				fullGCFile = dir
-			}
-		}
+		_, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.SnapshotExt && maxSnapEnd.LT(&end) {
 			maxSnapEnd = end
 			snapFile = dir.Name
@@ -218,16 +201,12 @@ func (c *checkpointCleaner) Replay() error {
 		}
 	}
 	readDirs := make([]fileservice.DirEntry, 0)
-	if !minMergedStart.IsEmpty() {
-		readDirs = append(readDirs, fullGCFile)
-	}
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
-		if ext == blockio.GCFullExt || ext == blockio.SnapshotExt || ext == blockio.AcctExt {
+		if ext == blockio.SnapshotExt || ext == blockio.AcctExt {
 			continue
 		}
-		if (maxConsumedStart.IsEmpty() || maxConsumedStart.LT(&end)) &&
-			minMergedEnd.LT(&end) {
+		if maxConsumedStart.IsEmpty() || maxConsumedStart.LT(&end) {
 			maxConsumedStart = start
 			maxConsumedEnd = end
 			readDirs = append(readDirs, dir)
@@ -270,12 +249,6 @@ func (c *checkpointCleaner) Replay() error {
 	}
 	ckp := checkpoint.NewCheckpointEntry(c.sid, maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	c.updateScanWatermark(ckp)
-	defer func() {
-		// Ensure that updateMinMerged is executed last, because minMergedEnd is not empty means that the replay is completed
-		// For UT
-		ckp = checkpoint.NewCheckpointEntry(c.sid, minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
-		c.updateMinMerged(ckp)
-	}()
 	if acctFile == "" {
 		//No account table information, it may be a new cluster or an upgraded cluster,
 		//and the table information needs to be initialized from the checkpoint
@@ -349,10 +322,6 @@ func (c *checkpointCleaner) updateScanWatermark(e *checkpoint.CheckpointEntry) {
 	c.watermarks.scanWatermark.Store(e)
 }
 
-func (c *checkpointCleaner) updateMinMerged(e *checkpoint.CheckpointEntry) {
-	c.minMerged.Store(e)
-}
-
 func (c *checkpointCleaner) updateGCWatermark(e *checkpoint.CheckpointEntry) {
 	c.watermarks.gcWatermark.Store(e)
 }
@@ -382,7 +351,7 @@ func (c *checkpointCleaner) GetScanWatermark() *checkpoint.CheckpointEntry {
 }
 
 func (c *checkpointCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
-	return c.minMerged.Load()
+	return c.GetScanWatermark()
 }
 
 func (c *checkpointCleaner) GetGCWatermark() *checkpoint.CheckpointEntry {
@@ -531,7 +500,6 @@ func (c *checkpointCleaner) upgradeGCFiles(
 		)
 		return err
 	}
-	c.updateMinMerged(scanWatermark)
 	return nil
 }
 

@@ -473,7 +473,6 @@ func (t *GCWindow) replayData(
 	if err != nil {
 		return nil, nil, err
 	}
-	logutil.Infof("Replaying data for table %s", bat.String())
 	return bat, release, nil
 }
 
