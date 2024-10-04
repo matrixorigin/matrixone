@@ -91,11 +91,13 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 		panic(moerr.NewInternalErrorNoCtx("withFilterMixin tryUpdate called with different cols"))
 	}
 
-	// record the column selectivity
-	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
-	v2.TaskSelColumnTotal.Add(float64(ctotal))
-	if ctotal >= chit {
-		v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+	if mixin.tableDef != nil {
+		// record the column selectivity
+		chit, ctotal := len(cols), len(mixin.tableDef.Cols)
+		v2.TaskSelColumnTotal.Add(float64(ctotal))
+		if ctotal >= chit {
+			v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+		}
 	}
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
