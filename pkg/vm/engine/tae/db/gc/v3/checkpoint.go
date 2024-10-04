@@ -62,8 +62,7 @@ type checkpointCleaner struct {
 		gcWatermark atomic.Pointer[checkpoint.CheckpointEntry]
 	}
 
-	ckpStage atomic.Pointer[types.TS]
-	ckpGC    atomic.Pointer[types.TS]
+	ckpGC atomic.Pointer[types.TS]
 
 	config struct {
 		// minMergeCount is the configuration of the merge GC metadata file.
@@ -326,10 +325,6 @@ func (c *checkpointCleaner) updateGCWatermark(e *checkpoint.CheckpointEntry) {
 	c.watermarks.gcWatermark.Store(e)
 }
 
-func (c *checkpointCleaner) updateCkpStage(ts *types.TS) {
-	c.ckpStage.Store(ts)
-}
-
 func (c *checkpointCleaner) updateCkpGC(ts *types.TS) {
 	c.ckpGC.Store(ts)
 }
@@ -356,10 +351,6 @@ func (c *checkpointCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
 
 func (c *checkpointCleaner) GetGCWatermark() *checkpoint.CheckpointEntry {
 	return c.watermarks.gcWatermark.Load()
-}
-
-func (c *checkpointCleaner) GeteCkpStage() *types.TS {
-	return c.ckpStage.Load()
 }
 
 func (c *checkpointCleaner) GeteCkpGC() *types.TS {
@@ -613,8 +604,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	stage types.TS,
 	accoutSnapshots map[uint32][]types.TS,
 ) error {
-	if stage.IsEmpty() ||
-		(c.GeteCkpStage() != nil && c.GeteCkpStage().GE(&stage)) {
+	if stage.IsEmpty() {
 		return nil
 	}
 	metas := c.GetCheckpoints()
@@ -624,7 +614,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 		return err
 	}
 	if !ok {
-		c.updateCkpStage(&stage)
 		return nil
 	}
 	ckpGC := c.GeteCkpGC()
@@ -671,7 +660,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 			}
 		}
 	}
-	c.updateCkpStage(&stage)
 	return nil
 }
 
