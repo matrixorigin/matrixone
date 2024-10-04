@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1770,11 +1771,15 @@ func (s *Scope) DropIndex(c *Compile) error {
 		if _, err = d.Relation(c.proc.Ctx, qry.IndexTableName, nil); err != nil {
 			return err
 		}
+
+		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), d, qry.IndexTableName, c.proc.GetTxnOperator()); err != nil {
+			return err
+		}
+
 		if err = d.Delete(c.proc.Ctx, qry.IndexTableName); err != nil {
 			return err
 		}
 
-		// ERIC TODO: delete auto increment
 	}
 
 	//3. delete index object from mo_catalog.mo_indexes
@@ -2301,11 +2306,14 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 		for _, name := range qry.IndexTableNames {
+			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
+				return err
+			}
+
 			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
 				return err
 			}
 
-			// ERIC TODO: delete autoincrement
 		}
 
 		//delete partition table
@@ -2348,11 +2356,14 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 		for _, name := range qry.IndexTableNames {
+			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
+				return err
+			}
+
 			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
 				return err
 			}
 
-			// ERIC: TODO delete autoincrement
 		}
 
 		// delete partition subtable
@@ -3313,6 +3324,45 @@ func maybeCreateAutoIncrement(
 		def.TblId,
 		cols,
 		txnOp)
+}
+
+func maybeDeleteAutoIncrement(
+	ctx context.Context,
+	sid string,
+	db engine.Database,
+	tblname string,
+	txnOp client.TxnOperator) error {
+
+	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
+
+	rel, err := db.Relation(ctx, tblname, nil)
+	if err != nil {
+		return err
+	}
+
+	tblId := rel.GetTableID(ctx)
+
+	tblDef := rel.GetTableDef(ctx)
+	var containAuto bool
+	for _, col := range tblDef.Cols {
+		if col.Typ.AutoIncr {
+			containAuto = true
+			break
+		}
+	}
+	if containAuto {
+		err = incrservice.GetAutoIncrementService(sid).Delete(
+			ctx,
+			tblId,
+			txnOp)
+		if err != nil {
+			return err
+		}
+
+		logutil.Infof("DELETED AUTO INCREMENT %s", tblname)
+	}
+
+	return nil
 }
 
 func getRelFromMoCatalog(c *Compile, tblName string) (engine.Relation, error) {
