@@ -596,7 +596,8 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 		return nil
 	}
 	// spill the remaining data
-	if sinker.staged.inMemorySize >= sinker.config.tailSizeCap {
+	if sinker.staged.inMemorySize > 0 &&
+		sinker.staged.inMemorySize >= sinker.config.tailSizeCap {
 		if err := sinker.trySpill(ctx); err != nil {
 			return err
 		}

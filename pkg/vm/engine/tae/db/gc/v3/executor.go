@@ -178,6 +178,10 @@ func (exec *GCExecutor) Run(
 		canGCObjects,
 		exec.fs,
 		timestamp.Timestamp{},
+		engine_util.WithColumns(
+			ObjectTableSeqnums,
+			ObjectTableTypes,
+		),
 	)
 	if release != nil {
 		defer release()
