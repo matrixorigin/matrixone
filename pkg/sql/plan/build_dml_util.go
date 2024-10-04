@@ -4299,7 +4299,31 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	return nil
 }
 
-// build pre insert fulltext index plan
+// This function try to create a INSERT plan to tokenize the index parts into index table.  The expected insert plans is as follow:
+// +-----------------------------------------------------------------------------------+
+// | TP QUERY PLAN                                                                     |
+// +-----------------------------------------------------------------------------------+
+// | Plan 1:                                                                           |
+// | Insert on db.__mo_index_secondary_01924deb-9423-719a-a1cb-efc85bc46628            |
+// |   ->  PreInsert on db.__mo_index_secondary_01924deb-9423-719a-a1cb-efc85bc46628   |
+// |         ->  Project                                                               |
+// |               ->  CROSS APPLY                                                     |
+// |                     ->  Sink Scan                                                 |
+// |                           DataSource: Plan 0                                      |
+// |                     ->  Table Function on fulltext_index_tokenize                 |
+// +-----------------------------------------------------------------------------------+
+//
+// Note:
+// Output of sink scan include all columns in source table.
+// When INSERT/UPDATE with specified columns, columns without value will be replaced by NULL constant.
+//
+// There is difference in implementation between other indexes and fulltext index.
+// For other indexes, preDeleteIndex function will do DELETE and INSERT when UPDATE and preInsertIndex function is only used when INSERT.
+// For fulltext index, preDeleteFullTextIndex will only perform DELETE and preInsertFullTextIndex will perform INSERT.
+// For DELETE, create DELETE plan with prePreDeleteFullTextIndex()
+// For INSERT, create INSERT plan with prePreInsertFullTextIndex()
+// For UPDATE, create DELETE plan with prePreDeleteFullTextIndex() and then create INSERT plan with preInsertFullTextIndex().
+// i.e. delete old rows and then insert new values
 func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	updateColLength int, sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
 
@@ -4373,7 +4397,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 	}
 	tableFuncId := builder.appendNode(tablefunc, bindCtx)
 
-	// cross apply projection
+	// cross apply projection = fulltext_index_tokenize output (doc_id, pos, word)
 	apply_project := make([]*plan.Expr, len(ftcols))
 	for i := range ftcols {
 		apply_project[i] = &plan.Expr{
@@ -4397,7 +4421,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 
 	crossapply := builder.qry.Nodes[lastNodeId]
 
-	// projection
+	// fulltext index projection = (fulltext_index_tokenize output(doc_id, pos, word), __mo_fake_pk_col)
 	project := make([]*plan.Expr, len(ftcols))
 	for i := range ftcols {
 		project[i] = &plan.Expr{
@@ -4411,7 +4435,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		}
 	}
 
-	// fake primary key hidden column must be a NULL constant
+	// fake primary key hidden column must be a NULL constant. See getDefaultExpr func from build_util.go
 	project = append(project, &plan.Expr{
 		Typ: plan.Type{
 			Id:          int32(types.T_uint64),
@@ -4501,6 +4525,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 	return err
 }
 
+// To create rows of (rowid, docid) for DELETE
 func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
 	indexObjRef *ObjectRef, indexTableDef *TableDef, typMap map[string]plan.Type, posMap map[string]int) (int32, int, int, Type, error) {
 
@@ -4632,7 +4657,40 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 	}
 }
 
-// build pre insert index plans
+// To create a DELETE plan to the fulltext index
+// mysql> explain delete from tmp3 where id=1;
+// +------------------------------------------------------------------------------------------+
+// | TP QUERY PLAN                                                                            |
+// +------------------------------------------------------------------------------------------+
+// | Plan 0:                                                                                  |
+// | Sink                                                                                     |
+// |   ->  Lock                                                                               |
+// |         ->  Project                                                                      |
+// |               ->  Project                                                                |
+// |                     ->  Table Scan on eric.tmp3                                          |
+// |                           Filter Cond: (tmp3.id = 1)                                     |
+// | Plan 1:                                                                                  |
+// | Delete on eric.__mo_index_secondary_0192531f-20a2-7f07-9bd5-4b8989b7ecec                 |
+// |   ->  Join                                                                               |
+// |         Join Type: LEFT                                                                  |
+// |         Join Cond: (id = doc_id)                                                         |
+// |         ->  Sink Scan                                                                    |
+// |               DataSource: Plan 0                                                         |
+// |         ->  Table Scan on eric.__mo_index_secondary_0192531f-20a2-7f07-9bd5-4b8989b7ecec |
+// | Plan 2:                                                                                  |
+// | Delete on eric.tmp3                                                                      |
+// |   ->  Sink Scan                                                                          |
+// |         DataSource: Plan 0                                                               |
+// +------------------------------------------------------------------------------------------+
+//
+// Note:
+// There is difference in implementation between other indexes and fulltext index.
+// For other indexes, preDeleteIndex function will do DELETE and INSERT when UPDATE and preInsertIndex function is only used when INSERT.
+// For fulltext index, preDeleteFullTextIndex will only perform DELETE and preInsertFullTextIndex will perform INSERT.
+// For DELETE, create DELETE plan with prePreDeleteFullTextIndex()
+// For INSERT, create INSERT plan with prePreInsertFullTextIndex()
+// For UPDATE, create DELETE plan with prePreDeleteFullTextIndex() and then create INSERT plan with preInsertFullTextIndex().
+// i.e. delete old rows and then insert new values
 func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
 	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
 
