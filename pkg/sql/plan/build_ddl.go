@@ -1749,8 +1749,8 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		tableDef.Cols = append(tableDef.Cols, colDef)
 
 		tableDef.Pkey = &PrimaryKeyDef{
-			Names:       []string{pkeyName},
-			PkeyColName: pkeyName,
+			Names:       []string{keyName},
+			PkeyColName: keyName,
 		}
 
 		// append to createTable.IndexTables and createTable.TableDef
