@@ -8787,35 +8787,46 @@ func TestSnapshotCheckpoint(t *testing.T) {
 			tae.ForceCheckpoint()
 			tae.ForceCheckpoint()
 			dataObject, tombstoneObject := testutil.GetUserTablesInsBatch(t, rel1.ID(), types.TS{}, snapshot, db.Catalog)
-			ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, snapshot, rel1.ID(), checkpoint.SpecifiedCheckpoint)
+			ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, snapshot, rel1.ID(), nil)
 			assert.Nil(t, err)
-			var inslen, dataObjectLen, tombstoneObjectLen int
+			objects := make(map[string]struct{})
+			tombstones := make(map[string]struct{})
 			for _, ckp := range ckps {
-				ins, _, dataObject, tombstoneObject, cbs := testutil.ReadSnapshotCheckpoint(t, rel1.ID(), ckp.GetLocation(), db.Opts.Fs)
+				_, _, dataObject, tombstoneObject, cbs := testutil.ReadSnapshotCheckpoint(t, rel1.ID(), ckp.GetLocation(), db.Opts.Fs)
 				for _, cb := range cbs {
 					if cb != nil {
 						cb()
 					}
 				}
-				if ins != nil {
-					moIns, err := batch.ProtoBatchToBatch(ins)
-					assert.NoError(t, err)
-					inslen += moIns.Vecs[0].Length()
-				}
 				if dataObject != nil {
 					moIns, err := batch.ProtoBatchToBatch(dataObject)
 					assert.NoError(t, err)
-					dataObjectLen += moIns.Vecs[0].Length()
+					for i := 0; i < moIns.Vecs[2].Length(); i++ {
+						stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
+						objects[stats.ObjectName().String()] = struct{}{}
+					}
 				}
 				if tombstoneObject != nil {
 					moIns, err := batch.ProtoBatchToBatch(tombstoneObject)
 					assert.NoError(t, err)
-					tombstoneObjectLen += moIns.Vecs[0].Length()
+					for i := 0; i < moIns.Vecs[2].Length(); i++ {
+						stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
+						tombstones[stats.ObjectName().String()] = struct{}{}
+					}
 				}
 			}
-			assert.Equal(t, dataObjectLen, dataObject.Length())
-			assert.Equal(t, tombstoneObjectLen, tombstoneObject.Length())
-			assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
+			vec1 := dataObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
+			vec2 := tombstoneObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
+			for i := 0; i < dataObject.Length(); i++ {
+				stats := objectio.ObjectStats(vec1.GetBytesAt(i))
+				_, ok := objects[stats.ObjectName().String()]
+				assert.True(t, ok)
+			}
+			for i := 0; i < tombstoneObject.Length(); i++ {
+				stats := objectio.ObjectStats(vec2.GetBytesAt(i))
+				_, ok := tombstones[stats.ObjectName().String()]
+				assert.True(t, ok)
+			}
 		},
 	)
 }

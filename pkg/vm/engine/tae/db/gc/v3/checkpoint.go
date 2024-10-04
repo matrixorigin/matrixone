@@ -273,7 +273,7 @@ func (c *checkpointCleaner) Replay() error {
 		//and the table information needs to be initialized from the checkpoint
 		scanWaterMark := c.GetScanWaterMark()
 		isConsumedGCkp := false
-		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.sid, c.fs.Service, scanWaterMark.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
+		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.sid, c.fs.Service, scanWaterMark.GetEnd(), 0, nil)
 		if err != nil {
 			// TODO: why only warn???
 			logutil.Warn(

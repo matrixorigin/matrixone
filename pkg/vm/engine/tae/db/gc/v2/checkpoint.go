@@ -251,7 +251,7 @@ func (c *checkpointCleaner) Replay() error {
 		//and the table information needs to be initialized from the checkpoint
 		maxConsumed := c.maxConsumed.Load()
 		isConsumedGCkp := false
-		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.sid, c.fs.Service, maxConsumed.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
+		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.sid, c.fs.Service, maxConsumed.GetEnd(), 0, nil)
 		if err != nil {
 			logutil.Warnf("list checkpoint failed, err[%v]", err)
 		}
