@@ -26,31 +26,55 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-type GetCheckpointRange = func(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error)
+// `files` should be sorted by the end-ts in the asc order
+// Ex.1
+//
+//	    files  :  [0,100],[100,200],[200,300],[0,300],[300,400],[400,500]
+//		ts     :  250
+//		return :  [0,100],[100,200],[200,300]
+//
+// Ex.2
+//
+//	    files  :  [0,100],[100,200],[200,300],[0,300],[300,400],[400,500]
+//		ts     :  300
+//		return :  [0,100],[100,200],[200,300],[0,300]
+//
+// Ex.3
+//
+//	    files  :  [0,100],[100,200],[200,300],[0,300],[300,400],[400,500],[500,600]
+//		ts     :  450
+//      return :  [0,100],[100,200],[200,300],[0,300],[300,400],[400,500],[500,600]
 
-func SpecifiedCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error) {
-	for i, file := range files {
-		if snapshot.LE(&file.end) {
-			return files, i, nil
-		}
+func FilterSortedMetaFilesByTimestamp(
+	ts *types.TS,
+	files []*MetaFile,
+) []*MetaFile {
+	if len(files) == 0 {
+		return nil
 	}
-	return files, len(files) - 1, nil
-}
 
-func AllAfterAndGCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error) {
-	prev := &MetaFile{}
-	for i, file := range files {
-		if snapshot.LE(&file.end) &&
-			(prev.end.IsEmpty() || snapshot.LT(&prev.end)) &&
-			file.start.IsEmpty() {
-			if prev.end.IsEmpty() {
-				return files, i, nil
-			}
-			return files, i - 1, nil
-		}
-		prev = file
+	prev := files[0]
+
+	// start.IsEmpty() means the file is a global checkpoint
+	// ts.LE(&prev.end) means the ts is in the range of the checkpoint
+	// it means the ts is in the range of the global checkpoint
+	// ts is within GCKP[0, end]
+	if prev.start.IsEmpty() && ts.LE(&prev.end) {
+		return files[:1]
 	}
-	return files, len(files) - 1, nil
+
+	for i := 1; i < len(files); i++ {
+		curr := files[i]
+		// curr.start.IsEmpty() means the file is a global checkpoint
+		// ts.LE(&curr.end) means the ts is in the range of the checkpoint
+		// ts.LT(&prev.end) means the ts is not in the range of the previous checkpoint
+		if curr.start.IsEmpty() && ts.LE(&curr.end) {
+			return files[:i]
+		}
+		prev = curr
+	}
+
+	return files
 }
 
 func ListSnapshotCheckpoint(
@@ -59,30 +83,30 @@ func ListSnapshotCheckpoint(
 	fs fileservice.FileService,
 	snapshot types.TS,
 	tid uint64,
-	listFunc GetCheckpointRange,
 ) ([]*CheckpointEntry, error) {
-	files, idx, err := ListSnapshotMeta(ctx, fs, snapshot, listFunc)
+	metaFiles, err := ListSnapshotMeta(ctx, snapshot, fs)
 	if err != nil {
 		return nil, err
 	}
-	if len(files) == 0 {
+	if len(metaFiles) == 0 {
 		return nil, nil
 	}
-	return ListSnapshotCheckpointWithMeta(ctx, sid, fs, files, idx, types.TS{}, false)
+	return ListSnapshotCheckpointWithMeta(
+		ctx, sid, fs, metaFiles[len(metaFiles)-1], types.TS{}, false,
+	)
 }
 
 func ListSnapshotMeta(
 	ctx context.Context,
-	fs fileservice.FileService,
 	snapshot types.TS,
-	listFunc GetCheckpointRange,
-) ([]*MetaFile, int, error) {
+	fs fileservice.FileService,
+) ([]*MetaFile, error) {
 	dirs, err := fs.List(ctx, CheckpointDir)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	if len(dirs) == 0 {
-		return nil, 0, nil
+		return nil, nil
 	}
 	metaFiles := make([]*MetaFile, 0)
 	for i, dir := range dirs {
@@ -103,69 +127,70 @@ func ListSnapshotMeta(
 		logutil.Infof("metaFiles[%d]: %v", i, file.String())
 	}
 
-	if listFunc == nil {
-		listFunc = AllAfterAndGCheckpoint
-	}
-	return listFunc(snapshot, metaFiles)
+	metaFiles = FilterSortedMetaFilesByTimestamp(&snapshot, metaFiles)
+	return metaFiles, nil
 }
 
-func ListSnapshotMetaWithDiskCleaner(
+// 1. it will parse all the input meta file names to MetaFiles
+// 2. sort the MetaFiles by the end-ts in the asc order
+// 3. filter the MetaFiles by the input ts
+func FilterMetaFilesByTimestamp(
 	snapshot types.TS,
-	listFunc GetCheckpointRange,
-	metas map[string]struct{},
-) ([]*MetaFile, []*MetaFile, int, error) {
-	if len(metas) == 0 {
-		return nil, nil, 0, nil
+	checkpointMetaFiles map[string]struct{},
+) ([]*MetaFile, error) {
+	if len(checkpointMetaFiles) == 0 {
+		return nil, nil
 	}
-	metaFiles := make([]*MetaFile, 0)
+
+	// parse meta file names to MetaFiles
+	metaFiles := make([]*MetaFile, 0, len(checkpointMetaFiles))
 	idx := 0
-	for meta := range metas {
-		start, end := blockio.DecodeCheckpointMetadataFileName(meta)
+	for metaFile := range checkpointMetaFiles {
+		start, end := blockio.DecodeCheckpointMetadataFileName(metaFile)
 		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
 			end:   end,
 			index: idx,
-			name:  meta,
+			name:  metaFile,
 		})
 		idx++
 	}
+
+	// sort meta files by the end ts in the asc order
 	sort.Slice(metaFiles, func(i, j int) bool {
 		return metaFiles[i].end.LT(&metaFiles[j].end)
 	})
 
-	mergeMetaFiles := make([]*MetaFile, 0)
-	start := 0
+	// find the first global checkpoint
+	// JW TODO: refactor the following code
+	pos := 0
 	for i, file := range metaFiles {
 		// TODO: remove log
 		logutil.Infof("metaFiles[%d]: %v", i, file.String())
 		if file.start.IsEmpty() && i < len(metaFiles)-1 && !metaFiles[i+1].start.IsEmpty() {
-			start = i
+			pos = i
 			break
 		}
 	}
 
-	if start > 0 {
-		mergeMetaFiles = append(mergeMetaFiles, metaFiles[:start]...)
-		metaFiles = metaFiles[start:]
+	// JW TODO: pos > 0 ?
+	if pos > 0 {
+		metaFiles = metaFiles[pos:]
 	}
 
-	if listFunc == nil {
-		listFunc = AllAfterAndGCheckpoint
-	}
-	files, num, err := listFunc(snapshot, metaFiles)
-	return files, mergeMetaFiles, num, err
+	metaFiles = FilterSortedMetaFilesByTimestamp(&snapshot, metaFiles)
+	return metaFiles, nil
 }
 
 func ListSnapshotCheckpointWithMeta(
 	ctx context.Context,
 	sid string,
 	fs fileservice.FileService,
-	files []*MetaFile,
-	idx int,
+	metaFile *MetaFile,
 	gcStage types.TS,
 	isAll bool,
 ) ([]*CheckpointEntry, error) {
-	reader, err := blockio.NewFileReader(sid, fs, CheckpointDir+files[idx].name)
+	reader, err := blockio.NewFileReader(sid, fs, CheckpointDir+metaFile.name)
 	if err != nil {
 		return nil, nil
 	}
