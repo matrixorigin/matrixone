@@ -116,6 +116,7 @@ func (t *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
 	buffer *containers.OneSchemaBatchBuffer,
+	cacheSize int,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) ([]string, error) {
@@ -134,6 +135,7 @@ func (t *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		false,
 		mp,
 		fs,
+		WithGCJobCoarseConfig(0, 0, cacheSize),
 	)
 	defer job.Close()
 

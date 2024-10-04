@@ -69,6 +69,8 @@ type checkpointCleaner struct {
 		// When the GC file is greater than or equal to minMergeCount,
 		// the merge GC metadata file will be triggered and the expired file will be deleted.
 		minMergeCount atomic.Int64
+
+		canGCCacheSize int
 	}
 
 	// remainingObjects is to record the currently valid GCWindow
@@ -111,12 +113,23 @@ type checkpointCleaner struct {
 	sid string
 }
 
+func WithCheckpointCleanerConfig(
+	size int,
+) CheckpointCleanerOption {
+	return func(e *checkpointCleaner) {
+		e.config.canGCCacheSize = size
+	}
+}
+
+type CheckpointCleanerOption func(*checkpointCleaner)
+
 func NewCheckpointCleaner(
 	ctx context.Context,
 	sid string,
 	fs *objectio.ObjectFS,
 	checkpointCli checkpoint.RunnerReader,
 	disableGC bool,
+	opts ...CheckpointCleanerOption,
 ) Cleaner {
 	cleaner := &checkpointCleaner{
 		ctx:           ctx,
@@ -124,6 +137,9 @@ func NewCheckpointCleaner(
 		fs:            fs,
 		checkpointCli: checkpointCli,
 		disableGC:     disableGC,
+	}
+	for _, opt := range opts {
+		opt(cleaner)
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.config.minMergeCount.Store(MinMergeCount)
@@ -805,6 +821,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpoint(
 		pitrs,
 		c.snapshotMeta,
 		memoryBuffer,
+		c.config.canGCCacheSize,
 		c.mp,
 		c.fs.Service,
 	); err != nil {
@@ -931,6 +948,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		pitr,
 		c.snapshotMeta,
 		buffer,
+		c.config.canGCCacheSize,
 		c.mp,
 		c.fs.Service,
 	); err != nil {
@@ -952,6 +970,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		pitr,
 		c.snapshotMeta,
 		buffer,
+		c.config.canGCCacheSize,
 		c.mp,
 		c.fs.Service,
 	); err != nil {

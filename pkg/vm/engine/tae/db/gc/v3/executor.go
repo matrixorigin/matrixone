@@ -67,6 +67,7 @@ func BuildBloomfilter(
 func NewGCExecutor(
 	buffer *containers.OneSchemaBatchBuffer,
 	isBufferOwner bool,
+	cacheSize int,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) *GCExecutor {
@@ -76,6 +77,8 @@ func NewGCExecutor(
 	}
 	exec.buffer.isOwner = isBufferOwner
 	exec.buffer.impl = buffer
+
+	exec.config.canGCCacheSize = cacheSize
 	return exec
 }
 
@@ -83,6 +86,10 @@ type GCExecutor struct {
 	buffer struct {
 		isOwner bool
 		impl    *containers.OneSchemaBatchBuffer
+	}
+
+	config struct {
+		canGCCacheSize int
 	}
 	mp   *mpool.MPool
 	fs   fileservice.FileService
@@ -148,9 +155,10 @@ func (exec *GCExecutor) Run(
 	cannotGCSinker := exec.getSinker(
 		engine_util.WithBuffer(exec.buffer.impl, false),
 	)
+
 	canGCSinker := exec.getSinker(
 		engine_util.WithBuffer(exec.buffer.impl, false),
-		engine_util.WithTailSizeCap(mpool.MB*64),
+		engine_util.WithTailSizeCap(exec.config.canGCCacheSize),
 	)
 	defer cannotGCSinker.Close()
 	defer canGCSinker.Close()

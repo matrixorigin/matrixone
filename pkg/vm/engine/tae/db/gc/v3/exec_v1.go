@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,6 +36,7 @@ import (
 const (
 	Default_Coarse_EstimateRows = 10000000
 	Default_Coarse_Probility    = 0.0001
+	Default_CanGC_TailSize      = 64 * malloc.MB
 )
 
 type GCJobExecutorOption func(*GCJob)
@@ -42,10 +44,12 @@ type GCJobExecutorOption func(*GCJob)
 func WithGCJobCoarseConfig(
 	estimateRows int,
 	probility float64,
+	size int,
 ) GCJobExecutorOption {
 	return func(e *GCJob) {
 		e.config.coarseEstimateRows = estimateRows
 		e.config.coarseProbility = probility
+		e.config.canGCCacheSize = size
 	}
 }
 
@@ -54,6 +58,7 @@ type CheckpointBasedGCJob struct {
 	config struct {
 		coarseEstimateRows int
 		coarseProbility    float64
+		canGCCacheSize     int
 	}
 	sourcer          engine.BaseReader
 	snapshotMeta     *logtail.SnapshotMeta
@@ -82,7 +87,6 @@ func NewCheckpointBasedGCJob(
 	opts ...GCJobExecutorOption,
 ) *CheckpointBasedGCJob {
 	e := &CheckpointBasedGCJob{
-		GCExecutor:       *NewGCExecutor(buffer, isOwner, mp, fs),
 		sourcer:          sourcer,
 		snapshotMeta:     snapshotMeta,
 		accountSnapshots: accountSnapshots,
@@ -94,6 +98,7 @@ func NewCheckpointBasedGCJob(
 		opt(e)
 	}
 	e.fillDefaults()
+	e.GCExecutor = *NewGCExecutor(buffer, isOwner, e.config.canGCCacheSize, mp, fs)
 	return e
 }
 
@@ -118,6 +123,9 @@ func (e *CheckpointBasedGCJob) fillDefaults() {
 	}
 	if e.config.coarseProbility <= 0 {
 		e.config.coarseProbility = Default_Coarse_Probility
+	}
+	if e.config.canGCCacheSize <= 0 {
+		e.config.canGCCacheSize = Default_CanGC_TailSize
 	}
 }
 
