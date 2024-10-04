@@ -28,7 +28,6 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -136,7 +135,6 @@ func buildInsertPlans(
 			return err
 		}
 
-		logutil.Infof("ERIC BUILd Insert Plan: insert cols : %v", insertColsNameFromStmt)
 		// try to build pk filter epxr for origin table
 		if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsNameFromStmt, nil) {
 			pkLocationMap := newLocationMap(tableDef, nil)
@@ -1733,10 +1731,6 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	preInsertProjection := getProjectionByLastNode(builder, lastNodeId)
 	hiddenColumnTyp, hiddenColumnName := getHiddenColumnForPreInsert(tableDef)
 
-	for i, c := range preInsertProjection {
-		logutil.Infof("PreInsertProject: %d %v", i, *c)
-	}
-
 	hashAutoCol := false
 	for _, col := range tableDef.Cols {
 		if col.Typ.AutoIncr {
@@ -1773,10 +1767,6 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 				})
 			}
 		}
-	}
-
-	for i, c := range preInsertProjection {
-		logutil.Infof("AFTER PreInsertProject: %d %v", i, *c)
 	}
 
 	name2ColIndex := make(map[string]int32, len(tableDef.Cols))
@@ -4349,8 +4339,6 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		}
 	}
 
-	logutil.Infof("lastnode %d, params = %s\n", lastNodeId, indexdef.IndexAlgoParams)
-
 	// INSERT INTO index_table SELECT f.* from sink_scan CROSS APPLY fulltext_index_tokenize(algoParams, pk, col1, col2,...) as f;
 
 	// TableFunc fulltext_index_tokenize
@@ -4448,10 +4436,6 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		},
 	})
 
-	logutil.Infof("Binding Tag %d", tablefunc.BindingTags[0])
-	logutil.Infof("PROJECT HERE. %v", project)
-	logutil.Infof("APPLY HERE. %d", lastNodeId)
-
 	projectNode := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeId},
@@ -4465,14 +4449,11 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, indexdef.IndexName)
 	}
 
-	logutil.Infof("TABLEID = %d", indexTableDef.TblId)
 	insertEntriesTableDef := DeepCopyTableDef(indexTableDef, false)
 	for _, col := range indexTableDef.Cols {
 		if col.Name != catalog.Row_ID {
 			insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
 		}
-
-		logutil.Infof("FULLTEXT INDEX COL %s", col.Name)
 	}
 
 	preInsertNode := &Node{
@@ -4707,8 +4688,6 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 	}
 
 	// delete
-	logutil.Infof("LastNodeId : %d, deleteIdx %d, pkPos = %d, %v", lastNodeId, deleteIdx, pkPos, pkTyp)
-
 	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, indexObjRef, indexTableDef, deleteIdx, -1, false, pkPos, pkTyp, delCtx.lockTable, delCtx.partitionInfos)
 	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, true, false)
 	putDeleteNodeInfo(delNodeInfo)
