@@ -66,7 +66,7 @@ func (g *GCWorker) resetObjects() {
 	g.objects = make([]string, 0)
 }
 
-func (g *GCWorker) ExecDelete(ctx context.Context, names []string, disableGC bool) error {
+func (g *GCWorker) ExecDelete(ctx context.Context, names []string) error {
 	g.Lock()
 	g.objects = append(g.objects, names...)
 	if len(g.objects) == 0 {
@@ -82,11 +82,8 @@ func (g *GCWorker) ExecDelete(ctx context.Context, names []string, disableGC boo
 			zap.Int("file count", deleteCount),
 			zap.String("time cost", time.Since(now).String()))
 	}()
-	logutil.Infof("[DB GC] disableGC: %v, files to delete: %v", disableGC, g.objects)
-	var err error
-	if !disableGC {
-		err = g.fs.DelFiles(ctx, g.objects)
-	}
+	logutil.Infof("[DB GC] files to delete: %v", g.objects)
+	err := g.fs.DelFiles(ctx, g.objects)
 	g.Lock()
 	defer g.Unlock()
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {

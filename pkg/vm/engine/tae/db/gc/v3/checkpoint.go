@@ -103,8 +103,6 @@ type checkpointCleaner struct {
 	// files, and only one worker will run
 	delWorker *GCWorker
 
-	disableGC bool
-
 	// checkGC is to check the correctness of GC
 	checkGC bool
 
@@ -136,7 +134,6 @@ func NewCheckpointCleaner(
 	sid string,
 	fs *objectio.ObjectFS,
 	checkpointCli checkpoint.RunnerReader,
-	disableGC bool,
 	opts ...CheckpointCleanerOption,
 ) Cleaner {
 	cleaner := &checkpointCleaner{
@@ -144,7 +141,6 @@ func NewCheckpointCleaner(
 		sid:           sid,
 		fs:            fs,
 		checkpointCli: checkpointCli,
-		disableGC:     disableGC,
 	}
 	for _, opt := range opts {
 		opt(cleaner)
@@ -670,18 +666,16 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	logutil.Info("[MergeCheckpoint]",
 		common.OperationField("CKP GC"),
 		common.OperandField(deleteFiles))
-	if !c.disableGC {
-		err = c.fs.DelFiles(c.ctx, deleteFiles)
-		if err != nil {
-			logutil.Errorf("DelFiles failed: %v", err.Error())
-			return err
-		}
-		for _, file := range deleteFiles {
-			if strings.Contains(file, checkpoint.PrefixMetadata) {
-				info := strings.Split(file, checkpoint.CheckpointDir+"/")
-				name := info[1]
-				c.checkpointCli.RemoveCheckpointMetaFile(name)
-			}
+	err = c.fs.DelFiles(c.ctx, deleteFiles)
+	if err != nil {
+		logutil.Errorf("DelFiles failed: %v", err.Error())
+		return err
+	}
+	for _, file := range deleteFiles {
+		if strings.Contains(file, checkpoint.PrefixMetadata) {
+			info := strings.Split(file, checkpoint.CheckpointDir+"/")
+			name := info[1]
+			c.checkpointCli.RemoveCheckpointMetaFile(name)
 		}
 	}
 	return nil
@@ -761,7 +755,7 @@ func (c *checkpointCleaner) tryGCAgainstGlobalCheckpoint(gckp *checkpoint.Checkp
 	}
 	// Delete files after doGCAgainstGlobalCheckpoint
 	// TODO:Requires Physical Removal Policy
-	err = c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
+	err = c.delWorker.ExecDelete(c.ctx, gc)
 	if err != nil {
 		logutil.Infof("[DiskCleaner] ExecDelete failed: %v", err.Error())
 		return err
