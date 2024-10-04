@@ -105,7 +105,12 @@ func (exec *GCExecutor) doFilter(
 	canGCSinker SinkerFn,
 ) error {
 	bat := exec.getBuffer()
+	canGCBat := exec.getBuffer()
+	defer exec.putBuffer(bat)
+	defer exec.putBuffer(canGCBat)
 	for {
+		bat.CleanOnlyData()
+		canGCBat.CleanOnlyData()
 		// 1. get next batch from sourcer
 		done, err := sourcer(ctx, bat.Attrs, nil, exec.mp, bat)
 		if err != nil {
@@ -124,20 +129,17 @@ func (exec *GCExecutor) doFilter(
 			return err
 		}
 		// 3. sink the batch to the corresponding sinker
-		cannotGCBat := exec.getBuffer()
-		defer exec.putBuffer(cannotGCBat)
 		exec.sels = exec.sels[:0]
 		bitmap.ToArray(&exec.bm, &exec.sels)
-		if _, err := cannotGCBat.AppendWithCopy(ctx, exec.mp, bat); err != nil {
+		if err := canGCBat.Union(bat, exec.sels, exec.mp); err != nil {
 			return err
 		}
-		if err := cannotGCSinker(ctx, cannotGCBat); err != nil {
-			return err
-		}
-		// remove the GC'ed rows from the batch
 		bat.Shrink(exec.sels, false)
+		if err := cannotGCSinker(ctx, bat); err != nil {
+			return err
+		}
 		logutil.Infof("doFilter: %d, bat is %d", len(exec.sels), bat.Vecs[0].Length())
-		if err := canGCSinker(ctx, bat); err != nil {
+		if err := canGCSinker(ctx, canGCBat); err != nil {
 			return err
 		}
 	}
