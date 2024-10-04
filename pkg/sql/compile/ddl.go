@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1524,7 +1523,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tmpDBSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
+		if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, def.Name), nil); err == nil {
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
 		}
 
@@ -1539,7 +1538,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 			def,
 			c.proc.GetTxnOperator(),
 			func() string {
-				return engine.GetTempTableName(dbName, tblName)
+				return engine.GetTempTableName(dbName, def.Name)
 			})
 		if err != nil {
 			return err
@@ -2047,16 +2046,36 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
 		var err error
+		var oldIndexId, newIndexId uint64
+		var idxtblname string
 		if isTemp {
+			if rel, err = dbSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, name), nil); err != nil {
+				return err
+			}
+			oldIndexId = rel.GetTableID(c.proc.Ctx)
+			newIndexId = oldIndexId
+			idxtblname = engine.GetTempTableName(dbName, name)
 			_, err = dbSource.Truncate(c.proc.Ctx, engine.GetTempTableName(dbName, name))
 		} else {
-			_, err = dbSource.Truncate(c.proc.Ctx, name)
+			if rel, err = dbSource.Relation(c.proc.Ctx, name, nil); err != nil {
+				return err
+			}
+			oldIndexId = rel.GetTableID(c.proc.Ctx)
+			newIndexId, err = dbSource.Truncate(c.proc.Ctx, name)
+			idxtblname = name
 		}
 		if err != nil {
 			return err
 		}
 
-		// ERIC TODO: reset auto increment
+		// only non-temporary table can insert into mo_catalog tables so auto increment is not working on temp table
+		if !isTemp {
+			if err = maybeResetAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, idxtblname,
+				oldIndexId, newIndexId, keepAutoIncrement, c.proc.GetTxnOperator()); err != nil {
+				return err
+			}
+		}
+
 	}
 
 	//Truncate Partition subtable if needed
@@ -2306,14 +2325,14 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 		for _, name := range qry.IndexTableNames {
-			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
+			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource,
+				engine.GetTempTableName(dbName, name), c.proc.GetTxnOperator()); err != nil {
 				return err
 			}
 
-			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
+			if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, name)); err != nil {
 				return err
 			}
-
 		}
 
 		//delete partition table
@@ -3334,7 +3353,6 @@ func maybeDeleteAutoIncrement(
 	txnOp client.TxnOperator) error {
 
 	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
-
 	rel, err := db.Relation(ctx, tblname, nil)
 	if err != nil {
 		return err
@@ -3358,8 +3376,46 @@ func maybeDeleteAutoIncrement(
 		if err != nil {
 			return err
 		}
+	}
 
-		logutil.Infof("DELETED AUTO INCREMENT %s", tblname)
+	return nil
+}
+
+func maybeResetAutoIncrement(
+	ctx context.Context,
+	sid string,
+	db engine.Database,
+	tblname string,
+	oldId uint64,
+	newId uint64,
+	keepAutoIncrement bool,
+	txnOp client.TxnOperator) error {
+
+	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
+
+	rel, err := db.Relation(ctx, tblname, nil)
+	if err != nil {
+		return err
+	}
+
+	tblDef := rel.GetTableDef(ctx)
+	var containAuto bool
+	for _, col := range tblDef.Cols {
+		if col.Typ.AutoIncr {
+			containAuto = true
+			break
+		}
+	}
+	if containAuto {
+		err = incrservice.GetAutoIncrementService(sid).Reset(
+			ctx,
+			oldId,
+			newId,
+			keepAutoIncrement,
+			txnOp)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
