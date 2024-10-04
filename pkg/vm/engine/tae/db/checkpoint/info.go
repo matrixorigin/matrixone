@@ -32,7 +32,7 @@ type RunnerReader interface {
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 	MaxGlobalCheckpoint() *CheckpointEntry
-	GetStage() types.TS
+	GetLowWaterMark() types.TS
 	MaxLSN() uint64
 	GetCatalog() *catalog.Catalog
 	GetCheckpointMetaFiles() map[string]struct{}
@@ -140,7 +140,9 @@ func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 	return incrementals
 }
 
-func (r *runner) GetStage() types.TS {
+// this API returns the min ts of all checkpoints
+// the start of global checkpoint is always 0
+func (r *runner) GetLowWaterMark() types.TS {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
 	global, okG := r.storage.globals.Min()
