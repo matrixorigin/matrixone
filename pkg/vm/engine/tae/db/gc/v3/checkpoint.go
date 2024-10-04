@@ -45,21 +45,21 @@ type checkpointCleaner struct {
 	checkpointCli checkpoint.RunnerReader
 
 	watermarks struct {
-		// scanWatermark is the watermark of the incremental checkpoint which has been
+		// scanWaterMark is the watermark of the incremental checkpoint which has been
 		// scanned by the cleaner. After the cleaner scans the checkpoint, it
 		// records all the object-list found in the checkpoint into some GC-specific
-		// files. The scanWatermark is used to record the end of the checkpoint.
+		// files. The scanWaterMark is used to record the end of the checkpoint.
 		// For example:
 		// Incremental checkpoint: [t100, t200), [t200, t300), [t300, t400)
-		// scanWatermark: [t100, t200)
+		// scanWaterMark: [t100, t200)
 		// remainingObjects: windows: [t100, t200), [f1, f2, f3]
 		// The cleaner will scan the checkpoint [t200, t300) next time. Then:
-		// scanWatermark: [t100, t200), [t200, t300)
+		// scanWaterMark: [t100, t200), [t200, t300)
 		// remainingObjects: windows:
 		// {[t100, t200), [f1, f2, f3]}, {[t200, t300), [f4, f5, f6]}
-		scanWatermark atomic.Pointer[checkpoint.CheckpointEntry]
+		scanWaterMark atomic.Pointer[checkpoint.CheckpointEntry]
 
-		gcWatermark atomic.Pointer[checkpoint.CheckpointEntry]
+		gcWaterMark atomic.Pointer[checkpoint.CheckpointEntry]
 	}
 
 	ckpGC atomic.Pointer[types.TS]
@@ -247,13 +247,13 @@ func (c *checkpointCleaner) Replay() error {
 		}
 	}
 	ckp := checkpoint.NewCheckpointEntry(c.sid, maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
-	c.updateScanWatermark(ckp)
+	c.updateScanWaterMark(ckp)
 	if acctFile == "" {
 		//No account table information, it may be a new cluster or an upgraded cluster,
 		//and the table information needs to be initialized from the checkpoint
-		scanWatermark := c.GetScanWatermark()
+		scanWaterMark := c.GetScanWaterMark()
 		isConsumedGCkp := false
-		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.sid, c.fs.Service, scanWatermark.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
+		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.sid, c.fs.Service, scanWaterMark.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
 		if err != nil {
 			// TODO: why only warn???
 			logutil.Warn(
@@ -265,7 +265,7 @@ func (c *checkpointCleaner) Replay() error {
 			return nil
 		}
 		for _, entry := range checkpointEntries {
-			logutil.Infof("load checkpoint: %s, consumedEnd: %s", entry.String(), scanWatermark.String())
+			logutil.Infof("load checkpoint: %s, consumedEnd: %s", entry.String(), scanWaterMark.String())
 			ckpData, err := c.collectCkpData(entry)
 			if err != nil {
 				// TODO: why only warn???
@@ -291,7 +291,7 @@ func (c *checkpointCleaner) Replay() error {
 			logutil.Info(
 				"Replay-GC-Load-Global-Checkpoint",
 				zap.String("max-gloabl", entry.String()),
-				zap.String("max-consumed", scanWatermark.String()),
+				zap.String("max-consumed", scanWaterMark.String()),
 			)
 			ckpData, err := c.collectCkpData(entry)
 			if err != nil {
@@ -317,12 +317,12 @@ func (c *checkpointCleaner) GetCheckpoints() map[string]struct{} {
 	return c.checkpointCli.GetCheckpointMetaFiles()
 }
 
-func (c *checkpointCleaner) updateScanWatermark(e *checkpoint.CheckpointEntry) {
-	c.watermarks.scanWatermark.Store(e)
+func (c *checkpointCleaner) updateScanWaterMark(e *checkpoint.CheckpointEntry) {
+	c.watermarks.scanWaterMark.Store(e)
 }
 
-func (c *checkpointCleaner) updateGCWatermark(e *checkpoint.CheckpointEntry) {
-	c.watermarks.gcWatermark.Store(e)
+func (c *checkpointCleaner) updateGCWaterMark(e *checkpoint.CheckpointEntry) {
+	c.watermarks.gcWaterMark.Store(e)
 }
 
 func (c *checkpointCleaner) updateCkpGC(ts *types.TS) {
@@ -341,16 +341,16 @@ func (c *checkpointCleaner) recordFilesGCed(files []string) {
 	c.gcState.filesGCed = append(c.gcState.filesGCed, files...)
 }
 
-func (c *checkpointCleaner) GetScanWatermark() *checkpoint.CheckpointEntry {
-	return c.watermarks.scanWatermark.Load()
+func (c *checkpointCleaner) GetScanWaterMark() *checkpoint.CheckpointEntry {
+	return c.watermarks.scanWaterMark.Load()
 }
 
 func (c *checkpointCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
-	return c.GetScanWatermark()
+	return c.GetScanWaterMark()
 }
 
-func (c *checkpointCleaner) GetGCWatermark() *checkpoint.CheckpointEntry {
-	return c.watermarks.gcWatermark.Load()
+func (c *checkpointCleaner) GetGCWaterMark() *checkpoint.CheckpointEntry {
+	return c.watermarks.gcWaterMark.Load()
 }
 
 func (c *checkpointCleaner) GeteCkpGC() *types.TS {
@@ -381,8 +381,8 @@ func (c *checkpointCleaner) OrhpanFilesGCed() []string {
 }
 
 func (c *checkpointCleaner) mergeSnapshotFile(metas map[string]struct{}) error {
-	scanWatermark := c.GetScanWatermark()
-	if scanWatermark == nil {
+	scanWaterMark := c.GetScanWaterMark()
+	if scanWaterMark == nil {
 		return nil
 	}
 	var (
@@ -454,19 +454,19 @@ func (c *checkpointCleaner) upgradeGCFiles(
 	checker func(string, *GCWindow) bool,
 ) error {
 	// get the scan watermark
-	scanWatermark := c.GetScanWatermark()
-	if scanWatermark == nil {
-		panic("scanWatermark is nil")
+	scanWaterMark := c.GetScanWaterMark()
+	if scanWaterMark == nil {
+		panic("scanWaterMark is nil")
 	}
 	now := time.Now()
 	logutil.Info(
 		"[DiskCleaner]",
-		zap.String("MergeGCFile-Start", scanWatermark.String()),
+		zap.String("MergeGCFile-Start", scanWaterMark.String()),
 	)
 	defer func() {
 		logutil.Info(
 			"[DiskCleaner]",
-			zap.String("MergeGCFile-End", scanWatermark.String()),
+			zap.String("MergeGCFile-End", scanWaterMark.String()),
 			zap.Duration("cost", time.Since(now)),
 		)
 	}()
@@ -742,7 +742,7 @@ func (c *checkpointCleaner) tryGCAgainstGlobalCheckpoint(gckp *checkpoint.Checkp
 		logutil.Infof("[DiskCleaner] ExecDelete failed: %v", err.Error())
 		return err
 	}
-	err = c.mergeCheckpointFiles(c.checkpointCli.GetStage(), accountSnapshots)
+	err = c.mergeCheckpointFiles(c.checkpointCli.GetLowWaterMark(), accountSnapshots)
 	if err != nil {
 		// TODO: Error handle
 		logutil.Errorf("[DiskCleaner] mergeCheckpointFiles failed: %v", err.Error())
@@ -815,14 +815,14 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpoint(
 	softCost = time.Since(now)
 
 	// update gc watermark and refresh snapshot meta with the latest gc result
-	// gcWatermark will be updated to the end of the global checkpoint after each GC
+	// gcWaterMark will be updated to the end of the global checkpoint after each GC
 	// Before:
-	// gcWatermark: GCKP[t100, t200)
+	// gcWaterMark: GCKP[t100, t200)
 	// After:
-	// gcWatermark: GCKP[t200, t400)
+	// gcWaterMark: GCKP[t200, t400)
 	now = time.Now()
 	// TODO:
-	c.updateGCWatermark(gckp)
+	c.updateGCWaterMark(gckp)
 	c.snapshotMeta.MergeTableInfo(accountSnapshots, pitrs)
 	mergeCost = time.Since(now)
 	return filesToGC, nil
@@ -849,14 +849,14 @@ func (c *checkpointCleaner) CheckGC() error {
 	defer c.remainingObjects.RUnlock()
 
 	// no scan watermark, GC has not yet run
-	var scanWatermark *checkpoint.CheckpointEntry
-	if scanWatermark = c.GetScanWatermark(); scanWatermark == nil {
+	var scanWaterMark *checkpoint.CheckpointEntry
+	if scanWaterMark = c.GetScanWaterMark(); scanWaterMark == nil {
 		return moerr.NewInternalErrorNoCtx("GC has not yet run")
 	}
 
-	gCkp := c.GetGCWatermark()
+	gCkp := c.GetGCWaterMark()
 	testutils.WaitExpect(10000, func() bool {
-		gCkp = c.GetGCWatermark()
+		gCkp = c.GetGCWaterMark()
 		return gCkp != nil
 	})
 	if gCkp == nil {
@@ -867,7 +867,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		logutil.Warnf("MaxCompared is nil, use maxGlobalCkp %v", gCkp.String())
 	}
 	for i, ckp := range debugCandidates {
-		maxEnd := scanWatermark.GetEnd()
+		maxEnd := scanWaterMark.GetEnd()
 		ckpEnd := ckp.GetEnd()
 		if ckpEnd.Equal(&maxEnd) {
 			debugCandidates = debugCandidates[:i+1]
@@ -875,7 +875,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		}
 	}
 	start1 := debugCandidates[len(debugCandidates)-1].GetEnd()
-	start2 := scanWatermark.GetEnd()
+	start2 := scanWaterMark.GetEnd()
 	if !start1.Equal(&start2) {
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
 			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
@@ -987,18 +987,18 @@ func (c *checkpointCleaner) Process() {
 	}()
 
 	// 1. get the max consumed timestamp water level
-	var tsWaterLevel types.TS
-	if scanWatermark := c.GetScanWatermark(); scanWatermark != nil {
-		tsWaterLevel = scanWatermark.GetEnd()
+	var tsWaterMark types.TS
+	if scanWaterMark := c.GetScanWaterMark(); scanWaterMark != nil {
+		tsWaterMark = scanWaterMark.GetEnd()
 	}
 
-	// 2. get up to 10 incremental checkpoints starting from the tsWaterLevel
-	checkpoints := c.checkpointCli.ICKPSeekLT(tsWaterLevel, 10)
+	// 2. get up to 10 incremental checkpoints starting from the tsWaterMark
+	checkpoints := c.checkpointCli.ICKPSeekLT(tsWaterMark, 10)
 	// if there is no incremental checkpoint, quickly return
 	if len(checkpoints) == 0 {
 		logutil.Info(
 			"DiskCleaner-Process-NoCheckpoint",
-			zap.String("water-level", tsWaterLevel.ToString()),
+			zap.String("water-level", tsWaterMark.ToString()),
 		)
 		return
 	}
@@ -1032,7 +1032,7 @@ func (c *checkpointCleaner) Process() {
 		return
 	}
 	c.addGCWindow(gcWindow)
-	c.updateScanWatermark(candidates[len(candidates)-1])
+	c.updateScanWaterMark(candidates[len(candidates)-1])
 
 	// get the max global checkpoint
 	// if there is no global checkpoint, quickly return
@@ -1042,9 +1042,9 @@ func (c *checkpointCleaner) Process() {
 	}
 
 	// get the gc watermark, which is the end of the global checkpoint after last GC
-	var gcWatermarkTS types.TS
-	if gcWatermark := c.GetGCWatermark(); gcWatermark != nil {
-		gcWatermarkTS = gcWatermark.GetEnd()
+	var gcWaterMarkTS types.TS
+	if gcWaterMark := c.GetGCWaterMark(); gcWaterMark != nil {
+		gcWaterMarkTS = gcWaterMark.GetEnd()
 	}
 
 	// if the gc watermark is less than the end of the global checkpoint, it means
@@ -1054,11 +1054,11 @@ func (c *checkpointCleaner) Process() {
 	for name := range c.metaFiles {
 		metas[name] = struct{}{}
 	}
-	if gcWatermarkTS.LT(&nextGCTS) {
+	if gcWaterMarkTS.LT(&nextGCTS) {
 		logutil.Info(
 			"DiskCleaner-Process-TryGC",
 			zap.String("max-global", maxGlobalCKP.String()),
-			zap.String("gc-watermark", gcWatermarkTS.ToString()),
+			zap.String("gc-watermark", gcWaterMarkTS.ToString()),
 		)
 		if err = c.tryGCAgainstGlobalCheckpoint(
 			maxGlobalCKP,

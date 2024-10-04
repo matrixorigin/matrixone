@@ -733,7 +733,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		logutil.Infof("[DiskCleaner] ExecDelete failed: %v", err.Error())
 		return err
 	}
-	err = c.mergeCheckpointFiles(c.ckpClient.GetStage(), snapshotList, pitrs)
+	err = c.mergeCheckpointFiles(c.ckpClient.GetLowWaterMark(), snapshotList, pitrs)
 
 	if err != nil {
 		// TODO: Error handle
