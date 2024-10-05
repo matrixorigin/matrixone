@@ -324,11 +324,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			DeleteCols: []plan.ColRef{
 				{
 					RelPos: finalProjTag,
-					ColPos: int32(finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]),
+					ColPos: int32(finalColName2Idx[alias+"."+catalog.Row_ID]),
 				},
 				{
 					RelPos: finalProjTag,
-					ColPos: int32(finalColName2Idx[alias+"."+catalog.Row_ID]),
+					ColPos: int32(finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]),
 				},
 			},
 		})

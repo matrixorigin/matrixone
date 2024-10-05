@@ -208,11 +208,11 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 			DeleteCols: []plan.ColRef{
 				{
 					RelPos: selectNode.BindingTags[0],
-					ColPos: pkPos,
+					ColPos: rowIDPos,
 				},
 				{
 					RelPos: selectNode.BindingTags[0],
-					ColPos: rowIDPos,
+					ColPos: pkPos,
 				},
 			},
 		})
@@ -265,11 +265,11 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 				DeleteCols: []plan.ColRef{
 					{
 						RelPos: idxNode.BindingTags[0],
-						ColPos: pkPos,
+						ColPos: rowIDPos,
 					},
 					{
 						RelPos: idxNode.BindingTags[0],
-						ColPos: rowIDPos,
+						ColPos: pkPos,
 					},
 				},
 			})
