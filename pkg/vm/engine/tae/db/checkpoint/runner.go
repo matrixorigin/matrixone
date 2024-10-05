@@ -215,6 +215,7 @@ type runner struct {
 		sync.RWMutex
 		incrementals *btree.BTreeG[*CheckpointEntry]
 		globals      *btree.BTreeG[*CheckpointEntry]
+		compacted    *btree.BTreeG[*CheckpointEntry]
 	}
 
 	gcTS atomic.Value

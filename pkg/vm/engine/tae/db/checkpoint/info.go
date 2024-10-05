@@ -31,6 +31,7 @@ type RunnerReader interface {
 	GetGlobalCheckpointCount() int
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
+	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
 	MaxGlobalCheckpoint() *CheckpointEntry
 	GetLowWaterMark() types.TS
 	MaxLSN() uint64
@@ -132,6 +133,30 @@ func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 				continue
 			}
 			incrementals = append(incrementals, e)
+			if !it.Next() {
+				break
+			}
+		}
+	}
+	return incrementals
+}
+
+func (r *runner) ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry {
+	r.storage.Lock()
+	tree := r.storage.incrementals.Copy()
+	r.storage.Unlock()
+	it := tree.Iter()
+	ok := it.Seek(NewCheckpointEntry(r.rt.SID(), *start, *start, ET_Incremental))
+	incrementals := make([]*CheckpointEntry, 0)
+	if ok {
+		for len(incrementals) < cnt {
+			e := it.Item()
+			if !e.IsFinished() {
+				break
+			}
+			if e.start.GT(start) && e.start.LT(end) {
+				incrementals = append(incrementals, e)
+			}
 			if !it.Next() {
 				break
 			}

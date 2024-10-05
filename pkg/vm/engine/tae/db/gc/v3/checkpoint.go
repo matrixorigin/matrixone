@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -517,72 +518,43 @@ func (c *checkpointCleaner) upgradeGCFiles(
 
 // getMetaFilesToMerge returns the files that can be merged.
 // metaFiles: all checkpoint meta files should be merged.
-func getMetaFilesToMerge(
-	ts types.TS,
-	checkpointMetaFiles map[string]struct{},
-) (
-	metaFiles []*checkpoint.MetaFile,
-	err error,
+func (c *checkpointCleaner) getMetaFilesToMerge() (
+	checkpoints []*checkpoint.CheckpointEntry,
 ) {
-	if metaFiles, err = checkpoint.FilterMetaFilesByTimestamp(
-		ts, checkpointMetaFiles,
-	); err != nil {
-		return
+	start := c.GetCheckpointGCWaterMark()
+	end := c.GetGCWaterMark().GetEnd()
+	if !end.GT(start) {
+		return nil
 	}
-	if len(metaFiles) == 0 {
-		return
-	}
-
-	var tmpFiles []*checkpoint.MetaFile
-
-	for i, file := range metaFiles {
-		start := file.GetStart()
-		if start.IsEmpty() {
-			if i != 0 {
-				tmpFiles = append(tmpFiles, metaFiles[i-1])
-			}
-		}
-	}
-
-	metaFiles = tmpFiles
-	return
+	return c.checkpointCli.ICKPRange(start, &end, 10)
 }
 
 func (c *checkpointCleaner) getDeleteFile(
-	ctx context.Context,
-	fs fileservice.FileService,
-	metaFile *checkpoint.MetaFile,
-	ts, stage types.TS,
+	checkpoints []*checkpoint.CheckpointEntry,
+	stage types.TS,
 	ckpSnapList []types.TS,
 ) ([]string, []*checkpoint.CheckpointEntry, error) {
-	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(
-		ctx, c.sid, fs, metaFile, ts, true,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(ckps) == 0 {
+	if len(checkpoints) == 0 {
 		return nil, nil, nil
 	}
 	deleteFiles := make([]string, 0)
 	var mergeFiles []*checkpoint.CheckpointEntry
-	for i := len(ckps) - 1; i >= 0; i-- {
+	for i := len(checkpoints) - 1; i >= 0; i-- {
 		// TODO: remove this log
 		logutil.Info("[MergeCheckpoint]",
 			common.OperationField("List Checkpoint"),
-			common.OperandField(ckps[i].String()))
+			common.OperandField(checkpoints[i].String()))
 	}
-	for i := len(ckps) - 1; i >= 0; i-- {
-		ckp := ckps[i]
+	for i := len(checkpoints) - 1; i >= 0; i-- {
+		ckp := checkpoints[i]
 		end := ckp.GetEnd()
 		if end.LT(&stage) {
-			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) &&
-				ckp.GetType() != checkpoint.ET_Global {
+			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) {
 				// TODO: remove this log
 				logutil.Info("[MergeCheckpoint]",
 					common.OperationField("isSnapshotCKPRefers"),
 					common.OperandField(ckp.String()))
-				mergeFiles = ckps[:i+1]
+				mergeFiles = checkpoints[:i+1]
 				break
 			}
 			logutil.Info("[MergeCheckpoint]",
@@ -601,22 +573,13 @@ func (c *checkpointCleaner) getDeleteFile(
 				return nil, nil, err
 			}
 			deleteFiles = append(deleteFiles, nameMeta)
-			if i == len(ckps)-1 {
+			if i == len(checkpoints)-1 {
 				c.updateCheckpointGCWaterMark(&end)
 			}
 			for name := range locations {
 				deleteFiles = append(deleteFiles, name)
 			}
 			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
-
-			if ckp.GetType() == checkpoint.ET_Global {
-				// After the global checkpoint is processed,
-				// subsequent checkpoints need to be processed in the next getDeleteFile
-				logutil.Info("[MergeCheckpoint]",
-					common.OperationField("GC Global checkpoint"),
-					common.OperandField(ckp.String()))
-				break
-			}
 		}
 	}
 	return deleteFiles, mergeFiles, nil
@@ -635,13 +598,16 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	if checkpointLowWaterMark.IsEmpty() {
 		return nil
 	}
-	checkpointMetaFiles := c.GetCheckpointMetaFiles()
-	logutil.Infof("[MergeCheckpoint] checkpointMetaFiles len %d", len(checkpointMetaFiles))
-	metaFiles, err := getMetaFilesToMerge(
-		checkpointLowWaterMark, checkpointMetaFiles,
-	)
-	if err != nil || len(metaFiles) == 0 {
-		return err
+	checkpoints := c.getMetaFilesToMerge()
+	logutil.Infof("[MergeCheckpoint] checkpointMetaFiles len %d", len(checkpoints))
+	if len(checkpoints) == 0 {
+		return nil
+	}
+
+	gcWaterMark := c.GetGCWaterMark().GetEnd()
+	rangeEnd := checkpoints[len(checkpoints)-1].GetEnd()
+	if rangeEnd.LT(&gcWaterMark) {
+		panic(fmt.Sprintf("rangeEnd %s < gcWaterMark %s", rangeEnd, gcWaterMark))
 	}
 
 	ckpGC := c.GetCheckpointGCWaterMark()
@@ -656,27 +622,32 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	sort.Slice(ckpSnapList, func(i, j int) bool {
 		return ckpSnapList[i].LT(&ckpSnapList[j])
 	})
-	for _, metaFile := range metaFiles {
-		logutil.Info("[MergeCheckpoint]",
-			common.OperationField("MergeCheckpointFiles"),
-			common.OperandField(checkpointLowWaterMark.ToString()),
-			common.OperandField(metaFile.GetIndex()))
-		delFiles, _, err := c.getDeleteFile(
-			c.ctx,
-			c.fs.Service,
-			metaFile,
-			*ckpGC,
-			checkpointLowWaterMark,
-			ckpSnapList,
-		)
-		if err != nil {
-			return err
-		}
-		ckpGC = new(types.TS)
-		deleteFiles = append(deleteFiles, delFiles...)
-
-		deleteFiles = append(deleteFiles, delFiles...)
+	logutil.Info("[MergeCheckpoint]",
+		common.OperationField("MergeCheckpointFiles"),
+		common.OperandField(checkpointLowWaterMark.ToString()))
+	logutil.Info("[MergeCheckpoint]",
+		common.OperationField("MergeCheckpointFiles"),
+		common.OperandField(checkpointLowWaterMark.ToString()))
+	dFiles, mergeFiles, err := c.getDeleteFile(
+		checkpoints,
+		checkpointLowWaterMark,
+		ckpSnapList,
+	)
+	if err != nil {
+		return err
 	}
+	ckpGC = new(types.TS)
+	deleteFiles = append(deleteFiles, dFiles...)
+	var newName string
+	dFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFiles, c.mp)
+	if err != nil {
+		return err
+	}
+	if newName != "" {
+
+		//TODO: add to checkpoint tree
+	}
+	deleteFiles = append(deleteFiles, dFiles...)
 
 	logutil.Info("[MergeCheckpoint]",
 		common.OperationField("CKP GC"),

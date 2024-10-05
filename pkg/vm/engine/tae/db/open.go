@@ -288,11 +288,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CheckpointCfg.DisableGCCheckpoint {
 					return nil
 				}
-				scanWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
-				if scanWaterMark == nil {
+				gcWaterMark := db.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
+				if gcWaterMark == nil {
 					return nil
 				}
-				return db.BGCheckpointRunner.GCByTS(ctx, scanWaterMark.GetEnd())
+				return db.BGCheckpointRunner.GCByTS(ctx, gcWaterMark.GetEnd())
 			}),
 		gc.WithCronJob(
 			"catalog-gc",
@@ -301,11 +301,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CatalogCfg.DisableGC {
 					return nil
 				}
-				scanWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
-				if scanWaterMark == nil {
+				gcWaterMark := db.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
+				if gcWaterMark == nil {
 					return nil
 				}
-				db.Catalog.GCByTS(ctx, scanWaterMark.GetEnd())
+				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
 				return nil
 			}),
 		gc.WithCronJob(
