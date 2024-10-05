@@ -76,7 +76,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncate
 }
 func (r *runner) GetAllIncrementalCheckpoints() []*CheckpointEntry {
 	r.storage.Lock()
-	snapshot := r.storage.entries.Copy()
+	snapshot := r.storage.incrementals.Copy()
 	r.storage.Unlock()
 	return snapshot.Items()
 }
@@ -101,10 +101,10 @@ func (r *runner) MaxGlobalCheckpoint() *CheckpointEntry {
 	return global
 }
 
-func (r *runner) MaxCheckpoint() *CheckpointEntry {
+func (r *runner) MaxIncrementalCheckpoint() *CheckpointEntry {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
-	entry, _ := r.storage.entries.Max()
+	entry, _ := r.storage.incrementals.Max()
 	return entry
 }
 
@@ -114,7 +114,7 @@ func (r *runner) GetCatalog() *catalog.Catalog {
 
 func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 	r.storage.Lock()
-	tree := r.storage.entries.Copy()
+	tree := r.storage.incrementals.Copy()
 	r.storage.Unlock()
 	it := tree.Iter()
 	ok := it.Seek(NewCheckpointEntry(r.rt.SID(), ts, ts, ET_Incremental))
@@ -146,7 +146,7 @@ func (r *runner) GetLowWaterMark() types.TS {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
 	global, okG := r.storage.globals.Min()
-	incremental, okI := r.storage.entries.Min()
+	incremental, okI := r.storage.incrementals.Min()
 	if !okG && !okI {
 		return types.TS{}
 	}
@@ -207,7 +207,7 @@ func (r *runner) GetAllCheckpoints() []*CheckpointEntry {
 	var ts types.TS
 	r.storage.Lock()
 	g := r.getLastFinishedGlobalCheckpointLocked()
-	tree := r.storage.entries.Copy()
+	tree := r.storage.incrementals.Copy()
 	r.storage.Unlock()
 	if g != nil {
 		ts = g.GetEnd()
@@ -257,7 +257,7 @@ func (r *runner) getGCTS() types.TS {
 func (r *runner) getGCedTS() types.TS {
 	r.storage.RLock()
 	minGlobal, _ := r.storage.globals.Min()
-	minIncremental, _ := r.storage.entries.Min()
+	minIncremental, _ := r.storage.incrementals.Min()
 	r.storage.RUnlock()
 	if minGlobal == nil {
 		return types.TS{}
