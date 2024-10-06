@@ -292,7 +292,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if gcWaterMark == nil {
 					return nil
 				}
-				return db.BGCheckpointRunner.GCByTS(ctx, gcWaterMark.GetEnd())
+				return db.BGCheckpointRunner.GCByTS(ctx, *gcWaterMark)
 			}),
 		gc.WithCronJob(
 			"catalog-gc",
@@ -305,7 +305,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if gcWaterMark == nil {
 					return nil
 				}
-				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
+				db.Catalog.GCByTS(ctx, *gcWaterMark)
 				return nil
 			}),
 		gc.WithCronJob(

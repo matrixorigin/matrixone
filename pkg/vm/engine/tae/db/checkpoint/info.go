@@ -40,7 +40,8 @@ type RunnerReader interface {
 	AddCheckpointMetaFile(string)
 	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
 	CompactedRange(cnt int) ([]*CheckpointEntry, bool)
-	AddCompacted(*CheckpointEntry) error
+	AddCompacted(entry *CheckpointEntry)
+	DeleteCompactedEntry(entry *CheckpointEntry)
 }
 
 func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncateLSN uint64) *containers.Batch {
@@ -190,8 +191,17 @@ func (r *runner) CompactedRange(cnt int) ([]*CheckpointEntry, bool) {
 	return compacted, len(compacted) == cnt
 }
 
-func (r *runner) AddCompacted(*CheckpointEntry) error {
-	return nil
+func (r *runner) AddCompacted(entry *CheckpointEntry) {
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	if entry == nil {
+		panic("nil entry")
+	}
+	if entry.entryType != ET_Compacted {
+		panic("invalid entry type")
+	}
+	r.storage.compacted.Set(entry)
+	return
 }
 
 // this API returns the min ts of all checkpoints

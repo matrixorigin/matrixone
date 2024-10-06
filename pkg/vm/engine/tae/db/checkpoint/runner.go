@@ -511,6 +511,16 @@ func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 		counter.TAE.CheckPoint.DeleteGlobalEntry.Add(1)
 	})
 }
+
+func (r *runner) DeleteCompactedEntry(entry *CheckpointEntry) {
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	r.storage.compacted.Delete(entry)
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DeleteCompactedEntry.Add(1)
+	})
+}
+
 func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
 	iarg, sarg, flush := fault.TriggerFault("flush_table_error")
 	if flush && (iarg == 0 || rand.Int63n(iarg) == 0) {

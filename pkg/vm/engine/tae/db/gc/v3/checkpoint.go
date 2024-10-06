@@ -621,9 +621,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	logutil.Info("[MergeCheckpoint]",
 		common.OperationField("MergeCheckpointFiles"),
 		common.OperandField(checkpointLowWaterMark.ToString()))
-	logutil.Info("[MergeCheckpoint]",
-		common.OperationField("MergeCheckpointFiles"),
-		common.OperandField(checkpointLowWaterMark.ToString()))
 	dFiles, mergeFiles, err := c.getDeleteFile(
 		checkpoints,
 		checkpointLowWaterMark,
@@ -633,26 +630,37 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 		return err
 	}
 	deleteFiles = append(deleteFiles, dFiles...)
-	var newName string
-	dFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFiles, c.mp)
+
+	// merge ickp
+	var newCheckpoint *checkpoint.CheckpointEntry
+	dFiles, newCheckpoint, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFiles, c.mp)
 	if err != nil {
 		return err
 	}
-	if newName != "" {
+	if newCheckpoint != nil {
 		//TODO: add to checkpoint tree
+		c.checkpointCli.AddCompacted(newCheckpoint)
+		ts := newCheckpoint.GetEnd()
+
+		// update checkpoint gc water mark
+		c.updateCheckpointGCWaterMark(&ts)
 	}
 	deleteFiles = append(deleteFiles, dFiles...)
 
+	// When the compacted tree exceeds 10 entries, you need to merge once
 	compacted, ok := c.checkpointCli.CompactedRange(10)
 	if ok {
-		dFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, compacted, c.mp)
+		dFiles, newCheckpoint, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, compacted, c.mp)
 		if err != nil {
 			return err
 		}
-		if newName != "" {
-			//TODO: add to checkpoint tree
+		if newCheckpoint != nil {
+			c.checkpointCli.AddCompacted(newCheckpoint)
 		}
 		deleteFiles = append(deleteFiles, dFiles...)
+		for _, ckp := range compacted {
+			c.checkpointCli.DeleteCompactedEntry(ckp)
+		}
 	}
 
 	logutil.Info("[MergeCheckpoint]",
