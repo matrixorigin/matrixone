@@ -560,6 +560,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.ToWriteS3 = t.ToWriteS3
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
 		op.Engine = t.Engine
+		op.SegmentMap = t.SegmentMap
 		op.SetInfo(&info)
 		return op
 	case vm.DedupJoin:
@@ -776,6 +777,7 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpdate {
 	arg := multi_update.NewArgument()
 	arg.Engine = eg
+	arg.SegmentMap = colexec.Get().GetCnSegmentMap()
 
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(n.UpdateCtxList))
 	for i, updateCtx := range n.UpdateCtxList {

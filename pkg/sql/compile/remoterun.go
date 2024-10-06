@@ -862,6 +862,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			AffectedRows:  t.GetAffectedRows(),
 			ToWriteS3:     t.ToWriteS3,
 			UpdateCtxList: updateCtxList,
+			SegmentMap:    t.SegmentMap,
 		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
@@ -1353,6 +1354,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetMultiUpdate()
 		arg.SetAffectedRows(t.AffectedRows)
 		arg.ToWriteS3 = t.ToWriteS3
+		arg.SegmentMap = t.SegmentMap
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
 		for i, muCtx := range t.UpdateCtxList {

@@ -93,9 +93,9 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 }
 
 func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepareStmt bool, skipStats bool, isExplain bool) (*Plan, error) {
-	if !isExplain {
-		return buildDelete(stmt, ctx, isPrepareStmt)
-	}
+	// if !isExplain {
+	// 	return buildDelete(stmt, ctx, isPrepareStmt)
+	// }
 
 	start := time.Now()
 	defer func() {

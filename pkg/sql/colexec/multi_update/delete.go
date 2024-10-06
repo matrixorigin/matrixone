@@ -34,10 +34,7 @@ func (update *MultiUpdate) delete_table(
 	ctr := &update.ctr
 	if ctr.deleteBuf[idx] == nil {
 		mainPkIdx := updateCtx.DeleteCols[1]
-		buf := batch.New(false, []string{catalog.Row_ID, "pk"})
-		buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-		buf.SetVector(1, vector.NewVec(*inputBatch.Vecs[mainPkIdx].GetType()))
-		ctr.deleteBuf[idx] = buf
+		ctr.deleteBuf[idx] = newDeleteBatch(inputBatch, mainPkIdx)
 	}
 	deleteBatch := ctr.deleteBuf[idx]
 	rowIdIdx := updateCtx.DeleteCols[0]
@@ -102,4 +99,11 @@ func (update *MultiUpdate) delete_table(
 	}
 
 	return
+}
+
+func newDeleteBatch(inputBatch *batch.Batch, mainPkIdx int) *batch.Batch {
+	buf := batch.New(false, []string{catalog.Row_ID, "pk"})
+	buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+	buf.SetVector(1, vector.NewVec(*inputBatch.Vecs[mainPkIdx].GetType()))
+	return buf
 }

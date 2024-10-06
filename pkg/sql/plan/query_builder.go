@@ -2679,9 +2679,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 				colPosMap := make(map[string]int32)
 				for idx, col := range tableDef.Cols {
-					colPosMap[tableDef.Name+"."+col.Name] = int32(idx)
+					colPosMap[col.Name] = int32(idx)
 				}
-				partitionExpr, err := getRemapParitionExpr(tableDef, lastTag, colPosMap)
+				partitionExpr, err := getRemapParitionExpr(tableDef, lastTag, colPosMap, false)
 				if err != nil {
 					return -1, err
 				}
