@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -26,7 +27,19 @@ func (update *MultiUpdate) delete_table(
 	proc *process.Process,
 	updateCtx *MultiUpdateCtx,
 	inputBatch *batch.Batch,
-	deleteBatch *batch.Batch) (err error) {
+	idx int,
+) (err error) {
+
+	// init buf
+	ctr := &update.ctr
+	if ctr.deleteBuf[idx] == nil {
+		mainPkIdx := updateCtx.DeleteCols[1]
+		buf := batch.New(false, []string{catalog.Row_ID, "pk"})
+		buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+		buf.SetVector(1, vector.NewVec(*inputBatch.Vecs[mainPkIdx].GetType()))
+		ctr.deleteBuf[idx] = buf
+	}
+	deleteBatch := ctr.deleteBuf[idx]
 	rowIdIdx := updateCtx.DeleteCols[0]
 
 	if len(updateCtx.PartitionTableIDs) > 0 {
