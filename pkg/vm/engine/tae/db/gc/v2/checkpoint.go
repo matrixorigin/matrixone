@@ -442,7 +442,7 @@ func (c *checkpointCleaner) mergeGCFile() error {
 			}
 			continue
 		}
-		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		_, end, _ := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		maxEnd := maxConsumed.GetEnd()
 		if end.LE(&maxEnd) {
 			deleteFiles = append(deleteFiles, GCMetaDir+dir.Name)

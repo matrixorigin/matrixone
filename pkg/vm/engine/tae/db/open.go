@@ -301,11 +301,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CatalogCfg.DisableGC {
 					return nil
 				}
-				gcWaterMark := db.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
+				gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
 				if gcWaterMark == nil {
 					return nil
 				}
-				db.Catalog.GCByTS(ctx, *gcWaterMark)
+				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
 				return nil
 			}),
 		gc.WithCronJob(
