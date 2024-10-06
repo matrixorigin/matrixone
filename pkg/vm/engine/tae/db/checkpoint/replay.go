@@ -414,7 +414,7 @@ func MergeCkpMeta(
 	}
 	metaFiles := make([]*MetaFile, 0)
 	for i, dir := range dirs {
-		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		start, end, _ := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
 			end:   end,

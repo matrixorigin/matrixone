@@ -631,14 +631,36 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 		return err
 	}
 	deleteFiles = append(deleteFiles, dFiles...)
-
 	// merge ickp
 	var newCheckpoint *checkpoint.CheckpointEntry
+	window := c.GetFirstWindow()
+
+	if len(mergeFiles) > 0 {
+		ckpEnd := mergeFiles[len(mergeFiles)-1].GetEnd()
+		end := window.tsRange.end
+		if ckpEnd.GT(&end) {
+			panic("checkpoint end ts is greater than window end ts")
+		}
+	}
+
+	buffer := MakeGCWindowBuffer(16 * mpool.MB)
+	defer buffer.Close(c.mp)
+	sourcer := window.MakeFilesReader(c.ctx, c.fs.Service)
+	bf, err := BuildBloomfilter(
+		c.ctx,
+		Default_Coarse_EstimateRows,
+		Default_Coarse_Probility,
+		0,
+		sourcer.Read,
+		buffer,
+		c.mp,
+	)
 	dFiles, newCheckpoint, err = MergeCheckpoint(
 		c.ctx,
 		c.sid,
 		c.fs.Service,
 		mergeFiles,
+		bf,
 		blockio.EncodeCheckpointMetadataFileName,
 		c.mp)
 	if err != nil {
@@ -661,6 +683,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 			c.sid,
 			c.fs.Service,
 			compacted,
+			bf,
 			blockio.EncodeCompactedMetadataFileName,
 			c.mp)
 		if err != nil {

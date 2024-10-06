@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -45,10 +46,10 @@ func MergeCheckpoint(
 	sid string,
 	fs fileservice.FileService,
 	ckpEntries []*checkpoint.CheckpointEntry,
+	bf *bloomfilter.BloomFilter,
 	encodeName func(string, string, types.TS, types.TS) string,
 	pool *mpool.MPool,
 ) (deleteFiles []string, checkpointEntry *checkpoint.CheckpointEntry, err error) {
-	var objects, tombstones map[string]*ObjectEntry
 	ckpData := logtail.NewCheckpointData(sid, pool)
 	datas := make([]*logtail.CheckpointData, 0)
 	deleteFiles = make([]string, 0)
@@ -96,25 +97,20 @@ func MergeCheckpoint(
 	for _, data := range datas {
 		ins := data.GetObjectBatchs()
 		tombstone := data.GetTombstoneObjectBatchs()
-		for i := 0; i < ins.Length(); i++ {
-			var objectStats objectio.ObjectStats
-			buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			// TODO: check if object is in the object list, use bloomfilter
-			if objects[objectStats.ObjectName().String()] == nil {
-				continue
-			}
-			appendValToBatch(ins, ckpData.GetObjectBatchs(), i)
-		}
-		for i := 0; i < tombstone.Length(); i++ {
-			var objectStats objectio.ObjectStats
-			buf := tombstone.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			if tombstones[objectStats.ObjectName().String()] == nil {
-				continue
-			}
-			appendValToBatch(tombstone, ckpData.GetTombstoneObjectBatchs(), i)
-		}
+		bf.Test(ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
+			func(exists bool, i int) {
+				if !exists {
+					return
+				}
+				appendValToBatch(ins, ckpData.GetObjectBatchs(), i)
+			})
+		bf.Test(tombstone.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
+			func(exists bool, i int) {
+				if !exists {
+					return
+				}
+				appendValToBatch(tombstone, ckpData.GetTombstoneObjectBatchs(), i)
+			})
 	}
 
 	mergePool := dbutils.MakeDefaultSmallPool("merge-checkpoint-pool")

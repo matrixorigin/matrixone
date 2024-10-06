@@ -110,7 +110,7 @@ func ListSnapshotMeta(
 	}
 	metaFiles := make([]*MetaFile, 0)
 	for i, dir := range dirs {
-		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		start, end, _ := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
 			end:   end,
@@ -146,7 +146,7 @@ func FilterMetaFilesByTimestamp(
 	metaFiles := make([]*MetaFile, 0, len(checkpointMetaFiles))
 	idx := 0
 	for metaFile := range checkpointMetaFiles {
-		start, end := blockio.DecodeCheckpointMetadataFileName(metaFile)
+		start, end, _ := blockio.DecodeCheckpointMetadataFileName(metaFile)
 		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
 			end:   end,
