@@ -70,6 +70,10 @@ type checkpointCleaner struct {
 		// when the cleaner finishes this GC operation.
 		gcWaterMark atomic.Pointer[checkpoint.CheckpointEntry]
 
+		// checkpointGCWaterMark is the watermark after being merged. The checkpoint runner will
+		// GC the entry in the checkpoint tree according to this watermark And the diskcleaner
+		// will use this watermark as the start, and use `gcWaterMark` as the end to call `ICKPRange`,
+		// to get the ickp to perform a merge operation
 		checkpointGCWaterMark atomic.Pointer[types.TS]
 	}
 
@@ -573,9 +577,6 @@ func (c *checkpointCleaner) getDeleteFile(
 				return nil, nil, err
 			}
 			deleteFiles = append(deleteFiles, nameMeta)
-			if i == len(checkpoints)-1 {
-				c.updateCheckpointGCWaterMark(&end)
-			}
 			for name := range locations {
 				deleteFiles = append(deleteFiles, name)
 			}
@@ -633,7 +634,13 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 
 	// merge ickp
 	var newCheckpoint *checkpoint.CheckpointEntry
-	dFiles, newCheckpoint, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFiles, c.mp)
+	dFiles, newCheckpoint, err = MergeCheckpoint(
+		c.ctx,
+		c.sid,
+		c.fs.Service,
+		mergeFiles,
+		blockio.EncodeCheckpointMetadataFileName,
+		c.mp)
 	if err != nil {
 		return err
 	}
@@ -650,7 +657,12 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	// When the compacted tree exceeds 10 entries, you need to merge once
 	compacted, ok := c.checkpointCli.CompactedRange(10)
 	if ok {
-		dFiles, newCheckpoint, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, compacted, c.mp)
+		dFiles, newCheckpoint, err = MergeCheckpoint(c.ctx,
+			c.sid,
+			c.fs.Service,
+			compacted,
+			blockio.EncodeCompactedMetadataFileName,
+			c.mp)
 		if err != nil {
 			return err
 		}

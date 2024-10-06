@@ -726,6 +726,16 @@ func (r *runner) tryAddNewGlobalCheckpointEntry(entry *CheckpointEntry) (success
 	return true
 }
 
+func (r *runner) tryAddNewCompactedCheckpointEntry(entry *CheckpointEntry) (success bool) {
+	if entry.entryType != ET_Compacted {
+		panic("tryAddNewCompactedCheckpointEntry entry type is error")
+	}
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	r.storage.compacted.Set(entry)
+	return true
+}
+
 func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (success bool) {
 	r.storage.Lock()
 	defer r.storage.Unlock()

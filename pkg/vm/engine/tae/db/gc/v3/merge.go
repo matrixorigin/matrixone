@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -44,6 +45,7 @@ func MergeCheckpoint(
 	sid string,
 	fs fileservice.FileService,
 	ckpEntries []*checkpoint.CheckpointEntry,
+	encodeName func(string, string, types.TS, types.TS) string,
 	pool *mpool.MPool,
 ) (deleteFiles []string, checkpointEntry *checkpoint.CheckpointEntry, err error) {
 	var objects, tombstones map[string]*ObjectEntry
@@ -59,12 +61,26 @@ func MergeCheckpoint(
 			return nil, nil, err
 		}
 		datas = append(datas, data)
-		nameMeta := blockio.EncodeCheckpointMetadataFileName(
+		nameMeta := encodeName(
 			checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
 			ckpEntry.GetStart(), ckpEntry.GetEnd())
 
 		// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
 		deleteFiles = append(deleteFiles, nameMeta)
+
+		locations, err := logtail.LoadCheckpointLocations(
+			ctx, sid, ckpEntry.GetTNLocation(), ckpEntry.GetVersion(), fs)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				deleteFiles = append(deleteFiles, nameMeta)
+				continue
+			}
+			return nil, nil, err
+		}
+
+		for name := range locations {
+			deleteFiles = append(deleteFiles, name)
+		}
 	}
 	defer func() {
 		for _, data := range datas {
@@ -84,7 +100,7 @@ func MergeCheckpoint(
 			var objectStats objectio.ObjectStats
 			buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 			objectStats.UnMarshal(buf)
-			// TODO: check if object is in the object list, use bf
+			// TODO: check if object is in the object list, use bloomfilter
 			if objects[objectStats.ObjectName().String()] == nil {
 				continue
 			}
@@ -180,7 +196,7 @@ func MergeCheckpoint(
 	bat.GetVectorByName(checkpoint.CheckpointAttr_TruncateLSN).Append(uint64(0), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_Type).Append(int8(checkpoint.ET_Compacted), false)
 	defer bat.Close()
-	name := blockio.EncodeCheckpointMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, ckpEntries[0].GetStart(), end)
+	name := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, ckpEntries[0].GetStart(), end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
 		return
