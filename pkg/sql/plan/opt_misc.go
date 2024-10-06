@@ -42,6 +42,23 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 		increaseRefCntForColRefList(updateCtx.DeleteCols, 2, colRefCnt)
 	}
 
+	if node.NodeType == plan.Node_LOCK_OP {
+		var colRefs []ColRef
+		for _, lockTarget := range node.LockTargets {
+			colRefs = append(colRefs, ColRef{
+				RelPos: node.BindingTags[1],
+				ColPos: lockTarget.PrimaryColIdxInBat,
+			})
+			if lockTarget.FilterColIdxInBat > -1 {
+				colRefs = append(colRefs, ColRef{
+					RelPos: node.BindingTags[1],
+					ColPos: lockTarget.FilterColIdxInBat,
+				})
+			}
+		}
+		increaseRefCntForColRefList(colRefs, 1, colRefCnt)
+	}
+
 	for _, childID := range node.Children {
 		builder.countColRefs(childID, colRefCnt)
 	}
@@ -198,6 +215,14 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	for _, updateCtx := range node.UpdateCtxList {
 		replaceColumnsForColRefList(updateCtx.InsertCols, projMap)
 		replaceColumnsForColRefList(updateCtx.DeleteCols, projMap)
+	}
+	if node.NodeType == plan.Node_LOCK_OP {
+		colRef := [2]int32{node.BindingTags[1], node.LockTargets[0].PrimaryColIdxInBat}
+		if expr, ok := projMap[colRef]; ok {
+			if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+				node.BindingTags[1] = e.Col.RelPos
+			}
+		}
 	}
 }
 

@@ -1349,20 +1349,25 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 
-		pkExpr := &plan.Expr{
-			// Typ: node.LockTargets[0].GetPrimaryColTyp(),
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: node.BindingTags[1],
-					ColPos: node.LockTargets[0].PrimaryColIdxInBat,
+		var pkExprs []*plan.Expr
+		var oldPkPos [][2]int32
+		for _, lockTarget := range node.LockTargets {
+			pkExpr := &plan.Expr{
+				// Typ: node.LockTargets[0].GetPrimaryColTyp(),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: node.BindingTags[1],
+						ColPos: lockTarget.PrimaryColIdxInBat,
+					},
 				},
-			},
+			}
+			increaseRefCnt(pkExpr, 1, colRefCnt)
+			pkExprs = append(pkExprs, pkExpr)
+			oldPkPos = append(oldPkPos, [2]int32{node.BindingTags[1], lockTarget.PrimaryColIdxInBat})
 		}
-		increaseRefCnt(pkExpr, 1, colRefCnt)
+
 		var oldPartExpr [2]int32
 		var partExpr *Expr
-		oldPkPos := [2]int32{node.BindingTags[1], node.LockTargets[0].PrimaryColIdxInBat}
-
 		if node.TableDef.Partition != nil {
 			partExpr = &Expr{
 				// Typ: node.ProjectList[len(node.ProjectList)-1].Typ,
@@ -1382,10 +1387,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		if newPos, ok := childRemapping.globalToLocal[oldPkPos]; ok {
-			node.LockTargets[0].PrimaryColIdxInBat = newPos[1]
+		for pkIdx, pkExpr := range pkExprs {
+			if newPos, ok := childRemapping.globalToLocal[oldPkPos[pkIdx]]; ok {
+				node.LockTargets[pkIdx].PrimaryColIdxInBat = newPos[1]
+			}
+			increaseRefCnt(pkExpr, -1, colRefCnt)
 		}
-		increaseRefCnt(pkExpr, -1, colRefCnt)
 
 		if partExpr != nil {
 			if newPos, ok := childRemapping.globalToLocal[oldPartExpr]; ok {
