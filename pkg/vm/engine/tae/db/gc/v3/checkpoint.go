@@ -610,10 +610,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 		panic(fmt.Sprintf("rangeEnd %s < gcWaterMark %s", rangeEnd, gcWaterMark))
 	}
 
-	ckpGC := c.GetCheckpointGCWaterMark()
-	if ckpGC == nil {
-		ckpGC = new(types.TS)
-	}
 	deleteFiles := make([]string, 0)
 	ckpSnapList := make([]types.TS, 0)
 	for _, ts := range accoutSnapshots {
@@ -636,7 +632,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	if err != nil {
 		return err
 	}
-	ckpGC = new(types.TS)
 	deleteFiles = append(deleteFiles, dFiles...)
 	var newName string
 	dFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFiles, c.mp)
@@ -644,10 +639,21 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 		return err
 	}
 	if newName != "" {
-
 		//TODO: add to checkpoint tree
 	}
 	deleteFiles = append(deleteFiles, dFiles...)
+
+	compacted, ok := c.checkpointCli.CompactedRange(10)
+	if ok {
+		dFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, compacted, c.mp)
+		if err != nil {
+			return err
+		}
+		if newName != "" {
+			//TODO: add to checkpoint tree
+		}
+		deleteFiles = append(deleteFiles, dFiles...)
+	}
 
 	logutil.Info("[MergeCheckpoint]",
 		common.OperationField("CKP GC"),

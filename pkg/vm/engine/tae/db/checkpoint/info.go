@@ -31,7 +31,6 @@ type RunnerReader interface {
 	GetGlobalCheckpointCount() int
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
-	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
 	MaxGlobalCheckpoint() *CheckpointEntry
 	GetLowWaterMark() types.TS
 	MaxLSN() uint64
@@ -39,6 +38,9 @@ type RunnerReader interface {
 	GetCheckpointMetaFiles() map[string]struct{}
 	RemoveCheckpointMetaFile(string)
 	AddCheckpointMetaFile(string)
+	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
+	CompactedRange(cnt int) ([]*CheckpointEntry, bool)
+	AddCompacted(*CheckpointEntry) error
 }
 
 func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncateLSN uint64) *containers.Batch {
@@ -163,6 +165,33 @@ func (r *runner) ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry {
 		}
 	}
 	return incrementals
+}
+
+func (r *runner) CompactedRange(cnt int) ([]*CheckpointEntry, bool) {
+	r.storage.Lock()
+	tree := r.storage.compacted.Copy()
+	r.storage.Unlock()
+	it := tree.Iter()
+	minEntry, ok := tree.Min()
+	if !ok {
+		return nil, false
+	}
+	ok = it.Seek(minEntry)
+	compacted := make([]*CheckpointEntry, 0)
+	if ok {
+		for len(compacted) < cnt {
+			e := it.Item()
+			compacted = append(compacted, e)
+			if !it.Next() {
+				break
+			}
+		}
+	}
+	return compacted, len(compacted) == cnt
+}
+
+func (r *runner) AddCompacted(*CheckpointEntry) error {
+	return nil
 }
 
 // this API returns the min ts of all checkpoints
