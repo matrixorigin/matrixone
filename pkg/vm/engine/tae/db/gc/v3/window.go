@@ -90,6 +90,13 @@ type GCWindow struct {
 	}
 }
 
+func (w *GCWindow) Clone() GCWindow {
+	w2 := *w
+	w2.files = make([]objectio.ObjectStats, len(w.files))
+	copy(w2.files, w.files)
+	return w2
+}
+
 func (w *GCWindow) MakeFilesReader(
 	ctx context.Context,
 	fs fileservice.FileService,
