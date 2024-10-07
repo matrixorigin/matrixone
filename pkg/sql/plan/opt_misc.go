@@ -49,7 +49,7 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 				RelPos: node.BindingTags[1],
 				ColPos: lockTarget.PrimaryColIdxInBat,
 			})
-			if lockTarget.FilterColIdxInBat > -1 {
+			if lockTarget.IsPartitionTable {
 				colRefs = append(colRefs, ColRef{
 					RelPos: node.BindingTags[1],
 					ColPos: lockTarget.FilterColIdxInBat,
@@ -215,6 +215,15 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	for _, updateCtx := range node.UpdateCtxList {
 		replaceColumnsForColRefList(updateCtx.InsertCols, projMap)
 		replaceColumnsForColRefList(updateCtx.DeleteCols, projMap)
+	}
+	if node.NodeType == plan.Node_MULTI_UPDATE {
+		if len(node.BindingTags) > 1 {
+			if len(node.UpdateCtxList[0].InsertCols) > 0 {
+				node.BindingTags[1] = node.UpdateCtxList[0].InsertCols[0].RelPos
+			} else {
+				node.BindingTags[1] = node.UpdateCtxList[0].DeleteCols[0].RelPos
+			}
+		}
 	}
 	if node.NodeType == plan.Node_LOCK_OP {
 		colRef := [2]int32{node.BindingTags[1], node.LockTargets[0].PrimaryColIdxInBat}
