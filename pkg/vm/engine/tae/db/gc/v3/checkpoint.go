@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"sort"
 	"strings"
 	"sync"
@@ -84,6 +85,8 @@ type checkpointCleaner struct {
 		minMergeCount atomic.Int64
 
 		canGCCacheSize int
+
+		DisableGCCheckpoint bool
 	}
 
 	// remainingObjects is to record the currently valid GCWindow
@@ -120,6 +123,7 @@ type checkpointCleaner struct {
 	snapshotMeta *logtail.SnapshotMeta
 
 	mp *mpool.MPool
+	vp *containers.VectorPool
 
 	sid string
 }
@@ -129,6 +133,12 @@ func WithCheckpointCleanerConfig(
 ) CheckpointCleanerOption {
 	return func(e *checkpointCleaner) {
 		e.config.canGCCacheSize = size
+	}
+}
+
+func WithDisableGCCheckpoint(isDisable bool) CheckpointCleanerOption {
+	return func(e *checkpointCleaner) {
+		e.config.DisableGCCheckpoint = isDisable
 	}
 }
 
@@ -157,10 +167,12 @@ func NewCheckpointCleaner(
 	cleaner.mp = common.CheckpointAllocator
 	cleaner.checker.extras = make(map[string]func(item any) bool)
 	cleaner.metaFiles = make(map[string]struct{})
+	cleaner.vp = dbutils.MakeDefaultSmallPool("gc-pool")
 	return cleaner
 }
 
 func (c *checkpointCleaner) Stop() {
+	c.vp.Destory()
 }
 
 func (c *checkpointCleaner) GetMPool() *mpool.MPool {
@@ -273,6 +285,16 @@ func (c *checkpointCleaner) Replay() error {
 	}
 	ckp := checkpoint.NewCheckpointEntry(c.sid, maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	c.updateScanWaterMark(ckp)
+	compacted := c.checkpointCli.GetAllCompactedCheckpoints()
+	if len(compacted) > 0 {
+		sort.Slice(compacted, func(i, j int) bool {
+			end1 := compacted[i].GetEnd()
+			end2 := compacted[j].GetEnd()
+			return end1.LT(&end2)
+		})
+		end := compacted[len(compacted)-1].GetEnd()
+		c.updateCheckpointGCWaterMark(&end)
+	}
 	if acctFile == "" {
 		//No account table information, it may be a new cluster or an upgraded cluster,
 		//and the table information needs to be initialized from the checkpoint
@@ -418,15 +440,10 @@ func (c *checkpointCleaner) mergeSnapshotFile(metas map[string]struct{}) error {
 		err        error
 	)
 
-	//metas := make(map[string]struct{})
-	for name := range c.metaFiles {
-		metas[name] = struct{}{}
-	}
-
 	mergeSnapAcctFile := func(name string, ts, max *types.TS, file *string) error {
 		if *file != "" {
 			if max.LT(ts) {
-				max = ts
+				*max = *ts
 				err = c.fs.Delete(*file)
 				if err != nil {
 					logutil.Errorf("DelFiles failed: %v, max: %v", err.Error(), max.ToString())
@@ -443,7 +460,7 @@ func (c *checkpointCleaner) mergeSnapshotFile(metas map[string]struct{}) error {
 			}
 		} else {
 			*file = GCMetaDir + name
-			max = ts
+			*max = *ts
 			logutil.Info(
 				"Merging-GC-File-SnapAcct-File",
 				zap.String("name", name),
@@ -522,20 +539,24 @@ func (c *checkpointCleaner) upgradeGCFiles(
 
 // getMetaFilesToMerge returns the files that can be merged.
 // metaFiles: all checkpoint meta files should be merged.
-func (c *checkpointCleaner) getMetaFilesToMerge() (
+func (c *checkpointCleaner) getMetaFilesToMerge(ts *types.TS) (
 	checkpoints []*checkpoint.CheckpointEntry,
 ) {
-	start := c.GetCheckpointGCWaterMark()
-	end := c.GetGCWaterMark().GetEnd()
-	if !end.GT(start) {
-		return nil
+	gcWaterMark := c.GetCheckpointGCWaterMark()
+	start := types.TS{}
+	if gcWaterMark != nil {
+		start = *gcWaterMark
 	}
-	return c.checkpointCli.ICKPRange(start, &end, 10)
+	if !ts.GT(&start) {
+		panic(fmt.Sprintf("getMetaFilesToMerge end < start. "+
+			"end: %v, start: %v", ts.ToString(), start.ToString()))
+	}
+	return c.checkpointCli.ICKPRange(&start, ts, 20)
 }
 
 func (c *checkpointCleaner) getDeleteFile(
 	checkpoints []*checkpoint.CheckpointEntry,
-	stage types.TS,
+	stage *types.TS,
 	ckpSnapList []types.TS,
 ) ([]string, []*checkpoint.CheckpointEntry, error) {
 	if len(checkpoints) == 0 {
@@ -552,7 +573,12 @@ func (c *checkpointCleaner) getDeleteFile(
 	for i := len(checkpoints) - 1; i >= 0; i-- {
 		ckp := checkpoints[i]
 		end := ckp.GetEnd()
-		if end.LT(&stage) {
+		if end.LT(stage) {
+			mergeFiles = checkpoints[:i+1]
+			break
+
+			//Fixme:Now only ickp is consumed, there is no gckp, so when merging, all ickp needs to be merged,
+			//not just those referenced by snapshots
 			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) {
 				// TODO: remove this log
 				logutil.Info("[MergeCheckpoint]",
@@ -587,7 +613,7 @@ func (c *checkpointCleaner) getDeleteFile(
 }
 
 func (c *checkpointCleaner) mergeCheckpointFiles(
-	checkpointLowWaterMark types.TS,
+	checkpointLowWaterMark *types.TS,
 	accoutSnapshots map[uint32][]types.TS,
 ) error {
 	// checkpointLowWaterMark is empty only in the following cases:
@@ -599,16 +625,15 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	if checkpointLowWaterMark.IsEmpty() {
 		return nil
 	}
-	checkpoints := c.getMetaFilesToMerge()
-	logutil.Infof("[MergeCheckpoint] checkpointMetaFiles len %d", len(checkpoints))
+	checkpoints := c.getMetaFilesToMerge(checkpointLowWaterMark)
 	if len(checkpoints) == 0 {
 		return nil
 	}
 
-	gcWaterMark := c.GetGCWaterMark().GetEnd()
+	gcWaterMark := checkpointLowWaterMark
 	rangeEnd := checkpoints[len(checkpoints)-1].GetEnd()
-	if rangeEnd.LT(&gcWaterMark) {
-		panic(fmt.Sprintf("rangeEnd %s < gcWaterMark %s", rangeEnd, gcWaterMark))
+	if rangeEnd.GT(gcWaterMark) {
+		panic(fmt.Sprintf("rangeEnd %s < gcWaterMark %s", rangeEnd.ToString(), gcWaterMark.ToString()))
 	}
 
 	deleteFiles := make([]string, 0)
@@ -634,13 +659,8 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	// merge ickp
 	var newCheckpoint *checkpoint.CheckpointEntry
 	window := c.GetFirstWindow()
-
-	if len(mergeFiles) > 0 {
-		ckpEnd := mergeFiles[len(mergeFiles)-1].GetEnd()
-		end := window.tsRange.end
-		if ckpEnd.GT(&end) {
-			panic("checkpoint end ts is greater than window end ts")
-		}
+	if rangeEnd.GT(&window.tsRange.end) {
+		panic(fmt.Sprintf("rangeEnd %s < window end %s", rangeEnd.ToString(), window.tsRange.end.ToString()))
 	}
 
 	buffer := MakeGCWindowBuffer(16 * mpool.MB)
@@ -661,50 +681,61 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 		c.fs.Service,
 		mergeFiles,
 		bf,
+		&rangeEnd,
 		blockio.EncodeCheckpointMetadataFileName,
-		c.mp)
+		c.mp,
+		c.vp)
 	if err != nil {
 		return err
 	}
-	if newCheckpoint != nil {
-		//TODO: add to checkpoint tree
-		c.checkpointCli.AddCompacted(newCheckpoint)
-		ts := newCheckpoint.GetEnd()
-
-		// update checkpoint gc water mark
-		c.updateCheckpointGCWaterMark(&ts)
+	if newCheckpoint == nil {
+		panic("MergeCheckpoint new checkpoint is nil")
 	}
+
+	c.checkpointCli.AddCompacted(newCheckpoint)
+	ts := newCheckpoint.GetEnd()
+	logutil.Infof("[MergeCheckpoint] new checkpoint: %s", ts.ToString())
+	// update checkpoint gc water mark
+	c.updateCheckpointGCWaterMark(&ts)
+
 	deleteFiles = append(deleteFiles, dFiles...)
 
 	// When the compacted tree exceeds 10 entries, you need to merge once
 	compacted, ok := c.checkpointCli.CompactedRange(10)
 	if ok {
+		end := compacted[len(compacted)-1].GetEnd()
 		dFiles, newCheckpoint, err = MergeCheckpoint(c.ctx,
 			c.sid,
 			c.fs.Service,
 			compacted,
 			bf,
+			&end,
 			blockio.EncodeCompactedMetadataFileName,
-			c.mp)
+			c.mp,
+			c.vp)
 		if err != nil {
 			return err
 		}
-		if newCheckpoint != nil {
-			c.checkpointCli.AddCompacted(newCheckpoint)
+		if newCheckpoint == nil {
+			panic("MergeCheckpoint new compacted checkpoint is nil")
 		}
+
+		c.checkpointCli.AddCompacted(newCheckpoint)
 		deleteFiles = append(deleteFiles, dFiles...)
 		for _, ckp := range compacted {
 			c.checkpointCli.DeleteCompactedEntry(ckp)
 		}
 	}
 
-	logutil.Info("[MergeCheckpoint]",
-		common.OperationField("CKP GC"),
-		common.OperandField(deleteFiles))
-	err = c.fs.DelFiles(c.ctx, deleteFiles)
-	if err != nil {
-		logutil.Errorf("DelFiles failed: %v", err.Error())
-		return err
+	logutil.Info("[MergeCheckpoint] CKP GC",
+		zap.Bool("DisableGC", c.config.DisableGCCheckpoint),
+		zap.Strings("files", deleteFiles))
+	if !c.config.DisableGCCheckpoint {
+		err = c.fs.DelFiles(c.ctx, deleteFiles)
+		if err != nil {
+			logutil.Errorf("DelFiles failed: %v", err.Error())
+			return err
+		}
 	}
 	for _, file := range deleteFiles {
 		if strings.Contains(file, checkpoint.PrefixMetadata) {
@@ -795,7 +826,18 @@ func (c *checkpointCleaner) tryGCAgainstGlobalCheckpoint(gckp *checkpoint.Checkp
 		logutil.Infof("[DiskCleaner] ExecDelete failed: %v", err.Error())
 		return err
 	}
-	err = c.mergeCheckpointFiles(c.checkpointCli.GetLowWaterMark(), accountSnapshots)
+	if c.GetGCWaterMark() == nil {
+		return nil
+	}
+	waterMark := c.GetGCWaterMark().GetEnd()
+	mergeMark := types.TS{}
+	if c.GetCheckpointGCWaterMark() != nil {
+		mergeMark = *c.GetCheckpointGCWaterMark()
+	}
+	if !waterMark.GT(&mergeMark) {
+		return nil
+	}
+	err = c.mergeCheckpointFiles(&waterMark, accountSnapshots)
 	if err != nil {
 		// TODO: Error handle
 		logutil.Errorf("[DiskCleaner] mergeCheckpointFiles failed: %v", err.Error())
@@ -861,6 +903,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpoint(
 		c.config.canGCCacheSize,
 		c.mp,
 		c.fs.Service,
+		c.vp,
 	); err != nil {
 		logutil.Errorf("doGCAgainstGlobalCheckpoint failed: %v", err.Error())
 		return nil, err
@@ -898,6 +941,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 
 func (c *checkpointCleaner) CheckGC() error {
 	debugCandidates := c.checkpointCli.GetAllIncrementalCheckpoints()
+	compactedCandidates := c.checkpointCli.GetAllCompactedCheckpoints()
 
 	c.remainingObjects.RLock()
 	defer c.remainingObjects.RUnlock()
@@ -920,6 +964,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		}
 		logutil.Warnf("MaxCompared is nil, use maxGlobalCkp %v", gCkp.String())
 	}
+
 	for i, ckp := range debugCandidates {
 		maxEnd := scanWaterMark.GetEnd()
 		ckpEnd := ckp.GetEnd()
@@ -928,6 +973,7 @@ func (c *checkpointCleaner) CheckGC() error {
 			break
 		}
 	}
+
 	start1 := debugCandidates[len(debugCandidates)-1].GetEnd()
 	start2 := scanWaterMark.GetEnd()
 	if !start1.Equal(&start2) {
@@ -935,7 +981,6 @@ func (c *checkpointCleaner) CheckGC() error {
 			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
 		return moerr.NewInternalErrorNoCtx("TS Compare not equal")
 	}
-
 	buffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer buffer.Close(c.mp)
 
@@ -988,16 +1033,11 @@ func (c *checkpointCleaner) CheckGC() error {
 		c.config.canGCCacheSize,
 		c.mp,
 		c.fs.Service,
+		c.vp,
 	); err != nil {
 		logutil.Infof("err is %v", err)
 		return err
 	}
-
-	logutil.Infof(
-		"merge table2 is %d, stats is %v",
-		len(mergeWindow.files),
-		mergeWindow.files[0].ObjectName().String(),
-	)
 
 	//logutil.Infof("debug table is %d, stats is %v", len(debugWindow.files.stats), debugWindow.files.stats[0].ObjectName().String())
 	if _, err = debugWindow.ExecuteGlobalCheckpointBasedGC(
@@ -1010,6 +1050,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		c.config.canGCCacheSize,
 		c.mp,
 		c.fs.Service,
+		c.vp,
 	); err != nil {
 		logutil.Infof("err is %v", err)
 		return err
@@ -1025,6 +1066,62 @@ func (c *checkpointCleaner) CheckGC() error {
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare is End"),
 			common.AnyField("table :", debugWindow.String(objects2)),
 			common.OperandField(start1.ToString()))
+	}
+
+	if len(compactedCandidates) == 0 {
+		return nil
+	}
+	cend := compactedCandidates[len(compactedCandidates)-1].GetEnd()
+	dend := debugCandidates[0].GetEnd()
+	if dend.GT(&cend) {
+		return nil
+	}
+	ickpObjects := make(map[string]*ObjectEntry, 0)
+	ok := false
+	for i, ckp := range debugCandidates {
+		end := ckp.GetEnd()
+		if end.Equal(&cend) {
+			debugCandidates = debugCandidates[:i+1]
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return nil
+	}
+
+	for _, ckp := range debugCandidates {
+		data, err := c.collectCkpData(ckp)
+		if err != nil {
+			return err
+		}
+		collectObjectsWithCkp(data, ickpObjects)
+	}
+	cptCkpObjects := make(map[string]*ObjectEntry, 0)
+	for _, ckp := range compactedCandidates {
+		data, err := c.collectCkpData(ckp)
+		if err != nil {
+			return err
+		}
+		collectObjectsWithCkp(data, cptCkpObjects)
+	}
+
+	tList, pList := c.snapshotMeta.AccountToTableSnapshots(accoutSnapshots, pitr)
+	for name, entry := range ickpObjects {
+		if cptCkpObjects[name] != nil {
+			continue
+		}
+
+		if isSnapshotRefers(entry.stats, pList[entry.table], &entry.createTS, &entry.dropTS, tList[entry.table]) {
+			logutil.Info(
+				"GCJOB-DEBUG-2",
+				zap.String("name", entry.stats.ObjectName().String()),
+				zap.String("pitr", pList[entry.table].ToString()),
+				zap.String("create-ts", entry.createTS.ToString()),
+				zap.String("drop-ts", entry.dropTS.ToString()),
+			)
+			return moerr.NewInternalError(c.ctx, "snapshot refers")
+		}
 	}
 	return nil
 }

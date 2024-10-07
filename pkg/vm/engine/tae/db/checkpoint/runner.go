@@ -267,6 +267,11 @@ func NewRunner(
 	}, btree.Options{
 		NoLocks: true,
 	})
+	r.storage.compacted = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
+		return a.end.LT(&b.end)
+	}, btree.Options{
+		NoLocks: true,
+	})
 	for _, opt := range opts {
 		opt(r)
 	}

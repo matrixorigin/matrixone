@@ -85,6 +85,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 			start: start,
 			end:   end,
 			index: i,
+			name:  dir.Name,
 		}
 		if ext == blockio.CompactedExt {
 			compactedFiles = append(compactedFiles, metaFile)
@@ -98,13 +99,16 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	replayEntries := func(name string, bat *containers.Batch) (entries []*CheckpointEntry, maxGlobalEnd types.TS) {
+	replayEntries := func(name string, ckpBat *containers.Batch) (entries []*CheckpointEntry, maxGlobalEnd types.TS, err error) {
 		reader, err := blockio.NewFileReader(r.rt.SID(), r.rt.Fs.Service, CheckpointDir+name)
 		if err != nil {
 			return
 		}
 		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
 		if err != nil {
+			return
+		}
+		if len(bats) == 0 {
 			return
 		}
 		defer func() {
@@ -126,38 +130,45 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 			checkpointVersion = 3
 		}
 		for i := range bats[0].Vecs {
-			if len(bats) == 0 {
-				continue
-			}
 			var vec containers.Vector
 			if bats[0].Vecs[i].Length() == 0 {
 				vec = containers.MakeVector(colTypes[i], common.CheckpointAllocator)
 			} else {
 				vec = containers.ToTNVector(bats[0].Vecs[i], common.CheckpointAllocator)
 			}
-			bat.AddVector(colNames[i], vec)
+			ckpBat.AddVector(colNames[i], vec)
 		}
 		c.readDuration += time.Since(t0)
-
-		return ReplayCheckpointEntries(bat, checkpointVersion)
+		entries, maxGlobalEnd = ReplayCheckpointEntries(ckpBat, checkpointVersion)
+		return
 	}
 
 	{
 		// replay compacted tree
-		compacted := containers.NewBatch()
 		for _, file := range compactedFiles {
-			entry, _ := replayEntries(file.name, compacted)
+			compacted := containers.NewBatch()
+			defer compacted.Close()
+			entry, _, err := replayEntries(file.name, compacted)
+			if err != nil {
+				logutil.Errorf("replay compacted checkpoint file %s failed: %v", file.name, err.Error())
+			}
 			if len(entry) != 1 {
+				for _, e := range entry {
+					logutil.Infof("compacted checkpoint entry: %v", e.String())
+				}
 				panic("invalid compacted checkpoint file")
 			}
 			r.tryAddNewCompactedCheckpointEntry(entry[0])
 		}
-		compacted.Close()
 	}
 
 	bat := containers.NewBatch()
 	defer bat.Close()
-	entries, maxGlobalEnd := replayEntries(dir.Name, bat)
+	entries, maxGlobalEnd, err := replayEntries(dir.Name, bat)
+	if err != nil {
+		logutil.Infof("replay checkpoint file %s failed: %v", dir.Name, err.Error())
+		return
+	}
 	c.ckpEntries = entries
 
 	// step2. read checkpoint data, output is the ckpdatas

@@ -119,6 +119,7 @@ func (t *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	cacheSize int,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	vp *containers.VectorPool,
 ) ([]string, error) {
 
 	sourcer := t.MakeFilesReader(ctx, fs)
@@ -135,6 +136,7 @@ func (t *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		false,
 		mp,
 		fs,
+		vp,
 		WithGCJobCoarseConfig(0, 0, cacheSize),
 	)
 	defer job.Close()
@@ -332,7 +334,6 @@ func (t *GCWindow) writeMetaForRemainings(
 	if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
 		return err
 	}
-
 	_, err = writer.WriteEnd(ctx)
 	return err
 }

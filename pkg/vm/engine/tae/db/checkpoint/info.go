@@ -41,6 +41,7 @@ type RunnerReader interface {
 	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
 	CompactedRange(cnt int) ([]*CheckpointEntry, bool)
 	AddCompacted(entry *CheckpointEntry)
+	GetAllCompactedCheckpoints() []*CheckpointEntry
 	DeleteCompactedEntry(entry *CheckpointEntry)
 }
 
@@ -84,6 +85,14 @@ func (r *runner) GetAllIncrementalCheckpoints() []*CheckpointEntry {
 	r.storage.Unlock()
 	return snapshot.Items()
 }
+
+func (r *runner) GetAllCompactedCheckpoints() []*CheckpointEntry {
+	r.storage.Lock()
+	snapshot := r.storage.compacted.Copy()
+	r.storage.Unlock()
+	return snapshot.Items()
+}
+
 func (r *runner) GetAllGlobalCheckpoints() []*CheckpointEntry {
 	r.storage.Lock()
 	snapshot := r.storage.globals.Copy()
@@ -157,7 +166,7 @@ func (r *runner) ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry {
 			if !e.IsFinished() {
 				break
 			}
-			if e.start.GT(start) && e.start.LT(end) {
+			if e.start.GE(start) && e.start.LT(end) {
 				incrementals = append(incrementals, e)
 			}
 			if !it.Next() {

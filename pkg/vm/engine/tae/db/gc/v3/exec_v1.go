@@ -84,6 +84,7 @@ func NewCheckpointBasedGCJob(
 	isOwner bool,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	vp *containers.VectorPool,
 	opts ...GCJobExecutorOption,
 ) *CheckpointBasedGCJob {
 	e := &CheckpointBasedGCJob{
@@ -98,7 +99,7 @@ func NewCheckpointBasedGCJob(
 		opt(e)
 	}
 	e.fillDefaults()
-	e.GCExecutor = *NewGCExecutor(buffer, isOwner, e.config.canGCCacheSize, mp, fs)
+	e.GCExecutor = *NewGCExecutor(buffer, isOwner, e.config.canGCCacheSize, mp, fs, vp)
 	return e
 }
 

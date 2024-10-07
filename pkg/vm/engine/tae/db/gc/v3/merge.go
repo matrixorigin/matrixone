@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 
@@ -47,8 +46,10 @@ func MergeCheckpoint(
 	fs fileservice.FileService,
 	ckpEntries []*checkpoint.CheckpointEntry,
 	bf *bloomfilter.BloomFilter,
+	end *types.TS,
 	encodeName func(string, string, types.TS, types.TS) string,
 	pool *mpool.MPool,
+	vp *containers.VectorPool,
 ) (deleteFiles []string, checkpointEntry *checkpoint.CheckpointEntry, err error) {
 	ckpData := logtail.NewCheckpointData(sid, pool)
 	datas := make([]*logtail.CheckpointData, 0)
@@ -113,15 +114,13 @@ func MergeCheckpoint(
 			})
 	}
 
-	mergePool := dbutils.MakeDefaultSmallPool("merge-checkpoint-pool")
-	defer mergePool.Destory()
 	tidColIdx := 4
-	_, err = mergesort.SortBlockColumns(ckpData.GetObjectBatchs().Vecs, tidColIdx, mergePool)
+	_, err = mergesort.SortBlockColumns(ckpData.GetObjectBatchs().Vecs, tidColIdx, vp)
 	if err != nil {
 		return
 	}
 
-	_, err = mergesort.SortBlockColumns(ckpData.GetTombstoneObjectBatchs().Vecs, tidColIdx, mergePool)
+	_, err = mergesort.SortBlockColumns(ckpData.GetTombstoneObjectBatchs().Vecs, tidColIdx, vp)
 	if err != nil {
 		return
 	}
@@ -180,10 +179,9 @@ func MergeCheckpoint(
 	if err != nil {
 		return
 	}
-	end := ckpEntries[len(ckpEntries)-1].GetEnd()
 	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetEnd(), false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(end, false)
+	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetStart(), false)
+	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(*end, false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation).Append([]byte(cnLocation), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_EntryType).Append(false, false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_Version).Append(ckpEntries[len(ckpEntries)-1].GetVersion(), false)
@@ -192,7 +190,7 @@ func MergeCheckpoint(
 	bat.GetVectorByName(checkpoint.CheckpointAttr_TruncateLSN).Append(uint64(0), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_Type).Append(int8(checkpoint.ET_Compacted), false)
 	defer bat.Close()
-	name := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, ckpEntries[0].GetStart(), end)
+	name := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, ckpEntries[0].GetStart(), *end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
 		return
@@ -203,7 +201,7 @@ func MergeCheckpoint(
 
 	// TODO: checkpoint entry should maintain the location
 	_, err = writer.WriteEnd(ctx)
-	checkpointEntry = checkpoint.NewCheckpointEntry("", ckpEntries[0].GetEnd(), end, checkpoint.ET_Compacted)
+	checkpointEntry = checkpoint.NewCheckpointEntry("", ckpEntries[0].GetStart(), *end, checkpoint.ET_Compacted)
 	checkpointEntry.SetLocation(cnLocation, tnLocation)
 	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())
 	checkpointEntry.SetState(checkpoint.ST_Finished)

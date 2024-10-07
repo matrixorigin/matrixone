@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
@@ -55,7 +56,6 @@ func BuildBloomfilter(
 		if done, err = sourcer(ctx, bat.Attrs, nil, mp, bat); err != nil {
 			return
 		}
-		logutil.Infof("BuildBloomfilter: %d", bat.Vecs[0].Length())
 		if done {
 			break
 		}
@@ -70,6 +70,7 @@ func NewGCExecutor(
 	cacheSize int,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	vp *containers.VectorPool,
 ) *GCExecutor {
 	exec := &GCExecutor{
 		mp: mp,
@@ -79,6 +80,7 @@ func NewGCExecutor(
 	exec.buffer.impl = buffer
 
 	exec.config.canGCCacheSize = cacheSize
+	exec.vp = vp
 	return exec
 }
 
@@ -95,6 +97,7 @@ type GCExecutor struct {
 	fs   fileservice.FileService
 	bm   bitmap.Bitmap
 	sels []int64
+	vp   *containers.VectorPool
 }
 
 func (exec *GCExecutor) doFilter(
@@ -125,6 +128,11 @@ func (exec *GCExecutor) doFilter(
 		//    bit 0 means the row cannot be GC'ed
 		exec.bm.Clear()
 		exec.bm.TryExpandWithSize(bat.RowCount())
+		tmp := containers.ToTNBatch(bat, exec.mp)
+		_, err = mergesort.SortBlockColumns(tmp.Vecs, 2, exec.vp)
+		if err != nil {
+			return err
+		}
 		if err := filter(ctx, &exec.bm, bat, exec.mp); err != nil {
 			return err
 		}
@@ -134,11 +142,10 @@ func (exec *GCExecutor) doFilter(
 		if err := canGCBat.Union(bat, exec.sels, exec.mp); err != nil {
 			return err
 		}
-		bat.Shrink(exec.sels, false)
+		bat.Shrink(exec.sels, true)
 		if err := cannotGCSinker(ctx, bat); err != nil {
 			return err
 		}
-		logutil.Infof("doFilter: %d, bat is %d", len(exec.sels), bat.Vecs[0].Length())
 		if err := canGCSinker(ctx, canGCBat); err != nil {
 			return err
 		}
