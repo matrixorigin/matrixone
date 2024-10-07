@@ -445,7 +445,7 @@ func (c *checkpointCleaner) OrhpanFilesGCed() []string {
 	return filesGCed
 }
 
-func (c *checkpointCleaner) mergeSnapshotFile(
+func (c *checkpointCleaner) deleteStaleSnapshotFiles(
 	metaFiles map[string]GCMetaFile,
 ) error {
 	scanWaterMark := c.GetScanWaterMark()
@@ -461,11 +461,6 @@ func (c *checkpointCleaner) mergeSnapshotFile(
 
 		err error
 	)
-
-	//metas := make(map[string]struct{})
-	// for name := range c.metaFiles {
-	// 	metas[name] = struct{}{}
-	// }
 
 	doDeleteFileFn := func(
 		thisFile string, thisTS *types.TS,
@@ -483,7 +478,7 @@ func (c *checkpointCleaner) mergeSnapshotFile(
 				zap.String("max-file", newMaxFile),
 				zap.String("max-ts", newMaxTS.ToString()),
 			)
-			delete(c.metaFiles, thisFile)
+			delete(metaFiles, thisFile)
 			return
 		}
 		if maxTS.LT(thisTS) {
@@ -498,7 +493,7 @@ func (c *checkpointCleaner) mergeSnapshotFile(
 				zap.String("max-file", newMaxFile),
 				zap.String("max-ts", newMaxTS.ToString()),
 			)
-			delete(c.metaFiles, thisFile)
+			delete(metaFiles, thisFile)
 			return
 		}
 
@@ -506,7 +501,7 @@ func (c *checkpointCleaner) mergeSnapshotFile(
 		if err = c.fs.Delete(GCMetaDir + thisFile); err != nil {
 			logutil.Errorf("DelFiles failed: %v, file: %s, ts: %s", err.Error(), thisFile, thisTS.ToString())
 		}
-		delete(c.metaFiles, thisFile)
+		delete(metaFiles, thisFile)
 
 		return
 	}
@@ -530,16 +525,18 @@ func (c *checkpointCleaner) mergeSnapshotFile(
 	return nil
 }
 
-func (c *checkpointCleaner) upgradeGCFiles(
+// when call this function:
+// at least one incremental checkpoint has been scanned
+// window is the latest GCWindow that has been scanned
+// metaFiles is the GC metadata files that need to be merged
+func (c *checkpointCleaner) deleteStaleCheckpointMetaFile(
 	metaFiles map[string]GCMetaFile,
 	window *GCWindow,
 ) (err error) {
-	// get the scan watermark
-	scanWaterMark := c.GetScanWaterMark()
-	if scanWaterMark == nil {
-		panic("scanWaterMark is nil")
-	}
 	now := time.Now()
+
+	scanWaterMark := c.GetScanWaterMark()
+
 	logutil.Info(
 		"[DiskCleaner]",
 		zap.String("MergeGCFile-Start", scanWaterMark.String()),
@@ -551,20 +548,16 @@ func (c *checkpointCleaner) upgradeGCFiles(
 			zap.Duration("cost", time.Since(now)),
 		)
 	}()
-	deleteFiles := make([]string, 0)
+	filesToDelete := make([]string, 0)
 	for _, metaFile := range metaFiles {
 		if (metaFile.Ext() == blockio.CheckpointExt) &&
 			!(metaFile.EqualRange(&window.tsRange.start, &window.tsRange.end)) {
-			deleteFiles = append(deleteFiles, GCMetaDir+metaFile.Name())
-			delete(c.metaFiles, metaFile.Name())
+			filesToDelete = append(filesToDelete, GCMetaDir+metaFile.Name())
+			delete(metaFiles, metaFile.Name())
 		}
 	}
 
-	if scannedWindow := c.GetScannedWindow(); scannedWindow == nil {
-		return
-	}
-
-	if err = c.fs.DelFiles(c.ctx, deleteFiles); err != nil {
+	if err = c.fs.DelFiles(c.ctx, filesToDelete); err != nil {
 		logutil.Error(
 			"Merging-GC-File-Error",
 			zap.Error(err),
@@ -792,7 +785,7 @@ func (c *checkpointCleaner) TryGC() (err error) {
 	for k, v := range c.metaFiles {
 		metaFiles[k] = v
 	}
-	if err = c.upgradeGCFiles(
+	if err = c.deleteStaleCheckpointMetaFile(
 		metaFiles, scannedWindow,
 	); err != nil {
 		logutil.Error(
@@ -1191,6 +1184,16 @@ func (c *checkpointCleaner) Process() {
 		gcWindow *GCWindow
 		err      error
 	)
+
+	defer func() {
+		if err != nil {
+			logutil.Error(
+				"DiskCleaner-Process-Error",
+				zap.Error(err),
+			)
+		}
+	}()
+
 	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 	if gcWindow, err = c.scanCheckpointsAsOneWindow(
@@ -1244,7 +1247,7 @@ func (c *checkpointCleaner) Process() {
 			return
 		}
 
-		if err = c.upgradeGCFiles(
+		if err = c.deleteStaleCheckpointMetaFile(
 			metaFiles, c.GetScannedWindow(),
 		); err != nil {
 			logutil.Error(
@@ -1255,14 +1258,19 @@ func (c *checkpointCleaner) Process() {
 		}
 	}
 
-	if err = c.mergeSnapshotFile(metaFiles); err != nil {
-		// TODO: Error handle
+	if err = c.deleteStaleSnapshotFiles(metaFiles); err != nil {
 		return
 	}
+	err = c.commitNewMetaFiles(metaFiles)
+	return
+}
 
-	if !c.CheckEnabled() {
-		return
-	}
+// PXU TODO: check the idempotency of this function
+func (c *checkpointCleaner) commitNewMetaFiles(
+	metaFiles map[string]GCMetaFile,
+) error {
+	c.metaFiles = metaFiles
+	return nil
 }
 
 func (c *checkpointCleaner) checkExtras(item any) bool {
