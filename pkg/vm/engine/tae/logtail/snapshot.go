@@ -273,27 +273,28 @@ type SnapshotMeta struct {
 	// all table information under the account.
 	tables map[uint32]map[uint64]*tableInfo
 
-	// tableIndex records all the index information of mo, the key is
-	// account id, and the value is the index information.
-	tableIndex map[uint64]*tableInfo
+	// tableIDIndex records all the index information of mo, the key is
+	// account id, and the value is the tableInfo
+	tableIDIndex map[uint64]*tableInfo
 
-	// pkIndexes records all the index information of mo, the key is
-	// the mo_table pk, and the value is the index information.
-	pkIndexes map[string][]*tableInfo
+	// tablePKIndex records all the index information of mo, the key is
+	// the mo_table pk, and the value is the tableInfo
+	tablePKIndex map[string][]*tableInfo
 
-	// tides is used to consume the object and tombstone of the checkpoint.
-	tides map[uint64]struct{}
+	// the key of snapshotTableIDs is the table id of a snapshot table
+	// each account has one dedicated snapshot table
+	snapshotTableIDs map[uint64]struct{}
 }
 
 func NewSnapshotMeta() *SnapshotMeta {
 	meta := &SnapshotMeta{
-		objects:      make(map[uint64]map[objectio.Segmentid]*objectInfo),
-		tombstones:   make(map[uint64]map[objectio.Segmentid]*objectInfo),
-		aobjDelTsMap: make(map[types.TS]struct{}),
-		tables:       make(map[uint32]map[uint64]*tableInfo),
-		tableIndex:   make(map[uint64]*tableInfo),
-		tides:        make(map[uint64]struct{}),
-		pkIndexes:    make(map[string][]*tableInfo),
+		objects:          make(map[uint64]map[objectio.Segmentid]*objectInfo),
+		tombstones:       make(map[uint64]map[objectio.Segmentid]*objectInfo),
+		aobjDelTsMap:     make(map[types.TS]struct{}),
+		tables:           make(map[uint32]map[uint64]*tableInfo),
+		tableIDIndex:     make(map[uint64]*tableInfo),
+		snapshotTableIDs: make(map[uint64]struct{}),
+		tablePKIndex:     make(map[string][]*tableInfo),
 	}
 	meta.pitr.objects = make(map[objectio.Segmentid]*objectInfo)
 	meta.pitr.tombstones = make(map[objectio.Segmentid]*objectInfo)
@@ -431,7 +432,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			}
 			pk := tuple.ErrString(nil)
 			if name == catalog2.MO_SNAPSHOTS {
-				sm.tides[tid] = struct{}{}
+				sm.snapshotTableIDs[tid] = struct{}{}
 				logutil.Info("[UpdateSnapTable]",
 					zap.Uint64("tid", tid),
 					zap.Uint32("account id", account),
@@ -452,7 +453,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 					panic(fmt.Sprintf("table %v %v create at %v is greater than %v",
 						tid, tuple.ErrString(nil), table.createAt.ToString(), createAt.ToString()))
 				}
-				sm.pkIndexes[pk] = append(sm.pkIndexes[pk], table)
+				sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
 				continue
 			}
 			table = &tableInfo{
@@ -463,11 +464,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 				pk:        pk,
 			}
 			sm.tables[account][tid] = table
-			sm.tableIndex[tid] = table
-			if sm.pkIndexes[pk] == nil {
-				sm.pkIndexes[pk] = make([]*tableInfo, 0)
+			sm.tableIDIndex[tid] = table
+			if sm.tablePKIndex[pk] == nil {
+				sm.tablePKIndex[pk] = make([]*tableInfo, 0)
 			}
-			sm.pkIndexes[pk] = append(sm.pkIndexes[pk], table)
+			sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
 		}
 	}
 
@@ -511,29 +512,29 @@ func (sm *SnapshotMeta) updateTableInfo(
 
 	for _, del := range deletes {
 		pk := del.pk.ErrString(nil)
-		if sm.pkIndexes[pk] == nil {
+		if sm.tablePKIndex[pk] == nil {
 			continue
 		}
-		if len(sm.pkIndexes[pk]) == 0 {
+		if len(sm.tablePKIndex[pk]) == 0 {
 			panic(fmt.Sprintf("delete table %v not found @ %v, start is %v, end is %v", del.pk.ErrString(nil), del.ts.ToString(), startts.ToString(), endts.ToString()))
 		}
-		table := sm.pkIndexes[pk][0]
+		table := sm.tablePKIndex[pk][0]
 		if !table.deleteAt.IsEmpty() && table.deleteAt.GT(&del.ts) {
 			panic(fmt.Sprintf("table %v delete at %v is greater than %v", table.tid, table.deleteAt, del.ts))
 		}
 		table.deleteAt = del.ts
-		sm.pkIndexes[pk] = sm.pkIndexes[pk][1:]
+		sm.tablePKIndex[pk] = sm.tablePKIndex[pk][1:]
 
-		if sm.tableIndex[table.tid] == nil {
+		if sm.tableIDIndex[table.tid] == nil {
 			//In the upgraded cluster, because the inc checkpoint is consumed halfway,
 			// there may be no record of the create table entry, only the delete entry
 			continue
 		}
-		sm.tableIndex[table.tid] = table
+		sm.tableIDIndex[table.tid] = table
 		sm.tables[table.accountID][table.tid] = table
 	}
 
-	for pk, tables := range sm.pkIndexes {
+	for pk, tables := range sm.tablePKIndex {
 		if len(tables) > 1 {
 			panic(fmt.Sprintf("table %v has more than one entry, tables len %d", pk, len(tables)))
 		}
@@ -590,7 +591,7 @@ func (sm *SnapshotMeta) Update(
 		logutil.Errorf("[UpdateSnapshot] updateTableInfo failed %v", err)
 		return sm, err
 	}
-	if len(sm.tides) == 0 && sm.pitr.tid == 0 {
+	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 {
 		return sm, nil
 	}
 
@@ -636,7 +637,7 @@ func (sm *SnapshotMeta) Update(
 		if tid == sm.pitr.tid {
 			mapFun(*objects2)
 		}
-		if _, ok := sm.tides[tid]; !ok {
+		if _, ok := sm.snapshotTableIDs[tid]; !ok {
 			return
 		}
 		if (*objects)[tid] == nil {
@@ -869,7 +870,7 @@ func (sm *SnapshotMeta) GetPITR(
 }
 
 func (sm *SnapshotMeta) SetTid(tid uint64) {
-	sm.tides[tid] = struct{}{}
+	sm.snapshotTableIDs[tid] = struct{}{}
 }
 
 func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint32, error) {
@@ -976,7 +977,7 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 				continue
 			}
 
-			if _, ok := sm.tides[table.tid]; ok {
+			if _, ok := sm.snapshotTableIDs[table.tid]; ok {
 				appendBat(snapTableBat, table)
 			}
 		}
@@ -1057,15 +1058,15 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 			pk:        pk,
 		}
 		sm.tables[accid][tid] = table
-		sm.tableIndex[tid] = table
+		sm.tableIDIndex[tid] = table
 		if !table.deleteAt.IsEmpty() {
 			continue
 		}
-		if len(sm.pkIndexes[pk]) > 0 {
+		if len(sm.tablePKIndex[pk]) > 0 {
 			panic(fmt.Sprintf("pk %s already exists, table: %d", pk, tid))
 		}
-		sm.pkIndexes[pk] = make([]*tableInfo, 1)
-		sm.pkIndexes[pk][0] = table
+		sm.tablePKIndex[pk] = make([]*tableInfo, 1)
+		sm.tablePKIndex[pk][0] = table
 	}
 }
 
@@ -1084,8 +1085,8 @@ func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
 	for i := 0; i < ins.Length(); i++ {
 		tid := insTIDs[i]
 		accid := accIDs[i]
-		if _, ok := sm.tides[tid]; !ok {
-			sm.tides[tid] = struct{}{}
+		if _, ok := sm.snapshotTableIDs[tid]; !ok {
+			sm.snapshotTableIDs[tid] = struct{}{}
 			logutil.Info("[RebuildSnapshotTid]", zap.Uint64("tid", tid), zap.Uint32("account id", accid))
 		}
 	}
@@ -1152,8 +1153,8 @@ func (sm *SnapshotMeta) Rebuild(
 			}
 			continue
 		}
-		if _, ok := sm.tides[tid]; !ok {
-			sm.tides[tid] = struct{}{}
+		if _, ok := sm.snapshotTableIDs[tid]; !ok {
+			sm.snapshotTableIDs[tid] = struct{}{}
 			logutil.Info("[RebuildSnapTable]", zap.Uint64("tid", tid))
 		}
 		if (*objects)[tid] == nil {
@@ -1326,10 +1327,10 @@ func (sm *SnapshotMeta) TableInfoString() string {
 }
 
 func (sm *SnapshotMeta) GetSnapshotListLocked(snapshotList map[uint32][]types.TS, tid uint64) []types.TS {
-	if sm.tableIndex[tid] == nil {
+	if sm.tableIDIndex[tid] == nil {
 		return nil
 	}
-	accID := sm.tableIndex[tid].accountID
+	accID := sm.tableIDIndex[tid].accountID
 	return snapshotList[accID]
 }
 
@@ -1379,7 +1380,7 @@ func (sm *SnapshotMeta) AccountToTableSnapshots(
 	tablePitrs[catalog2.MO_TABLES_ID] = &sysPitr
 	tablePitrs[catalog2.MO_COLUMNS_ID] = &sysPitr
 
-	for tid, info := range sm.tableIndex {
+	for tid, info := range sm.tableIDIndex {
 		if catalog2.IsSystemTable(tid) {
 			continue
 		}
@@ -1398,7 +1399,7 @@ func (sm *SnapshotMeta) GetPitrByTable(
 	pitr *PitrInfo, dbID, tableID uint64,
 ) *types.TS {
 	var accountID uint32
-	if tableInfo := sm.tableIndex[tableID]; tableInfo != nil {
+	if tableInfo := sm.tableIDIndex[tableID]; tableInfo != nil {
 		accountID = tableInfo.accountID
 	}
 	ts := pitr.GetTS(accountID, dbID, tableID)
@@ -1419,7 +1420,7 @@ func (sm *SnapshotMeta) MergeTableInfo(
 			for _, table := range tables {
 				if !table.deleteAt.IsEmpty() {
 					delete(sm.tables[accID], table.tid)
-					delete(sm.tableIndex, table.tid)
+					delete(sm.tableIDIndex, table.tid)
 					if sm.objects[table.tid] != nil {
 						delete(sm.objects, table.tid)
 					}
@@ -1432,7 +1433,7 @@ func (sm *SnapshotMeta) MergeTableInfo(
 			if !table.deleteAt.IsEmpty() &&
 				!isSnapshotRefers(table, accountSnapshots[accID], ts) {
 				delete(sm.tables[accID], table.tid)
-				delete(sm.tableIndex, table.tid)
+				delete(sm.tableIDIndex, table.tid)
 				if sm.objects[table.tid] != nil {
 					delete(sm.objects, table.tid)
 				}
@@ -1452,7 +1453,7 @@ func (sm *SnapshotMeta) String() string {
 	sm.RLock()
 	defer sm.RUnlock()
 	return fmt.Sprintf("account count: %d, table count: %d, object count: %d",
-		len(sm.tables), len(sm.tableIndex), len(sm.objects))
+		len(sm.tables), len(sm.tableIDIndex), len(sm.objects))
 }
 
 func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr *types.TS) bool {

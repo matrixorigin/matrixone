@@ -250,9 +250,9 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	// TODO: WithGCInterval requires configuration parameters
 	cleaner := gc2.NewCheckpointCleaner(opts.Ctx,
 		opts.SID, fs, db.BGCheckpointRunner,
-		gc2.WithCheckpointCleanerConfig(opts.GCCfg.CacheSize),
+		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
+		gc2.WithCheckOption(opts.GCCfg.CheckGC),
 		gc2.WithDisableGCCheckpoint(opts.CheckpointCfg.DisableGCCheckpoint))
-	cleaner.SetCheckGC(opts.GCCfg.CheckGC)
 	cleaner.AddChecker(
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)

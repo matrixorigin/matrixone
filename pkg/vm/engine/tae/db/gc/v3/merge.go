@@ -49,7 +49,6 @@ func MergeCheckpoint(
 	end *types.TS,
 	encodeName func(string, string, types.TS, types.TS) string,
 	pool *mpool.MPool,
-	vp *containers.VectorPool,
 ) (deleteFiles []string, checkpointEntry *checkpoint.CheckpointEntry, err error) {
 	ckpData := logtail.NewCheckpointData(sid, pool)
 	datas := make([]*logtail.CheckpointData, 0)
@@ -115,12 +114,14 @@ func MergeCheckpoint(
 	}
 
 	tidColIdx := 4
-	_, err = mergesort.SortBlockColumns(ckpData.GetObjectBatchs().Vecs, tidColIdx, vp)
+	objectBatch := containers.ToCNBatch(ckpData.GetObjectBatchs())
+	err = mergesort.SortColumnsByIndex(objectBatch.Vecs, tidColIdx, pool)
 	if err != nil {
 		return
 	}
 
-	_, err = mergesort.SortBlockColumns(ckpData.GetTombstoneObjectBatchs().Vecs, tidColIdx, vp)
+	tombstoneBatch := containers.ToCNBatch(ckpData.GetTombstoneObjectBatchs())
+	err = mergesort.SortColumnsByIndex(tombstoneBatch.Vecs, tidColIdx, pool)
 	if err != nil {
 		return
 	}

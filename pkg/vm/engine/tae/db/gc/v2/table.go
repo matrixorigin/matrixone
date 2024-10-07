@@ -327,8 +327,8 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 	bats = t.collectData()
 	collectCost = time.Since(now)
 	now = time.Now()
-	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
-	writer, err = objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
+	name := blockio.EncodeGCMetadataFileName(PrefixGCMeta, start, end)
+	writer, err = objectio.NewObjectWriterSpecial(objectio.WriterGC, GCMetaDir+name, fs.Service)
 	if err != nil {
 		return nil, err
 	}

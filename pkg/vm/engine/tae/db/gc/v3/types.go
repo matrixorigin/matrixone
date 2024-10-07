@@ -166,13 +166,12 @@ type Cleaner interface {
 	// for test
 	SetMinMergeCountForTest(count int)
 	GetMinMerged() *checkpoint.CheckpointEntry
-	CheckGC() error
+	DoCheck() error
 	GetPITRs() (*logtail.PitrInfo, error)
 	SetTid(tid uint64)
-	EnableGCForTest()
-	DisableGCForTest()
+	EnableGC()
+	DisableGC()
 	GCEnabled() bool
-	SetCheckGC(enable bool)
 	GetMPool() *mpool.MPool
 	GetSnapshots() (map[uint32]containers.Vector, error)
 }
@@ -190,6 +189,32 @@ const ObjectTableVersion = 0
 const (
 	DefaultInMemoryStagedSize = mpool.MB * 32
 )
+
+type GCMetaFile struct {
+	name       string
+	start, end types.TS
+	ext        string
+}
+
+func (f *GCMetaFile) FullName(dir string) string {
+	return dir + f.name
+}
+
+func (f *GCMetaFile) Start() *types.TS {
+	return &f.start
+}
+func (f *GCMetaFile) End() *types.TS {
+	return &f.end
+}
+func (f *GCMetaFile) Ext() string {
+	return f.ext
+}
+func (f *GCMetaFile) Name() string {
+	return f.name
+}
+func (f *GCMetaFile) EqualRange(start, end *types.TS) bool {
+	return f.start == *start && f.end == *end
+}
 
 func init() {
 	ObjectTableAttrs = []string{

@@ -70,7 +70,6 @@ func NewGCExecutor(
 	cacheSize int,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-	vp *containers.VectorPool,
 ) *GCExecutor {
 	exec := &GCExecutor{
 		mp: mp,
@@ -80,7 +79,6 @@ func NewGCExecutor(
 	exec.buffer.impl = buffer
 
 	exec.config.canGCCacheSize = cacheSize
-	exec.vp = vp
 	return exec
 }
 
@@ -97,7 +95,6 @@ type GCExecutor struct {
 	fs   fileservice.FileService
 	bm   bitmap.Bitmap
 	sels []int64
-	vp   *containers.VectorPool
 }
 
 func (exec *GCExecutor) doFilter(
@@ -128,8 +125,7 @@ func (exec *GCExecutor) doFilter(
 		//    bit 0 means the row cannot be GC'ed
 		exec.bm.Clear()
 		exec.bm.TryExpandWithSize(bat.RowCount())
-		tmp := containers.ToTNBatch(bat, exec.mp)
-		_, err = mergesort.SortBlockColumns(tmp.Vecs, 2, exec.vp)
+		err = mergesort.SortColumnsByIndex(bat.Vecs, 2, exec.mp)
 		if err != nil {
 			return err
 		}
