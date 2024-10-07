@@ -673,16 +673,19 @@ func getPartitionInfos(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDe
 	return partTableIds, partTableNames
 }
 
-func getRemapParitionExpr(tableDef *TableDef, relPos int32, colPosMap map[string]int32) (retExpr *Expr, err error) {
+func getRemapParitionExpr(tableDef *TableDef, relPos int32, colPosMap map[string]int32, containTableName bool) (retExpr *Expr, err error) {
 	retExpr = DeepCopyExpr(tableDef.Partition.PartitionExpression)
-	err = remapPartitionExprColRef(retExpr, tableDef.Name, relPos, colPosMap)
+	err = remapPartitionExprColRef(retExpr, tableDef.Name, relPos, colPosMap, containTableName)
 	return
 }
 
-func remapPartitionExprColRef(expr *Expr, tableName string, relPos int32, colPosMap map[string]int32) (err error) {
+func remapPartitionExprColRef(expr *Expr, tableName string, relPos int32, colPosMap map[string]int32, containTableName bool) (err error) {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		colName := tableName + "." + ne.Col.Name
+		colName := ne.Col.Name
+		if containTableName {
+			colName = tableName + "." + colName
+		}
 		if colPos, ok := colPosMap[colName]; ok {
 			ne.Col.RelPos = relPos
 			ne.Col.ColPos = colPos
@@ -693,23 +696,23 @@ func remapPartitionExprColRef(expr *Expr, tableName string, relPos int32, colPos
 
 	case *plan.Expr_F:
 		for _, arg := range ne.F.GetArgs() {
-			if err = remapPartitionExprColRef(arg, tableName, relPos, colPosMap); err != nil {
+			if err = remapPartitionExprColRef(arg, tableName, relPos, colPosMap, containTableName); err != nil {
 				return
 			}
 		}
 
 	case *plan.Expr_W:
-		if err = remapPartitionExprColRef(ne.W.WindowFunc, tableName, relPos, colPosMap); err != nil {
+		if err = remapPartitionExprColRef(ne.W.WindowFunc, tableName, relPos, colPosMap, containTableName); err != nil {
 			return
 		}
 
 		for _, arg := range ne.W.PartitionBy {
-			if err = remapPartitionExprColRef(arg, tableName, relPos, colPosMap); err != nil {
+			if err = remapPartitionExprColRef(arg, tableName, relPos, colPosMap, containTableName); err != nil {
 				return
 			}
 		}
 		for _, order := range ne.W.OrderBy {
-			if err = remapPartitionExprColRef(order.Expr, tableName, relPos, colPosMap); err != nil {
+			if err = remapPartitionExprColRef(order.Expr, tableName, relPos, colPosMap, containTableName); err != nil {
 				return
 			}
 		}

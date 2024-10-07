@@ -15,6 +15,9 @@
 package multi_update
 
 import (
+	"fmt"
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -23,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,10 +37,34 @@ const (
 	DeleteWriteS3Threshold uint64 = 16 * mpool.MB
 
 	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
+
+	RowIDIdx = 0
+	PkIdx    = 1
 )
+
+type deleteBlockData struct {
+	bitmap *nulls.Nulls
+	typ    int8
+	bat    *batch.Batch
+}
+
+type deleteBlockInfo struct {
+	name string
+	bat  *batch.Batch
+}
+
+func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int) *deleteBlockData {
+	data := &deleteBlockData{
+		bitmap: nulls.NewWithSize(int(options.DefaultBlockMaxRows)),
+		typ:    deletion.RawRowIdBatch,
+		bat:    newDeleteBatch(inputBatch, pkIdx),
+	}
+	return data
+}
 
 type s3Writer struct {
 	cacheBatchs *batch.CompactBatchs
+	segmentMap  map[string]int32
 
 	action actionType
 
@@ -46,7 +75,8 @@ type s3Writer struct {
 	schemaVersions []uint32
 	isClusterBys   []bool
 
-	deleteBlockInfo [][]*batch.Batch
+	deleteBlockMap  [][]map[types.Blockid]*deleteBlockData
+	deleteBlockInfo [][]*deleteBlockInfo
 	insertBlockInfo [][]*batch.Batch
 
 	deleteBuf []*batch.Batch
@@ -62,6 +92,7 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 	tableCount := len(update.MultiUpdateCtx)
 	writer := &s3Writer{
 		cacheBatchs:    batch.NewCompactBatchs(),
+		segmentMap:     update.SegmentMap,
 		seqnums:        make([][]uint16, 0, tableCount),
 		sortIdxs:       make([]int, 0, tableCount),
 		pkIdxs:         make([]int, 0, tableCount),
@@ -70,8 +101,9 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 
 		deleteBuf:       make([]*batch.Batch, tableCount),
 		insertBuf:       make([]*batch.Batch, tableCount),
-		deleteBlockInfo: make([][]*batch.Batch, tableCount),
+		deleteBlockInfo: make([][]*deleteBlockInfo, tableCount),
 		insertBlockInfo: make([][]*batch.Batch, tableCount),
+		deleteBlockMap:  make([][]map[types.Blockid]*deleteBlockData, tableCount),
 	}
 
 	var thisUpdateCtxs []*MultiUpdateCtx
@@ -133,6 +165,74 @@ func (writer *s3Writer) append(proc *process.Process, inBatch *batch.Batch) (err
 	return
 }
 
+func (writer *s3Writer) prepareDeleteBatchs(proc *process.Process, idx int, partIdx int, src []*batch.Batch) ([]*batch.Batch, error) {
+	// split delete batchs by BlockID
+	if writer.deleteBlockMap[idx][partIdx] == nil {
+		writer.deleteBlockMap[idx][partIdx] = make(map[types.Blockid]*deleteBlockData)
+	}
+	blockMap := writer.deleteBlockMap[idx][partIdx]
+
+	for _, bat := range src {
+		rowIDVec := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(RowIDIdx))
+		for i, rowID := range rowIDVec {
+			blkid := rowID.CloneBlockID()
+			segid := rowID.CloneSegmentID()
+			// blkOffset := rowID.GetBlockOffset()
+			rowOffset := rowID.GetRowOffset()
+
+			if blockMap[blkid] == nil {
+				blockMap[blkid] = newDeleteBlockData(bat, 1)
+				strSegid := string(segid[:])
+				if writer.segmentMap[strSegid] == colexec.TxnWorkSpaceIdType {
+					blockMap[blkid].typ = deletion.RawBatchOffset
+				} else if writer.segmentMap[strSegid] == colexec.CnBlockIdType {
+					blockMap[blkid].typ = deletion.CNBlockOffset
+				} else {
+					blockMap[blkid].typ = deletion.RawRowIdBatch
+				}
+			}
+
+			block := blockMap[blkid]
+
+			bitmap := block.bitmap
+			if bitmap.Contains(uint64(rowOffset)) {
+				continue
+			} else {
+				bitmap.Add(uint64(rowOffset))
+			}
+
+			vector.AppendFixed(block.bat.GetVector(RowIDIdx), rowID, false, proc.GetMPool())
+			block.bat.GetVector(PkIdx).UnionOne(bat.GetVector(PkIdx), int64(i), proc.GetMPool())
+			block.bat.SetRowCount(block.bat.Vecs[0].Length())
+		}
+	}
+
+	//collect batchs that can be flush
+	blkids := make([]types.Blockid, 0, len(blockMap))
+	for blkid, data := range blockMap {
+		//Don't flush rowids belong to uncommitted cn block and raw data batch in txn's workspace.
+		if data.typ != deletion.RawRowIdBatch {
+			continue
+		}
+		blkids = append(blkids, blkid)
+	}
+	slices.SortFunc(blkids, func(a, b types.Blockid) int {
+		return a.Compare(&b)
+	})
+	deleteBats := batch.NewCompactBatchs()
+	for _, blkid := range blkids {
+		bat := blockMap[blkid].bat
+		//todo deleteBats can take bat's ownership
+		err := deleteBats.Push(proc.GetMPool(), bat)
+		if err != nil {
+			return nil, err
+		}
+		bat.Clean(proc.GetMPool())
+		delete(blockMap, blkid)
+	}
+	return deleteBats.TakeBatchs(), nil
+}
+
 func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 	var bats []*batch.Batch
 	onlyDelete := writer.action == actionDelete
@@ -151,7 +251,14 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 				if err != nil {
 					return
 				}
-				err = writer.sortAndSyncOneTable(proc, i, 0, true, bats)
+
+				var delBatchs []*batch.Batch
+				delBatchs, err = writer.prepareDeleteBatchs(proc, i, 0, bats)
+				if err != nil {
+					return
+				}
+
+				err = writer.sortAndSyncOneTable(proc, i, 0, true, delBatchs)
 				if err != nil {
 					return
 				}
@@ -167,7 +274,13 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 					if err != nil {
 						return
 					}
-					err = writer.sortAndSyncOneTable(proc, i, int16(getPartitionIdx), true, bats)
+
+					var delBatchs []*batch.Batch
+					delBatchs, err = writer.prepareDeleteBatchs(proc, i, getPartitionIdx, bats)
+					if err != nil {
+						return
+					}
+					err = writer.sortAndSyncOneTable(proc, i, int16(getPartitionIdx), true, delBatchs)
 					if err != nil {
 						return
 					}
@@ -251,7 +364,12 @@ func (writer *s3Writer) sortAndSyncOneTable(
 		if err != nil {
 			return
 		}
-		return writer.fillBlockInfoBat(proc, idx, partitionIdx, blockInfos, objStats, isDelete)
+
+		if isDelete {
+			return writer.fillDeleteBlockInfo(proc, idx, partitionIdx, objStats)
+		} else {
+			return writer.fillInsertBlockInfo(proc, idx, partitionIdx, blockInfos, objStats)
+		}
 	}
 
 	// need sort
@@ -302,40 +420,63 @@ func (writer *s3Writer) sortAndSyncOneTable(
 	if err != nil {
 		return
 	}
-	return writer.fillBlockInfoBat(proc, idx, partitionIdx, blockInfos, objStats, isDelete)
+
+	if isDelete {
+		return writer.fillDeleteBlockInfo(proc, idx, partitionIdx, objStats)
+	} else {
+		return writer.fillInsertBlockInfo(proc, idx, partitionIdx, blockInfos, objStats)
+	}
 }
 
-func (writer *s3Writer) fillBlockInfoBat(
+func (writer *s3Writer) fillDeleteBlockInfo(
+	proc *process.Process,
+	idx int,
+	partitionIdx int16,
+	objStats objectio.ObjectStats) (err error) {
+
+	// init buf
+	if writer.deleteBlockInfo[idx][partitionIdx] == nil {
+		attrs := []string{catalog.ObjectMeta_ObjectStats}
+		blockInfoBat := batch.NewWithSize(len(attrs))
+		blockInfoBat.Attrs = attrs
+		blockInfoBat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		writer.deleteBlockInfo[idx][partitionIdx] = &deleteBlockInfo{
+			name: "",
+			bat:  blockInfoBat,
+		}
+	}
+
+	targetBloInfo := writer.deleteBlockInfo[idx][partitionIdx]
+
+	objId := objStats.ObjectName().ObjectId()[:]
+	targetBloInfo.name = fmt.Sprintf("%s|%d", objId, deletion.FlushDeltaLoc)
+
+	if err = vector.AppendBytes(
+		targetBloInfo.bat.GetVector(0), objStats.Marshal(), false, proc.GetMPool()); err != nil {
+		return
+	}
+	targetBloInfo.bat.SetRowCount(targetBloInfo.bat.Vecs[0].Length())
+	return
+}
+
+func (writer *s3Writer) fillInsertBlockInfo(
 	proc *process.Process,
 	idx int,
 	partitionIdx int16,
 	blockInfos []objectio.BlockInfo,
-	objStats objectio.ObjectStats,
-	isDelete bool) (err error) {
+	objStats objectio.ObjectStats) (err error) {
 
-	createBat := func() *batch.Batch {
+	// init buf
+	if writer.insertBlockInfo[idx][partitionIdx] == nil {
 		attrs := []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 		blockInfoBat := batch.NewWithSize(len(attrs))
 		blockInfoBat.Attrs = attrs
 		blockInfoBat.Vecs[0] = vector.NewVec(types.T_text.ToType())
 		blockInfoBat.Vecs[1] = vector.NewVec(types.T_binary.ToType())
-		return blockInfoBat
+		writer.insertBlockInfo[idx][partitionIdx] = blockInfoBat
 	}
 
-	// init buf
-	var targetBat *batch.Batch
-	if isDelete {
-		if writer.deleteBlockInfo[idx][partitionIdx] == nil {
-			writer.deleteBlockInfo[idx][partitionIdx] = createBat()
-		}
-		targetBat = writer.deleteBlockInfo[idx][partitionIdx]
-	} else {
-		if writer.insertBlockInfo[idx][partitionIdx] == nil {
-			writer.insertBlockInfo[idx][partitionIdx] = createBat()
-		}
-		targetBat = writer.insertBlockInfo[idx][partitionIdx]
-	}
-
+	targetBat := writer.insertBlockInfo[idx][partitionIdx]
 	for _, blkInfo := range blockInfos {
 		if err = vector.AppendBytes(
 			targetBat.Vecs[0],
@@ -350,7 +491,6 @@ func (writer *s3Writer) fillBlockInfoBat(
 		objStats.Marshal(), false, proc.GetMPool()); err != nil {
 		return
 	}
-
 	targetBat.SetRowCount(targetBat.Vecs[0].Length())
 
 	return
@@ -366,23 +506,21 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 		}
 	}
 
-	//write block info to workspace
-	for i, bats := range writer.deleteBlockInfo {
-		if len(bats) == 1 {
+	//write delete block info to workspace
+	for i, partBlockInfos := range writer.deleteBlockInfo {
+		if len(partBlockInfos) == 1 {
 			// normal table
-			if bats[0] != nil && bats[0].RowCount() > 0 {
-				resetMergeBlockForOldCN(proc, bats[0])
-				err = writer.updateCtxs[i].Source.Write(proc.Ctx, bats[0])
+			if partBlockInfos[0] != nil && partBlockInfos[0].bat.RowCount() > 0 {
+				err = writer.updateCtxs[i].Source.Delete(proc.Ctx, partBlockInfos[0].bat, partBlockInfos[0].name)
 				if err != nil {
 					return
 				}
 			}
 		} else {
 			// partition table
-			for partIdx, bat := range bats {
-				if bat != nil && bat.RowCount() > 0 {
-					resetMergeBlockForOldCN(proc, bat)
-					err = writer.updateCtxs[i].PartitionSources[partIdx].Write(proc.Ctx, bat)
+			for partIdx, blockInfo := range partBlockInfos {
+				if blockInfo != nil && blockInfo.bat.RowCount() > 0 {
+					err = writer.updateCtxs[i].PartitionSources[partIdx].Delete(proc.Ctx, blockInfo.bat, blockInfo.name)
 					if err != nil {
 						return
 					}
@@ -390,6 +528,32 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			}
 		}
 	}
+	//write delete batch (which not flush to s3) to workspace
+	for i, blocks := range writer.deleteBlockMap {
+		if len(blocks) == 1 {
+			// normal table
+			for blockID, blockData := range blocks[0] {
+				name := fmt.Sprintf("%s|%d", blockID, blockData.typ)
+				err = writer.updateCtxs[i].Source.Delete(proc.Ctx, blockData.bat, name)
+				if err != nil {
+					return
+				}
+			}
+		} else {
+			// partition table
+			for partIdx, blockDatas := range blocks {
+				for blockID, blockData := range blockDatas {
+					name := fmt.Sprintf("%s|%d", blockID, blockData.typ)
+					err = writer.updateCtxs[i].PartitionSources[partIdx].Delete(proc.Ctx, blockData.bat, name)
+					if err != nil {
+						return
+					}
+				}
+			}
+		}
+	}
+
+	//write insert block info to workspace
 	for i, bats := range writer.insertBlockInfo {
 		if len(bats) == 1 {
 			// normal table
@@ -438,10 +602,10 @@ func (writer *s3Writer) reset(proc *process.Process) (err error) {
 			}
 		}
 	}
-	for _, bats := range writer.deleteBlockInfo {
-		for _, bat := range bats {
-			if bat != nil {
-				bat.CleanOnlyData()
+	for _, partBlockInfos := range writer.deleteBlockInfo {
+		for _, blockInfo := range partBlockInfos {
+			if blockInfo != nil {
+				blockInfo.bat.CleanOnlyData()
 			}
 		}
 	}
@@ -472,10 +636,10 @@ func (writer *s3Writer) free(proc *process.Process) (err error) {
 		}
 	}
 	writer.insertBlockInfo = nil
-	for _, bats := range writer.deleteBlockInfo {
-		for _, bat := range bats {
-			if bat != nil {
-				bat.Clean(proc.Mp())
+	for _, partBlockInfos := range writer.deleteBlockInfo {
+		for _, blockInfo := range partBlockInfos {
+			if blockInfo != nil {
+				blockInfo.bat.Clean(proc.Mp())
 			}
 		}
 	}

@@ -18,10 +18,7 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -173,19 +170,10 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 }
 
 func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batch) (err error) {
-	ctr := &update.ctr
 	for i, updateCtx := range update.MultiUpdateCtx {
 		// delete rows
 		if len(updateCtx.DeleteCols) > 0 {
-			// init buf
-			if ctr.deleteBuf[i] == nil {
-				mainPkIdx := updateCtx.DeleteCols[1]
-				buf := batch.New(false, []string{catalog.Row_ID, "pk"})
-				buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-				buf.SetVector(1, vector.NewVec(*bat.Vecs[mainPkIdx].GetType()))
-				ctr.deleteBuf[i] = buf
-			}
-			err = update.delete_table(proc, updateCtx, bat, ctr.deleteBuf[i])
+			err = update.delete_table(proc, updateCtx, bat, i)
 			if err != nil {
 				return
 			}

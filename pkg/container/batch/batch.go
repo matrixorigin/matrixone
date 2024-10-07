@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
