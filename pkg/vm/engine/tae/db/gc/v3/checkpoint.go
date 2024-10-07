@@ -498,7 +498,7 @@ func (c *checkpointCleaner) mergeSnapshotFile(
 func (c *checkpointCleaner) upgradeGCFiles(
 	metaFiles map[string]GCMetaFile,
 	window *GCWindow,
-) error {
+) (err error) {
 	// get the scan watermark
 	scanWaterMark := c.GetScanWaterMark()
 	if scanWaterMark == nil {
@@ -527,19 +527,17 @@ func (c *checkpointCleaner) upgradeGCFiles(
 	c.remainingObjects.RLock()
 	if len(c.remainingObjects.windows) == 0 {
 		c.remainingObjects.RUnlock()
-		return nil
+		return
 	}
 	// windows[0] has always been a full GCWindow
 	c.remainingObjects.RUnlock()
-	err := c.fs.DelFiles(c.ctx, deleteFiles)
-	if err != nil {
+	if err = c.fs.DelFiles(c.ctx, deleteFiles); err != nil {
 		logutil.Error(
 			"Merging-GC-File-Error",
 			zap.Error(err),
 		)
-		return err
 	}
-	return nil
+	return
 }
 
 // getMetaFilesToMerge returns the files that can be merged.
@@ -611,6 +609,7 @@ func (c *checkpointCleaner) getDeleteFile(
 func (c *checkpointCleaner) mergeCheckpointFiles(
 	checkpointLowWaterMark types.TS,
 	accoutSnapshots map[uint32][]types.TS,
+	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) error {
 	// checkpointLowWaterMark is empty only in the following cases:
 	// 1. no incremental and no gloabl checkpoint
@@ -665,8 +664,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 		}
 	}
 
-	buffer := MakeGCWindowBuffer(16 * mpool.MB)
-	defer buffer.Close(c.mp)
 	sourcer := window.MakeFilesReader(c.ctx, c.fs.Service)
 	bf, err := BuildBloomfilter(
 		c.ctx,
@@ -674,7 +671,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 		Default_Coarse_Probility,
 		0,
 		sourcer.Read,
-		buffer,
+		memoryBuffer,
 		c.mp,
 	)
 	dFiles, newCheckpoint, err = MergeCheckpoint(
@@ -750,44 +747,48 @@ func (c *checkpointCleaner) GetPITRs() (*logtail.PitrInfo, error) {
 	return c.snapshotMeta.GetPITR(c.ctx, c.sid, ts, c.fs.Service, c.mp)
 }
 
-func (c *checkpointCleaner) TryGC() error {
-	if maxGlobalCKP := c.checkpointCli.MaxGlobalCheckpoint(); maxGlobalCKP != nil {
-		if err := c.tryGCAgainstGlobalCheckpoint(
-			maxGlobalCKP,
-		); err != nil {
-			logutil.Error(
-				"DiskCleaner-Replay-TryGC-Error",
-				zap.Error(err),
-				zap.String("checkpoint", maxGlobalCKP.String()),
-			)
-			return err
-		}
-		if len(c.remainingObjects.windows) == 0 {
-			return nil
-		}
-		metaFiles := make(map[string]GCMetaFile, len(c.metaFiles))
-		for k, v := range c.metaFiles {
-			metaFiles[k] = v
-		}
-		if err := c.upgradeGCFiles(
-			metaFiles, c.remainingObjects.windows[0],
-		); err != nil {
-			logutil.Error(
-				"DiskCleaner-Replay-UpgradeGC-Error",
-				zap.Error(err),
-			)
-			return err
-		}
-		return nil
+func (c *checkpointCleaner) TryGC() (err error) {
+	var maxGlobalCKP *checkpoint.CheckpointEntry
+	if maxGlobalCKP = c.checkpointCli.MaxGlobalCheckpoint(); maxGlobalCKP == nil {
+		return
 	}
-	return nil
+	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
+	defer memoryBuffer.Close(c.mp)
+	if err = c.tryGCAgainstGlobalCheckpoint(
+		maxGlobalCKP, memoryBuffer,
+	); err != nil {
+		logutil.Error(
+			"DiskCleaner-Replay-TryGC-Error",
+			zap.Error(err),
+			zap.String("checkpoint", maxGlobalCKP.String()),
+		)
+		return
+	}
+	if len(c.remainingObjects.windows) == 0 {
+		return
+	}
+	metaFiles := make(map[string]GCMetaFile, len(c.metaFiles))
+	for k, v := range c.metaFiles {
+		metaFiles[k] = v
+	}
+	if err = c.upgradeGCFiles(
+		metaFiles, c.remainingObjects.windows[0],
+	); err != nil {
+		logutil.Error(
+			"DiskCleaner-Replay-UpgradeGC-Error",
+			zap.Error(err),
+		)
+	}
+	return
 }
 
-func (c *checkpointCleaner) tryGCAgainstGlobalCheckpoint(gckp *checkpoint.CheckpointEntry) error {
+func (c *checkpointCleaner) tryGCAgainstGlobalCheckpoint(
+	gckp *checkpoint.CheckpointEntry,
+	memoryBuffer *containers.OneSchemaBatchBuffer,
+) (err error) {
 	if !c.delWorker.Start() {
-		return nil
+		return
 	}
-	var err error
 	var snapshots map[uint32]containers.Vector
 	defer func() {
 		if err != nil {
@@ -799,39 +800,41 @@ func (c *checkpointCleaner) tryGCAgainstGlobalCheckpoint(gckp *checkpoint.Checkp
 	pitrs, err := c.GetPITRs()
 	if err != nil {
 		logutil.Errorf("[DiskCleaner] GetPitrs failed: %v", err.Error())
-		return nil
+		return
 	}
 	snapshots, err = c.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
 	if err != nil {
 		logutil.Errorf("[DiskCleaner] GetSnapshot failed: %v", err.Error())
-		return nil
+		return
 	}
 	accountSnapshots := TransformToTSList(snapshots)
-	gc, err := c.doGCAgainstGlobalCheckpoint(gckp, accountSnapshots, pitrs)
+	filesToGC, err := c.doGCAgainstGlobalCheckpoint(
+		gckp, accountSnapshots, pitrs, memoryBuffer,
+	)
 	if err != nil {
 		logutil.Errorf("[DiskCleaner] doGCAgainstGlobalCheckpoint failed: %v", err.Error())
-		return err
+		return
 	}
 	// Delete files after doGCAgainstGlobalCheckpoint
 	// TODO:Requires Physical Removal Policy
-	err = c.delWorker.ExecDelete(c.ctx, gc)
-	if err != nil {
-		logutil.Infof("[DiskCleaner] ExecDelete failed: %v", err.Error())
-		return err
+	if err = c.delWorker.ExecDelete(c.ctx, filesToGC); err != nil {
+		logutil.Infof("[DiskCleaner] ExecDelete failed: %v", err)
+		return
 	}
-	err = c.mergeCheckpointFiles(c.checkpointCli.GetLowWaterMark(), accountSnapshots)
-	if err != nil {
+	if err = c.mergeCheckpointFiles(
+		c.checkpointCli.GetLowWaterMark(), accountSnapshots, memoryBuffer,
+	); err != nil {
 		// TODO: Error handle
 		logutil.Errorf("[DiskCleaner] mergeCheckpointFiles failed: %v", err.Error())
-		return err
 	}
-	return nil
+	return
 }
 
 func (c *checkpointCleaner) doGCAgainstGlobalCheckpoint(
 	gckp *checkpoint.CheckpointEntry,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
+	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) ([]string, error) {
 	c.remainingObjects.Lock()
 	defer c.remainingObjects.Unlock()
@@ -858,10 +861,6 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpoint(
 		c.remainingObjects.windows[i] = nil
 	}
 	c.remainingObjects.windows = c.remainingObjects.windows[:1]
-
-	// create a buffer as the GC memory pool
-	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
-	defer memoryBuffer.Close(c.mp)
 
 	var (
 		filesToGC []string
@@ -1102,7 +1101,11 @@ func (c *checkpointCleaner) Process() {
 		gcWindow *GCWindow
 		err      error
 	)
-	if gcWindow, err = c.scanCheckpointsAsOneWindow(candidates); err != nil {
+	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
+	defer memoryBuffer.Close(c.mp)
+	if gcWindow, err = c.scanCheckpointsAsOneWindow(
+		candidates, memoryBuffer,
+	); err != nil {
 		logutil.Error(
 			"DiskCleaner-Process-CreateNewInput-Error",
 			zap.Error(err),
@@ -1141,7 +1144,7 @@ func (c *checkpointCleaner) Process() {
 			zap.String("gc-watermark", gcWaterMarkTS.ToString()),
 		)
 		if err = c.tryGCAgainstGlobalCheckpoint(
-			maxGlobalCKP,
+			maxGlobalCKP, memoryBuffer,
 		); err != nil {
 			logutil.Error(
 				"DiskCleaner-Process-TryGC-Error",
@@ -1205,6 +1208,7 @@ func (c *checkpointCleaner) RemoveChecker(key string) error {
 
 func (c *checkpointCleaner) scanCheckpointsAsOneWindow(
 	ckps []*checkpoint.CheckpointEntry,
+	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) (gcWindow *GCWindow, err error) {
 	now := time.Now()
 	var snapSize, tableSize uint32
@@ -1220,8 +1224,6 @@ func (c *checkpointCleaner) scanCheckpointsAsOneWindow(
 			zap.Uint32("table-meta-size :", tableSize),
 			zap.String("snapshot-detail", c.snapshotMeta.String()))
 	}()
-	buffer := MakeGCWindowBuffer(16 * mpool.MB)
-	defer buffer.Close(c.mp)
 	saveSnapshot := func() error {
 		name := blockio.EncodeSnapshotMetadataFileName(GCMetaDir,
 			PrefixSnapMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
@@ -1251,7 +1253,7 @@ func (c *checkpointCleaner) scanCheckpointsAsOneWindow(
 		c.collectCkpData,
 		c.updateSnapshot,
 		saveSnapshot,
-		buffer,
+		memoryBuffer,
 	); err != nil {
 		return
 	}
