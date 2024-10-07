@@ -83,8 +83,9 @@ type checkpointCleaner struct {
 	}
 
 	options struct {
-		gcEnabled    atomic.Bool
-		checkEnabled atomic.Bool
+		gcEnabled           atomic.Bool
+		checkEnabled        atomic.Bool
+		gcCheckpointEnabled atomic.Bool
 	}
 
 	config struct {
@@ -94,8 +95,6 @@ type checkpointCleaner struct {
 		minMergeCount atomic.Int64
 
 		canGCCacheSize int
-
-		DisableGCCheckpoint bool
 	}
 
 	// remainingObjects is to record the currently valid GCWindow
@@ -134,9 +133,9 @@ func WithCanGCCacheSize(
 }
 
 // for ut
-func WithDisableGCCheckpoint(isDisable bool) CheckpointCleanerOption {
+func WithGCCheckpointOption(enable bool) CheckpointCleanerOption {
 	return func(e *checkpointCleaner) {
-		e.config.DisableGCCheckpoint = isDisable
+		e.options.gcCheckpointEnabled.Store(enable)
 	}
 }
 
@@ -197,6 +196,10 @@ func (c *checkpointCleaner) DisableGC() {
 
 func (c *checkpointCleaner) GCEnabled() bool {
 	return c.options.gcEnabled.Load()
+}
+
+func (c *checkpointCleaner) GCCheckpointEnabled() bool {
+	return c.options.gcCheckpointEnabled.Load()
 }
 
 func (c *checkpointCleaner) EnableCheck() {
@@ -421,12 +424,6 @@ func (c *checkpointCleaner) GetScannedWindow() *GCWindow {
 	return c.remainingObjects.window
 }
 
-func (c *checkpointCleaner) GetFirstWindow() *GCWindow {
-	c.remainingObjects.RLock()
-	defer c.remainingObjects.RUnlock()
-	return c.remainingObjects.window
-}
-
 func (c *checkpointCleaner) GetScannedWindowLocked() *GCWindow {
 	return c.remainingObjects.window
 }
@@ -593,37 +590,29 @@ func (c *checkpointCleaner) getMetaFilesToMerge(ts *types.TS) (
 	return c.checkpointCli.ICKPRange(&start, ts, 20)
 }
 
-func (c *checkpointCleaner) getDeleteFile(
+// filterCheckpoints filters the checkpoints with the endTS less than the highWater
+func (c *checkpointCleaner) filterCheckpoints(
+	highWater *types.TS,
 	checkpoints []*checkpoint.CheckpointEntry,
-	stage *types.TS,
-) ([]string, []*checkpoint.CheckpointEntry, error) {
+) ([]*checkpoint.CheckpointEntry, error) {
 	if len(checkpoints) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
-	deleteFiles := make([]string, 0)
-	var mergeFiles []*checkpoint.CheckpointEntry
-	for i := len(checkpoints) - 1; i >= 0; i-- {
-		// TODO: remove this log
-		logutil.Info("[MergeCheckpoint]",
-			common.OperationField("List Checkpoint"),
-			common.OperandField(checkpoints[i].String()))
-	}
-	for i := len(checkpoints) - 1; i >= 0; i-- {
-		ckp := checkpoints[i]
-		end := ckp.GetEnd()
-		if end.LT(stage) {
-			mergeFiles = checkpoints[:i+1]
+	var i int
+	for i = len(checkpoints) - 1; i >= 0; i-- {
+		endTS := checkpoints[i].GetEnd()
+		if endTS.LT(highWater) {
 			break
 		}
 	}
-	return deleteFiles, mergeFiles, nil
+	return checkpoints[:i+1], nil
 }
 
 func (c *checkpointCleaner) mergeCheckpointFiles(
 	checkpointLowWaterMark *types.TS,
 	accoutSnapshots map[uint32][]types.TS,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
-) error {
+) (err error) {
 	// checkpointLowWaterMark is empty only in the following cases:
 	// 1. no incremental and no gloabl checkpoint
 	// 2. one incremental checkpoint with empty start
@@ -631,11 +620,11 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	// if there are global checkpoints and incremental checkpoints, the low water mark is:
 	// min(min(startTS of all incremental checkpoints),min(endTS of global checkpoints))
 	if checkpointLowWaterMark.IsEmpty() {
-		return nil
+		return
 	}
 	checkpoints := c.getMetaFilesToMerge(checkpointLowWaterMark)
 	if len(checkpoints) == 0 {
-		return nil
+		return
 	}
 
 	gcWaterMark := checkpointLowWaterMark
@@ -644,32 +633,25 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 		panic(fmt.Sprintf("rangeEnd %s < gcWaterMark %s", rangeEnd.ToString(), gcWaterMark.ToString()))
 	}
 
-	deleteFiles := make([]string, 0)
-	ckpSnapList := make([]types.TS, 0)
-	for _, ts := range accoutSnapshots {
-		ckpSnapList = append(ckpSnapList, ts...)
-	}
-	sort.Slice(ckpSnapList, func(i, j int) bool {
-		return ckpSnapList[i].LT(&ckpSnapList[j])
-	})
 	logutil.Info("[MergeCheckpoint]",
 		common.OperationField("MergeCheckpointFiles"),
 		common.OperandField(checkpointLowWaterMark.ToString()))
-	dFiles, mergeFiles, err := c.getDeleteFile(
-		checkpoints,
+
+	var checkpointsToMerge []*checkpoint.CheckpointEntry
+
+	if checkpointsToMerge, err = c.filterCheckpoints(
 		checkpointLowWaterMark,
-	)
-	if err != nil {
-		return err
+		checkpoints,
+	); err != nil {
+		return
 	}
-	if len(mergeFiles) == 0 {
+	if len(checkpointsToMerge) == 0 {
 		logutil.Warnf("[MergeCheckpoint] checkpoints len %d", len(checkpoints))
-		return nil
+		return
 	}
-	deleteFiles = append(deleteFiles, dFiles...)
-	// merge ickp
-	var newCheckpoint *checkpoint.CheckpointEntry
-	window := c.GetFirstWindow()
+
+	// get the scanned window, it should not be nil
+	window := c.GetScannedWindow()
 	if rangeEnd.GT(&window.tsRange.end) {
 		panic(fmt.Sprintf("rangeEnd %s < window end %s", rangeEnd.ToString(), window.tsRange.end.ToString()))
 	}
@@ -685,11 +667,15 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 		c.mp,
 	)
 
+	var (
+		dFiles        []string
+		newCheckpoint *checkpoint.CheckpointEntry
+	)
 	dFiles, newCheckpoint, err = MergeCheckpoint(
 		c.ctx,
 		c.sid,
 		c.fs.Service,
-		mergeFiles,
+		checkpointsToMerge,
 		bf,
 		&rangeEnd,
 		blockio.EncodeCheckpointMetadataFileName,
@@ -702,26 +688,27 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	}
 
 	c.checkpointCli.AddCompacted(newCheckpoint)
-	ts := newCheckpoint.GetEnd()
-	// update checkpoint gc water mark
-	c.updateCheckpointGCWaterMark(&ts)
 
-	deleteFiles = append(deleteFiles, dFiles...)
+	// update checkpoint gc water mark
+	newWaterMark := newCheckpoint.GetEnd()
+	c.updateCheckpointGCWaterMark(&newWaterMark)
+
+	deleteFiles := dFiles
 
 	// When the compacted tree exceeds 10 entries, you need to merge once
 	compacted, ok := c.checkpointCli.CompactedRange(10)
 	if ok {
 		end := compacted[len(compacted)-1].GetEnd()
-		dFiles, newCheckpoint, err = MergeCheckpoint(c.ctx,
+		if dFiles, newCheckpoint, err = MergeCheckpoint(c.ctx,
 			c.sid,
 			c.fs.Service,
 			compacted,
 			bf,
 			&end,
 			blockio.EncodeCompactedMetadataFileName,
-			c.mp)
-		if err != nil {
-			return err
+			c.mp,
+		); err != nil {
+			return
 		}
 		if newCheckpoint == nil {
 			panic("MergeCheckpoint new compacted checkpoint is nil")
@@ -735,9 +722,9 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	}
 
 	logutil.Info("[MergeCheckpoint] CKP GC",
-		zap.Bool("DisableGC", c.config.DisableGCCheckpoint),
+		zap.Bool("gc-checkpoint", c.GCCheckpointEnabled()),
 		zap.Strings("files", deleteFiles))
-	if !c.config.DisableGCCheckpoint {
+	if c.GCCheckpointEnabled() {
 		err = c.fs.DelFiles(c.ctx, deleteFiles)
 		if err != nil {
 			logutil.Errorf("DelFiles failed: %v", err.Error())

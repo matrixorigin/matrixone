@@ -252,7 +252,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		opts.SID, fs, db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
 		gc2.WithCheckOption(opts.GCCfg.CheckGC),
-		gc2.WithDisableGCCheckpoint(opts.CheckpointCfg.DisableGCCheckpoint))
+		gc2.WithGCCheckpointOption(!opts.CheckpointCfg.DisableGCCheckpoint))
 	cleaner.AddChecker(
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)
