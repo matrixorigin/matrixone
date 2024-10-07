@@ -48,7 +48,6 @@ func MakeLoadFunc(
 		reader engine.Reader
 	)
 	if len(objects) > 0 {
-		logutil.Infof("load from objects %d", len(objects))
 		reader = engine_util.SimpleMultiObjectsReader(
 			ctx, fs, objects, ts, opts...,
 		)

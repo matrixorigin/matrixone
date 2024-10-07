@@ -18,8 +18,6 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -184,7 +182,6 @@ func (exec *GCExecutor) Run(
 		return
 	}
 	canGCObjects, canGCMemTable := canGCSinker.GetResult()
-	logutil.Infof("canGCMemTable is %d, canGCObjects is %d", len(canGCMemTable), len(canGCObjects))
 	fineSourcer, release := MakeLoadFunc(
 		ctx,
 		canGCMemTable,

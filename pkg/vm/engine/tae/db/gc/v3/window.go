@@ -586,7 +586,6 @@ func (w *GCWindow) Compare(
 		logutil.Infof("objects are not equal")
 		return objects, objects2, false
 	}
-	logutil.Infof("objects len %d", len(objects))
 	return objects, objects2, true
 }
 

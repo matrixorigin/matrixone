@@ -596,7 +596,6 @@ func (c *checkpointCleaner) getMetaFilesToMerge(ts *types.TS) (
 func (c *checkpointCleaner) getDeleteFile(
 	checkpoints []*checkpoint.CheckpointEntry,
 	stage *types.TS,
-	ckpSnapList []types.TS,
 ) ([]string, []*checkpoint.CheckpointEntry, error) {
 	if len(checkpoints) == 0 {
 		return nil, nil, nil
@@ -615,37 +614,6 @@ func (c *checkpointCleaner) getDeleteFile(
 		if end.LT(stage) {
 			mergeFiles = checkpoints[:i+1]
 			break
-
-			//Fixme:Now only ickp is consumed, there is no gckp, so when merging, all ickp needs to be merged,
-			//not just those referenced by snapshots
-			//if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) {
-			//	// TODO: remove this log
-			//	logutil.Info("[MergeCheckpoint]",
-			//		common.OperationField("isSnapshotCKPRefers"),
-			//		common.OperandField(ckp.String()))
-			//	mergeFiles = checkpoints[:i+1]
-			//	break
-			//}
-			//logutil.Info("[MergeCheckpoint]",
-			//	common.OperationField("GC checkpoint"),
-			//	common.OperandField(ckp.String()))
-			//nameMeta := blockio.EncodeCheckpointMetadataFileName(
-			//	checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
-			//	ckp.GetStart(), ckp.GetEnd())
-			//locations, err := logtail.LoadCheckpointLocations(
-			//	c.ctx, c.sid, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
-			//if err != nil {
-			//	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			//		deleteFiles = append(deleteFiles, nameMeta)
-			//		continue
-			//	}
-			//	return nil, nil, err
-			//}
-			//deleteFiles = append(deleteFiles, nameMeta)
-			//for name := range locations {
-			//	deleteFiles = append(deleteFiles, name)
-			//}
-			//deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
 		}
 	}
 	return deleteFiles, mergeFiles, nil
@@ -690,7 +658,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 	dFiles, mergeFiles, err := c.getDeleteFile(
 		checkpoints,
 		checkpointLowWaterMark,
-		ckpSnapList,
 	)
 	if err != nil {
 		return err
@@ -736,7 +703,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(
 
 	c.checkpointCli.AddCompacted(newCheckpoint)
 	ts := newCheckpoint.GetEnd()
-	logutil.Infof("[MergeCheckpoint] new checkpoint: %s", ts.ToString())
 	// update checkpoint gc water mark
 	c.updateCheckpointGCWaterMark(&ts)
 
