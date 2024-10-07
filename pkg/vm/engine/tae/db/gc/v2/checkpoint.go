@@ -1017,16 +1017,16 @@ func (c *checkpointCleaner) createNewInput(
 		input.UpdateTable(data)
 		c.updateSnapshot(c.ctx, c.fs.Service, data, startts, endts)
 	}
-	name := blockio.EncodeSnapshotMetadataFileName(GCMetaDir,
+	name := blockio.EncodeSnapshotMetadataFileName(
 		PrefixSnapMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
-	snapSize, err = c.snapshotMeta.SaveMeta(name, c.fs.Service)
+	snapSize, err = c.snapshotMeta.SaveMeta(GCMetaDir+name, c.fs.Service)
 	if err != nil {
 		logutil.Errorf("SaveMeta is failed")
 		return
 	}
-	name = blockio.EncodeTableMetadataFileName(GCMetaDir,
+	name = blockio.EncodeTableMetadataFileName(
 		PrefixAcctMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
-	tableSize, err = c.snapshotMeta.SaveTableInfo(name, c.fs.Service)
+	tableSize, err = c.snapshotMeta.SaveTableInfo(GCMetaDir+name, c.fs.Service)
 	if err != nil {
 		logutil.Errorf("SaveTableInfo is failed")
 		return

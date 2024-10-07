@@ -119,7 +119,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	cacheSize int,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) ([]string, error) {
+) ([]string, string, error) {
 
 	sourcer := w.MakeFilesReader(ctx, fs)
 
@@ -140,18 +140,20 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	defer job.Close()
 
 	if err := job.Execute(ctx); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	filesToGC, filesNotGC := job.Result()
-	if err := w.writeMetaForRemainings(
+	var metaFile string
+	var err error
+	if metaFile, err = w.writeMetaForRemainings(
 		ctx, filesNotGC,
 	); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	w.files = filesNotGC
-	return filesToGC, nil
+	return filesToGC, metaFile, nil
 }
 
 // ScanCheckpoints will load data from the `checkpointEntries` one by one and
@@ -164,7 +166,7 @@ func (w *GCWindow) ScanCheckpoints(
 	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CheckpointData) error,
 	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
-) (err error) {
+) (metaFile string, err error) {
 	if len(checkpointEntries) == 0 {
 		return
 	}
@@ -221,13 +223,13 @@ func (w *GCWindow) ScanCheckpoints(
 	w.tsRange.start = start
 	w.tsRange.end = end
 	newFiles, _ := sinker.GetResult()
-	if err = w.writeMetaForRemainings(
+	if metaFile, err = w.writeMetaForRemainings(
 		ctx, newFiles,
 	); err != nil {
 		return
 	}
 	w.files = append(w.files, newFiles...)
-	return nil
+	return metaFile, nil
 }
 
 func isSnapshotRefers(
@@ -312,10 +314,8 @@ func (w *GCWindow) getSinker(
 func (w *GCWindow) writeMetaForRemainings(
 	ctx context.Context,
 	stats []objectio.ObjectStats,
-) error {
-	name := blockio.EncodeCheckpointMetadataFileName(
-		w.metaDir, PrefixGCMeta, w.tsRange.start, w.tsRange.end,
-	)
+) (string, error) {
+	name := blockio.EncodeGCMetadataFileName(PrefixGCMeta, w.tsRange.start, w.tsRange.end)
 	ret := batch.NewWithSchema(
 		false, false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)
@@ -324,19 +324,19 @@ func (w *GCWindow) writeMetaForRemainings(
 		if err := vector.AppendBytes(
 			ret.GetVector(0), s[:], false, w.mp,
 		); err != nil {
-			return err
+			return "", err
 		}
 	}
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, w.fs)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, w.metaDir+name, w.fs)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
-		return err
+		return "", err
 	}
 
 	_, err = writer.WriteEnd(ctx)
-	return err
+	return name, err
 }
 
 func (w *GCWindow) Merge(o *GCWindow) {

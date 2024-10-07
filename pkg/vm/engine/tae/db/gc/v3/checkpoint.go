@@ -868,6 +868,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpoint(
 
 	var (
 		filesToGC []string
+		metafile  string
 		err       error
 	)
 	// do GC against the global checkpoint
@@ -878,7 +879,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpoint(
 	// After:
 	// [t100, t400] [f10, f11]
 	// Also, it will update the GC metadata
-	if filesToGC, err = oneWindow.ExecuteGlobalCheckpointBasedGC(
+	if filesToGC, metafile, err = oneWindow.ExecuteGlobalCheckpointBasedGC(
 		c.ctx,
 		gckp,
 		accountSnapshots,
@@ -891,6 +892,12 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpoint(
 	); err != nil {
 		logutil.Errorf("doGCAgainstGlobalCheckpoint failed: %v", err.Error())
 		return nil, err
+	}
+	c.metaFiles[metafile] = GCMetaFile{
+		name:  metafile,
+		start: oneWindow.tsRange.start,
+		end:   oneWindow.tsRange.end,
+		ext:   blockio.CheckpointExt,
 	}
 
 	softCost = time.Since(now)
@@ -914,7 +921,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 	buffer *containers.OneSchemaBatchBuffer,
 ) (window *GCWindow, err error) {
 	window = NewGCWindow(c.mp, c.fs.Service, WithMetaPrefix("debug/"))
-	if err = window.ScanCheckpoints(
+	if _, err = window.ScanCheckpoints(
 		c.ctx, ckps, c.collectCkpData, nil, nil, buffer,
 	); err != nil {
 		window.Close()
@@ -1005,7 +1012,7 @@ func (c *checkpointCleaner) DoCheck() error {
 		len(mergeWindow.files),
 		mergeWindow.files[0].ObjectName().String(),
 	)
-	if _, err = mergeWindow.ExecuteGlobalCheckpointBasedGC(
+	if _, _, err = mergeWindow.ExecuteGlobalCheckpointBasedGC(
 		c.ctx,
 		gCkp,
 		accoutSnapshots,
@@ -1027,7 +1034,7 @@ func (c *checkpointCleaner) DoCheck() error {
 	)
 
 	//logutil.Infof("debug table is %d, stats is %v", len(debugWindow.files.stats), debugWindow.files.stats[0].ObjectName().String())
-	if _, err = debugWindow.ExecuteGlobalCheckpointBasedGC(
+	if _, _, err = debugWindow.ExecuteGlobalCheckpointBasedGC(
 		c.ctx,
 		gCkp,
 		accoutSnapshots,
@@ -1231,15 +1238,15 @@ func (c *checkpointCleaner) scanCheckpointsAsOneWindow(
 			zap.String("snapshot-detail", c.snapshotMeta.String()))
 	}()
 
+	var snapshotFile, accountFile GCMetaFile
 	saveSnapshot := func() (err2 error) {
 		name := blockio.EncodeSnapshotMetadataFileName(
-			GCMetaDir,
 			PrefixSnapMeta,
 			ckps[0].GetStart(),
 			ckps[len(ckps)-1].GetEnd(),
 		)
 		if snapSize, err2 = c.snapshotMeta.SaveMeta(
-			name, c.fs.Service,
+			GCMetaDir+name, c.fs.Service,
 		); err2 != nil {
 			logutil.Error(
 				"DiskCleaner-Error-SaveMeta",
@@ -1247,25 +1254,37 @@ func (c *checkpointCleaner) scanCheckpointsAsOneWindow(
 			)
 			return
 		}
+		snapshotFile = GCMetaFile{
+			name:  name,
+			start: ckps[0].GetStart(),
+			end:   ckps[len(ckps)-1].GetEnd(),
+			ext:   blockio.SnapshotExt,
+		}
 		name = blockio.EncodeTableMetadataFileName(
-			GCMetaDir,
 			PrefixAcctMeta,
 			ckps[0].GetStart(),
 			ckps[len(ckps)-1].GetEnd(),
 		)
 		if tableSize, err2 = c.snapshotMeta.SaveTableInfo(
-			name, c.fs.Service,
+			GCMetaDir+name, c.fs.Service,
 		); err2 != nil {
 			logutil.Error(
 				"DiskCleaner-Error-SaveTableInfo",
 				zap.Error(err2),
 			)
 		}
+		accountFile = GCMetaFile{
+			name:  name,
+			start: ckps[0].GetStart(),
+			end:   ckps[len(ckps)-1].GetEnd(),
+			ext:   blockio.AcctExt,
+		}
 		return
 	}
 
 	gcWindow = NewGCWindow(c.mp, c.fs.Service)
-	if err = gcWindow.ScanCheckpoints(
+	var gcMetaFile string
+	if gcMetaFile, err = gcWindow.ScanCheckpoints(
 		c.ctx,
 		ckps,
 		c.collectCkpData,
@@ -1275,6 +1294,15 @@ func (c *checkpointCleaner) scanCheckpointsAsOneWindow(
 	); err != nil {
 		gcWindow.Close()
 		gcWindow = nil
+	}
+
+	c.metaFiles[snapshotFile.name] = snapshotFile
+	c.metaFiles[accountFile.name] = accountFile
+	c.metaFiles[gcMetaFile] = GCMetaFile{
+		name:  gcMetaFile,
+		start: gcWindow.tsRange.start,
+		end:   gcWindow.tsRange.end,
+		ext:   blockio.CheckpointExt,
 	}
 	return
 }
