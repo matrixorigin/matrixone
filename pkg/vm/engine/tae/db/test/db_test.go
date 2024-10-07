@@ -6406,7 +6406,7 @@ func TestAppendAndGC(t *testing.T) {
 	}
 	logutil.Infof("start gc")
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-	err = db.DiskCleaner.GetCleaner().CheckGC()
+	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
 	testutils.WaitExpect(10000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
@@ -6537,7 +6537,7 @@ func TestSnapshotGC(t *testing.T) {
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
-	db.DiskCleaner.GetCleaner().DisableGCForTest()
+	db.DiskCleaner.GetCleaner().DisableGC()
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
@@ -6601,7 +6601,7 @@ func TestSnapshotGC(t *testing.T) {
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
-	db.DiskCleaner.GetCleaner().EnableGCForTest()
+	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	testutils.WaitExpect(5000, func() bool {
@@ -6615,7 +6615,7 @@ func TestSnapshotGC(t *testing.T) {
 		return
 	}
 	assert.NotNil(t, minMerged)
-	err = db.DiskCleaner.GetCleaner().CheckGC()
+	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
@@ -6631,7 +6631,7 @@ func TestSnapshotGC(t *testing.T) {
 	end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
 	minEnd := minMerged.GetEnd()
 	assert.True(t, end.GE(&minEnd))
-	err = db.DiskCleaner.GetCleaner().CheckGC()
+	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
 
 }
@@ -6678,7 +6678,7 @@ func TestSnapshotMeta(t *testing.T) {
 		db.DiskCleaner.GetCleaner().SetTid(rel4.ID())
 		db.DiskCleaner.GetCleaner().SetTid(rel5.ID())
 	}
-	//db.DiskCleaner.GetCleaner().DisableGCForTest()
+	//db.DiskCleaner.GetCleaner().DisableGC()
 
 	snapshots := make([]int64, 0)
 	for i := 0; i < 10; i++ {
@@ -6694,7 +6694,7 @@ func TestSnapshotMeta(t *testing.T) {
 	}
 	tae.Restart(ctx)
 	db = tae.DB
-	db.DiskCleaner.GetCleaner().DisableGCForTest()
+	db.DiskCleaner.GetCleaner().DisableGC()
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	for i, snapshot := range snapshots {
 		attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
@@ -6739,7 +6739,7 @@ func TestSnapshotMeta(t *testing.T) {
 		return
 	}
 	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
-	db.DiskCleaner.GetCleaner().EnableGCForTest()
+	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	testutils.WaitExpect(3000, func() bool {
@@ -6779,7 +6779,7 @@ func TestSnapshotMeta(t *testing.T) {
 	for _, snap := range snaps {
 		assert.Equal(t, len(snapshots), snap.Length())
 	}
-	err = db.DiskCleaner.GetCleaner().CheckGC()
+	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
@@ -6805,7 +6805,7 @@ func TestSnapshotMeta(t *testing.T) {
 	for _, snap := range snaps {
 		assert.Equal(t, len(snapshots), snap.Length())
 	}
-	err = db.DiskCleaner.GetCleaner().CheckGC()
+	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
 }
 
@@ -6935,7 +6935,7 @@ func TestPitrMeta(t *testing.T) {
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
-	db.DiskCleaner.GetCleaner().EnableGCForTest()
+	db.DiskCleaner.GetCleaner().EnableGC()
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -6968,7 +6968,7 @@ func TestPitrMeta(t *testing.T) {
 		}
 	}
 
-	err = db.DiskCleaner.GetCleaner().CheckGC()
+	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
@@ -6985,7 +6985,7 @@ func TestPitrMeta(t *testing.T) {
 	end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
 	minEnd = minMerged.GetEnd()
 	assert.True(t, end.GE(&minEnd))
-	err = db.DiskCleaner.GetCleaner().CheckGC()
+	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
 	pitr, err := db.DiskCleaner.GetCleaner().GetPITRs()
 	assert.Nil(t, err)
@@ -7030,7 +7030,7 @@ func TestMergeGC(t *testing.T) {
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
-	db.DiskCleaner.GetCleaner().DisableGCForTest()
+	db.DiskCleaner.GetCleaner().DisableGC()
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
@@ -7115,7 +7115,7 @@ func TestMergeGC(t *testing.T) {
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
-	db.DiskCleaner.GetCleaner().EnableGCForTest()
+	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	testutils.WaitExpect(10000, func() bool {

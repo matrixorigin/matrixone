@@ -166,13 +166,12 @@ type Cleaner interface {
 	// for test
 	SetMinMergeCountForTest(count int)
 	GetMinMerged() *checkpoint.CheckpointEntry
-	CheckGC() error
+	DoCheck() error
 	GetPITRs() (*logtail.PitrInfo, error)
 	SetTid(tid uint64)
-	EnableGCForTest()
-	DisableGCForTest()
+	EnableGC()
+	DisableGC()
 	GCEnabled() bool
-	SetCheckGC(enable bool)
 	GetMPool() *mpool.MPool
 	GetSnapshots() (map[uint32]containers.Vector, error)
 }

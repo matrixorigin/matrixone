@@ -39,8 +39,13 @@ import (
 )
 
 type checkpointCleaner struct {
-	fs  *objectio.ObjectFS
 	ctx context.Context
+
+	// TODO: remove `sid`
+	sid string
+
+	mp *mpool.MPool
+	fs *objectio.ObjectFS
 
 	// checkpointCli is used to get the instance of the specified checkpoint
 	checkpointCli checkpoint.RunnerReader
@@ -77,6 +82,11 @@ type checkpointCleaner struct {
 		checkpointGCWaterMark atomic.Pointer[types.TS]
 	}
 
+	options struct {
+		gcEnabled    atomic.Bool
+		checkEnabled atomic.Bool
+	}
+
 	config struct {
 		// minMergeCount is the configuration of the merge GC metadata file.
 		// When the GC file is greater than or equal to minMergeCount,
@@ -108,27 +118,22 @@ type checkpointCleaner struct {
 	// files, and only one worker will run
 	delWorker *GCWorker
 
-	// checkGC is to check the correctness of GC
-	checkGC bool
-
-	option struct {
-		gcEnabled atomic.Bool
-	}
-
 	metaFiles map[string]GCMetaFile
 
 	snapshotMeta *logtail.SnapshotMeta
-
-	mp *mpool.MPool
-
-	sid string
 }
 
-func WithCheckpointCleanerConfig(
+func WithCanGCCacheSize(
 	size int,
 ) CheckpointCleanerOption {
 	return func(e *checkpointCleaner) {
 		e.config.canGCCacheSize = size
+	}
+}
+
+func WithCheckOption(enable bool) CheckpointCleanerOption {
+	return func(e *checkpointCleaner) {
+		e.options.checkEnabled.Store(enable)
 	}
 }
 
@@ -153,7 +158,7 @@ func NewCheckpointCleaner(
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.config.minMergeCount.Store(MinMergeCount)
 	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
-	cleaner.option.gcEnabled.Store(true)
+	cleaner.options.gcEnabled.Store(true)
 	cleaner.mp = common.CheckpointAllocator
 	cleaner.checker.extras = make(map[string]func(item any) bool)
 	cleaner.metaFiles = make(map[string]GCMetaFile)
@@ -173,28 +178,27 @@ func (c *checkpointCleaner) SetTid(tid uint64) {
 	c.snapshotMeta.SetTid(tid)
 }
 
-func (c *checkpointCleaner) EnableGCForTest() {
-	c.option.gcEnabled.Store(true)
+func (c *checkpointCleaner) EnableGC() {
+	c.options.gcEnabled.Store(true)
 }
 
-func (c *checkpointCleaner) DisableGCForTest() {
-	c.option.gcEnabled.Store(false)
+func (c *checkpointCleaner) DisableGC() {
+	c.options.gcEnabled.Store(false)
 }
 
 func (c *checkpointCleaner) GCEnabled() bool {
-	return c.option.gcEnabled.Load()
+	return c.options.gcEnabled.Load()
 }
 
-func (c *checkpointCleaner) IsEnableGC() bool {
-	return c.GCEnabled()
+func (c *checkpointCleaner) EnableCheck() {
+	c.options.checkEnabled.Store(true)
+}
+func (c *checkpointCleaner) DisableCheck() {
+	c.options.checkEnabled.Store(false)
 }
 
-func (c *checkpointCleaner) SetCheckGC(enable bool) {
-	c.checkGC = enable
-}
-
-func (c *checkpointCleaner) isEnableCheckGC() bool {
-	return c.checkGC
+func (c *checkpointCleaner) CheckEnabled() bool {
+	return c.options.checkEnabled.Load()
 }
 
 func (c *checkpointCleaner) Replay() error {
@@ -919,7 +923,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 	return
 }
 
-func (c *checkpointCleaner) CheckGC() error {
+func (c *checkpointCleaner) DoCheck() error {
 	debugCandidates := c.checkpointCli.GetAllIncrementalCheckpoints()
 
 	c.remainingObjects.RLock()
@@ -1170,7 +1174,7 @@ func (c *checkpointCleaner) Process() {
 		return
 	}
 
-	if !c.isEnableCheckGC() {
+	if !c.CheckEnabled() {
 		return
 	}
 }

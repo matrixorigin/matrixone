@@ -90,14 +90,14 @@ type GCWindow struct {
 	}
 }
 
-func (t *GCWindow) MakeFilesReader(
+func (w *GCWindow) MakeFilesReader(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) engine.Reader {
 	return engine_util.SimpleMultiObjectsReader(
 		ctx,
 		fs,
-		t.files,
+		w.files,
 		timestamp.Timestamp{},
 		engine_util.WithColumns(
 			ObjectTableSeqnums,
@@ -109,7 +109,7 @@ func (t *GCWindow) MakeFilesReader(
 // ExecuteGlobalCheckpointBasedGC is to remove objectentry that can be deleted from GCWindow
 // it will refresh the files in GCWindow with the files that can not be GC'ed
 // it will return the files that could be GC'ed
-func (t *GCWindow) ExecuteGlobalCheckpointBasedGC(
+func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	ctx context.Context,
 	gCkp *checkpoint.CheckpointEntry,
 	accountSnapshots map[uint32][]types.TS,
@@ -121,7 +121,7 @@ func (t *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	fs fileservice.FileService,
 ) ([]string, error) {
 
-	sourcer := t.MakeFilesReader(ctx, fs)
+	sourcer := w.MakeFilesReader(ctx, fs)
 
 	gcTS := gCkp.GetEnd()
 	job := NewCheckpointBasedGCJob(
@@ -144,17 +144,17 @@ func (t *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	}
 
 	filesToGC, filesNotGC := job.Result()
-	if err := t.writeMetaForRemainings(
+	if err := w.writeMetaForRemainings(
 		ctx, filesNotGC,
 	); err != nil {
 		return nil, err
 	}
 
-	t.files = filesNotGC
+	w.files = filesNotGC
 	return filesToGC, nil
 }
 
-func (t *GCWindow) ScanCheckpoints(
+func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	ckps []*checkpoint.CheckpointEntry,
 	collectCkpData func(*checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
@@ -190,15 +190,15 @@ func (t *GCWindow) ScanCheckpoints(
 		ckps = ckps[1:]
 		return false, nil
 	}
-	sinker := t.getSinker(0, buffer)
+	sinker := w.getSinker(0, buffer)
 	defer sinker.Close()
 	if err := engine_util.StreamBatchProcess(
 		ctx,
 		getOneBatch,
-		t.sortOneBatch,
+		w.sortOneBatch,
 		sinker.Write,
 		buffer,
-		t.mp,
+		w.mp,
 	); err != nil {
 		logutil.Error(
 			"GCWindow-createInput-SINK-ERROR",
@@ -206,8 +206,8 @@ func (t *GCWindow) ScanCheckpoints(
 		)
 		return err
 	}
-	t.tsRange.start = start
-	t.tsRange.end = end
+	w.tsRange.start = start
+	w.tsRange.end = end
 
 	if fineProcess != nil {
 		if err := fineProcess(); err != nil {
@@ -219,12 +219,12 @@ func (t *GCWindow) ScanCheckpoints(
 		return err
 	}
 	newFiles, _ := sinker.GetResult()
-	if err := t.writeMetaForRemainings(
+	if err := w.writeMetaForRemainings(
 		ctx, newFiles,
 	); err != nil {
 		return err
 	}
-	t.files = append(t.files, newFiles...)
+	w.files = append(w.files, newFiles...)
 	return nil
 }
 
@@ -291,7 +291,7 @@ func isSnapshotRefers(
 	return false
 }
 
-func (t *GCWindow) getSinker(
+func (w *GCWindow) getSinker(
 	tailSize int,
 	buffer *containers.OneSchemaBatchBuffer,
 ) *engine_util.Sinker {
@@ -300,32 +300,32 @@ func (t *GCWindow) getSinker(
 		ObjectTableAttrs,
 		ObjectTableTypes,
 		FSinkerFactory,
-		t.mp,
-		t.fs,
+		w.mp,
+		w.fs,
 		engine_util.WithTailSizeCap(tailSize),
 		engine_util.WithBuffer(buffer, false),
 	)
 }
 
-func (t *GCWindow) writeMetaForRemainings(
+func (w *GCWindow) writeMetaForRemainings(
 	ctx context.Context,
 	stats []objectio.ObjectStats,
 ) error {
 	name := blockio.EncodeCheckpointMetadataFileName(
-		t.metaDir, PrefixGCMeta, t.tsRange.start, t.tsRange.end,
+		w.metaDir, PrefixGCMeta, w.tsRange.start, w.tsRange.end,
 	)
 	ret := batch.NewWithSchema(
 		false, false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)
-	defer ret.Clean(t.mp)
+	defer ret.Clean(w.mp)
 	for _, s := range stats {
 		if err := vector.AppendBytes(
-			ret.GetVector(0), s[:], false, t.mp,
+			ret.GetVector(0), s[:], false, w.mp,
 		); err != nil {
 			return err
 		}
 	}
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, t.fs)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, w.fs)
 	if err != nil {
 		return err
 	}
@@ -337,26 +337,26 @@ func (t *GCWindow) writeMetaForRemainings(
 	return err
 }
 
-func (t *GCWindow) Merge(o *GCWindow) {
+func (w *GCWindow) Merge(o *GCWindow) {
 	if o == nil || (o.tsRange.start.IsEmpty() && o.tsRange.end.IsEmpty()) {
 		return
 	}
-	if t.tsRange.start.IsEmpty() && t.tsRange.end.IsEmpty() {
-		t.tsRange.start = o.tsRange.start
-		t.tsRange.end = o.tsRange.end
-		t.files = append(t.files, o.files...)
+	if w.tsRange.start.IsEmpty() && w.tsRange.end.IsEmpty() {
+		w.tsRange.start = o.tsRange.start
+		w.tsRange.end = o.tsRange.end
+		w.files = append(w.files, o.files...)
 		return
 	}
 
 	for _, file := range o.files {
-		t.files = append(t.files, file)
+		w.files = append(w.files, file)
 	}
 
-	if t.tsRange.start.GT(&o.tsRange.start) {
-		t.tsRange.start = o.tsRange.start
+	if w.tsRange.start.GT(&o.tsRange.start) {
+		w.tsRange.start = o.tsRange.start
 	}
-	if t.tsRange.end.LT(&o.tsRange.end) {
-		t.tsRange.end = o.tsRange.end
+	if w.tsRange.end.LT(&o.tsRange.end) {
+		w.tsRange.end = o.tsRange.end
 	}
 }
 
@@ -384,8 +384,8 @@ func collectObjectsWithCkp(data *logtail.CheckpointData, objects map[string]*Obj
 	}
 }
 
-func (t *GCWindow) Close() {
-	t.files = nil
+func (w *GCWindow) Close() {
+	w.files = nil
 }
 
 // collectData collects data from memory that can be written to s3
@@ -407,7 +407,7 @@ func collectMapData(
 	return nil
 }
 
-func (t *GCWindow) sortOneBatch(
+func (w *GCWindow) sortOneBatch(
 	ctx context.Context,
 	data *batch.Batch,
 	mp *mpool.MPool,
@@ -423,27 +423,27 @@ func (t *GCWindow) sortOneBatch(
 }
 
 // collectData collects data from memory that can be written to s3
-func (t *GCWindow) LoadBatchData(
+func (w *GCWindow) LoadBatchData(
 	ctx context.Context,
 	_ []string,
 	_ *plan.Expr,
 	mp *mpool.MPool,
 	bat *batch.Batch,
 ) (bool, error) {
-	if len(t.files) == 0 {
+	if len(w.files) == 0 {
 		return true, nil
 	}
 	bat.CleanOnlyData()
 	pint := "LoadBatchData is "
-	for _, s := range t.files {
+	for _, s := range w.files {
 		pint += s.ObjectName().String() + ";"
 	}
 	logutil.Infof(pint)
-	err := loader(ctx, t.fs, &t.files[0], bat, mp)
+	err := loader(ctx, w.fs, &w.files[0], bat, mp)
 	if err != nil {
 		return false, err
 	}
-	t.files = t.files[1:]
+	w.files = w.files[1:]
 	return false, nil
 }
 
@@ -466,15 +466,15 @@ func loader(
 
 }
 
-func (t *GCWindow) rebuildTable(bat *batch.Batch) {
+func (w *GCWindow) rebuildTable(bat *batch.Batch) {
 	for i := 0; i < bat.Vecs[0].Length(); i++ {
 		var stats objectio.ObjectStats
 		stats.UnMarshal(bat.Vecs[0].GetRawBytesAt(i))
-		t.files = append(t.files, stats)
+		w.files = append(w.files, stats)
 	}
 }
 
-func (t *GCWindow) replayData(
+func (w *GCWindow) replayData(
 	ctx context.Context,
 	bs []objectio.BlockObject,
 	reader *blockio.BlockReader) (*batch.Batch, func(), error) {
@@ -487,7 +487,7 @@ func (t *GCWindow) replayData(
 }
 
 // ReadTable reads an s3 file and replays a GCWindow in memory
-func (t *GCWindow) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS, ts types.TS) error {
+func (w *GCWindow) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS, ts types.TS) error {
 	var release1 func()
 	var buffer *batch.Batch
 	defer func() {
@@ -496,8 +496,8 @@ func (t *GCWindow) ReadTable(ctx context.Context, name string, size int64, fs *o
 		}
 	}()
 	start, end, _ := blockio.DecodeGCMetadataFileName(name)
-	t.tsRange.start = start
-	t.tsRange.end = end
+	w.tsRange.start = start
+	w.tsRange.end = end
 	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
 	if err != nil {
 		return err
@@ -506,17 +506,17 @@ func (t *GCWindow) ReadTable(ctx context.Context, name string, size int64, fs *o
 	if err != nil {
 		return err
 	}
-	buffer, release1, err = t.replayData(ctx, bs, reader)
+	buffer, release1, err = w.replayData(ctx, bs, reader)
 	if err != nil {
 		return err
 	}
-	t.rebuildTable(buffer)
+	w.rebuildTable(buffer)
 	return nil
 }
 
 // For test
 
-func (t *GCWindow) Compare(
+func (w *GCWindow) Compare(
 	table *GCWindow,
 	buffer *containers.OneSchemaBatchBuffer,
 ) (
@@ -526,10 +526,10 @@ func (t *GCWindow) Compare(
 ) {
 	if buffer == nil {
 		buffer = MakeGCWindowBuffer(mpool.MB)
-		defer buffer.Close(t.mp)
+		defer buffer.Close(w.mp)
 	}
 	bat := buffer.Fetch()
-	defer buffer.Putback(bat, t.mp)
+	defer buffer.Putback(bat, w.mp)
 
 	objects := make(map[string]*ObjectEntry)
 	objects2 := make(map[string]*ObjectEntry)
@@ -540,7 +540,7 @@ func (t *GCWindow) Compare(
 	) error {
 		for {
 			bat.CleanOnlyData()
-			done, err := loadfn(context.Background(), nil, nil, t.mp, bat)
+			done, err := loadfn(context.Background(), nil, nil, w.mp, bat)
 			if err != nil {
 				logutil.Infof("load data error")
 				return err
@@ -572,9 +572,9 @@ func (t *GCWindow) Compare(
 		}
 		return nil
 	}
-	buildObjects(t, objects, t.LoadBatchData)
+	buildObjects(w, objects, w.LoadBatchData)
 	buildObjects(table, objects2, table.LoadBatchData)
-	if !t.compareObjects(objects, objects2) {
+	if !w.compareObjects(objects, objects2) {
 		logutil.Infof("objects are not equal")
 		return objects, objects2, false
 	}
@@ -582,7 +582,7 @@ func (t *GCWindow) Compare(
 	return objects, objects2, true
 }
 
-func (t *GCWindow) compareObjects(objects, compareObjects map[string]*ObjectEntry) bool {
+func (w *GCWindow) compareObjects(objects, compareObjects map[string]*ObjectEntry) bool {
 	for name, entry := range compareObjects {
 		object := objects[name]
 		if object == nil {
@@ -599,16 +599,15 @@ func (t *GCWindow) compareObjects(objects, compareObjects map[string]*ObjectEntr
 	return len(compareObjects) == len(objects)
 }
 
-func (t *GCWindow) String(objects map[string]*ObjectEntry) string {
+func (w *GCWindow) String(objects map[string]*ObjectEntry) string {
 	if len(objects) == 0 {
 		return ""
 	}
-	var w bytes.Buffer
-	_, _ = w.WriteString("objects:[\n")
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("objects:[\n")
 	for name, entry := range objects {
-		_, _ = w.WriteString(fmt.Sprintf("name: %s, createTS: %v ", name, entry.createTS.ToString()))
+		_, _ = buf.WriteString(fmt.Sprintf("name: %s, createTS: %v ", name, entry.createTS.ToString()))
 	}
-	_, _ = w.WriteString("]\n")
-	return w.String()
-	return ""
+	_, _ = buf.WriteString("]\n")
+	return buf.String()
 }
