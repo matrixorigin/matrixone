@@ -1215,11 +1215,13 @@ func (c *checkpointCleaner) scanCheckpointsAsOneWindow(
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) (gcWindow *GCWindow, err error) {
 	now := time.Now()
-	var snapSize, tableSize uint32
-	gcWindow = NewGCWindow(c.mp, c.fs.Service)
 	logutil.Info(
 		"DiskCleaner-Consume-Start",
 		zap.Int("entry-count :", len(ckps)),
+	)
+
+	var (
+		snapSize, tableSize uint32
 	)
 	defer func() {
 		logutil.Info("DiskCleaner-Consume-End",
@@ -1228,29 +1230,41 @@ func (c *checkpointCleaner) scanCheckpointsAsOneWindow(
 			zap.Uint32("table-meta-size :", tableSize),
 			zap.String("snapshot-detail", c.snapshotMeta.String()))
 	}()
-	saveSnapshot := func() error {
-		name := blockio.EncodeSnapshotMetadataFileName(GCMetaDir,
-			PrefixSnapMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
-		snapSize, err = c.snapshotMeta.SaveMeta(name, c.fs.Service)
-		if err != nil {
+
+	saveSnapshot := func() (err2 error) {
+		name := blockio.EncodeSnapshotMetadataFileName(
+			GCMetaDir,
+			PrefixSnapMeta,
+			ckps[0].GetStart(),
+			ckps[len(ckps)-1].GetEnd(),
+		)
+		if snapSize, err2 = c.snapshotMeta.SaveMeta(
+			name, c.fs.Service,
+		); err2 != nil {
 			logutil.Error(
 				"DiskCleaner-Error-SaveMeta",
-				zap.Error(err),
+				zap.Error(err2),
 			)
-			return err
+			return
 		}
-		name = blockio.EncodeTableMetadataFileName(GCMetaDir,
-			PrefixAcctMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
-		tableSize, err = c.snapshotMeta.SaveTableInfo(name, c.fs.Service)
-		if err != nil {
+		name = blockio.EncodeTableMetadataFileName(
+			GCMetaDir,
+			PrefixAcctMeta,
+			ckps[0].GetStart(),
+			ckps[len(ckps)-1].GetEnd(),
+		)
+		if tableSize, err2 = c.snapshotMeta.SaveTableInfo(
+			name, c.fs.Service,
+		); err2 != nil {
 			logutil.Error(
 				"DiskCleaner-Error-SaveTableInfo",
-				zap.Error(err),
+				zap.Error(err2),
 			)
-			return err
 		}
-		return nil
+		return
 	}
+
+	gcWindow = NewGCWindow(c.mp, c.fs.Service)
 	if err = gcWindow.ScanCheckpoints(
 		c.ctx,
 		ckps,
@@ -1259,7 +1273,8 @@ func (c *checkpointCleaner) scanCheckpointsAsOneWindow(
 		saveSnapshot,
 		memoryBuffer,
 	); err != nil {
-		return
+		gcWindow.Close()
+		gcWindow = nil
 	}
 	return
 }

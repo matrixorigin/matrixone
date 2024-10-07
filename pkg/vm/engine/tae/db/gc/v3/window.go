@@ -154,45 +154,46 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	return filesToGC, nil
 }
 
+// ScanCheckpoints will load data from the `checkpointEntries` one by one and
+// update `w.tsRange` and `w.files`
+// At the end, it will save the metadata into a specified file as the finish of scan
 func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
-	ckps []*checkpoint.CheckpointEntry,
+	checkpointEntries []*checkpoint.CheckpointEntry,
 	collectCkpData func(*checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
 	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CheckpointData) error,
-	fineProcess func() error,
+	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
-) error {
-	if len(ckps) == 0 {
-		return nil
+) (err error) {
+	if len(checkpointEntries) == 0 {
+		return
 	}
-	start := ckps[0].GetStart()
-	end := ckps[len(ckps)-1].GetEnd()
+	start := checkpointEntries[0].GetStart()
+	end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
 	getOneBatch := func(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
-		if len(ckps) == 0 {
+		if len(checkpointEntries) == 0 {
 			return true, nil
 		}
-		data, err := collectCkpData(ckps[0])
+		data, err := collectCkpData(checkpointEntries[0])
 		if err != nil {
 			return false, err
 		}
 		if processCkpData != nil {
-			err = processCkpData(ckps[0], data)
-			if err != nil {
+			if err = processCkpData(checkpointEntries[0], data); err != nil {
 				return false, err
 			}
 		}
 		objects := make(map[string]*ObjectEntry)
-		collectObjectsWithCkp(data, objects)
-		err = collectMapData(objects, bat, mp)
-		if err != nil {
+		collectObjectsFromCheckpointData(data, objects)
+		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
 		}
-		ckps = ckps[1:]
+		checkpointEntries = checkpointEntries[1:]
 		return false, nil
 	}
 	sinker := w.getSinker(0, buffer)
 	defer sinker.Close()
-	if err := engine_util.StreamBatchProcess(
+	if err = engine_util.StreamBatchProcess(
 		ctx,
 		getOneBatch,
 		w.sortOneBatch,
@@ -204,25 +205,26 @@ func (w *GCWindow) ScanCheckpoints(
 			"GCWindow-createInput-SINK-ERROR",
 			zap.Error(err),
 		)
-		return err
+		return
 	}
-	w.tsRange.start = start
-	w.tsRange.end = end
 
-	if fineProcess != nil {
-		if err := fineProcess(); err != nil {
-			return err
+	if onScanDone != nil {
+		if err = onScanDone(); err != nil {
+			return
 		}
 	}
 
-	if err := sinker.Sync(ctx); err != nil {
-		return err
+	if err = sinker.Sync(ctx); err != nil {
+		return
 	}
+
+	w.tsRange.start = start
+	w.tsRange.end = end
 	newFiles, _ := sinker.GetResult()
-	if err := w.writeMetaForRemainings(
+	if err = w.writeMetaForRemainings(
 		ctx, newFiles,
 	); err != nil {
-		return err
+		return
 	}
 	w.files = append(w.files, newFiles...)
 	return nil
@@ -360,7 +362,7 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsWithCkp(data *logtail.CheckpointData, objects map[string]*ObjectEntry) {
+func collectObjectsFromCheckpointData(data *logtail.CheckpointData, objects map[string]*ObjectEntry) {
 	ins := data.GetObjectBatchs()
 	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
 	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
