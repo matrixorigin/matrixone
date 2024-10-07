@@ -243,7 +243,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 		}
 
 		for _, col := range tableDef.Cols {
-			if col.Name == tableDef.Pkey.PkeyColName && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+			if col.Name == tableDef.Pkey.PkeyColName {
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
 					PrimaryColIdxInBat: int32(pkPos),
