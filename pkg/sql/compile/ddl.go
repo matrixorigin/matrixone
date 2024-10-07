@@ -2053,21 +2053,24 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			if err != nil {
 				return err
 			}
+			idxtblname = engine.GetTempTableName(dbName, name)
 			oldIndexId = indexrel.GetTableID(c.proc.Ctx)
 			newIndexId = oldIndexId
-			idxtblname = engine.GetTempTableName(dbName, name)
 			_, err = dbSource.Truncate(c.proc.Ctx, engine.GetTempTableName(dbName, name))
+			if err != nil {
+				return err
+			}
 		} else {
 			indexrel, err := dbSource.Relation(c.proc.Ctx, name, nil)
 			if err != nil {
 				return err
 			}
+			idxtblname = name
 			oldIndexId = indexrel.GetTableID(c.proc.Ctx)
 			newIndexId, err = dbSource.Truncate(c.proc.Ctx, name)
-			idxtblname = name
-		}
-		if err != nil {
-			return err
+			if err != nil {
+				return err
+			}
 		}
 
 		// only non-temporary table can insert into mo_catalog tables so auto increment is not working on temp table
