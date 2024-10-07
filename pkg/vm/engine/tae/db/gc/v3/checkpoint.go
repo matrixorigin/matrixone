@@ -610,7 +610,6 @@ func (c *checkpointCleaner) filterCheckpoints(
 
 func (c *checkpointCleaner) mergeCheckpointFiles(
 	checkpointLowWaterMark *types.TS,
-	accoutSnapshots map[uint32][]types.TS,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) (err error) {
 	// checkpointLowWaterMark is empty only in the following cases:
@@ -866,7 +865,7 @@ func (c *checkpointCleaner) tryGCAgainstGlobalCheckpoint(
 	if waterMark.GT(&scanMark) {
 		waterMark = scanMark
 	}
-	err = c.mergeCheckpointFiles(&waterMark, accountSnapshots, memoryBuffer)
+	err = c.mergeCheckpointFiles(&waterMark, memoryBuffer)
 	if err != nil {
 		// TODO: Error handle
 		logutil.Errorf("[DiskCleaner] mergeCheckpointFiles failed: %v", err.Error())
@@ -1397,25 +1396,4 @@ func (c *checkpointCleaner) updateSnapshot(
 
 func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
 	return c.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
-}
-
-func isSnapshotCKPRefers(start, end types.TS, snapVec []types.TS) bool {
-	if len(snapVec) == 0 {
-		return false
-	}
-	left, right := 0, len(snapVec)-1
-	for left <= right {
-		mid := left + (right-left)/2
-		snapTS := snapVec[mid]
-		if snapTS.GE(&start) && snapTS.LT(&end) {
-			logutil.Debugf("isSnapshotRefers: %s, create %v, drop %v",
-				snapTS.ToString(), start.ToString(), end.ToString())
-			return true
-		} else if snapTS.LT(&start) {
-			left = mid + 1
-		} else {
-			right = mid - 1
-		}
-	}
-	return false
 }
