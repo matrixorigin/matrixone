@@ -38,13 +38,22 @@ func (update *MultiUpdate) delete_table(
 	}
 	deleteBatch := ctr.deleteBuf[idx]
 	rowIdIdx := updateCtx.DeleteCols[0]
+	rowIdVec := inputBatch.Vecs[rowIdIdx]
+	if rowIdVec.IsConstNull() {
+		return
+	}
+	rowCount := inputBatch.RowCount()
 
 	if len(updateCtx.PartitionTableIDs) > 0 {
 		for partIdx := range len(updateCtx.PartitionTableIDs) {
+			rowIdNulls := rowIdVec.GetNulls()
+			if rowIdNulls.Count() == rowCount {
+				continue
+			}
+
 			deleteBatch.CleanOnlyData()
 			expected := int32(partIdx)
 			partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.PartitionIdx])
-			rowIdNulls := inputBatch.Vecs[rowIdIdx].GetNulls()
 
 			for i, partition := range partTableIDs {
 				if !inputBatch.Vecs[updateCtx.PartitionIdx].GetNulls().Contains(uint64(i)) {
@@ -71,11 +80,14 @@ func (update *MultiUpdate) delete_table(
 		}
 	} else {
 		deleteBatch.CleanOnlyData()
+		if rowIdVec.HasNull() {
+			// multi delete or delete unique table with null value
+			rowIdNulls := rowIdVec.GetNulls()
+			if rowIdNulls.Count() == rowCount {
+				return
+			}
 
-		if inputBatch.Vecs[rowIdIdx].HasNull() {
-			// multi delete
-			rowIdNulls := inputBatch.Vecs[rowIdIdx].GetNulls()
-			for i := 0; i < inputBatch.RowCount(); i++ {
+			for i := 0; i < rowCount; i++ {
 				if !rowIdNulls.Contains(uint64(i)) {
 					for deleteIdx, inputIdx := range updateCtx.DeleteCols {
 						err = deleteBatch.Vecs[deleteIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp())
