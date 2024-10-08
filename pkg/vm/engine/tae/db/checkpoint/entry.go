@@ -182,6 +182,9 @@ func (e *CheckpointEntry) GetType() EntryType {
 }
 
 func (e *CheckpointEntry) String() string {
+	if e == nil {
+		return "nil"
+	}
 	t := "I"
 	if !e.IsIncremental() {
 		t = "G"
