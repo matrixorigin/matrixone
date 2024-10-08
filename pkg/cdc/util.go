@@ -76,32 +76,32 @@ func extractRowFromEveryVector(
 	return nil
 }
 
-func extractRowFromWantedVecs(
-	ctx context.Context,
-	dataSet *batch.Batch,
-	rowIndex int,
-	wantedVecIdxes []int,
-	row []any,
-) error {
-	for i := 0; i < len(row); i++ {
-		vec := dataSet.Vecs[wantedVecIdxes[i]]
-		rowIndexBackup := rowIndex
-		if vec.IsConstNull() {
-			row[i] = nil
-			continue
-		}
-		if vec.IsConst() {
-			rowIndex = 0
-		}
-
-		err := extractRowFromVector(ctx, vec, i, row, rowIndex)
-		if err != nil {
-			return err
-		}
-		rowIndex = rowIndexBackup
-	}
-	return nil
-}
+//func extractRowFromWantedVecs(
+//	ctx context.Context,
+//	dataSet *batch.Batch,
+//	rowIndex int,
+//	wantedVecIdxes []int,
+//	row []any,
+//) error {
+//	for i := 0; i < len(row); i++ {
+//		vec := dataSet.Vecs[wantedVecIdxes[i]]
+//		rowIndexBackup := rowIndex
+//		if vec.IsConstNull() {
+//			row[i] = nil
+//			continue
+//		}
+//		if vec.IsConst() {
+//			rowIndex = 0
+//		}
+//
+//		err := extractRowFromVector(ctx, vec, i, row, rowIndex)
+//		if err != nil {
+//			return err
+//		}
+//		rowIndex = rowIndexBackup
+//	}
+//	return nil
+//}
 
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {

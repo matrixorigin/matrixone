@@ -2279,7 +2279,7 @@ func Test_getTaskCkp(t *testing.T) {
 				accountId: sysAccountID,
 				taskId:    "taskID-1",
 			},
-			wantS: "{\n  \"db1.tb1\": 1970-01-01 08:00:00 +0800 CST,\n}",
+			wantS: "{\n  \"db1.tb1\": 1970-01-01 00:00:00 +0000 UTC,\n}",
 		},
 	}
 	for _, tt := range tests {
