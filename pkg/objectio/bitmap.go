@@ -76,6 +76,10 @@ func (r *Bitmap) Reusable() bool {
 	return r.put != nil
 }
 
+func (r *Bitmap) Bitmap() *bitmap.Bitmap {
+	return r.bm
+}
+
 func (r *Bitmap) Or(o Bitmap) {
 	if o.IsEmpty() {
 		return

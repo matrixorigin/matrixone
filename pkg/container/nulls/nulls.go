@@ -398,6 +398,12 @@ func (nsp *Nulls) ReadNoCopyV1(data []byte) error {
 	return nil
 }
 
+func (nsp *Nulls) OrBitmap(m *bitmap.Bitmap) {
+	if m != nil && !m.IsEmpty() {
+		nsp.np.Or(m)
+	}
+}
+
 // Or the m Nulls into nsp.
 func (nsp *Nulls) Or(m *Nulls) {
 	if m != nil && !m.np.EmptyByFlag() {
