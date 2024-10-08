@@ -495,9 +495,13 @@ func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.St
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.IOMergerTimeConsumption()))
 
-			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %dns, PlanResolveVariableDuration: %dns",
+			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %dns, PlanResolveVariableDuration: %dns\n",
 				statsInfo.BuildPlanStatsDuration,
 				statsInfo.BuildPlanResolveVarDuration,
+			))
+
+			buffer.WriteString(fmt.Sprintf("CompileTableScanDuration: %dns",
+				statsInfo.CompileTableScanDuration,
 			))
 		}
 	}

@@ -36,7 +36,7 @@ type HashPageTable = TransferTable[*TransferHashPage]
 
 var (
 	ttl      = 5 * time.Second
-	diskTTL  = 3 * time.Minute
+	diskTTL  = 5 * time.Minute
 	ttlLatch sync.RWMutex
 )
 

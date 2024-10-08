@@ -2545,7 +2545,18 @@ func TestReLockInRollingRestartCN(t *testing.T) {
 				[]byte("txn1"),
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			require.True(t, l1.validGroupTable(0, 0))
+			// Actually, txn1 and txn2 are executed concurrently.
+			// it should use a loop check.
+			for {
+				if l1.validGroupTable(0, 0) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					require.True(t, false)
+				default:
+				}
+			}
 			require.True(t, l1.isStatus(pb.Status_ServiceLockWaiting))
 
 			err = l2.Unlock(

@@ -16,6 +16,7 @@ package shard
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"testing"
@@ -42,6 +43,29 @@ func TestPartitionBasedTableCanBeCreated(
 			db := testutils.GetDatabaseName(t)
 			tableID := mustCreatePartitionBasedTable(t, c, db, 3)
 			waitReplica(t, c, tableID, []int64{1, 1, 1})
+
+			cn0, err := c.GetCNService(0)
+			require.NoError(t, err)
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",
+				cn0.GetServiceConfig().CN.Frontend.Port,
+			)
+			database, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, database.Close())
+			}()
+
+			rows, err := database.Query(fmt.Sprintf("select mo_ctl('cn', 'get-table-shards', '%d')",
+				tableID))
+			require.NoError(t, rows.Err())
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, rows.Close())
+			}()
+			require.True(t, rows.Next())
+			var info string
+			require.NoError(t, rows.Scan(&info))
+			require.NotEmpty(t, info)
 		},
 	)
 }
@@ -66,6 +90,7 @@ func TestPartitionBasedTableCanBeDeleted(
 			)
 
 			waitReplica(t, c, tableID, []int64{0, 0, 0})
+
 		},
 	)
 }
@@ -311,6 +336,57 @@ func TestSelectWithMultiPartition(
 				c,
 			)
 		},
+	)
+}
+
+func TestUpdateOnNewCN(
+	t *testing.T,
+) {
+	runShardClusterTestWithReuse(
+		func(c embed.Cluster) {
+			db := testutils.GetDatabaseName(t)
+			tableID := mustCreatePartitionBasedTable(t, c, db, 12)
+			waitReplica(t, c, tableID, []int64{4, 4, 4})
+
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			values := getAllPartitionValues(
+				t,
+				tableID,
+				c,
+			)
+
+			var min timestamp.Timestamp
+			for _, v := range values {
+				ts := testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					fmt.Sprintf("insert into %s(id, value) values (%d, %d)", t.Name(), v, v),
+				)
+				if ts.Greater(min) {
+					min = ts
+				}
+			}
+
+			require.NoError(t, c.StartNewCNService(1))
+			waitReplica(t, c, tableID, []int64{3, 3, 3, 3})
+
+			cn, err = c.GetCNService(3)
+			require.NoError(t, err)
+
+			for _, v := range values {
+				min = testutils.ExecSQLWithMinCommittedTS(
+					t,
+					db,
+					cn,
+					min,
+					fmt.Sprintf("update %s set value = %d where id = %d", t.Name(), v*100, v),
+				)
+			}
+		},
+		false,
 	)
 }
 

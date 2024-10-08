@@ -132,7 +132,8 @@ func (c *DashboardCreator) initMallocRow() dashboard.Option {
 		makeGraph(""),
 		makeGraph("memory-cache-"),
 		makeGraph("io-"),
-		makeGraph("bytes-"),
 		makeGraph("session-"),
+		makeGraph("hashmap-"),
+		makeGraph("mpool-"),
 	)
 }

@@ -61,6 +61,9 @@ func TestAtomicBatch_Append(t *testing.T) {
 }
 
 func TestAtomicBatch_Close(t *testing.T) {
+	bat := batch.New(false, []string{"attr1"})
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
+
 	type fields struct {
 		Mp      *mpool.MPool
 		From    types.TS
@@ -74,7 +77,8 @@ func TestAtomicBatch_Close(t *testing.T) {
 	}{
 		{
 			fields: fields{
-				Batches: []*batch.Batch{batch.New(false, []string{"attr1"})},
+				Mp:      testutil.TestUtilMp,
+				Batches: []*batch.Batch{bat},
 				Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
 			},
 		},
@@ -189,8 +193,12 @@ func Test_atomicBatchRowIter(t *testing.T) {
 	rows.Set(row2)
 	rows.Set(row3)
 
+	bat := batch.New(false, []string{"attr1"})
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
+
 	// at init position (before the first row)
 	iter := &atomicBatchRowIter{
+		bat:      &AtomicBatch{Batches: []*batch.Batch{bat}, Rows: rows, Mp: testutil.TestUtilMp},
 		iter:     rows.Iter(),
 		initIter: rows.Iter(),
 	}

@@ -1,0 +1,103 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop pitr if exists pitr01;
+create pitr pitr01 for account acc01 range 1 'h';
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+01922d7c-5687-7645-859d-d68e61f99eef    pitr01    0    2024-09-26 08:39:36    2024-09-26 08:39:36    account    8    acc01            8    1    h
+select account_id, account_name from mo_catalog.mo_account where account_name = 'acc01';
+account_id    account_name
+8    acc01
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+01922d7c-5687-7645-859d-d68e61f99eef    pitr01    0    2024-09-26 08:39:36    2024-09-26 08:39:36    account    8    acc01            9    1    h
+select account_id, account_name from mo_catalog.mo_account where account_name = 'acc01';
+account_id    account_name
+9    acc01
+drop account if exists acc01;
+drop pitr if exists pitr01;
+drop database if exists abc1;
+create database abc1;
+drop pitr if exists pitr02;
+create pitr pitr02 for database abc1 range 1 'h';
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+01922d7c-5a2b-7ee8-8a9a-fe45239847fd    pitr02    0    2024-09-26 08:39:37    2024-09-26 08:39:37    database    0    sys    abc1        273247    1    h
+drop database abc1;
+create database abc1;
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+01922d7c-5a2b-7ee8-8a9a-fe45239847fd    pitr02    0    2024-09-26 08:39:37    2024-09-26 08:39:37    database    0    sys    abc1        273248    1    h
+drop database abc1;
+drop pitr if exists pitr02;
+drop database if exists abc1;
+create database abc1;
+use abc1;
+create table test1(a timestamp);
+drop pitr if exists pitr03;
+create pitr pitr03 for database abc1 table test1 range 1 'h';
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+01922d7c-5a71-7217-80bc-9e8f087df425    pitr03    0    2024-09-26 08:39:37    2024-09-26 08:39:37    table    0    sys    abc1    test1    273250    1    h
+drop table test1;
+create table test1(a timestamp);
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+01922d7c-5a71-7217-80bc-9e8f087df425    pitr03    0    2024-09-26 08:39:37    2024-09-26 08:39:37    table    0    sys    abc1    test1    273251    1    h
+drop database abc1;
+drop pitr if exists pitr03;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop database if exists abc1;
+create database abc1;
+drop pitr if exists pitr02;
+create pitr pitr02 for database abc1 range 1 'h';
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+01922d7c-5c3a-7a83-88d8-da1722660d8f    pitr02    10    2024-09-26 08:39:37    2024-09-26 08:39:37    database    10    acc01    abc1        273330    1    h
+drop database abc1;
+create database abc1;
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+01922d7c-5c3a-7a83-88d8-da1722660d8f    pitr02    10    2024-09-26 08:39:37    2024-09-26 08:39:37    database    10    acc01    abc1        273331    1    h
+drop database abc1;
+drop database if exists abc1;
+create database abc1;
+use abc1;
+create table test1(a timestamp);
+drop pitr if exists pitr03;
+create pitr pitr03 for database abc1 table test1 range 1 'h';
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+01922d7c-5c3a-7a83-88d8-da1722660d8f    pitr02    10    2024-09-26 08:39:37    2024-09-26 08:39:37    database    10    acc01    abc1        273332    1    h
+01922d7c-5c81-70ee-bd08-00e1f56dfd36    pitr03    10    2024-09-26 08:39:37    2024-09-26 08:39:37    table    10    acc01    abc1    test1    273333    1    h
+drop table test1;
+create table test1(a timestamp);
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+01922d7c-5c3a-7a83-88d8-da1722660d8f    pitr02    10    2024-09-26 08:39:37    2024-09-26 08:39:37    database    10    acc01    abc1        273332    1    h
+01922d7c-5c81-70ee-bd08-00e1f56dfd36    pitr03    10    2024-09-26 08:39:37    2024-09-26 08:39:37    table    10    acc01    abc1    test1    273334    1    h
+drop database abc1;
+drop account if exists acc01;
+create pitr pitr_mo_catalog for database mo_catalog range 1 'h';
+internal error: can not create pitr for current database mo_catalog
+create pitr pitr_mysql for database mysql range 1 'h';
+internal error: can not create pitr for current database mysql
+create pitr pitr_system for database system range 1 'h';
+internal error: can not create pitr for current database system
+create pitr pitr_system_metrics for database system_metrics range 1 'h';
+internal error: can not create pitr for current database system_metrics
+create pitr pitr_mo_task for database mo_task range 1 'h';
+internal error: can not create pitr for current database mo_task
+create pitr pitr_mo_debug for database mo_debug range 1 'h';
+internal error: can not create pitr for current database mo_debug
+create pitr pitr_information_schema for database information_schema range 1 'h';
+internal error: can not create pitr for current database information_schema
+create pitr pitr_mo_catalog for database mo_catalog table mo_pitr range 1 'h';
+internal error: can not create pitr for current table mo_catalog.mo_pitr
+create pitr pitr_mo_catalog for database mo_catalog table mo_snapshots range 1 'h';
+internal error: can not create pitr for current table mo_catalog.mo_snapshots
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT

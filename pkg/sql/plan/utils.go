@@ -2172,6 +2172,18 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 	}
 }
 
+func GetColExpr(typ Type, relpos int32, colpos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relpos,
+				ColPos: colpos,
+			},
+		},
+	}
+}
+
 func MakeSerialExtractExpr(ctx context.Context, fromExpr *Expr, origType Type, serialIdx int64) (*Expr, error) {
 	return BindFuncExprImplByPlanExpr(ctx, "serial_extract", []*plan.Expr{
 		fromExpr,
@@ -2347,6 +2359,29 @@ func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 		return true
 	}
 	return false
+}
+
+func containGrouping(expr *Expr) bool {
+	var ret bool
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || containGrouping(arg)
+		}
+		ret = ret || (exprImpl.F.Func.ObjName == "grouping")
+	case *plan.Expr_Col:
+		ret = false
+	}
+
+	return ret
+}
+
+func checkGrouping(ctx context.Context, expr *Expr) error {
+	if containGrouping(expr) {
+		return moerr.NewSyntaxError(ctx, "aggregate function grouping not allowed in WHERE clause")
+	}
+	return nil
 }
 
 // a > current_time() + 1 and b < ? + c and d > ? + 2

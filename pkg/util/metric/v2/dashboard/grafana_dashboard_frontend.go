@@ -247,13 +247,9 @@ func (c *DashboardCreator) initFrontendCdc() dashboard.Option {
 			3,
 			[]string{
 				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_processing_record_count", `type="total"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_processing_record_count", `type="snapshot"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_processing_record_count", `type="tail"`) + `)`,
 			},
 			[]string{
 				"total",
-				"snapshot",
-				"tail",
 			}),
 
 		c.withMultiGraph(
@@ -261,13 +257,9 @@ func (c *DashboardCreator) initFrontendCdc() dashboard.Option {
 			3,
 			[]string{
 				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_allocated_batch_bytes", `type="total"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_allocated_batch_bytes", `type="snapshot"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_allocated_batch_bytes", `type="tail"`) + `)`,
 			},
 			[]string{
 				"total",
-				"snapshot",
-				"tail",
 			}),
 	)
 }

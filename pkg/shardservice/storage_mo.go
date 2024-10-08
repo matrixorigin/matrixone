@@ -173,13 +173,14 @@ func (s *storage) GetChanged(
 
 	current := make(map[uint64]uint32)
 	now, _ := s.clock.Now()
+	sql := getCheckMetadataSQL(targets)
 	err := s.executor.ExecTxn(
 		ctx,
 		func(
 			txn executor.TxnExecutor,
 		) error {
 			res, err := txn.Exec(
-				getCheckMetadataSQL(targets),
+				sql,
 				executor.StatementOption{},
 			)
 			if err != nil {
@@ -207,6 +208,12 @@ func (s *storage) GetChanged(
 	if err != nil {
 		return err
 	}
+
+	s.logger.Info("get sharding metadata",
+		zap.String("sql", sql),
+		zap.Any("current", current),
+		zap.String("ts", now.DebugString()),
+	)
 
 	for table, version := range tables {
 		new, ok := current[table]
