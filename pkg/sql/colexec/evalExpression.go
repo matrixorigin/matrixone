@@ -689,17 +689,16 @@ func (expr *FunctionExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
-func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	relIndex := expr.relIndex
 	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
 	if len(batches) == 1 {
 		relIndex = 0
 	}
 
-	// protected code. In fact, we shouldn't receive a wrong index here.
-	// if happens, it means it's a bad expression for the input data that we cannot calculate it.
-	if len(batches) <= relIndex || len(batches[relIndex].Vecs) <= expr.colIndex {
-		return nil, moerr.NewInternalError(proc.Ctx, "unexpected input batch for column expression")
+	// [hack-#002] our `select * from external table` is `select * from EmptyForConstFoldBatch`.
+	if batches[relIndex] == batch.EmptyForConstFoldBatch {
+		return expr.getConstNullVec(expr.typ, 1), nil
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]

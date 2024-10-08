@@ -195,7 +195,7 @@ func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {
 	return nil
 }
 
-func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, runtimeFilterSpec *pbplan.RuntimeFilterSpec, proc *process.Process) error {
+func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) error {
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
@@ -297,7 +297,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 			}
 		}
 
-		if runtimeFilterSpec != nil {
+		if needUniqueVec {
 			if len(hb.UniqueJoinKeys) == 0 {
 				hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executor))
 				for j, vec := range hb.vecs[vecIdx1] {

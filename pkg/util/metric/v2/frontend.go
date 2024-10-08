@@ -147,9 +147,7 @@ var (
 			Name:      "cdc_processing_record_count",
 			Help:      "Count of records cdc has read but not sunk",
 		}, []string{"type"})
-	CdcProcessingTotalRecordCountGauge    = cdcProcessingRecordCountGauge.WithLabelValues("total")
-	CdcProcessingSnapshotRecordCountGauge = cdcProcessingRecordCountGauge.WithLabelValues("snapshot")
-	CdcProcessingTailRecordCountGauge     = cdcProcessingRecordCountGauge.WithLabelValues("tail")
+	CdcTotalProcessingRecordCountGauge = cdcProcessingRecordCountGauge.WithLabelValues("total")
 
 	cdcAllocatedBatchBytesGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -158,7 +156,5 @@ var (
 			Name:      "cdc_allocated_batch_bytes",
 			Help:      "Bytes allocated by cdc",
 		}, []string{"type"})
-	CdcTotalAllocatedBatchBytesGauge    = cdcAllocatedBatchBytesGauge.WithLabelValues("total")
-	CdcSnapshotAllocatedBatchBytesGauge = cdcAllocatedBatchBytesGauge.WithLabelValues("snapshot")
-	CdcTailAllocatedBatchBytesGauge     = cdcAllocatedBatchBytesGauge.WithLabelValues("tail")
+	CdcTotalAllocatedBatchBytesGauge = cdcAllocatedBatchBytesGauge.WithLabelValues("total")
 )

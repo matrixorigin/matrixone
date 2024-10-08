@@ -673,7 +673,13 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	// write!
 	objID := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(objID)
-	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
+	writer, err := blockio.NewBlockWriterNew(
+		task.rt.Fs.Service,
+		name,
+		schema.Version,
+		seqnums,
+		isTombstone,
+	)
 	if err != nil {
 		return err
 	}
@@ -681,7 +687,6 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	if schema.HasPK() {
 		pkIdx := schema.GetSingleSortKeyIdx()
 		if isTombstone {
-			writer.SetDataType(objectio.SchemaTombstone)
 			writer.SetPrimaryKeyWithType(
 				uint16(objectio.TombstonePrimaryKeyIdx),
 				index.HBF,
