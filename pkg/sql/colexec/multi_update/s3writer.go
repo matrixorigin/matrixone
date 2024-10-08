@@ -173,8 +173,21 @@ func (writer *s3Writer) prepareDeleteBatchs(proc *process.Process, idx int, part
 	blockMap := writer.deleteBlockMap[idx][partIdx]
 
 	for _, bat := range src {
-		rowIDVec := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(RowIDIdx))
-		for i, rowID := range rowIDVec {
+		rowIDVec := bat.GetVector(RowIDIdx)
+		if rowIDVec.IsConstNull() {
+			continue
+		}
+		nulls := rowIDVec.GetNulls()
+		if nulls.Count() == bat.RowCount() {
+			continue
+		}
+
+		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](rowIDVec)
+		for i, rowID := range rowIDs {
+			if nulls.Contains(uint64(i)) {
+				continue
+			}
+
 			blkid := rowID.CloneBlockID()
 			segid := rowID.CloneSegmentID()
 			// blkOffset := rowID.GetBlockOffset()
