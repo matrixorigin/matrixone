@@ -135,7 +135,7 @@ func TestNewConsoleSinker(t *testing.T) {
 }
 
 func Test_consoleSinker_Sink(t *testing.T) {
-	bat := batch.New(true, []string{"a", "b", "c"})
+	bat := batch.New([]string{"a", "b", "c"})
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
 	bat.SetRowCount(3)
@@ -494,7 +494,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	defer put.Put()
 
 	// first receive a ckp
-	ckpBat := batch.New(true, []string{"a", "ts"})
+	ckpBat := batch.New([]string{"a", "ts"})
 	ckpBat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil)
 	ckpBat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
 	ckpBat.SetRowCount(3)
@@ -515,14 +515,14 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	// receive a tail
 	insertAtomicBat := NewAtomicBatch(testutil.TestUtilMp, t1, t2)
-	insertBat := batch.New(true, []string{"a", "ts"})
+	insertBat := batch.New([]string{"a", "ts"})
 	insertBat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil)
 	insertBat.Vecs[1] = testutil.MakeTSVector([]types.TS{t1}, nil)
 	insertBat.SetRowCount(3)
 	insertAtomicBat.Append(packer, insertBat, 1, 0)
 
 	deleteAtomicBat := NewAtomicBatch(testutil.TestUtilMp, t1, t2)
-	deleteBat := batch.New(true, []string{"a", "ts"})
+	deleteBat := batch.New([]string{"a", "ts"})
 	deleteBat.Vecs[0] = testutil.MakeUint64Vector([]uint64{4}, nil)
 	deleteBat.Vecs[1] = testutil.MakeTSVector([]types.TS{t1}, nil)
 	deleteBat.SetRowCount(1)
@@ -759,7 +759,7 @@ func Test_mysqlSinker_sinkRemain(t *testing.T) {
 		ctx context.Context
 	}
 
-	bat := batch.New(true, []string{"a", "b", "c"})
+	bat := batch.New([]string{"a", "b", "c"})
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
 	bat.SetRowCount(3)

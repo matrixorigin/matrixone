@@ -64,7 +64,7 @@ func CreateR(db engine.Database) {
 		logutil.Fatal(err.Error())
 	}
 	{
-		bat := batch.New(true, []string{"orderid", "uid", "price"})
+		bat := batch.New([]string{"orderid", "uid", "price"})
 		{
 			{
 				vec := vector.NewVec(types.T_varchar.ToType())
@@ -106,7 +106,7 @@ func CreateR(db engine.Database) {
 		}
 	}
 	{
-		bat := batch.New(true, []string{"orderid", "uid", "price"})
+		bat := batch.New([]string{"orderid", "uid", "price"})
 		{
 			vec := vector.NewVec(types.T_varchar.ToType())
 			vs := make([][]byte, 10)
@@ -181,7 +181,7 @@ func CreateS(db engine.Database) {
 		logutil.Fatal(err.Error())
 	}
 	{
-		bat := batch.New(true, []string{"orderid", "uid", "price"})
+		bat := batch.New([]string{"orderid", "uid", "price"})
 		{
 			{
 				vec := vector.NewVec(types.T_varchar.ToType())
@@ -222,7 +222,7 @@ func CreateS(db engine.Database) {
 		}
 	}
 	{
-		bat := batch.New(true, []string{"orderid", "uid", "price"})
+		bat := batch.New([]string{"orderid", "uid", "price"})
 		{
 			vec := vector.NewVec(types.T_varchar.ToType())
 			vs := make([][]byte, 10)
@@ -324,7 +324,7 @@ func CreateT1(db engine.Database) {
 		logutil.Fatal(err.Error())
 	}
 	{
-		bat := batch.New(true, []string{"spid", "userid", "score"})
+		bat := batch.New([]string{"spid", "userid", "score"})
 		{
 			vec := vector.NewVec(types.T_int32.ToType())
 			vs := make([]int32, 5)
@@ -369,7 +369,7 @@ func CreateT1(db engine.Database) {
 		}
 	}
 	{
-		bat := batch.New(true, []string{"spid", "userid", "score"})
+		bat := batch.New([]string{"spid", "userid", "score"})
 		{
 			vec := vector.NewVec(types.T_int32.ToType())
 			vs := make([]int32, 2)

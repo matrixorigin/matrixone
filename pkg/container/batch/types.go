@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
+// special batch that will never been free.
 var (
 	EmptyBatch = &Batch{rowCount: 0}
 
