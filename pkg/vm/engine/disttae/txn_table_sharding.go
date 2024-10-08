@@ -493,7 +493,6 @@ type shardingLocalReader struct {
 	//relation data to distribute to remote CN which holds shard's partition state.
 	remoteRelData         engine.RelData
 	remoteTombApplyPolicy engine.TombstoneApplyPolicy
-	remoteScanType        int
 }
 
 // TODO::
@@ -541,7 +540,6 @@ func (r *shardingLocalReader) Read(
 				func(param *shard.ReadParam) {
 					param.ReaderBuildParam.RelData = relData
 					param.ReaderBuildParam.Expr = expr
-					param.ReaderBuildParam.ScanType = int32(r.remoteScanType)
 					param.ReaderBuildParam.TombstoneApplyPolicy = int32(r.remoteTombApplyPolicy)
 				},
 				func(resp []byte) {
@@ -690,7 +688,6 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		}
 	}
 
-	scanType := determineScanType(relData, newNum)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
 	current := 0
@@ -709,7 +706,6 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		srd := &shardingLocalReader{
 			tblDelegate:           tbl,
 			remoteTombApplyPolicy: engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3,
-			remoteScanType:        scanType,
 		}
 
 		if localRelData.DataCnt() > 0 {
@@ -735,7 +731,6 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 			if err != nil {
 				return nil, err
 			}
-			lrd.SetScanType(scanType)
 			srd.lrd = lrd
 		}
 
