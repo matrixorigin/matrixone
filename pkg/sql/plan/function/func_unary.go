@@ -832,6 +832,13 @@ func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
+func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToFixed[types.Timestamp, types.Time](ivecs, result, proc, length, func(v types.Timestamp) types.Time {
+		return v.ToDatetime(time.Local).ToTime(scale)
+	}, selectList)
+}
+
 func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithErrorCheck[int64, types.Time](ivecs, result, proc, length, func(v int64) (types.Time, error) {
 		t, e := types.ParseInt64ToTime(v, 0)
