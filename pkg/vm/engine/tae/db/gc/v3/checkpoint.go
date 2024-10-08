@@ -201,15 +201,13 @@ func (c *checkpointCleaner) CheckEnabled() bool {
 
 func (c *checkpointCleaner) StartMutationTask(name string) {
 	c.mutation.Lock()
-	defer c.mutation.Unlock()
 	c.mutation.taskState.id++
 	c.mutation.taskState.name = fmt.Sprintf("%s-%d", name, c.mutation.taskState.id)
 }
 
 func (c *checkpointCleaner) StopMutationTask() {
-	c.mutation.Lock()
-	defer c.mutation.Unlock()
 	c.mutation.taskState.name = ""
+	c.mutation.Unlock()
 }
 
 func (c *checkpointCleaner) TaskNameLocked() string {
@@ -833,6 +831,8 @@ func (c *checkpointCleaner) GetPITRsLocked() (*logtail.PitrInfo, error) {
 
 func (c *checkpointCleaner) TryGC() (err error) {
 	now := time.Now()
+	c.StartMutationTask("gc-try-gc")
+	defer c.StopMutationTask()
 	defer func() {
 		logutil.Info(
 			"GC-TRACE-TRY-GC",
@@ -841,9 +841,6 @@ func (c *checkpointCleaner) TryGC() (err error) {
 			zap.Error(err),
 		)
 	}()
-
-	c.StartMutationTask("gc-try-gc")
-	defer c.StopMutationTask()
 	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 	err = c.tryGCLocked(memoryBuffer)
