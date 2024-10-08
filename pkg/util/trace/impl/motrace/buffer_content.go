@@ -112,10 +112,12 @@ func (b *ContentBuffer) Add(i bp.HasName) {
 			v2.TraceMOLoggerErrorWriteItemCounter.Inc()
 		}
 
-		item.Free()
 		if b.tbl == nil {
 			b.tbl = rowFields.GetTable()
 		}
+		// bugfix: item.Free keep at the end of this loop.
+		// issue: https://github.com/matrixorigin/matrixone/issues/19046
+		item.Free()
 	}
 
 	// keep checkWriteHook, push checkWriteHook to the writer while GenBatch
