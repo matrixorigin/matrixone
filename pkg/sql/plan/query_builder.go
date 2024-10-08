@@ -1356,14 +1356,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				// Typ: node.LockTargets[0].GetPrimaryColTyp(),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: node.BindingTags[1],
+						RelPos: lockTarget.PrimaryColRelPos,
 						ColPos: lockTarget.PrimaryColIdxInBat,
 					},
 				},
 			}
 			increaseRefCnt(pkExpr, 1, colRefCnt)
 			pkExprs = append(pkExprs, pkExpr)
-			oldPkPos = append(oldPkPos, [2]int32{node.BindingTags[1], lockTarget.PrimaryColIdxInBat})
+			oldPkPos = append(oldPkPos, [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat})
 		}
 
 		var oldPartExpr [2]int32
@@ -1373,13 +1373,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				// Typ: node.ProjectList[len(node.ProjectList)-1].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: node.BindingTags[1],
+						RelPos: node.LockTargets[0].FilterColRelPos,
 						ColPos: node.LockTargets[0].FilterColIdxInBat,
 					},
 				},
 			}
 			increaseRefCnt(partExpr, 1, colRefCnt)
-			oldPartExpr = [2]int32{node.BindingTags[1], node.LockTargets[0].FilterColIdxInBat}
+			oldPartExpr = [2]int32{node.LockTargets[0].FilterColRelPos, node.LockTargets[0].FilterColIdxInBat}
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -1389,6 +1389,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		for pkIdx, pkExpr := range pkExprs {
 			if newPos, ok := childRemapping.globalToLocal[oldPkPos[pkIdx]]; ok {
+				node.LockTargets[pkIdx].PrimaryColRelPos = newPos[0]
 				node.LockTargets[pkIdx].PrimaryColIdxInBat = newPos[1]
 			}
 			increaseRefCnt(pkExpr, -1, colRefCnt)
@@ -1396,6 +1397,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		if partExpr != nil {
 			if newPos, ok := childRemapping.globalToLocal[oldPartExpr]; ok {
+				node.LockTargets[0].FilterColRelPos = newPos[0]
 				node.LockTargets[0].FilterColIdxInBat = newPos[1]
 			}
 			increaseRefCnt(partExpr, -1, colRefCnt)
@@ -2671,15 +2673,16 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 			objRef := builder.qry.Nodes[nodeID].GetObjRef()
 			pkPos, pkTyp := getPkPos(tableDef, false)
+			lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
+				PrimaryColRelPos:   lastTag,
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
 				RefreshTsIdxInBat:  -1, //unsupport now
 			}
 			if tableDef.Partition != nil {
-				lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
 				partTableIDs, _ := getPartTableIdsAndNames(builder.compCtx, objRef, tableDef)
 				lockTarget.IsPartitionTable = true
 				lockTarget.PartitionTableIds = partTableIDs
@@ -2709,6 +2712,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 				}
 				lockTarget.FilterColIdxInBat = int32(len(projectList))
+				lockTarget.FilterColRelPos = lastTag
 				projectList = append(projectList, partitionExpr)
 				newBindingTag := builder.genNewTag()
 				if binding, ok := ctx.bindingByTable[tableDef.Name]; ok {
@@ -2729,7 +2733,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				Children:    []int32{nodeID},
 				TableDef:    tableDef,
 				LockTargets: []*plan.LockTarget{lockTarget},
-				BindingTags: []int32{builder.genNewTag(), builder.qry.Nodes[nodeID].BindingTags[0]},
+				BindingTags: []int32{builder.genNewTag()},
 			}
 
 			if astLimit == nil {

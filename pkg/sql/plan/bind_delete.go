@@ -148,6 +148,12 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 			}
 
 			idxObjRef, idxTableDef := builder.compCtx.Resolve(dmlCtx.objRefs[0].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
+			if len(idxTableDef.Name2ColIndex) == 0 {
+				idxTableDef.Name2ColIndex = make(map[string]int32)
+				for colIdx, col := range idxTableDef.Cols {
+					idxTableDef.Name2ColIndex[col.Name] = int32(colIdx)
+				}
+			}
 			idxTag := builder.genNewTag()
 			builder.addNameByColRef(idxTag, idxTableDef)
 
@@ -251,12 +257,14 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
 					PrimaryColIdxInBat: int32(pkPos),
+					PrimaryColRelPos:   selectNodeTag,
 					PrimaryColTyp:      col.Typ,
 				}
 				if tableDef.Partition != nil {
 					lockTarget.IsPartitionTable = true
 					lockTarget.PartitionTableIds = updateCtx.PartitionTableIds
 					lockTarget.FilterColIdxInBat = updateCtx.PartitionIdx
+					lockTarget.FilterColRelPos = selectNodeTag
 				}
 				lockTargets = append(lockTargets, lockTarget)
 				break
@@ -324,6 +332,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 						lockTargets = append(lockTargets, &plan.LockTarget{
 							TableId:            idxNode.TableDef.TblId,
 							PrimaryColIdxInBat: int32(pkPos),
+							PrimaryColRelPos:   idxNode.BindingTags[0],
 							PrimaryColTyp:      col.Typ,
 						})
 						break
@@ -389,7 +398,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 			NodeType:    plan.Node_LOCK_OP,
 			Children:    []int32{lastNodeID},
 			TableDef:    dmlCtx.tableDefs[0],
-			BindingTags: []int32{builder.genNewTag(), selectNodeTag},
+			BindingTags: []int32{builder.genNewTag()},
 			LockTargets: lockTargets,
 		}, bindCtx)
 

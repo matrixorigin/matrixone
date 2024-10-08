@@ -40,18 +40,27 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	for _, updateCtx := range node.UpdateCtxList {
 		increaseRefCntForColRefList(updateCtx.InsertCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.DeleteCols, 2, colRefCnt)
+		if len(updateCtx.PartitionTableIds) > 0 {
+			colRefs := []ColRef{
+				{
+					RelPos: node.BindingTags[1],
+					ColPos: updateCtx.PartitionIdx,
+				},
+			}
+			increaseRefCntForColRefList(colRefs, 1, colRefCnt)
+		}
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
 		var colRefs []ColRef
 		for _, lockTarget := range node.LockTargets {
 			colRefs = append(colRefs, ColRef{
-				RelPos: node.BindingTags[1],
+				RelPos: lockTarget.PrimaryColRelPos,
 				ColPos: lockTarget.PrimaryColIdxInBat,
 			})
 			if lockTarget.IsPartitionTable {
 				colRefs = append(colRefs, ColRef{
-					RelPos: node.BindingTags[1],
+					RelPos: lockTarget.FilterColRelPos,
 					ColPos: lockTarget.FilterColIdxInBat,
 				})
 			}
@@ -215,21 +224,36 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	for _, updateCtx := range node.UpdateCtxList {
 		replaceColumnsForColRefList(updateCtx.InsertCols, projMap)
 		replaceColumnsForColRefList(updateCtx.DeleteCols, projMap)
-	}
-	if node.NodeType == plan.Node_MULTI_UPDATE {
-		if len(node.BindingTags) > 1 {
-			if len(node.UpdateCtxList[0].InsertCols) > 0 {
-				node.BindingTags[1] = node.UpdateCtxList[0].InsertCols[0].RelPos
-			} else {
-				node.BindingTags[1] = node.UpdateCtxList[0].DeleteCols[0].RelPos
+		if len(updateCtx.PartitionTableIds) > 0 {
+			colRef := [2]int32{node.BindingTags[1], updateCtx.PartitionIdx}
+			if expr, ok := projMap[colRef]; ok {
+				if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+					node.BindingTags[1] = e.Col.RelPos
+					updateCtx.PartitionIdx = e.Col.ColPos
+				}
 			}
 		}
+
 	}
+
 	if node.NodeType == plan.Node_LOCK_OP {
-		colRef := [2]int32{node.BindingTags[1], node.LockTargets[0].PrimaryColIdxInBat}
-		if expr, ok := projMap[colRef]; ok {
-			if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-				node.BindingTags[1] = e.Col.RelPos
+		for _, lockTarget := range node.LockTargets {
+			colRef := [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat}
+			if expr, ok := projMap[colRef]; ok {
+				if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+					lockTarget.PrimaryColRelPos = e.Col.RelPos
+					lockTarget.PrimaryColIdxInBat = e.Col.ColPos
+				}
+			}
+
+			if lockTarget.IsPartitionTable {
+				colRef = [2]int32{lockTarget.FilterColRelPos, lockTarget.FilterColIdxInBat}
+				if expr, ok := projMap[colRef]; ok {
+					if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+						lockTarget.FilterColRelPos = e.Col.RelPos
+						lockTarget.FilterColIdxInBat = e.Col.ColPos
+					}
+				}
 			}
 		}
 	}
