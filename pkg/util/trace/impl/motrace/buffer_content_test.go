@@ -17,7 +17,6 @@ package motrace
 import (
 	"bytes"
 	"context"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -91,7 +90,6 @@ func TestContentBuffer_Add_Free_cause_panic(t *testing.T) {
 		ctx            context.Context
 		buf            *bytes.Buffer
 		tbl            *table.Table
-		mux            sync.Mutex
 		formatter      *db_holder.CSVWriter
 		checkWriteHook []table.AckHook
 	}
