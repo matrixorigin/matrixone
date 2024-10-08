@@ -102,6 +102,36 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "malformed select node")
 	}
 
+	if dmlCtx.tableDefs[0].Partition != nil {
+		selectNodeTag := selectNode.BindingTags[0]
+		var partitionExpr *Expr
+		partitionExpr, err = getRemapParitionExpr(dmlCtx.tableDefs[0], selectNodeTag, colName2Idx[0], false)
+		if err != nil {
+			return -1, err
+		}
+
+		projectList := make([]*plan.Expr, len(selectNode.ProjectList)+1)
+		for i := range selectNode.ProjectList {
+			projectList[i] = &plan.Expr{
+				Typ: selectNode.ProjectList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectNodeTag,
+						ColPos: int32(i),
+					},
+				},
+			}
+		}
+		projectList[len(selectNode.ProjectList)] = partitionExpr
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeID},
+			BindingTags: []int32{builder.genNewTag()},
+			ProjectList: projectList,
+		}, bindCtx)
+		selectNode = builder.qry.Nodes[lastNodeID]
+	}
+
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
 
 	for i, tableDef := range dmlCtx.tableDefs {
@@ -198,7 +228,6 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 		BindingTags: []int32{builder.genNewTag()},
 	}
 	selectNodeTag := selectNode.BindingTags[0]
-	var partitionExpr *plan.Expr
 	var lockTargets []*plan.LockTarget
 
 	for i, tableDef := range dmlCtx.tableDefs {
@@ -211,34 +240,9 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 
 		if tableDef.Partition != nil {
 			partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[i], tableDef)
-			updateCtx.PartitionIdx = int32(len(selectNode.ProjectList))
+			updateCtx.PartitionIdx = int32(len(selectNode.ProjectList) - 1)
 			updateCtx.PartitionTableIds = partitionTableIDs
 			updateCtx.PartitionTableNames = partitionTableNames
-			partitionExpr, err = getRemapParitionExpr(tableDef, selectNodeTag, colName2Idx[i], false)
-			if err != nil {
-				return -1, err
-			}
-
-			projectList := make([]*plan.Expr, len(selectNode.ProjectList)+1)
-			for i := range selectNode.ProjectList {
-				projectList[i] = &plan.Expr{
-					Typ: selectNode.ProjectList[i].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: selectNodeTag,
-							ColPos: int32(i),
-						},
-					},
-				}
-			}
-			projectList[len(selectNode.ProjectList)] = partitionExpr
-			selectNodeTag = builder.genNewTag()
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_PROJECT,
-				Children:    []int32{lastNodeID},
-				BindingTags: []int32{selectNodeTag},
-				ProjectList: projectList,
-			}, bindCtx)
 			dmlNode.BindingTags = append(dmlNode.BindingTags, selectNodeTag)
 		}
 
@@ -249,12 +253,13 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 					PrimaryColIdxInBat: int32(pkPos),
 					PrimaryColTyp:      col.Typ,
 				}
-				if partitionExpr != nil {
+				if tableDef.Partition != nil {
 					lockTarget.IsPartitionTable = true
 					lockTarget.PartitionTableIds = updateCtx.PartitionTableIds
 					lockTarget.FilterColIdxInBat = updateCtx.PartitionIdx
 				}
 				lockTargets = append(lockTargets, lockTarget)
+				break
 			}
 		}
 
