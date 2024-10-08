@@ -211,7 +211,7 @@ func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.Object
 			)
 			return
 		}
-		entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
+		entry.Stats.SetLastMergeTime()
 	} else {
 		objScopes := make([]common.ID, 0)
 		tombstoneScopes := make([]common.ID, 0)
@@ -262,9 +262,9 @@ func (e *executor) scheduleMergeObjects(scopes []common.ID, mobjs []*catalog.Obj
 		e.roundMergeRows += uint64(obj.Rows())
 	}
 	logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
-	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
-
+	entry.Stats.SetLastMergeTime()
 }
+
 func (e *executor) memAvailBytes() int {
 	merging := int(e.activeEstimateBytes.Load())
 	avail := e.memLimit - e.memUsing - merging

@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"slices"
+	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -168,8 +169,9 @@ func (g *policyGroup) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
 
 type basic struct {
 	schema  *catalog.Schema
-	hist    *common.MergeHistory
 	objects []*catalog.ObjectEntry
+
+	lastMergeTime time.Time
 
 	objectsSize int
 	accBuf      []int
@@ -288,7 +290,7 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry, config *BasicPolicyConfig)
 
 	// avoid frequent small object merge
 	if readyToMergeRows < int(o.schema.Extra.BlockMaxRows) &&
-		!o.hist.IsLastBefore(constSmallMergeGap) &&
+		!o.lastMergeTime.Before(time.Now().Add(-constSmallMergeGap)) &&
 		i < config.MergeMaxOneRun {
 		return nil
 	}
@@ -316,7 +318,7 @@ func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 
 func (o *basic) resetForTable(entry *catalog.TableEntry) {
 	o.schema = entry.GetLastestSchemaLocked(false)
-	o.hist = entry.Stats.GetLastMerge()
+	o.lastMergeTime = entry.Stats.GetLastMergeTime()
 	o.objects = o.objects[:0]
 	o.objectsSize = 0
 }

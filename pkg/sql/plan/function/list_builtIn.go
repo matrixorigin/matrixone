@@ -4427,6 +4427,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToTime
 				},
 			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampToTime
+				},
+			},
 		},
 	},
 

@@ -347,7 +347,7 @@ func TestConstructTombstoneWriter(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	fs := testutil.NewSharedFS()
-	writer := ConstructTombstoneWriter(false, fs)
+	writer := ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	assert.NotNil(t, writer)
 
 	bat := batch.NewWithSize(2)

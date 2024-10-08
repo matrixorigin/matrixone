@@ -583,6 +583,10 @@ func (ms *mockShardService) Close() error {
 	return nil
 }
 
+func (ms *mockShardService) GetTableShards(tableID uint64) (pb.ShardsMetadata, []pb.TableShard, error) {
+	return pb.ShardsMetadata{}, nil, nil
+}
+
 var _ logservice.CNHAKeeperClient = new(testHAKeeperClient)
 
 type testHAKeeperClient struct {

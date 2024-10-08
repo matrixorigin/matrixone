@@ -265,7 +265,6 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	bat = &batch.Batch{
 		Attrs: make([]string, num),
 		Vecs:  make([]*vector.Vector, num),
-		Cnt:   1,
 	}
 
 	mp := proc.GetMPool()

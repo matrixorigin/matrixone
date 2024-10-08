@@ -42,7 +42,7 @@ func Test_Sinker(t *testing.T) {
 	require.NoError(t, err)
 
 	sinker1 := engine_util.NewTombstoneSinker(
-		false,
+		objectio.HiddenColumnSelection_None,
 		pkType,
 		mp,
 		fs,
@@ -61,7 +61,7 @@ func Test_Sinker(t *testing.T) {
 		blkCnt, blkRows, true, mp,
 	)
 	require.NoError(t, err)
-	bat1 := engine_util.NewCNTombstoneBatch(&pkType)
+	bat1 := engine_util.NewCNTombstoneBatch(&pkType, objectio.HiddenColumnSelection_None)
 	bat1.SetVector(0, rowIDVec)
 	bat1.SetVector(1, pkVec.GetDownstreamVector())
 	bat1.SetRowCount(rowIDVec.Length())
@@ -95,23 +95,29 @@ func Test_Sinker(t *testing.T) {
 
 	require.Equal(t, bat1.RowCount(), rows)
 
+	hiddenSels := objectio.HiddenColumnSelection_PhysicalAddr
+
 	r := engine_util.SimpleMultiObjectsReader(
 		ctx, fs, objs, timestamp.Timestamp{},
 		engine_util.WithColumns(
-			objectio.TombstoneSeqnums_CN_Created,
-			objectio.GetTombstoneTypes(pkType, false),
+			objectio.GetTombstoneSeqnums(hiddenSels),
+			objectio.GetTombstoneTypes(pkType, hiddenSels),
 		),
-		engine_util.WithTombstone(),
 	)
 	blockio.Start("")
 	defer blockio.Stop("")
-	bat2 := engine_util.NewCNTombstoneBatch(&pkType)
-	buffer := engine_util.NewCNTombstoneBatch(&pkType)
+	bat2 := engine_util.NewCNTombstoneBatch(&pkType, hiddenSels)
+	buffer := engine_util.NewCNTombstoneBatch(&pkType, hiddenSels)
 	for {
 		done, err := r.Read(ctx, buffer.Attrs, nil, mp, buffer)
 		require.NoError(t, err)
 		if done {
 			break
+		}
+		phyAddrs := vector.MustFixedColWithTypeCheck[types.Rowid](buffer.Vecs[2])
+		for i := range phyAddrs {
+			rowOff := int(phyAddrs[i].GetRowOffset())
+			require.Equal(t, i, rowOff)
 		}
 		rowIds := vector.MustFixedColWithTypeCheck[types.Rowid](buffer.Vecs[0])
 		var (
