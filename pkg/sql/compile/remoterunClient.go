@@ -130,7 +130,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	// generate a new pipeline to send data in local.
 	// value_scan -> dispatch -> next pipeline.
 	if arg, isDispatch := s.RootOp.(*dispatch.Dispatch); isDispatch {
-		fakeValueScanOperator := value_scan.NewArgument()
+		fakeValueScanOperator := value_scan.NewValueScanFromItSelf()
 		if err := fakeValueScanOperator.Prepare(s.Proc); err != nil {
 			return err
 		}
@@ -356,7 +356,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 
 		bat, err = decodeBatch(sender.mp, dataBuffer)
-		/* 		bat := new(batch.Batch)
+		/* 		bat := batch.NewOffHeapEmpty()
 		   		if err := bat.UnmarshalBinary(dataBuffer); err != nil {
 		   			bat.Clean(sender.mp)
 		   			return bat, false, err

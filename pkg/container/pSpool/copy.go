@@ -207,9 +207,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 		// set row count.
 		dst.SetRowCount(src.RowCount())
-
-		// set cnt.
-		dst.SetCnt(1)
 	}
 
 	signal.pointer = dst

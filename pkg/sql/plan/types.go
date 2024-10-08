@@ -297,6 +297,9 @@ type BindContext struct {
 
 	// lower is sys var lower_case_table_names
 	lower int64
+
+	isGroupingSet bool
+	groupingFlag  []bool
 }
 
 type NameTuple struct {

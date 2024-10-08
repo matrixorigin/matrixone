@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 const (
@@ -159,7 +160,9 @@ type Cleaner interface {
 	// for test
 	SetMinMergeCountForTest(count int)
 	GetMinMerged() *checkpoint.CheckpointEntry
+	GeteCkpStage() *types.TS
 	CheckGC() error
+	GetPITRs() (*logtail.PitrInfo, error)
 	GetInputs() *GCTable
 	SetTid(tid uint64)
 	EnableGCForTest()

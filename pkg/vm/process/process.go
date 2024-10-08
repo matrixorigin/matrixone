@@ -161,11 +161,11 @@ func (proc *Process) CopyValueScanBatch(src *Process) {
 }
 
 func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch.Batch, error) {
-	bat := batch.NewWithSize(len(src.Vecs))
+	bat := batch.NewOffHeapWithSize(len(src.Vecs))
 	bat.SetAttributes(src.Attrs)
 	bat.Recursive = src.Recursive
 	for i := range bat.Vecs {
-		v := vector.NewVec(*src.Vecs[i].GetType())
+		v := vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
 		if v.Capacity() < preAllocSize {
 			err := v.PreExtend(preAllocSize, proc.Mp())
 			if err != nil {

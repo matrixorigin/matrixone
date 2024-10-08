@@ -4427,6 +4427,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToTime
 				},
 			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampToTime
+				},
+			},
 		},
 	},
 
@@ -6683,6 +6693,31 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return SHA1Func
+				},
+			},
+		},
+	},
+	// function 'grouping'
+	{
+		functionId: GROUPING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) >= 1 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return GroupingFunc
 				},
 			},
 		},

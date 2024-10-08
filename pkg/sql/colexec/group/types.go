@@ -79,11 +79,11 @@ func (ev *ExprEvalVector) ResetForNextQuery() {
 type container struct {
 	// if skipInitReusableMem is true, we will skip some initialization of reusable.
 	skipInitReusableMem bool
-
-	typ       int
-	state     vm.CtrState
-	inserted  []uint8
-	zInserted []uint8
+	itr                 hashmap.Iterator
+	typ                 int
+	state               vm.CtrState
+	inserted            []uint8
+	zInserted           []uint8
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
@@ -101,6 +101,7 @@ type container struct {
 type Group struct {
 	ctr          container
 	NeedEval     bool // need to projection the aggregate column
+	GroupingFlag []bool
 	PreAllocSize uint64
 
 	Exprs []*plan.Expr // group Expressions

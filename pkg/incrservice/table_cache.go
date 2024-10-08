@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -91,6 +92,14 @@ func (c *tableCache) getTxn() client.TxnOperator {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.mu.txnOp
+}
+
+func (c *tableCache) getLastAllocateTS(colName string) (timestamp.Timestamp, error) {
+	cc := c.getColumnCache(colName)
+	if cc == nil {
+		panic("column cache should not be nil, " + colName)
+	}
+	return cc.lastAllocateAt, nil
 }
 
 func (c *tableCache) insertAutoValues(

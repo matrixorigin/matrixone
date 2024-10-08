@@ -799,7 +799,7 @@ message Node {
 
 	// AGG
 	repeated Expr group_by = 10;
-	repeated Expr grouping_set = 11;
+	repeated bool grouping_flag = 11;
 	repeated Expr agg_list = 12;
 
 	// WINDOW
