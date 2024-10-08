@@ -6520,12 +6520,12 @@ func TestSnapshotGC(t *testing.T) {
 	schema2 := catalog.MockSchemaAll(13, 2)
 	schema2.Extra.BlockMaxRows = 10
 	schema2.Extra.ObjectMaxBlocks = 2
-	var rel3 handle.Relation
+	var rele2, rel3 handle.Relation
 	{
 		txn, _ := db.StartTxn(nil)
 		database, err := testutil.CreateDatabase2(ctx, txn, "db")
 		assert.Nil(t, err)
-		_, err = testutil.CreateRelation2(ctx, txn, database, schema1)
+		rele2, err = testutil.CreateRelation2(ctx, txn, database, schema1)
 		assert.Nil(t, err)
 		_, err = testutil.CreateRelation2(ctx, txn, database, schema2)
 		assert.Nil(t, err)
@@ -6546,6 +6546,8 @@ func TestSnapshotGC(t *testing.T) {
 	var wg sync.WaitGroup
 	var snapWG sync.WaitGroup
 	snapWG.Add(1)
+	var viewSnapshot types.TS
+	var snapshot int64
 	go func() {
 		i := 0
 		for {
@@ -6553,9 +6555,12 @@ func TestSnapshotGC(t *testing.T) {
 				snapWG.Done()
 				break
 			}
+			if i == 2 {
+				viewSnapshot = types.BuildTS(snapshot, 0)
+			}
 			i++
 			time.Sleep(200 * time.Millisecond)
-			snapshot := time.Now().UTC().UnixNano()
+			snapshot = time.Now().UTC().UnixNano()
 			snapshots = append(snapshots, snapshot)
 			attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
 			vecTypes := []types.Type{types.T_uint64.ToType(),
@@ -6629,6 +6634,47 @@ func TestSnapshotGC(t *testing.T) {
 	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
+	dataObject, tombstoneObject := testutil.GetUserTablesInsBatch(t, rele2.ID(), types.TS{}, viewSnapshot, db.Catalog)
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, viewSnapshot, rele2.ID())
+	assert.Nil(t, err)
+	objects := make(map[string]struct{})
+	tombstones := make(map[string]struct{})
+	for _, ckp := range ckps {
+		_, _, dataObject, tombstoneObject, cbs := testutil.ReadSnapshotCheckpoint(t, rele2.ID(), ckp.GetLocation(), db.Opts.Fs)
+		for _, cb := range cbs {
+			if cb != nil {
+				cb()
+			}
+		}
+		if dataObject != nil {
+			moIns, err := batch.ProtoBatchToBatch(dataObject)
+			assert.NoError(t, err)
+			for i := 0; i < moIns.Vecs[2].Length(); i++ {
+				stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
+				objects[stats.ObjectName().String()] = struct{}{}
+			}
+		}
+		if tombstoneObject != nil {
+			moIns, err := batch.ProtoBatchToBatch(tombstoneObject)
+			assert.NoError(t, err)
+			for i := 0; i < moIns.Vecs[2].Length(); i++ {
+				stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
+				tombstones[stats.ObjectName().String()] = struct{}{}
+			}
+		}
+	}
+	vec1 := dataObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
+	vec2 := tombstoneObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
+	for i := 0; i < dataObject.Length(); i++ {
+		stats := objectio.ObjectStats(vec1.GetBytesAt(i))
+		_, ok := objects[stats.ObjectName().String()]
+		assert.True(t, ok)
+	}
+	for i := 0; i < tombstoneObject.Length(); i++ {
+		stats := objectio.ObjectStats(vec2.GetBytesAt(i))
+		_, ok := tombstones[stats.ObjectName().String()]
+		assert.True(t, ok)
+	}
 
 }
 
