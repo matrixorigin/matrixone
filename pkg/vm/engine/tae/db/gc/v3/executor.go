@@ -16,8 +16,6 @@ package gc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
 
 type GCJob = CheckpointBasedGCJob
@@ -182,6 +181,13 @@ func (exec *GCExecutor) Run(
 		return
 	}
 	canGCObjects, canGCMemTable := canGCSinker.GetResult()
+	defer func() {
+		if err = DeleteObjects(ctx, exec.fs, canGCObjects); err != nil {
+			//TODO: handle error
+			err = nil
+		}
+	}()
+
 	fineSourcer, release := MakeLoadFunc(
 		ctx,
 		canGCMemTable,

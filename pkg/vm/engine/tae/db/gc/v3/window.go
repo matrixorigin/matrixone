@@ -495,7 +495,7 @@ func (w *GCWindow) replayData(
 }
 
 // ReadTable reads an s3 file and replays a GCWindow in memory
-func (w *GCWindow) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS, ts types.TS) error {
+func (w *GCWindow) ReadTable(ctx context.Context, name string, fs *objectio.ObjectFS) error {
 	var release1 func()
 	var buffer *batch.Batch
 	defer func() {

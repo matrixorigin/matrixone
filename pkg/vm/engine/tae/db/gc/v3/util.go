@@ -90,3 +90,18 @@ func MakeGCWindowBuffer(size int) *containers.OneSchemaBatchBuffer {
 		size, ObjectTableAttrs, ObjectTableTypes,
 	)
 }
+
+func DeleteObjects(
+	ctx context.Context,
+	fs fileservice.FileService,
+	objects []objectio.ObjectStats,
+) error {
+	if len(objects) == 0 {
+		return nil
+	}
+	files := make([]string, 0, len(objects))
+	for _, obj := range objects {
+		files = append(files, obj.ObjectName().String())
+	}
+	return fs.Delete(ctx, files...)
+}

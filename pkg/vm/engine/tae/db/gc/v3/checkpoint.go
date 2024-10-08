@@ -260,8 +260,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 	for _, dir := range readDirs {
 		start := time.Now()
 		window := NewGCWindow(c.mp, c.fs.Service)
-		_, end, _ := blockio.DecodeGCMetadataFileName(dir.Name)
-		err = window.ReadTable(c.ctx, GCMetaDir+dir.Name, dir.Size, c.fs, end)
+		err = window.ReadTable(c.ctx, GCMetaDir+dir.Name, c.fs)
 		if err != nil {
 			logger = logutil.Error
 		}
@@ -523,11 +522,24 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	metaFiles := c.CloneMetaFilesLocked()
 	filesToDelete := make([]string, 0)
 	for _, metaFile := range metaFiles {
-		if (metaFile.Ext() == blockio.CheckpointExt) &&
-			!(metaFile.EqualRange(&window.tsRange.start, &window.tsRange.end)) {
-			filesToDelete = append(filesToDelete, GCMetaDir+metaFile.Name())
-			delete(metaFiles, metaFile.Name())
+		if (metaFile.Ext() != blockio.CheckpointExt) ||
+			(metaFile.EqualRange(&window.tsRange.start, &window.tsRange.end)) {
+			continue
 		}
+		gcWindow := NewGCWindow(c.mp, c.fs.Service)
+		defer gcWindow.Close()
+		if err = gcWindow.ReadTable(c.ctx, GCMetaDir+metaFile.Name(), c.fs); err != nil {
+			logutil.Error(
+				"Merging-GC-File-Error",
+				zap.Error(err),
+			)
+			return
+		}
+		for _, file := range gcWindow.files {
+			filesToDelete = append(filesToDelete, file.ObjectName().String())
+		}
+		filesToDelete = append(filesToDelete, GCMetaDir+metaFile.Name())
+		delete(metaFiles, metaFile.Name())
 	}
 
 	// TODO: if file is not found, it should be ignored
