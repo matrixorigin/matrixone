@@ -15,6 +15,8 @@
 package objectio
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -23,10 +25,19 @@ import (
 
 const (
 	BitmapBitsInPool = 8192
+	BitmapPoolSize   = 128
 )
 
+func BitmapPoolReport() string {
+	return fmt.Sprintf(
+		"Runtime-State-BitmapPool: [%d/%d]",
+		BitmapPool.InUseCount(),
+		BitmapPoolSize,
+	)
+}
+
 var BitmapPool = fileservice.NewPool(
-	128,
+	BitmapPoolSize,
 	func() *bitmap.Bitmap {
 		var bm bitmap.Bitmap
 		bm.InitWithSize(BitmapBitsInPool)

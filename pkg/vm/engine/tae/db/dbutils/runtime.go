@@ -305,11 +305,13 @@ func (r *Runtime) SID() string {
 	return r.Options.SID
 }
 
-func (r *Runtime) PrintVectorPoolUsage() {
+func (r *Runtime) PoolUsageReport() {
 	var w bytes.Buffer
 	w.WriteString(r.VectorPool.Transient.String())
 	w.WriteByte('\n')
 	w.WriteString(r.VectorPool.Small.String())
+	w.WriteByte('\n')
+	w.WriteString(objectio.BitmapPoolReport())
 	logutil.Info(w.String())
 }
 
