@@ -378,6 +378,14 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	})
 }
 
+// TimestampToTime convert timestamp to time
+func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToFixed[types.Timestamp, types.Time](ivecs, result, proc, length, func(v types.Timestamp) types.Time {
+		return v.ToDatetime(time.Local).ToTime(scale)
+	})
+}
+
 func DateToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryFixedToFixed[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
 		return v.Day()
