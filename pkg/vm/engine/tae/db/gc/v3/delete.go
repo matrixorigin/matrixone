@@ -90,7 +90,6 @@ func (g *GCWorker) ExecDelete(ctx context.Context, names []string) error {
 		g.state = Idle
 		return err
 	}
-	g.cleaner.recordFilesGCed(g.objects)
 	g.resetObjects()
 	g.state = Idle
 	return nil

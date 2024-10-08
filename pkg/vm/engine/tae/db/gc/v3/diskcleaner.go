@@ -27,8 +27,6 @@ const (
 	MessgeNormal
 )
 
-const MinMergeCount = 20
-
 // DiskCleaner is the main structure of v2 operation,
 // and provides "JobFactory" to let tae notify itself
 // to perform a v2

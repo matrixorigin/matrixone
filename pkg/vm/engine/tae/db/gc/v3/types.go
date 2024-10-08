@@ -163,8 +163,6 @@ type Cleaner interface {
 	GetCheckpointGCWaterMark() *types.TS
 	GetScannedWindow() *GCWindow
 	Stop()
-	// for test
-	SetMinMergeCountForTest(count int)
 	GetMinMerged() *checkpoint.CheckpointEntry
 	DoCheck() error
 	GetPITRs() (*logtail.PitrInfo, error)

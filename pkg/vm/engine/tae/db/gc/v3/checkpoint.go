@@ -47,8 +47,8 @@ type checkpointCleaner struct {
 	mp *mpool.MPool
 	fs *objectio.ObjectFS
 
-	// checkpointCli is used to get the instance of the specified checkpoint
 	checkpointCli checkpoint.RunnerReader
+	delWorker     *GCWorker
 
 	watermarks struct {
 		// scanWaterMark is the watermark of the incremental checkpoint which has been
@@ -89,11 +89,6 @@ type checkpointCleaner struct {
 	}
 
 	config struct {
-		// minMergeCount is the configuration of the merge GC metadata file.
-		// When the GC file is greater than or equal to minMergeCount,
-		// the merge GC metadata file will be triggered and the expired file will be deleted.
-		minMergeCount atomic.Int64
-
 		canGCCacheSize int
 	}
 
@@ -103,21 +98,11 @@ type checkpointCleaner struct {
 		window *GCWindow
 	}
 
-	// gcState is used to record state of the executed GCs
-	gcState struct {
-		sync.RWMutex
-		filesGCed []string
-	}
-
 	// checker is to check whether the checkpoint can be consumed
 	checker struct {
 		sync.RWMutex
 		extras map[string]func(item any) bool
 	}
-
-	// delWorker is a worker that deletes s3‘s objects or local
-	// files, and only one worker will run
-	delWorker *GCWorker
 
 	metaFiles map[string]GCMetaFile
 
@@ -164,7 +149,6 @@ func NewCheckpointCleaner(
 		opt(cleaner)
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
-	cleaner.config.minMergeCount.Store(MinMergeCount)
 	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.options.gcEnabled.Store(true)
 	cleaner.mp = common.CheckpointAllocator
@@ -396,12 +380,6 @@ func (c *checkpointCleaner) addGCWindow(window *GCWindow) {
 	}
 }
 
-func (c *checkpointCleaner) recordFilesGCed(files []string) {
-	c.gcState.Lock()
-	defer c.gcState.Unlock()
-	c.gcState.filesGCed = append(c.gcState.filesGCed, files...)
-}
-
 func (c *checkpointCleaner) GetScanWaterMark() *checkpoint.CheckpointEntry {
 	return c.watermarks.scanWaterMark.Load()
 }
@@ -426,23 +404,6 @@ func (c *checkpointCleaner) GetScannedWindow() *GCWindow {
 
 func (c *checkpointCleaner) GetScannedWindowLocked() *GCWindow {
 	return c.remainingObjects.window
-}
-
-func (c *checkpointCleaner) SetMinMergeCountForTest(count int) {
-	c.config.minMergeCount.Store(int64(count))
-}
-
-func (c *checkpointCleaner) getMinMergeCount() int {
-	return int(c.config.minMergeCount.Load())
-}
-
-func (c *checkpointCleaner) OrhpanFilesGCed() []string {
-	c.gcState.RLock()
-	defer c.gcState.RUnlock()
-	filesGCed := c.gcState.filesGCed
-	//Empty the array, in order to store the next file list
-	c.gcState.filesGCed = make([]string, 0)
-	return filesGCed
 }
 
 func (c *checkpointCleaner) deleteStaleSnapshotFiles(

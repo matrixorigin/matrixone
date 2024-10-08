@@ -6361,7 +6361,6 @@ func TestAppendAndGC(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.Extra.BlockMaxRows = 10
@@ -6427,7 +6426,6 @@ func TestAppendAndGC2(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.Extra.BlockMaxRows = 10
@@ -6511,7 +6509,6 @@ func TestSnapshotGC(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 
 	snapshotSchema := catalog.MockSnapShotSchema()
 	snapshotSchema.Extra.BlockMaxRows = 2
@@ -6619,7 +6616,6 @@ func TestSnapshotGC(t *testing.T) {
 	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetScanWaterMark() == nil {
 			return false
@@ -6647,7 +6643,6 @@ func TestSnapshotMeta(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 
 	snapshotSchema := catalog.MockSnapShotSchema()
 	snapshotSchema.Extra.BlockMaxRows = 2
@@ -6695,7 +6690,6 @@ func TestSnapshotMeta(t *testing.T) {
 	tae.Restart(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().DisableGC()
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	for i, snapshot := range snapshots {
 		attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
 		vecTypes := []types.Type{types.T_uint64.ToType(),
@@ -6783,7 +6777,6 @@ func TestSnapshotMeta(t *testing.T) {
 	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	testutils.WaitExpect(10000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetScanWaterMark() == nil {
 			return false
@@ -6820,7 +6813,6 @@ func TestPitrMeta(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	pitrSchema := catalog.NewEmptySchema("mo_pitr")
 
 	constraintDef := &engine.ConstraintDef{
@@ -6865,7 +6857,6 @@ func TestPitrMeta(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	attrs := []string{"col0", "col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8", "col9", "col10", "col11", "col12"}
 	vecTypes := []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(),
 		types.T_uint64.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
@@ -6973,7 +6964,6 @@ func TestPitrMeta(t *testing.T) {
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
 	db = tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetScanWaterMark() == nil {
 			return false
@@ -7004,7 +6994,6 @@ func TestMergeGC(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 
 	snapshotSchema := catalog.MockSnapShotSchema()
 	snapshotSchema.Extra.BlockMaxRows = 2
@@ -8731,7 +8720,6 @@ func TestSnapshotCheckpoint(t *testing.T) {
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
 			db := tae.DB
-			db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 
 			schema1 := catalog.MockSchemaAll(13, 2)
 			schema1.Extra.BlockMaxRows = 10
