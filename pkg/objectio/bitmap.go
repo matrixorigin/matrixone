@@ -38,19 +38,19 @@ var BitmapPool = fileservice.NewPool(
 	nil,
 )
 
-var NullReusableBitmap ReusableBitmap
+var NullBitmap Bitmap
 
-type ReusableBitmap struct {
+type Bitmap struct {
 	bm  *bitmap.Bitmap
 	put func()
 	idx int
 }
 
-func (r *ReusableBitmap) Idx() int {
+func (r *Bitmap) Idx() int {
 	return r.idx
 }
 
-func (r *ReusableBitmap) Release() {
+func (r *Bitmap) Release() {
 	if r.bm != nil {
 		r.bm = nil
 	}
@@ -61,7 +61,7 @@ func (r *ReusableBitmap) Release() {
 	r.idx = 0
 }
 
-func (r *ReusableBitmap) OrBitmap(o *bitmap.Bitmap) {
+func (r *Bitmap) OrBitmap(o *bitmap.Bitmap) {
 	if o.IsEmpty() {
 		return
 	}
@@ -72,11 +72,11 @@ func (r *ReusableBitmap) OrBitmap(o *bitmap.Bitmap) {
 	r.bm.Or(o)
 }
 
-func (r *ReusableBitmap) Reusable() bool {
+func (r *Bitmap) Reusable() bool {
 	return r.put != nil
 }
 
-func (r *ReusableBitmap) Or(o ReusableBitmap) {
+func (r *Bitmap) Or(o Bitmap) {
 	if o.IsEmpty() {
 		return
 	}
@@ -87,7 +87,7 @@ func (r *ReusableBitmap) Or(o ReusableBitmap) {
 	r.bm.Or(o.bm)
 }
 
-func (r *ReusableBitmap) Add(i uint64) {
+func (r *Bitmap) Add(i uint64) {
 	if r == nil || r.bm == nil {
 		logutil.Fatal("invalid bitmap")
 	}
@@ -95,13 +95,13 @@ func (r *ReusableBitmap) Add(i uint64) {
 	r.bm.Add(i)
 }
 
-func (r *ReusableBitmap) PreExtend(nbits int) {
+func (r *Bitmap) PreExtend(nbits int) {
 	if r.bm.Len() >= int64(nbits) {
 		return
 	}
 	if r.put != nil {
 		logutil.Warn(
-			"ReusableBitmap-COW",
+			"Bitmap-COW",
 			zap.Int("nbits", nbits),
 		)
 		var nbm bitmap.Bitmap
@@ -115,60 +115,60 @@ func (r *ReusableBitmap) PreExtend(nbits int) {
 	r.bm.TryExpandWithSize(nbits)
 }
 
-func (r *ReusableBitmap) ToI64Array() []int64 {
+func (r *Bitmap) ToI64Array() []int64 {
 	if r.IsEmpty() {
 		return nil
 	}
 	return r.bm.ToI64Array()
 }
 
-func (r *ReusableBitmap) ToArray() []uint64 {
+func (r *Bitmap) ToArray() []uint64 {
 	if r.IsEmpty() {
 		return nil
 	}
 	return r.bm.ToArray()
 }
 
-func (r *ReusableBitmap) IsEmpty() bool {
+func (r *Bitmap) IsEmpty() bool {
 	return r.bm == nil || r.bm.IsEmpty()
 }
 
-func (r *ReusableBitmap) Clear() {
+func (r *Bitmap) Clear() {
 	if r.bm != nil {
 		r.bm.Clear()
 	}
 }
 
-func (r *ReusableBitmap) Count() int {
+func (r *Bitmap) Count() int {
 	if r.bm == nil {
 		return 0
 	}
 	return r.bm.Count()
 }
 
-func (r *ReusableBitmap) Contains(i uint64) bool {
+func (r *Bitmap) Contains(i uint64) bool {
 	if r.bm == nil {
 		return false
 	}
 	return r.bm.Contains(i)
 }
 
-func (r *ReusableBitmap) IsValid() bool {
+func (r *Bitmap) IsValid() bool {
 	return r != nil && r.bm != nil
 }
 
-func GetReusableBitmap() ReusableBitmap {
+func GetReusableBitmap() Bitmap {
 	var bm *bitmap.Bitmap
 	put := BitmapPool.Get(&bm)
-	return ReusableBitmap{
+	return Bitmap{
 		bm:  bm,
 		put: put.Put,
 		idx: put.Idx(),
 	}
 }
 
-func GetReusableBitmapNoReuse() ReusableBitmap {
-	return ReusableBitmap{
+func GetNoReuseBitmap() Bitmap {
+	return Bitmap{
 		bm: &bitmap.Bitmap{},
 	}
 }

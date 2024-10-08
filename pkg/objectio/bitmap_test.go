@@ -45,7 +45,7 @@ func TestBitmap1(t *testing.T) {
 	require.False(t, bm1.Reusable())
 	require.False(t, bm1.IsValid())
 
-	bm2 := GetReusableBitmapNoReuse()
+	bm2 := GetNoReuseBitmap()
 	require.False(t, bm2.Reusable())
 	require.True(t, bm2.IsValid())
 	require.True(t, bm2.IsEmpty())
@@ -90,6 +90,6 @@ func TestBitmap1(t *testing.T) {
 	require.Equal(t, 0, len(bm1.ToI64Array()))
 	require.Equal(t, 0, len(bm1.ToArray()))
 
-	var bm3 ReusableBitmap
+	var bm3 Bitmap
 	require.Equal(t, 0, bm3.Count())
 }
