@@ -150,8 +150,8 @@ func TestMySQLProtocolRead(t *testing.T) {
 	sv.SessionTimeout.Duration = 24 * time.Hour
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
-	cm, err := NewIOSession(client, pu)
+	setSessionAlloc("", newLeakCheckAllocator())
+	cm, err := NewIOSession(client, pu, "")
 	assert.Nil(t, err)
 	cm.allowedPacketSize = int(MaxPayloadSize) * 16
 	convey.Convey("read small packet < 1MB", t, func() {
@@ -275,8 +275,8 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 	sv.SessionTimeout.Duration = 24 * time.Hour
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
-	cm, err := NewIOSession(client, pu)
+	setSessionAlloc("", newLeakCheckAllocator())
+	cm, err := NewIOSession(client, pu, "")
 	assert.Nil(t, err)
 	cm.allowedPacketSize = int(MaxPayloadSize) * 16
 	convey.Convey("Bad Network: read small packet < 1MB", t, func() {
@@ -393,15 +393,15 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setSessionAlloc("", newLeakCheckAllocator())
 	convey.Convey("test write packet", t, func() {
 		rows := 20
 		server, client := net.Pipe()
 		defer server.Close()
 		defer client.Close()
-		cWriter, err := NewIOSession(client, pu)
+		cWriter, err := NewIOSession(client, pu, "")
 		assert.Nil(t, err)
-		cReader, err := NewIOSession(server, pu)
+		cReader, err := NewIOSession(server, pu, "")
 		assert.Nil(t, err)
 		cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 		exceptPayload := make([][]byte, 0)
@@ -447,9 +447,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			server, client := net.Pipe()
 			defer server.Close()
 			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			cWriter, err := NewIOSession(client, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(server, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
@@ -491,9 +491,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			server, client := net.Pipe()
 			defer server.Close()
 			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			cWriter, err := NewIOSession(client, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(server, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
@@ -540,9 +540,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			server, client := net.Pipe()
 			defer server.Close()
 			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			cWriter, err := NewIOSession(client, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(server, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
@@ -586,9 +586,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			server, client := net.Pipe()
 			defer server.Close()
 			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			cWriter, err := NewIOSession(client, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(server, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
@@ -631,9 +631,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			server, client := net.Pipe()
 			defer server.Close()
 			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			cWriter, err := NewIOSession(client, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(server, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
@@ -681,9 +681,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			server, client := net.Pipe()
 			defer server.Close()
 			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			cWriter, err := NewIOSession(client, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(server, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
@@ -731,14 +731,14 @@ func TestMySQLBufferReadLoadLocal(t *testing.T) {
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setSessionAlloc("", newLeakCheckAllocator())
 	convey.Convey("test read load local packet", t, func() {
 		server, client := net.Pipe()
 		defer server.Close()
 		defer client.Close()
-		cWriter, _ := NewIOSession(client, pu)
+		cWriter, _ := NewIOSession(client, pu, "")
 		assert.Nil(t, err)
-		cReader, _ := NewIOSession(server, pu)
+		cReader, _ := NewIOSession(server, pu, "")
 		assert.Nil(t, err)
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
@@ -786,14 +786,14 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setSessionAlloc("", newLeakCheckAllocator())
 	convey.Convey("test read max allowed packet", t, func() {
 		server, client := net.Pipe()
 		defer server.Close()
 		defer client.Close()
-		cWriter, err := NewIOSession(client, pu)
+		cWriter, err := NewIOSession(client, pu, "")
 		assert.Nil(t, err)
-		cReader, err := NewIOSession(server, pu)
+		cReader, err := NewIOSession(server, pu, "")
 		assert.Nil(t, err)
 		ses := &Session{}
 		ses.respr = &MysqlResp{
@@ -962,14 +962,14 @@ func Test_NewIOSessionFailed(t *testing.T) {
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	aAlloc := newLeakCheckAllocator()
 	aAlloc.mod = leakCheckAllocatorModeAllocReturnErr
-	setGlobalSessionAlloc(aAlloc)
-	conn, err = NewIOSession(client, pu)
+	setSessionAlloc("", aAlloc)
+	conn, err = NewIOSession(client, pu, "")
 	assert.NotNil(t, err)
 	assert.Nil(t, conn)
 	assert.Zero(t, aAlloc.allocated)
 
 	aAlloc.mod = 0
-	conn, err = NewIOSession(client, pu)
+	conn, err = NewIOSession(client, pu, "")
 	assert.Nil(t, err)
 	assert.NotNil(t, conn)
 	assert.NotNil(t, conn.fixBuf.data)
@@ -1053,8 +1053,8 @@ func newTestConn(t *testing.T, leakAlloc *leakCheckAllocator) (*testConn, *Conn)
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(leakAlloc)
-	conn, err = NewIOSession(tConn, pu)
+	setSessionAlloc("", leakAlloc)
+	conn, err = NewIOSession(tConn, pu, "")
 	assert.Nil(t, err)
 	assert.NotNil(t, conn)
 	return tConn, conn

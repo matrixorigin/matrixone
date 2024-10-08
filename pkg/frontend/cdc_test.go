@@ -670,7 +670,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	pu.TaskService = &testTaskService{
 		db: db,
 	}
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	create := &tree.CreateCDC{
 		IfNotExists: false,
@@ -1714,7 +1714,7 @@ func Test_updateCdc_cancel(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -2928,7 +2928,7 @@ func Test_getSqlForGetTask(t *testing.T) {
 func Test_initAesKey(t *testing.T) {
 	{
 		cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.NoError(t, err)
 
 		cdc2.AesKey = ""
@@ -2941,7 +2941,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer queryTableStub.Reset()
 
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.Equal(t, e, err)
 	}
 
@@ -2951,7 +2951,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer queryTableStub.Reset()
 
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.Error(t, err)
 	}
 
@@ -2975,7 +2975,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer getGlobalPuStub.Reset()
 
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.NoError(t, err)
 		assert.Equal(t, "aesKey", cdc2.AesKey)
 		cdc2.AesKey = ""

@@ -277,8 +277,8 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 	}).AnyTimes()
 
 	ses := newTestSession(t, ctrl)
-	getGlobalPu().TxnClient = txnClient
-	getGlobalPu().StorageEngine = eng
+	getPu("").TxnClient = txnClient
+	getPu().StorageEngine = eng
 	ses.txnHandler.storage = eng
 	var c clock.Clock
 	_ = ses.GetTxnHandler().CreateTempStorage(c)
@@ -307,8 +307,8 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 	}).AnyTimes()
 
 	ses := newTestSession(t, ctrl)
-	getGlobalPu().TxnClient = txnClient
-	getGlobalPu().StorageEngine = eng
+	getPu().TxnClient = txnClient
+	getPu().StorageEngine = eng
 	ses.txnHandler.storage = eng
 
 	var c clock.Clock
@@ -340,8 +340,8 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 	}).AnyTimes()
 
 	ses := newTestSession(t, ctrl)
-	getGlobalPu().TxnClient = txnClient
-	getGlobalPu().StorageEngine = eng
+	getPu().TxnClient = txnClient
+	getPu().StorageEngine = eng
 	ses.txnHandler.storage = eng
 
 	var c clock.Clock
@@ -381,7 +381,7 @@ func Test_rollbackStatement(t *testing.T) {
 		ioses.EXPECT().Ref().AnyTimes()
 
 		ses := newTestSession(t, ctrl)
-		getGlobalPu().TxnClient = txnClient
+		getPu().TxnClient = txnClient
 		ses.txnHandler.storage = eng
 
 		ec := newTestExecCtx(ctx, ctrl)

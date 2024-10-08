@@ -20,6 +20,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -339,6 +340,7 @@ type BackgroundExec interface {
 	GetExecResultBatches() []*batch.Batch
 	ClearExecResultBatches()
 	Clear()
+	Service() string
 }
 
 var _ BackgroundExec = &backExec{}
@@ -1230,4 +1232,14 @@ type CsvWriter interface {
 // MemWriter write batch into memory pool
 type MemWriter interface {
 	MediaWriter
+}
+
+// ServerLevelVariables holds the variables are shared in single frontend mo server instance.
+// these variables should be initialized at the server startup.
+type ServerLevelVariables struct {
+	RtMgr           atomic.Value
+	Pu              atomic.Value
+	Aicm            atomic.Value
+	moServerStarted atomic.Bool
+	sessionAlloc    atomic.Value
 }
