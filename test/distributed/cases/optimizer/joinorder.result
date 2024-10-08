@@ -134,3 +134,6 @@ Project
 select count(*) from t1,t2,t3 where t3.c1<t1.c1 and t1.c3<t2.c3 and t3.c2=0;
 count(*)
 0
+select count(*) from t1 join t2 on t1.c1=t2.c1 join t3 where t1.c1=1;
+count(*)
+1000000
