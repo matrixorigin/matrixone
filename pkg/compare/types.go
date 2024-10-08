@@ -31,6 +31,7 @@ type compare[T any] struct {
 	xs          [][]T
 	cmp         func(T, T) int
 	ns          []*nulls.Nulls
+	gs          []*nulls.Nulls
 	vs          []*vector.Vector
 	isConstNull []bool
 	cpy         func([]T, []T, int64, int64)

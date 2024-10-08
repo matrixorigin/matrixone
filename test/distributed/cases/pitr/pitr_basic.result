@@ -49,7 +49,7 @@ create table db01.table01 (col1 int);
 drop pitr if exists pitr12;
 create pitr pitr12 for database db01 table table01 range 1 'h';
 create pitr pitr13 for database db01 table table02 range 1 'h';
-internal error: table table02 does not exist
+internal error: table db01.table02 does not exist
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
 pitr01    2024-09-13 03:29:42    2024-09-13 03:29:42    account    sys    *    *    1    h
@@ -98,7 +98,7 @@ create table db01.table01 (col1 int);
 drop pitr if exists pitr21;
 create pitr pitr21 for database db01 table table01 range 1 'h';
 create pitr pitr22 for database db01 table table02 range 1 'h';
-internal error: table table02 does not exist
+internal error: table db01.table02 does not exist
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
 pitr21    2024-09-13 03:29:43    2024-09-13 03:29:43    table    acc01    db01    table01    1    h

@@ -44,7 +44,9 @@ show table_values from t1 from db;
 use db;
 select * from db.t1;
 
+-- @bvt:issue#14293
 -- @ignore:3,5,10,11,12
 show table status from system;
+-- @bvt:issue
 
 set global enable_privilege_cache = on;

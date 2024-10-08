@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,7 +30,6 @@ import (
 func New(ro bool, attrs []string) *Batch {
 	return &Batch{
 		Ro:       ro,
-		Cnt:      1,
 		Attrs:    attrs,
 		Vecs:     make([]*vector.Vector, len(attrs)),
 		rowCount: 0,
@@ -45,9 +42,14 @@ func NewOffHeap(ro bool, attrs []string) *Batch {
 	return ret
 }
 
+func NewOffHeapEmpty() *Batch {
+	return &Batch{
+		offHeap: true,
+	}
+}
+
 func NewWithSize(n int) *Batch {
 	return &Batch{
-		Cnt:      1,
 		Vecs:     make([]*vector.Vector, n),
 		rowCount: 0,
 	}
@@ -106,7 +108,6 @@ func (bat *Batch) Slice(from, to int) *Batch {
 		Attrs:    bat.Attrs[from:to],
 		Vecs:     bat.Vecs[from:to],
 		rowCount: bat.rowCount,
-		Cnt:      1,
 	}
 
 }
@@ -232,7 +233,6 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	bat.Recursive = types.DecodeInt32(data[:4])
 	data = data[4:]
 	bat.ShuffleIDX = types.DecodeInt32(data[:4])
-	bat.Cnt = 1
 
 	if len(aggs) > 0 {
 		bat.Aggs = make([]aggexec.AggFuncExec, len(aggs))
@@ -311,6 +311,9 @@ func (bat *Batch) SetAttributes(attrs []string) {
 
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
 	bat.Vecs[pos] = vec
+	if vec != nil {
+		vec.SetOffHeap(bat.offHeap)
+	}
 }
 
 func (bat *Batch) GetVector(pos int32) *vector.Vector {
@@ -322,7 +325,12 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 	for i, attr := range bat.Attrs {
 		mp[attr] = i
 	}
-	rbat := NewWithSize(len(cols))
+	var rbat *Batch
+	if bat.offHeap {
+		rbat = NewOffHeapWithSize(len(cols))
+	} else {
+		rbat = NewWithSize(len(cols))
+	}
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
@@ -332,8 +340,7 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 
 func (bat *Batch) Clean(m *mpool.MPool) {
 	// situations that batch was still in use.
-	// we use `!= 0` but not `>0` to avoid the situation that the batch was cleaned more than required.
-	if bat == EmptyBatch || bat == CteEndBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
+	if bat == EmptyBatch || bat == CteEndBatch {
 		return
 	}
 
@@ -527,22 +534,6 @@ func (bat *Batch) SetRowCount(rowCount int) {
 	bat.rowCount = rowCount
 }
 
-func (bat *Batch) AddCnt(cnt int) {
-	atomic.AddInt64(&bat.Cnt, int64(cnt))
-}
-
-// func (bat *Batch) SubCnt(cnt int) {
-// 	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
-// }
-
-func (bat *Batch) SetCnt(cnt int64) {
-	atomic.StoreInt64(&bat.Cnt, cnt)
-}
-
-func (bat *Batch) GetCnt() int64 {
-	return atomic.LoadInt64(&bat.Cnt)
-}
-
 func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector, startIndex int) {
 	for i := startIndex; i < len(bat.Vecs); i++ {
 		if bat.Vecs[i] == oldVec {
@@ -583,6 +574,7 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 		if err != nil {
 			return nil, err
 		}
+		b.Vecs[i].SetOffHeap(bat.offHeap)
 	}
 	b.rowCount = end - start
 	return b, nil

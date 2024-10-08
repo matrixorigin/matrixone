@@ -16,9 +16,9 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"net"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
 
 	"github.com/golang/mock/gomock"
 	"github.com/smartystreets/goconvey/convey"
@@ -27,9 +27,6 @@ import (
 )
 
 func Test_protocol(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
 	convey.Convey("test protocol.go succ", t, func() {
 		req := &Request{}
 		req.SetCmd(1)
@@ -51,21 +48,17 @@ func Test_protocol(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		io, err := NewIOSession(serverConn, pu)
+		io, err := NewIOSession(&testConn{}, pu)
 		convey.ShouldBeNil(err)
 		cpi.tcpConn = io
 
 		str1 := cpi.Peer()
-		convey.So(str1, convey.ShouldEqual, "pipe")
+		convey.So(str1, convey.ShouldEqual, "test addr")
 	})
 }
 
 func Test_SendResponse(t *testing.T) {
 	ctx := context.TODO()
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
 	convey.Convey("SendResponse succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -79,7 +72,7 @@ func Test_SendResponse(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		ioses, err := NewIOSession(&testConn{}, pu)
 		convey.ShouldBeNil(err)
 		mp := &MysqlProtocolImpl{}
 		mp.io = iopackage

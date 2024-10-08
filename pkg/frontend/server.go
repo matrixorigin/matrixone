@@ -350,11 +350,11 @@ var globalAicm atomic.Value
 var moServerStarted atomic.Bool
 var globalSessionAlloc atomic.Value
 
-func getGlobalSessionAlloc() *SessionAllocator {
-	return globalSessionAlloc.Load().(*SessionAllocator)
+func getGlobalSessionAlloc() Allocator {
+	return globalSessionAlloc.Load().(Allocator)
 }
 
-func setGlobalSessionAlloc(s *SessionAllocator) {
+func setGlobalSessionAlloc(s Allocator) {
 	globalSessionAlloc.Store(s)
 }
 

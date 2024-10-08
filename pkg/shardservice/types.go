@@ -77,6 +77,8 @@ type ShardService interface {
 	HasAllLocalReplicas(tableID uint64) (bool, error)
 	// GetShardInfo returns the metadata of the shards corresponding to the table.
 	GetShardInfo(table uint64) (shardTableID uint64, policy pb.Policy, isShardTable bool, err error)
+	// GetShardAllocated returns the allocation of the shards corresponding to the table.
+	GetTableShards(table uint64) (pb.ShardsMetadata, []pb.TableShard, error)
 	// Create creates table shards metadata in current txn. And create shard
 	// binds after txn committed asynchronously. Nothing happened if txn aborted.
 	//

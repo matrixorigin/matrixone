@@ -67,6 +67,9 @@ var (
 	getSqlForCheckAccountFmt = `select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s';`
 
 	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where database_name = '%s';`
+
+	// update mo_pitr object id
+	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set obj_id = %d, modified_time = '%s' where account_name = '%s';`
 )
 
 type pitrRecord struct {
@@ -143,6 +146,10 @@ func getSqlForCheckDupPitrFormat(accountId, objId uint64) string {
 
 func getPubInfoWithPitr(ts int64, dbName string) string {
 	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, dbName)
+}
+
+func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64, modifiedTime string) string {
+	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, objId, modifiedTime, accountName)
 }
 
 func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccountId, objId uint64) (bool, error) {
@@ -405,6 +412,9 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 	case tree.PITRLEVELDATABASE:
 		// create database level pitr for current account
 		databaseName = string(stmt.DatabaseName)
+		if len(databaseName) > 0 && needSkipDb(databaseName) {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create pitr for current database %s", databaseName))
+		}
 		getDatabaseIdFunc := func(dbName string) (dbId uint64, rtnErr error) {
 			var erArray []ExecResult
 			sql, rtnErr = getSqlForCheckDatabase(ctx, dbName)
@@ -471,6 +481,9 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		// create table level pitr for current account
 		databaseName = string(stmt.DatabaseName)
 		tableName = string(stmt.TableName)
+		if len(databaseName) > 0 && needSkipDb(databaseName) {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create pitr for current table %s.%s", databaseName, tableName))
+		}
 		getTableIdFunc := func(dbName, tblName string) (tblId uint64, rtnErr error) {
 			var erArray []ExecResult
 			sql, rtnErr = getSqlForCheckDatabaseTable(ctx, dbName, tblName)
@@ -496,7 +509,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 					}
 				}
 			} else {
-				return 0, moerr.NewInternalErrorf(ctx, "table %s does not exist", tblName)
+				return 0, moerr.NewInternalErrorf(ctx, "table %s.%s does not exist", dbName, tblName)
 			}
 			return tblId, rtnErr
 		}
@@ -712,7 +725,6 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	// check if the database can be restore
 	if len(dbName) != 0 && needSkipDb(dbName) {
 		return moerr.NewInternalErrorf(ctx, "database %s can not be restore", dbName)
-
 	}
 
 	// get pitr Record
@@ -744,7 +756,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 				return rtnErr
 			}
 			if !accountExist {
-				return moerr.NewInternalErrorf(ctx, "account %s does not exist at timestamp %d", tenantInfo.GetTenant(), ts)
+				return moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 			}
 			// mock snapshot
 			var snapshotName string
@@ -825,7 +837,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		return err
 	}
 	if !accountExist {
-		return moerr.NewInternalErrorf(ctx, "account %s does not exist at timestamp %d", tenantInfo.GetTenant(), ts)
+		return moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 	}
 
 	//drop foreign key related tables first
@@ -991,7 +1003,7 @@ func restoreToDatabaseWithPitr(
 		return err
 	}
 	if !databaseExist {
-		return moerr.NewInternalErrorf(ctx, "database '%s' not exists at timestamp %d", dbName, ts)
+		return moerr.NewInternalErrorf(ctx, "database '%s' does not exists at timestamp: %v", dbName, nanoTimeFormat(ts))
 	}
 
 	return restoreToDatabaseOrTableWithPitr(
@@ -1026,7 +1038,7 @@ func restoreToTableWithPitr(
 		return err
 	}
 	if !TableExist {
-		return moerr.NewInternalErrorf(ctx, "database '%s' table '%s' not exists at timestamp %d", dbName, tblName, ts)
+		return moerr.NewInternalErrorf(ctx, "database '%s' table '%s' does not exists at timestamp: %v", dbName, tblName, nanoTimeFormat(ts))
 	}
 	return restoreToDatabaseOrTableWithPitr(
 		ctx,
@@ -1627,6 +1639,19 @@ func nanoTimeFormat(ts int64) string {
 // then return an error
 // if the ts bigger than now(), then return an error
 func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
+	// if the timestamp time less than the pitrRecord modified time, then return error
+	// modified time is utc time string, ts is coverted to utc too
+	modifiedTimeStr := pitrRecord.modifiedTime
+	// parse modifiedTimeStr to utc time
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", modifiedTimeStr, time.UTC)
+	if err != nil {
+		return
+	}
+	utcNano := t.UTC().UnixNano()
+	if ts <= utcNano {
+		moerr.NewInternalErrorNoCtxf("input timestamp %v is less than the pitr valid time %v", nanoTimeFormat(ts), nanoTimeFormat(utcNano))
+	}
+
 	// use utc time now sub pitr during time get the minest time
 	// is ts time less than the minest time, then return error
 	pitrValue := pitrRecord.pitrValue
@@ -1638,12 +1663,12 @@ func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 	}
 
 	if ts < minTs.UnixNano() {
-		return moerr.NewInternalErrorNoCtxf("ts %v is less than the pitr range minest time %v", nanoTimeFormat(ts), nanoTimeFormat(minTs.UnixNano()))
+		return moerr.NewInternalErrorNoCtxf("input timestamp %v is less than the pitr range minest timestamp %v", nanoTimeFormat(ts), nanoTimeFormat(minTs.UnixNano()))
 	}
 
 	// if the ts bigger than now(), then return an error
 	if ts > time.Now().UTC().UnixNano() {
-		return moerr.NewInternalErrorNoCtxf("ts %v is bigger than now %v", nanoTimeFormat(ts), nanoTimeFormat(time.Now().UTC().UnixNano()))
+		return moerr.NewInternalErrorNoCtxf("input timestamp %v is bigger than now timestamp %v", nanoTimeFormat(ts), nanoTimeFormat(time.Now().UTC().UnixNano()))
 	}
 
 	return
@@ -2027,6 +2052,24 @@ func createPubByPitr(
 		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication)); err != nil {
 			return
 		}
+	}
+	return
+}
+
+// updatePitrObjectId
+// if mo_pitr table contains the same account name create account, then update the obj_id of mo_pitr
+// otherwise, skip it
+func updatePitrObjectId(ctx context.Context,
+	bh BackgroundExec,
+	accountName string,
+	objId uint64) (err error) {
+	sql := getSqlForUpdateMoPitrAccountObjectId(
+		accountName,
+		objId,
+		types.CurrentTimestamp().String2(time.UTC, 0))
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return
 	}
 	return
 }

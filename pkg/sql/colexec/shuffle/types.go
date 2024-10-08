@@ -29,7 +29,7 @@ type Shuffle struct {
 	ctr                container
 	ShuffleColIdx      int32
 	ShuffleType        int32
-	AliveRegCnt        int32
+	BucketNum          int32
 	ShuffleColMin      int64
 	ShuffleColMax      int64
 	ShuffleRangeUint64 []uint64
@@ -72,6 +72,7 @@ func (shuffle *Shuffle) Release() {
 
 type container struct {
 	ending               bool
+	lastForShufflePool   bool
 	sels                 [][]int64
 	buf                  *batch.Batch
 	shufflePool          *ShufflePool
@@ -82,6 +83,10 @@ func (shuffle *Shuffle) SetShufflePool(sp *ShufflePool) {
 	shuffle.ctr.shufflePool = sp
 }
 
+func (shuffle *Shuffle) GetShufflePool() *ShufflePool {
+	return shuffle.ctr.shufflePool
+}
+
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if shuffle.RuntimeFilterSpec != nil {
 		shuffle.ctr.runtimeFilterHandled = false
@@ -90,8 +95,14 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 		shuffle.ctr.buf.Clean(proc.Mp())
 	}
 	if shuffle.ctr.shufflePool != nil {
-		shuffle.ctr.shufflePool.Reset(proc.Mp())
+		//shuffle.ctr.shufflePool.Print()
+		if pipelineFailed || err != nil {
+			shuffle.ctr.shufflePool.Reset(proc.Mp(), true)
+		} else if shuffle.ctr.lastForShufflePool {
+			shuffle.ctr.shufflePool.Reset(proc.Mp(), false)
+		}
 	}
+	shuffle.ctr.lastForShufflePool = false
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
 }

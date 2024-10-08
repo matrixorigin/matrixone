@@ -17,9 +17,12 @@ package dbutils
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
+	fcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -78,49 +81,143 @@ func WithRuntimeOptions(opts *options.Options) RuntimeOption {
 type lockedTableInfo struct {
 	lockedAt   time.Time // user txn lock time
 	lockStatus int       // 0 no lock. above 1 user txn lock count
+	indexes    []string
+
+	lockedByNonReentrantLock bool
+}
+
+// Indexes only for tests
+func (l *lockedTableInfo) Indexes() []string {
+	return l.indexes
 }
 
 type LockMergeService struct {
 	rwlock sync.RWMutex
-	locked map[uint64]*lockedTableInfo // map table id to lockedTableInfo
+
+	locked  map[uint64]*lockedTableInfo // map table id to lockedTableInfo
+	indexes map[string]struct{}
+}
+
+// LockedInfos Only for tests
+func (l *LockMergeService) LockedInfos() map[uint64]*lockedTableInfo {
+	return l.locked
+}
+
+// LockedInfos Only for tests
+func (l *LockMergeService) Indexes() map[string]struct{} {
+	return l.indexes
 }
 
 func NewLockMergeService() *LockMergeService {
 	return &LockMergeService{
-		locked: make(map[uint64]*lockedTableInfo),
+		locked:  make(map[uint64]*lockedTableInfo),
+		indexes: make(map[string]struct{}),
 	}
 }
 
-func (l *LockMergeService) IsLockedByUser(id uint64) (isLocked bool) {
+func (l *LockMergeService) IsLockedByUser(id uint64, tblName string) (isLocked bool) {
 	l.rwlock.RLock()
 	defer l.rwlock.RUnlock()
-	info, existed := l.locked[id]
-	return existed && info.lockStatus > 0
+
+	return l.isLockedByUser(id, tblName)
 }
 
-func (l *LockMergeService) LockFromUser(id uint64) {
-	l.rwlock.Lock()
-	defer l.rwlock.Unlock()
-	if info, ok := l.locked[id]; ok {
-		info.lockStatus++
-	} else {
-		l.locked[id] = &lockedTableInfo{
-			lockStatus: 1,
-			lockedAt:   time.Now(),
-		}
+func (l *LockMergeService) isLockedByUser(id uint64, tblName string) bool {
+	if strings.HasPrefix(tblName, fcatalog.PrefixIndexTableName) {
+		_, ok := l.indexes[tblName]
+		return ok
 	}
-}
 
-func (l *LockMergeService) UnlockFromUser(id uint64) {
+	if info, ok := l.locked[id]; ok {
+		return info.lockedByNonReentrantLock || info.lockStatus > 0
+	}
+	return false
+}
+func (l *LockMergeService) LockFromUser(id uint64, tblName string, reentrant bool, indexTableNames ...string) error {
+	if strings.HasPrefix(tblName, fcatalog.PrefixIndexTableName) {
+		if reentrant {
+			return nil
+		}
+		return moerr.NewInternalErrorNoCtx("lock on index")
+	}
+
 	l.rwlock.Lock()
 	defer l.rwlock.Unlock()
-	if info, ok := l.locked[id]; ok {
+
+	if l.isLockedByUser(id, tblName) {
+		if !reentrant {
+			return moerr.NewInternalErrorNoCtxf("%s is already locked", tblName)
+		}
+
+		l.locked[id].lockStatus++
+		return nil
+	}
+
+	lockInfo := &lockedTableInfo{
+		lockedAt: time.Now(),
+		indexes:  indexTableNames,
+	}
+	if reentrant {
+		lockInfo.lockStatus = 1
+	} else {
+		lockInfo.lockedByNonReentrantLock = true
+	}
+
+	l.locked[id] = lockInfo
+	for _, indexTableName := range indexTableNames {
+		l.indexes[indexTableName] = struct{}{}
+	}
+	return nil
+}
+
+func (l *LockMergeService) UnlockFromUser(id uint64, reentrant bool) error {
+	l.rwlock.Lock()
+	defer l.rwlock.Unlock()
+
+	info, ok := l.locked[id]
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("table %d is not locked", id)
+	}
+
+	if reentrant {
 		if info.lockStatus <= 0 {
 			panic("bad lock status")
 		}
 		info.lockStatus--
-	} else {
-		panic("Before UnlockFromUser, call LockFromUser")
+		return nil
+	}
+
+	if !info.lockedByNonReentrantLock {
+		return moerr.NewInternalErrorNoCtxf("table %d is not locked by non-reentrant lock", id)
+	}
+	info.lockedByNonReentrantLock = false
+
+	if !info.lockedByNonReentrantLock && info.lockStatus == 0 {
+		for _, index := range info.indexes {
+			delete(l.indexes, index)
+		}
+		delete(l.locked, id)
+	}
+	return nil
+}
+
+func (l *LockMergeService) PruneStale(id uint64) {
+	l.rwlock.RLock()
+	info := l.locked[id]
+	l.rwlock.RUnlock()
+
+	// The table is index table or locked by non-reentrant lock.
+	if info == nil || info.lockedByNonReentrantLock {
+		return
+	}
+
+	if !info.lockedAt.IsZero() && time.Since(info.lockedAt) > time.Minute*10 {
+		l.rwlock.Lock()
+		delete(l.locked, id)
+		for _, index := range info.indexes {
+			delete(l.indexes, index)
+		}
+		l.rwlock.Unlock()
 	}
 }
 
@@ -129,7 +226,7 @@ func (l *LockMergeService) Prune() {
 	pruned := make([]uint64, 0)
 	for id, info := range l.locked {
 		if !info.lockedAt.IsZero() && time.Since(info.lockedAt) > time.Minute*10 {
-			if info.lockStatus == 0 {
+			if info.lockStatus == 0 && !info.lockedByNonReentrantLock {
 				pruned = append(pruned, id)
 			} else {
 				logutil.Warn(
@@ -137,6 +234,7 @@ func (l *LockMergeService) Prune() {
 					zap.Uint64("tableId", id),
 					zap.Duration("ago", time.Since(info.lockedAt)),
 					zap.Int("lockStatus", info.lockStatus),
+					zap.Bool("non-reentrant", info.lockedByNonReentrantLock),
 				)
 			}
 		}
@@ -148,7 +246,11 @@ func (l *LockMergeService) Prune() {
 		l.rwlock.Lock()
 		defer l.rwlock.Unlock()
 		for _, id := range pruned {
+			info := l.locked[id]
 			delete(l.locked, id)
+			for _, index := range info.indexes {
+				delete(l.indexes, index)
+			}
 		}
 	}
 }

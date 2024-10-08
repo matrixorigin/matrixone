@@ -28,22 +28,20 @@ type ManagedAllocator[U Allocator] struct {
 
 type managedAllocatorShard struct {
 	sync.Mutex
-	items []managedAllocatorItem
+	items map[unsafe.Pointer]Deallocator //TODO use weak pointer if possible
 	_     cpu.CacheLinePad
-}
-
-type managedAllocatorItem struct {
-	//TODO use weak pointer when supported
-	ptr         unsafe.Pointer
-	deallocator Deallocator
 }
 
 func NewManagedAllocator[U Allocator](
 	upstream U,
 ) *ManagedAllocator[U] {
-	return &ManagedAllocator[U]{
+	ret := &ManagedAllocator[U]{
 		upstream: upstream,
 	}
+	for i := range len(ret.inUse) {
+		ret.inUse[i].items = make(map[unsafe.Pointer]Deallocator)
+	}
+	return ret
 }
 
 func (m *ManagedAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, error) {
@@ -66,25 +64,19 @@ func (m *ManagedAllocator[U]) Deallocate(slice []byte, hints Hints) {
 func (m *managedAllocatorShard) allocate(ptr unsafe.Pointer, deallocator Deallocator) {
 	m.Lock()
 	defer m.Unlock()
-	m.items = append(m.items, managedAllocatorItem{
-		ptr:         ptr,
-		deallocator: deallocator,
-	})
+	m.items[ptr] = deallocator
 }
 
 func (m *managedAllocatorShard) deallocate(ptr unsafe.Pointer, hints Hints) {
 	m.Lock()
 	defer m.Unlock()
-	for i := 0; i < len(m.items); i++ {
-		if m.items[i].ptr == ptr {
-			// found
-			m.items[i].deallocator.Deallocate(hints)
-			m.items[i] = m.items[len(m.items)-1]
-			m.items = m.items[:len(m.items)-1]
-			return
-		}
+	deallocator, ok := m.items[ptr]
+	if !ok {
+		panic("bad pointer")
+	} else {
+		deallocator.Deallocate(hints)
+		delete(m.items, ptr)
 	}
-	panic("bad pointer")
 }
 
 func hashPointer(ptr uintptr) uint8 {

@@ -256,7 +256,6 @@ func makeUnnestBatch(jsons []string, typ types.T, fn func(str string) ([]byte, e
 	for i := range bat.Vecs {
 		bat.Vecs[i] = vector.NewVec(types.New(typ, 256, 0))
 	}
-	bat.Cnt = 1
 	for _, json := range jsons {
 		bjBytes, err := fn(json)
 		if err != nil {

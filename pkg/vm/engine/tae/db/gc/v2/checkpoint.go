@@ -531,6 +531,7 @@ func (c *checkpointCleaner) getDeleteFile(
 	idx int,
 	ts, stage types.TS,
 	ckpSnapList []types.TS,
+	pitr *types.TS,
 ) ([]string, []*checkpoint.CheckpointEntry, error) {
 	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(ctx, c.sid, fs, files, idx, ts, true)
 	if err != nil {
@@ -551,8 +552,9 @@ func (c *checkpointCleaner) getDeleteFile(
 		ckp := ckps[i]
 		end := ckp.GetEnd()
 		if end.LT(&stage) {
-			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) &&
-				ckp.GetType() != checkpoint.ET_Global {
+			if (!pitr.IsEmpty() && end.GE(pitr)) ||
+				(isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) &&
+					ckp.GetType() != checkpoint.ET_Global) {
 				// TODO: remove this log
 				logutil.Info("[MergeCheckpoint]",
 					common.OperationField("isSnapshotCKPRefers"),
@@ -597,7 +599,7 @@ func (c *checkpointCleaner) getDeleteFile(
 	return deleteFiles, mergeFiles, nil
 }
 
-func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS) error {
+func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS, pitrs *logtail.PitrInfo) error {
 	if stage.IsEmpty() ||
 		(c.GeteCkpStage() != nil && c.GeteCkpStage().GE(&stage)) {
 		return nil
@@ -616,7 +618,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 	if ckpGC == nil {
 		ckpGC = new(types.TS)
 	}
-	deleteFiles := make([]string, 0)
+	delFiles := make([]string, 0)
 	ckpSnapList := make([]types.TS, 0)
 	for _, ts := range snapshotList {
 		ckpSnapList = append(ckpSnapList, ts...)
@@ -624,38 +626,48 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 	sort.Slice(ckpSnapList, func(i, j int) bool {
 		return ckpSnapList[i].LT(&ckpSnapList[j])
 	})
+	pitrList := pitrs.ToTsList()
+	sort.Slice(pitrList, func(i, j int) bool {
+		return pitrList[i].LT(&pitrList[j])
+	})
+	pitr := types.TS{}
+	pitrCount := len(pitrList)
+	if pitrCount > 0 {
+		pitr = pitrList[len(pitrList)-1]
+		logutil.Info("[MergeCheckpoint] Pitr", zap.Int("pitrCount", pitrCount))
+	}
 	for _, idx := range idxes {
 		logutil.Info("[MergeCheckpoint]",
 			common.OperationField("MergeCheckpointFiles"),
 			common.OperandField(stage.ToString()),
 			common.OperandField(idx))
-		delFiles, mergeFile, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList)
+		dFiles, mergeFiles, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList, &pitr)
 		if err != nil {
 			return err
 		}
 		ckpGC = new(types.TS)
-		deleteFiles = append(deleteFiles, delFiles...)
+		delFiles = append(delFiles, dFiles...)
 		var newName string
-		delFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFile, c.GetInputs(), c.mPool)
+		dFiles, newName, err = MergeCheckpoint(c.ctx, c.sid, c.fs.Service, mergeFiles, c.GetInputs(), c.mPool)
 		if err != nil {
 			return err
 		}
 		if newName != "" {
 			c.ckpClient.AddCheckpointMetaFile(newName)
 		}
-		deleteFiles = append(deleteFiles, delFiles...)
+		delFiles = append(delFiles, dFiles...)
 	}
 
 	logutil.Info("[MergeCheckpoint]",
-		common.OperationField("CKP GC"),
-		common.OperandField(deleteFiles))
+		common.OperationField("Checkpoint-GC"),
+		common.OperandField(delFiles))
 	if !c.disableGC {
-		err = c.fs.DelFiles(c.ctx, deleteFiles)
+		err = c.fs.DelFiles(c.ctx, delFiles)
 		if err != nil {
 			logutil.Errorf("DelFiles failed: %v", err.Error())
 			return err
 		}
-		for _, file := range deleteFiles {
+		for _, file := range delFiles {
 			if strings.Contains(file, checkpoint.PrefixMetadata) {
 				info := strings.Split(file, checkpoint.CheckpointDir+"/")
 				name := info[1]
@@ -732,7 +744,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		logutil.Infof("[DiskCleaner] ExecDelete failed: %v", err.Error())
 		return err
 	}
-	err = c.mergeCheckpointFiles(c.ckpClient.GetStage(), snapshotList)
+	err = c.mergeCheckpointFiles(c.ckpClient.GetStage(), snapshotList, pitrs)
 
 	if err != nil {
 		// TODO: Error handle
