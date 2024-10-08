@@ -110,3 +110,22 @@ select t1.a=t2.a from t1,(select a from t1  where b=2)as t2 where b=1;
 drop table t1;
 
 select timestampdiff(second, t1, t2), a from (select sysdate() as t1, sleep(2) as a, sysdate() as t2);
+
+-- @ignore:0
+select time(now());
+-- @ignore:0
+select date(now());
+-- @ignore:0
+select timestamp(now());
+-- @ignore:0
+select year(now());
+-- @ignore:0
+select month(now());
+-- @ignore:0
+select day(now());
+-- @ignore:0
+select hour(now());
+-- @ignore:0
+select minute(now());
+-- @ignore:0
+select second(now());

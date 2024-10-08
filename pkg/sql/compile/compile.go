@@ -1588,6 +1588,16 @@ func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.Exter
 	return ss, nil
 }
 
+func GetExternParallelSize(totalSize int64, cpuNum int) int {
+	parallelSize := int(totalSize / int64(colexec.WriteS3Threshold))
+	if parallelSize < 1 {
+		return 1
+	} else if parallelSize < cpuNum {
+		return parallelSize
+	}
+	return cpuNum
+}
+
 func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	visibleCols := make([]*plan.ColDef, 0)
 	if param.Strict {
@@ -1619,46 +1629,52 @@ func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.E
 		}
 	}
 
+	parallelSize := GetExternParallelSize(fileSize[0], mcpu)
+
 	var fileOffset [][]int64
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
-		arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], visibleCols)
+		arr, err := external.ReadFileOffset(param, parallelSize, fileSize[i], visibleCols)
 		fileOffset = append(fileOffset, arr)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	ss := make([]*Scope, len(c.cnList))
+	var ss []*Scope
 	pre := 0
 	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
-		ss[i].IsLoad = true
-		count := ID2Addr[i]
+	for i := 0; i < len(c.cnList); i++ {
+		scope := c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
+		ss = append(ss, scope)
+		scope.IsLoad = true
+		count := min(parallelSize, ID2Addr[i])
+		scope.NodeInfo.Mcpu = count
 		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 		for j := range fileOffsetTmp {
 			preIndex := pre
 			fileOffsetTmp[j] = &pipeline.FileOffset{}
 			fileOffsetTmp[j].Offset = make([]int64, 0)
-			if param.Parallel {
-				if param.Strict {
-					if 2*preIndex+2*count < len(fileOffset[j]) {
-						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-					} else if 2*preIndex < len(fileOffset[j]) {
-						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
-					} else {
-						continue
-					}
-				} else {
+			if param.Strict {
+				if 2*preIndex+2*count < len(fileOffset[j]) {
 					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+				} else if 2*preIndex < len(fileOffset[j]) {
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+				} else {
+					continue
 				}
+			} else {
+				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
 			}
 		}
 		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].setRootOperator(op)
+		scope.setRootOperator(op)
 		pre += count
+		if parallelSize <= count {
+			break
+		}
+		parallelSize -= count
 	}
 	c.anal.isFirst = false
 	return ss, nil
