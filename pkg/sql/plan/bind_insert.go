@@ -289,12 +289,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
 					PrimaryColIdxInBat: int32(colName2Idx[tableDef.Name+"."+col.Name]),
+					PrimaryColRelPos:   selectNodeTag,
 					PrimaryColTyp:      col.Typ,
 				}
 				if partitionExpr != nil {
 					lockTarget.IsPartitionTable = true
 					lockTarget.PartitionTableIds = updateCtx.PartitionTableIds
 					lockTarget.FilterColIdxInBat = updateCtx.PartitionIdx
+					lockTarget.FilterColRelPos = selectNodeTag
 				}
 				lockTargets = append(lockTargets, lockTarget)
 			}
@@ -331,6 +333,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 					lockTargets = append(lockTargets, &plan.LockTarget{
 						TableId:            idxTableDef.TblId,
 						PrimaryColIdxInBat: int32(colName2Idx[idxTableDef.Name+"."+col.Name]),
+						PrimaryColRelPos:   selectNodeTag,
 						PrimaryColTyp:      col.Typ,
 					})
 				}
@@ -371,7 +374,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 			NodeType:    plan.Node_LOCK_OP,
 			Children:    []int32{lastNodeID},
 			TableDef:    dmlCtx.tableDefs[0],
-			BindingTags: []int32{builder.genNewTag(), selectNodeTag},
+			BindingTags: []int32{builder.genNewTag()},
 			LockTargets: lockTargets,
 		}, bindCtx)
 

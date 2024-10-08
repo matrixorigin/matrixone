@@ -214,10 +214,6 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewInvalidInput(ctx.GetContext(), "Cannot insert/update/delete from sequence")
 	}
 
-	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		return moerr.NewUnsupportedDML(ctx.GetContext(), "no primary key")
-	}
-
 	if len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0 {
 		return moerr.NewUnsupportedDML(ctx.GetContext(), "foreign key constraint")
 	}
