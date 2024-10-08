@@ -672,11 +672,9 @@ func (tbl *txnTable) doRanges(
 		return
 	}
 
-	data = &engine_util.BlockListRelData{}
-	for i := range blocks.Len() {
-		data.AppendBlockInfo(blocks.Get(i))
-	}
-
+	blklist := &engine_util.BlockListRelData{}
+	blklist.SetBlockList(blocks)
+	data = blklist
 	return
 }
 
