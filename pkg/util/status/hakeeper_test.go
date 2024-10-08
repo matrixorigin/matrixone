@@ -50,6 +50,10 @@ func (c *mockHAKeeperClient) GetClusterState(ctx context.Context) (pb.CheckerSta
 	return pb.CheckerState{}, nil
 }
 
+func (c *mockHAKeeperClient) CheckLogServiceHealth(_ context.Context) error {
+	return nil
+}
+
 func (c *mockHAKeeperClient) addCNStore() {
 	c.details.CNStores = append(c.details.CNStores, pb.CNStore{
 		SQLAddress: "127.0.0.1:8000",
