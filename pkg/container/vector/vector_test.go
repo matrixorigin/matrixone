@@ -2257,7 +2257,7 @@ func TestRowToString(t *testing.T) {
 		v := NewVec(types.T_array_float64.ToType())
 		err := AppendArrayList(v, [][]float64{{1, 1}}, nil, mp)
 		require.NoError(t, err)
-		require.Equal(t, "[1, 1]", v.RowToString(1))
+		require.Equal(t, "[1, 1]", v.RowToString(0))
 		err = AppendArrayList(v, [][]float64{{2, 2}, {3, 3}}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, "[2, 2]", v.RowToString(1))

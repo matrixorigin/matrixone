@@ -82,7 +82,11 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			ctr.state = Probe
+			if ctr.mp == nil && !dedupJoin.IsShuffle {
+				ctr.state = End
+			} else {
+				ctr.state = Probe
+			}
 
 		case Probe:
 			result, err = vm.ChildrenCall(dedupJoin.GetChildren(0), proc, analyzer)
