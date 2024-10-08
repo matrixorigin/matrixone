@@ -103,7 +103,6 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
 				return input, err
 			}
-			bat.Cnt = 1
 			pIndex := partitionIdxs[i]
 			err = mergeDelete.ctr.partitionSources[pIndex].Delete(proc.Ctx, bat, name)
 			if err != nil {
@@ -118,7 +117,6 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
 				return input, err
 			}
-			bat.Cnt = 1
 			err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, name)
 			if err != nil {
 				return input, err

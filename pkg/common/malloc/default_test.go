@@ -20,20 +20,56 @@ import (
 
 func TestDefaultAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
-		return GetDefault(nil)
+		return newDefault(nil)
 	})
 }
 
 func BenchmarkDefaultAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
-			return GetDefault(nil)
+			return newDefault(nil)
 		}, n)
 	}
 }
 
 func FuzzDefaultAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
-		return GetDefault(nil)
+		return newDefault(nil)
 	})
+}
+
+func TestDefaultCAllocator(t *testing.T) {
+	testAllocator(t, func() Allocator {
+		return newDefault(&Config{
+			Allocator: ptrTo("c"),
+		})
+	})
+}
+
+func BenchmarkDefaultCAllocator(b *testing.B) {
+	for _, n := range benchNs {
+		benchmarkAllocator(b, func() Allocator {
+			return newDefault(&Config{
+				Allocator: ptrTo("c"),
+			})
+		}, n)
+	}
+}
+
+func TestDefaultGoAllocator(t *testing.T) {
+	testAllocator(t, func() Allocator {
+		return newDefault(&Config{
+			Allocator: ptrTo("go"),
+		})
+	})
+}
+
+func BenchmarkDefaultGoAllocator(b *testing.B) {
+	for _, n := range benchNs {
+		benchmarkAllocator(b, func() Allocator {
+			return newDefault(&Config{
+				Allocator: ptrTo("go"),
+			})
+		}, n)
+	}
 }

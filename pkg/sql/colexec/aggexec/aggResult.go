@@ -45,8 +45,8 @@ func (r *basicResult) init(
 	}
 	r.mg = mg
 	r.mp = mg.Mp()
-	r.res = vector.NewVec(typ)
-	r.ess = vector.NewVec(types.T_bool.ToType())
+	r.res = vector.NewOffHeapVecWithType(typ)
+	r.ess = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 }
 
 func (r *basicResult) extend(more int) (oldLen, newLen int, err error) {

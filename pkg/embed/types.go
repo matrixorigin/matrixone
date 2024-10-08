@@ -23,6 +23,7 @@ type Cluster interface {
 	ID() uint64
 	Start() error
 	Close() error
+	StartNewCNService(n int) error
 	GetService(sid string) (ServiceOperator, error)
 	GetCNService(index int) (ServiceOperator, error)
 	ForeachServices(fn func(ServiceOperator) bool)
