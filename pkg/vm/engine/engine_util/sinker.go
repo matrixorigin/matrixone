@@ -84,19 +84,19 @@ type FSinkerImpl struct {
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
-	sortKeyPos    int
-	isPrimaryKey  bool
-	isTombstone   bool
-	seqnums       []uint16
-	schemaVersion uint32
-	withHidden    bool
+	sortKeyPos      int
+	isPrimaryKey    bool
+	isTombstone     bool
+	seqnums         []uint16
+	schemaVersion   uint32
+	hiddenSelection objectio.HiddenColumnSelection
 }
 
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
 		if s.isTombstone {
 			s.writer = blockio.ConstructTombstoneWriter(
-				s.withHidden,
+				s.hiddenSelection,
 				s.fs,
 			)
 		} else {
@@ -150,13 +150,13 @@ func (s *FSinkerImpl) Close() error {
 type FileSinkerFactory func(*mpool.MPool, fileservice.FileService) FileSinker
 
 // This factory is used to create a FileSinker for tombstone
-// withHidden: whether to write hidden tombstone
+// hiddenSelection: whether to write hidden tombstone
 //
 //	true: TN created tombstone objects
 //	false: CN created tombstone objects
-func NewTombstoneFSinkerImplFactory(withHidden bool) FileSinkerFactory {
+func NewTombstoneFSinkerImplFactory(hidden objectio.HiddenColumnSelection) FileSinkerFactory {
 	return func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
-		return NewTombstoneFSinkerImpl(withHidden, mp, fs)
+		return NewTombstoneFSinkerImpl(hidden, mp, fs)
 	}
 }
 
@@ -183,15 +183,15 @@ func NewFSinkerImplFactory(
 }
 
 func NewTombstoneFSinkerImpl(
-	withHidden bool,
+	hidden objectio.HiddenColumnSelection,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) *FSinkerImpl {
 	return &FSinkerImpl{
-		fs:          fs,
-		mp:          mp,
-		isTombstone: true,
-		withHidden:  withHidden,
+		fs:              fs,
+		mp:              mp,
+		isTombstone:     true,
+		hiddenSelection: hidden,
 	}
 }
 
@@ -216,14 +216,14 @@ func NewFSinkerImpl(
 }
 
 func NewTombstoneSinker(
-	withHidden bool,
+	hidden objectio.HiddenColumnSelection,
 	pkType types.Type,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	opts ...SinkerOption,
 ) *Sinker {
-	factory := NewTombstoneFSinkerImplFactory(withHidden)
-	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, withHidden)
+	factory := NewTombstoneFSinkerImplFactory(hidden)
+	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, hidden)
 	return NewSinker(
 		objectio.TombstonePrimaryKeyIdx,
 		attrs,

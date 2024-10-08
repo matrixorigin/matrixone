@@ -113,6 +113,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 		bat := engine_util.NewCNTombstoneBatch(
 			&int32Type,
+			objectio.HiddenColumnSelection_None,
 		)
 
 		for j := 0; j < 10; j++ {
