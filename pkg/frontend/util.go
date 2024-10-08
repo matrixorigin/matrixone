@@ -815,8 +815,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					nsp.Add(uint64(rowIdx))
 					continue
 				}
-				var val int8
-				val = row[colIdx].(int8)
+				val := row[colIdx].(int8)
 				err := vector.AppendFixed[int8](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -828,8 +827,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					nsp.Add(uint64(rowIdx))
 					continue
 				}
-				var val int16
-				val = row[colIdx].(int16)
+				val := row[colIdx].(int16)
 				err := vector.AppendFixed[int16](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -841,8 +839,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					nsp.Add(uint64(rowIdx))
 					continue
 				}
-				var val int32
-				val = row[colIdx].(int32)
+
+				val := row[colIdx].(int32)
 				err := vector.AppendFixed[int32](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -854,8 +852,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					nsp.Add(uint64(rowIdx))
 					continue
 				}
-				var val int64
-				val = row[colIdx].(int64)
+				val := row[colIdx].(int64)
 				err := vector.AppendFixed[int64](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -867,8 +864,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					nsp.Add(uint64(rowIdx))
 					continue
 				}
-				var val float64
-				val = row[colIdx].(float64)
+
+				val := row[colIdx].(float64)
 				err := vector.AppendFixed[float64](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -880,8 +877,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					nsp.Add(uint64(rowIdx))
 					continue
 				}
-				var val float32
-				val = row[colIdx].(float32)
+
+				val := row[colIdx].(float32)
 				err := vector.AppendFixed[float32](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -893,8 +890,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					nsp.Add(uint64(rowIdx))
 					continue
 				}
-				var val types.Date
-				val = row[colIdx].(types.Date)
+				val := row[colIdx].(types.Date)
 				err := vector.AppendFixed[types.Date](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -906,8 +902,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					nsp.Add(uint64(rowIdx))
 					continue
 				}
-				var val types.Time
-				val = row[colIdx].(types.Time)
+				val := row[colIdx].(types.Time)
 				err := vector.AppendFixed[types.Time](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -919,8 +914,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					nsp.Add(uint64(rowIdx))
 					continue
 				}
-				var val types.Datetime
-				val = row[colIdx].(types.Datetime)
+				val := row[colIdx].(types.Datetime)
 				err := vector.AppendFixed[types.Datetime](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -945,7 +939,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				default:
 					return nil, nil, moerr.NewInternalErrorNoCtxf("%v can't convert to timestamp type", v)
 				}
-				err := vector.AppendFixed(bat.Vecs[colIdx], val, false, pool)
+				err := vector.AppendFixed[types.Timestamp](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -956,9 +950,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					nsp.Add(uint64(rowIdx))
 					continue
 				}
-				var val types.Enum
-				val = row[colIdx].(types.Enum)
-				err := vector.AppendFixed(bat.Vecs[colIdx], val, false, pool)
+
+				val := row[colIdx].(types.Enum)
+				err := vector.AppendFixed[types.Enum](bat.Vecs[colIdx], val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
