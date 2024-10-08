@@ -493,7 +493,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 		err error,
 	) {
 		if maxFile == "" {
-			newMaxFile = GCMetaDir + thisFile
+			newMaxFile = thisFile
 			newMaxTS = *thisTS
 			logutil.Info(
 				"GC-TRACE-DELETE-SNAPSHOT-FILE",
@@ -501,13 +501,12 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 				zap.String("max-file", newMaxFile),
 				zap.String("max-ts", newMaxTS.ToString()),
 			)
-			delete(metaFiles, thisFile)
 			return
 		}
 		if maxTS.LT(thisTS) {
-			newMaxFile = GCMetaDir + thisFile
+			newMaxFile = thisFile
 			newMaxTS = *thisTS
-			if err = c.fs.Delete(maxFile); err != nil {
+			if err = c.fs.Delete(GCMetaDir + maxFile); err != nil {
 				logutil.Error(
 					"GC-DELETE-SNAPSHOT-FILE-ERROR",
 					zap.String("task", c.TaskNameLocked()),
@@ -525,7 +524,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 				zap.String("max-ts", newMaxTS.ToString()),
 			)
 			// TODO: seem to be a bug
-			delete(metaFiles, thisFile)
+			delete(metaFiles, maxFile)
 			return
 		}
 
