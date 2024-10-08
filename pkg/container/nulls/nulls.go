@@ -423,11 +423,11 @@ func (nsp *Nulls) ToArray() []uint64 {
 	return nsp.np.ToArray()
 }
 
-func (nsp *Nulls) ToI64Arrary() []int64 {
+func (nsp *Nulls) ToI64Array() []int64 {
 	if nsp == nil || nsp.np.EmptyByFlag() {
 		return []int64{}
 	}
-	return nsp.np.ToI64Arrary()
+	return nsp.np.ToI64Array()
 }
 
 func (nsp *Nulls) GetCardinality() int {

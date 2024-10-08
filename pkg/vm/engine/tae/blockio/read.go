@@ -348,7 +348,7 @@ func BlockDataReadBackup(
 	if err != nil {
 		return
 	}
-	rows := tombstones.ToI64Arrary()
+	rows := tombstones.ToI64Array()
 	if len(rows) > 0 {
 		loaded.Shrink(rows, true)
 	}
@@ -438,7 +438,7 @@ func BlockDataReadInner(
 	// transform delete mask to deleted rows
 	// TODO: avoid this transformation
 	if !deleteMask.IsEmpty() {
-		deletedRows = deleteMask.ToI64Arrary()
+		deletedRows = deleteMask.ToI64Array()
 		// logutil.Debugf("deleted/length: %d/%d=%f",
 		// 	len(deletedRows),
 		// 	loaded.Vecs[0].Length(),
