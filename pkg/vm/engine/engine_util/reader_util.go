@@ -30,8 +30,12 @@ func WithColumns(
 	seqnums []uint16, colTypes []types.Type,
 ) ReaderOption {
 	return func(r *reader) {
+		if len(seqnums) != len(colTypes) {
+			panic("seqnums and colTypes should have the same length")
+		}
 		r.columns.seqnums = seqnums
 		r.columns.colTypes = colTypes
+		r.columns.phyAddrPos = objectio.MustGetPhysicalColumnPosition(seqnums, colTypes)
 	}
 }
 
@@ -51,12 +55,6 @@ func WithMemFilter(filter MemPKFilter) ReaderOption {
 	}
 }
 
-func WithTombstone() ReaderOption {
-	return func(r *reader) {
-		r.isTombstone = true
-	}
-}
-
 func NewSimpleReader(
 	ctx context.Context,
 	ds engine.DataSource,
@@ -71,6 +69,7 @@ func NewSimpleReader(
 		},
 		source: ds,
 	}
+	r.columns.phyAddrPos = -1
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -100,7 +99,6 @@ func SimpleTombstoneObjectReader(
 	ts timestamp.Timestamp, // only used for appendable object
 	opts ...ReaderOption,
 ) engine.Reader {
-	opts = append(opts, WithTombstone())
 	return SimpleObjectReader(
 		ctx, fs, obj, ts, opts...,
 	)

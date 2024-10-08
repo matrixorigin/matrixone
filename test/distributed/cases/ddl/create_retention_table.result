@@ -217,8 +217,8 @@ insert into aff01 values (1,1), (2,2), (3,3);
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
 test01    aff01    1726139310
-select sleep(2);
-sleep(2)
+select sleep(3);
+sleep(3)
 0
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)

@@ -482,9 +482,6 @@ func (c *clientConn) Close() error {
 		}
 		c.mysqlProto.Close()
 	}
-	if c.queryClient != nil {
-		return c.queryClient.Close()
-	}
 	return nil
 }
 
