@@ -11035,3 +11035,117 @@ func Test_checkPitrDup(t *testing.T) {
 		convey.So(isDup, convey.ShouldBeTrue)
 	})
 }
+
+func TestDoGrantPrivilegeImplicitly(t *testing.T) {
+	convey.Convey("do grant privilege implicitly for create database succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx)
+		ses.rm = rm
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+		stmt := &tree.CreateDatabase{
+			Name: tree.Identifier("abc"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForRoleIdOfRole(ctx, tenant.DefaultRole)
+		convey.So(err, convey.ShouldBeNil)
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{{5}})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabase(ctx, "abc")
+		convey.So(err, convey.ShouldBeNil)
+		mrs = newMrsForPasswordOfUser([][]interface{}{{1}})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForCheckRoleHasPrivilege(5, objectTypeDatabase, 1, int64(PrivilegeTypeDatabaseOwnership))
+		mrs = newMrsForPasswordOfUser([][]interface{}{{5, true}})
+		bh.sql2result[sql] = mrs
+
+		err = doGrantPrivilegeImplicitly(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestDoRevokePrivilegeImplicitly(t *testing.T) {
+	convey.Convey("do revoke privilege implicitly for drop database succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx)
+		ses.rm = rm
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+		stmt := &tree.DropDatabase{
+			Name: tree.Identifier("abc"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForRoleIdOfRole(ctx, tenant.DefaultRole)
+		convey.So(err, convey.ShouldBeNil)
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{{5}})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabase(ctx, "abc")
+		convey.So(err, convey.ShouldBeNil)
+		mrs = newMrsForPasswordOfUser([][]interface{}{{1}})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForCheckRoleHasPrivilege(5, objectTypeDatabase, 1, int64(PrivilegeTypeDatabaseOwnership))
+		mrs = newMrsForPasswordOfUser([][]interface{}{{5, true}})
+		bh.sql2result[sql] = mrs
+
+		err = doRevokePrivilegeImplicitly(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
