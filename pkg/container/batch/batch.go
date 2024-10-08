@@ -29,7 +29,6 @@ import (
 
 func New(ro bool, attrs []string) *Batch {
 	return &Batch{
-		Ro:       ro,
 		Attrs:    attrs,
 		Vecs:     make([]*vector.Vector, len(attrs)),
 		rowCount: 0,
@@ -104,7 +103,6 @@ func SetLength(bat *Batch, n int) {
 
 func (bat *Batch) Slice(from, to int) *Batch {
 	return &Batch{
-		Ro:       bat.Ro,
 		Attrs:    bat.Attrs[from:to],
 		Vecs:     bat.Vecs[from:to],
 		rowCount: bat.rowCount,

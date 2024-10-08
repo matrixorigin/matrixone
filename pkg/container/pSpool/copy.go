@@ -137,7 +137,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 		case signal = <-cb.freeBatchPointer:
 			dst = signal.pointer
 			dst.Recursive = src.Recursive
-			dst.Ro = src.Ro
 			dst.ShuffleIDX = src.ShuffleIDX
 
 		case <-senderCtx.Done():
