@@ -133,7 +133,7 @@ func NewCodecService(
 	udfService udf.Service,
 	engine engine.Engine,
 ) ProcessCodecService {
-	mp, err := mpool.NewMPool("codec", 1024*1024*32, mpool.NoFixed)
+	mp, err := mpool.NewMPool("codec", 1<<40, mpool.NoFixed)
 	if err != nil {
 		panic(err)
 	}

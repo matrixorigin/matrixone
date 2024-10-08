@@ -371,20 +371,13 @@ func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
 }
 
 func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
-	bat, ok := proc.Base.valueScanBatch[key]
-	if ok {
-		bat.SetCnt(1000) // make sure this batch wouldn't be cleaned
-		return bat
-		// delete(proc.valueScanBatch, key)
-	}
-	return bat
+	return proc.Base.valueScanBatch[key]
 }
 
 func (proc *Process) CleanValueScanBatchs() {
 	mp := proc.Mp()
 	for k, bat := range proc.Base.valueScanBatch {
 		if bat != nil {
-			bat.SetCnt(1)
 			bat.Clean(mp)
 		}
 		// todo: why not remake the map after all clean ?

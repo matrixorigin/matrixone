@@ -53,6 +53,7 @@ func TestTombstoneData1(t *testing.T) {
 		require.NoError(t, err)
 		bat := NewCNTombstoneBatch(
 			&int32Type,
+			objectio.HiddenColumnSelection_None,
 		)
 		for j := 0; j < 10; j++ {
 			row := types.RandomRowid()

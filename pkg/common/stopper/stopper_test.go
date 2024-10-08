@@ -16,11 +16,13 @@ package stopper
 
 import (
 	"context"
+	"io"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRunTaskOnNotRunning(t *testing.T) {
@@ -67,7 +69,29 @@ func TestRunTaskWithTimeout(t *testing.T) {
 
 	s.Stop()
 	assert.Equal(t, 1, len(names))
-	assert.Equal(t, "timeout", names[0])
+	assert.Contains(t, names[0], "timeout")
+}
+
+func TestRunNamedRetryTask(t *testing.T) {
+	s := NewStopper("TestRunNamedRetryTask")
+
+	called := 0
+	err := s.RunNamedRetryTask(
+		"retry",
+		0,
+		2,
+		func(ctx context.Context, _ int32) error {
+			called++
+			if called == 0 {
+				return io.EOF
+			}
+			return nil
+		},
+	)
+	require.NoError(t, err)
+
+	s.Stop()
+	require.Equal(t, 1, called)
 }
 
 func BenchmarkRunTask1000(b *testing.B) {

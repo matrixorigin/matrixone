@@ -358,7 +358,6 @@ func Test_decodeBatch(t *testing.T) {
 		Recursive:  0,
 		Ro:         false,
 		ShuffleIDX: 0,
-		Cnt:        1,
 		Attrs:      []string{"1"},
 		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
 		Aggs:       []aggexec.AggFuncExec{agg0},

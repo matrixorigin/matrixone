@@ -195,3 +195,10 @@ func TestRangeShuffleSlice(t *testing.T) {
 	require.Equal(t, GetRangeShuffleIndexUnsignedSlice([]uint64{10001, 10002, 10003, 10004, 10005, 10006}, 10006), uint64(5))
 	require.Equal(t, GetRangeShuffleIndexUnsignedSlice([]uint64{30, 50, 60, 90, 120}, 61), uint64(3))
 }
+
+func TestGetShuffleDop(t *testing.T) {
+	n := GetShuffleDop(4, 2, 100000000000)
+	require.Equal(t, 16, n)
+	n = GetShuffleDop(64, 1, 10000000000000)
+	require.Equal(t, 64, n)
+}

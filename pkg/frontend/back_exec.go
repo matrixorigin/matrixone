@@ -915,7 +915,7 @@ func (backSes *backSession) GetLogger() SessionLogger {
 }
 
 func (backSes *backSession) getMOLogger() *log.MOLogger {
-	if backSes.upstream == nil {
+	if backSes.upstream == nil || backSes.upstream.logger == nil {
 		return getLogger(backSes.GetService())
 	} else {
 		return backSes.upstream.logger

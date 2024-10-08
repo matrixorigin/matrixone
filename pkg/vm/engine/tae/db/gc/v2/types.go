@@ -160,6 +160,7 @@ type Cleaner interface {
 	// for test
 	SetMinMergeCountForTest(count int)
 	GetMinMerged() *checkpoint.CheckpointEntry
+	GeteCkpStage() *types.TS
 	CheckGC() error
 	GetPITRs() (*logtail.PitrInfo, error)
 	GetInputs() *GCTable
