@@ -1649,7 +1649,7 @@ func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 	}
 	utcNano := t.UTC().UnixNano()
 	if ts <= utcNano {
-		moerr.NewInternalErrorNoCtxf("input timestamp %v is less than the pitr valid time %v", nanoTimeFormat(ts), nanoTimeFormat(utcNano))
+		return moerr.NewInternalErrorNoCtxf("input timestamp %v is less than the pitr valid time %v", nanoTimeFormat(ts), nanoTimeFormat(utcNano))
 	}
 
 	// use utc time now sub pitr during time get the minest time
