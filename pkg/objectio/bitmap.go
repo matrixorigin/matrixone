@@ -30,7 +30,7 @@ const (
 
 func BitmapPoolReport() string {
 	return fmt.Sprintf(
-		"Runtime-State-BitmapPool: [%d/%d]",
+		"Runtime-State-BitmapPool-Report: [%d/%d]",
 		BitmapPool.InUseCount(),
 		BitmapPoolSize,
 	)

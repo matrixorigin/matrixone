@@ -310,8 +310,6 @@ func (r *Runtime) PoolUsageReport() {
 	w.WriteString(r.VectorPool.Transient.String())
 	w.WriteByte('\n')
 	w.WriteString(r.VectorPool.Small.String())
-	w.WriteByte('\n')
-	w.WriteString(objectio.BitmapPoolReport())
 	logutil.Info(w.String())
 }
 
