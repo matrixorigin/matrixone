@@ -15,10 +15,11 @@
 package vector
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func BenchmarkGetStrValue1(b *testing.B) {
@@ -97,4 +98,61 @@ func TestPreExtendAndReset(t *testing.T) {
 
 	wrapper.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestReuseFunctionParameter(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	vec := NewVec(types.T_varchar.ToType())
+	for i := uint64(0); i < 10; i++ {
+		err := appendOneBytes(vec, []byte("x"), false, mp)
+		require.NoError(t, err)
+	}
+	g1 := GenerateFunctionStrParameter(vec)
+	ok := ReuseFunctionStrParameter(vec, g1)
+	require.Equal(t, true, ok)
+
+	err := appendOneBytes(vec, []byte("x"), true, mp)
+	require.NoError(t, err)
+	g1 = GenerateFunctionStrParameter(vec)
+	ok = ReuseFunctionStrParameter(vec, g1)
+	require.Equal(t, true, ok)
+
+	vec.CleanOnlyData()
+	vec.SetClass(CONSTANT)
+	g1 = GenerateFunctionStrParameter(vec)
+	ok = ReuseFunctionStrParameter(vec, g1)
+	require.Equal(t, true, ok)
+
+	err = appendOneBytes(vec, []byte("x"), false, mp)
+	require.NoError(t, err)
+	g1 = GenerateFunctionStrParameter(vec)
+	ok = ReuseFunctionStrParameter(vec, g1)
+	require.Equal(t, true, ok)
+
+	vec1 := NewVec(types.T_int32.ToType())
+	for i := uint64(0); i < 10; i++ {
+		err = appendOneFixed(vec1, i, false, mp)
+		require.NoError(t, err)
+	}
+	g2 := GenerateFunctionFixedTypeParameter[int32](vec1)
+	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
+	require.Equal(t, true, ok)
+
+	err = appendOneFixed(vec1, 0, true, mp)
+	require.NoError(t, err)
+	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
+	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
+	require.Equal(t, true, ok)
+
+	vec1.CleanOnlyData()
+	vec1.SetClass(CONSTANT)
+	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
+	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
+	require.Equal(t, true, ok)
+
+	err = appendOneFixed(vec1, 0, false, mp)
+	require.NoError(t, err)
+	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
+	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
+	require.Equal(t, true, ok)
 }
