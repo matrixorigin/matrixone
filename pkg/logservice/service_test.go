@@ -39,9 +39,13 @@ import (
 func runServiceTest(t *testing.T,
 	hakeeper bool, startReplica bool, fn func(*testing.T, *Service)) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg,
+	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -83,9 +87,55 @@ func runServiceTest(t *testing.T,
 
 func TestNewService(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg,
+	service, err := NewServiceWithRetry(genCfg,
+		newFS(),
+		nil,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
+	require.NoError(t, err)
+	assert.NoError(t, service.Close())
+}
+
+func TestNewServiceRetry(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg0 := getServiceTestConfig()
+	genCfg0 := func() Config {
+		return cfg0
+	}
+	defer vfs.ReportLeakedFD(cfg0.FS, t)
+	service0, err := NewServiceWithRetry(genCfg0,
+		newFS(),
+		nil,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service0.Close())
+	}()
+
+	var cfg Config
+	first := true
+	genCfg := func() Config {
+		if first {
+			first = false
+			return cfg0
+		} else {
+			cfg = getServiceTestConfig()
+			return cfg
+		}
+	}
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {

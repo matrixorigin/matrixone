@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/tidwall/btree"
@@ -196,6 +197,10 @@ func (bat *AtomicBatch) RowCount() int {
 		}
 		c += rows
 	}
+
+	if c != bat.Rows.Len() {
+		logutil.Errorf("inconsistent row count, sum rows of batches: %d, rows of btree: %d\n", c, bat.Rows.Len())
+	}
 	return c
 }
 
@@ -261,6 +266,22 @@ func (bat *AtomicBatch) GetRowIterator() RowIterator {
 		initIter: bat.Rows.Iter(),
 	}
 }
+
+//func (bat *AtomicBatch) DebugString(tableDef *plan.TableDef, isDelete bool) string {
+//	ctx := context.Background()
+//	keys := make([]string, 0, bat.Rows.Len())
+//	iter := bat.Rows.Iter()
+//	defer iter.Release()
+//	for iter.Next() {
+//		row := iter.Item()
+//		s, err := getRowPkAndTsFromBat(ctx, row.Src, tableDef, isDelete, row.Offset)
+//		if err != nil {
+//			return ""
+//		}
+//		keys = append(keys, s)
+//	}
+//	return fmt.Sprintf("count=%d, key=%v", bat.Rows.Len(), keys)
+//}
 
 var _ RowIterator = new(atomicBatchRowIter)
 
