@@ -1322,3 +1322,26 @@ func TestServiceLeaderID(t *testing.T) {
 	}
 	runServiceTest(t, false, true, fn)
 }
+
+func TestServiceCheckHealth(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = s.ID()
+		require.NoError(t, s.store.startHAKeeperReplica(1, peers, false))
+		s.store.hakeeperTick()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		_, err := s.store.addLogStoreHeartbeat(ctx, s.store.getHeartbeatMessage())
+		assert.NoError(t, err)
+
+		req := pb.Request{
+			Method: pb.CHECK_HEALTH,
+			CheckHealth: &pb.CheckHealth{
+				ShardID: 1,
+			},
+		}
+		resp := s.handleCheckHealth(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+	}
+	runServiceTest(t, false, true, fn)
+}

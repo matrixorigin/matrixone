@@ -19,7 +19,6 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -81,21 +80,26 @@ func GetTombstonesByBlockId(
 	ts *types.TS,
 	blockId *objectio.Blockid,
 	getTombstoneFileFn func() (*objectio.ObjectStats, error),
-	deletedMask *nulls.Nulls,
+	deletedMask *objectio.Bitmap,
 	fs fileservice.FileService,
 ) (err error) {
 	loadedBlkCnt := 0
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
-		var location objectio.ObjectLocation
+		var (
+			err2     error
+			mask     objectio.Bitmap
+			location objectio.ObjectLocation
+		)
 		tombstoneObject.BlockLocationTo(uint16(pos), objectio.BlockMaxRows, location[:])
-		if mask, err := FillBlockDeleteMask(
+		if mask, err2 = FillBlockDeleteMask(
 			ctx, ts, blockId, location[:], fs, tombstoneObject.GetCNCreated(),
-		); err != nil {
-			return false, err
+		); err2 != nil {
+			return false, err2
 		} else {
 			deletedMask.Or(mask)
 		}
 		loadedBlkCnt++
+		mask.Release()
 		return true, nil
 	}
 

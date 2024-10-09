@@ -315,6 +315,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetRequiredLsn(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_LEADER_ID:
 		return s.handleGetLeaderID(ctx, req), pb.LogRecordResponse{}
+	case pb.CHECK_HEALTH:
+		return s.handleCheckHealth(ctx, req), pb.LogRecordResponse{}
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -665,6 +667,15 @@ func (s *Service) handleBootstrapShard(cmd pb.ScheduleCommand) {
 			zap.Error(err),
 		)
 	}
+}
+
+func (s *Service) handleCheckHealth(_ context.Context, req pb.Request) pb.Response {
+	r := req.CheckHealth
+	resp := getResponse(req)
+	if err := s.store.checkHealth(r.ShardID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
 }
 
 func (s *Service) getBackendOptions() []morpc.BackendOption {
