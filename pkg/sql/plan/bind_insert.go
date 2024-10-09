@@ -292,7 +292,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 					PrimaryColRelPos:   selectNodeTag,
 					PrimaryColTyp:      col.Typ,
 				}
-				if partitionExpr != nil {
+				if tableDef.Partition != nil {
 					lockTarget.IsPartitionTable = true
 					lockTarget.PartitionTableIds = updateCtx.PartitionTableIds
 					lockTarget.FilterColIdxInBat = updateCtx.PartitionIdx
