@@ -348,7 +348,7 @@ func nextConnectionID() uint32 {
 var serverVarsMap sync.Map
 
 func init() {
-	initServerLevelVars("")
+	InitServerLevelVars("")
 }
 
 func getServerLevelVars(service string) *ServerLevelVariables {
@@ -357,7 +357,7 @@ func getServerLevelVars(service string) *ServerLevelVariables {
 	return ret.(*ServerLevelVariables)
 }
 
-func initServerLevelVars(service string) {
+func InitServerLevelVars(service string) {
 	serverVarsMap.Store(service, &ServerLevelVariables{})
 }
 
@@ -424,7 +424,7 @@ func NewMOServer(
 	if baseService != nil {
 		service = baseService.ID()
 	}
-	initServerLevelVars(service)
+	InitServerLevelVars(service)
 	setPu(service, pu)
 	setAicm(service, aicm)
 	setSessionAlloc(service, NewSessionAllocator(pu))
