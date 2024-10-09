@@ -44,7 +44,7 @@ func createTestDataSync(
 	return ds
 }
 
-func TestSyncer_Create(t *testing.T) {
+func TestSyncer_Create_Fail(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	rt := runtime.DefaultRuntime()
 	st := stopper.NewStopper(
@@ -53,17 +53,23 @@ func TestSyncer_Create(t *testing.T) {
 	)
 	defer st.Stop()
 
-	t.Run("create consumer error", func(t *testing.T) {
-		assert.Panics(t, func() {
-			createTestDataSync(t, rt, st, nil)
-		})
+	assert.Panics(t, func() {
+		createTestDataSync(t, rt, st, nil)
 	})
+}
 
-	t.Run("ok", func(t *testing.T) {
-		s := createTestDataSync(t, rt, st, newTestFS())
-		assert.NotNil(t, s)
-		assert.NoError(t, s.Close())
-	})
+func TestSyncer_Create_OK(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	rt := runtime.DefaultRuntime()
+	st := stopper.NewStopper(
+		"test",
+		stopper.WithLogger(rt.Logger().RawLogger()),
+	)
+	defer st.Stop()
+
+	s := createTestDataSync(t, rt, st, newTestFS())
+	assert.NotNil(t, s)
+	assert.NoError(t, s.Close())
 }
 
 func TestSyncer(t *testing.T) {
