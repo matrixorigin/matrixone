@@ -1379,12 +1379,6 @@ func (g *toposort) sort() (ans []string, err error) {
 	return
 }
 
-func setFPrints(txnOp TxnOperator, fprints footPrints) {
-	if txnOp != nil {
-		txnOp.SetFootPrints(fprints.prints[:])
-	}
-}
-
 type footPrints struct {
 	prints [256][2]uint32
 }
