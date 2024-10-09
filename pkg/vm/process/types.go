@@ -294,6 +294,9 @@ type BaseProcess struct {
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
+
+	// post dml sqls run right after all pipelines finished
+	PostDmlSqlList []string
 }
 
 // Process contains context used in query execution

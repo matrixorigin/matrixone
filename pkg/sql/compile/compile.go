@@ -493,6 +493,14 @@ func (c *Compile) runOnce() error {
 		return err
 	}
 
+	// run post insert sql
+	defer func() {
+		c.proc.Base.PostDmlSqlList = nil
+	}()
+	for _, sql := range c.proc.Base.PostDmlSqlList {
+		logutil.Infof("ERIC ERIC POST INSERT SQL :%s ", sql)
+	}
+
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
 	for _, f := range c.fuzzys {
 		if f != nil && f.cnt > 0 {
