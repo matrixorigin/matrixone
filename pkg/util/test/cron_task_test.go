@@ -139,8 +139,8 @@ func TestCalculateObjectCount(t *testing.T) {
 	// query with metrics db
 	{
 		queryOpts := ie.NewOptsBuilder().Database(mometric.MetricDBConst).Internal(true).Finish()
-		frontend.SetPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
-		result := frontend.NewInternalExecutor("").Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
+
+		result := frontend.NewInternalExecutor(svc.ServiceID()).Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
 		require.NoError(t, result.Error())
 
 		name2idx := make(map[string]uint64)
@@ -157,7 +157,7 @@ func TestCalculateObjectCount(t *testing.T) {
 	{
 		queryOpts := ie.NewOptsBuilder().Internal(true).Finish()
 
-		result := frontend.NewInternalExecutor("").Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
+		result := frontend.NewInternalExecutor(svc.ServiceID()).Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
 		require.NoError(t, result.Error())
 
 		name2idx := make(map[string]uint64)
