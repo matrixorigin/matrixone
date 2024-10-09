@@ -749,7 +749,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*blockio.BlockReader, []objectio.BlockObject, error) {
 	// read result's blocks
 	filePath := getPathOfQueryResultFile(fileName)
-	reader, err := blockio.NewFileReader(ses.service, getPu(ses.GetService()).FileService, filePath)
+	reader, err := blockio.NewFileReader(ses.GetService(), getPu(ses.GetService()).FileService, filePath)
 	if err != nil {
 		return nil, nil, err
 	}

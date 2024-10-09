@@ -113,7 +113,6 @@ const (
 type Session struct {
 	feSessionImpl
 
-	service    string
 	logger     *log.MOLogger
 	logLevel   zapcore.Level
 	loggerOnce sync.Once
@@ -515,7 +514,6 @@ func NewSession(
 	txnHandler := InitTxnHandler(service, getPu(service).StorageEngine, connCtx, txnOp)
 
 	ses := &Session{
-		service: service,
 		feSessionImpl: feSessionImpl{
 			pool:       mp,
 			txnHandler: txnHandler,
@@ -524,6 +522,7 @@ func NewSession(
 			outputCallback: getDataFromPipeline,
 			timeZone:       time.Local,
 			respr:          NewMysqlResp(proto),
+			service:        service,
 		},
 		errInfo: &errInfo{
 			codes:  make([]uint16, 0, MoDefaultErrorCount),
@@ -549,6 +548,7 @@ func NewSession(
 	ses.buf = buffer.New()
 	ses.sqlHelper = &SqlHelper{ses: ses}
 	ses.uuid, _ = uuid.NewV7()
+	pu := getPu(service)
 	if ses.pool == nil {
 		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
 		// fixed pool size can be another param, or should be computed from cap,
@@ -557,12 +557,11 @@ func NewSession(
 		// XXX MPOOL
 		// We don't have a way to close a session, so the only sane way of creating
 		// a mpool is to use NoFixed
-		ses.pool, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), getPu(service).SV.GuestMmuLimitation, mpool.NoFixed)
+		ses.pool, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), pu.SV.GuestMmuLimitation, mpool.NoFixed)
 		if err != nil {
 			panic(err)
 		}
 	}
-	pu := getPu(service)
 	ses.proc = process.NewTopProcess(
 		context.TODO(),
 		ses.pool,
@@ -587,10 +586,6 @@ func NewSession(
 		ss.Close()
 	})
 	return ses
-}
-
-func (ses *Session) GetService() string {
-	return ses.service
 }
 
 // ReserveConnAndClose closes the session with the connection is reserved.

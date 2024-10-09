@@ -420,7 +420,6 @@ func NewMOServer(
 	if baseService != nil {
 		service = baseService.ID()
 	}
-	initServerLevelVars(service)
 	setPu(service, pu)
 	setAicm(service, aicm)
 	setSessionAlloc(service, NewSessionAllocator(pu))

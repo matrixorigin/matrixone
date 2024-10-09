@@ -269,7 +269,8 @@ func handleCreateCdc(ses *Session, execCtx *ExecCtx, create *tree.CreateCDC) err
 }
 
 func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err error) {
-	ts := getPu(ses.GetService()).TaskService
+	service := ses.GetService()
+	ts := getPu(service).TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
@@ -373,7 +374,6 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 			},
 		},
 	}
-	service := ses.GetService()
 
 	addCdcTaskCallback := func(ctx context.Context, tx taskservice.SqlExecutor) (ret int, err error) {
 		err = checkAccounts(ctx, tx, tablePts, filterPts)
@@ -1485,7 +1485,13 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 	return runUpdateCdcTask(ctx, targetTaskStatus, uint64(accountId), taskName, ses.GetService(), conds...)
 }
 
-func runUpdateCdcTask(ctx context.Context, targetTaskStatus task.TaskStatus, accountId uint64, taskName string, service string, conds ...taskservice.Condition) (err error) {
+func runUpdateCdcTask(
+	ctx context.Context,
+	targetTaskStatus task.TaskStatus,
+	accountId uint64,
+	taskName string,
+	service string,
+	conds ...taskservice.Condition) (err error) {
 	ts := getPu(service).TaskService
 	if ts == nil {
 		return nil

@@ -7297,7 +7297,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 	}
 
 	if !exists {
-		if err = createSubscription(ctx, bh, newTenant, getPu(ses.GetService())); err != nil {
+		if err = createSubscription(ctx, bh, newTenant); err != nil {
 			return err
 		}
 	}
@@ -7579,7 +7579,7 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 }
 
 // createSubscription insert records into mo_subs of To-All-Publications
-func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo, pu *config.ParameterUnit) (err error) {
+func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) (err error) {
 	// get all accounts
 	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh)
 	if err != nil {
@@ -7617,7 +7617,7 @@ func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *Tenan
 	}
 
 	// create sub for other privileged tenants' to-all-pub
-	pubAllAccounts := pubsub.SplitAccounts(pu.SV.PubAllAccounts)
+	pubAllAccounts := pubsub.SplitAccounts(getPu(bh.Service()).SV.PubAllAccounts)
 	for _, accountName := range pubAllAccounts {
 		accountInfo, ok := accNameInfoMap[accountName]
 		if !ok {

@@ -658,7 +658,6 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 }
 
 type backSession struct {
-	service string
 	feSessionImpl
 }
 
@@ -681,15 +680,11 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 			label:          make(map[string]string),
 			timeZone:       time.Local,
 			respr:          defResper,
+			service:        service,
 		},
 	}
-	backSes.service = service
 	backSes.uuid, _ = uuid.NewV7()
 	return backSes
-}
-
-func (backSes *backSession) GetService() string {
-	return backSes.service
 }
 
 func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {

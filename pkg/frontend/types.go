@@ -678,6 +678,11 @@ type feSessionImpl struct {
 	// reserved because the connection is still in use in proxy's connection cache.
 	// Default is false, means that the network connection should be closed.
 	reserveConn bool
+	service     string
+}
+
+func (ses *feSessionImpl) GetService() string {
+	return ses.service
 }
 
 func (ses *feSessionImpl) GetMySQLParser() *mysql.MySQLParser {
