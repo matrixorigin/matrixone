@@ -915,10 +915,10 @@ func TestAesCFBDecodeWithKey_EmptyKey(t *testing.T) {
 func Test_batchRowCount(t *testing.T) {
 	assert.Equal(t, 0, batchRowCount(nil))
 
-	bat := batch.New(true, []string{})
+	bat := batch.New([]string{})
 	assert.Equal(t, 0, batchRowCount(bat))
 
-	bat = batch.New(true, []string{"a", "ts"})
+	bat = batch.New([]string{"a", "ts"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil)
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
 	bat.SetRowCount(3)
