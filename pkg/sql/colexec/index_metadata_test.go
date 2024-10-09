@@ -56,9 +56,9 @@ func TestInsertIndexMetadata(t *testing.T) {
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}, bat *batch.Batch) (bool, error) {
 		// bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+		bat.Vecs[2] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 
 		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
 		if err != nil {

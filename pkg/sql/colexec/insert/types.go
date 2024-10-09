@@ -149,7 +149,7 @@ func (insert *Insert) initBufForS3() {
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 	insert.ctr.buf = batch.NewWithSize(len(attrs))
 	insert.ctr.buf.SetAttributes(attrs)
-	insert.ctr.buf.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-	insert.ctr.buf.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	insert.ctr.buf.Vecs[2] = vector.NewVec(types.T_binary.ToType())
+	insert.ctr.buf.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int16.ToType())
+	insert.ctr.buf.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+	insert.ctr.buf.Vecs[2] = vector.NewOffHeapVecWithType(types.T_binary.ToType())
 }

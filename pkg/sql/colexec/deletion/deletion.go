@@ -246,8 +246,8 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 
 	if len(delCtx.PartitionTableIDs) > 0 {
 		pkTyp := bat.Vecs[delCtx.PrimaryKeyIdx].GetType()
-		deletion.ctr.resBat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-		deletion.ctr.resBat.SetVector(1, vector.NewVec(*pkTyp))
+		deletion.ctr.resBat.SetVector(0, vector.NewOffHeapVecWithType(types.T_Rowid.ToType()))
+		deletion.ctr.resBat.SetVector(1, vector.NewOffHeapVecWithType(*pkTyp))
 
 		for partIdx := range len(delCtx.PartitionTableIDs) {
 			deletion.ctr.resBat.CleanOnlyData()

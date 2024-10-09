@@ -89,7 +89,7 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 			if preInsert.ctr.buf.Vecs[idx] != nil {
 				preInsert.ctr.buf.Vecs[idx].CleanOnlyData()
 			} else {
-				preInsert.ctr.buf.Vecs[idx] = vector.NewVec(*typ)
+				preInsert.ctr.buf.Vecs[idx] = vector.NewOffHeapVecWithType(*typ)
 			}
 			if err = vector.GetUnionAllFunction(*typ, proc.Mp())(preInsert.ctr.buf.Vecs[idx], bat.Vecs[idx]); err != nil {
 				return err
@@ -99,7 +99,7 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				preInsert.ctr.canFreeVecIdx[idx] = true
 				//expland const vector
 				typ := bat.Vecs[idx].GetType()
-				tmpVec := vector.NewVec(*typ)
+				tmpVec := vector.NewOffHeapVecWithType(*typ)
 				if err = vector.GetUnionAllFunction(*typ, proc.Mp())(tmpVec, bat.Vecs[idx]); err != nil {
 					return err
 				}
@@ -134,7 +134,7 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 		if preInsert.IsUpdate {
 			idx := len(bat.Vecs) - 1
 			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.Row_ID)
-			rowIdVec := vector.NewVec(*bat.GetVector(int32(idx)).GetType())
+			rowIdVec := vector.NewOffHeapVecWithType(*bat.GetVector(int32(idx)).GetType())
 			err = rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
 			if err != nil {
 				rowIdVec.Free(proc.Mp())

@@ -362,8 +362,8 @@ func (fuzzyFilter *FuzzyFilter) appendCollisionKey(proc *process.Process, idx in
 func (fuzzyFilter *FuzzyFilter) generate() error {
 	ctr := &fuzzyFilter.ctr
 	rbat := batch.NewWithSize(1)
-	rbat.SetVector(0, vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
-	ctr.pass2RuntimeFilter = vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
+	rbat.SetVector(0, vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
+	ctr.pass2RuntimeFilter = vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
 	ctr.rbat = rbat
 	return nil
 }

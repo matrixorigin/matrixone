@@ -993,7 +993,7 @@ func buildValueScan(
 	for i, colName := range updateColumns {
 		col := tableDef.Cols[colToIdx[colName]]
 		colTyp := makeTypeByPlan2Type(col.Typ)
-		vec := vector.NewVec(colTyp)
+		vec := vector.NewOffHeapVecWithType(colTyp)
 		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
 			Typ: col.Typ,

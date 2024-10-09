@@ -154,7 +154,7 @@ func (tableFunction *TableFunction) createResultBatch() *batch.Batch {
 	bat := batch.NewWithSize(len(tableFunction.Attrs))
 	bat.Attrs = tableFunction.Attrs
 	for i := range tableFunction.ctr.retSchema {
-		bat.Vecs[i] = vector.NewVec(tableFunction.ctr.retSchema[i])
+		bat.Vecs[i] = vector.NewOffHeapVecWithType(tableFunction.ctr.retSchema[i])
 	}
 	return bat
 }

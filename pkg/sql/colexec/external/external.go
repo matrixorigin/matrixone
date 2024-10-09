@@ -158,7 +158,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		//alloc space for vector
 		for i := range param.Attrs {
 			typ := makeType(&param.Cols[i].Typ, flag)
-			external.ctr.buf.Vecs[i] = vector.NewVec(typ)
+			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
 	return nil

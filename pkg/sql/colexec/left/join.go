@@ -112,11 +112,11 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.rbat = batch.NewWithSize(len(leftJoin.Result))
 				for i, rp := range leftJoin.Result {
 					if rp.Rel == 0 {
-						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inbat.Vecs[rp.Pos].GetType())
+						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.inbat.Vecs[rp.Pos].GetType())
 						// for left join, if left batch is sorted , then output batch is sorted
 						ctr.rbat.Vecs[i].SetSorted(ctr.inbat.Vecs[rp.Pos].GetSorted())
 					} else {
-						ctr.rbat.Vecs[i] = vector.NewVec(leftJoin.Typs[rp.Pos])
+						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(leftJoin.Typs[rp.Pos])
 					}
 				}
 			} else {

@@ -79,7 +79,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result []byte
 	if len(groups) > 0 {
 		exec.groups = make([]*vector.Vector, len(groups))
 		for i := range exec.groups {
-			exec.groups[i] = vector.NewVec(exec.singleAggInfo.argType)
+			exec.groups[i] = vector.NewOffHeapVecWithType(exec.singleAggInfo.argType)
 			if err := vectorUnmarshal(exec.groups[i], groups[i], mp); err != nil {
 				return err
 			}
@@ -114,7 +114,7 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 	}
 
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
-		exec.groups[i] = vector.NewVec(exec.singleAggInfo.argType)
+		exec.groups[i] = vector.NewOffHeapVecWithType(exec.singleAggInfo.argType)
 	}
 	return exec.ret.grows(more)
 }

@@ -397,9 +397,9 @@ func (rightJoin *RightJoin) resetRBat() {
 
 		for i, rp := range rightJoin.Result {
 			if rp.Rel == 0 {
-				ctr.rbat.Vecs[i] = vector.NewVec(rightJoin.LeftTypes[rp.Pos])
+				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(rightJoin.LeftTypes[rp.Pos])
 			} else {
-				ctr.rbat.Vecs[i] = vector.NewVec(rightJoin.RightTypes[rp.Pos])
+				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(rightJoin.RightTypes[rp.Pos])
 			}
 		}
 	}

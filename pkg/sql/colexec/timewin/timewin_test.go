@@ -195,14 +195,14 @@ func TestAvgTwCache(t *testing.T) {
 		// prepare the input data.
 		var err error
 
-		vec := vector.NewVec(inputType)
+		vec := vector.NewOffHeapVecWithType(inputType)
 		require.NoError(t, vector.AppendFixedList[int32](vec, []int32{3, 0, 4, 5}, []bool{false, true, false, false}, mg.Mp()))
 		inputs[0] = vec
 		inputs[1] = vec
 		inputs[2] = vector.NewConstNull(inputType, 2, mg.Mp())
 		inputs[3], err = vector.NewConstFixed[int32](inputType, 1, 3, mg.Mp())
 		require.NoError(t, err)
-		inputs[4] = vector.NewVec(inputType)
+		inputs[4] = vector.NewOffHeapVecWithType(inputType)
 		require.NoError(t, vector.AppendFixedList[int32](inputs[4], []int32{1, 2, 3, 4}, nil, mg.Mp()))
 	}
 	{
@@ -258,7 +258,7 @@ func TestAvgTwCacheDecimal64(t *testing.T) {
 	inputs := make([]*vector.Vector, 3)
 	{
 		vs := make([]types.Decimal64, 4)
-		vec := vector.NewVec(types.T_decimal64.ToType())
+		vec := vector.NewOffHeapVecWithType(types.T_decimal64.ToType())
 		require.NoError(t, vector.AppendFixedList(vec, vs, nil, mg.Mp()))
 		inputs[0] = vec
 		inputs[1] = vec
@@ -315,7 +315,7 @@ func TestAvgTwCacheDecimal128(t *testing.T) {
 	inputs := make([]*vector.Vector, 3)
 	{
 		vs := make([]types.Decimal128, 4)
-		vec := vector.NewVec(types.T_decimal128.ToType())
+		vec := vector.NewOffHeapVecWithType(types.T_decimal128.ToType())
 		require.NoError(t, vector.AppendFixedList(vec, vs, nil, mg.Mp()))
 		inputs[0] = vec
 		inputs[1] = vec
@@ -375,14 +375,14 @@ func TestAvgTwResult(t *testing.T) {
 		// prepare the input data.
 		var err error
 
-		vec := vector.NewVec(inputType)
+		vec := vector.NewOffHeapVecWithType(inputType)
 		require.NoError(t, vector.AppendStringList(vec, []string{"sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf"}, []bool{false, true, false, false}, mg.Mp()))
 		inputs[0] = vec
 		inputs[1] = vec
 		inputs[2] = vector.NewConstNull(inputType, 2, mg.Mp())
 		inputs[3], err = vector.NewConstBytes(inputType, []byte("sdfasdfsadfasdfadf"), 3, mg.Mp())
 		require.NoError(t, err)
-		inputs[4] = vector.NewVec(inputType)
+		inputs[4] = vector.NewOffHeapVecWithType(inputType)
 		require.NoError(t, vector.AppendStringList(inputs[4], []string{"sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf"}, nil, mg.Mp()))
 	}
 	{
@@ -443,14 +443,14 @@ func TestAvgTwResultDecimal(t *testing.T) {
 
 		str := "agg test str: AppendStringList NewConstBytes AppendStringList"
 
-		vec := vector.NewVec(inputType)
+		vec := vector.NewOffHeapVecWithType(inputType)
 		require.NoError(t, vector.AppendStringList(vec, []string{str, str, str, str}, []bool{false, true, false, false}, mg.Mp()))
 		inputs[0] = vec
 		inputs[1] = vec
 		inputs[2] = vector.NewConstNull(inputType, 2, mg.Mp())
 		inputs[3], err = vector.NewConstBytes(inputType, []byte(str), 3, mg.Mp())
 		require.NoError(t, err)
-		inputs[4] = vector.NewVec(inputType)
+		inputs[4] = vector.NewOffHeapVecWithType(inputType)
 		require.NoError(t, vector.AppendStringList(inputs[4], []string{str, str, str, str}, nil, mg.Mp()))
 	}
 	{

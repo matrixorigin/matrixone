@@ -207,7 +207,7 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyzer pr
 			ctr.rbat = batch.NewWithSize(len(ap.Result))
 
 			for i, pos := range ap.Result {
-				ctr.rbat.Vecs[i] = vector.NewVec(ap.RightTypes[pos])
+				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[pos])
 			}
 		}
 
@@ -228,7 +228,7 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyzer pr
 		for k := range ap.ctr.buf {
 			ap.ctr.buf[k] = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
-				ap.ctr.buf[k].Vecs[i] = vector.NewVec(ap.RightTypes[pos])
+				ap.ctr.buf[k].Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[pos])
 			}
 			var newsels []int32
 			if (k+1)*colexec.DefaultBatchSize <= len(sels) {

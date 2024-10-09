@@ -116,7 +116,7 @@ func (exec *clusterCentersExec) unmarshal(mp *mpool.MPool, result []byte, groups
 	if len(groups) > 0 {
 		exec.groupData = make([]*vector.Vector, len(groups)-1)
 		for i := range exec.groupData {
-			exec.groupData[i] = vector.NewVec(exec.singleAggInfo.argType)
+			exec.groupData[i] = vector.NewOffHeapVecWithType(exec.singleAggInfo.argType)
 			if err := vectorUnmarshal(exec.groupData[i], groups[i], mp); err != nil {
 				return err
 			}
@@ -152,7 +152,7 @@ func (exec *clusterCentersExec) GroupGrow(more int) error {
 		return err
 	}
 	for i := 0; i < more; i++ {
-		exec.groupData = append(exec.groupData, vector.NewVec(types.T_varchar.ToType()))
+		exec.groupData = append(exec.groupData, vector.NewOffHeapVecWithType(types.T_varchar.ToType()))
 	}
 	return nil
 }

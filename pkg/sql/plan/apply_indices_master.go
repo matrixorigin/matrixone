@@ -169,7 +169,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		inVecType := types.T_varchar.ToType()
 
 		// a. varchar vector ("value1", "value2", "value3")
-		arg1AsColValuesVec := vector.NewVec(inVecType)
+		arg1AsColValuesVec := vector.NewOffHeapVecWithType(inVecType)
 		_ = arg1AsColValuesVec.UnmarshalBinary(args[1].GetVec().GetData())
 		inExprListLen := arg1AsColValuesVec.Length()
 
@@ -186,7 +186,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		}()
 		function.SerialHelper(arg0AsColNameVec, nil, ps, true)
 		function.SerialHelper(arg1AsColValuesVec, nil, ps, true)
-		arg1ForPrefixInVec := vector.NewVec(inVecType)
+		arg1ForPrefixInVec := vector.NewOffHeapVecWithType(inVecType)
 		for i := 0; i < inExprListLen; i++ {
 			_ = vector.AppendBytes(arg1ForPrefixInVec, ps[i].Bytes(), false, mp)
 		}

@@ -139,7 +139,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 				insert.ctr.buf = batch.NewWithSize(len(insert.InsertCtx.Attrs))
 				insert.ctr.buf.Attrs = insert.InsertCtx.Attrs
 				for i := range insert.ctr.buf.Attrs {
-					insert.ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+					insert.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*input.Batch.Vecs[i].GetType())
 				}
 
 				for partIdx := range len(insert.InsertCtx.PartitionTableIDs) {
@@ -223,7 +223,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		insert.ctr.buf.Attrs = insert.InsertCtx.Attrs
 		for i := range insert.ctr.buf.Attrs {
 			if insert.ctr.buf.Vecs[i] == nil {
-				insert.ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+				insert.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*input.Batch.Vecs[i].GetType())
 			}
 		}
 
@@ -243,7 +243,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		insert.ctr.buf.CleanOnlyData()
 		for i := range insert.ctr.buf.Attrs {
 			if insert.ctr.buf.Vecs[i] == nil {
-				insert.ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+				insert.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*input.Batch.Vecs[i].GetType())
 			}
 			if err = insert.ctr.buf.Vecs[i].UnionBatch(input.Batch.Vecs[i], 0, input.Batch.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 				return input, err

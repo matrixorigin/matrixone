@@ -168,7 +168,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTe
 	resultBatch.SetRowCount(4)
 	bat := colexec.MakeMockBatchs()
 	for i := range rp {
-		resultBatch.Vecs[i] = vector.NewVec(*bat.Vecs[rp[i].Pos].GetType())
+		resultBatch.Vecs[i] = vector.NewOffHeapVecWithType(*bat.Vecs[rp[i].Pos].GetType())
 	}
 	tag++
 	return productTestCase{

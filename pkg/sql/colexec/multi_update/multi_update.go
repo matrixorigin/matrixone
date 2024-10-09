@@ -180,8 +180,8 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batc
 			if ctr.deleteBuf[i] == nil {
 				mainPkIdx := updateCtx.deleteCols[1]
 				buf := batch.New(false, []string{catalog.Row_ID, "pk"})
-				buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-				buf.SetVector(1, vector.NewVec(*bat.Vecs[mainPkIdx].GetType()))
+				buf.SetVector(0, vector.NewOffHeapVecWithType(types.T_Rowid.ToType()))
+				buf.SetVector(1, vector.NewOffHeapVecWithType(*bat.Vecs[mainPkIdx].GetType()))
 				ctr.deleteBuf[i] = buf
 			}
 			err = update.delete_table(proc, updateCtx, bat, ctr.deleteBuf[i])

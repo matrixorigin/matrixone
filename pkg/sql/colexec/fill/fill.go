@@ -52,7 +52,7 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		// the batch just for eval const value
 		b := batch.NewWithSize(1)
 		defer b.Clean(proc.Mp())
-		b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+		b.SetVector(0, vector.NewOffHeapVecWithType(types.T_varchar.ToType()))
 		batch.SetLength(b, 1)
 		if len(ctr.exes) == 0 {
 			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
@@ -298,7 +298,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 				}
 			} else {
 				if ctr.prevVecs[i] == nil {
-					ctr.prevVecs[i] = vector.NewVec(*ctr.buf.Vecs[i].GetType())
+					ctr.prevVecs[i] = vector.NewOffHeapVecWithType(*ctr.buf.Vecs[i].GetType())
 					err = appendValue(ctr.prevVecs[i], ctr.buf.Vecs[i], j, proc)
 					if err != nil {
 						return result, err
@@ -386,12 +386,12 @@ func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 			}
 		case fillValue:
 			b := batch.NewWithSize(2)
-			b.Vecs[0] = vector.NewVec(*ctr.bats[ctr.preIdx].Vecs[idx].GetType())
+			b.Vecs[0] = vector.NewOffHeapVecWithType(*ctr.bats[ctr.preIdx].Vecs[idx].GetType())
 			err = appendValue(b.Vecs[0], ctr.bats[ctr.preIdx].Vecs[idx], ctr.preRow, proc)
 			if err != nil {
 				return err
 			}
-			b.Vecs[1] = vector.NewVec(*ctr.bats[ctr.curIdx].Vecs[idx].GetType())
+			b.Vecs[1] = vector.NewOffHeapVecWithType(*ctr.bats[ctr.curIdx].Vecs[idx].GetType())
 			err = appendValue(b.Vecs[1], ctr.bats[ctr.curIdx].Vecs[idx], ctr.curRow, proc)
 			if err != nil {
 				return err

@@ -63,18 +63,18 @@ func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColum
 	if isUpdate {
 		preInsertSecIdx.ctr.buf = batch.NewWithSize(3)
 		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
-		preInsertSecIdx.ctr.buf.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+		preInsertSecIdx.ctr.buf.Vecs[2] = vector.NewOffHeapVecWithType(types.T_Rowid.ToType())
 	} else {
 		preInsertSecIdx.ctr.buf = batch.NewWithSize(2)
 		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 
 	if len(secondaryColumnPos) == 1 {
-		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(*bat.Vecs[secondaryColumnPos[0]].GetType())
+		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewOffHeapVecWithType(*bat.Vecs[secondaryColumnPos[0]].GetType())
 	} else {
-		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	}
-	preInsertSecIdx.ctr.buf.Vecs[1] = vector.NewVec(*bat.Vecs[pkPos].GetType())
+	preInsertSecIdx.ctr.buf.Vecs[1] = vector.NewOffHeapVecWithType(*bat.Vecs[pkPos].GetType())
 }
 
 func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResult, error) {

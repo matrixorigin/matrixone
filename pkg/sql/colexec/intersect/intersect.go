@@ -162,7 +162,7 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer proce
 		if ctr.buf == nil {
 			ctr.buf = batch.NewWithSize(len(input.Batch.Vecs))
 			for i := range input.Batch.Vecs {
-				ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+				ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*input.Batch.Vecs[i].GetType())
 			}
 		}
 		ctr.buf.CleanOnlyData()

@@ -123,10 +123,10 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		insertArg.ctr.checkConflictBat.Attrs = append(insertArg.ctr.checkConflictBat.Attrs, insertArg.Attrs...)
 
 		for i, v := range originBatch.Vecs {
-			newVec := vector.NewVec(*v.GetType())
+			newVec := vector.NewOffHeapVecWithType(*v.GetType())
 			insertArg.ctr.rbat.SetVector(int32(i), newVec)
 
-			ckVec := vector.NewVec(*v.GetType())
+			ckVec := vector.NewOffHeapVecWithType(*v.GetType())
 			insertArg.ctr.checkConflictBat.SetVector(int32(i), ckVec)
 		}
 	} else {
@@ -280,7 +280,7 @@ func fetchOneRowAsBatch(idx int, originBatch *batch.Batch, proc *process.Process
 	newBatch.Attrs = attrs
 	var uErr error
 	for i, v := range originBatch.Vecs {
-		newVec := vector.NewVec(*v.GetType())
+		newVec := vector.NewOffHeapVecWithType(*v.GetType())
 		uErr = newVec.UnionOne(v, int64(idx), proc.Mp())
 		if uErr != nil {
 			newBatch.Clean(proc.Mp())
@@ -310,7 +310,7 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 				newBatch.SetVector(int32(i), newVec)
 			} else {
 				originVec = evalBatch.Vecs[i+columnCount]
-				newVec := vector.NewVec(*originVec.GetType())
+				newVec := vector.NewOffHeapVecWithType(*originVec.GetType())
 				err := newVec.UnionOne(originVec, int64(0), proc.Mp())
 				if err != nil {
 					newBatch.Clean(proc.Mp())
@@ -321,7 +321,7 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 		} else {
 			// keep old cols
 			originVec = evalBatch.Vecs[i]
-			newVec := vector.NewVec(*originVec.GetType())
+			newVec := vector.NewOffHeapVecWithType(*originVec.GetType())
 			err := newVec.UnionOne(originVec, int64(0), proc.Mp())
 			if err != nil {
 				newBatch.Clean(proc.Mp())

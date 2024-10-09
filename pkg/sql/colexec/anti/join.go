@@ -111,7 +111,7 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(ap.Result))
 				for i, pos := range ap.Result {
-					ctr.rbat.Vecs[i] = vector.NewVec(*inbat.Vecs[pos].GetType())
+					ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*inbat.Vecs[pos].GetType())
 					// for anti join, if left batch is sorted , then output batch is sorted
 					ctr.rbat.Vecs[i].SetSorted(inbat.Vecs[pos].GetSorted())
 				}

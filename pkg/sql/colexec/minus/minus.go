@@ -165,7 +165,7 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 		if minus.ctr.bat == nil {
 			minus.ctr.bat = batch.NewWithSize(len(input.Batch.Vecs))
 			for i := range input.Batch.Vecs {
-				minus.ctr.bat.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+				minus.ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*input.Batch.Vecs[i].GetType())
 			}
 		}
 		minus.ctr.bat.CleanOnlyData()

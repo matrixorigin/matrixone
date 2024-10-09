@@ -105,6 +105,6 @@ func (ctr *container) initEmptyBatchFromInput(bat *batch.Batch) {
 
 	ctr.bat = batch.NewWithSize(len(bat.Vecs))
 	for i := range bat.Vecs {
-		ctr.bat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
+		ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*bat.Vecs[i].GetType())
 	}
 }

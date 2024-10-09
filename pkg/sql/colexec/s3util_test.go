@@ -70,7 +70,7 @@ func TestSetStatsCNCreated(t *testing.T) {
 	require.NoError(t, err)
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_Rowid.ToType())
 
 	for i := 0; i < 100; i++ {
 		row := types.RandomRowid()
@@ -108,8 +108,8 @@ func TestMergeSortBatches(t *testing.T) {
 	{
 		bat1 := batch.NewWithSize(2)
 		defer bat1.Clean(pool)
-		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
-		bat1.SetVector(1, vector.NewVec(types.T_bool.ToType()))
+		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
 		bat2, err := bat1.Dup(pool)
 		require.NoError(t, err)
 		buffer, err := bat1.Dup(pool)
@@ -137,8 +137,8 @@ func TestMergeSortBatches(t *testing.T) {
 	{
 		bat1 := batch.NewWithSize(2)
 		defer bat1.Clean(pool)
-		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
-		bat1.SetVector(1, vector.NewVec(types.T_int8.ToType()))
+		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_int8.ToType()))
 		bat2, err := bat1.Dup(pool)
 		require.NoError(t, err)
 		buffer, err := bat1.Dup(pool)
@@ -166,8 +166,8 @@ func TestMergeSortBatches(t *testing.T) {
 	{
 		bat1 := batch.NewWithSize(2)
 		defer bat1.Clean(pool)
-		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
-		bat1.SetVector(1, vector.NewVec(types.T_int16.ToType()))
+		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_int16.ToType()))
 		bat2, err := bat1.Dup(pool)
 		require.NoError(t, err)
 		buffer, err := bat1.Dup(pool)
@@ -195,8 +195,8 @@ func TestMergeSortBatches(t *testing.T) {
 	{
 		bat1 := batch.NewWithSize(2)
 		defer bat1.Clean(pool)
-		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
-		bat1.SetVector(1, vector.NewVec(types.T_uint8.ToType()))
+		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_uint8.ToType()))
 		bat2, err := bat1.Dup(pool)
 		require.NoError(t, err)
 		buffer, err := bat1.Dup(pool)
@@ -224,8 +224,8 @@ func TestMergeSortBatches(t *testing.T) {
 	{
 		bat1 := batch.NewWithSize(2)
 		defer bat1.Clean(pool)
-		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
-		bat1.SetVector(1, vector.NewVec(types.T_uint16.ToType()))
+		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_uint16.ToType()))
 		bat2, err := bat1.Dup(pool)
 		require.NoError(t, err)
 		buffer, err := bat1.Dup(pool)
@@ -253,8 +253,8 @@ func TestMergeSortBatches(t *testing.T) {
 	{
 		bat1 := batch.NewWithSize(2)
 		defer bat1.Clean(pool)
-		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
-		bat1.SetVector(1, vector.NewVec(types.T_uint32.ToType()))
+		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_uint32.ToType()))
 		bat2, err := bat1.Dup(pool)
 		require.NoError(t, err)
 		buffer, err := bat1.Dup(pool)
@@ -282,8 +282,8 @@ func TestMergeSortBatches(t *testing.T) {
 	{
 		bat1 := batch.NewWithSize(2)
 		defer bat1.Clean(pool)
-		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
-		bat1.SetVector(1, vector.NewVec(types.T_bit.ToType()))
+		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_bit.ToType()))
 		bat2, err := bat1.Dup(pool)
 		require.NoError(t, err)
 		buffer, err := bat1.Dup(pool)
@@ -311,8 +311,8 @@ func TestMergeSortBatches(t *testing.T) {
 	{
 		bat1 := batch.NewWithSize(2)
 		defer bat1.Clean(pool)
-		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
-		bat1.SetVector(1, vector.NewVec(types.T_float32.ToType()))
+		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_float32.ToType()))
 		bat2, err := bat1.Dup(pool)
 		require.NoError(t, err)
 		buffer, err := bat1.Dup(pool)
@@ -340,8 +340,8 @@ func TestMergeSortBatches(t *testing.T) {
 	{
 		bat1 := batch.NewWithSize(2)
 		defer bat1.Clean(pool)
-		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
-		bat1.SetVector(1, vector.NewVec(types.T_float64.ToType()))
+		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_float64.ToType()))
 		bat2, err := bat1.Dup(pool)
 		require.NoError(t, err)
 		buffer, err := bat1.Dup(pool)
@@ -369,8 +369,8 @@ func TestMergeSortBatches(t *testing.T) {
 	{
 		bat1 := batch.NewWithSize(2)
 		defer bat1.Clean(pool)
-		bat1.SetVector(0, vector.NewVec(types.T_int32.ToType()))
-		bat1.SetVector(1, vector.NewVec(types.T_date.ToType()))
+		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
+		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_date.ToType()))
 		bat2, err := bat1.Dup(pool)
 		require.NoError(t, err)
 		buffer, err := bat1.Dup(pool)
@@ -401,7 +401,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 	require.NoError(t, err)
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_Rowid.ToType())
 
 	for i := 0; i < 100; i++ {
 		row := types.RandomRowid()
@@ -459,7 +459,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 			testutil.WithMPool(pool))
 
 		bat2 := batch.NewWithSize(1)
-		bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat2.Vecs[0] = vector.NewOffHeapVecWithType(types.T_Rowid.ToType())
 
 		objectio.SetObjectSizeLimit(mpool.MB * 32)
 		cnt := (objectio.ObjectSizeLimit) / types.RowidSize * 3

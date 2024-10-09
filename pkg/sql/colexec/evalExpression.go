@@ -143,7 +143,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		return ve, nil
 
 	case *plan.Expr_Vec:
-		vec := vector.NewVec(types.T_any.ToType())
+		vec := vector.NewOffHeapVecWithType(types.T_any.ToType())
 		err := vec.UnmarshalBinary(t.Vec.Data)
 		if err != nil {
 			return nil, err
@@ -432,7 +432,7 @@ type ListExpressionExecutor struct {
 
 func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
 	if expr.resultVector == nil {
-		expr.resultVector = vector.NewVec(expr.typ)
+		expr.resultVector = vector.NewOffHeapVecWithType(expr.typ)
 	} else {
 		expr.resultVector.CleanOnlyData()
 	}
@@ -483,7 +483,7 @@ func (expr *ListExpressionExecutor) Init(proc *process.Process, typ types.Type, 
 	expr.typ = typ
 	expr.mp = m
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
-	expr.resultVector = vector.NewVec(typ)
+	expr.resultVector = vector.NewOffHeapVecWithType(typ)
 }
 
 func (expr *ListExpressionExecutor) SetParameter(index int, executor ExpressionExecutor) {
@@ -1188,7 +1188,7 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec := vector.NewVec(types.T_any.ToType())
+						vec := vector.NewOffHeapVecWithType(types.T_any.ToType())
 						vec.UnmarshalBinary(data.Vec.Data)
 						vecs[rid] = vec
 					} else {
@@ -1241,7 +1241,7 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec := vector.NewVec(types.T_any.ToType())
+						vec := vector.NewOffHeapVecWithType(types.T_any.ToType())
 						vec.UnmarshalBinary(data.Vec.Data)
 						vecs[rid] = vec
 					} else {

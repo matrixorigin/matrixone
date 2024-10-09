@@ -776,7 +776,7 @@ func (fc *FunctionTestCase) BenchMarkRun() error {
 }
 
 func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewOffHeapVecWithType(typ)
 	switch typ.Oid {
 	case types.T_bool:
 		values := val.([]bool)

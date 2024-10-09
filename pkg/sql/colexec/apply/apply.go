@@ -105,9 +105,9 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.rbat = batch.NewWithSize(len(apply.Result))
 			for i, rp := range apply.Result {
 				if rp.Rel == 0 {
-					ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inbat.Vecs[rp.Pos].GetType())
+					ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.inbat.Vecs[rp.Pos].GetType())
 				} else {
-					ctr.rbat.Vecs[i] = vector.NewVec(apply.Typs[rp.Pos])
+					ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(apply.Typs[rp.Pos])
 				}
 			}
 		} else {

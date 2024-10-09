@@ -145,7 +145,7 @@ func cloneSomeVecFromCompactBatchs(
 
 			for newColIdx, oldColIdx := range cols {
 				typ := oldBat.Vecs[oldColIdx].GetType()
-				newBat.Vecs[newColIdx] = vector.NewVec(*typ)
+				newBat.Vecs[newColIdx] = vector.NewOffHeapVecWithType(*typ)
 			}
 
 			for rowIdx, partition := range rid2pid {
@@ -229,7 +229,7 @@ func fetchMainTableBatchs(
 
 			for newColIdx, oldColIdx := range cols {
 				typ := oldBat.Vecs[oldColIdx].GetType()
-				newBat.Vecs[newColIdx] = vector.NewVec(*typ)
+				newBat.Vecs[newColIdx] = vector.NewOffHeapVecWithType(*typ)
 			}
 
 			for rowIdx, partition := range rid2pid {

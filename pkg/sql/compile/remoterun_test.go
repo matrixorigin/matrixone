@@ -359,7 +359,7 @@ func Test_decodeBatch(t *testing.T) {
 		Ro:         false,
 		ShuffleIDX: 0,
 		Attrs:      []string{"1"},
-		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
+		Vecs:       []*vector.Vector{vector.NewOffHeapVecWithType(types.T_int64.ToType())},
 		Aggs:       []aggexec.AggFuncExec{agg0},
 	}
 	bat.SetRowCount(1)

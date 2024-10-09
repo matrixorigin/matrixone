@@ -121,13 +121,13 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.rbat = batch.NewWithSize(len(loopJoin.Result))
 				for i, rp := range loopJoin.Result {
 					if rp.Rel == 0 {
-						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inbat.Vecs[rp.Pos].GetType())
+						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.inbat.Vecs[rp.Pos].GetType())
 						ctr.rbat.Vecs[i].SetSorted(ctr.inbat.Vecs[rp.Pos].GetSorted())
 					} else {
 						if loopJoin.JoinType != LoopMark {
-							ctr.rbat.Vecs[i] = vector.NewVec(loopJoin.Typs[rp.Pos])
+							ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(loopJoin.Typs[rp.Pos])
 						} else {
-							ctr.rbat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+							ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 						}
 					}
 				}

@@ -188,7 +188,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	} else {
 		ctr.buf = batch.NewWithSize(ctr.batchList[0].VectorCount())
 		for i := range ctr.buf.Vecs {
-			ctr.buf.Vecs[i] = vector.NewVec(*ctr.batchList[0].Vecs[i].GetType())
+			ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.batchList[0].Vecs[i].GetType())
 		}
 	}
 	mp := proc.Mp()

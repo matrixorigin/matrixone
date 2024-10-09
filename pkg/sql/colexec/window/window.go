@@ -224,7 +224,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			ctr.os = ctr.ps
 		}
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewOffHeapVecWithType(types.T_int64.ToType())
 		defer vec.Free(proc.Mp())
 		if err = vector.AppendFixedList(vec, ctr.os, nil, proc.Mp()); err != nil {
 			return err
