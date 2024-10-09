@@ -347,6 +347,10 @@ func nextConnectionID() uint32 {
 
 var serverVarsMap sync.Map
 
+func init() {
+	initServerLevelVars("")
+}
+
 func getServerLevelVars(service string) *ServerLevelVariables {
 	//always there
 	ret, _ := serverVarsMap.Load(service)
@@ -424,7 +428,7 @@ func NewMOServer(
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	setRtMgr("", rm)
+	setRtMgr(service, rm)
 	rm.setBaseService(baseService)
 	if baseService != nil {
 		rm.setSessionMgr(baseService.SessionMgr())

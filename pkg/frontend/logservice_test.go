@@ -197,7 +197,7 @@ func Test_HandleShowLogserviceReplicas(t *testing.T) {
 	}
 	hc.addStore("store1", store1)
 	pu.HAKeeperClient = hc
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	showStmt := &tree.ShowLogserviceReplicas{}
 
@@ -272,7 +272,7 @@ func Test_HandleShowLogserviceStores(t *testing.T) {
 	}
 	hc.addStore("store1", store1)
 	pu.HAKeeperClient = hc
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	showStmt := &tree.ShowLogserviceStores{}
 
@@ -330,7 +330,7 @@ func Test_HandleLogserviceSettings(t *testing.T) {
 		NumberOfReplicas: 1,
 	})
 	pu.HAKeeperClient = hc
-	setGlobalPu(&pu)
+	setPu("", &pu)
 	execCtx := ses.GetTxnCompileCtx().execCtx
 
 	sql := "set logservice settings non_voting_locality='region:beijing'"

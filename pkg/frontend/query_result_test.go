@@ -139,7 +139,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			}
 			ses.SetTenantInfo(tenant)
 			proc := testutil.NewProcess()
-			proc.Base.FileService = getPu().FileService
+			proc.Base.FileService = getPu("").FileService
 
 			proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 			ses.GetTxnCompileCtx().execCtx = &ExecCtx{
@@ -237,7 +237,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			err = doDumpQueryResult(ctx, ses, ep)
 			assert.Nil(t, err)
 
-			fs := getPu().FileService
+			fs := getPu("").FileService
 
 			//csvBuf := &bytes.Buffer{}
 			var r io.ReadCloser

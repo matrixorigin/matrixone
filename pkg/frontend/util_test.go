@@ -760,7 +760,7 @@ func TestGetExprValue(t *testing.T) {
 		}
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
@@ -915,7 +915,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-	setGlobalPu(pu)
+	setPu("", pu)
 	ses1 := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
@@ -1450,7 +1450,7 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
 

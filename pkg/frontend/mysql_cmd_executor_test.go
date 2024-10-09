@@ -242,7 +242,7 @@ func Test_mce(t *testing.T) {
 
 		pu, err = getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		pu.SV.SkipCheckPrivilege = true
 
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
@@ -345,14 +345,14 @@ func Test_mce_selfhandle(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
+		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		pu, err = getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 
@@ -396,7 +396,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
+		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
@@ -472,7 +472,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
+		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
@@ -544,7 +544,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
+		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)

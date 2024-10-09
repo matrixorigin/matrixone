@@ -118,7 +118,7 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 		ses.Info(ctx, "open save query result", zap.Float64("current result size:", s))
 		return nil
 	}
-	fs := getPu("").FileService
+	fs := getPu(ses.GetService()).FileService
 	// write query result
 	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.GetStmtId()).String(), ses.GetIncBlockIdx())
 	ses.Info(ctx, "open save query result", zap.String("statemant id is:", uuid.UUID(ses.GetStmtId()).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))

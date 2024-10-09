@@ -1482,7 +1482,7 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		)
 	}
 
-	return runUpdateCdcTask(ctx, targetTaskStatus, uint64(accountId), taskName, "", conds...)
+	return runUpdateCdcTask(ctx, targetTaskStatus, uint64(accountId), taskName, ses.GetService(), conds...)
 }
 
 func runUpdateCdcTask(ctx context.Context, targetTaskStatus task.TaskStatus, accountId uint64, taskName string, service string, conds ...taskservice.Condition) (err error) {

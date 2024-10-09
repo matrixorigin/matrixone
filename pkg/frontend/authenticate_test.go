@@ -173,7 +173,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -301,7 +301,7 @@ func Test_initFunction(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -5869,7 +5869,7 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.Base.FileService = getPu().FileService
+		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 			proc: proc,
@@ -5911,7 +5911,7 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.Base.FileService = getPu().FileService
+		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -5963,7 +5963,7 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.Base.FileService = getPu().FileService
+		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -7701,7 +7701,7 @@ func Test_genRevokeCases(t *testing.T) {
 func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
-	setGlobalPu(pu)
+	setPu("", pu)
 	setSessionAlloc("", newLeakCheckAllocator())
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -7830,6 +7830,10 @@ func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
 
 func (bt *backgroundExecTest) ClearExecResultSet() {
 	//bt.init()
+}
+
+func (bt *backgroundExecTest) Service() string {
+	return ""
 }
 
 var _ BackgroundExec = &backgroundExecTest{}
@@ -10422,7 +10426,7 @@ func TestUpload(t *testing.T) {
 		pu.SV.SaveQueryResult = "on"
 		//file service
 		pu.FileService = fs
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		ioses, err := NewIOSession(tConn, pu, "")
 		assert.Nil(t, err)
@@ -10471,7 +10475,7 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm

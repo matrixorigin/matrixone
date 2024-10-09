@@ -186,6 +186,7 @@ type Conn struct {
 	allocator         *BufferAllocator
 	ses               *Session
 	closeFunc         sync.Once
+	service           string
 }
 
 // NewIOSession create a new io session
@@ -200,6 +201,7 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *C
 		timeout:           pu.SV.SessionTimeout.Duration,
 		maxBytesToFlush:   int(pu.SV.MaxBytesInOutbufToFlush * 1024),
 		allowedPacketSize: int(MaxPayloadSize),
+		service:           service,
 	}
 
 	defer func() {
@@ -271,7 +273,7 @@ func (c *Conn) Close() error {
 			return
 		}
 		c.ses = nil
-		rm := getRtMgr("")
+		rm := getRtMgr(c.service)
 		if rm != nil {
 			rm.Closed(c)
 		}

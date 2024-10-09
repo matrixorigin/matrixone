@@ -64,7 +64,7 @@ func registerConn(clientConn net.Conn) {
 func createInnerServer() *MOServer {
 
 	rm := getRtMgr("")
-	pu := getPu()
+	pu := getPu("")
 	mo := &MOServer{
 		addr:        "",
 		uaddr:       pu.SV.UnixSocketAddress,
@@ -97,6 +97,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	setSessionAlloc("", newLeakCheckAllocator())
 	setPu("", pu)
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -196,7 +197,7 @@ func TestKill(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	setGlobalPu(pu)
+	setPu("", pu)
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
 
@@ -1347,7 +1348,7 @@ func make9ColumnsResultSet() *MysqlResultSet {
 //	if !ok {
 //		return moerr.NewInternalError(ctx, "message is not Packet")
 //	}
-//	setGlobalPu(pu)
+//	setPu("",pu)
 //	ses := NewSession(pro, nil, nil, false, nil)
 //	ses.SetRequestContext(ctx)
 //	pro.SetSession(ses)
@@ -1913,7 +1914,7 @@ func Test_writePackets(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
+		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		if err != nil {
 			panic(err)
@@ -1931,7 +1932,7 @@ func Test_writePackets(t *testing.T) {
 	//
 	//	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	//	pu.SV.SkipCheckUser = true
-	//	setGlobalPu(pu)
+	//	setPu("",pu)
 	//	ioses, err := NewIOSession(serverConn, pu)
 	//	if err != nil {
 	//		panic(err)
@@ -1949,7 +1950,7 @@ func Test_writePackets(t *testing.T) {
 	//
 	//	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	//	pu.SV.SkipCheckUser = true
-	//	setGlobalPu(pu)
+	//	setPu("",pu)
 	//	ioses, err := NewIOSession(serverConn, pu)
 	//	if err != nil {
 	//		panic(err)

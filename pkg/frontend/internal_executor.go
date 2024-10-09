@@ -139,7 +139,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getPu("").SV.SessionTimeout.Duration)
+	ctx, cancel = context.WithTimeout(ctx, getPu(ie.service).SV.SessionTimeout.Duration)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer func() {

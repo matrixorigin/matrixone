@@ -38,7 +38,7 @@ const (
 )
 
 func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.CreateTable) error {
-	ts := getPu("").TaskService
+	ts := getPu(ses.GetService()).TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
