@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,8 +32,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 
 	var selectList []tree.SelectExpr
-	colName2Idx := make(map[string]int)
-	updateColName2Idx := make(map[string]int)
+	colName2Idx := make(map[string]int32)
+	updateColName2Idx := make(map[string]int32)
 
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -42,7 +44,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		// append  table.* to project list
 		for _, col := range tableDef.Cols {
-			colName2Idx[alias+"."+col.Name] = len(selectList)
+			colName2Idx[alias+"."+col.Name] = int32(len(selectList))
 			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: e,
@@ -72,39 +74,49 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			for _, colDef := range tableDef.Cols {
-				if colDef.Name == colName && colDef.Typ.Id == int32(types.T_enum) {
-					if colDef.Typ.AutoIncr {
-						return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
-					}
-
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, colDef.Typ, nil)
-					updateKeyExpr, err := binder.BindExpr(updateExpr, 0, false)
-					if err != nil {
-						return 0, err
-					}
-
-					exprs := []tree.Expr{
-						tree.NewNumVal(colDef.Typ.Enumvalues, colDef.Typ.Enumvalues, false, tree.P_char),
-						updateExpr,
-					}
-
-					if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {
-						updateExpr = &tree.FuncExpr{
-							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastIndexValueToIndexFun)),
-							Type:  tree.FUNC_TYPE_DEFAULT,
-							Exprs: exprs,
+				if colDef.Name == colName {
+					if colDef.Typ.Id == int32(types.T_enum) {
+						if colDef.Typ.AutoIncr {
+							return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
 						}
-					} else {
-						updateExpr = &tree.FuncExpr{
-							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastValueToIndexFun)),
-							Type:  tree.FUNC_TYPE_DEFAULT,
-							Exprs: exprs,
+
+						binder := NewDefaultBinder(builder.GetContext(), nil, nil, colDef.Typ, nil)
+						updateKeyExpr, err := binder.BindExpr(updateExpr, 0, false)
+						if err != nil {
+							return 0, err
+						}
+
+						exprs := []tree.Expr{
+							tree.NewNumVal(colDef.Typ.Enumvalues, colDef.Typ.Enumvalues, false, tree.P_char),
+							updateExpr,
+						}
+
+						if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {
+							updateExpr = &tree.FuncExpr{
+								Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastIndexValueToIndexFun)),
+								Type:  tree.FUNC_TYPE_DEFAULT,
+								Exprs: exprs,
+							}
+						} else {
+							updateExpr = &tree.FuncExpr{
+								Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastValueToIndexFun)),
+								Type:  tree.FUNC_TYPE_DEFAULT,
+								Exprs: exprs,
+							}
+						}
+					}
+
+					if colDef.Typ.AutoIncr {
+						if constExpr, ok := updateExpr.(*tree.NumVal); ok {
+							if constExpr.ValType == tree.P_null {
+								return 0, moerr.NewConstraintViolation(builder.compCtx.GetContext(), fmt.Sprintf("Column '%s' cannot be null", colName))
+							}
 						}
 					}
 				}
 			}
 
-			updateColName2Idx[alias+"."+colName] = len(selectList)
+			updateColName2Idx[alias+"."+colName] = int32(len(selectList))
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateExpr,
 			})
@@ -273,7 +285,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	updateCtxList := make([]*plan.UpdateCtx, 0)
 
 	finalProjTag := builder.genNewTag()
-	finalColName2Idx := make(map[string]int)
+	finalColName2Idx := make(map[string]int32)
 	var finalProjList []*plan.Expr
 
 	for i, tableDef := range dmlCtx.tableDefs {
@@ -286,10 +298,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		for j, col := range tableDef.Cols {
 			finalColIdx := len(finalProjList)
-			if col.Name == tableDef.Pkey.PkeyColName && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+			if col.Name == tableDef.Pkey.PkeyColName {
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
 					PrimaryColIdxInBat: int32(finalColIdx),
+					PrimaryColRelPos:   finalProjTag,
 					PrimaryColTyp:      col.Typ,
 				}
 				lockTargets = append(lockTargets, lockTarget)
@@ -305,7 +318,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				colIdx = updateIdx
 			}
 
-			finalColName2Idx[alias+"."+col.Name] = finalColIdx
+			finalColName2Idx[alias+"."+col.Name] = int32(finalColIdx)
 			finalProjList = append(finalProjList, &plan.Expr{
 				Typ: selectNode.ProjectList[colIdx].Typ,
 				Expr: &plan.Expr_Col{
@@ -324,11 +337,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			DeleteCols: []plan.ColRef{
 				{
 					RelPos: finalProjTag,
-					ColPos: int32(finalColName2Idx[alias+"."+catalog.Row_ID]),
+					ColPos: finalColName2Idx[alias+"."+catalog.Row_ID],
 				},
 				{
 					RelPos: finalProjTag,
-					ColPos: int32(finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]),
+					ColPos: finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName],
 				},
 			},
 		})
@@ -397,7 +410,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			insertCols[0].ColPos = int32(oldIdx)
 
 			insertCols[1].RelPos = finalProjTag
-			insertCols[1].ColPos = int32(finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName])
+			insertCols[1].ColPos = finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]
 
 			updateCtxList = append(updateCtxList, &plan.UpdateCtx{
 				ObjRef:     idxNode.ObjRef,
@@ -408,6 +421,39 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
+	dmlNode := &plan.Node{
+		NodeType:      plan.Node_MULTI_UPDATE,
+		BindingTags:   []int32{builder.genNewTag()},
+		UpdateCtxList: updateCtxList,
+	}
+
+	if dmlCtx.tableDefs[0].Partition != nil {
+		partName2Idx := make(map[string]int32)
+		for k, v := range colName2Idx {
+			partName2Idx[k] = v
+		}
+		for k, v := range updateColName2Idx {
+			partName2Idx[k] = v
+		}
+		var partitionExpr *Expr
+		partitionIdx := int32(len(finalProjList))
+		partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[0], dmlCtx.tableDefs[0])
+		updateCtxList[0].PartitionIdx = partitionIdx
+		updateCtxList[0].PartitionTableIds = partitionTableIDs
+		updateCtxList[0].PartitionTableNames = partitionTableNames
+		partitionExpr, err = getRemapParitionExpr(dmlCtx.tableDefs[0], selectNodeTag, partName2Idx, true)
+		if err != nil {
+			return -1, err
+		}
+		finalProjList = append(finalProjList, partitionExpr)
+		dmlNode.BindingTags = append(dmlNode.BindingTags, finalProjTag)
+
+		lockTargets[0].IsPartitionTable = true
+		lockTargets[0].PartitionTableIds = partitionTableIDs
+		lockTargets[0].FilterColIdxInBat = partitionIdx
+		lockTargets[0].FilterColRelPos = finalProjTag
+	}
+
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: finalProjList,
@@ -415,24 +461,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		BindingTags: []int32{finalProjTag},
 	}, bindCtx)
 
-	if len(lockTargets) > 0 {
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{lastNodeID},
-			TableDef:    dmlCtx.tableDefs[0],
-			BindingTags: []int32{builder.genNewTag(), selectNodeTag},
-			LockTargets: lockTargets,
-		}, bindCtx)
-
-		reCheckifNeedLockWholeTable(builder)
-	}
-
 	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:      plan.Node_MULTI_UPDATE,
-		Children:      []int32{lastNodeID},
-		BindingTags:   []int32{builder.genNewTag()},
-		UpdateCtxList: updateCtxList,
+		NodeType:    plan.Node_LOCK_OP,
+		Children:    []int32{lastNodeID},
+		TableDef:    dmlCtx.tableDefs[0],
+		BindingTags: []int32{builder.genNewTag()},
+		LockTargets: lockTargets,
 	}, bindCtx)
+	reCheckifNeedLockWholeTable(builder)
+
+	dmlNode.Children = append(dmlNode.Children, lastNodeID)
+	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
 }

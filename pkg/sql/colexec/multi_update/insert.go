@@ -120,11 +120,12 @@ func (update *MultiUpdate) insert_table(
 	inputBatch *batch.Batch,
 	insertBatch *batch.Batch) (err error) {
 	if len(updateCtx.PartitionTableIDs) > 0 {
+		partTableNulls := inputBatch.Vecs[updateCtx.PartitionIdx].GetNulls()
+		partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.PartitionIdx])
+
 		for partIdx := range len(updateCtx.PartitionTableIDs) {
 			insertBatch.CleanOnlyData()
 			expected := int32(partIdx)
-			partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.PartitionIdx])
-			partTableNulls := inputBatch.Vecs[updateCtx.PartitionIdx].GetNulls()
 
 			for i, partition := range partTableIDs {
 				if !partTableNulls.Contains(uint64(i)) {
@@ -141,10 +142,13 @@ func (update *MultiUpdate) insert_table(
 				}
 			}
 
-			insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
-			err = updateCtx.PartitionSources[partIdx].Write(proc.Ctx, insertBatch)
-			if err != nil {
-				return err
+			rowCount := insertBatch.Vecs[0].Length()
+			if rowCount > 0 {
+				insertBatch.SetRowCount(rowCount)
+				err = updateCtx.PartitionSources[partIdx].Write(proc.Ctx, insertBatch)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	} else {
@@ -155,8 +159,11 @@ func (update *MultiUpdate) insert_table(
 				return err
 			}
 		}
-		insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
-		err = updateCtx.Source.Write(proc.Ctx, insertBatch)
+		rowCount := insertBatch.Vecs[0].Length()
+		if rowCount > 0 {
+			insertBatch.SetRowCount(rowCount)
+			err = updateCtx.Source.Write(proc.Ctx, insertBatch)
+		}
 	}
 	return
 }

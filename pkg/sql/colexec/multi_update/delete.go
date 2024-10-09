@@ -45,6 +45,9 @@ func (update *MultiUpdate) delete_table(
 	rowCount := inputBatch.RowCount()
 
 	if len(updateCtx.PartitionTableIDs) > 0 {
+		partTableNulls := inputBatch.Vecs[updateCtx.PartitionIdx].GetNulls()
+		partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.PartitionIdx])
+
 		for partIdx := range len(updateCtx.PartitionTableIDs) {
 			rowIdNulls := rowIdVec.GetNulls()
 			if rowIdNulls.Count() == rowCount {
@@ -53,10 +56,9 @@ func (update *MultiUpdate) delete_table(
 
 			deleteBatch.CleanOnlyData()
 			expected := int32(partIdx)
-			partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.PartitionIdx])
 
 			for i, partition := range partTableIDs {
-				if !inputBatch.Vecs[updateCtx.PartitionIdx].GetNulls().Contains(uint64(i)) {
+				if !partTableNulls.Contains(uint64(i)) {
 					if partition == -1 {
 						return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 					} else if partition == expected {
@@ -72,10 +74,13 @@ func (update *MultiUpdate) delete_table(
 				}
 			}
 
-			deleteBatch.SetRowCount(deleteBatch.Vecs[0].Length())
-			err = updateCtx.PartitionSources[partIdx].Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
-			if err != nil {
-				return err
+			rowCount := deleteBatch.Vecs[0].Length()
+			if rowCount > 0 {
+				deleteBatch.SetRowCount(rowCount)
+				err = updateCtx.PartitionSources[partIdx].Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	} else {
@@ -106,8 +111,11 @@ func (update *MultiUpdate) delete_table(
 				}
 			}
 		}
-		deleteBatch.SetRowCount(deleteBatch.Vecs[0].Length())
-		err = updateCtx.Source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
+		rowCount := deleteBatch.Vecs[0].Length()
+		if rowCount > 0 {
+			deleteBatch.SetRowCount(rowCount)
+			err = updateCtx.Source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
+		}
 	}
 
 	return
