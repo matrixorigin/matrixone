@@ -179,7 +179,7 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batc
 			// init buf
 			if ctr.deleteBuf[i] == nil {
 				mainPkIdx := updateCtx.deleteCols[1]
-				buf := batch.New(false, []string{catalog.Row_ID, "pk"})
+				buf := batch.NewOffHeap(false, []string{catalog.Row_ID, "pk"})
 				buf.SetVector(0, vector.NewOffHeapVecWithType(types.T_Rowid.ToType()))
 				buf.SetVector(1, vector.NewOffHeapVecWithType(*bat.Vecs[mainPkIdx].GetType()))
 				ctr.deleteBuf[i] = buf

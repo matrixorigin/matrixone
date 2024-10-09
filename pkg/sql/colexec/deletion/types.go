@@ -280,7 +280,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			return 0, err
 		}
 
-		bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
+		bat := batch.NewOffHeap(false, []string{catalog.ObjectMeta_ObjectStats})
 		bat.SetVector(0, vector.NewOffHeapVecWithType(types.T_text.ToType()))
 		if err = vector.AppendBytes(
 			bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
@@ -362,7 +362,7 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 }
 
 func makeDelBatch(pkType types.Type) *batch.Batch {
-	bat := batch.New(false, []string{catalog.Row_ID, "pk"})
+	bat := batch.NewOffHeap(false, []string{catalog.Row_ID, "pk"})
 	bat.SetVector(0, vector.NewOffHeapVecWithType(types.T_Rowid.ToType()))
 	bat.SetVector(1, vector.NewOffHeapVecWithType(pkType))
 	return bat
