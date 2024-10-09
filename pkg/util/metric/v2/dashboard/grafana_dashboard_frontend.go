@@ -37,6 +37,7 @@ func (c *DashboardCreator) initFrontendDashboard() error {
 			c.initFrontendPubSubDuration(),
 			c.initFrontendSQLLength(),
 			c.initFrontendCdc(),
+			c.initFrontendCdcDuration(),
 		)...)
 	if err != nil {
 		return err
@@ -261,5 +262,28 @@ func (c *DashboardCreator) initFrontendCdc() dashboard.Option {
 			[]string{
 				"total",
 			}),
+	)
+}
+
+func (c *DashboardCreator) initFrontendCdcDuration() dashboard.Option {
+	return dashboard.Row(
+		"Cdc Duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="read"`),
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="append"`),
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="sink"`),
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="send-sql"`),
+			},
+			[]string{
+				"read",
+				"append",
+				"sink",
+				"send-sql",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
 	)
 }
