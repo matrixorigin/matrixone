@@ -1706,7 +1706,6 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore cluster level pitr %s", tenantInfo.GetTenant(), pitrRecord.pitrName)
 		}
 	case tree.RESTORELEVELACCOUNT:
-
 		if len(stmt.AccountName) == 0 { // restore self account
 			// check the level
 			if pitrRecord.level == tree.PITRLEVELDATABASE.String() || pitrRecord.level == tree.PITRLEVELTABLE.String() {
