@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -72,33 +74,43 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			for _, colDef := range tableDef.Cols {
-				if colDef.Name == colName && colDef.Typ.Id == int32(types.T_enum) {
-					if colDef.Typ.AutoIncr {
-						return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
-					}
-
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, colDef.Typ, nil)
-					updateKeyExpr, err := binder.BindExpr(updateExpr, 0, false)
-					if err != nil {
-						return 0, err
-					}
-
-					exprs := []tree.Expr{
-						tree.NewNumVal(colDef.Typ.Enumvalues, colDef.Typ.Enumvalues, false, tree.P_char),
-						updateExpr,
-					}
-
-					if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {
-						updateExpr = &tree.FuncExpr{
-							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastIndexValueToIndexFun)),
-							Type:  tree.FUNC_TYPE_DEFAULT,
-							Exprs: exprs,
+				if colDef.Name == colName {
+					if colDef.Typ.Id == int32(types.T_enum) {
+						if colDef.Typ.AutoIncr {
+							return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
 						}
-					} else {
-						updateExpr = &tree.FuncExpr{
-							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastValueToIndexFun)),
-							Type:  tree.FUNC_TYPE_DEFAULT,
-							Exprs: exprs,
+
+						binder := NewDefaultBinder(builder.GetContext(), nil, nil, colDef.Typ, nil)
+						updateKeyExpr, err := binder.BindExpr(updateExpr, 0, false)
+						if err != nil {
+							return 0, err
+						}
+
+						exprs := []tree.Expr{
+							tree.NewNumVal(colDef.Typ.Enumvalues, colDef.Typ.Enumvalues, false, tree.P_char),
+							updateExpr,
+						}
+
+						if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {
+							updateExpr = &tree.FuncExpr{
+								Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastIndexValueToIndexFun)),
+								Type:  tree.FUNC_TYPE_DEFAULT,
+								Exprs: exprs,
+							}
+						} else {
+							updateExpr = &tree.FuncExpr{
+								Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastValueToIndexFun)),
+								Type:  tree.FUNC_TYPE_DEFAULT,
+								Exprs: exprs,
+							}
+						}
+					}
+
+					if colDef.Typ.AutoIncr {
+						if constExpr, ok := updateExpr.(*tree.NumVal); ok {
+							if constExpr.ValType == tree.P_null {
+								return 0, moerr.NewConstraintViolation(builder.compCtx.GetContext(), fmt.Sprintf("Column '%s' cannot be null", colName))
+							}
 						}
 					}
 				}
