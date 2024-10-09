@@ -128,13 +128,27 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 				rightExpr,
 			})
 
+			var dedupColName string
+			dedupColTypes := make([]plan.Type, len(tableDef.Pkey.Names))
+
+			if len(tableDef.Pkey.Names) == 1 {
+				dedupColName = tableDef.Pkey.Names[0]
+			} else {
+				dedupColName = "(" + strings.Join(tableDef.Pkey.Names, ",") + ")"
+			}
+
+			for j, part := range tableDef.Pkey.Names {
+				dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[part]].Typ
+			}
+
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType:          plan.Node_JOIN,
 				Children:          []int32{scanNodeID, lastNodeID},
 				JoinType:          plan.Node_DEDUP,
 				OnList:            []*plan.Expr{joinCond},
 				OnDuplicateAction: onDupAction,
-				DedupColName:      pkName,
+				DedupColName:      dedupColName,
+				DedupColTypes:     dedupColTypes,
 			}, bindCtx)
 		}
 
@@ -222,13 +236,27 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 				rightExpr,
 			})
 
+			var dedupColName string
+			dedupColTypes := make([]plan.Type, len(idxDef.Parts))
+
+			if len(idxDef.Parts) == 1 {
+				dedupColName = idxDef.Parts[0]
+			} else {
+				dedupColName = "(" + strings.Join(idxDef.Parts, ",") + ")"
+			}
+
+			for j, part := range idxDef.Parts {
+				dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[part]].Typ
+			}
+
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType:          plan.Node_JOIN,
 				Children:          []int32{idxTableNodeID, lastNodeID},
 				JoinType:          plan.Node_DEDUP,
 				OnList:            []*plan.Expr{joinCond},
 				OnDuplicateAction: onDupAction,
-				DedupColName:      catalog.IndexTableIndexColName,
+				DedupColName:      dedupColName,
+				DedupColTypes:     dedupColTypes,
 			}, bindCtx)
 		}
 	}

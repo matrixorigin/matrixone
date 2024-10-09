@@ -1906,7 +1906,6 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 		arg := op.(*dedupjoin.DedupJoin)
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		//ret.HashOnPK = arg.HashOnPK
 		ret.NeedBatches = true
 		ret.IsDedup = true
 		ret.OnDuplicateAction = arg.OnDuplicateAction
