@@ -387,7 +387,7 @@ func newResultFunc[T types.FixedSizeT](
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if fr.vec == nil {
-		fr.vec = NewVec(fr.typ)
+		fr.vec = NewOffHeapVecWithType(fr.typ)
 	}
 
 	oldLength := fr.vec.Length()
