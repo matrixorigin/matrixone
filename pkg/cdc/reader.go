@@ -44,6 +44,7 @@ type tableReader struct {
 	tick         *time.Ticker
 	restartFunc  func(*DbTableInfo) error
 
+	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
 	delTsColIdx, delCompositedPkColIdx int
 }
@@ -69,6 +70,7 @@ func NewTableReader(
 		wMarkUpdater: wMarkUpdater,
 		tick:         time.NewTicker(200 * time.Millisecond),
 		restartFunc:  restartFunc,
+		tableDef:     tableDef,
 	}
 
 	// batch columns layout:
@@ -179,6 +181,7 @@ func (reader *tableReader) readTableWithTxn(
 	//step3: pull data
 	var insertData, deleteData *batch.Batch
 	var insertAtmBatch, deleteAtmBatch *AtomicBatch
+	//var insertTotalCount, deleteTotalCount int
 
 	allocateAtomicBatchIfNeed := func(atmBatch *AtomicBatch) *AtomicBatch {
 		if atmBatch == nil {
@@ -188,13 +191,6 @@ func (reader *tableReader) readTableWithTxn(
 			)
 		}
 		return atmBatch
-	}
-
-	recordCount := func(bat *batch.Batch) int {
-		if bat == nil || len(bat.Vecs) == 0 {
-			return 0
-		}
-		return bat.Vecs[0].Length()
 	}
 
 	var curHint engine.ChangesHandle_Hint
@@ -213,6 +209,12 @@ func (reader *tableReader) readTableWithTxn(
 
 		//both nil denote no more data
 		if insertData == nil && deleteData == nil {
+			//if !strings.Contains(reader.info.SourceTblName, "order") && !(insertTotalCount == 0 && deleteTotalCount == 0) {
+			//	logutil.Errorf("tableReader(%s)[%s, %s], insert total record count=%v, delete total record count=%v",
+			//		reader.info.SourceTblName, fromTs.ToString(), toTs.ToString(), insertTotalCount, deleteTotalCount)
+			//}
+			//insertTotalCount, deleteTotalCount = 0, 0
+
 			// heartbeat
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
 				noMoreData: true,
@@ -222,7 +224,20 @@ func (reader *tableReader) readTableWithTxn(
 			return
 		}
 
-		count := float64(recordCount(insertData) + recordCount(deleteData))
+		//if !strings.Contains(reader.info.SourceTblName, "order") {
+		//	insertPks, err := getPksFromBat(ctx, insertData, reader.tableDef, false)
+		//	if err != nil {
+		//		logutil.Errorf("tableReader(%s), get insertPks failed, err: %v", reader.info.SourceTblName, err)
+		//	}
+		//	deletePks, err := getPksFromBat(ctx, deleteData, reader.tableDef, true)
+		//	if err != nil {
+		//		logutil.Errorf("tableReader(%s), get deletePks failed, err: %v", reader.info.SourceTblName, err)
+		//	}
+		//	logutil.Errorf("tableReader(%s)[%s, %s], insertData pks = %v, deleteData pks = %v",
+		//		reader.info.SourceTblName, fromTs.ToString(), toTs.ToString(), insertPks, deletePks)
+		//}
+
+		count := float64(batchRowCount(insertData) + batchRowCount(deleteData))
 		allocated := float64(insertData.Allocated() + deleteData.Allocated())
 		v2.CdcTotalProcessingRecordCountGauge.Add(count)
 		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
@@ -250,6 +265,16 @@ func (reader *tableReader) readTableWithTxn(
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 			insertAtmBatch.Append(packer, insertData, reader.insTsColIdx, reader.insCompositedPkColIdx)
 			deleteAtmBatch.Append(packer, deleteData, reader.delTsColIdx, reader.delCompositedPkColIdx)
+
+			//insertTotalCount += insertAtmBatch.RowCount()
+			//deleteTotalCount += deleteAtmBatch.RowCount()
+			//if !strings.Contains(reader.info.SourceTblName, "order") {
+			//	logutil.Errorf("tableReader(%s)[%s, %s], insertAtmBatch: %s, deleteAtmBatch: %s",
+			//		reader.info.SourceTblName, fromTs.ToString(), toTs.ToString(),
+			//		insertAtmBatch.DebugString(reader.tableDef, false),
+			//		deleteAtmBatch.DebugString(reader.tableDef, true))
+			//}
+
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
 				outputTyp:      OutputTypeTailDone,
 				insertAtmBatch: insertAtmBatch,
