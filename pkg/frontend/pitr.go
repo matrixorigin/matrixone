@@ -1559,9 +1559,11 @@ func getPitrRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*pitr
 				if record.modifiedTime, err = er.GetString(ctx, row, 4); err != nil {
 					return nil, err
 				}
-				if record.level, err = er.GetString(ctx, row, 5); err != nil {
+				var level string
+				if level, err = er.GetString(ctx, row, 5); err != nil {
 					return nil, err
 				}
+				record.level = strings.ToLower(level)
 				if record.accountId, err = er.GetUint64(ctx, row, 6); err != nil {
 					return nil, err
 				}
