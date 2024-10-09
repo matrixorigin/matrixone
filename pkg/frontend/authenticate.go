@@ -4281,15 +4281,6 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
 	checkedPrivilegeTypes := make([]PrivilegeType, len(rp.Privileges))
 
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
 	//handle "IF EXISTS"
 	//step 1: check roles. exists or not.
 	for i, user := range rp.Roles {
@@ -4553,15 +4544,6 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 	//step 1: get role_id
 	verifiedRoles := make([]*verifiedRole, len(gp.Roles))
 	checkedPrivilegeTypes := make([]PrivilegeType, len(gp.Privileges))
-
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	for i, role := range gp.Roles {
 		//check Grant privilege on xxx yyy to moadmin(accountadmin)

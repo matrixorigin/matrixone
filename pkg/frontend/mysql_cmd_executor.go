@@ -1414,17 +1414,35 @@ func handleRevokeRole(ses FeSession, execCtx *ExecCtx, rr *tree.RevokeRole) erro
 }
 
 // handleGrantRole grants the privilege to the role
-func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) error {
+func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) (err error) {
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
+
+	//put it into the single transaction
+	err = bh.Exec(execCtx.reqCtx, "begin;")
+	defer func() {
+		err = finishTxn(execCtx.reqCtx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
 
 	return doGrantPrivilege(execCtx.reqCtx, ses, gp, bh)
 }
 
 // handleRevokePrivilege revokes the privilege from the user or role
-func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) error {
+func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
+
+	//put it into the single transaction
+	err = bh.Exec(execCtx.reqCtx, "begin;")
+	defer func() {
+		err = finishTxn(execCtx.reqCtx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
 
 	return doRevokePrivilege(execCtx.reqCtx, ses, rp, bh)
 }
