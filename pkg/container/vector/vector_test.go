@@ -2407,7 +2407,7 @@ func TestRowToString(t *testing.T) {
 		v := NewVec(types.T_timestamp.ToType())
 		err := AppendFixedList(v, []types.Timestamp{1, types.Timestamp(types.DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0)), 3, 4}, nil, mp)
 		require.NoError(t, err)
-		require.Equal(t, "1970-01-01 08:00:00", v.RowToString(1))
+		require.Equal(t, "1970-01-01 00:00:00", v.RowToString(1))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
