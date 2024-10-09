@@ -108,7 +108,7 @@ func Test_mce(t *testing.T) {
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		setSessionAlloc("", newLeakCheckAllocator())
+		setSessionAlloc("", NewLeakCheckAllocator())
 		ioses, err := NewIOSession(tConn, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)

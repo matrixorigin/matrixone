@@ -21,6 +21,10 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/lni/goutils/leaktest"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -33,9 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	dto "github.com/prometheus/client_model/go"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 const defaultTestTimeout = 3 * time.Minute
@@ -138,7 +139,7 @@ func TestCalculateObjectCount(t *testing.T) {
 	// query with metrics db
 	{
 		queryOpts := ie.NewOptsBuilder().Database(mometric.MetricDBConst).Internal(true).Finish()
-
+		frontend.SetPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 		result := frontend.NewInternalExecutor("").Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
 		require.NoError(t, result.Error())
 

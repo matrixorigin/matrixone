@@ -37,7 +37,7 @@ func Test_Closed(t *testing.T) {
 	registerConn(clientConn)
 	pu, _ := getParameterUnit("test/system_vars_config.toml", nil, nil)
 	pu.SV.SkipCheckUser = true
-	setSessionAlloc("", newLeakCheckAllocator())
+	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	temp, _ := NewRoutineManager(ctx, "")

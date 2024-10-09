@@ -47,7 +47,7 @@ func Test_protocol(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setSessionAlloc("", newLeakCheckAllocator())
+		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
 		io, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -72,7 +72,7 @@ func Test_SendResponse(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setSessionAlloc("", newLeakCheckAllocator())
+		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)

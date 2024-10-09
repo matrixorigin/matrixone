@@ -97,7 +97,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	setSessionAlloc("", newLeakCheckAllocator())
+	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)

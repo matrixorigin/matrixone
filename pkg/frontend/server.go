@@ -369,6 +369,10 @@ func setSessionAlloc(service string, s Allocator) {
 	getServerLevelVars(service).sessionAlloc.Store(s)
 }
 
+func SetSessionAlloc(service string, s Allocator) {
+	setSessionAlloc(service, s)
+}
+
 func setRtMgr(service string, rtMgr *RoutineManager) {
 	getServerLevelVars(service).RtMgr.Store(rtMgr)
 }
@@ -383,6 +387,10 @@ func getRtMgr(service string) *RoutineManager {
 
 func setPu(service string, pu *config.ParameterUnit) {
 	getServerLevelVars(service).Pu.Store(pu)
+}
+
+func SetPu(service string, pu *config.ParameterUnit) {
+	setPu(service, pu)
 }
 
 func getPu(service string) *config.ParameterUnit {

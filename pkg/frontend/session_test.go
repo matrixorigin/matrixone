@@ -240,7 +240,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		setSessionAlloc("", newLeakCheckAllocator())
+		setSessionAlloc("", NewLeakCheckAllocator())
 		catalog2.SetupDefines("")
 		ioSes, err := NewIOSession(&testConn{}, pu, "")
 		if err != nil {
@@ -354,7 +354,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 		setPu("", pu)
-		setSessionAlloc("", newLeakCheckAllocator())
+		setSessionAlloc("", NewLeakCheckAllocator())
 		ses := genSession(ctrl, pu)
 
 		var ts *timestamp.Timestamp
@@ -401,7 +401,7 @@ func TestSession_GetTempTableStorage(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	setPu("", pu)
-	setSessionAlloc("", newLeakCheckAllocator())
+	setSessionAlloc("", NewLeakCheckAllocator())
 	ses := genSession(ctrl, pu)
 	assert.Panics(t, func() {
 		_ = ses.GetTxnHandler().GetTempStorage()
@@ -430,7 +430,7 @@ func TestIfInitedTempEngine(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	setPu("", pu)
-	setSessionAlloc("", newLeakCheckAllocator())
+	setSessionAlloc("", NewLeakCheckAllocator())
 	ses := genSession(ctrl, pu)
 	assert.False(t, ses.GetTxnHandler().HasTempEngine())
 }
@@ -456,7 +456,7 @@ func TestSetTempTableStorage(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	setPu("", pu)
-	setSessionAlloc("", newLeakCheckAllocator())
+	setSessionAlloc("", NewLeakCheckAllocator())
 	ses := genSession(ctrl, pu)
 
 	ck := clock.NewHLCClock(func() int64 {

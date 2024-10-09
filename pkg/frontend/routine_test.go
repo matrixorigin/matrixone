@@ -163,7 +163,7 @@ func Test_ConnectionCount(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	setSessionAlloc("", newLeakCheckAllocator())
+	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 
 	noResultSet := make(map[string]bool)

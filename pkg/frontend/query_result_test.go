@@ -68,7 +68,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	//file service
 	pu.FileService = newLocalETLFS(t, defines.SharedFileServiceName)
 	setPu("", pu)
-	setSessionAlloc("", newLeakCheckAllocator())
+	setSessionAlloc("", NewLeakCheckAllocator())
 	//io session
 
 	ioses, err := NewIOSession(&testConn{}, pu, "")
