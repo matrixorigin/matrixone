@@ -229,9 +229,6 @@ func (rm *RoutineManager) setBaseService(baseService BaseService) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.baseService = baseService
-	if baseService != nil {
-		rm.service = baseService.ID()
-	}
 }
 
 func (rm *RoutineManager) setSessionMgr(sessionMgr *queryservice.SessionManager) {
@@ -490,7 +487,7 @@ func (rm *RoutineManager) killNetConns() {
 	}
 }
 
-func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
+func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, error) {
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithCancel(ctx)
 	accountRoutine := &AccountRoutineManager{
@@ -506,6 +503,7 @@ func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
 		routinesByConnID: make(map[uint32]*Routine),
 		accountRoutine:   accountRoutine,
 		cancel:           cancel,
+		service:          service,
 	}
 	if getPu(rm.service).SV.EnableTls {
 		err := initTlsConfig(rm, getPu(rm.service).SV)

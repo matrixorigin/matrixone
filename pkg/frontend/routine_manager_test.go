@@ -40,7 +40,7 @@ func Test_Closed(t *testing.T) {
 	setSessionAlloc("", newLeakCheckAllocator())
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-	temp, _ := NewRoutineManager(ctx)
+	temp, _ := NewRoutineManager(ctx, "")
 	setRtMgr("", temp)
 	mo := createInnerServer()
 	wg := sync.WaitGroup{}

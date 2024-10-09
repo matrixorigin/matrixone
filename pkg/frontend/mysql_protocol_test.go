@@ -105,7 +105,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	// A mock autoincrcache manager.
 	acim := &defines.AutoIncrCacheManager{}
 	setAicm("", acim)
-	rm, _ := NewRoutineManager(ctx)
+	rm, _ := NewRoutineManager(ctx, "")
 	setRtMgr("", rm)
 
 	wg := sync.WaitGroup{}
@@ -266,7 +266,7 @@ func TestKill(t *testing.T) {
 	// A mock autoincrcache manager.
 	acim := &defines.AutoIncrCacheManager{}
 	setAicm("", acim)
-	temp, _ := NewRoutineManager(ctx)
+	temp, _ := NewRoutineManager(ctx, "")
 	setRtMgr("", temp)
 
 	wg := sync.WaitGroup{}

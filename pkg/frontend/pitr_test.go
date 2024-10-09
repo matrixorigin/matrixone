@@ -121,7 +121,7 @@ func Test_createPubByPitr(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -160,7 +160,7 @@ func Test_createPubByPitr(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -201,7 +201,7 @@ func Test_createPubByPitr(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -244,7 +244,7 @@ func Test_doRestorePitr(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -323,7 +323,7 @@ func Test_doRestorePitr(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -404,7 +404,7 @@ func Test_doRestorePitr(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -485,7 +485,7 @@ func Test_doRestorePitr(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -581,7 +581,7 @@ func Test_doRestorePitr(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -680,7 +680,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -760,7 +760,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{

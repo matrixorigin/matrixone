@@ -420,10 +420,11 @@ func NewMOServer(
 	if baseService != nil {
 		service = baseService.ID()
 	}
+	initServerLevelVars(service)
 	setPu(service, pu)
 	setAicm(service, aicm)
 	setSessionAlloc(service, NewSessionAllocator(pu))
-	rm, err := NewRoutineManager(ctx)
+	rm, err := NewRoutineManager(ctx, service)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}

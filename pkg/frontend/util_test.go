@@ -1454,7 +1454,7 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
 
-		rm, err := NewRoutineManager(ctx)
+		rm, err := NewRoutineManager(ctx, "")
 		assert.Nil(t, err)
 		ses.rm = rm
 
