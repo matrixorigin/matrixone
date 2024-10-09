@@ -441,6 +441,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	sink := &mysqlSink{
 		user:          "root",
@@ -536,6 +537,23 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 		deleteAtmBatch: deleteAtomicBat,
 	})
 	assert.NoError(t, err)
+
+	err = sinker.Sink(context.Background(), &DecoderOutput{
+		outputTyp:      OutputTypeTailDone,
+		fromTs:         t1,
+		toTs:           t2,
+		insertAtmBatch: insertAtomicBat,
+	})
+	assert.NoError(t, err)
+
+	err = sinker.Sink(context.Background(), &DecoderOutput{
+		outputTyp:      OutputTypeTailDone,
+		fromTs:         t1,
+		toTs:           t2,
+		deleteAtmBatch: deleteAtomicBat,
+	})
+	assert.NoError(t, err)
+
 	err = sinker.Sink(context.Background(), &DecoderOutput{
 		noMoreData: true,
 		fromTs:     t1,
@@ -855,9 +873,7 @@ func Test_mysqlSinker_sinkTail(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr assert.ErrorAssertionFunc
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &mysqlSinker{
