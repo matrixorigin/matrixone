@@ -119,7 +119,13 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	default:
 		//change privilege
 		switch execCtx.stmt.(type) {
-		case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView, *tree.DropSequence,
+		case *tree.DropTable, *tree.DropDatabase:
+			ses.InvalidatePrivilegeCache()
+			err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			if err != nil {
+				return
+			}
+		case *tree.DropIndex, *tree.DropView, *tree.DropSequence,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
@@ -169,11 +175,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		switch execCtx.stmt.(type) {
 		case *tree.CreateDatabase:
 			err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
-			if err != nil {
-				return
-			}
-		case *tree.DropDatabase, *tree.DropTable:
-			err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
 			if err != nil {
 				return
 			}
