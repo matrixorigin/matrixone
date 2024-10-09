@@ -879,6 +879,7 @@ message Node {
 	Snapshot scan_snapshot = 62;
 	bool recursive_cte = 63;
 	ApplyType apply_type = 64;
+	PostDmlCtx post_dml_ctx = 65;
 
 }
 
@@ -979,6 +980,27 @@ message DeleteCtx {
 	int32 primary_key_idx = 9;
 	TruncateTable truncate_table = 10;
 	TableDef table_def 	= 11;
+}
+
+message PostDmlFullTextCtx {
+	bool is_delete = 1;
+	bool is_insert = 2;
+	string source_table_name = 3;
+	string index_table_name = 4;
+	int32 primary_key_idx = 5;
+	string primary_key_name = 6;
+	repeated string parts = 7;
+	string algo_params = 8;
+}
+
+message PostDmlCtx {
+	ObjectRef ref = 1;
+	bool add_affected_rows 	= 2;
+	// Align array index with the partition number
+	repeated uint64 partition_table_ids = 3;
+	repeated string partition_table_names = 4;
+	int32 partition_idx = 5;
+	PostDmlFullTextCtx full_text = 6;
 }
 
 message Query {

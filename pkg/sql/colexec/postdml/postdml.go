@@ -95,7 +95,7 @@ func (postdml *PostDml) runPostDmlFullText(proc *process.Process) (vm.CallResult
 
 	} else {
 		bat := result.Batch
-		pkvec := bat.Vecs[ftctx.PkeyIdx]
+		pkvec := bat.Vecs[ftctx.PrimaryKeyIdx]
 		//pkTyp := pkvec.GetType()
 		in_list = make([]any, 0, bat.RowCount())
 		for i := 0; i < bat.RowCount(); i++ {
@@ -120,7 +120,7 @@ func (postdml *PostDml) runPostDmlFullText(proc *process.Process) (vm.CallResult
 	}
 
 	if ftctx.IsInsert {
-		sql := fmt.Sprintf(fulltextInsertSqlFmt, ftctx.IndexTableName, ftctx.SourceTableName, ftctx.AlgoParams, ftctx.PkeyName,
+		sql := fmt.Sprintf(fulltextInsertSqlFmt, ftctx.IndexTableName, ftctx.SourceTableName, ftctx.AlgoParams, ftctx.PrimaryKeyName,
 			strings.Join(ftctx.Parts, ", "), ftctx.SourceTableName, values)
 		logutil.Infof("INSERT SQL : %s", sql)
 		proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)

@@ -74,8 +74,8 @@ type PostDmlFullTextCtx struct {
 	IsInsert        bool
 	SourceTableName string
 	IndexTableName  string
-	PkeyIdx         int
-	PkeyName        string
+	PrimaryKeyIdx   int32
+	PrimaryKeyName  string
 	Parts           []string
 	AlgoParams      string
 }
