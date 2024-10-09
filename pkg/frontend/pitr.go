@@ -1715,21 +1715,14 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 				return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v", pitrRecord.pitrName, tenantInfo.GetTenant())
 			}
-			// if the pitr level is cluster, the tenant must be sys account
-			if pitrRecord.level == tree.PITRLEVELCLUSTER.String() && tenantInfo.GetTenantID() != sysAccountID {
-				return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore cluster level pitr %s", tenantInfo.GetTenant(), pitrRecord.pitrName)
-			}
 		} else {
 			// sys restore other account's pitr
 			// if the accout not sys account, return err
 			if tenantInfo.GetTenantID() != sysAccountID {
 				return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore other account %s", tenantInfo.GetTenant(), string(stmt.AccountName))
 			}
-			// if the pitr level is cluster, the scource account can not be empty
-			if pitrRecord.level == tree.PITRLEVELCLUSTER.String() && len(stmt.SrcAccountName) == 0 {
-				return moerr.NewInternalErrorNoCtxf("source account %s can not be empty when restore cluster level pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
-			}
-			// if the pitr level is account, the scource account must be empty
+
+			// if the pitr level is account, the scource account must be same
 			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountName != string(stmt.AccountName) {
 				return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v", pitrRecord.pitrName, string(stmt.SrcAccountName))
 			}
