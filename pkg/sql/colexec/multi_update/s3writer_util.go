@@ -44,8 +44,10 @@ func generateBlockWriter(writer *s3Writer,
 		return nil, err
 	}
 	seqnums := writer.seqnums[idx]
+	sortIdx := writer.sortIdxs[idx]
 	if isDelete {
 		seqnums = nil
+		sortIdx = 0
 	}
 	blockWriter, err := blockio.NewBlockWriterNew(
 		s3,
@@ -58,8 +60,8 @@ func generateBlockWriter(writer *s3Writer,
 		return nil, err
 	}
 
-	if writer.sortIdxs[idx] > -1 {
-		blockWriter.SetSortKey(uint16(writer.sortIdxs[idx]))
+	if sortIdx > -1 {
+		blockWriter.SetSortKey(uint16(sortIdx))
 	}
 
 	if isDelete {
@@ -102,7 +104,7 @@ func appendCfgToWriter(writer *s3Writer, tableDef *plan.TableDef) {
 	thisIdx := len(writer.sortIdxs)
 	writer.seqnums = append(writer.seqnums, seqnums)
 	writer.sortIdxs = append(writer.sortIdxs, sortIdx)
-	writer.pkIdxs = append(writer.sortIdxs, pkIdx)
+	writer.pkIdxs = append(writer.pkIdxs, pkIdx)
 	writer.schemaVersions = append(writer.schemaVersions, tableDef.Version)
 	writer.isClusterBys = append(writer.isClusterBys, tableDef.ClusterBy != nil)
 	if tableDef.Partition == nil {
