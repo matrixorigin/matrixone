@@ -111,6 +111,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		}
 
 		// grant privilege implicitly
+		// must execute after run to get table id
 		err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
@@ -121,6 +122,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		switch execCtx.stmt.(type) {
 		case *tree.DropTable, *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
+			// must execute before run to get database id or table id
 			doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
 
 		case *tree.DropIndex, *tree.DropView, *tree.DropSequence,
@@ -172,6 +174,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		}
 		switch execCtx.stmt.(type) {
 		case *tree.CreateDatabase:
+			// must execute after run to get database id
 			err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
 			if err != nil {
 				return
