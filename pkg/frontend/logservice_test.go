@@ -72,6 +72,10 @@ func (c *mockHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, error) 
 	return nil, nil
 }
 
+func (c *mockHAKeeperClient) CheckLogServiceHealth(_ context.Context) error {
+	return nil
+}
+
 func (c *mockHAKeeperClient) SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
 	return pb.CommandBatch{}, nil
 }
