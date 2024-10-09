@@ -335,22 +335,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 
-		//lastNodeID = builder.appendNode(&plan.Node{
-		//	NodeType: plan.Node_INSERT,
-		//	Children: []int32{lastNodeID},
-		//	ObjRef:   objRefs[i],
-		//	TableDef: tableDef,
-		//	InsertCtx: &plan.InsertCtx{
-		//		Ref:            objRefs[i],
-		//		IsClusterTable: tableDef.TableType == catalog.SystemClusterRel,
-		//		TableDef:       tableDef,
-		//		PartitionTableIds:   paritionTableIds,
-		//		PartitionTableNames: paritionTableNames,
-		//		PartitionIdx:        int32(partitionIdx),
-		//	},
-		//	InsertDeleteCols: insertCols,
-		//}, ctx)
-
 		for j, idxTableDef := range idxTableDefs[i] {
 			idxInsertCols := make([]plan.ColRef, len(idxTableDef.Cols)-1)
 			for k, col := range idxTableDef.Cols {
@@ -375,24 +359,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 				TableDef:   idxTableDef,
 				InsertCols: idxInsertCols,
 			})
-
-			//idxObjRef := DeepCopyObjectRef(idxObjRefs[i][j])
-			//idxTblDef := DeepCopyTableDef(idxTableDef, true)
-			//lastNodeID = builder.appendNode(&plan.Node{
-			//	NodeType: plan.Node_INSERT,
-			//	Children: []int32{lastNodeID},
-			//	ObjRef:   idxObjRef,
-			//	TableDef: idxTblDef,
-			//	InsertCtx: &plan.InsertCtx{
-			//		Ref:            idxObjRef,
-			//		IsClusterTable: idxTblDef.TableType == catalog.SystemClusterRel,
-			//		TableDef:       idxTblDef,
-			//		//PartitionTableIds:   paritionTableIds,
-			//		//PartitionTableNames: paritionTableNames,
-			//		//PartitionIdx:        int32(partitionIdx),
-			//	},
-			//	InsertDeleteCols: idxInsertCols,
-			//}, ctx)
 		}
 
 	}
@@ -655,18 +621,20 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		BindingTags: []int32{projTag1},
 	}, tmpCtx)
 
-	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType: plan.Node_PRE_INSERT,
-		Children: []int32{lastNodeID},
-		PreInsertCtx: &plan.PreInsertCtx{
-			Ref:           objRef,
-			TableDef:      tableDef,
-			HasAutoCol:    hasAutoCol,
-			CompPkeyExpr:  compPkeyExpr,
-			ClusterByExpr: clusterByExpr,
-		},
-		BindingTags: []int32{preInsertTag},
-	}, tmpCtx)
+	if hasAutoCol || compPkeyExpr != nil || clusterByExpr != nil {
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PRE_INSERT,
+			Children: []int32{lastNodeID},
+			PreInsertCtx: &plan.PreInsertCtx{
+				Ref:           objRef,
+				TableDef:      tableDef,
+				HasAutoCol:    hasAutoCol,
+				CompPkeyExpr:  compPkeyExpr,
+				ClusterByExpr: clusterByExpr,
+			},
+			BindingTags: []int32{preInsertTag},
+		}, tmpCtx)
+	}
 
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
