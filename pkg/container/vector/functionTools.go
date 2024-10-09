@@ -87,13 +87,13 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 	}
 }
 
-func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) {
+func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) bool {
 	t := v.GetType()
 	if v.IsConstNull() {
 		r, _ := f.(*FunctionParameterScalarNull[T])
 		r.typ = *t
 		r.sourceVector = v
-		return
+		return true
 	}
 	cols := MustFixedColWithTypeCheck[T](v)
 	if v.IsConst() {
@@ -101,20 +101,27 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 		r.typ = *t
 		r.sourceVector = v
 		r.scalarValue = cols[0]
-		return
+		return true
 	}
 	if !v.nsp.IsEmpty() {
-		r, _ := f.(*FunctionParameterNormal[T])
+		r, ok := f.(*FunctionParameterNormal[T])
+		if !ok {
+			return false
+		}
 		r.typ = *t
 		r.sourceVector = v
 		r.values = cols
 		r.nullMap = v.GetNulls().GetBitmap()
-		return
+		return true
 	}
-	r, _ := f.(*FunctionParameterWithoutNull[T])
+	r, ok := f.(*FunctionParameterWithoutNull[T])
+	if !ok {
+		return false
+	}
 	r.typ = *t
 	r.sourceVector = v
 	r.values = cols
+	return true
 }
 
 func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varlena] {
@@ -168,13 +175,13 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 	}
 }
 
-func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varlena]) {
+func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varlena]) bool {
 	t := v.GetType()
 	if v.IsConstNull() {
 		r, _ := f.(*FunctionParameterScalarNull[types.Varlena])
 		r.typ = *t
 		r.sourceVector = v
-		return
+		return true
 	}
 	var cols []types.Varlena
 	ToSliceNoTypeCheck(v, &cols)
@@ -184,38 +191,51 @@ func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varle
 		r.sourceVector = v
 		r.scalarValue = cols[0]
 		r.scalarStr = cols[0].GetByteSlice(v.area)
-		return
+		return true
 	}
 
 	if !v.nsp.IsEmpty() {
 		if len(v.area) == 0 {
-			r, _ := f.(*FunctionParameterNormalSpecial1[types.Varlena])
+			r, ok := f.(*FunctionParameterNormalSpecial1[types.Varlena])
+			if !ok {
+				return false
+			}
 			r.typ = *t
 			r.sourceVector = v
 			r.strValues = cols
 			r.nullMap = v.GetNulls().GetBitmap()
-			return
+			return true
 		}
-		r, _ := f.(*FunctionParameterNormal[types.Varlena])
+		r, ok := f.(*FunctionParameterNormal[types.Varlena])
+		if !ok {
+			return false
+		}
 		r.typ = *t
 		r.sourceVector = v
 		r.strValues = cols
 		r.area = v.area
 		r.nullMap = v.GetNulls().GetBitmap()
-		return
+		return true
 	}
 	if len(v.area) == 0 {
-		r, _ := f.(*FunctionParameterWithoutNullSpecial1[types.Varlena])
+		r, ok := f.(*FunctionParameterWithoutNullSpecial1[types.Varlena])
+		if !ok {
+			return false
+		}
 		r.typ = *t
 		r.sourceVector = v
 		r.strValues = cols
-		return
+		return true
 	}
-	r, _ := f.(*FunctionParameterWithoutNull[types.Varlena])
+	r, ok := f.(*FunctionParameterWithoutNull[types.Varlena])
+	if !ok {
+		return false
+	}
 	r.typ = *t
 	r.sourceVector = v
 	r.strValues = cols
 	r.area = v.area
+	return true
 }
 
 // FunctionParameterNormal is a wrapper of normal vector which

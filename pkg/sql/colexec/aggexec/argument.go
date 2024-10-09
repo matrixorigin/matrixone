@@ -32,7 +32,10 @@ func (arg *sFixedArg[T]) prepare(v *vector.Vector) {
 	if arg.w == nil {
 		arg.w = vector.GenerateFunctionFixedTypeParameter[T](v)
 	} else {
-		vector.ReuseFunctionFixedTypeParameter(v, arg.w)
+		ok := vector.ReuseFunctionFixedTypeParameter(v, arg.w)
+		if !ok {
+			arg.w = vector.GenerateFunctionFixedTypeParameter[T](v)
+		}
 	}
 }
 
@@ -40,7 +43,10 @@ func (arg *sBytesArg) prepare(v *vector.Vector) {
 	if arg.w == nil {
 		arg.w = vector.GenerateFunctionStrParameter(v)
 	} else {
-		vector.ReuseFunctionStrParameter(v, arg.w)
+		ok := vector.ReuseFunctionStrParameter(v, arg.w)
+		if !ok {
+			arg.w = vector.GenerateFunctionStrParameter(v)
+		}
 	}
 }
 
