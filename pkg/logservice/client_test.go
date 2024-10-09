@@ -87,9 +87,14 @@ func TestClientCanBeCreated(t *testing.T) {
 
 func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg,
+	service, err := NewServiceWithRetry(
+		genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
