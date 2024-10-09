@@ -121,10 +121,8 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		switch execCtx.stmt.(type) {
 		case *tree.DropTable, *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
-			err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
-			if err != nil {
-				return
-			}
+			doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
+
 		case *tree.DropIndex, *tree.DropView, *tree.DropSequence,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole,
