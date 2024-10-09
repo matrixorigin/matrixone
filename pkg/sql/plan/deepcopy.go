@@ -224,6 +224,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		SampleFunc:       DeepCopySampleFuncSpec(node.SampleFunc),
 		OnUpdateExprs:    DeepCopyExprList(node.OnUpdateExprs),
 		InsertDeleteCols: DeepCopyExprList(node.InsertDeleteCols),
+		DedupColName:     node.DedupColName,
+		DedupColTypes:    slices.Clone(node.DedupColTypes),
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 

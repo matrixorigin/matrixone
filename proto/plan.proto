@@ -880,6 +880,7 @@ message Node {
 
 	OnDuplicateAction on_duplicate_action = 65;
 	string dedup_col_name = 66;
+	repeated Type dedup_col_types = 67 [(gogoproto.nullable) = false];
 }
 
 // Snapshot Represents a snapshot of the database

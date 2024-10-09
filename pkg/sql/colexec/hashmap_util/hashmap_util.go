@@ -23,9 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -42,9 +41,11 @@ type HashmapBuilder struct {
 	UniqueJoinKeys     []*vector.Vector
 
 	IsDedup           bool
-	OnDuplicateAction pbplan.Node_OnDuplicateAction
+	OnDuplicateAction plan.Node_OnDuplicateAction
 	DedupColName      string
-	IgnoreRows        *bitmap.Bitmap
+	DedupColTypes     []plan.Type
+
+	IgnoreRows *bitmap.Bitmap
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -73,7 +74,7 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 		hb.executor = make([]colexec.ExpressionExecutor, len(Conditions))
 		hb.keyWidth = 0
 		for i, expr := range Conditions {
-			if _, ok := Conditions[i].Expr.(*pbplan.Expr_Col); !ok {
+			if _, ok := Conditions[i].Expr.(*plan.Expr_Col); !ok {
 				hb.needDupVec = true
 			}
 			typ := expr.Typ
@@ -302,11 +303,11 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 			if hb.IsDedup {
 				if v <= vOld {
 					switch hb.OnDuplicateAction {
-					case pbplan.Node_ERROR:
+					case plan.Node_ERROR:
 						return moerr.NewDuplicateEntry(proc.Ctx, hb.vecs[vecIdx1][0].RowToString(vecIdx2+k), hb.DedupColName)
-					case pbplan.Node_IGNORE:
+					case plan.Node_IGNORE:
 						hb.IgnoreRows.Add(uint64(i + k))
-					case pbplan.Node_UPDATE:
+					case plan.Node_UPDATE:
 					}
 				} else {
 					vOld = v

@@ -79,6 +79,7 @@ type DedupJoin struct {
 
 	OnDuplicateAction plan.Node_OnDuplicateAction
 	DedupColName      string
+	DedupColTypes     []plan.Type
 
 	vm.OperatorBase
 	colexec.Projection

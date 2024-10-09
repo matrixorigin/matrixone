@@ -581,12 +581,13 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColName = t.DedupColName
+		op.DedupColTypes = t.DedupColTypes
 		return op
 	}
 	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 }
 
-func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *filter.Filter {
+func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
 	op := filter.NewArgument()
 	op.E = filterExpr
 	op.IsEnd = n.IsEnd
@@ -1104,6 +1105,7 @@ func constructDedupJoin(n *plan.Node, right_typs []types.Type, proc *process.Pro
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.OnDuplicateAction = n.OnDuplicateAction
 	arg.DedupColName = n.DedupColName
+	arg.DedupColTypes = n.DedupColTypes
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
 		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1776,6 +1778,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.IsDedup = true
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
+		ret.DedupColTypes = arg.DedupColTypes
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
@@ -1908,6 +1911,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 		ret.IsDedup = true
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
+		ret.DedupColTypes = arg.DedupColTypes
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}

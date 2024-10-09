@@ -792,6 +792,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsDedup:           t.IsDedup,
 			OnDuplicateAction: t.OnDuplicateAction,
 			DedupColName:      t.DedupColName,
+			DedupColTypes:     t.DedupColTypes,
 		}
 	case *shufflebuild.ShuffleBuild:
 		in.ShuffleBuild = &pipeline.Shufflebuild{
@@ -805,6 +806,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsDedup:           t.IsDedup,
 			OnDuplicateAction: t.OnDuplicateAction,
 			DedupColName:      t.DedupColName,
+			DedupColTypes:     t.DedupColTypes,
 		}
 	case *indexbuild.IndexBuild:
 		in.IndexBuild = &pipeline.Indexbuild{
@@ -815,11 +817,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
-			OnDuplicateAction:      t.OnDuplicateAction,
-			DedupColName:           t.DedupColName,
 			IsShuffle:              t.IsShuffle,
 			JoinMapTag:             t.JoinMapTag,
 			ShuffleIdx:             t.ShuffleIdx,
+			OnDuplicateAction:      t.OnDuplicateAction,
+			DedupColName:           t.DedupColName,
+			DedupColTypes:          t.DedupColTypes,
 		}
 	case *apply.Apply:
 		relList, colList := getRelColList(t.Result)
@@ -1305,6 +1308,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsDedup = t.IsDedup
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
+		arg.DedupColTypes = t.DedupColTypes
 		op = arg
 	case vm.ShuffleBuild:
 		arg := shufflebuild.NewArgument()
@@ -1319,6 +1323,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsDedup = t.IsDedup
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
+		arg.DedupColTypes = t.DedupColTypes
 		op = arg
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
@@ -1329,11 +1334,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetDedupJoin()
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
-		arg.OnDuplicateAction = t.OnDuplicateAction
-		arg.DedupColName = t.DedupColName
 		arg.IsShuffle = t.IsShuffle
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx
+		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.DedupColName = t.DedupColName
+		arg.DedupColTypes = t.DedupColTypes
 		op = arg
 	case vm.Apply:
 		arg := apply.NewArgument()

@@ -344,11 +344,12 @@ message DedupJoin {
   repeated plan.Expr left_cond = 1;
   repeated plan.Expr right_cond = 2;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 3;
-  plan.Node.OnDuplicateAction on_duplicate_action = 4;
-  string dedup_col_name = 5;
-  bool is_shuffle = 6;
-  int32 join_map_tag = 7;
-  int32 shuffle_idx = 8;
+  bool is_shuffle = 4;
+  int32 join_map_tag = 5;
+  int32 shuffle_idx = 6;
+  plan.Node.OnDuplicateAction on_duplicate_action = 7;
+  string dedup_col_name = 8;
+  repeated plan.Type dedup_col_types = 9 [(gogoproto.nullable) = false];
 }
 
 message Product {
@@ -431,6 +432,7 @@ message HashBuild {
   bool is_dedup = 9;
   plan.Node.OnDuplicateAction on_duplicate_action = 10;
   string dedup_col_name = 11;
+  repeated plan.Type dedup_col_types = 12 [(gogoproto.nullable) = false];
 }
 
 message Shufflebuild {
@@ -444,6 +446,7 @@ message Shufflebuild {
   bool is_dedup = 8;
   plan.Node.OnDuplicateAction on_duplicate_action = 9;
   string dedup_col_name = 10;
+  repeated plan.Type dedup_col_types = 11 [(gogoproto.nullable) = false];
 }
 
 message Indexbuild {
