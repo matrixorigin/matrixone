@@ -1417,6 +1417,7 @@ func handleRevokeRole(ses FeSession, execCtx *ExecCtx, rr *tree.RevokeRole) erro
 func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) error {
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
+
 	return doGrantPrivilege(execCtx.reqCtx, ses, gp, bh)
 }
 
@@ -1424,6 +1425,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) error {
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
+
 	return doRevokePrivilege(execCtx.reqCtx, ses, rp, bh)
 }
 
