@@ -1418,7 +1418,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
 
-	//put it into the single transaction
+	// put it into the single transaction
 	err = bh.Exec(execCtx.reqCtx, "begin;")
 	defer func() {
 		err = finishTxn(execCtx.reqCtx, bh, err)
@@ -1435,7 +1435,7 @@ func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivi
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
 
-	//put it into the single transaction
+	// put it into the single transaction
 	err = bh.Exec(execCtx.reqCtx, "begin;")
 	defer func() {
 		err = finishTxn(execCtx.reqCtx, bh, err)
