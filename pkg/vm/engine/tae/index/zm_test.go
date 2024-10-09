@@ -21,9 +21,88 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTruncatedOverlap(t *testing.T) {
+
+	p := types.NewPacker()
+
+	var zm1, zm2, zm3 ZM
+	{
+		p.Reset()
+		p.EncodeStringType([]byte("2185"))
+		p.EncodeStringType([]byte("5636"))
+		p.EncodeStringType([]byte("82331"))
+		p.EncodeStringType([]byte("4522205"))
+
+		zm1 = BuildZM(types.T_varchar, p.Bytes())
+		p.Reset()
+		p.EncodeStringType([]byte("-1"))
+		p.EncodeStringType([]byte("-1"))
+		p.EncodeStringType([]byte("-1"))
+		p.EncodeStringType([]byte("-1"))
+		zm1.updateMinString(p.Bytes())
+	}
+	{
+		p.Reset()
+		p.EncodeStringType([]byte("2185"))
+		p.EncodeStringType([]byte("5636"))
+		p.EncodeStringType([]byte("82331"))
+		p.EncodeStringType([]byte("4522206"))
+		zm2 = BuildZM(types.T_varchar, p.Bytes())
+		p.Reset()
+		p.EncodeStringType([]byte("3421"))
+		p.EncodeStringType([]byte("1636"))
+		p.EncodeStringType([]byte("89331"))
+		p.EncodeStringType([]byte("5522206"))
+		zm2.updateMaxString(p.Bytes())
+	}
+
+	{
+		p.Reset()
+		p.EncodeStringType([]byte("2185"))
+		p.EncodeStringType([]byte("67923"))
+		zm3 = BuildZM(types.T_varchar, p.Bytes())
+	}
+
+	// Overlapped!
+	require.Positive(t, compute.CompareGeneric(zm1.GetMax(), zm2.GetMin(), types.T_varchar))
+	require.True(t, zm1.FastIntersect(zm2))
+
+	// Not overlapped!
+	require.Negative(t, StrictlyCompareZmMaxAndMin(zm1.GetMaxBuf(), zm2.GetMinBuf(), zm1.GetType(), zm1.GetScale(), zm2.GetScale()))
+
+	require.Negative(t, StrictlyCompareZmMaxAndMin(zm1.GetMaxBuf(), zm3.GetMinBuf(), zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+	require.Negative(t, StrictlyCompareZmMaxAndMin(
+		append(bytes.Repeat([]byte{0xff}, 28), 0x00, 0x00),
+		bytes.Repeat([]byte{0xff}, 28),
+		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+	require.Positive(t, StrictlyCompareZmMaxAndMin(
+		append(bytes.Repeat([]byte{0xff}, 28), 0x00, 0x01),
+		bytes.Repeat([]byte{0xff}, 28),
+		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+	require.Negative(t, StrictlyCompareZmMaxAndMin(
+		bytes.Repeat([]byte{0xff}, 30),
+		append(bytes.Repeat([]byte{0xff}, 29), 0x20),
+		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+	require.Positive(t, StrictlyCompareZmMaxAndMin(
+		append(bytes.Repeat([]byte{0xff}, 29), 0x22),
+		append(bytes.Repeat([]byte{0xff}, 29), 0x20),
+		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+	require.Positive(t, StrictlyCompareZmMaxAndMin(
+		bytes.Repeat([]byte{0xff}, 30),
+		bytes.Repeat([]byte{0x20}, 30),
+		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+}
 
 type testArithRes struct {
 	zm ZM
