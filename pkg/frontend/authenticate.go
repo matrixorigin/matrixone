@@ -4264,7 +4264,7 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 }
 
 // doRevokePrivilege accomplishes the RevokePrivilege statement
-func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivilege) (err error) {
+func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivilege, bh BackgroundExec) (err error) {
 	var vr *verifiedRole
 	var objType objectType
 	var privLevel privilegeLevelType
@@ -4277,8 +4277,6 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
 	checkedPrivilegeTypes := make([]PrivilegeType, len(rp.Privileges))
@@ -4529,7 +4527,7 @@ func matchPrivilegeTypeWithObjectType(ctx context.Context, privType PrivilegeTyp
 }
 
 // doGrantPrivilege accomplishes the GrantPrivilege statement
-func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege) (err error) {
+func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege, bh BackgroundExec) (err error) {
 	var erArray []ExecResult
 	var roleId int64
 	var privType PrivilegeType
@@ -4550,9 +4548,6 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 	} else {
 		userId = account.GetUserID()
 	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
 
 	//Get primary keys
 	//step 1: get role_id
@@ -8750,7 +8745,11 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	if err != nil {
 		return err
 	}
-	err = doGrantPrivilege(tenantCtx, ses, &rp[0].(*tree.Grant).GrantPrivilege)
+
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+
+	err = doGrantPrivilege(tenantCtx, ses, &rp[0].(*tree.Grant).GrantPrivilege, bh)
 	if err != nil {
 		return err
 	}
@@ -8801,7 +8800,11 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	if err != nil {
 		return err
 	}
-	err = doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege)
+
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+
+	err = doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh)
 	if err != nil {
 		return err
 	}

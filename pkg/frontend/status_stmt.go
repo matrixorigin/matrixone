@@ -109,6 +109,13 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				return
 			}
 		}
+
+		// grant privilege implicitly
+		err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+		if err != nil {
+			return
+		}
+
 	default:
 		//change privilege
 		switch execCtx.stmt.(type) {
@@ -158,6 +165,18 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+		}
+		switch execCtx.stmt.(type) {
+		case *tree.CreateDatabase:
+			err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			if err != nil {
+				return
+			}
+		case *tree.DropDatabase, *tree.DropTable:
+			err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			if err != nil {
+				return
+			}
 		}
 	}
 
@@ -225,7 +244,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
-		_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
 		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -255,13 +273,10 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		case *tree.DropTable:
 			// handle dynamic table drop, cancel all the running daemon task
 			_ = handleDropDynamicTable(execCtx.reqCtx, ses, st)
-			_ = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
 		case *tree.CreateDatabase:
 			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
-			_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
 		case *tree.DropDatabase:
 			_ = deleteRecordToMoMysqlCompatbilityMode(execCtx.reqCtx, ses, execCtx.stmt)
-			_ = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
 			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {
 				return execCtx.proc.Base.FileService.Delete(execCtx.reqCtx, path)
 			})
