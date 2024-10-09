@@ -132,7 +132,7 @@ func TestSamplePool(t *testing.T) {
 }
 
 func genSampleBatch(proc *process.Process, rows [][]int64) (*batch.Batch, error) {
-	b := batch.NewWithSize(len(rows[0]))
+	b := batch.NewOffHeapWithSize(len(rows[0]))
 
 	var err error
 	for i := range b.Vecs {

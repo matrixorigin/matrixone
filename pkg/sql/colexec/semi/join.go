@@ -121,7 +121,7 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.rbat == nil {
-				ctr.rbat = batch.NewWithSize(len(semiJoin.Result))
+				ctr.rbat = batch.NewOffHeapWithSize(len(semiJoin.Result))
 				for i, pos := range semiJoin.Result {
 					ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*bat.Vecs[pos].GetType())
 					// for semi join, if left batch is sorted , then output batch is sorted

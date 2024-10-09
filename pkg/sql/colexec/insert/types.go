@@ -147,7 +147,7 @@ func (insert *Insert) GetAffectedRows() *uint64 {
 
 func (insert *Insert) initBufForS3() {
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-	insert.ctr.buf = batch.NewWithSize(len(attrs))
+	insert.ctr.buf = batch.NewOffHeapWithSize(len(attrs))
 	insert.ctr.buf.SetAttributes(attrs)
 	insert.ctr.buf.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int16.ToType())
 	insert.ctr.buf.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())

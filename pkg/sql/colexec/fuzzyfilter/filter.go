@@ -361,7 +361,7 @@ func (fuzzyFilter *FuzzyFilter) appendCollisionKey(proc *process.Process, idx in
 // rbat will contain the keys that have hash collisions
 func (fuzzyFilter *FuzzyFilter) generate() error {
 	ctr := &fuzzyFilter.ctr
-	rbat := batch.NewWithSize(1)
+	rbat := batch.NewOffHeapWithSize(1)
 	rbat.SetVector(0, vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
 	ctr.pass2RuntimeFilter = vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
 	ctr.rbat = rbat

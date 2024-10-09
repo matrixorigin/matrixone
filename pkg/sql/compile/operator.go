@@ -104,7 +104,7 @@ import (
 var constBat *batch.Batch
 
 func init() {
-	constBat = batch.NewWithSize(0)
+	constBat = batch.NewOffHeapWithSize(0)
 	constBat.SetRowCount(1)
 }
 

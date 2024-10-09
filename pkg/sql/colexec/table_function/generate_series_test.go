@@ -143,7 +143,7 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 			continue
 		}
 
-		bat := batch.NewWithSize(1)
+		bat := batch.NewOffHeapWithSize(1)
 		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 
 		var result []T
@@ -285,7 +285,7 @@ func TestGenerateTimestamp(t *testing.T) {
 			continue
 		}
 
-		bat := batch.NewWithSize(1)
+		bat := batch.NewOffHeapWithSize(1)
 		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_datetime.ToType())
 		var res []types.Datetime
 

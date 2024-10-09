@@ -469,7 +469,7 @@ func makeDatetimeExpr(s string, p int32) *plan.Expr {
 func TestTime(t *testing.T) {
 	s := "12:34:56"
 	e := makeTimeExpr(s, 0)
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	bat.SetRowCount(1)
 	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
 	require.NoError(t, err)
@@ -481,7 +481,7 @@ func TestTime(t *testing.T) {
 func TestDatetime(t *testing.T) {
 	s := "2019-12-12 12:34:56"
 	e := makeDatetimeExpr(s, 0)
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	bat.SetRowCount(1)
 	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
 	require.NoError(t, err)
@@ -492,7 +492,7 @@ func TestDatetime(t *testing.T) {
 func TestTimestamp(t *testing.T) {
 	s := "2019-12-12 12:34:56"
 	e := makeTimestampExpr(s, 0, time.Local)
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	bat.SetRowCount(1)
 	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
 	require.NoError(t, err)
@@ -503,7 +503,7 @@ func TestTimestamp(t *testing.T) {
 func TestDate(t *testing.T) {
 	s := "2019-12-12"
 	e := makeDateExpr(s)
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	bat.SetRowCount(1)
 	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
 	require.NoError(t, err)

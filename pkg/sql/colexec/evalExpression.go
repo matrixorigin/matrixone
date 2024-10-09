@@ -957,7 +957,7 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 
 func NewJoinBatch(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch,
 	[]func(*vector.Vector, *vector.Vector, int64, int) error) {
-	rbat := batch.NewWithSize(bat.VectorCount())
+	rbat := batch.NewOffHeapWithSize(bat.VectorCount())
 	cfs := make([]func(*vector.Vector, *vector.Vector, int64, int) error, bat.VectorCount())
 	for i, vec := range bat.Vecs {
 		typ := *vec.GetType()
@@ -978,7 +978,7 @@ func SetJoinBatchValues(joinBat, bat *batch.Batch, sel int64, length int,
 	return nil
 }
 
-var noColumnBatchForZoneMap = []*batch.Batch{batch.NewWithSize(0)}
+var noColumnBatchForZoneMap = []*batch.Batch{batch.NewOffHeapWithSize(0)}
 
 func getConstZM(
 	ctx context.Context,

@@ -51,7 +51,7 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	if len(projection.ctr.projExecutors) == 0 {
 		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
 
-		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
+		projection.ctr.buf = batch.NewOffHeapWithSize(len(projection.ProjectList))
 	}
 	return err
 }

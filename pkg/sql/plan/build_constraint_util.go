@@ -988,7 +988,7 @@ func buildValueScan(
 		Cols:  make([]*plan.ColDef, colCount),
 	}
 	projectList := make([]*Expr, colCount)
-	bat := batch.NewWithSize(len(updateColumns))
+	bat := batch.NewOffHeapWithSize(len(updateColumns))
 
 	for i, colName := range updateColumns {
 		col := tableDef.Cols[colToIdx[colName]]

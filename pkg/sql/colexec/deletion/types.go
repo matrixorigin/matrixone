@@ -369,7 +369,7 @@ func makeDelBatch(pkType types.Type) *batch.Batch {
 }
 
 func makeDelRemoteBatch() *batch.Batch {
-	bat := batch.NewWithSize(5)
+	bat := batch.NewOffHeapWithSize(5)
 	bat.Attrs = []string{
 		catalog.BlockMeta_Delete_ID,
 		catalog.BlockMeta_DeltaLoc,

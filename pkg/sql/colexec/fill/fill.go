@@ -50,7 +50,7 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	switch fill.FillType {
 	case plan.Node_VALUE:
 		// the batch just for eval const value
-		b := batch.NewWithSize(1)
+		b := batch.NewOffHeapWithSize(1)
 		defer b.Clean(proc.Mp())
 		b.SetVector(0, vector.NewOffHeapVecWithType(types.T_varchar.ToType()))
 		batch.SetLength(b, 1)
@@ -385,7 +385,7 @@ func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 				ctr.status = receiveBat
 			}
 		case fillValue:
-			b := batch.NewWithSize(2)
+			b := batch.NewOffHeapWithSize(2)
 			b.Vecs[0] = vector.NewOffHeapVecWithType(*ctr.bats[ctr.preIdx].Vecs[idx].GetType())
 			err = appendValue(b.Vecs[0], ctr.bats[ctr.preIdx].Vecs[idx], ctr.preRow, proc)
 			if err != nil {

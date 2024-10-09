@@ -118,7 +118,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.rbat == nil {
-				ctr.rbat = batch.NewWithSize(len(loopJoin.Result))
+				ctr.rbat = batch.NewOffHeapWithSize(len(loopJoin.Result))
 				for i, rp := range loopJoin.Result {
 					if rp.Rel == 0 {
 						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.inbat.Vecs[rp.Pos].GetType())

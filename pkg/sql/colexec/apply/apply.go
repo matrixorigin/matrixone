@@ -102,7 +102,7 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			apply.TableFunction.ApplyArgsEval(ctr.inbat, proc)
 		}
 		if ctr.rbat == nil {
-			ctr.rbat = batch.NewWithSize(len(apply.Result))
+			ctr.rbat = batch.NewOffHeapWithSize(len(apply.Result))
 			for i, rp := range apply.Result {
 				if rp.Rel == 0 {
 					ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.inbat.Vecs[rp.Pos].GetType())

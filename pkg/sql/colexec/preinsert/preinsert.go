@@ -75,7 +75,7 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				preInsert.ctr.canFreeVecIdx[idx] = true
 			}
 		}
-		preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
+		preInsert.ctr.buf = batch.NewOffHeapWithSize(len(preInsert.Attrs))
 		preInsert.ctr.buf.Attrs = make([]string, 0, len(preInsert.Attrs))
 		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.Attrs...)
 	} else {

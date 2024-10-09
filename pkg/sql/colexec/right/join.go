@@ -393,7 +393,7 @@ func (rightJoin *RightJoin) resetRBat() {
 	if ctr.rbat != nil {
 		ctr.rbat.CleanOnlyData()
 	} else {
-		ctr.rbat = batch.NewWithSize(len(rightJoin.Result))
+		ctr.rbat = batch.NewOffHeapWithSize(len(rightJoin.Result))
 
 		for i, rp := range rightJoin.Result {
 			if rp.Rel == 0 {

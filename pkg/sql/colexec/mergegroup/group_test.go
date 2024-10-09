@@ -42,7 +42,7 @@ func generateInputData(proc *process.Process, groupValues []int64, sumResult []i
 		panic("bad input data")
 	}
 
-	bat := batch.NewWithSize(0)
+	bat := batch.NewOffHeapWithSize(0)
 	if len(groupValues) > 0 {
 		bat.Vecs = make([]*vector.Vector, 1)
 		bat.Vecs[0] = testutil.NewInt64Vector(

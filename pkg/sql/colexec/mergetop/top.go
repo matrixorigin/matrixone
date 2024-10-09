@@ -169,7 +169,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 			}
 
 			if ctr.bat == nil {
-				ctr.bat = batch.NewWithSize(len(bat.Vecs))
+				ctr.bat = batch.NewOffHeapWithSize(len(bat.Vecs))
 				for i, vec := range bat.Vecs {
 					ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
 				}

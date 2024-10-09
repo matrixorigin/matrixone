@@ -181,7 +181,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func makeRecursiveBatch(proc *process.Process) *batch.Batch {
-	b := batch.NewWithSize(1)
+	b := batch.NewOffHeapWithSize(1)
 	b.Attrs = []string{
 		"recursive_col",
 	}

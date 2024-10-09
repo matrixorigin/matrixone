@@ -185,7 +185,7 @@ func TestSplitBatch(t *testing.T) {
 		// 	},
 		// 	args: args{
 		// 		proc: testutil.NewProc(),
-		// 		srcBat: batch.NewWithSize(2),
+		// 		srcBat: batch.NewOffHeapWithSize(2),
 		// 	},
 		// 	wantErr: false,
 		// },

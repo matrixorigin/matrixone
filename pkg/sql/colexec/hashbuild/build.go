@@ -187,7 +187,7 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 	} else {
 		// Composite primary key
 		if ap.RuntimeFilterSpec.Expr.GetF() != nil {
-			bat := batch.NewWithSize(len(ctr.hashmapBuilder.UniqueJoinKeys))
+			bat := batch.NewOffHeapWithSize(len(ctr.hashmapBuilder.UniqueJoinKeys))
 			bat.SetRowCount(vec.Length())
 			copy(bat.Vecs, ctr.hashmapBuilder.UniqueJoinKeys)
 

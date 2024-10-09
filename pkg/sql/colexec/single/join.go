@@ -114,7 +114,7 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if ctr.rbat == nil {
-				ctr.rbat = batch.NewWithSize(len(singleJoin.Result))
+				ctr.rbat = batch.NewOffHeapWithSize(len(singleJoin.Result))
 				for i, rp := range singleJoin.Result {
 					if rp.Rel != 0 {
 						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(singleJoin.Typs[rp.Pos])

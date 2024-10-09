@@ -273,7 +273,7 @@ func (p *KeyHashPartitionPruner) buildPruneResultForOrConditions(conditions []*E
 // getUsedPartition Calculate the partition based on the constant expression of the partition key column
 func (p *KeyHashPartitionPruner) getUsedPartition(cnfColEqVal map[string]*plan.Expr) (bool, int32) {
 	// 1.evaluate the partition expr where the colRef assigned with const
-	inputBat := batch.NewWithSize(len(p.node.TableDef.GetCols()))
+	inputBat := batch.NewOffHeapWithSize(len(p.node.TableDef.GetCols()))
 	inputBat.SetRowCount(1)
 	defer inputBat.Clean(p.process.Mp())
 

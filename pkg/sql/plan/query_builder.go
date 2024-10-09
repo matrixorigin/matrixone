@@ -2314,7 +2314,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if len(valuesClause.Rows) == 0 {
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
-		bat := batch.NewWithSize(len(valuesClause.Rows[0]))
+		bat := batch.NewOffHeapWithSize(len(valuesClause.Rows[0]))
 		strTyp := plan.Type{
 			Id:          int32(types.T_text),
 			NotNullable: false,

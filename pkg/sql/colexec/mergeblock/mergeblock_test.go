@@ -180,7 +180,7 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 		attrs = []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
 	}
 
-	blockInfoBat := batch.NewWithSize(len(attrs))
+	blockInfoBat := batch.NewOffHeapWithSize(len(attrs))
 	blockInfoBat.Attrs = attrs
 	blockInfoBat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int16.ToType())
 	blockInfoBat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())

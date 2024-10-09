@@ -130,7 +130,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 			//because ctr.build will change input batch(append new Vector)
 			if top.ctr.buildBat == nil {
 				top.ctr.n = len(bat.Vecs)
-				top.ctr.buildBat = batch.NewWithSize(top.ctr.n)
+				top.ctr.buildBat = batch.NewOffHeapWithSize(top.ctr.n)
 			} else {
 				top.ctr.buildBat.Vecs = top.ctr.buildBat.Vecs[:len(bat.Vecs)]
 			}
@@ -200,7 +200,7 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process) er
 		}
 
 		if ctr.bat == nil {
-			ctr.bat = batch.NewWithSize(len(bat.Vecs))
+			ctr.bat = batch.NewOffHeapWithSize(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
 				ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
 			}

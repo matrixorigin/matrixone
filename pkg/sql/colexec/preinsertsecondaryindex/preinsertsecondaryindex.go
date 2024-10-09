@@ -61,11 +61,11 @@ func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColum
 	}
 
 	if isUpdate {
-		preInsertSecIdx.ctr.buf = batch.NewWithSize(3)
+		preInsertSecIdx.ctr.buf = batch.NewOffHeapWithSize(3)
 		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
 		preInsertSecIdx.ctr.buf.Vecs[2] = vector.NewOffHeapVecWithType(types.T_Rowid.ToType())
 	} else {
-		preInsertSecIdx.ctr.buf = batch.NewWithSize(2)
+		preInsertSecIdx.ctr.buf = batch.NewOffHeapWithSize(2)
 		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 

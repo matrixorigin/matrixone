@@ -97,7 +97,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.rbat == nil {
-				ctr.rbat = batch.NewWithSize(len(productl2.Result))
+				ctr.rbat = batch.NewOffHeapWithSize(len(productl2.Result))
 				for i, rp := range productl2.Result {
 					if rp.Rel == 0 {
 						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.inBat.Vecs[rp.Pos].GetType())

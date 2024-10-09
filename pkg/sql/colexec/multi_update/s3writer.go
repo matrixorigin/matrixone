@@ -311,7 +311,7 @@ func (writer *s3Writer) fillBlockInfoBat(
 	if isDelete {
 		if writer.deleteBlockInfo[idx][partitionIdx] == nil {
 			attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-			blockInfoBat := batch.NewWithSize(len(attrs))
+			blockInfoBat := batch.NewOffHeapWithSize(len(attrs))
 			blockInfoBat.Attrs = attrs
 			blockInfoBat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int16.ToType())
 			blockInfoBat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
@@ -322,7 +322,7 @@ func (writer *s3Writer) fillBlockInfoBat(
 	} else {
 		if writer.insertBlockInfo[idx][partitionIdx] == nil {
 			attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-			blockInfoBat := batch.NewWithSize(len(attrs))
+			blockInfoBat := batch.NewOffHeapWithSize(len(attrs))
 			blockInfoBat.Attrs = attrs
 			blockInfoBat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int16.ToType())
 			blockInfoBat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())

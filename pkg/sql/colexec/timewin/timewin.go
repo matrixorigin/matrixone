@@ -403,7 +403,7 @@ func (ctr *container) fillRows() error {
 const maxTimeWindowRows = 8192
 
 func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
-	ctr.bat = batch.NewWithSize(ctr.colCnt)
+	ctr.bat = batch.NewOffHeapWithSize(ctr.colCnt)
 	i := 0
 	for _, agg := range ctr.aggs {
 		vec, err := agg.Flush()
@@ -418,7 +418,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
 		return nil
 	}
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	if ap.WStart {
 		if ctr.startVec != nil {
 			ctr.startVec.CleanOnlyData()
@@ -465,7 +465,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 }
 
 func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {
-	ctr.bat = batch.NewWithSize(ctr.colCnt)
+	ctr.bat = batch.NewOffHeapWithSize(ctr.colCnt)
 	i := 0
 	for _, vec := range ctr.aggVec[ctr.i-1] {
 		ctr.bat.SetVector(int32(i), vec)
@@ -476,7 +476,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 		batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
 		return nil
 	}
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	if ap.WStart {
 		bat.SetVector(0, ctr.tsVec[ctr.i-1])
 		batch.SetLength(bat, ctr.tsVec[ctr.i-1].Length())

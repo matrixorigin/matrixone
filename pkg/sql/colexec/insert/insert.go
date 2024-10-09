@@ -78,7 +78,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 		insert.ctr.partitionSources = partitionRels
 
 		if insert.ctr.buf == nil {
-			insert.ctr.buf = batch.NewWithSize(len(insert.InsertCtx.Attrs))
+			insert.ctr.buf = batch.NewOffHeapWithSize(len(insert.InsertCtx.Attrs))
 			insert.ctr.buf.SetAttributes(insert.InsertCtx.Attrs)
 		}
 	}
@@ -136,7 +136,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 
 			// If the target is partition table
 			if len(insert.InsertCtx.PartitionTableIDs) > 0 {
-				insert.ctr.buf = batch.NewWithSize(len(insert.InsertCtx.Attrs))
+				insert.ctr.buf = batch.NewOffHeapWithSize(len(insert.InsertCtx.Attrs))
 				insert.ctr.buf.Attrs = insert.InsertCtx.Attrs
 				for i := range insert.ctr.buf.Attrs {
 					insert.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*input.Batch.Vecs[i].GetType())

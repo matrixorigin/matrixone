@@ -33,7 +33,7 @@ type poolData struct {
 
 func (pd *poolData) appendValidRow(mp *mpool.MPool, bat *batch.Batch, offset int, length int) error {
 	if pd.validBatch == nil {
-		pd.validBatch = batch.NewWithSize(len(bat.Vecs))
+		pd.validBatch = batch.NewOffHeapWithSize(len(bat.Vecs))
 		for i := range pd.validBatch.Vecs {
 			pd.validBatch.Vecs[i] = vector.NewOffHeapVecWithType(*bat.Vecs[i].GetType())
 		}
@@ -52,7 +52,7 @@ func (pd *poolData) appendInvalidRow(mp *mpool.MPool, bat *batch.Batch, row int)
 	if pd.invalidBatch != nil {
 		return nil
 	}
-	pd.invalidBatch = batch.NewWithSize(len(bat.Vecs))
+	pd.invalidBatch = batch.NewOffHeapWithSize(len(bat.Vecs))
 	for i := range pd.invalidBatch.Vecs {
 		pd.invalidBatch.Vecs[i] = vector.NewOffHeapVecWithType(*bat.Vecs[i].GetType())
 	}

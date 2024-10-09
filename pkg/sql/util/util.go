@@ -42,7 +42,7 @@ func InitPredefinedTables(tables []string) {
 }
 
 func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
-	rbat := batch.NewWithSize(len(bat.Vecs))
+	rbat := batch.NewOffHeapWithSize(len(bat.Vecs))
 	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, srcVec := range bat.Vecs {
 		vec := vector.NewOffHeapVecWithType(*srcVec.GetType())

@@ -140,7 +140,7 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.rbat == nil {
-				ctr.rbat = batch.NewWithSize(len(markJoin.Result))
+				ctr.rbat = batch.NewOffHeapWithSize(len(markJoin.Result))
 				for i, rp := range markJoin.Result {
 					if rp >= 0 {
 						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*bat.Vecs[rp].GetType())
@@ -483,7 +483,7 @@ func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) (*
 	for _, sel := range sels {
 		flags[sel] = 1
 	}
-	bat := batch.NewWithSize(len(originBatch.Vecs))
+	bat := batch.NewOffHeapWithSize(len(originBatch.Vecs))
 	for i, vec := range originBatch.Vecs {
 		bat.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
 	}

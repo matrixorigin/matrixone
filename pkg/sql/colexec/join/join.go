@@ -166,7 +166,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 
 	mpbat := ctr.mp.GetBatches()
 	if ctr.rbat == nil {
-		ctr.rbat = batch.NewWithSize(len(ap.Result))
+		ctr.rbat = batch.NewOffHeapWithSize(len(ap.Result))
 		for i, rp := range ap.Result {
 			if rp.Rel == 0 {
 				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ap.ctr.inbat.Vecs[rp.Pos].GetType())

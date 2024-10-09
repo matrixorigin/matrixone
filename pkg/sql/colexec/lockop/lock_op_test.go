@@ -361,7 +361,7 @@ func runLockNonBlockingOpTest(
 	runLockOpTest(
 		t,
 		func(proc *process.Process) {
-			bat := batch.NewWithSize(len(tables) * 2)
+			bat := batch.NewOffHeapWithSize(len(tables) * 2)
 			bat.SetRowCount(len(tables) * 2)
 
 			defer func() {

@@ -45,7 +45,7 @@ func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
 		err = indexJoin.PrepareProjection(proc)
 	}
 	if indexJoin.ctr.buf == nil {
-		indexJoin.ctr.buf = batch.NewWithSize(len(indexJoin.Result))
+		indexJoin.ctr.buf = batch.NewOffHeapWithSize(len(indexJoin.Result))
 	}
 	return err
 }

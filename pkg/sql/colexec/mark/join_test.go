@@ -233,7 +233,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 			},
 		},
 	}
-	resultBatch := batch.NewWithSize(len(rp))
+	resultBatch := batch.NewOffHeapWithSize(len(rp))
 	resultBatch.SetRowCount(2)
 	for i := range rp {
 		bat := colexec.MakeMockBatchs()

@@ -182,7 +182,7 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 		//init output batch
 
 		if ctr.buf == nil {
-			ctr.buf = batch.NewWithSize(len(input.Batch.Vecs))
+			ctr.buf = batch.NewOffHeapWithSize(len(input.Batch.Vecs))
 			for i := range input.Batch.Vecs {
 				ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*input.Batch.Vecs[i].GetType())
 			}

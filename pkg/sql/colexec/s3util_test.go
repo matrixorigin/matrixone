@@ -69,7 +69,7 @@ func TestSetStatsCNCreated(t *testing.T) {
 	_, err := s3writer.generateWriter(proc)
 	require.NoError(t, err)
 
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_Rowid.ToType())
 
 	for i := 0; i < 100; i++ {
@@ -106,7 +106,7 @@ func TestMergeSortBatches(t *testing.T) {
 	}
 	// Test bool
 	{
-		bat1 := batch.NewWithSize(2)
+		bat1 := batch.NewOffHeapWithSize(2)
 		defer bat1.Clean(pool)
 		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
@@ -135,7 +135,7 @@ func TestMergeSortBatches(t *testing.T) {
 	}
 	// Test int8
 	{
-		bat1 := batch.NewWithSize(2)
+		bat1 := batch.NewOffHeapWithSize(2)
 		defer bat1.Clean(pool)
 		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_int8.ToType()))
@@ -164,7 +164,7 @@ func TestMergeSortBatches(t *testing.T) {
 	}
 	// Test int16
 	{
-		bat1 := batch.NewWithSize(2)
+		bat1 := batch.NewOffHeapWithSize(2)
 		defer bat1.Clean(pool)
 		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_int16.ToType()))
@@ -193,7 +193,7 @@ func TestMergeSortBatches(t *testing.T) {
 	}
 	// Test uint8
 	{
-		bat1 := batch.NewWithSize(2)
+		bat1 := batch.NewOffHeapWithSize(2)
 		defer bat1.Clean(pool)
 		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_uint8.ToType()))
@@ -222,7 +222,7 @@ func TestMergeSortBatches(t *testing.T) {
 	}
 	// Test uint16
 	{
-		bat1 := batch.NewWithSize(2)
+		bat1 := batch.NewOffHeapWithSize(2)
 		defer bat1.Clean(pool)
 		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_uint16.ToType()))
@@ -251,7 +251,7 @@ func TestMergeSortBatches(t *testing.T) {
 	}
 	// Test uint32
 	{
-		bat1 := batch.NewWithSize(2)
+		bat1 := batch.NewOffHeapWithSize(2)
 		defer bat1.Clean(pool)
 		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_uint32.ToType()))
@@ -280,7 +280,7 @@ func TestMergeSortBatches(t *testing.T) {
 	}
 	// Test bit
 	{
-		bat1 := batch.NewWithSize(2)
+		bat1 := batch.NewOffHeapWithSize(2)
 		defer bat1.Clean(pool)
 		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_bit.ToType()))
@@ -309,7 +309,7 @@ func TestMergeSortBatches(t *testing.T) {
 	}
 	// Test float32
 	{
-		bat1 := batch.NewWithSize(2)
+		bat1 := batch.NewOffHeapWithSize(2)
 		defer bat1.Clean(pool)
 		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_float32.ToType()))
@@ -338,7 +338,7 @@ func TestMergeSortBatches(t *testing.T) {
 	}
 	// Test float64
 	{
-		bat1 := batch.NewWithSize(2)
+		bat1 := batch.NewOffHeapWithSize(2)
 		defer bat1.Clean(pool)
 		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_float64.ToType()))
@@ -367,7 +367,7 @@ func TestMergeSortBatches(t *testing.T) {
 	}
 	// Test date
 	{
-		bat1 := batch.NewWithSize(2)
+		bat1 := batch.NewOffHeapWithSize(2)
 		defer bat1.Clean(pool)
 		bat1.SetVector(0, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 		bat1.SetVector(1, vector.NewOffHeapVecWithType(types.T_date.ToType()))
@@ -400,7 +400,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 	pool, err := mpool.NewMPool("", mpool.GB, 0)
 	require.NoError(t, err)
 
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_Rowid.ToType())
 
 	for i := 0; i < 100; i++ {
@@ -458,7 +458,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		proc := testutil.NewProc(
 			testutil.WithMPool(pool))
 
-		bat2 := batch.NewWithSize(1)
+		bat2 := batch.NewOffHeapWithSize(1)
 		bat2.Vecs[0] = vector.NewOffHeapVecWithType(types.T_Rowid.ToType())
 
 		objectio.SetObjectSizeLimit(mpool.MB * 32)
