@@ -384,7 +384,7 @@ func (n *Bitmap) ToArray() []uint64 {
 	return res
 }
 
-func (n *Bitmap) ToI64Arrary() []int64 {
+func (n *Bitmap) ToI64Array() []int64 {
 	var res []int64
 	if n.EmptyByFlag() {
 		return res
