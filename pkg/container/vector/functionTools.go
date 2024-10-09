@@ -90,14 +90,20 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) bool {
 	t := v.GetType()
 	if v.IsConstNull() {
-		r, _ := f.(*FunctionParameterScalarNull[T])
+		r, ok := f.(*FunctionParameterScalarNull[T])
+		if !ok {
+			return false
+		}
 		r.typ = *t
 		r.sourceVector = v
 		return true
 	}
 	cols := MustFixedColWithTypeCheck[T](v)
 	if v.IsConst() {
-		r, _ := f.(*FunctionParameterScalar[T])
+		r, ok := f.(*FunctionParameterScalar[T])
+		if !ok {
+			return false
+		}
 		r.typ = *t
 		r.sourceVector = v
 		r.scalarValue = cols[0]
@@ -178,7 +184,10 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varlena]) bool {
 	t := v.GetType()
 	if v.IsConstNull() {
-		r, _ := f.(*FunctionParameterScalarNull[types.Varlena])
+		r, ok := f.(*FunctionParameterScalarNull[types.Varlena])
+		if !ok {
+			return false
+		}
 		r.typ = *t
 		r.sourceVector = v
 		return true
@@ -186,7 +195,10 @@ func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varle
 	var cols []types.Varlena
 	ToSliceNoTypeCheck(v, &cols)
 	if v.IsConst() {
-		r, _ := f.(*FunctionParameterScalar[types.Varlena])
+		r, ok := f.(*FunctionParameterScalar[types.Varlena])
+		if !ok {
+			return false
+		}
 		r.typ = *t
 		r.sourceVector = v
 		r.scalarValue = cols[0]
