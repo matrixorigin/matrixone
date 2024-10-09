@@ -417,6 +417,42 @@ func (l *store) addLogShard(ctx context.Context, addLogShard pb.AddLogShard) err
 	return nil
 }
 
+func (l *store) checkHealth(shardID uint64) error {
+	opts := dragonboat.NodeHostInfoOption{
+		SkipLogInfo: true,
+	}
+	nhi := l.nh.GetNodeHostInfo(opts)
+	for _, ci := range nhi.ShardInfoList {
+		if ci.ShardID == shardID {
+			if ci.Pending {
+				return moerr.NewInternalErrorNoCtxf("shard %d is pending on store %s",
+					shardID, l.cfg.UUID)
+			}
+			break
+		}
+	}
+	cs, err := l.getCheckerState()
+	if err != nil {
+		return err
+	}
+	storeInfo, ok := cs.LogState.Stores[l.cfg.UUID]
+	if ok {
+		if storeInfo.Tick >= cs.Tick {
+			return nil
+		}
+		if (cs.Tick-storeInfo.Tick)*uint64(l.cfg.HAKeeperTickInterval.Duration) >
+			uint64(l.cfg.HAKeeperConfig.LogStoreTimeout.Duration) {
+			return moerr.NewInternalErrorNoCtxf("log store %s of shard %d expired",
+				l.cfg.UUID, shardID)
+		} else {
+			return nil
+		}
+	} else {
+		return moerr.NewInternalErrorNoCtxf("shard %d not started on store %s",
+			shardID, l.cfg.UUID)
+	}
+}
+
 func (l *store) retryWait() {
 	if l.nh.NodeHostConfig().RTTMillisecond == 1 {
 		time.Sleep(time.Millisecond)
