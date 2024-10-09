@@ -1117,11 +1117,14 @@ func skipClientQuit(info string) bool {
 // for some special statement, like 'set_var', we need to use the stmt.
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
-	sql           string
-	hashedSql     string
-	stmt          tree.Statement
-	sqlSourceType []string
-	isRestore     bool
+	sql                 string
+	hashedSql           string
+	stmtName            string
+	stmt                tree.Statement
+	preparePlan         *plan.Plan // binary protocol execute
+	sqlSourceType       []string
+	isRestore           bool
+	isBinaryProtExecute bool
 	// operator account, the account executes restoration
 	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
 	opAccount uint32
@@ -1138,6 +1141,10 @@ func (ui *UserInput) genHash() {
 
 func (ui *UserInput) getHash() string {
 	return ui.hashedSql
+}
+
+func (ui *UserInput) getPreparePlan() *plan.Plan {
+	return ui.preparePlan
 }
 
 // getStmt if the stmt is not nil, we neglect the sql.

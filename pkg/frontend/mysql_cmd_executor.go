@@ -2018,7 +2018,12 @@ func checkModify(plan0 *plan.Plan, ses FeSession) bool {
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cws []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
+	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
+		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
+		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
+		cws = append(cws, tcw)
+		return cws, nil
+	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
@@ -2542,7 +2547,7 @@ func dispatchStmt(ses FeSession,
 	ses.EnterFPrint(FPDispatchStmt)
 	defer ses.ExitFPrint(FPDispatchStmt)
 	//5. check plan within txn
-	if execCtx.cw.Plan() != nil {
+	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
 		if checkModify(execCtx.cw.Plan(), ses) {
 
 			//plan changed
@@ -3085,7 +3090,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
