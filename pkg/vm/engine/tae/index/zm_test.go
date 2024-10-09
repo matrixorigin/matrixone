@@ -30,7 +30,7 @@ func TestTruncatedOverlap(t *testing.T) {
 
 	p := types.NewPacker()
 
-	var zm1, zm2 ZM
+	var zm1, zm2, zm3 ZM
 	{
 		p.Reset()
 		p.EncodeStringType([]byte("2185"))
@@ -61,12 +61,46 @@ func TestTruncatedOverlap(t *testing.T) {
 		zm2.updateMaxString(p.Bytes())
 	}
 
+	{
+		p.Reset()
+		p.EncodeStringType([]byte("2185"))
+		p.EncodeStringType([]byte("67923"))
+		zm3 = BuildZM(types.T_varchar, p.Bytes())
+	}
+
 	// Overlapped!
 	require.Positive(t, compute.CompareGeneric(zm1.GetMax(), zm2.GetMin(), types.T_varchar))
 	require.True(t, zm1.FastIntersect(zm2))
 
 	// Not overlapped!
 	require.Negative(t, StrictlyCompareZmMaxAndMin(zm1.GetMaxBuf(), zm2.GetMinBuf(), zm1.GetType(), zm1.GetScale(), zm2.GetScale()))
+
+	require.Negative(t, StrictlyCompareZmMaxAndMin(zm1.GetMaxBuf(), zm3.GetMinBuf(), zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+	require.Negative(t, StrictlyCompareZmMaxAndMin(
+		append(bytes.Repeat([]byte{0xff}, 28), 0x00, 0x00),
+		bytes.Repeat([]byte{0xff}, 28),
+		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+	require.Positive(t, StrictlyCompareZmMaxAndMin(
+		append(bytes.Repeat([]byte{0xff}, 28), 0x00, 0x01),
+		bytes.Repeat([]byte{0xff}, 28),
+		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+	require.Negative(t, StrictlyCompareZmMaxAndMin(
+		bytes.Repeat([]byte{0xff}, 30),
+		append(bytes.Repeat([]byte{0xff}, 29), 0x20),
+		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+	require.Positive(t, StrictlyCompareZmMaxAndMin(
+		append(bytes.Repeat([]byte{0xff}, 29), 0x22),
+		append(bytes.Repeat([]byte{0xff}, 29), 0x20),
+		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
+	require.Positive(t, StrictlyCompareZmMaxAndMin(
+		bytes.Repeat([]byte{0xff}, 30),
+		bytes.Repeat([]byte{0x20}, 30),
+		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
 
 }
 
