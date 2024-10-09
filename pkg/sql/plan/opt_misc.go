@@ -201,10 +201,10 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 
 	childType := builder.qry.Nodes[node.Children[0]].NodeType
 	if childType == plan.Node_VALUE_SCAN || childType == plan.Node_EXTERNAL_SCAN {
-		return false
+		return parentType == plan.Node_PROJECT
 	}
 	if childType == plan.Node_FUNCTION_SCAN || childType == plan.Node_EXTERNAL_FUNCTION {
-		return false
+		return parentType == plan.Node_PROJECT
 	}
 
 	return true
