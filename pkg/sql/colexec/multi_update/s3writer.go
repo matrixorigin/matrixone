@@ -510,8 +510,8 @@ func (writer *s3Writer) fillInsertBlockInfo(
 }
 
 func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, update *MultiUpdate) (err error) {
-
-	if writer.batchSize > TagS3SizeForMOLogger {
+	onlyDelete := writer.action == actionDelete
+	if !onlyDelete && writer.batchSize > TagS3SizeForMOLogger {
 		//write tail batch to s3
 		err = writer.sortAndSync(proc)
 		if err != nil {

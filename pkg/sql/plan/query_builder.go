@@ -2712,9 +2712,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 				}
 				lockTarget.FilterColIdxInBat = int32(len(projectList))
-				lockTarget.FilterColRelPos = lastTag
 				projectList = append(projectList, partitionExpr)
 				newBindingTag := builder.genNewTag()
+				lockTarget.FilterColRelPos = newBindingTag
 				if binding, ok := ctx.bindingByTable[tableDef.Name]; ok {
 					//@xxx not a good choice
 					binding.tag = newBindingTag
