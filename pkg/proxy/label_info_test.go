@@ -90,6 +90,10 @@ func (c *mockHAKeeperClient) GetClusterState(_ context.Context) (logpb.CheckerSt
 	}, nil
 }
 
+func (c *mockHAKeeperClient) CheckLogServiceHealth(_ context.Context) error {
+	return nil
+}
+
 func (c *mockHAKeeperClient) GetCNState(_ context.Context) (logpb.CNState, error) {
 	return logpb.CNState{}, nil
 }
