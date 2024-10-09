@@ -21,7 +21,6 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -225,7 +224,7 @@ func (tomb *tombstoneData) PrefetchTombstones(
 func (tomb *tombstoneData) ApplyInMemTombstones(
 	bid *types.Blockid,
 	rowsOffset []int64,
-	deleted *nulls.Nulls,
+	deleted *objectio.Bitmap,
 ) (left []int64) {
 
 	left = rowsOffset
@@ -250,7 +249,7 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 	snapshot *types.TS,
 	bid *types.Blockid,
 	rowsOffset []int64,
-	deletedMask *nulls.Nulls,
+	deletedMask *objectio.Bitmap,
 ) (left []int64, err error) {
 
 	left = rowsOffset
@@ -268,10 +267,13 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 		return tomb.files.Get(i), nil
 	}
 
+	release := func() {}
 	if deletedMask == nil {
-		deletedMask = &nulls.Nulls{}
-		deletedMask.InitWithSize(8192)
+		bm := objectio.GetReusableBitmap()
+		deletedMask = &bm
+		release = bm.Release
 	}
+	defer release()
 
 	if err = blockio.GetTombstonesByBlockId(
 		ctx,
