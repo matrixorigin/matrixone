@@ -1405,7 +1405,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Rowid](v))
-		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]", v.String())
+		require.Equal(t, "[00000000-0000-0000-0000-000000000000-0-0-0 00000000-0000-0000-0000-000000000000-0-0-0]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -2336,6 +2336,21 @@ func TestSetFunction(t *testing.T) {
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+}
+
+func TestSortAndCompact(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := NewVec(types.New(types.T_array_float32, 4, 0))
+	err := AppendArrayList(v, [][]float32{{1, 2, 3, 0}, {1, 2, 3, 0}}, nil, mp)
+	require.NoError(t, err)
+	v.InplaceSortAndCompact()
+	require.Equal(t, v.length, 1)
+
+	v = NewVec(types.New(types.T_array_float64, 4, 0))
+	err = AppendArrayList(v, [][]float64{{1.1, 2, 3, 0}, {1.1, 2, 3, 0}}, nil, mp)
+	require.NoError(t, err)
+	v.InplaceSortAndCompact()
+	require.Equal(t, v.length, 1)
 }
 
 func TestSetFunction2(t *testing.T) {

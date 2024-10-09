@@ -314,6 +314,7 @@ import (
 
 %token <str> OUT INOUT
 
+
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT
 %token <str> CHAIN NO RELEASE PRIORITY QUICK
@@ -487,7 +488,10 @@ import (
 %token <str> CDC
 
 // ROLLUP
-%token <str> ROLLUP
+%token <str> GROUPING SETS CUBE ROLLUP 
+
+// Logservice
+%token <str> LOGSERVICE REPLICAS STORES SETTINGS
 
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
@@ -503,11 +507,11 @@ import (
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> show_servers_stmt show_connectors_stmt
+%type <statement> show_servers_stmt show_connectors_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt rename_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
-%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt
+%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
@@ -523,7 +527,7 @@ import (
 %type <statement> kill_stmt
 %type <statement> backup_stmt snapshot_restore_stmt
 %type <statement> create_cdc_stmt show_cdc_stmt pause_cdc_stmt drop_cdc_stmt resume_cdc_stmt restart_cdc_stmt
-%type <rowsExprs> row_constructor_list
+%type <rowsExprs> row_constructor_list grouping_sets 
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
@@ -2296,6 +2300,16 @@ set_stmt:
 |   set_default_role_stmt
 |   set_transaction_stmt
 |   set_connection_id_stmt
+|   set_logservice_non_voting_replica_num
+
+set_logservice_non_voting_replica_num:
+  SET LOGSERVICE SETTINGS var_name equal_or_assignment set_expr
+  {
+    $$ = &tree.SetLogserviceSettings{
+      Name: $4,
+      Value: $6,
+    }
+  }
 
 set_transaction_stmt:
     SET TRANSACTION transaction_characteristic_list
@@ -3978,6 +3992,27 @@ show_stmt:
 |   show_snapshots_stmt
 |   show_pitr_stmt
 |   show_cdc_stmt
+|   show_logservice_replicas_stmt
+|   show_logservice_stores_stmt
+|   show_logservice_settings_stmt
+
+show_logservice_replicas_stmt:
+    SHOW LOGSERVICE REPLICAS
+    {
+        $$ = &tree.ShowLogserviceReplicas{}
+    }
+
+show_logservice_stores_stmt:
+    SHOW LOGSERVICE STORES
+    {
+        $$ = &tree.ShowLogserviceStores{}
+    }
+
+show_logservice_settings_stmt:
+    SHOW LOGSERVICE SETTINGS
+    {
+        $$ = &tree.ShowLogserviceSettings{}
+    }
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -5643,10 +5678,50 @@ group_by_opt:
     }
 |   GROUP BY expression_list rollup_opt
     {
+        exprsList := []tree.Exprs{$3}
         $$ = &tree.GroupByClause{
-            GroupByExprs: $3,
-            RollUp:       $4,
+            GroupByExprsList: exprsList,
+            Apart: false,
+            Cube :      false,
+            Rollup:       $4,
         }
+    }
+|   GROUP BY GROUPING SETS '(' grouping_sets ')'
+    {
+        $$ = &tree.GroupByClause{
+            GroupByExprsList: $6,
+            Apart: false,
+            Cube :      false,
+            Rollup:       false,
+        }
+    }
+|   GROUP BY CUBE '('  expression_list ')'
+    {
+        $$ = &tree.GroupByClause{
+            GroupByExprsList: []tree.Exprs{$5},
+            Apart: false,
+            Cube :      true,
+            Rollup:       false,
+        }
+    }
+|   GROUP BY ROLLUP '(' expression_list ')'
+    {
+        $$ = &tree.GroupByClause{
+            GroupByExprsList: []tree.Exprs{$5},
+            Apart: false,
+            Cube :      false,
+            Rollup:       true,
+        }
+    }
+
+grouping_sets:
+    '(' expression_list_opt ')'
+    {
+        $$ = []tree.Exprs{$2}
+    }
+|   grouping_sets ',' '(' expression_list_opt ')'
+    {
+        $$ = append($1, $4)
     }
 
 rollup_opt:
@@ -5844,6 +5919,7 @@ values_stmt:
             Limit: $4,
         }
     }
+
 
 row_constructor_list:
     row_constructor
@@ -10197,6 +10273,23 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
+|   GROUPING '(' func_type_opt column_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        var columnList tree.Exprs
+        for _, columnStr := range $4{
+            column := tree.NewUnresolvedColName(string(columnStr))
+            columnList = append(columnList, column)
+        }
+
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: columnList,
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
 
 std_dev_pop:
     STD
@@ -12199,6 +12292,7 @@ non_reserved_keyword:
 |   LESS
 |   LEVEL
 |   LINESTRING
+|   LOGSERVICE
 |   LONGBLOB
 |   LONGTEXT
 |   LOCAL
@@ -12248,6 +12342,7 @@ non_reserved_keyword:
 |   REDUNDANT
 |   REPAIR
 |   REPEATABLE
+|   REPLICAS
 |   RELEASE
 |   RESUME
 |   REVOKE
@@ -12256,6 +12351,7 @@ non_reserved_keyword:
 |   ROLLBACK
 |   RESTRICT
 |   SESSION
+|   SETTINGS
 |   SERIALIZABLE
 |   SHARE
 |   SIGNED
@@ -12266,6 +12362,7 @@ non_reserved_keyword:
 |   START
 |   STATUS
 |   STORAGE
+|   STORES
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
 |   STATS_SAMPLE_PAGES
@@ -12465,6 +12562,10 @@ non_reserved_keyword:
 |	OWNERSHIP
 |   MO_TS
 |   ROLLUP
+|   GROUPING
+|   SETS
+|   CUBE
+
 
 func_not_keyword:
     DATE_ADD

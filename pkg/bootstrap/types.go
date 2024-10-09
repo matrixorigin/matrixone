@@ -121,3 +121,10 @@ func WithCheckUpgradeTenantWorkers(value int) Option {
 		s.upgrade.upgradeTenantTasks = value
 	}
 }
+
+// WithKek setup key encryption key
+func WithKek(value string) Option {
+	return func(s *service) {
+		s.upgrade.kek = value
+	}
+}

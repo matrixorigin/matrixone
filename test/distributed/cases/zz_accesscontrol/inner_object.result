@@ -513,3 +513,58 @@ drop database user_db;
 drop account ac_1;
 drop user sys_user;
 drop role sys_role;
+drop database if exists etao;
+create database etao;
+use etao;
+CREATE TABLE `users` (
+`id` VARCHAR(128) NOT NULL,
+`username` VARCHAR(255) DEFAULT NULL,
+`password` VARCHAR(512) DEFAULT NULL,
+`user_status` TINYINT DEFAULT NULL,
+`user_role` TINYINT DEFAULT NULL,
+`created_at` DATETIME DEFAULT NULL,
+`updated_at` DATETIME DEFAULT NULL,
+`user_source` TINYINT DEFAULT NULL,
+PRIMARY KEY (`id`),
+UNIQUE KEY `idx_mocadmin_users_username` (`username`)
+);
+SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale , datetime_precision FROM information_schema.columns WHERE table_schema = 'etao' AND table_name = 'users' ORDER BY ORDINAL_POSITION;
+column_name    column_default    is_nullable = YES    data_type    character_maximum_length    column_type    column_key    extra    column_comment    numeric_precision    numeric_scale    datetime_precision
+id    null    false    VARCHAR    128    VARCHAR(128)    PRI            null    null    null
+username    null    true    VARCHAR    255    VARCHAR(255)    UNI            null    null    null
+password    null    true    VARCHAR    512    VARCHAR(512)                null    null    null
+user_status    null    true    TINYINT    null    TINYINT(8)                null    null    null
+user_role    null    true    TINYINT    null    TINYINT(8)                null    null    null
+created_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
+updated_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
+user_source    null    true    TINYINT    null    TINYINT(8)                null    null    null
+drop database etao;
+drop account if exists acc1;
+create account acc1 admin_name 'root' identified by '111';
+drop database if exists etao;
+create database etao;
+use etao;
+CREATE TABLE `users` (
+`id` VARCHAR(128) NOT NULL,
+`username` VARCHAR(255) DEFAULT NULL,
+`password` VARCHAR(512) DEFAULT NULL,
+`user_status` TINYINT DEFAULT NULL,
+`user_role` TINYINT DEFAULT NULL,
+`created_at` DATETIME DEFAULT NULL,
+`updated_at` DATETIME DEFAULT NULL,
+`user_source` TINYINT DEFAULT NULL,
+PRIMARY KEY (`id`),
+UNIQUE KEY `idx_mocadmin_users_username` (`username`)
+);
+SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale , datetime_precision FROM information_schema.columns WHERE table_schema = 'etao' AND table_name = 'users' ORDER BY ORDINAL_POSITION;
+column_name    column_default    is_nullable = YES    data_type    character_maximum_length    column_type    column_key    extra    column_comment    numeric_precision    numeric_scale    datetime_precision
+id    null    false    VARCHAR    128    VARCHAR(128)    PRI            null    null    null
+username    null    true    VARCHAR    255    VARCHAR(255)    UNI            null    null    null
+password    null    true    VARCHAR    512    VARCHAR(512)                null    null    null
+user_status    null    true    TINYINT    null    TINYINT(8)                null    null    null
+user_role    null    true    TINYINT    null    TINYINT(8)                null    null    null
+created_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
+updated_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
+user_source    null    true    TINYINT    null    TINYINT(8)                null    null    null
+drop database etao;
+drop account acc1;

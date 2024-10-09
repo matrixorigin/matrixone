@@ -179,7 +179,6 @@ func uuidAscCompare(x, y types.Uuid) int {
 	return x.Compare(y)
 }
 
-// PXU FIXME Done
 func txntsAscCompare(x, y types.TS) int {
 	return x.Compare(&y)
 }
@@ -223,7 +222,6 @@ func uuidDescCompare(x, y types.Uuid) int {
 }
 
 func txntsDescCompare(x, y types.TS) int {
-	// PXU FIXME Done
 	return y.Compare(&x)
 }
 func rowidDescCompare(x, y types.Rowid) int {
@@ -281,6 +279,7 @@ func newCompare[T any](cmp func(T, T) int, cpy func([]T, []T, int64, int64), nul
 		cpy:         cpy,
 		xs:          make([][]T, 2),
 		ns:          make([]*nulls.Nulls, 2),
+		gs:          make([]*nulls.Nulls, 2),
 		vs:          make([]*vector.Vector, 2),
 		isConstNull: make([]bool, 2),
 		nullsLast:   nullsLast,
@@ -296,6 +295,7 @@ func (c *compare[T]) Set(idx int, vec *vector.Vector) {
 	c.ns[idx] = vec.GetNulls()
 	c.xs[idx] = vector.ExpandFixedCol[T](vec)
 	c.isConstNull[idx] = vec.IsConstNull()
+	c.gs[idx] = vec.GetGrouping()
 }
 
 func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {

@@ -1,0 +1,19 @@
+drop table if exists t1;
+
+create table t1(
+a int primary key,
+b varchar(10)
+);
+
+select mo_ctl('dn', 'inspect', 'policy -t mo_ctl_policy.t1 -s');
+mo_ctl(dn, inspect, policy -t mo_ctl_policy.t1 -s)
+\nmsg: (303406-t1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\nsuccess
+select mo_ctl('dn', 'inspect', 'policy -t mo_ctl_policy.t1 -s');
+mo_ctl(dn, inspect, policy -t mo_ctl_policy.t1 -s)
+\nmsg: run err: internal error: t1 is already locked\n\n
+select mo_ctl('dn', 'inspect', 'policy -t mo_ctl_policy.t1');
+mo_ctl(dn, inspect, policy -t mo_ctl_policy.t1)
+\nmsg: (303406-t1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\nsuccess
+select mo_ctl('dn', 'inspect', 'policy -t mo_ctl_policy.t1');
+mo_ctl(dn, inspect, policy -t mo_ctl_policy.t1)
+\nmsg: (303406-t1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\nsuccess

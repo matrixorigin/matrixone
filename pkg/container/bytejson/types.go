@@ -94,6 +94,11 @@ const (
 	LiteralFalse
 )
 
+// search josn element cut off point.
+const (
+	binarySearchCutoff = 20
+)
+
 var (
 	endian = binary.LittleEndian
 )

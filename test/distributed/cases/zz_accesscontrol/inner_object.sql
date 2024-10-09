@@ -278,3 +278,44 @@ drop database user_db;
 drop account ac_1;
 drop user sys_user;
 drop role sys_role;
+
+drop database if exists etao;
+create database etao;
+use etao;
+CREATE TABLE `users` (
+  `id` VARCHAR(128) NOT NULL,
+  `username` VARCHAR(255) DEFAULT NULL,
+  `password` VARCHAR(512) DEFAULT NULL,
+  `user_status` TINYINT DEFAULT NULL,
+  `user_role` TINYINT DEFAULT NULL,
+  `created_at` DATETIME DEFAULT NULL,
+  `updated_at` DATETIME DEFAULT NULL,
+  `user_source` TINYINT DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_mocadmin_users_username` (`username`)
+);
+SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale , datetime_precision FROM information_schema.columns WHERE table_schema = 'etao' AND table_name = 'users' ORDER BY ORDINAL_POSITION;
+drop database etao;
+
+drop account if exists acc1;
+create account acc1 admin_name 'root' identified by '111';
+-- @session:id=6&user=acc1:root&password=111
+drop database if exists etao;
+create database etao;
+use etao;
+CREATE TABLE `users` (
+  `id` VARCHAR(128) NOT NULL,
+  `username` VARCHAR(255) DEFAULT NULL,
+  `password` VARCHAR(512) DEFAULT NULL,
+  `user_status` TINYINT DEFAULT NULL,
+  `user_role` TINYINT DEFAULT NULL,
+  `created_at` DATETIME DEFAULT NULL,
+  `updated_at` DATETIME DEFAULT NULL,
+  `user_source` TINYINT DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_mocadmin_users_username` (`username`)
+);
+SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale , datetime_precision FROM information_schema.columns WHERE table_schema = 'etao' AND table_name = 'users' ORDER BY ORDINAL_POSITION;
+drop database etao;
+-- @session
+drop account acc1;

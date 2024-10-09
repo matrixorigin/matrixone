@@ -113,10 +113,48 @@ var (
 			Subsystem: "frontend",
 			Name:      "input_sql_length",
 			Help:      "Bucketed histogram of Input SQL Length",
-			Buckets:   getDurationBuckets(),
+			Buckets:   prometheus.ExponentialBuckets(64, 2, 20), //from 64, to 64 * 2 ^20
 		}, []string{"label"})
 
 	TotalSQLLengthHistogram          = sqlLengthHistogram.WithLabelValues("total-sql-length")
 	LoadDataInlineSQLLengthHistogram = sqlLengthHistogram.WithLabelValues("load-data-inline-sql-length")
 	OtherSQLLengthHistogram          = sqlLengthHistogram.WithLabelValues("other-sql-length")
+
+	cdcRecordCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "cdc_record_count",
+			Help:      "Count of records cdc read and sink",
+		}, []string{"type"})
+	CdcReadRecordCounter = cdcRecordCounter.WithLabelValues("read")
+	CdcSinkRecordCounter = cdcRecordCounter.WithLabelValues("sink")
+
+	cdcErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "cdc_error_count",
+			Help:      "Count of error",
+		}, []string{"type"})
+	CdcMysqlConnErrorCounter = cdcErrorCounter.WithLabelValues("mysql-conn")
+	CdcMysqlSinkErrorCounter = cdcErrorCounter.WithLabelValues("mysql-sink")
+
+	cdcProcessingRecordCountGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "cdc_processing_record_count",
+			Help:      "Count of records cdc has read but not sunk",
+		}, []string{"type"})
+	CdcTotalProcessingRecordCountGauge = cdcProcessingRecordCountGauge.WithLabelValues("total")
+
+	cdcAllocatedBatchBytesGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "cdc_allocated_batch_bytes",
+			Help:      "Bytes allocated by cdc",
+		}, []string{"type"})
+	CdcTotalAllocatedBatchBytesGauge = cdcAllocatedBatchBytesGauge.WithLabelValues("total")
 )

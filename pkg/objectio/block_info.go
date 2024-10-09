@@ -225,6 +225,32 @@ func MakeBlockInfoSlice(cnt int) BlockInfoSlice {
 	return make([]byte, cnt*BlockInfoSize)
 }
 
+func MultiObjectStatsToBlockInfoSlice(objs []ObjectStats, withFirstEmpty bool) BlockInfoSlice {
+	offset := 0
+	var ret BlockInfoSlice
+	cnt := 0
+	for _, obj := range objs {
+		cnt += int(obj.BlkCnt())
+	}
+	if withFirstEmpty {
+		ret = MakeBlockInfoSlice(cnt + 1)
+		offset = 1
+	} else {
+		ret = MakeBlockInfoSlice(cnt)
+	}
+	idx := 0
+	for _, obj := range objs {
+		for i := 0; i < int(obj.BlkCnt()); i++ {
+			blk := ret.Get(idx + offset)
+			obj.BlockLocationTo(uint16(i), BlockMaxRows, blk.MetaLoc[:])
+			blk.ConstructBlockID(obj.ObjectName(), uint16(i))
+			blk.SetFlagByObjStats(&obj)
+			idx++
+		}
+	}
+	return ret
+}
+
 func ObjectStatsToBlockInfoSlice(stats *ObjectStats, withFirstEmpty bool) BlockInfoSlice {
 	offset := 0
 	var ret BlockInfoSlice

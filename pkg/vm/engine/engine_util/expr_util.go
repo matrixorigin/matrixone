@@ -31,6 +31,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func NewColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				Name:   name,
+				ColPos: int32(pos),
+			},
+		},
+	}
+}
+
+func ConstructInExpr(
+	ctx context.Context,
+	colName string,
+	colVec *vector.Vector,
+) *plan.Expr {
+	data, _ := colVec.MarshalBinary()
+	colExpr := NewColumnExpr(0, plan2.MakePlan2Type(colVec.GetType()), colName)
+	return plan2.MakeInExpr(
+		ctx,
+		colExpr,
+		int32(colVec.Length()),
+		data,
+		false,
+	)
+}
+
 func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
 	idx := strings.Index(name, ".")
 	var pos int32
@@ -54,7 +82,6 @@ func evalValue(
 	tblDef *plan.TableDef,
 	isVec bool,
 	pkName string,
-	proc *process.Process,
 ) (
 	ok bool, oid types.T, vals [][]byte,
 ) {
@@ -62,9 +89,9 @@ func evalValue(
 	var col *plan.Expr_Col
 
 	if !isVec {
-		col, vals, ok = mustColConstValueFromBinaryFuncExpr(exprImpl, tblDef, proc)
+		col, vals, ok = mustColConstValueFromBinaryFuncExpr(exprImpl)
 	} else {
-		col, val, ok = mustColVecValueFromBinaryFuncExpr(proc, exprImpl)
+		col, val, ok = mustColVecValueFromBinaryFuncExpr(exprImpl)
 	}
 
 	if !ok {
@@ -94,7 +121,7 @@ func evalValue(
 }
 
 func mustColConstValueFromBinaryFuncExpr(
-	expr *plan.Expr_F, tableDef *plan.TableDef, proc *process.Process,
+	expr *plan.Expr_F,
 ) (*plan.Expr_Col, [][]byte, bool) {
 	var (
 		colExpr  *plan.Expr_Col
@@ -115,31 +142,30 @@ func mustColConstValueFromBinaryFuncExpr(
 		return nil, nil, false
 	}
 
-	vals, ok := getConstBytesFromExpr(
-		valExprs,
-		tableDef.Cols[colExpr.Col.ColPos],
-		proc,
-	)
+	vals, ok := getConstBytesFromExpr(valExprs)
 	if !ok {
 		return nil, nil, false
 	}
 	return colExpr, vals, true
 }
 
-func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *process.Process) ([][]byte, bool) {
+func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {
 	vals := make([][]byte, len(exprs))
 	for idx := range exprs {
-		constVal := getConstValueByExpr(exprs[idx], proc)
-		if constVal == nil {
+		if fExpr, ok := exprs[idx].Expr.(*plan.Expr_Fold); ok {
+			if len(fExpr.Fold.Data) == 0 {
+				return nil, false
+			}
+			if !fExpr.Fold.IsConst {
+				return nil, false
+			}
+
+			vals[idx] = nil
+			vals[idx] = append(vals[idx], fExpr.Fold.Data...)
+		} else {
+			logutil.Warnf("const folded val expr is not a fold expr: %s\n", plan2.FormatExpr(exprs[idx]))
 			return nil, false
 		}
-		colType := types.T(colDef.Typ.Id)
-		val, ok := evalLiteralExpr2(constVal, colType)
-		if !ok {
-			return nil, ok
-		}
-
-		vals[idx] = val
 	}
 
 	return vals, true
@@ -160,84 +186,7 @@ func getConstValueByExpr(
 	return rule.GetConstantValue(vec, true, 0)
 }
 
-func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {
-	can = true
-	switch val := expr.Value.(type) {
-	case *plan.Literal_I8Val:
-		i8 := int8(val.I8Val)
-		ret = types.EncodeInt8(&i8)
-	case *plan.Literal_I16Val:
-		i16 := int16(val.I16Val)
-		ret = types.EncodeInt16(&i16)
-	case *plan.Literal_I32Val:
-		i32 := val.I32Val
-		ret = types.EncodeInt32(&i32)
-	case *plan.Literal_I64Val:
-		i64 := val.I64Val
-		ret = types.EncodeInt64(&i64)
-	case *plan.Literal_Dval:
-		if oid == types.T_float32 {
-			fval := float32(val.Dval)
-			ret = types.EncodeFloat32(&fval)
-		} else {
-			dval := val.Dval
-			ret = types.EncodeFloat64(&dval)
-		}
-	case *plan.Literal_Sval:
-		ret = []byte(val.Sval)
-	case *plan.Literal_Bval:
-		ret = types.EncodeBool(&val.Bval)
-	case *plan.Literal_U8Val:
-		u8 := uint8(val.U8Val)
-		ret = types.EncodeUint8(&u8)
-	case *plan.Literal_U16Val:
-		u16 := uint16(val.U16Val)
-		ret = types.EncodeUint16(&u16)
-	case *plan.Literal_U32Val:
-		u32 := val.U32Val
-		ret = types.EncodeUint32(&u32)
-	case *plan.Literal_U64Val:
-		u64 := val.U64Val
-		ret = types.EncodeUint64(&u64)
-	case *plan.Literal_Fval:
-		if oid == types.T_float32 {
-			fval := float32(val.Fval)
-			ret = types.EncodeFloat32(&fval)
-		} else {
-			fval := float64(val.Fval)
-			ret = types.EncodeFloat64(&fval)
-		}
-	case *plan.Literal_Dateval:
-		v := types.Date(val.Dateval)
-		ret = types.EncodeDate(&v)
-	case *plan.Literal_Timeval:
-		v := types.Time(val.Timeval)
-		ret = types.EncodeTime(&v)
-	case *plan.Literal_Datetimeval:
-		v := types.Datetime(val.Datetimeval)
-		ret = types.EncodeDatetime(&v)
-	case *plan.Literal_Timestampval:
-		v := types.Timestamp(val.Timestampval)
-		ret = types.EncodeTimestamp(&v)
-	case *plan.Literal_Decimal64Val:
-		v := types.Decimal64(val.Decimal64Val.A)
-		ret = types.EncodeDecimal64(&v)
-	case *plan.Literal_Decimal128Val:
-		v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
-		ret = types.EncodeDecimal128(&v)
-	case *plan.Literal_EnumVal:
-		v := types.Enum(val.EnumVal)
-		ret = types.EncodeEnum(&v)
-	case *plan.Literal_Jsonval:
-		ret = []byte(val.Jsonval)
-	default:
-		can = false
-	}
-
-	return
-}
-
-func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
+func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
 	var (
 		colExpr  *plan.Expr_Col
 		valExpr  *plan.Expr
@@ -253,16 +202,18 @@ func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F)
 	}
 
 	if exprImpl, ok = valExpr.Expr.(*plan.Expr_Vec); !ok {
-		foldedExprs, err := plan2.ConstandFoldList([]*plan.Expr{valExpr}, proc, true)
-		if err != nil {
-			logutil.Errorf("try const fold val expr failed: %s", plan2.FormatExpr(valExpr))
-			return nil, nil, false
+		if fExpr, ok := valExpr.Expr.(*plan.Expr_Fold); ok {
+			if len(fExpr.Fold.Data) == 0 {
+				return nil, nil, false
+			}
+			if fExpr.Fold.IsConst {
+				return nil, nil, false
+			}
+			return colExpr, fExpr.Fold.Data, ok
 		}
 
-		if exprImpl, ok = foldedExprs[0].Expr.(*plan.Expr_Vec); !ok {
-			logutil.Errorf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
-			return nil, nil, false
-		}
+		logutil.Warnf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
+		return nil, nil, false
 	}
 
 	return colExpr, exprImpl.Vec.Data, ok

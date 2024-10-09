@@ -40,7 +40,7 @@ const (
 
 type container struct {
 	state int
-
+	itr   hashmap.Iterator
 	// should use hash map or not and the hash map type.
 	typ int
 

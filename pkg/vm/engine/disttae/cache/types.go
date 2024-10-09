@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -120,7 +121,6 @@ type TableItem struct {
 	Version      uint32
 	DatabaseName string
 
-	Rowid types.Rowid
 	CPKey []byte
 
 	// table def
@@ -132,6 +132,7 @@ type TableItem struct {
 	Partition      string
 	CreateSql      string
 	CatalogVersion uint32
+	ExtraInfo      *api.SchemaExtra
 
 	// primary index
 	PrimaryIdx    int
@@ -288,7 +289,7 @@ func copyTableItem(dst, src *TableItem) {
 	dst.ClusterByIdx = src.ClusterByIdx
 	dst.PrimarySeqnum = src.PrimarySeqnum
 	dst.Version = src.Version
-	copy(dst.Rowid[:], src.Rowid[:])
+	dst.ExtraInfo = api.MustUnmarshalTblExtra(api.MustMarshalTblExtra(src.ExtraInfo))
 }
 
 func copyDatabaseItem(dest, src *DatabaseItem) {

@@ -148,8 +148,8 @@ func TestTable(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(3, 2)
-	schema.BlockMaxRows = 10000
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 10000
+	schema.Extra.ObjectMaxBlocks = 10
 	{
 		txn, _ := mgr.StartTxn(nil)
 		db, err := txn.CreateDatabase("db", "", "")
@@ -195,8 +195,8 @@ func TestAppend(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(3, 1)
-	schema.BlockMaxRows = 10000
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 10000
+	schema.Extra.ObjectMaxBlocks = 10
 
 	txn, _ := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db", "", "")
@@ -313,8 +313,8 @@ func TestLoad(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(14, 13)
-	schema.BlockMaxRows = 10000
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 10000
+	schema.Extra.ObjectMaxBlocks = 10
 
 	bat := catalog.MockBatch(schema, 60000)
 	defer bat.Close()
@@ -346,8 +346,8 @@ func TestNodeCommand(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(14, 13)
-	schema.BlockMaxRows = 10000
-	schema.ObjectMaxBlocks = 10
+	schema.Extra.BlockMaxRows = 10000
+	schema.Extra.ObjectMaxBlocks = 10
 
 	bat := catalog.MockBatch(schema, 15000)
 	defer bat.Close()
@@ -708,10 +708,10 @@ func TestDedup1(t *testing.T) {
 	defer mgr.Stop()
 
 	schema := catalog.MockSchemaAll(4, 2)
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 4
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 4
 	cnt := uint64(10)
-	rows := uint64(schema.BlockMaxRows) / 2 * cnt
+	rows := uint64(schema.Extra.BlockMaxRows) / 2 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
 	defer bat.Close()
 	bats := bat.Split(int(cnt))

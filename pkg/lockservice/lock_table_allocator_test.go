@@ -397,6 +397,7 @@ func runLockTableAllocatorTest(
 							},
 						}))
 				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+				defer cluster.Close()
 
 				a := NewLockTableAllocator(sid, testSockets, timeout, morpc.Config{}, opts...)
 				defer func() {

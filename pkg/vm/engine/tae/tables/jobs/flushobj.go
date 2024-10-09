@@ -99,7 +99,13 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	seg := task.meta.ID().Segment()
 	name := objectio.BuildObjectName(seg, 0)
 	task.name = name
-	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, task.schemaVer, task.seqnums)
+	writer, err := blockio.NewBlockWriterNew(
+		task.fs.Service,
+		name,
+		task.schemaVer,
+		task.seqnums,
+		task.meta.IsTombstone,
+	)
 	if err != nil {
 		return err
 	}
@@ -108,15 +114,13 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	}
 
 	if task.meta.IsTombstone {
-		writer.SetDataType(objectio.SchemaTombstone)
 		writer.SetPrimaryKeyWithType(
-			uint16(catalog.TombstonePrimaryKeyIdx),
+			uint16(objectio.TombstonePrimaryKeyIdx),
 			index.HBF,
 			index.ObjectPrefixFn,
 			index.BlockPrefixFn,
 		)
 	} else {
-		writer.SetDataType(objectio.SchemaData)
 		if task.meta.GetSchema().HasPK() {
 			writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 		} else if task.meta.GetSchema().HasSortKey() {

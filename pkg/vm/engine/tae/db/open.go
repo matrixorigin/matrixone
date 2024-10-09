@@ -35,6 +35,7 @@ import (
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -60,13 +61,19 @@ func fillRuntimeOptions(opts *options.Options) {
 	if opts.MergeCfg.CNStandaloneTake {
 		common.ShouldStandaloneCNTakeOver.Store(true)
 	}
+	if opts.MergeCfg.DisableZMBasedMerge {
+		common.RuntimeDisableZMBasedMerge.Store(true)
+	}
 }
 
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
 
-	logutil.Info("open-tae", common.OperationField("Start"),
-		common.OperandField("open"))
+	logutil.Info(
+		"open-tae",
+		common.OperationField("Start"),
+		common.OperandField("open"),
+	)
 	totalTime := time.Now()
 
 	if err != nil {
@@ -76,10 +83,12 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		if dbLocker != nil {
 			dbLocker.Close()
 		}
-		logutil.Info("open-tae", common.OperationField("End"),
+		logutil.Info(
+			"open-tae", common.OperationField("End"),
 			common.OperandField("open"),
 			common.AnyField("cost", time.Since(totalTime)),
-			common.AnyField("err", err))
+			common.AnyField("err", err),
+		)
 	}()
 
 	opts = opts.FillDefaults(dirname)
@@ -87,8 +96,12 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	wbuf := &bytes.Buffer{}
 	werr := toml.NewEncoder(wbuf).Encode(opts)
-	logutil.Info("open-tae", common.OperationField("Config"),
-		common.AnyField("toml", wbuf.String()), common.ErrorField(werr))
+	logutil.Info(
+		"open-tae",
+		common.OperationField("Config"),
+		common.AnyField("toml", wbuf.String()),
+		common.ErrorField(werr),
+	)
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
@@ -107,9 +120,9 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
-	transferTable, e := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
-	if e != nil {
-		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", e))
+	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
+	if err != nil {
+		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", err))
 	}
 
 	switch opts.LogStoreT {
@@ -175,23 +188,51 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
-	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
+	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
+	if err = ckpReplayer.ReadCkpFiles(); err != nil {
+		panic(err)
+	}
+
+	// 1. replay three tables objectlist
+	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist()
 	if err != nil {
 		panic(err)
 	}
-	logutil.Info("open-tae", common.OperationField("replay"),
+
+	var txn txnif.AsyncTxn
+	{
+		// create a txn manually
+		txnIdAlloc := common.NewTxnIDAllocator()
+		store := txnStoreFactory()
+		txn = txnFactory(db.TxnMgr, store, txnIdAlloc.Alloc(), checkpointed, types.TS{})
+		store.BindTxn(txn)
+	}
+	// 2. replay all table Entries
+	ckpReplayer.ReplayCatalog(txn)
+
+	// 3. replay other tables' objectlist
+	if err = ckpReplayer.ReplayObjectlist(); err != nil {
+		panic(err)
+	}
+	logutil.Info(
+		"open-tae",
+		common.OperationField("replay"),
 		common.OperandField("checkpoints"),
 		common.AnyField("cost", time.Since(now)),
-		common.AnyField("checkpointed", checkpointed.ToString()))
+		common.AnyField("checkpointed", checkpointed.ToString()),
+	)
 
 	now = time.Now()
 	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
 	db.Catalog.ReplayTableRows()
 
 	// checkObjectState(db)
-	logutil.Info("open-tae", common.OperationField("replay"),
+	logutil.Info(
+		"open-tae",
+		common.OperationField("replay"),
 		common.OperandField("wal"),
-		common.AnyField("cost", time.Since(now)))
+		common.AnyField("cost", time.Since(now)),
+	)
 
 	db.DBLocker, dbLocker = dbLocker, nil
 
@@ -214,7 +255,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			checkpoint := item.(*checkpoint.CheckpointEntry)
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
 			endTS := checkpoint.GetEnd()
-			return !endTS.GreaterEq(&ts)
+			return !endTS.GE(&ts)
 		}, gc2.CheckerKeyTTL)
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()

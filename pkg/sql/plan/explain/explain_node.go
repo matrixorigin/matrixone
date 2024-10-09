@@ -144,6 +144,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Lock"
 	case plan.Node_APPLY:
 		pname = "CROSS APPLY"
+	//case plan.Node_MULTI_UPDATE:
+	//	pname = "Multi Update"
 	default:
 		panic("error node type")
 	}
@@ -162,7 +164,21 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_SOURCE_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
-				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
+				if ndesc.Node.ParentObjRef == nil || options.CmpContext == nil { // original table
+					buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
+				} else { // index table, need to get index table name
+					scanSnapshot := ndesc.Node.ScanSnapshot
+					if scanSnapshot == nil {
+						scanSnapshot = &plan.Snapshot{}
+					}
+					_, origTableDef := options.CmpContext.Resolve(ndesc.Node.ParentObjRef.GetSchemaName(), ndesc.Node.ParentObjRef.GetObjName(), scanSnapshot)
+					for i := range origTableDef.Indexes {
+						if origTableDef.Indexes[i].IndexTableName == ndesc.Node.ObjRef.GetObjName() {
+							buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + origTableDef.Indexes[i].IndexName + "(index)")
+							break
+						}
+					}
+				}
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
 			}
@@ -711,7 +727,7 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		}
 
 		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
-			buf.WriteString(" shuffle: REUSE ")
+			buf.WriteString(" shuffle: REUSE")
 		}
 	}
 	return buf.String(), nil

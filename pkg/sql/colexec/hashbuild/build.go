@@ -129,7 +129,11 @@ func (ctr *container) build(ap *HashBuild, proc *process.Process, analyzer proce
 		return err
 	}
 	if ap.NeedHashMap {
-		err = ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, ap.RuntimeFilterSpec, proc)
+		needUniqueVec := true
+		if ap.RuntimeFilterSpec == nil || ap.RuntimeFilterSpec.Expr == nil {
+			needUniqueVec = false
+		}
+		err = ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, needUniqueVec, proc)
 	}
 	if err != nil {
 		return err

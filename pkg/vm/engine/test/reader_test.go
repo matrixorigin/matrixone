@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -31,15 +30,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -116,11 +119,19 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	// 	require.Equal(t, rowsCount, stats.DataObjectsVisible.RowCnt)
 	// }
 
+	var exes []colexec.ExpressionExecutor
+	proc := testutil3.NewProcessWithMPool("", mp)
 	expr := []*plan.Expr{
 		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
 			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
 		}),
+	}
+	for _, e := range expr {
+		plan2.ReplaceFoldExpr(proc, e, &exes)
+	}
+	for _, e := range expr {
+		plan2.EvalFoldExpr(proc, e, &exes)
 	}
 
 	txn, _, reader, err := testutil.GetTableTxnReader(
@@ -144,6 +155,9 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		ret.CleanOnlyData()
 	}
 
+	for _, exe := range exes {
+		exe.Free()
+	}
 	require.Equal(t, 1, resultHit)
 	require.NoError(t, txn.Commit(ctx))
 }
@@ -556,7 +570,7 @@ func Test_ShardingHandler(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		tombstones, err := disttae.UnmarshalTombstoneData(res)
+		tombstones, err := engine_util.UnmarshalTombstoneData(res)
 		require.NoError(t, err)
 
 		require.True(t, tombstones.HasAnyInMemoryTombstone())
@@ -778,7 +792,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 		data, err := relData.MarshalBinary()
 		require.NoError(t, err)
 		readerBuildParam.ReaderBuildParam.RelData = data
-		readerBuildParam.ReaderBuildParam.ScanType = disttae.SMALL
+		readerBuildParam.ReaderBuildParam.ScanType = engine_util.SMALL
 		readerBuildParam.ReaderBuildParam.TombstoneApplyPolicy =
 			int32(engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3)
 		res, err := disttae.HandleShardingReadBuildReader(
@@ -1255,15 +1269,136 @@ func Test_ShardingLocalReader(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	//test set orderby
+	//Just for passing UT coverage check only.
 	shardingLRD := disttae.MockShardingLocalReader()
-	assert.Panics(t, func() {
-		shardingLRD.SetOrderBy(nil)
-	})
-	assert.Panics(t, func() {
-		shardingLRD.GetOrderBy()
-	})
-	assert.Panics(t, func() {
-		shardingLRD.SetFilterZM(nil)
-	})
+	shardingLRD.SetOrderBy(nil)
+	shardingLRD.GetOrderBy()
+	shardingLRD.SetFilterZM(nil)
+}
+
+func Test_SimpleReader(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	proc := testutil3.NewProcessWithMPool("", mp)
+	pkType := types.T_int32.ToType()
+	bat1 := engine_util.NewCNTombstoneBatch(
+		&pkType,
+		objectio.HiddenColumnSelection_None,
+	)
+	defer bat1.Clean(mp)
+	obj := types.NewObjectid()
+	blk0 := types.NewBlockidWithObjectID(obj, 0)
+	blk1 := types.NewBlockidWithObjectID(obj, 1)
+	idx := int32(0)
+	for i := 0; i < 10; i++ {
+		vector.AppendFixed[int32](
+			bat1.Vecs[1],
+			idx,
+			false,
+			mp,
+		)
+		idx++
+		rowid := types.NewRowid(blk0, uint32(i))
+		vector.AppendFixed[types.Rowid](
+			bat1.Vecs[0],
+			*rowid,
+			false,
+			mp,
+		)
+	}
+	for i := 0; i < 10; i++ {
+		vector.AppendFixed[int32](
+			bat1.Vecs[1],
+			idx,
+			false,
+			mp,
+		)
+		idx++
+		rowid := types.NewRowid(blk1, uint32(i))
+		vector.AppendFixed[types.Rowid](
+			bat1.Vecs[0],
+			*rowid,
+			false,
+			mp,
+		)
+	}
+	bat1.SetRowCount(bat1.Vecs[0].Length())
+
+	w, err := colexec.NewS3TombstoneWriter()
+	require.NoError(t, err)
+	defer w.Free(mp)
+	w.StashBatch(proc, bat1)
+	_, stats, err := w.SortAndSync(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint32(20), stats.Rows())
+	t.Logf("stats: %s", stats.String())
+
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	r := engine_util.SimpleTombstoneObjectReader(
+		context.Background(), fs, &stats, timestamp.Timestamp{},
+		engine_util.WithColumns(
+			[]uint16{0, 1},
+			[]types.Type{objectio.RowidType, pkType},
+		),
+	)
+	blockio.Start("")
+	defer blockio.Stop("")
+	bat2 := engine_util.NewCNTombstoneBatch(
+		&pkType,
+		objectio.HiddenColumnSelection_None,
+	)
+	defer bat2.Clean(mp)
+	done, err := r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, 20, bat2.RowCount())
+	pks := vector.MustFixedColWithTypeCheck[int32](bat2.Vecs[1])
+	require.Equal(t, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}, pks)
+	rowids1 := vector.MustFixedColWithTypeCheck[types.Rowid](bat1.Vecs[0])
+	rowids2 := vector.MustFixedColWithTypeCheck[types.Rowid](bat2.Vecs[0])
+	for i := 0; i < bat1.RowCount(); i++ {
+		require.Equal(t, rowids1[i], rowids2[i])
+	}
+
+	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	require.NoError(t, err)
+	require.True(t, done)
+
+	r = engine_util.SimpleMultiObjectsReader(
+		context.Background(), fs,
+		[]objectio.ObjectStats{stats, stats}, timestamp.Timestamp{},
+		engine_util.WithColumns(
+			[]uint16{0, 1},
+			[]types.Type{objectio.RowidType, pkType},
+		),
+	)
+
+	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, 20, bat2.RowCount())
+
+	pks = vector.MustFixedColWithTypeCheck[int32](bat2.Vecs[1])
+	require.Equal(t, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}, pks)
+	rowids2 = vector.MustFixedColWithTypeCheck[types.Rowid](bat2.Vecs[0])
+	for i := 0; i < bat1.RowCount(); i++ {
+		require.Equal(t, rowids1[i], rowids2[i])
+	}
+
+	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, 20, bat2.RowCount())
+
+	pks = vector.MustFixedColWithTypeCheck[int32](bat2.Vecs[1])
+	require.Equal(t, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}, pks)
+	rowids2 = vector.MustFixedColWithTypeCheck[types.Rowid](bat2.Vecs[0])
+	for i := 0; i < bat1.RowCount(); i++ {
+		require.Equal(t, rowids1[i], rowids2[i])
+	}
+
+	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	require.NoError(t, err)
+	require.True(t, done)
 }

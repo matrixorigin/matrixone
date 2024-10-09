@@ -17,6 +17,7 @@ package catalog
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -46,31 +47,16 @@ func (es EntryState) Repr() string {
 	panic("not supported")
 }
 
-var (
-	TombstoneCNSchemaAttr = []string{
-		AttrRowID,
-		AttrPKVal,
-	}
-)
-
-const (
-	TombstonePrimaryKeyIdx int = 0
-)
-
-var (
-	TombstoneBatchIdxes = []int{0, 1}
-)
-
 func GetTombstoneSchema(objectSchema *Schema) *Schema {
 	pkType := objectSchema.GetPrimaryKey().GetType()
 	schema := NewEmptySchema("tombstone")
-	schema.BlockMaxRows = objectSchema.BlockMaxRows
-	schema.ObjectMaxBlocks = objectSchema.ObjectMaxBlocks
+	schema.Extra.BlockMaxRows = objectSchema.Extra.BlockMaxRows
+	schema.Extra.ObjectMaxBlocks = objectSchema.Extra.ObjectMaxBlocks
 	colTypes := []types.Type{
 		types.T_Rowid.ToType(),
 		pkType,
 	}
-	for i, colname := range TombstoneCNSchemaAttr {
+	for i, colname := range objectio.TombstoneAttrs_CN_Created {
 		if i == 0 {
 			if err := schema.AppendPKCol(colname, colTypes[i], 0); err != nil {
 				panic(err)
@@ -88,32 +74,32 @@ func GetTombstoneSchema(objectSchema *Schema) *Schema {
 // rowid, pk
 // used in range delete
 func NewTombstoneBatchWithPKVector(pkVec, rowIDVec containers.Vector, mp *mpool.MPool) *containers.Batch {
-	bat := containers.NewBatch()
-	bat.AddVector(AttrRowID, rowIDVec)
-	bat.AddVector(AttrPKVal, pkVec)
+	bat := containers.NewBatchWithCapacity(2)
+	bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
+	bat.AddVector(objectio.TombstoneAttr_PK_Attr, pkVec)
 	return bat
 }
 
 // rowid, pk, commitTS
 // used in Collect Delete in Range
 func NewTombstoneBatchByPKType(pkType types.Type, mp *mpool.MPool) *containers.Batch {
-	bat := containers.NewBatch()
-	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), mp)
+	bat := containers.NewBatchWithCapacity(3)
+	rowIDVec := containers.MakeVector(objectio.RowidType, mp)
 	pkVec := containers.MakeVector(pkType, mp)
-	commitTSVec := containers.MakeVector(types.T_TS.ToType(), mp)
-	bat.AddVector(AttrRowID, rowIDVec)
-	bat.AddVector(AttrPKVal, pkVec)
-	bat.AddVector(AttrCommitTs, commitTSVec)
+	commitTSVec := containers.MakeVector(objectio.TSType, mp)
+	bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
+	bat.AddVector(objectio.TombstoneAttr_PK_Attr, pkVec)
+	bat.AddVector(objectio.TombstoneAttr_CommitTs_Attr, commitTSVec)
 	return bat
 }
 
 // rowid, pk, commitTS
 // used in Collect Delete in Range
 func NewCNTombstoneBatchByPKType(pkType types.Type, mp *mpool.MPool) *containers.Batch {
-	bat := containers.NewBatch()
-	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), mp)
+	bat := containers.NewBatchWithCapacity(2)
+	rowIDVec := containers.MakeVector(objectio.RowidType, mp)
 	pkVec := containers.MakeVector(pkType, mp)
-	bat.AddVector(AttrRowID, rowIDVec)
-	bat.AddVector(AttrPKVal, pkVec)
+	bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
+	bat.AddVector(objectio.TombstoneAttr_PK_Attr, pkVec)
 	return bat
 }

@@ -5,4 +5,150 @@ select mo_memory("total") >= mo_memory("available");
 mo_memory(total) >= mo_memory(available)
 true
 select * from information_schema.files limit 1;
-empty set
+file_id    file_name    file_type    tablespace_name    table_catalog    table_schema    table_name    logfile_group_name    logfile_group_number    engine    fulltext_keys    deleted_rows    update_count    free_extents    total_extents    extent_size    initial_size    maximum_size    autoextend_size    creation_time    last_update_time    last_access_time    recover_time    transaction_counter    version    row_format    table_rows    avg_row_length    data_length    max_data_length    index_length    data_free    create_time    update_time    check_time    checksum    status    extra
+use system;
+show tables;
+Tables_in_system
+error_info
+log_info
+rawlog
+span_info
+sql_statement_hotspot
+statement_info
+select * from statement_info limit 0;
+statement_id    transaction_id    session_id    account    user    host    database    statement    statement_tag    statement_fingerprint    node_uuid    node_type    request_at    response_at    duration    status    err_code    error    exec_plan    rows_read    bytes_scan    stats    statement_type    query_type    role_id    sql_source_type    aggr_count    result_count
+select * from span_info limit 0;
+trace_id    span_id    parent_span_id    span_kind    node_uuid    node_type    span_name    start_time    end_time    duration    resource    extra
+select * from rawlog limit 0;
+raw_item    node_uuid    node_type    span_id    trace_id    logger_name    timestamp    level    caller    message    extra    err_code    error    stack    span_name    parent_span_id    start_time    end_time    duration    resource    span_kind    statement_id    session_id
+select * from log_info limit 0;
+trace_id    span_id    span_kind    node_uuid    node_type    timestamp    logger_name    level    caller    message    extra    stack    session_id    statement_id
+select * from error_info limit 0;
+timestamp    err_code    error    trace_id    span_id    span_kind    node_uuid    node_type    stack
+create database db01;
+use db01;
+create table table01 (id int);
+insert into table01 values(1);
+select * from table01;
+id
+1
+select * from table01 limit 0;
+id
+create table table02 (id int);
+insert into table02 select * from table01 limit 0;
+(select * from table01 limit 0) union all (select * from table02 limit 0);
+id
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+use system;
+show tables;
+Tables_in_system
+statement_info
+select * from statement_info limit 0;
+statement_id    transaction_id    session_id    account    user    host    database    statement    statement_tag    statement_fingerprint    node_uuid    node_type    request_at    response_at    duration    status    err_code    error    exec_plan    rows_read    bytes_scan    stats    statement_type    query_type    role_id    sql_source_type    aggr_count    result_count
+create database db01;
+use db01;
+create table table01 (id int);
+insert into table01 values(1);
+select * from table01;
+id
+1
+select * from table01 limit 0;
+id
+create table table02 (id int);
+insert into table02 select * from table01 limit 0;
+(select * from table01 limit 0) union all (select * from table02 limit 0);
+id
+select * from system.statement_info limit 0;
+statement_id    transaction_id    session_id    account    user    host    database    statement    statement_tag    statement_fingerprint    node_uuid    node_type    request_at    response_at    duration    status    err_code    error    exec_plan    rows_read    bytes_scan    stats    statement_type    query_type    role_id    sql_source_type    aggr_count    result_count
+select * from db01.table01 limit 0;
+id
+drop database db01;
+drop account if exists acc01;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists pri01;
+create table pri01(
+deptno int unsigned comment '部门编号',
+dname varchar(15) comment '部门名称',
+loc varchar(50)  comment '部门所在位置',
+primary key(deptno)
+) comment='部门表';
+insert into pri01 values (10,'ACCOUNTING','NEW YORK');
+insert into pri01 values (20,'RESEARCH','DALLAS');
+insert into pri01 values (30,'SALES','CHICAGO');
+insert into pri01 values (40,'OPERATIONS','BOSTON');
+drop table if exists aff01;
+create table aff01(
+empno int unsigned auto_increment COMMENT '雇员编号',
+ename varchar(15) comment '雇员姓名',
+job varchar(10) comment '雇员职位',
+mgr int unsigned comment '雇员对应的领导的编号',
+hiredate date comment '雇员的雇佣日期',
+sal decimal(7,2) comment '雇员的基本工资',
+comm decimal(7,2) comment '奖金',
+deptno int unsigned comment '所在部门',
+primary key(empno),
+constraint `c1` foreign key (deptno) references pri01 (deptno)
+);
+insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
+insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
+insert into aff01 values (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
+insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
+insert into aff01 values (7654,'MARTIN','SALESMAN',7698,'1981-09-28',1250,1400,30);
+insert into aff01 values (7698,'BLAKE','MANAGER',7839,'1981-05-01',2850,NULL,30);
+insert into aff01 values (7782,'CLARK','MANAGER',7839,'1981-06-09',2450,NULL,10);
+drop publication if exists pub01;
+create publication pub01 database test01 account acc01;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub01    test01    *    acc01        2024-09-12 18:33:38    null    
+drop database if exists sub01;
+create database sub01 from sys publication pub01;
+use sub01;
+show tables;
+Tables_in_sub01
+aff01
+pri01
+select * from aff01 limit 0;
+empno    ename    job    mgr    hiredate    sal    comm    deptno
+select * from pri01 limit 0;
+deptno    dname    loc
+drop publication if exists pub01;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+drop database if exists test01;
+drop account if exists acc01;
+create database db01;
+use db01;
+create table table01 (id int);
+insert into table01 values(1);
+select * from table01 limit 1;
+id
+1
+select id from table01 limit 1;
+id
+1
+select id from table01 limit 0;
+id
+select * from table01 limit 0;
+id
+select * from table02 limit 0;
+no such table db01.table02
+select * from system.table03 limit 0;
+no such table system.table03
+create snapshot snapshot01 for account sys;
+select * from table01 {snapshot = 'snapshot01'} limit 0;
+id
+select * from table01 {snapshot = 'snapshot01'} limit 1;
+id
+1
+select * from table02 {snapshot = 'snapshot01'} limit 0;
+SQL parser error: table "table02" does not exist
+select * from table02 {snapshot = 'snapshot01'} limit 1;
+SQL parser error: table "table02" does not exist
+drop snapshot if exists snapshot01;
+drop database db01;

@@ -29,6 +29,20 @@ Project
 select count(*) from t1,t2 where t1.c1=t2.c1;
 count(*)
 9000000
+explain select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Group Key: t1.c1 shuffle: REUSE
+        Aggregate Functions: starcount(1)
+        Filter Cond: (count(*) > 1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t1.c1 = t2.c1) shuffle: range(t1.c1)
+              ->  Table Scan on d1.t1
+              ->  Table Scan on d1.t2
+select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
+cnt
 explain select count(*) from t1,t2 where t1.c1=t2.c2;
 AP QUERY PLAN ON MULTICN(4 core)
 Project
