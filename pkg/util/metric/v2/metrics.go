@@ -201,6 +201,7 @@ func initFrontendMetrics() {
 	registry.MustRegister(cdcErrorCounter)
 	registry.MustRegister(cdcProcessingRecordCountGauge)
 	registry.MustRegister(cdcAllocatedBatchBytesGauge)
+	registry.MustRegister(cdcDurationHistogram)
 }
 
 func initPipelineMetrics() {
