@@ -569,7 +569,7 @@ func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, 
 	tcpPkgCnt := ses.GetPacketCnt()
 	packets = tcpPkgCnt /*1st part*/ +
 		int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14) + /*2nd part*/
-		resultSetPart>>bit4TcpWriteCopy + int64((csvPart>>20)/getGlobalPu().SV.ExportDataDefaultFlushSize) /*3rd part*/
+		resultSetPart>>bit4TcpWriteCopy + int64((csvPart>>20)/getPu(ses.GetService()).SV.ExportDataDefaultFlushSize) /*3rd part*/
 	if reset {
 		ses.ResetPacketCounter()
 	}

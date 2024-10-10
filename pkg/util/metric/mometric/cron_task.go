@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 const (
@@ -106,13 +107,13 @@ const (
 var (
 	gUpdateStorageUsageInterval atomic.Int64
 	gCheckNewInterval           atomic.Int64
-	frontendServerStarted       func() bool
+	frontendServerStarted       func(string) bool
 )
 
 func init() {
 	gUpdateStorageUsageInterval.Store(int64(time.Minute))
 	gCheckNewInterval.Store(int64(time.Minute))
-	frontendServerStarted = func() bool { return true }
+	frontendServerStarted = func(string) bool { return true }
 }
 
 func SetUpdateStorageUsageInterval(interval time.Duration) {
@@ -131,8 +132,8 @@ func cleanStorageUsageMetric(logger *log.MOLogger, actor string) {
 	logger.Info("clean storage usage metric", zap.String("actor", actor))
 }
 
-func checkServerStarted(logger *log.MOLogger) bool {
-	return frontendServerStarted()
+func checkServerStarted(service string, logger *log.MOLogger) bool {
+	return frontendServerStarted(service)
 }
 
 // after 1.3.0, turn it as CONST var
@@ -190,7 +191,7 @@ func CalculateStorageUsage(
 	defer cancel() // quit CheckNewAccountSize goroutine
 	logger := runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
 	logger.Info("started")
-	if !checkServerStarted(logger) {
+	if !checkServerStarted(service, logger) {
 		logger.Info("mo server is not started yet, wait next schedule.")
 		return nil
 	}

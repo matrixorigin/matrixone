@@ -139,7 +139,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	ctx, cancel = context.WithTimeout(ctx, getPu(ie.service).SV.SessionTimeout.Duration)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer func() {
@@ -163,7 +163,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	ctx, cancel = context.WithTimeout(ctx, getPu(ie.service).SV.SessionTimeout.Duration)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
@@ -192,7 +192,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//
 	// Session does not have a close call.   We need a Close() call in the Exec/Query method above.
 	//
-	mp, err := mpool.NewMPool("internal_exec_cmd_session", getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
+	mp, err := mpool.NewMPool("internal_exec_cmd_session", getPu(ie.service).SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
 		getLogger(ie.service).Fatal("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)

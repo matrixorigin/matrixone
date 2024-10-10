@@ -20,13 +20,14 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/stretchr/testify/assert"
 )
 
 type mockHAKeeperClient struct {
@@ -200,7 +201,7 @@ func Test_HandleShowLogserviceReplicas(t *testing.T) {
 	}
 	hc.addStore("store1", store1)
 	pu.HAKeeperClient = hc
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	showStmt := &tree.ShowLogserviceReplicas{}
 
@@ -275,7 +276,7 @@ func Test_HandleShowLogserviceStores(t *testing.T) {
 	}
 	hc.addStore("store1", store1)
 	pu.HAKeeperClient = hc
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	showStmt := &tree.ShowLogserviceStores{}
 
@@ -333,7 +334,7 @@ func Test_HandleLogserviceSettings(t *testing.T) {
 		NumberOfReplicas: 1,
 	})
 	pu.HAKeeperClient = hc
-	setGlobalPu(&pu)
+	setPu("", &pu)
 	execCtx := ses.GetTxnCompileCtx().execCtx
 
 	sql := "set logservice settings non_voting_locality='region:beijing'"

@@ -67,11 +67,11 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	}
 	//file service
 	pu.FileService = newLocalETLFS(t, defines.SharedFileServiceName)
-	setGlobalPu(pu)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
 	//io session
 
-	ioses, err := NewIOSession(&testConn{}, pu)
+	ioses, err := NewIOSession(&testConn{}, pu, "")
 	assert.Nil(t, err)
 	proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 
@@ -139,7 +139,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			}
 			ses.SetTenantInfo(tenant)
 			proc := testutil.NewProcess()
-			proc.Base.FileService = getGlobalPu().FileService
+			proc.Base.FileService = getPu("").FileService
 
 			proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 			ses.GetTxnCompileCtx().execCtx = &ExecCtx{
@@ -237,7 +237,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			err = doDumpQueryResult(ctx, ses, ep)
 			assert.Nil(t, err)
 
-			fs := getGlobalPu().FileService
+			fs := getPu("").FileService
 
 			//csvBuf := &bytes.Buffer{}
 			var r io.ReadCloser
