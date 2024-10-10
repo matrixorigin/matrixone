@@ -376,10 +376,18 @@ func (n *Bitmap) ToArray() []uint64 {
 	return rows
 }
 
-func (n *Bitmap) ToI64Arrary() []int64 {
-	rows := make([]int64, 0, n.Count())
-	ToArray(n, &rows)
-	return rows
+func (n *Bitmap) ToI64Array() []int64 {
+	var res []int64
+	if n.EmptyByFlag() {
+		return res
+	}
+
+	itr := n.Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		res = append(res, int64(r))
+	}
+	return res
 }
 
 func (n *Bitmap) Marshal() []byte {

@@ -369,3 +369,7 @@ func (thc *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservic
 func (thc *testHAKeeperClient) GetClusterState(ctx context.Context) (logservicepb.CheckerState, error) {
 	return logservicepb.CheckerState{}, nil
 }
+
+func (c *testHAKeeperClient) CheckLogServiceHealth(_ context.Context) error {
+	return nil
+}

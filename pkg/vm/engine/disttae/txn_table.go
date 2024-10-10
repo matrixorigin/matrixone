@@ -672,11 +672,9 @@ func (tbl *txnTable) doRanges(
 		return
 	}
 
-	data = &engine_util.BlockListRelData{}
-	for i := range blocks.Len() {
-		data.AppendBlockInfo(blocks.Get(i))
-	}
-
+	blklist := &engine_util.BlockListRelData{}
+	blklist.SetBlockList(blocks)
+	data = blklist
 	return
 }
 
@@ -2022,14 +2020,14 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	part, err := tbl.getTxn().engine.LazyLoadLatestCkp(ctx, tbl)
+	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(ctx, tbl)
 	if err != nil {
 		return false, err
 	}
 
 	snap := part.Snapshot()
 	var packer *types.Packer
-	put := tbl.getTxn().engine.packerPool.Get(&packer)
+	put := tbl.eng.(*Engine).packerPool.Get(&packer)
 	defer put.Put()
 	packer.Reset()
 

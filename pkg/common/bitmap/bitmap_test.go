@@ -167,13 +167,13 @@ func TestBitmap_Compatibility(t *testing.T) {
 	np2.UnmarshalV1(data)
 	require.Equal(t, np.Count(), np2.Count())
 	require.Equal(t, np.ToArray(), np2.ToArray())
-	require.Equal(t, np.ToI64Arrary(), np2.ToI64Arrary())
+	require.Equal(t, np.ToI64Array(), np2.ToI64Array())
 
 	np3 := newBm(BenchmarkRows)
 	np3.UnmarshalNoCopyV1(data)
 	require.Equal(t, np.Count(), np3.Count())
 	require.Equal(t, np.ToArray(), np3.ToArray())
-	require.Equal(t, np.ToI64Arrary(), np3.ToI64Arrary())
+	require.Equal(t, np.ToI64Array(), np3.ToI64Array())
 }
 
 func TestBitmap_Clear(t *testing.T) {

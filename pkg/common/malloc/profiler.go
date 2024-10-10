@@ -15,11 +15,13 @@
 package malloc
 
 import (
+	"hash/maphash"
 	"io"
 	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/google/pprof/profile"
 )
@@ -31,6 +33,9 @@ type Profiler[T any, P interface {
 	locations sync.Map // LocationKey -> *profile.Location
 	functions sync.Map // FunctionKey -> *profile.Function
 	samples   sync.Map // SampleKey -> *SampleInfo[P]
+
+	mu            sync.Mutex
+	mergedSamples map[uint64]*profile.Sample
 
 	// special samples
 	stackOmittedSample SampleInfo[T]
@@ -69,7 +74,9 @@ func NewProfiler[T any, P interface {
 	*T
 	SampleValues
 }]() *Profiler[T, P] {
-	ret := &Profiler[T, P]{}
+	ret := &Profiler[T, P]{
+		mergedSamples: make(map[uint64]*profile.Sample),
+	}
 
 	ret.stackOmittedSample.Locations = []*profile.Location{
 		ret.getMockLocation("| stack omitted |"),
@@ -89,6 +96,13 @@ func (p *Profiler[T, P]) Sample(
 		// omit stack
 		return &p.stackOmittedSample.Values
 	}
+
+	defer func() {
+		// merge
+		if fastrand()%1024 == 0 {
+			p.merge(true)
+		}
+	}()
 
 	skip += 2 // runtime.Callers, p.Sample
 
@@ -233,6 +247,72 @@ func (p *Profiler[T, P]) getLocationsFromPCs(pcs _PCs) []*profile.Location {
 	return locations
 }
 
+func (p *Profiler[T, P]) merge(try bool) {
+	if try {
+		if !p.mu.TryLock() {
+			return
+		}
+		defer p.mu.Unlock()
+	} else {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+	}
+
+	p.samples.Range(func(k, _ any) bool {
+		v, ok := p.samples.LoadAndDelete(k)
+		if !ok {
+			return true
+		}
+		info := v.(*SampleInfo[P])
+
+		locationsKey := getLocationsKey(info.Locations)
+		values := info.Values.Values()
+
+		sample, ok := p.mergedSamples[locationsKey]
+		if !ok {
+			p.mergedSamples[locationsKey] = &profile.Sample{
+				Location: info.Locations,
+				Value:    info.Values.Values(),
+			}
+		} else {
+			for i, value := range values {
+				sample.Value[i] += value
+			}
+		}
+
+		return true
+	})
+}
+
+var hashSeed = maphash.MakeSeed()
+
+var hasherPool = sync.Pool{
+	New: func() any {
+		hasher := new(maphash.Hash)
+		hasher.SetSeed(hashSeed)
+		return hasher
+	},
+}
+
+func getLocationsKey(locations []*profile.Location) uint64 {
+	hasher := hasherPool.Get().(*maphash.Hash)
+	defer func() {
+		hasher.Reset()
+		hasherPool.Put(hasher)
+	}()
+
+	for _, location := range locations {
+		hasher.Write(
+			unsafe.Slice(
+				(*byte)(unsafe.Pointer(&location.ID)),
+				unsafe.Sizeof(location.ID),
+			),
+		)
+	}
+
+	return hasher.Sum64()
+}
+
 func (p *Profiler[T, P]) Write(w io.Writer) error {
 
 	var ptr P
@@ -241,19 +321,14 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 		DefaultSampleType: ptr.DefaultSampleType(),
 	}
 
-	p.samples.Range(func(k, v any) bool {
-		info := v.(*SampleInfo[P])
-		values := info.Values.Values()
-		for i := range values {
-			values[i] *= info.Scale
-		}
-		sample := &profile.Sample{
-			Location: info.Locations,
-			Value:    values,
-		}
+	p.merge(false)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, sample := range p.mergedSamples {
 		prof.Sample = append(prof.Sample, sample)
-		return true
-	})
+	}
 
 	p.locations.Range(func(k, v any) bool {
 		location := v.(*profile.Location)

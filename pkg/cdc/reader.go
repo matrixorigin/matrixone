@@ -44,6 +44,7 @@ type tableReader struct {
 	tick         *time.Ticker
 	restartFunc  func(*DbTableInfo) error
 
+	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
 	delTsColIdx, delCompositedPkColIdx int
 }
@@ -69,6 +70,7 @@ func NewTableReader(
 		wMarkUpdater: wMarkUpdater,
 		tick:         time.NewTicker(200 * time.Millisecond),
 		restartFunc:  restartFunc,
+		tableDef:     tableDef,
 	}
 
 	// batch columns layout:
@@ -170,7 +172,9 @@ func (reader *tableReader) readTableWithTxn(
 	//  to = txn operator snapshot ts
 	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblId)
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
+	start := time.Now()
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
+	v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 	if err != nil {
 		return
 	}
@@ -182,19 +186,33 @@ func (reader *tableReader) readTableWithTxn(
 
 	allocateAtomicBatchIfNeed := func(atmBatch *AtomicBatch) *AtomicBatch {
 		if atmBatch == nil {
-			atmBatch = NewAtomicBatch(
-				reader.mp,
-				fromTs, toTs,
-			)
+			atmBatch = NewAtomicBatch(reader.mp)
 		}
 		return atmBatch
 	}
 
-	recordCount := func(bat *batch.Batch) int {
-		if bat == nil || len(bat.Vecs) == 0 {
-			return 0
-		}
-		return bat.Vecs[0].Length()
+	addStartMetrics := func() {
+		count := float64(batchRowCount(insertData) + batchRowCount(deleteData))
+		allocated := float64(insertData.Allocated() + deleteData.Allocated())
+		v2.CdcTotalProcessingRecordCountGauge.Add(count)
+		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
+		v2.CdcReadRecordCounter.Add(count)
+	}
+
+	addSnapshotEndMetrics := func() {
+		count := float64(batchRowCount(insertData))
+		allocated := float64(insertData.Allocated())
+		v2.CdcTotalProcessingRecordCountGauge.Sub(count)
+		v2.CdcTotalAllocatedBatchBytesGauge.Sub(allocated)
+		v2.CdcSinkRecordCounter.Add(count)
+	}
+
+	addTailEndMetrics := func(bat *AtomicBatch) {
+		count := float64(bat.RowCount())
+		allocated := float64(bat.Allocated())
+		v2.CdcTotalProcessingRecordCountGauge.Sub(count)
+		v2.CdcTotalAllocatedBatchBytesGauge.Sub(allocated)
+		v2.CdcSinkRecordCounter.Add(count)
 	}
 
 	var curHint engine.ChangesHandle_Hint
@@ -207,11 +225,14 @@ func (reader *tableReader) readTableWithTxn(
 		default:
 		}
 
-		if insertData, deleteData, curHint, err = changes.Next(ctx, reader.mp); err != nil {
+		start = time.Now()
+		insertData, deleteData, curHint, err = changes.Next(ctx, reader.mp)
+		v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
+		if err != nil {
 			return
 		}
 
-		//both nil denote no more data
+		// both nil denote no more data
 		if insertData == nil && deleteData == nil {
 			// heartbeat
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
@@ -222,21 +243,19 @@ func (reader *tableReader) readTableWithTxn(
 			return
 		}
 
-		count := float64(recordCount(insertData) + recordCount(deleteData))
-		allocated := float64(insertData.Allocated() + deleteData.Allocated())
-		v2.CdcTotalProcessingRecordCountGauge.Add(count)
-		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
-		v2.CdcReadRecordCounter.Add(count)
+		addStartMetrics()
 
 		switch curHint {
 		case engine.ChangesHandle_Snapshot:
 			// transform into insert instantly
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
-				outputTyp:     OutputTypeCheckpoint,
+				outputTyp:     OutputTypeSnapshot,
 				checkpointBat: insertData,
 				fromTs:        fromTs,
 				toTs:          toTs,
 			})
+			addSnapshotEndMetrics()
+			insertData.Clean(reader.mp)
 			if err != nil {
 				return
 			}
@@ -250,13 +269,25 @@ func (reader *tableReader) readTableWithTxn(
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 			insertAtmBatch.Append(packer, insertData, reader.insTsColIdx, reader.insCompositedPkColIdx)
 			deleteAtmBatch.Append(packer, deleteData, reader.delTsColIdx, reader.delCompositedPkColIdx)
+
+			//if !strings.Contains(reader.info.SourceTblName, "order") {
+			//	logutil.Errorf("tableReader(%s)[%s, %s], insertAtmBatch: %s, deleteAtmBatch: %s",
+			//		reader.info.SourceTblName, fromTs.ToString(), toTs.ToString(),
+			//		insertAtmBatch.DebugString(reader.tableDef, false),
+			//		deleteAtmBatch.DebugString(reader.tableDef, true))
+			//}
+
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
-				outputTyp:      OutputTypeTailDone,
+				outputTyp:      OutputTypeTail,
 				insertAtmBatch: insertAtmBatch,
 				deleteAtmBatch: deleteAtmBatch,
 				fromTs:         fromTs,
 				toTs:           toTs,
 			})
+			addTailEndMetrics(insertAtmBatch)
+			addTailEndMetrics(deleteAtmBatch)
+			insertAtmBatch.Close()
+			deleteAtmBatch.Close()
 			if err != nil {
 				return
 			}
