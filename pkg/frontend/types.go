@@ -422,6 +422,13 @@ var baseSessionAllocator = sync.OnceValue(func() malloc.Allocator {
 		metric.MallocCounter.WithLabelValues("session-allocate-objects"),
 		metric.MallocGauge.WithLabelValues("session-inuse-objects"),
 	)
+	// peak in-use tracking
+	allocator = malloc.NewInuseTrackingAllocator(
+		allocator,
+		func(inuse uint64) {
+			malloc.GlobalPeakInuseTracker.UpdateSession(inuse)
+		},
+	)
 	return allocator
 })
 
