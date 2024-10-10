@@ -24,6 +24,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 
@@ -2638,6 +2639,12 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 	}
 
 	return
+}
+
+func getOffsetFromUTC() string {
+	now := time.Now()
+	_, localOffset := now.Zone()
+	return offsetToString(localOffset)
 }
 
 func offsetToString(offset int) string {

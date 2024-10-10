@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -949,11 +948,10 @@ func buildShowPitr(stmt *tree.ShowPitr, ctx CompilerContext) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	_, localOffset := now.Zone()
-	offsetString := offsetToString(localOffset)
 
-	sql := fmt.Sprintf("SELECT pitr_name as `PITR_NAME`, convert_tz(create_time, '+00:00', '%s')  as `CREATED_TIME`, convert_tz(modified_time, '+00:00', '%s') as MODIFIED_TIME, level as `PITR_LEVEL`, IF(account_name = '', '*', account_name)  as `ACCOUNT_NAME`, IF(database_name = '', '*', database_name) as `DATABASE_NAME`, IF(table_name = '', '*', table_name) as `TABLE_NAME`, pitr_length as `PITR_LENGTH`, pitr_unit  as `PITR_UNIT` FROM %s.mo_pitr where create_account = %d ORDER BY create_time DESC", offsetString, offsetString, MO_CATALOG_DB_NAME, curAccountId)
+	offset := getOffsetFromUTC()
+
+	sql := fmt.Sprintf("SELECT pitr_name as `PITR_NAME`, convert_tz(create_time, '+00:00', '%s')  as `CREATED_TIME`, convert_tz(modified_time, '+00:00', '%s') as MODIFIED_TIME, level as `PITR_LEVEL`, IF(account_name = '', '*', account_name)  as `ACCOUNT_NAME`, IF(database_name = '', '*', database_name) as `DATABASE_NAME`, IF(table_name = '', '*', table_name) as `TABLE_NAME`, pitr_length as `PITR_LENGTH`, pitr_unit  as `PITR_UNIT` FROM %s.mo_pitr where create_account = %d ORDER BY create_time DESC", offset, offset, MO_CATALOG_DB_NAME, curAccountId)
 
 	newCtx := ctx.GetContext()
 	if curAccountId != catalog.System_Account {
