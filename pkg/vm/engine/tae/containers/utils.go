@@ -75,7 +75,7 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 		}
 	}
 	if len(bb.buffer) == 0 {
-		return batch.NewWithSchema(false, false, bb.attrs, bb.typs)
+		return batch.NewWithSchema(false, bb.attrs, bb.typs)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -85,7 +85,7 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 
 func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
 	if len(bb.buffer) == 0 {
-		return batch.NewWithSchema(false, false, bb.attrs, bb.typs)
+		return batch.NewWithSchema(false, bb.attrs, bb.typs)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -120,7 +120,7 @@ func (bb *OneSchemaBatchBuffer) Close(mp *mpool.MPool) {
 // ### Shallow copy Functions
 
 func ToCNBatch(tnBat *Batch) *batch.Batch {
-	cnBat := batch.New(true, tnBat.Attrs)
+	cnBat := batch.New(tnBat.Attrs)
 	for i, vec := range tnBat.Vecs {
 		cnBat.Vecs[i] = vec.GetDownstreamVector()
 	}
@@ -329,7 +329,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	if length%cnt == 0 {
 		bats := make([]*batch.Batch, 0, cnt)
 		for i := 0; i < cnt; i++ {
-			newBat := batch.New(true, bat.Attrs)
+			newBat := batch.New(bat.Attrs)
 			for j := 0; j < len(bat.Vecs); j++ {
 				window, _ := bat.Vecs[j].CloneWindow(i*rows, (i+1)*rows, nil)
 				newBat.Vecs[j] = window
@@ -357,7 +357,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	start := 0
 	bats := make([]*batch.Batch, 0, cnt)
 	for _, row := range rowArray {
-		newBat := batch.New(true, bat.Attrs)
+		newBat := batch.New(bat.Attrs)
 		for j := 0; j < len(bat.Vecs); j++ {
 			window, _ := bat.Vecs[j].CloneWindow(start, start+row, nil)
 			newBat.Vecs[j] = window
