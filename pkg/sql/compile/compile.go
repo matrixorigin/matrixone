@@ -3682,6 +3682,9 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 	}
 	ret := blocks/16 + 1
 	if ret < cpunum {
+		if cpunum > 4 && ret < 4 {
+			return 4
+		}
 		return ret
 	}
 	return cpunum

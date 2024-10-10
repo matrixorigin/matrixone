@@ -656,8 +656,9 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
-		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr)
-		switch GetSortOrder(tableDef, col.ColPos) {
+		sortOrder := GetSortOrder(tableDef, col.ColPos)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr, sortOrder)
+		switch sortOrder {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
 		case 1:
@@ -1484,7 +1485,7 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 	}
 }
 
-func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, expr *plan.Expr) float64 {
+func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, expr *plan.Expr, sortOrder int) float64 {
 	sel := expr.Selectivity
 	if s == nil {
 		if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
@@ -1498,7 +1499,11 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, expr *plan.Expr) 
 		}
 	}
 	if s.Overlap > 0.25 {
-		return 1
+		if sortOrder == 0 || sortOrder == 1 {
+			sel = sel * math.Pow(10, float64(sortOrder+1))
+		} else {
+			return 1
+		}
 	}
 	ret := sel * math.Pow(1000000, s.Overlap)
 	if ret > 1 {
