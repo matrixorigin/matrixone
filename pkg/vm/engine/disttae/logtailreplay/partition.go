@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,8 +38,9 @@ type Partition struct {
 	//current partitionState can serve snapshot read only if start <= ts <= end
 	mu struct {
 		sync.Mutex
-		start types.TS
-		end   types.TS
+		start    types.TS
+		end      types.TS
+		deadline time.Time
 	}
 
 	TableInfo   TableInfo
@@ -52,10 +54,10 @@ type TableInfo struct {
 }
 
 // PXU TODO
-func (p *Partition) CanServe(ts types.TS) bool {
+func (p *Partition) CanServe(ts types.TS) (bool, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return ts.GE(&p.mu.start) && ts.LE(&p.mu.end)
+	return ts.GE(&p.mu.start) && ts.LE(&p.mu.end), time.Now().Before(p.mu.deadline)
 }
 
 func NewPartition(
@@ -129,6 +131,7 @@ func (p *Partition) UpdateDuration(start types.TS, end types.TS) {
 	defer p.mu.Unlock()
 	p.mu.start = start
 	p.mu.end = end
+	p.mu.deadline = time.Now().Add(10 * time.Minute)
 }
 
 func (p *Partition) GetDuration() (types.TS, types.TS) {
