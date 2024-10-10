@@ -734,6 +734,7 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
+	c.ses.CountFlushPackage(1)
 	err = c.WriteToConn(c.fixBuf.AvailableData())
 	if err != nil {
 		return err
@@ -746,7 +747,6 @@ func (c *Conn) Flush() error {
 			return err
 		}
 	}
-	c.ses.CountFlushPackage(1)
 	c.packetInBuf = 0
 	return err
 }
