@@ -453,7 +453,7 @@ func (c *CatalogHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req *
 	if ok {
 		defer logReq("catalog", req, meta, resp, &err)()
 
-		b := batch.New(false, req.ColNames)
+		b := batch.New(req.ColNames)
 		maxRows := 4096
 		rows := 0
 
