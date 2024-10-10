@@ -8691,8 +8691,8 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
 	}
-	currentRole := tenantInfo.GetDefaultRole()
-	if len(currentRole) == 0 {
+	curRole := tenantInfo.GetDefaultRole()
+	if len(curRole) == 0 {
 		return err
 	}
 
@@ -8709,7 +8709,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	// 2.grant database privilege
 	switch st := stmt.(type) {
 	case *tree.CreateDatabase:
-		sql = getSqlForGrantOwnershipOnDatabase(string(st.Name), currentRole)
+		sql = getSqlForGrantOwnershipOnDatabase(string(st.Name), curRole)
 	case *tree.CreateTable:
 		// get database name
 		var dbName string
@@ -8720,7 +8720,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		}
 		// get table name
 		tableName := string(st.Table.ObjectName)
-		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, currentRole)
+		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, curRole)
 	}
 
 	rp, err := mysql.Parse(tenantCtx, sql, 1)
@@ -8746,8 +8746,8 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
 	}
-	currentRole := tenantInfo.GetDefaultRole()
-	if len(currentRole) == 0 {
+	curRole := tenantInfo.GetDefaultRole()
+	if len(curRole) == 0 {
 		return err
 	}
 
@@ -8764,7 +8764,7 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	// 2.grant database privilege
 	switch st := stmt.(type) {
 	case *tree.DropDatabase:
-		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), currentRole)
+		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), curRole)
 	case *tree.DropTable:
 		// get database name
 		var dbName string
@@ -8775,7 +8775,7 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		}
 		// get table name
 		tableName := string(st.Names[0].ObjectName)
-		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, currentRole)
+		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, curRole)
 	}
 
 	rp, err := mysql.Parse(tenantCtx, sql, 1)
