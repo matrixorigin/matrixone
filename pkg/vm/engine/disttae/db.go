@@ -282,10 +282,28 @@ func (e *Engine) getOrCreateSnapPart(
 	e.mu.Unlock()
 
 	tblSnaps.Lock()
-	defer tblSnaps.Unlock()
+	//defer tblSnaps.Unlock()
+	deadSnaps := make(map[*logtailreplay.Partition]struct{})
+	defer func() {
+		var newSnaps []*logtailreplay.Partition
+		for _, snap := range tblSnaps.snaps {
+			if _, ok := deadSnaps[snap]; !ok {
+				newSnaps = append(newSnaps, snap)
+			}
+		}
+		tblSnaps.snaps = newSnaps
+
+		tblSnaps.Unlock()
+	}()
 	for _, snap := range tblSnaps.snaps {
-		if snap.CanServe(ts) {
-			return snap.Snapshot(), nil
+		ok, active := snap.CanServe(ts)
+		if ok {
+			if active {
+				return snap.Snapshot(), nil
+			} else {
+				deadSnaps[snap] = struct{}{}
+				break
+			}
 		}
 	}
 
@@ -342,7 +360,7 @@ func (e *Engine) getOrCreateSnapPart(
 		logutil.Infof("Snapshot consumeSnapCkps failed, err:%v", err)
 		return nil, err
 	}
-	if snap.CanServe(ts) {
+	if ok, active := snap.CanServe(ts); ok && active {
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
 		return snap.Snapshot(), nil
 	}
