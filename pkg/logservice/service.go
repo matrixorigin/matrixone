@@ -20,6 +20,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -201,6 +202,27 @@ func NewService(
 	service.initTaskHolder()
 	service.initSqlWriterFactory()
 	return service, nil
+}
+
+// NewServiceWithRetry mainly used in tests which create new service.
+// If an error occurred and the error is syscall.EADDRINUSE, retry to
+// create a new service instance.
+func NewServiceWithRetry(
+	genCfg func() Config,
+	fileService fileservice.FileService,
+	shutdownC chan struct{},
+	opts ...Option,
+) (*Service, error) {
+	for {
+		s, err := NewService(genCfg(), fileService, shutdownC, opts...)
+		if err != nil {
+			if strings.Contains(err.Error(), "address already in use") {
+				continue
+			}
+			return nil, err
+		}
+		return s, nil
+	}
 }
 
 func (s *Service) Start() error {
