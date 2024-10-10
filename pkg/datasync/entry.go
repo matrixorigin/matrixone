@@ -16,6 +16,7 @@ package datasync
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -72,12 +73,13 @@ func getLocations(rec logservice.LogRecord) []string {
 		if ei.Group == wal.GroupPrepare {
 			locations = append(locations, parseCommonFiles(payload)...)
 		} else if ei.Group == store.GroupFiles {
-			locations = append(locations, parseCheckpointFiles(payload)...)
+			locations = append(locations, parseMetaFiles(payload)...)
 		}
 	}
 	return locations
 }
 
+// parseCommonFiles parses the common files which are in the root directory.
 func parseCommonFiles(payload []byte) []string {
 	if len(payload) < entryHeaderSize {
 		return nil
@@ -118,7 +120,8 @@ func parseCommonFiles(payload []byte) []string {
 	return locations
 }
 
-func parseCheckpointFiles(payload []byte) []string {
+// parseMetaFiles parses the meta files which are in ckp/ or gc/ directory.
+func parseMetaFiles(payload []byte) []string {
 	vec := vector.NewVec(types.Type{})
 	if err := vec.UnmarshalBinary(payload); err != nil {
 		logutil.Errorf("failed to unmarshal checkpoint file: %v", err)
@@ -127,6 +130,7 @@ func parseCheckpointFiles(payload []byte) []string {
 	var locations []string
 	for i := 0; i < vec.Length(); i++ {
 		file := vec.GetStringAt(i)
+		logutil.Infof("parsed meta file: %s", file)
 		locations = append(locations, file)
 	}
 	return locations
