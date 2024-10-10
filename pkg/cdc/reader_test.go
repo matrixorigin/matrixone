@@ -22,9 +22,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewTableReader(t *testing.T) {
