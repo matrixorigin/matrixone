@@ -153,7 +153,7 @@ func TestSplitBatch(t *testing.T) {
 			name: "test_partition_table_1",
 			fields: fields{
 				ctr: container{
-					resBat:           batch.New(false, []string{"rowid", "pk", "partition_id"}),
+					resBat:           batch.New([]string{"rowid", "pk", "partition_id"}),
 					partitionSources: []engine.Relation{nil, nil},
 				},
 				DeleteCtx: &DeleteCtx{
