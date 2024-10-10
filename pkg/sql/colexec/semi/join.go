@@ -204,7 +204,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 	itr := ctr.itr
 
 	rowCountIncrease := 0
-	eligible := make([]int64, 0) // eligible := make([]int32, 0, hashmap.UnitLimit)
+	if ctr.eligible == nil {
+		ctr.eligible = make([]int64, 0, hashmap.UnitLimit)
+	} else {
+		ctr.eligible = ctr.eligible[:0]
+	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -269,20 +273,19 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 					continue
 				}
 			}
-			eligible = append(eligible, int64(i+k))
+			ctr.eligible = append(ctr.eligible, int64(i+k))
 			rowCountIncrease++
 		}
-		//eligible = eligible[:0]
 	}
 
 	for j, pos := range ap.Result {
-		if err := ctr.rbat.Vecs[j].PreExtendWithArea(len(eligible), len(bat.Vecs[pos].GetArea()), proc.Mp()); err != nil {
+		if err := ctr.rbat.Vecs[j].PreExtendWithArea(len(ctr.eligible), len(bat.Vecs[pos].GetArea()), proc.Mp()); err != nil {
 			return err
 		}
 	}
 
 	for j, pos := range ap.Result {
-		if err := ctr.rbat.Vecs[j].Union(bat.Vecs[pos], eligible, proc.Mp()); err != nil {
+		if err := ctr.rbat.Vecs[j].Union(bat.Vecs[pos], ctr.eligible, proc.Mp()); err != nil {
 			return err
 		}
 	}

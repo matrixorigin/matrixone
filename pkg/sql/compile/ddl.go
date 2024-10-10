@@ -2630,7 +2630,6 @@ last_seq_num | min_value| max_value| start_value| increment_value| cycle| is_cal
 
 func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, tableDef *plan.TableDef, proc *process.Process, result []interface{}, curval string) (*batch.Batch, error) {
 	var bat batch.Batch
-	bat.Ro = true
 	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
 	for i := range attrs {
@@ -2739,7 +2738,6 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
-	bat.Ro = true
 	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
 	for i := range attrs {

@@ -89,7 +89,7 @@ func TestOnDuplicateKey(t *testing.T) {
 }
 
 func resetChildren(arg *OnDuplicatekey) {
-	bat := batch.New(true, []string{"a", "b", "a", "b", catalog.Row_ID})
+	bat := batch.New([]string{"a", "b", "a", "b", catalog.Row_ID})
 	vecs := make([]*vector.Vector, 5)
 	vecs[0] = testutil.MakeInt64Vector([]int64{1, 1}, nil)
 	vecs[1] = testutil.MakeInt64Vector([]int64{2, 2}, nil)

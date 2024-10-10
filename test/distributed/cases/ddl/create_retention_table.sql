@@ -16,7 +16,7 @@ select * from mo_catalog.mo_retention;
 select sleep(5);
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 show tables;
 select * from retention01;
 drop table retention01;
@@ -33,7 +33,7 @@ select * from mo_catalog.mo_retention;
 select sleep(3);
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 -- @ignore:2
 select * from mo_catalog.mo_retention;
 drop table if exists retention02;
@@ -99,7 +99,7 @@ select * from mo_catalog.mo_retention;
 select sleep(3);
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 -- @ignore:2
 select * from mo_catalog.mo_retention;
 
@@ -174,7 +174,7 @@ select * from mo_catalog.mo_retention;
 select sleep(2);
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 -- @ignore:2
 select * from mo_catalog.mo_retention;
 show tables;
@@ -194,7 +194,7 @@ select * from mo_catalog.mo_retention;
 select sleep(3);
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 -- @ignore:2
 select * from mo_catalog.mo_retention;
 show tables;
@@ -231,7 +231,7 @@ select * from mo_catalog.mo_retention;
 select sleep(2);
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 -- @ignore:2
 select * from mo_catalog.mo_retention;
 drop snapshot sp01;
@@ -249,7 +249,7 @@ insert into t1 values('a_cdef');
 select sleep(2);
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 drop snapshot if exists sp02;
 create snapshot sp02 for account sys;
 restore account sys from snapshot sp02;
@@ -293,7 +293,7 @@ select sleep(2);
 -- @session
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:2
 select * from mo_catalog.mo_retention;
@@ -322,7 +322,7 @@ select * from mo_catalog.mo_retention;
 select sleep(2);
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 -- @ignore:5,6
 show publications;
 drop publication pub01;
@@ -359,7 +359,7 @@ select * from mo_catalog.mo_retention;
 select sleep(2);
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 -- @ignore:5,6
 show publications;
 
@@ -402,7 +402,7 @@ select sleep(2);
 -- @session
 -- @ignore:0
 select mo_ctl('cn', 'task', ':retention');
-select sleep(1);
+select sleep(2);
 -- @session:id=2&user=sys:anne:intern&password=111
 -- @ignore:2
 select * from mo_catalog.mo_retention;
