@@ -19,22 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-/*
-type PostDmlFullTextCtx struct {
-	isDelete              bool
-	isInsert              bool
-	SourceTableName       string
-	IndexTableName        string
-	PkeyIdx               int
-	PkeyName              string
-	Parts                 []string
-	PartitionTableIDs     []uint64 // Align array index with the partition number
-	PartitionTableNames   []string // Align array index with the partition number
-	PartitionIndexInBatch int      // The array index position of the partition expression column
-}
-
-*/
-
 func TestFullText(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -78,7 +62,6 @@ func TestFullText(t *testing.T) {
 				SchemaName: "testDb",
 				ObjName:    "testTable",
 			},
-			Engine: eng,
 			FullText: &PostDmlFullTextCtx{
 				IsDelete:        true,
 				IsInsert:        true,
@@ -90,9 +73,7 @@ func TestFullText(t *testing.T) {
 				AlgoParams:      "",
 			},
 		},
-		ctr: container{
-			source: relation,
-		},
+		ctr: container{},
 	}
 
 	resetChildren(&arg)

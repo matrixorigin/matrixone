@@ -1262,6 +1262,15 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileApply(n, ns[n.Children[1]], left))
 		return ss, nil
+	case plan.Node_POSTDML:
+		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.compilePostDml(n, ss)
+		return ss, nil
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -2596,6 +2605,17 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	}
 
 	return rs
+}
+
+func (c *Compile) compilePostDml(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		arg := constructPostDml(n, c.e)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[i].setRootOperator(arg)
+	}
+	c.anal.isFirst = false
+	return ss
 }
 
 func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {

@@ -18,17 +18,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(PostDml)
 
 type container struct {
-	state            vm.CtrState
-	source           engine.Relation
-	partitionSources []engine.Relation // Align array index with the partition number
-	affectedRows     uint64
+	affectedRows uint64
 }
 
 type PostDml struct {
@@ -81,12 +77,8 @@ type PostDmlFullTextCtx struct {
 }
 
 type PostDmlCtx struct {
-	Ref                   *plan.ObjectRef
-	AddAffectedRows       bool
-	Engine                engine.Engine
-	PartitionTableIDs     []uint64 // Align array index with the partition number
-	PartitionTableNames   []string // Align array index with the partition number
-	PartitionIndexInBatch int      // The array index position of the partition expression column
+	Ref             *plan.ObjectRef
+	AddAffectedRows bool
 
 	// define various context for different tasks
 	FullText *PostDmlFullTextCtx
@@ -94,7 +86,6 @@ type PostDmlCtx struct {
 
 func (postdml *PostDml) Reset(proc *process.Process, pipelineFailed bool, err error) {
 
-	postdml.ctr.state = vm.Build
 }
 
 func (postdml *PostDml) Free(proc *process.Process, pipelineFailed bool, err error) {

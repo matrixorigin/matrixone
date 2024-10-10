@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -47,16 +46,6 @@ func (postdml *PostDml) Prepare(proc *process.Process) error {
 		postdml.OpAnalyzer.Reset()
 	}
 
-	ref := postdml.PostDmlCtx.Ref
-	eng := postdml.PostDmlCtx.Engine
-	partitionNames := postdml.PostDmlCtx.PartitionTableNames
-	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
-	if err != nil {
-		return err
-	}
-
-	postdml.ctr.source = rel
-	postdml.ctr.partitionSources = partitionRels
 	postdml.ctr.affectedRows = 0
 	return nil
 }
@@ -90,24 +79,19 @@ func (postdml *PostDml) runPostDmlFullText(proc *process.Process) (vm.CallResult
 
 	var in_list []any
 
-	if len(postdml.PostDmlCtx.PartitionTableIDs) > 0 {
-		// partition tables
-
-	} else {
-		bat := result.Batch
-		pkvec := bat.Vecs[ftctx.PrimaryKeyIdx]
-		//pkTyp := pkvec.GetType()
-		in_list = make([]any, 0, bat.RowCount())
-		for i := 0; i < bat.RowCount(); i++ {
-			pkey := vector.GetAny(pkvec, i)
-			bytes, ok := pkey.([]byte)
-			if ok {
-				key := "'" + string(bytes) + "'"
-				pkey = key
-			}
-
-			in_list = append(in_list, pkey)
+	bat := result.Batch
+	pkvec := bat.Vecs[ftctx.PrimaryKeyIdx]
+	//pkTyp := pkvec.GetType()
+	in_list = make([]any, 0, bat.RowCount())
+	for i := 0; i < bat.RowCount(); i++ {
+		pkey := vector.GetAny(pkvec, i)
+		bytes, ok := pkey.([]byte)
+		if ok {
+			key := "'" + string(bytes) + "'"
+			pkey = key
 		}
+
+		in_list = append(in_list, pkey)
 	}
 
 	values := anyslice2str(in_list)

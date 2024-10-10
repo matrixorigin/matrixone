@@ -1922,15 +1922,11 @@ func exprRelPos(expr *plan.Expr) int32 {
 	return -1
 }
 
-func constructPostDml(n *plan.Node, eg engine.Engine) (*postdml.PostDml, error) {
+func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
 	oldCtx := n.PostDmlCtx
 	delCtx := &postdml.PostDmlCtx{
-		Ref:                   oldCtx.Ref,
-		AddAffectedRows:       oldCtx.AddAffectedRows,
-		PartitionTableIDs:     oldCtx.PartitionTableIds,
-		PartitionTableNames:   oldCtx.PartitionTableNames,
-		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
-		Engine:                eg,
+		Ref:             oldCtx.Ref,
+		AddAffectedRows: oldCtx.AddAffectedRows,
 	}
 
 	if oldCtx.FullText != nil {
@@ -1948,5 +1944,5 @@ func constructPostDml(n *plan.Node, eg engine.Engine) (*postdml.PostDml, error) 
 
 	op := postdml.NewArgument()
 	op.PostDmlCtx = delCtx
-	return op, nil
+	return op
 }

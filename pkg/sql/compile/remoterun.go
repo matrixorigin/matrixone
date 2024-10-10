@@ -16,8 +16,9 @@ package compile
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -58,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
@@ -819,6 +821,24 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Params: t.TableFunction.Params,
 			Name:   t.TableFunction.FuncName,
 		}
+	case *postdml.PostDml:
+		in.PostDml = &pipeline.PostDml{
+			AddAffectedRows: t.PostDmlCtx.AddAffectedRows,
+			Ref:             t.PostDmlCtx.Ref,
+		}
+		if t.PostDmlCtx.FullText != nil {
+			ft := t.PostDmlCtx.FullText
+			fulltext := &plan.PostDmlFullTextCtx{
+				IsDelete:        ft.IsDelete,
+				IsInsert:        ft.IsInsert,
+				SourceTableName: ft.SourceTableName,
+				IndexTableName:  ft.IndexTableName,
+				PrimaryKeyIdx:   ft.PrimaryKeyIdx,
+				Parts:           ft.Parts,
+				AlgoParams:      ft.AlgoParams,
+			}
+			in.PostDml.FullText = fulltext
+		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
 	}
@@ -1286,6 +1306,29 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.Args = opr.TableFunction.Args
 		arg.TableFunction.FuncName = opr.TableFunction.Name
 		arg.TableFunction.Params = opr.TableFunction.Params
+		op = arg
+	case vm.PostDml:
+		t := opr.GetPostDml()
+		arg := postdml.NewArgument()
+		arg.PostDmlCtx = &postdml.PostDmlCtx{
+			Ref:             t.Ref,
+			AddAffectedRows: t.AddAffectedRows,
+		}
+
+		if t.FullText != nil {
+			ft := t.FullText
+			fulltext := &postdml.PostDmlFullTextCtx{
+				IsDelete:        ft.IsDelete,
+				IsInsert:        ft.IsInsert,
+				SourceTableName: ft.SourceTableName,
+				IndexTableName:  ft.IndexTableName,
+				PrimaryKeyIdx:   ft.PrimaryKeyIdx,
+				PrimaryKeyName:  ft.PrimaryKeyName,
+				Parts:           ft.Parts,
+				AlgoParams:      ft.AlgoParams,
+			}
+			arg.PostDmlCtx.FullText = fulltext
+		}
 		op = arg
 	default:
 		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
