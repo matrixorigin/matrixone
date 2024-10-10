@@ -87,6 +87,8 @@ func TestCollector(t *testing.T) {
 	factory := newExecutorFactory(sqlch)
 	collector := newMetricCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2),
 		WithSqlWorkerNum(runtime.NumCPU()))
+	// fix issue: https://github.com/matrixorigin/matrixone/issues/19163
+	instant := time.Now() // collector.Start() will go mergeWorker(), in which active 'FlushInterval' setting.
 	collector.Start(context.TODO())
 	defer collector.Stop(false)
 	names := []string{"m1", "m2"}
@@ -119,7 +121,6 @@ func TestCollector(t *testing.T) {
 			}},
 		})
 	}()
-	instant := time.Now()
 	valuesRe := regexp.MustCompile(`\([^)]*\),?\s?`) // find pattern like (1,2,3)
 	nameRe := regexp.MustCompile(`\.(\w+)\svalues`)  // find table name
 	nameAndValueCnt := func(s string) (name string, cnt int) {
