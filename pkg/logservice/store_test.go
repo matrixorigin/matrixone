@@ -73,10 +73,12 @@ func getStoreTestConfig() Config {
 	cfg := DefaultConfig()
 	cfg.UUID = uuid.New().String()
 	cfg.RTTMillisecond = 10
-	cfg.GossipPort = getAvailablePort()
+	cfg.RaftAddress = getTestRaftAddress()
+	cfg.GossipPort = getTestGossipPort()
 	testGossipAddress := getTestGossipAddress(cfg.GossipPort)
 	dummyGossipSeedAddress := getDummyGossipSeedAddress()
 	cfg.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
+	cfg.LogServicePort = getTestServicePort()
 	cfg.DeploymentID = 1
 	cfg.FS = vfs.NewStrictMem()
 	cfg.UseTeeLogDB = true
@@ -92,9 +94,18 @@ func getStoreTestConfig() Config {
 
 func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg, nil, nil, runtime.DefaultRuntime())
+	store, err := newLogStoreWithRetry(
+		genCfg,
+		nil,
+		nil,
+		runtime.DefaultRuntime(),
+	)
 	assert.NoError(t, err)
 	runtime.DefaultRuntime().Logger().Info("1")
 	defer func() {
@@ -103,9 +114,49 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	runtime.DefaultRuntime().Logger().Info("2")
 }
 
-func getTestStore(cfg Config, startLogReplica bool, taskService taskservice.TaskService) (*store, error) {
-	store, err := newLogStore(
-		cfg,
+func TestNewStoreRetry(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg0 := getStoreTestConfig()
+	genCfg0 := func() Config {
+		return cfg0
+	}
+	defer vfs.ReportLeakedFD(cfg0.FS, t)
+	store0, err := newLogStoreWithRetry(
+		genCfg0,
+		nil,
+		nil,
+		runtime.DefaultRuntime(),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, store0.close())
+	}()
+
+	var cfg Config
+	first := true
+	genCfg := func() Config {
+		if first {
+			first = false
+			return cfg0
+		} else {
+			cfg = getStoreTestConfig()
+			return cfg
+		}
+	}
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	store1, err := newLogStoreWithRetry(
+		genCfg,
+		nil,
+		nil,
+		runtime.DefaultRuntime(),
+	)
+	assert.NoError(t, err)
+	assert.NoError(t, store1.close())
+}
+
+func getTestStore(genCfg func() Config, startLogReplica bool, taskService taskservice.TaskService) (*store, error) {
+	store, err := newLogStoreWithRetry(
+		genCfg,
 		func() taskservice.TaskService { return taskService },
 		nil,
 		runtime.DefaultRuntime(),
@@ -126,9 +177,18 @@ func getTestStore(cfg Config, startLogReplica bool, taskService taskservice.Task
 
 func TestHAKeeperCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg, nil, nil, runtime.DefaultRuntime())
+	store, err := newLogStoreWithRetry(
+		genCfg,
+		nil,
+		nil,
+		runtime.DefaultRuntime(),
+	)
 	assert.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[2] = store.nh.ID()
@@ -141,9 +201,13 @@ func TestHAKeeperCanBeStarted(t *testing.T) {
 
 func TestStateMachineCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true, nil)
+	store, err := getTestStore(genCfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -153,9 +217,13 @@ func TestStateMachineCanBeStarted(t *testing.T) {
 
 func TestReplicaCanBeStopped(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true, nil)
+	store, err := getTestStore(genCfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -167,9 +235,13 @@ func TestReplicaCanBeStopped(t *testing.T) {
 
 func runStoreTest(t *testing.T, fn func(*testing.T, *store)) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true, nil)
+	store, err := getTestStore(genCfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -1168,9 +1240,13 @@ func TestCheckHealth(t *testing.T) {
 	}
 
 	t.Run("hakeeper not start", func(t *testing.T) {
-		cfg := getStoreTestConfig()
+		var cfg Config
+		genCfg := func() Config {
+			cfg = getStoreTestConfig()
+			return cfg
+		}
 		defer vfs.ReportLeakedFD(cfg.FS, t)
-		store, err := getTestStore(cfg, false, nil)
+		store, err := getTestStore(genCfg, false, nil)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, store.close())
@@ -1179,9 +1255,13 @@ func TestCheckHealth(t *testing.T) {
 	})
 
 	t.Run("log store no heartbeat", func(t *testing.T) {
-		cfg := getStoreTestConfig()
+		var cfg Config
+		genCfg := func() Config {
+			cfg = getStoreTestConfig()
+			return cfg
+		}
 		defer vfs.ReportLeakedFD(cfg.FS, t)
-		store, err := getTestStore(cfg, false, nil)
+		store, err := getTestStore(genCfg, false, nil)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, store.close())
@@ -1190,9 +1270,13 @@ func TestCheckHealth(t *testing.T) {
 	})
 
 	t.Run("tick timeout", func(t *testing.T) {
-		cfg := getStoreTestConfig()
+		var cfg Config
+		genCfg := func() Config {
+			cfg = getStoreTestConfig()
+			return cfg
+		}
 		defer vfs.ReportLeakedFD(cfg.FS, t)
-		store, err := getTestStore(cfg, false, nil)
+		store, err := getTestStore(genCfg, false, nil)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, store.close())
@@ -1201,9 +1285,13 @@ func TestCheckHealth(t *testing.T) {
 	})
 
 	t.Run("replica not start", func(t *testing.T) {
-		cfg := getStoreTestConfig()
+		var cfg Config
+		genCfg := func() Config {
+			cfg = getStoreTestConfig()
+			return cfg
+		}
 		defer vfs.ReportLeakedFD(cfg.FS, t)
-		store, err := getTestStore(cfg, false, nil)
+		store, err := getTestStore(genCfg, false, nil)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, store.close())
