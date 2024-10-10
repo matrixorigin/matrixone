@@ -324,7 +324,7 @@ func (w *GCWindow) writeMetaForRemainings(
 ) (string, error) {
 	name := blockio.EncodeGCMetadataFileName(PrefixGCMeta, w.tsRange.start, w.tsRange.end)
 	ret := batch.NewWithSchema(
-		false, false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
+		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)
 	defer ret.Clean(w.mp)
 	for _, s := range stats {
