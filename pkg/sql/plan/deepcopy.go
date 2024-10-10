@@ -68,7 +68,8 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			TableDef:            DeepCopyTableDef(ctx.TableDef, true),
 			PartitionTableIds:   slices.Clone(ctx.PartitionTableIds),
 			PartitionTableNames: slices.Clone(ctx.PartitionTableNames),
-			PartitionIdx:        ctx.PartitionIdx,
+			OldPartitionIdx:     ctx.OldPartitionIdx,
+			NewPartitionIdx:     ctx.NewPartitionIdx,
 			InsertCols:          slices.Clone(ctx.InsertCols),
 			DeleteCols:          slices.Clone(ctx.DeleteCols),
 		}

@@ -31,6 +31,7 @@ type DMLContext struct {
 	isClusterTable []bool
 
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
+	updatePartCol  []bool                 //If update cols contains col that Partition expr used
 	//oldColPosMap   []map[string]int       // origin table values to their position in derived table
 	//newColPosMap   []map[string]int       // insert/update values to their position in derived table
 	//nameToIdx      map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
@@ -124,6 +125,8 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		idx := dmlCtx.aliasMap[alias]
 		dmlCtx.updateCol2Expr[idx] = columnMap
 	}
+
+	dmlCtx.updatePartCol = make([]bool, len(dmlCtx.tableDefs))
 
 	return nil
 }

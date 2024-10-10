@@ -45,8 +45,8 @@ func (update *MultiUpdate) delete_table(
 	rowCount := inputBatch.RowCount()
 
 	if len(updateCtx.PartitionTableIDs) > 0 {
-		partTableNulls := inputBatch.Vecs[updateCtx.PartitionIdx].GetNulls()
-		partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.PartitionIdx])
+		partTableNulls := inputBatch.Vecs[updateCtx.OldPartitionIdx].GetNulls()
+		partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.OldPartitionIdx])
 
 		for partIdx := range len(updateCtx.PartitionTableIDs) {
 			rowIdNulls := rowIdVec.GetNulls()

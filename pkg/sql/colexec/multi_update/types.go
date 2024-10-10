@@ -91,7 +91,8 @@ type MultiUpdateCtx struct {
 
 	PartitionTableIDs   []uint64 // Align array index with the partition number
 	PartitionTableNames []string // Align array index with the partition number
-	PartitionIdx        int      // The array index position of the partition expression column
+	OldPartitionIdx     int      // The array index position of the partition expression column for delete
+	NewPartitionIdx     int      // The array index position of the partition expression column for insert
 
 	Source           engine.Relation
 	PartitionSources []engine.Relation // Align array index with the partition number

@@ -1349,8 +1349,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 
-		var pkExprs []*plan.Expr
-		var oldPkPos [][2]int32
+		var pkExprs, partExprs []*plan.Expr
+		var oldPkPos, oldPartPos [][2]int32
 		for _, lockTarget := range node.LockTargets {
 			pkExpr := &plan.Expr{
 				// Typ: node.LockTargets[0].GetPrimaryColTyp(),
@@ -1364,22 +1364,24 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(pkExpr, 1, colRefCnt)
 			pkExprs = append(pkExprs, pkExpr)
 			oldPkPos = append(oldPkPos, [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat})
-		}
 
-		var oldPartExpr [2]int32
-		var partExpr *Expr
-		if node.TableDef.Partition != nil {
-			partExpr = &Expr{
-				// Typ: node.ProjectList[len(node.ProjectList)-1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: node.LockTargets[0].FilterColRelPos,
-						ColPos: node.LockTargets[0].FilterColIdxInBat,
+			if lockTarget.IsPartitionTable {
+				partExpr := &Expr{
+					// Typ: node.ProjectList[len(node.ProjectList)-1].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: lockTarget.FilterColRelPos,
+							ColPos: lockTarget.FilterColIdxInBat,
+						},
 					},
-				},
+				}
+				increaseRefCnt(partExpr, 1, colRefCnt)
+				partExprs = append(partExprs, partExpr)
+				oldPartPos = append(oldPartPos, [2]int32{lockTarget.FilterColRelPos, lockTarget.FilterColIdxInBat})
+			} else {
+				partExprs = append(partExprs, nil)
+				oldPartPos = append(oldPartPos, [2]int32{-1, -1})
 			}
-			increaseRefCnt(partExpr, 1, colRefCnt)
-			oldPartExpr = [2]int32{node.LockTargets[0].FilterColRelPos, node.LockTargets[0].FilterColIdxInBat}
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -1393,14 +1395,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				node.LockTargets[pkIdx].PrimaryColIdxInBat = newPos[1]
 			}
 			increaseRefCnt(pkExpr, -1, colRefCnt)
-		}
 
-		if partExpr != nil {
-			if newPos, ok := childRemapping.globalToLocal[oldPartExpr]; ok {
-				node.LockTargets[0].FilterColRelPos = newPos[0]
-				node.LockTargets[0].FilterColIdxInBat = newPos[1]
+			if partExprs[pkIdx] != nil {
+				if newPos, ok := childRemapping.globalToLocal[oldPartPos[pkIdx]]; ok {
+					node.LockTargets[pkIdx].FilterColRelPos = newPos[0]
+					node.LockTargets[pkIdx].FilterColIdxInBat = newPos[1]
+				}
+				increaseRefCnt(partExprs[pkIdx], -1, colRefCnt)
 			}
-			increaseRefCnt(partExpr, -1, colRefCnt)
 		}
 
 		for i, globalRef := range childRemapping.localToGlobal {
@@ -1555,20 +1557,32 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		var oldPartExpr [2]int32
-		var partExpr *Expr
+		var oldPartRel, newPartRel [2]int32
+		var oldPartExpr, newPartExpr *Expr
 		if node.UpdateCtxList[0].TableDef.Partition != nil {
-			partExpr = &Expr{
+			oldPartExpr = &Expr{
 				// Typ: node.ProjectList[len(node.ProjectList)-1].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: node.BindingTags[1],
-						ColPos: node.UpdateCtxList[0].PartitionIdx,
+						ColPos: node.UpdateCtxList[0].OldPartitionIdx,
 					},
 				},
 			}
-			increaseRefCnt(partExpr, 1, colRefCnt)
-			oldPartExpr = [2]int32{node.BindingTags[1], node.UpdateCtxList[0].PartitionIdx}
+			increaseRefCnt(oldPartExpr, 1, colRefCnt)
+			oldPartRel = [2]int32{node.BindingTags[1], node.UpdateCtxList[0].OldPartitionIdx}
+
+			newPartExpr = &Expr{
+				// Typ: node.ProjectList[len(node.ProjectList)-1].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: node.BindingTags[1],
+						ColPos: node.UpdateCtxList[0].NewPartitionIdx,
+					},
+				},
+			}
+			increaseRefCnt(newPartExpr, 1, colRefCnt)
+			newPartRel = [2]int32{node.BindingTags[1], node.UpdateCtxList[0].NewPartitionIdx}
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -1576,11 +1590,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		if partExpr != nil {
-			if newPos, ok := childRemapping.globalToLocal[oldPartExpr]; ok {
-				node.UpdateCtxList[0].PartitionIdx = newPos[1]
+		if node.UpdateCtxList[0].TableDef.Partition != nil {
+			if newPos, ok := childRemapping.globalToLocal[oldPartRel]; ok {
+				node.UpdateCtxList[0].OldPartitionIdx = newPos[1]
 			}
-			increaseRefCnt(partExpr, -1, colRefCnt)
+			increaseRefCnt(oldPartExpr, -1, colRefCnt)
+			if newPos, ok := childRemapping.globalToLocal[newPartRel]; ok {
+				node.UpdateCtxList[0].NewPartitionIdx = newPos[1]
+			}
+			increaseRefCnt(oldPartExpr, -1, colRefCnt)
 		}
 
 		remapInfo.tip = "UpdateCtxList"

@@ -848,7 +848,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				TableDef:            muCtx.TableDef,
 				PartitionTableIds:   muCtx.PartitionTableIDs,
 				PartitionTableNames: muCtx.PartitionTableNames,
-				PartitionIdx:        int32(muCtx.PartitionIdx),
+				OldPartitionIdx:     int32(muCtx.OldPartitionIdx),
+				NewPartitionIdx:     int32(muCtx.NewPartitionIdx),
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1369,7 +1370,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				TableDef:            muCtx.TableDef,
 				PartitionTableIDs:   muCtx.PartitionTableIds,
 				PartitionTableNames: muCtx.PartitionTableNames,
-				PartitionIdx:        int(muCtx.PartitionIdx),
+				OldPartitionIdx:     int(muCtx.OldPartitionIdx),
+				NewPartitionIdx:     int(muCtx.NewPartitionIdx),
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
