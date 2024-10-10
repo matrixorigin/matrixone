@@ -1798,7 +1798,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 }
 
 func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill outputCallBackFunc) error {
-	bat := batch.New(true, []string{explainColName})
+	bat := batch.New([]string{explainColName})
 	rs := buffer.Lines
 	vs := make([][]byte, len(rs))
 
@@ -1825,7 +1825,7 @@ func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explai
 }
 
 func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufio.Reader, session *Session, fill outputCallBackFunc) error {
-	bat := batch.New(true, []string{explainColName})
+	bat := batch.New([]string{explainColName})
 	vs := make([][]byte, 0)
 	count := 0
 	for {

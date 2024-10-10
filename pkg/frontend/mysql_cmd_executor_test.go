@@ -670,7 +670,7 @@ func Test_typeconvert(t *testing.T) {
 }
 
 func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Batch {
-	batchData := batch.New(true, attrName)
+	batchData := batch.New(attrName)
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
