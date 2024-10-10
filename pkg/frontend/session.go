@@ -440,7 +440,7 @@ func (ses *Session) CountFlushPackage(delta int64) {
 	}
 	ses.packetCounter.Add(delta)
 }
-func (ses *Session) GetPacketCnt() int64 {
+func (ses *Session) GetFlushPacketCnt() int64 {
 	if ses == nil {
 		return 0
 	}
