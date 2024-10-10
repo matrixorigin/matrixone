@@ -132,11 +132,11 @@ func TestSamplePool(t *testing.T) {
 }
 
 func genSampleBatch(proc *process.Process, rows [][]int64) (*batch.Batch, error) {
-	b := batch.NewWithSize(len(rows[0]))
+	b := batch.NewOffHeapWithSize(len(rows[0]))
 
 	var err error
 	for i := range b.Vecs {
-		b.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		b.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 
 		for _, rowValue := range rows {
 			err = vector.AppendFixed[int64](b.Vecs[i], rowValue[i], rowValue[i] == nullFlag, proc.Mp())

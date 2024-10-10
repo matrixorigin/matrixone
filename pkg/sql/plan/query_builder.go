@@ -2314,7 +2314,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if len(valuesClause.Rows) == 0 {
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
-		bat := batch.NewWithSize(len(valuesClause.Rows[0]))
+		bat := batch.NewOffHeapWithSize(len(valuesClause.Rows[0]))
 		strTyp := plan.Type{
 			Id:          int32(types.T_text),
 			NotNullable: false,
@@ -2344,7 +2344,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 		ctx.binder = NewWhereBinder(builder, ctx)
 		for i := 0; i < colCount; i++ {
-			vec := vector.NewVec(types.T_text.ToType())
+			vec := vector.NewOffHeapVecWithType(types.T_text.ToType())
 			bat.Vecs[i] = vec
 			rowSetData.Cols[i] = &plan.ColData{}
 			for j := 0; j < rowCount; j++ {

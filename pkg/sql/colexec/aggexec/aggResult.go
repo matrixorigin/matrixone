@@ -156,8 +156,8 @@ func (r *basicResult) marshal() ([]byte, error) {
 }
 
 func (r *basicResult) unmarshal0(data []byte) error {
-	r.res = vector.NewVec(r.typ)
-	r.ess = vector.NewVec(types.T_bool.ToType())
+	r.res = vector.NewOffHeapVecWithType(r.typ)
+	r.ess = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 
 	length := types.DecodeUint32(data[:4])
 	data = data[4:]

@@ -988,12 +988,12 @@ func buildValueScan(
 		Cols:  make([]*plan.ColDef, colCount),
 	}
 	projectList := make([]*Expr, colCount)
-	bat := batch.NewWithSize(len(updateColumns))
+	bat := batch.NewOffHeapWithSize(len(updateColumns))
 
 	for i, colName := range updateColumns {
 		col := tableDef.Cols[colToIdx[colName]]
 		colTyp := makeTypeByPlan2Type(col.Typ)
-		vec := vector.NewVec(colTyp)
+		vec := vector.NewOffHeapVecWithType(colTyp)
 		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
 			Typ: col.Typ,

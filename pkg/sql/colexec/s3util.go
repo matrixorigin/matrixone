@@ -177,11 +177,11 @@ func (w *S3Writer) ResetBlockInfoBat() {
 		w.blockInfoBat.CleanOnlyData()
 	} else {
 		attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-		blockInfoBat := batch.NewWithSize(len(attrs))
+		blockInfoBat := batch.NewOffHeapWithSize(len(attrs))
 		blockInfoBat.Attrs = attrs
-		blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-		blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
-		blockInfoBat.Vecs[2] = vector.NewVec(types.T_binary.ToType())
+		blockInfoBat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int16.ToType())
+		blockInfoBat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+		blockInfoBat.Vecs[2] = vector.NewOffHeapVecWithType(types.T_binary.ToType())
 
 		w.blockInfoBat = blockInfoBat
 	}

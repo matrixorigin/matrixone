@@ -185,7 +185,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) makeResultBatch(bat *batch.Batch, vec *vector.Vector) *batch.Batch {
-	ctr.rBat = batch.NewWithSize(len(bat.Vecs) + 1)
+	ctr.rBat = batch.NewOffHeapWithSize(len(bat.Vecs) + 1)
 	i := 0
 	for i < len(bat.Vecs) {
 		ctr.rBat.Vecs[i] = bat.Vecs[i]
@@ -224,7 +224,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			ctr.os = ctr.ps
 		}
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewOffHeapVecWithType(types.T_int64.ToType())
 		defer vec.Free(proc.Mp())
 		if err = vector.AppendFixedList(vec, ctr.os, nil, proc.Mp()); err != nil {
 			return err

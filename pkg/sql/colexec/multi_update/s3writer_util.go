@@ -138,14 +138,14 @@ func cloneSomeVecFromCompactBatchs(
 	if partitionIdxInBatch > -1 {
 		expect := int32(getPartitionIdx)
 		for i := 0; i < src.Length(); i++ {
-			newBat = batch.NewWithSize(len(cols))
+			newBat = batch.NewOffHeapWithSize(len(cols))
 			oldBat := src.Get(i)
 			rid2pid := vector.MustFixedColWithTypeCheck[int32](oldBat.Vecs[partitionIdxInBatch])
 			nulls := oldBat.Vecs[partitionIdxInBatch].GetNulls()
 
 			for newColIdx, oldColIdx := range cols {
 				typ := oldBat.Vecs[oldColIdx].GetType()
-				newBat.Vecs[newColIdx] = vector.NewVec(*typ)
+				newBat.Vecs[newColIdx] = vector.NewOffHeapVecWithType(*typ)
 			}
 
 			for rowIdx, partition := range rid2pid {
@@ -167,7 +167,7 @@ func cloneSomeVecFromCompactBatchs(
 		}
 	} else {
 		for i := 0; i < src.Length(); i++ {
-			newBat = batch.NewWithSize(len(cols))
+			newBat = batch.NewOffHeapWithSize(len(cols))
 			oldBat := src.Get(i)
 			for newColIdx, oldColIdx := range cols {
 				newBat.Vecs[newColIdx], err = oldBat.Vecs[oldColIdx].Dup(proc.GetMPool())
@@ -223,13 +223,13 @@ func fetchMainTableBatchs(
 	if partitionIdxInBatch > -1 {
 		expect := int32(getPartitionIdx)
 		for i, oldBat := range srcBats {
-			newBat = batch.NewWithSize(len(cols))
+			newBat = batch.NewOffHeapWithSize(len(cols))
 			rid2pid := vector.MustFixedColWithTypeCheck[int32](oldBat.Vecs[partitionIdxInBatch])
 			nulls := oldBat.Vecs[partitionIdxInBatch].GetNulls()
 
 			for newColIdx, oldColIdx := range cols {
 				typ := oldBat.Vecs[oldColIdx].GetType()
-				newBat.Vecs[newColIdx] = vector.NewVec(*typ)
+				newBat.Vecs[newColIdx] = vector.NewOffHeapVecWithType(*typ)
 			}
 
 			for rowIdx, partition := range rid2pid {
@@ -251,7 +251,7 @@ func fetchMainTableBatchs(
 		}
 	} else {
 		for i, oldBat := range srcBats {
-			newBat = batch.NewWithSize(len(cols))
+			newBat = batch.NewOffHeapWithSize(len(cols))
 			for j, idx := range cols {
 				oldVec := oldBat.Vecs[idx]
 				srcBats[i].ReplaceVector(oldVec, nil, 0)

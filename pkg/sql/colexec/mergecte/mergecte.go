@@ -181,11 +181,11 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func makeRecursiveBatch(proc *process.Process) *batch.Batch {
-	b := batch.NewWithSize(1)
+	b := batch.NewOffHeapWithSize(1)
 	b.Attrs = []string{
 		"recursive_col",
 	}
-	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	b.SetVector(0, vector.NewOffHeapVecWithType(types.T_varchar.ToType()))
 	if err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool()); err != nil {
 		panic(err)
 	}

@@ -116,17 +116,17 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 
 	insertColCount := int(insertArg.InsertColCount) //columns without hidden columns
 	if insertArg.ctr.rbat == nil {
-		insertArg.ctr.rbat = batch.NewWithSize(len(insertArg.Attrs))
+		insertArg.ctr.rbat = batch.NewOffHeapWithSize(len(insertArg.Attrs))
 		insertArg.ctr.rbat.Attrs = insertArg.Attrs
 
-		insertArg.ctr.checkConflictBat = batch.NewWithSize(len(insertArg.Attrs))
+		insertArg.ctr.checkConflictBat = batch.NewOffHeapWithSize(len(insertArg.Attrs))
 		insertArg.ctr.checkConflictBat.Attrs = append(insertArg.ctr.checkConflictBat.Attrs, insertArg.Attrs...)
 
 		for i, v := range originBatch.Vecs {
-			newVec := vector.NewVec(*v.GetType())
+			newVec := vector.NewOffHeapVecWithType(*v.GetType())
 			insertArg.ctr.rbat.SetVector(int32(i), newVec)
 
-			ckVec := vector.NewVec(*v.GetType())
+			ckVec := vector.NewOffHeapVecWithType(*v.GetType())
 			insertArg.ctr.checkConflictBat.SetVector(int32(i), ckVec)
 		}
 	} else {
@@ -276,11 +276,11 @@ func resetColPos(e *plan.Expr, columnCount int) {
 }
 
 func fetchOneRowAsBatch(idx int, originBatch *batch.Batch, proc *process.Process, attrs []string) (*batch.Batch, error) {
-	newBatch := batch.NewWithSize(len(attrs))
+	newBatch := batch.NewOffHeapWithSize(len(attrs))
 	newBatch.Attrs = attrs
 	var uErr error
 	for i, v := range originBatch.Vecs {
-		newVec := vector.NewVec(*v.GetType())
+		newVec := vector.NewOffHeapVecWithType(*v.GetType())
 		uErr = newVec.UnionOne(v, int64(idx), proc.Mp())
 		if uErr != nil {
 			newBatch.Clean(proc.Mp())
@@ -294,7 +294,7 @@ func fetchOneRowAsBatch(idx int, originBatch *batch.Batch, proc *process.Process
 
 func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, proc *process.Process, columnCount int, attrs []string) (*batch.Batch, error) {
 	var originVec *vector.Vector
-	newBatch := batch.NewWithSize(len(attrs))
+	newBatch := batch.NewOffHeapWithSize(len(attrs))
 	newBatch.Attrs = attrs
 	for i, attr := range newBatch.Attrs {
 		if i < columnCount {
@@ -310,7 +310,7 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 				newBatch.SetVector(int32(i), newVec)
 			} else {
 				originVec = evalBatch.Vecs[i+columnCount]
-				newVec := vector.NewVec(*originVec.GetType())
+				newVec := vector.NewOffHeapVecWithType(*originVec.GetType())
 				err := newVec.UnionOne(originVec, int64(0), proc.Mp())
 				if err != nil {
 					newBatch.Clean(proc.Mp())
@@ -321,7 +321,7 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 		} else {
 			// keep old cols
 			originVec = evalBatch.Vecs[i]
-			newVec := vector.NewVec(*originVec.GetType())
+			newVec := vector.NewOffHeapVecWithType(*originVec.GetType())
 			err := newVec.UnionOne(originVec, int64(0), proc.Mp())
 			if err != nil {
 				newBatch.Clean(proc.Mp())

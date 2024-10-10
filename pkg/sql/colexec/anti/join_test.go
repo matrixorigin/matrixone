@@ -240,10 +240,10 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 			},
 		},
 	}
-	resultBatch := batch.NewWithSize(len(rp))
+	resultBatch := batch.NewOffHeapWithSize(len(rp))
 	for i := range rp {
 		bat := colexec.MakeMockBatchs()
-		resultBatch.Vecs[i] = vector.NewVec(*bat.Vecs[rp[i]].GetType())
+		resultBatch.Vecs[i] = vector.NewOffHeapVecWithType(*bat.Vecs[rp[i]].GetType())
 	}
 	tag++
 	return antiTestCase{

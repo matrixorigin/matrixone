@@ -239,7 +239,7 @@ func (s *sPool) vectorReOrder(
 			}
 		}
 
-		s.reOrderedInput = batch.NewWithSize(offset)
+		s.reOrderedInput = batch.NewOffHeapWithSize(offset)
 		s.otherPartIndex = make([]int, 0, len(inputBatch.Vecs))
 		for i, g := range got {
 			if !g {

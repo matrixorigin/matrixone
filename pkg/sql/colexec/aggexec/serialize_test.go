@@ -45,7 +45,7 @@ func fillTestData(mg AggMemoryManager, groupNumber int, exec AggFuncExec, dataTy
 		return err
 	}
 
-	vec := vector.NewVec(dataType)
+	vec := vector.NewOffHeapVecWithType(dataType)
 	switch dataType.Oid {
 	case types.T_int32:
 		values := make([]int32, groupNumber)

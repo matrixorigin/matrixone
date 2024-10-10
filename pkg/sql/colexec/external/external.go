@@ -148,7 +148,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		}
 	}
 	if external.ctr.buf == nil {
-		external.ctr.buf = batch.New(false, param.Attrs)
+		external.ctr.buf = batch.NewOffHeap(false, param.Attrs)
 		var flag bool
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
@@ -158,7 +158,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		//alloc space for vector
 		for i := range param.Attrs {
 			typ := makeType(&param.Cols[i].Typ, flag)
-			external.ctr.buf.Vecs[i] = vector.NewVec(typ)
+			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
 	return nil

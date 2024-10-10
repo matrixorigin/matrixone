@@ -1324,7 +1324,7 @@ func runFetchRowsTestWithAppendFunc[T any](
 	filterCols []int32,
 	filterAll bool) {
 	mp := mpool.MustNew("test")
-	vec := vector.NewVec(tp)
+	vec := vector.NewOffHeapVecWithType(tp)
 	appendFunc(vec, mp)
 
 	packer := types.NewPacker()

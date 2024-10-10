@@ -145,18 +145,18 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Proc
 	if len(mergeBlock.container.partitionSources) > 0 {
 		// 'i' aligns with partition number
 		for i := range mergeBlock.container.partitionSources {
-			bat := batch.NewWithSize(len(attrs))
+			bat := batch.NewOffHeapWithSize(len(attrs))
 			bat.Attrs = attrs
 			for idx := 0; idx < len(attrs); idx++ {
-				bat.Vecs[idx] = vector.NewVec(typs[idx])
+				bat.Vecs[idx] = vector.NewOffHeapVecWithType(typs[idx])
 			}
 			mergeBlock.container.mp[i] = bat
 		}
 	} else {
-		bat := batch.NewWithSize(len(attrs))
+		bat := batch.NewOffHeapWithSize(len(attrs))
 		bat.Attrs = attrs
 		for idx := 0; idx < len(attrs); idx++ {
-			bat.Vecs[idx] = vector.NewVec(typs[idx])
+			bat.Vecs[idx] = vector.NewOffHeapVecWithType(typs[idx])
 		}
 		mergeBlock.container.mp[0] = bat
 	}

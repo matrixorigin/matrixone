@@ -361,7 +361,7 @@ func runLockNonBlockingOpTest(
 	runLockOpTest(
 		t,
 		func(proc *process.Process) {
-			bat := batch.NewWithSize(len(tables) * 2)
+			bat := batch.NewOffHeapWithSize(len(tables) * 2)
 			bat.SetRowCount(len(tables) * 2)
 
 			defer func() {
@@ -380,11 +380,11 @@ func runLockNonBlockingOpTest(
 			for idx, table := range tables {
 				arg.AddLockTarget(table, offset, pkType, offset+1)
 
-				vec := vector.NewVec(pkType)
+				vec := vector.NewOffHeapVecWithType(pkType)
 				vector.AppendFixedList(vec, values[idx], nil, proc.Mp())
 				bat.Vecs[offset] = vec
 
-				vec = vector.NewVec(tsType)
+				vec = vector.NewOffHeapVecWithType(tsType)
 				bat.Vecs[offset+1] = vec
 				offset += 2
 			}

@@ -153,7 +153,7 @@ func TestSplitBatch(t *testing.T) {
 			name: "test_partition_table_1",
 			fields: fields{
 				ctr: container{
-					resBat:           batch.New(false, []string{"rowid", "pk", "partition_id"}),
+					resBat:           batch.NewOffHeap(false, []string{"rowid", "pk", "partition_id"}),
 					partitionSources: []engine.Relation{nil, nil},
 				},
 				DeleteCtx: &DeleteCtx{
@@ -176,7 +176,7 @@ func TestSplitBatch(t *testing.T) {
 		// 	name: "test_non_partition_table",
 		// 	fields: fields{
 		// 		ctr: container{
-		// 			resBat: batch.New(false, []string{"rowid", "pk"}),
+		// 			resBat: batch.NewOffHeap(false, []string{"rowid", "pk"}),
 		// 		},
 		// 		DeleteCtx: &DeleteCtx{
 		// 			PrimaryKeyIdx: 1,
@@ -185,7 +185,7 @@ func TestSplitBatch(t *testing.T) {
 		// 	},
 		// 	args: args{
 		// 		proc: testutil.NewProc(),
-		// 		srcBat: batch.NewWithSize(2),
+		// 		srcBat: batch.NewOffHeapWithSize(2),
 		// 	},
 		// 	wantErr: false,
 		// },

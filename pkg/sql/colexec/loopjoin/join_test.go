@@ -198,7 +198,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 			},
 		},
 	}
-	resultBatch := batch.NewWithSize(len(rp))
+	resultBatch := batch.NewOffHeapWithSize(len(rp))
 	resultBatch.SetRowCount(2)
 	for i := range rp {
 		bat := colexec.MakeMockBatchs()

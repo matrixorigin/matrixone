@@ -217,8 +217,8 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 	// If the target table is a partition table, group and split the batch data
 	if len(deletion.ctr.partitionSources) != 0 {
 		pkTyp := srcBat.Vecs[delCtx.PrimaryKeyIdx].GetType()
-		deletion.ctr.resBat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-		deletion.ctr.resBat.SetVector(1, vector.NewVec(*pkTyp))
+		deletion.ctr.resBat.SetVector(0, vector.NewOffHeapVecWithType(types.T_Rowid.ToType()))
+		deletion.ctr.resBat.SetVector(1, vector.NewOffHeapVecWithType(*pkTyp))
 		var err error
 
 		for partIdx := range len(delCtx.PartitionTableIDs) {
@@ -280,8 +280,8 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			return 0, err
 		}
 
-		bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
-		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		bat := batch.NewOffHeap(false, []string{catalog.ObjectMeta_ObjectStats})
+		bat.SetVector(0, vector.NewOffHeapVecWithType(types.T_text.ToType()))
 		if err = vector.AppendBytes(
 			bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
 			return 0, err
@@ -362,14 +362,14 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 }
 
 func makeDelBatch(pkType types.Type) *batch.Batch {
-	bat := batch.New(false, []string{catalog.Row_ID, "pk"})
-	bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-	bat.SetVector(1, vector.NewVec(pkType))
+	bat := batch.NewOffHeap(false, []string{catalog.Row_ID, "pk"})
+	bat.SetVector(0, vector.NewOffHeapVecWithType(types.T_Rowid.ToType()))
+	bat.SetVector(1, vector.NewOffHeapVecWithType(pkType))
 	return bat
 }
 
 func makeDelRemoteBatch() *batch.Batch {
-	bat := batch.NewWithSize(5)
+	bat := batch.NewOffHeapWithSize(5)
 	bat.Attrs = []string{
 		catalog.BlockMeta_Delete_ID,
 		catalog.BlockMeta_DeltaLoc,
@@ -377,10 +377,10 @@ func makeDelRemoteBatch() *batch.Batch {
 		catalog.BlockMeta_Partition,
 		catalog.BlockMeta_Deletes_Length,
 	}
-	bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_text.ToType()))
-	bat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
-	bat.SetVector(3, vector.NewVec(types.T_int32.ToType()))
+	bat.SetVector(0, vector.NewOffHeapVecWithType(types.T_text.ToType()))
+	bat.SetVector(1, vector.NewOffHeapVecWithType(types.T_text.ToType()))
+	bat.SetVector(2, vector.NewOffHeapVecWithType(types.T_int8.ToType()))
+	bat.SetVector(3, vector.NewOffHeapVecWithType(types.T_int32.ToType()))
 	//bat.Vecs[4] is constant
 	return bat
 }

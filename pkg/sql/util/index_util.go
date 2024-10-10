@@ -123,7 +123,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 			v := cIndexVecMap[part]
 			vs = append(vs, v)
 		}
-		b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		b.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 		bitMap, err = serialWithCompacted(vs, b.Vecs[0], proc, packers)
 	} else {
 		var vec *vector.Vector
@@ -133,7 +133,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 				break
 			}
 		}
-		b.Vecs[0] = vector.NewVec(*vec.GetType())
+		b.Vecs[0] = vector.NewOffHeapVecWithType(*vec.GetType())
 		bitMap, err = compactSingleIndexCol(vec, b.Vecs[0], proc)
 	}
 
@@ -144,7 +144,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 				vec = vecs[i]
 			}
 		}
-		b.Vecs[1] = vector.NewVec(*vec.GetType())
+		b.Vecs[1] = vector.NewOffHeapVecWithType(*vec.GetType())
 		err = compactPrimaryCol(vec, nil, bitMap, proc)
 	}
 
@@ -641,7 +641,7 @@ func compactSingleIndexCol(v *vector.Vector, vec *vector.Vector, proc *process.P
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
+		vec = vector.NewOffHeapVecWithType(*v.GetType())
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint64:
 		s := vector.MustFixedColNoTypeCheck[uint64](v)
@@ -669,7 +669,7 @@ func compactSingleIndexCol(v *vector.Vector, vec *vector.Vector, proc *process.P
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
+		vec = vector.NewOffHeapVecWithType(*v.GetType())
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_date:
 		s := vector.MustFixedColNoTypeCheck[types.Date](v)
@@ -679,7 +679,7 @@ func compactSingleIndexCol(v *vector.Vector, vec *vector.Vector, proc *process.P
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
+		vec = vector.NewOffHeapVecWithType(*v.GetType())
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_time:
 		s := vector.MustFixedColNoTypeCheck[types.Time](v)

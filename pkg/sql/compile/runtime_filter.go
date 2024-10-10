@@ -66,7 +66,7 @@ func ApplyRuntimeFilters(
 	for i, filter := range runtimeFilters {
 		switch filter.Typ {
 		case message.RuntimeFilter_IN:
-			vec := vector.NewVec(types.T_any.ToType())
+			vec := vector.NewOffHeapVecWithType(types.T_any.ToType())
 			err = vec.UnmarshalBinary(filter.Data)
 			if err != nil {
 				return nil, err

@@ -199,7 +199,7 @@ func makePlan2Vecf32ConstExpr(v string) *plan.Expr_Lit {
 var MakePlan2StringVecExprWithType = makePlan2StringVecExprWithType
 
 func makePlan2StringVecExprWithType(mp *mpool.MPool, vals ...string) *plan.Expr {
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	for _, val := range vals {
 		vector.AppendBytes(vec, []byte(val), false, mp)
 	}
@@ -219,7 +219,7 @@ func makePlan2StringVecExprWithType(mp *mpool.MPool, vals ...string) *plan.Expr 
 var MakePlan2Int64VecExprWithType = makePlan2Int64VecExprWithType
 
 func makePlan2Int64VecExprWithType(mp *mpool.MPool, vals ...int64) *plan.Expr {
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewOffHeapVecWithType(types.T_int64.ToType())
 	for _, val := range vals {
 		vector.AppendFixed(vec, val, false, mp)
 	}
