@@ -16,11 +16,8 @@ package merge
 
 import (
 	"cmp"
-	"fmt"
-	"math"
 	"slices"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -65,7 +62,7 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	if len(m.objects) < 2 {
 		return nil
 	}
-	if cpu > 95 {
+	if cpu > 90 {
 		return nil
 	}
 	objs, taskHostKind := m.reviseDataObjs(config)
@@ -77,7 +74,6 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 }
 
 func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
-	t := m.objects[0].SortKeyZoneMap().GetType()
 	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
 		zmA := a.SortKeyZoneMap()
 		zmB := b.SortKeyZoneMap()
@@ -89,13 +85,14 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: []byte{}}
 	for _, obj := range m.objects {
 		if len(set.entries) == 0 {
-			set.add(t, obj)
+			set.add(obj)
 			continue
 		}
 
-		if zm := obj.SortKeyZoneMap(); index.StrictlyCompareZmMaxAndMin(set.maxValue, zm.GetMinBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) > 0 {
+		if zm := obj.SortKeyZoneMap(); set.size < common.Const1GBytes &&
+			index.StrictlyCompareZmMaxAndMin(set.maxValue, zm.GetMinBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) > 0 {
 			// zm is overlapped
-			set.add(t, obj)
+			set.add(obj)
 			continue
 		}
 
@@ -107,15 +104,15 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 			m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
 		}
 
-		set.reset(t)
-		set.add(t, obj)
+		set.reset()
+		set.add(obj)
 	}
 	// there is still more than one entry in set.
 	if len(set.entries) > 1 {
 		objs := make([]*catalog.ObjectEntry, len(set.entries))
 		copy(objs, set.entries)
 		m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
-		set.reset(t)
+		set.reset()
 	}
 	if len(m.overlappingObjsSet) == 0 {
 		return nil, TaskHostDN
@@ -148,70 +145,17 @@ type entrySet struct {
 	size     int
 }
 
-func (s *entrySet) reset(t types.T) {
+func (s *entrySet) reset() {
 	s.entries = s.entries[:0]
 	s.maxValue = []byte{}
 	s.size = 0
 }
 
-func (s *entrySet) add(t types.T, obj *catalog.ObjectEntry) {
+func (s *entrySet) add(obj *catalog.ObjectEntry) {
 	s.entries = append(s.entries, obj)
 	s.size += int(obj.OriginSize())
-	if zm := obj.SortKeyZoneMap(); len(s.maxValue) == 0 || compute.Compare(s.maxValue, zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) < 0 {
+	if zm := obj.SortKeyZoneMap(); len(s.maxValue) == 0 ||
+		compute.Compare(s.maxValue, zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) < 0 {
 		s.maxValue = zm.GetMaxBuf()
-	}
-}
-
-func minValue(t types.T) any {
-	switch t {
-	case types.T_bit:
-		return 0
-	case types.T_int8:
-		return int8(math.MinInt8)
-	case types.T_int16:
-		return int16(math.MinInt16)
-	case types.T_int32:
-		return int32(math.MinInt32)
-	case types.T_int64:
-		return int64(math.MinInt64)
-	case types.T_uint8:
-		return uint8(0)
-	case types.T_uint16:
-		return uint16(0)
-	case types.T_uint32:
-		return uint32(0)
-	case types.T_uint64:
-		return uint64(0)
-	case types.T_float32:
-		return float32(-math.MaxFloat32)
-	case types.T_float64:
-		return float64(-math.MaxFloat64)
-	case types.T_date:
-		return types.Date(math.MinInt32)
-	case types.T_time:
-		return types.Time(math.MinInt64)
-	case types.T_datetime:
-		return types.Datetime(math.MinInt64)
-	case types.T_timestamp:
-		return types.Timestamp(math.MinInt64)
-	case types.T_enum:
-		return types.Enum(0)
-	case types.T_decimal64:
-		return types.Decimal64Min
-	case types.T_decimal128:
-		return types.Decimal128Min
-	case types.T_uuid:
-		return types.Uuid{}
-	case types.T_TS:
-		return types.TS{}
-	case types.T_Rowid:
-		return types.Rowid{}
-	case types.T_Blockid:
-		return types.Blockid{}
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		return []byte{}
-	default:
-		panic(fmt.Sprintf("unsupported type: %v", t))
 	}
 }
