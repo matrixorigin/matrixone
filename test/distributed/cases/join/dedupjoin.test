@@ -10,5 +10,6 @@ drop table t;
 
 create table t1(a int primary key);
 insert into t1 select result from generate_series(1000000) tf;
+select count(*) from t1 dedup join (select cast(result+999999 as int) result from generate_series(1000000) tmp) tf on a = result;
 select count(*) from t1 dedup join (select cast(result+1000000 as int) result from generate_series(1000000) tmp) tf on a = result;
 drop table t1;
