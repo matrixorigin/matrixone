@@ -130,6 +130,7 @@ type Config struct {
 		DisableGC      bool          `toml:"disable-gc"`
 		CheckGC        bool          `toml:"check-gc"`
 		CacheSize      int           `toml:"cache-size"`
+		GCMergeCount   int           `toml:"gc-merge-count"`
 	}
 
 	Merge struct {

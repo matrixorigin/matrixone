@@ -88,7 +88,8 @@ type checkpointCleaner struct {
 	}
 
 	config struct {
-		canGCCacheSize int
+		canGCCacheSize          int
+		maxMergeCheckpointCount int
 	}
 
 	// checker is to check whether the checkpoint can be consumed
@@ -115,6 +116,14 @@ func WithCanGCCacheSize(
 ) CheckpointCleanerOption {
 	return func(e *checkpointCleaner) {
 		e.config.canGCCacheSize = size
+	}
+}
+
+func WithMaxMergeCheckpointCount(
+	count int,
+) CheckpointCleanerOption {
+	return func(e *checkpointCleaner) {
+		e.config.maxMergeCheckpointCount = count
 	}
 }
 
@@ -635,7 +644,7 @@ func (c *checkpointCleaner) getMetaFilesToMerge(ts *types.TS) (
 	}
 	var ret []*checkpoint.CheckpointEntry
 	compacted := c.checkpointCli.GetCompacted()
-	ickps := c.checkpointCli.ICKPRange(&start, ts, 20)
+	ickps := c.checkpointCli.ICKPRange(&start, ts, c.config.maxMergeCheckpointCount)
 	if compacted != nil {
 		ret = make([]*checkpoint.CheckpointEntry, 0)
 		ret = append(ret, compacted)
@@ -643,7 +652,8 @@ func (c *checkpointCleaner) getMetaFilesToMerge(ts *types.TS) (
 	} else {
 		ret = ickps
 	}
-	logutil.Infof("getMetaFilesToMerge: start: %v, end: %v", start.ToString(), ts.ToString())
+	logutil.Infof("getMetaFilesToMerge max merge count %d, start: %v, end: %v",
+		c.config.maxMergeCheckpointCount, start.ToString(), ts.ToString())
 	return ret
 }
 
