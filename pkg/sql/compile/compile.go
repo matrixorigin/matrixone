@@ -3841,7 +3841,15 @@ func (c *Compile) expandRanges(
 	if err != nil {
 		return nil, err
 	}
-	relData, err = rel.Ranges(ctx, blockFilterList, c.TxnOffset)
+	preAllocSize := 2
+	if !c.IsTpQuery() {
+		if len(blockFilterList) > 0 {
+			preAllocSize = 64
+		} else {
+			preAllocSize = int(n.Stats.BlockNum)
+		}
+	}
+	relData, err = rel.Ranges(ctx, blockFilterList, preAllocSize, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -3855,7 +3863,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, blockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3877,7 +3885,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, blockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}

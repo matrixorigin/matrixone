@@ -12,7 +12,6 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	mpool "github.com/matrixorigin/matrixone/pkg/common/mpool"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
-	nulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	types "github.com/matrixorigin/matrixone/pkg/container/types"
 	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	fileservice "github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -215,7 +214,7 @@ func (m *MockTombstoner) EXPECT() *MockTombstonerMockRecorder {
 }
 
 // ApplyInMemTombstones mocks base method.
-func (m *MockTombstoner) ApplyInMemTombstones(bid *types.Blockid, rowsOffset []int64, deleted *nulls.Nulls) []int64 {
+func (m *MockTombstoner) ApplyInMemTombstones(bid *types.Blockid, rowsOffset []int64, deleted *objectio.Bitmap) []int64 {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ApplyInMemTombstones", bid, rowsOffset, deleted)
 	ret0, _ := ret[0].([]int64)
@@ -229,7 +228,7 @@ func (mr *MockTombstonerMockRecorder) ApplyInMemTombstones(bid, rowsOffset, dele
 }
 
 // ApplyPersistedTombstones mocks base method.
-func (m *MockTombstoner) ApplyPersistedTombstones(ctx context.Context, fs fileservice.FileService, snapshot types.TS, bid types.Blockid, rowsOffset []int64, deletedMask *nulls.Nulls) ([]int64, error) {
+func (m *MockTombstoner) ApplyPersistedTombstones(ctx context.Context, fs fileservice.FileService, snapshot *types.TS, bid *types.Blockid, rowsOffset []int64, deletedMask *objectio.Bitmap) ([]int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ApplyPersistedTombstones", ctx, fs, snapshot, bid, rowsOffset, deletedMask)
 	ret0, _ := ret[0].([]int64)
@@ -272,7 +271,7 @@ func (mr *MockTombstonerMockRecorder) HasAnyTombstoneFile() *gomock.Call {
 }
 
 // HasBlockTombstone mocks base method.
-func (m *MockTombstoner) HasBlockTombstone(ctx context.Context, id objectio.Blockid, fs fileservice.FileService) (bool, error) {
+func (m *MockTombstoner) HasBlockTombstone(ctx context.Context, id *objectio.Blockid, fs fileservice.FileService) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HasBlockTombstone", ctx, id, fs)
 	ret0, _ := ret[0].(bool)
@@ -686,7 +685,7 @@ func (m *MockDataSource) EXPECT() *MockDataSourceMockRecorder {
 }
 
 // ApplyTombstones mocks base method.
-func (m *MockDataSource) ApplyTombstones(ctx context.Context, bid objectio.Blockid, rowsOffset []int64, applyPolicy engine.TombstoneApplyPolicy) ([]int64, error) {
+func (m *MockDataSource) ApplyTombstones(ctx context.Context, bid *objectio.Blockid, rowsOffset []int64, applyPolicy engine.TombstoneApplyPolicy) ([]int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ApplyTombstones", ctx, bid, rowsOffset, applyPolicy)
 	ret0, _ := ret[0].([]int64)
@@ -727,10 +726,10 @@ func (mr *MockDataSourceMockRecorder) GetOrderBy() *gomock.Call {
 }
 
 // GetTombstones mocks base method.
-func (m *MockDataSource) GetTombstones(ctx context.Context, bid objectio.Blockid) (*nulls.Nulls, error) {
+func (m *MockDataSource) GetTombstones(ctx context.Context, bid *objectio.Blockid) (objectio.Bitmap, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetTombstones", ctx, bid)
-	ret0, _ := ret[0].(*nulls.Nulls)
+	ret0, _ := ret[0].(objectio.Bitmap)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -1310,18 +1309,18 @@ func (mr *MockRelationMockRecorder) PrimaryKeysMayBeModified(ctx, from, to, keyV
 }
 
 // Ranges mocks base method.
-func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr, arg2 int) (engine.RelData, error) {
+func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr, arg2, arg3 int) (engine.RelData, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Ranges", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "Ranges", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].(engine.RelData)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Ranges indicates an expected call of Ranges.
-func (mr *MockRelationMockRecorder) Ranges(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Ranges(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), arg0, arg1, arg2, arg3)
 }
 
 // Rows mocks base method.

@@ -608,7 +608,7 @@ func TestGetExprValue(t *testing.T) {
 		relData := &memoryengine.MemRelationData{
 			Shards: ranges,
 		}
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
 		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()

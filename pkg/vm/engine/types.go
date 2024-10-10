@@ -813,7 +813,7 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
+	Ranges(context.Context, []*plan.Expr, int, int) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 

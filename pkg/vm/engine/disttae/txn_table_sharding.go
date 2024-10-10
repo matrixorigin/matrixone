@@ -271,6 +271,7 @@ func (tbl *txnTableDelegate) Size(
 func (tbl *txnTableDelegate) Ranges(
 	ctx context.Context,
 	exprs []*plan.Expr,
+	preAllocSize int,
 	txnOffset int,
 ) (engine.RelData, error) {
 	is, err := tbl.isLocal()
@@ -281,6 +282,7 @@ func (tbl *txnTableDelegate) Ranges(
 		return tbl.origin.Ranges(
 			ctx,
 			exprs,
+			preAllocSize,
 			txnOffset,
 		)
 	}

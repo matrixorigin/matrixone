@@ -49,7 +49,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 	mockEngine.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, txnOperator).Return(catalog_database, nil).AnyTimes()
 
 	indexes_relation := mock_frontend.NewMockRelation(ctrl)
-	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	indexes_relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
@@ -141,7 +141,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	mockEngine.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, txnOperator).Return(catalog_database, nil).AnyTimes()
 
 	indexes_relation := mock_frontend.NewMockRelation(ctrl)
-	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	indexes_relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 

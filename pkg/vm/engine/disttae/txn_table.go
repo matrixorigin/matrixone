@@ -560,12 +560,14 @@ func (tbl *txnTable) CollectTombstones(
 func (tbl *txnTable) Ranges(
 	ctx context.Context,
 	exprs []*plan.Expr,
+	preAllocSize int,
 	txnOffset int,
 ) (data engine.RelData, err error) {
 	unCommittedObjs, _ := tbl.collectUnCommittedDataObjs(txnOffset)
 	return tbl.doRanges(
 		ctx,
 		exprs,
+		preAllocSize,
 		unCommittedObjs,
 	)
 }
@@ -573,13 +575,14 @@ func (tbl *txnTable) Ranges(
 func (tbl *txnTable) doRanges(
 	ctx context.Context,
 	exprs []*plan.Expr,
+	preAllocSize int,
 	uncommittedObjects []objectio.ObjectStats,
 ) (data engine.RelData, err error) {
 	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
-	blocks := objectio.MakeBlockInfoSlice(1)
+	blocks := objectio.PreAllocBlockInfoSlice(1, preAllocSize)
 
 	trace.GetService(sid).AddTxnDurationAction(
 		tbl.db.op,

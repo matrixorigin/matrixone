@@ -36,7 +36,7 @@ func TestRangesIsLocalErr(t *testing.T) {
 	runIsLocalErrTests(
 		t,
 		func(tbl *txnTableDelegate) {
-			_, err := tbl.Ranges(context.Background(), nil, 0)
+			_, err := tbl.Ranges(context.Background(), nil, 2, 0)
 			require.Error(t, err)
 		},
 	)
