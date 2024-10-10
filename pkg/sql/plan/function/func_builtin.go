@@ -1024,14 +1024,13 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			area := vec.GetArea()
 			vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
 			data := vs[0].GetByteSlice(area)
-			if !vec.IsConstNull() {
+			if vec.IsConstNull() {
 				for i := 0; i < n; i++ {
-					keys[i] = append(keys[i], byte(0))
-					keys[i] = append(keys[i], data...)
+					keys[i] = append(keys[i], byte(1))
 				}
 			} else {
 				for i := 0; i < n; i++ {
-					keys[i] = append(keys[i], byte(1))
+					keys[i] = append(keys[i], byte(0))
 					keys[i] = append(keys[i], data...)
 				}
 			}
@@ -1061,14 +1060,13 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	fillGroupStr := func(keys [][]byte, vec *vector.Vector, n int, sz int, start int) {
 		if vec.IsConst() {
 			data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), vec.GetType().Size)
-			if !vec.IsConstNull() {
+			if vec.IsConstNull() {
 				for i := 0; i < n; i++ {
-					keys[i] = append(keys[i], byte(0))
-					keys[i] = append(keys[i], data...)
+					keys[i] = append(keys[i], byte(1))
 				}
 			} else {
 				for i := 0; i < n; i++ {
-					keys[i] = append(keys[i], byte(1))
+					keys[i] = append(keys[i], byte(0))
 					keys[i] = append(keys[i], data...)
 				}
 			}

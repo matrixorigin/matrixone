@@ -131,9 +131,9 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 }
 
 func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepareStmt bool, skipStats bool, isExplain bool) (*Plan, error) {
-	// if !isExplain {
-	// 	return buildTableUpdate(stmt, ctx, isPrepareStmt)
-	// }
+	if !isExplain {
+		return buildTableUpdate(stmt, ctx, isPrepareStmt)
+	}
 
 	start := time.Now()
 	defer func() {
