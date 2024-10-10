@@ -123,9 +123,13 @@ func TestHandleBootstrapFailure(t *testing.T) {
 
 func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T, *store)) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, startLogReplica, nil)
+	store, err := getTestStore(genCfg, startLogReplica, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -145,7 +149,9 @@ func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskse
 	taskService := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
 	defer taskService.StopScheduleCronTask()
 
-	store, err := getTestStore(cfg, false, taskService)
+	store, err := getTestStore(func() Config {
+		return cfg
+	}, false, taskService)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())

@@ -757,3 +757,75 @@ func TestHAKeeperClientSendProxyHeartbeat(t *testing.T) {
 	}
 	runServiceTest(t, true, true, fn)
 }
+
+func TestHAKeeperClientCheckLogServiceHealth(t *testing.T) {
+	t.Run("no tn stores", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			cfg := HAKeeperClientConfig{
+				ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			c, err := NewClusterHAKeeperClient(ctx, "", cfg)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, c.Close())
+			}()
+			err = c.CheckLogServiceHealth(ctx)
+			require.NoError(t, err)
+		}
+		runServiceTest(t, true, true, fn)
+	})
+
+	t.Run("ok", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			req := pb.Request{
+				Method: pb.TN_HEARTBEAT,
+				TNHeartbeat: &pb.TNStoreHeartbeat{
+					UUID: "uuid1",
+					Shards: []pb.TNShardInfo{
+						{
+							ShardID:   1,
+							ReplicaID: 100,
+						},
+					},
+				},
+			}
+			resp := s.handleTNHeartbeat(ctx, req)
+			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+			req = pb.Request{
+				Method: pb.LOG_HEARTBEAT,
+				LogHeartbeat: &pb.LogStoreHeartbeat{
+					UUID: s.ID(),
+					Replicas: []pb.LogReplicaInfo{
+						{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID: 1,
+								Replicas: map[uint64]string{
+									100: "uuid1",
+								},
+							},
+						},
+					},
+				},
+			}
+			s.handleLogHeartbeat(ctx, req)
+			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+			cfg := HAKeeperClientConfig{
+				ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+			}
+			c, err := NewClusterHAKeeperClient(ctx, "", cfg)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, c.Close())
+			}()
+			err = c.CheckLogServiceHealth(ctx)
+			require.NoError(t, err)
+		}
+		runServiceTest(t, true, true, fn)
+	})
+}

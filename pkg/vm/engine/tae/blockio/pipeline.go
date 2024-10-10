@@ -454,7 +454,8 @@ func (p *IoPipeline) onWait(jobs ...any) {
 }
 
 func (p *IoPipeline) crontask(ctx context.Context) {
-	hb := w.NewHeartBeaterWithFunc(time.Second*10, func() {
+	hb := w.NewHeartBeaterWithFunc(time.Second*40, func() {
+		logutil.Info(objectio.BitmapPoolReport())
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

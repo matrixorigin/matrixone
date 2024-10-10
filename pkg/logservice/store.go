@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -181,6 +182,27 @@ func newLogStore(cfg Config,
 		return nil, err
 	}
 	return ls, nil
+}
+
+// newLogStoreWithRetry mainly used in tests which create new log store.
+// If an error occurred and the error is syscall.EADDRINUSE, retry to
+// create a new log store instance.
+func newLogStoreWithRetry(
+	genCfg func() Config,
+	taskServiceGetter func() taskservice.TaskService,
+	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType),
+	rt runtime.Runtime,
+) (*store, error) {
+	for {
+		s, err := newLogStore(genCfg(), taskServiceGetter, onReplicaChanged, rt)
+		if err != nil {
+			if strings.Contains(err.Error(), "address already in use") {
+				continue
+			}
+			return nil, err
+		}
+		return s, nil
+	}
 }
 
 func (l *store) close() error {
@@ -415,6 +437,42 @@ func (l *store) addLogShard(ctx context.Context, addLogShard pb.AddLogShard) err
 		return handleNotHAKeeperError(ctx, err)
 	}
 	return nil
+}
+
+func (l *store) checkHealth(shardID uint64) error {
+	opts := dragonboat.NodeHostInfoOption{
+		SkipLogInfo: true,
+	}
+	nhi := l.nh.GetNodeHostInfo(opts)
+	for _, ci := range nhi.ShardInfoList {
+		if ci.ShardID == shardID {
+			if ci.Pending {
+				return moerr.NewInternalErrorNoCtxf("shard %d is pending on store %s",
+					shardID, l.cfg.UUID)
+			}
+			break
+		}
+	}
+	cs, err := l.getCheckerState()
+	if err != nil {
+		return err
+	}
+	storeInfo, ok := cs.LogState.Stores[l.cfg.UUID]
+	if ok {
+		if storeInfo.Tick >= cs.Tick {
+			return nil
+		}
+		if (cs.Tick-storeInfo.Tick)*uint64(l.cfg.HAKeeperTickInterval.Duration) >
+			uint64(l.cfg.HAKeeperConfig.LogStoreTimeout.Duration) {
+			return moerr.NewInternalErrorNoCtxf("log store %s of shard %d expired",
+				l.cfg.UUID, shardID)
+		} else {
+			return nil
+		}
+	} else {
+		return moerr.NewInternalErrorNoCtxf("shard %d not started on store %s",
+			shardID, l.cfg.UUID)
+	}
 }
 
 func (l *store) retryWait() {
