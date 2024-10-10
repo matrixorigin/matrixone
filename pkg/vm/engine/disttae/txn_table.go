@@ -2238,7 +2238,7 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 	columns := []string{"src_blk", "src_row", "dest_obj", "dest_blk", "dest_row"}
 	colTypes := []types.T{types.T_int32, types.T_uint32, types.T_uint8, types.T_uint16, types.T_uint32}
 	batchSize := min(200*mpool.MB/len(columns)/int(unsafe.Sizeof(int32(0))), totalRows)
-	buffer := batch.New(true, columns)
+	buffer := batch.New(columns)
 	releases := make([]func(), len(columns))
 	for i := range columns {
 		t := colTypes[i].ToType()
