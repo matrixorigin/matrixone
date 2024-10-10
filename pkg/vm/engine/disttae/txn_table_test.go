@@ -67,7 +67,7 @@ func makeBatchForTest(
 	mp *mpool.MPool,
 	ints ...int64,
 ) *batch.Batch {
-	bat := batch.New(false, []string{"a"})
+	bat := batch.New([]string{"a"})
 	vec := vector.NewVec(types.T_int64.ToType())
 	for _, n := range ints {
 		vector.AppendFixed(vec, n, false, mp)

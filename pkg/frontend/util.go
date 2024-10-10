@@ -763,7 +763,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		return nil, nil, err
 	}
 	//1. make vector type
-	bat := batch.New(true, colNames)
+	bat := batch.New(colNames)
 	//2. make batch
 	cnt := len(rows)
 	bat.SetRowCount(cnt)

@@ -287,7 +287,7 @@ func testDatabase(
 				6, 7, 8, 9, 10,
 			},
 		)
-		bat := batch.New(false, []string{"a", "b"})
+		bat := batch.New([]string{"a", "b"})
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.SetRowCount(5)
@@ -468,7 +468,7 @@ func testDatabase(
 				6,
 			},
 		)
-		bat := batch.New(false, []string{"a", "b"})
+		bat := batch.New([]string{"a", "b"})
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.SetRowCount(1)
@@ -569,7 +569,7 @@ func testDatabase(
 				6, 7, 8, 9, 10,
 			},
 		)
-		bat := batch.New(false, []string{"a", "b"})
+		bat := batch.New([]string{"a", "b"})
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.SetRowCount(5)
