@@ -100,7 +100,7 @@ func TestPreExtendAndReset(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestReuseFunctionParameter(t *testing.T) {
+func TestReuseFunctionParameterStr(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	vec := NewVec(types.T_varchar.ToType())
 	for i := uint64(0); i < 10; i++ {
@@ -133,14 +133,18 @@ func TestReuseFunctionParameter(t *testing.T) {
 	g1 = GenerateFunctionStrParameter(vec)
 	ok = ReuseFunctionStrParameter(vec, g1)
 	require.Equal(t, true, ok)
+}
 
+func TestReuseFunctionParameterFixed(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var err error
 	vec1 := NewVec(types.T_int32.ToType())
 	for i := uint64(0); i < 10; i++ {
 		err = appendOneFixed(vec1, i, false, mp)
 		require.NoError(t, err)
 	}
 	g2 := GenerateFunctionFixedTypeParameter[int32](vec1)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
+	ok := ReuseFunctionFixedTypeParameter(vec1, g2)
 	require.Equal(t, true, ok)
 
 	err = appendOneFixed(vec1, 0, true, mp)
