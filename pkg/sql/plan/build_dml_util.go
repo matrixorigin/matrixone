@@ -4508,7 +4508,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 
 // To create rows of (rowid, docid) for DELETE
 func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
-	indexObjRef *ObjectRef, indexTableDef *TableDef, typMap map[string]plan.Type, posMap map[string]int) (int32, int, int, Type, error) {
+	indexObjRef *ObjectRef, indexTableDef *TableDef, indexdef *plan.IndexDef, typMap map[string]plan.Type, posMap map[string]int) (int32, int, int, Type, error) {
 
 	if delCtx.isDeleteWithoutFilters {
 		// truncate and create a table scan of index table
@@ -4545,6 +4545,29 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 
 		lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		orgPkColPos, orgPkType := getPkPos(delCtx.tableDef, false)
+
+		// testing postdml
+		postdmlProject := getProjectionByLastNode(builder, lastNodeId)
+		postdml := &plan.Node{
+			NodeType:    plan.Node_POSTDML,
+			ProjectList: postdmlProject,
+			Children:    []int32{lastNodeId},
+			PostDmlCtx: &plan.PostDmlCtx{
+				Ref: indexObjRef,
+				FullText: &plan.PostDmlFullTextCtx{
+					IsDelete:        true,
+					IsInsert:        false,
+					SourceTableName: delCtx.tableDef.Name,
+					IndexTableName:  indexTableDef.Name,
+					PrimaryKeyIdx:   int32(orgPkColPos),
+					PrimaryKeyName:  delCtx.tableDef.Pkey.PkeyColName,
+					Parts:           indexdef.Parts,
+					AlgoParams:      indexdef.IndexAlgoParams,
+				},
+			},
+		}
+		lastNodeId = builder.appendNode(postdml, bindCtx)
+		// end postdml
 
 		var rightRowIdPos int32 = -1
 		var rightPkPos int32 = 0 // doc_id
@@ -4682,7 +4705,7 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 	}
 
 	// create (rowid, doc_id) for delete
-	lastNodeId, deleteIdx, pkPos, pkTyp, err := buildDeleteRowsFullTextIndex(ctx, builder, bindCtx, delCtx, indexObjRef, indexTableDef, typMap, posMap)
+	lastNodeId, deleteIdx, pkPos, pkTyp, err := buildDeleteRowsFullTextIndex(ctx, builder, bindCtx, delCtx, indexObjRef, indexTableDef, indexdef, typMap, posMap)
 	if err != nil {
 		return err
 	}

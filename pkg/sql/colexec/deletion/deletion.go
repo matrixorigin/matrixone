@@ -282,8 +282,6 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 		}
 	}
 
-	proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, "SELECT * FROM ERIC")
-
 	if delCtx.AddAffectedRows {
 		atomic.AddUint64(&deletion.ctr.affectedRows, affectedRows)
 	}

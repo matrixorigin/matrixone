@@ -55,6 +55,8 @@ func (postdml *PostDml) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	// you may add new context to generate post dml SQL
+	// fulltext post dml
 	if postdml.PostDmlCtx.FullText != nil {
 		return postdml.runPostDmlFullText(proc)
 	}
