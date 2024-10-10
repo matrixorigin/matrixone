@@ -216,6 +216,9 @@ func (th *TxnHandler) Close() {
 		th.txnCtxCancel()
 	}
 	th.txnCtx = nil
+	th.shareTxn = false
+	th.serverStatus = defaultServerStatus
+	th.optionBits = defaultOptionBits
 }
 
 func (th *TxnHandler) GetConnCtx() context.Context {
