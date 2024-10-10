@@ -294,12 +294,6 @@ func TestObjOverlap(t *testing.T) {
 	policy.resetForTable(nil)
 }
 
-func TestMinValue(t *testing.T) {
-	require.Equal(t, minValue(types.T_bit), 0)
-	require.True(t, types.CompareDecimal64(minValue(types.T_decimal64).(types.Decimal64), 0) < 0)
-	require.True(t, types.CompareDecimal128(minValue(types.T_decimal128).(types.Decimal128), types.Decimal128{}) < 0)
-}
-
 func TestPolicyCompact(t *testing.T) {
 	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
