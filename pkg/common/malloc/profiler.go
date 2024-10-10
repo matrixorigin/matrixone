@@ -28,11 +28,14 @@ import (
 
 type Profiler[T any, P interface {
 	*T
-	SampleValues
+	SampleValues[P]
 }] struct {
 	locations sync.Map // LocationKey -> *profile.Location
 	functions sync.Map // FunctionKey -> *profile.Function
 	samples   sync.Map // SampleKey -> *SampleInfo[P]
+
+	mu            sync.Mutex
+	mergedSamples map[uint64]*MergedSample[P]
 
 	// special samples
 	stackOmittedSample SampleInfo[T]
@@ -43,17 +46,20 @@ type Profiler[T any, P interface {
 type SampleInfo[T any] struct {
 	Values    T
 	Locations []*profile.Location
+	Scale     int64
 }
 
-type SampleValues interface {
+type SampleValues[T any] interface {
 	Init()
 	SampleTypes() []*profile.ValueType
 	DefaultSampleType() string
 	Values() []int64
+	Merge(from T)
 }
 
 type LocationKey struct {
-	PC       uintptr
+	File     string
+	Line     int
 	Function string
 }
 
@@ -62,14 +68,23 @@ type FunctionKey struct {
 }
 
 type SampleKey struct {
-	Hash uint64
+	PCs _PCs
+}
+
+type _PCs = [128]uintptr
+
+type MergedSample[T any] struct {
+	Location []*profile.Location
+	Value    T
 }
 
 func NewProfiler[T any, P interface {
 	*T
-	SampleValues
+	SampleValues[P]
 }]() *Profiler[T, P] {
-	ret := &Profiler[T, P]{}
+	ret := &Profiler[T, P]{
+		mergedSamples: make(map[uint64]*MergedSample[P]),
+	}
 
 	ret.stackOmittedSample.Locations = []*profile.Location{
 		ret.getMockLocation("| stack omitted |"),
@@ -90,29 +105,25 @@ func (p *Profiler[T, P]) Sample(
 		return &p.stackOmittedSample.Values
 	}
 
+	defer func() {
+		// merge
+		if fastrand()%1024 == 0 {
+			p.merge(true)
+		}
+	}()
+
 	skip += 2 // runtime.Callers, p.Sample
 
 	// full stack
-	pcs := *pcsPool.Get().(*[]uintptr)
-	defer func() {
-		pcs = pcs[:cap(pcs)]
-		pcsPool.Put(&pcs)
-	}()
-	for {
-		n := runtime.Callers(skip, pcs)
-		if n == len(pcs) {
-			pcs = append(pcs, make([]uintptr, len(pcs))...)
-			continue
-		}
-		pcs = pcs[:n]
-		break
-	}
-	return p.getSampleValueFromPCs(pcs...)
+	var pcs _PCs
+	runtime.Callers(skip, pcs[:])
+	return p.getSampleValueFromPCs(pcs, int64(fullStackFraction))
 }
 
 func (p *Profiler[T, P]) getLocation(frame runtime.Frame) *profile.Location {
 	locationKey := LocationKey{
-		PC:       frame.PC,
+		File:     frame.File,
+		Line:     frame.Line,
 		Function: frame.Function,
 	}
 	if v, ok := p.locations.Load(locationKey); ok {
@@ -136,7 +147,6 @@ func (p *Profiler[T, P]) getLocation(frame runtime.Frame) *profile.Location {
 
 func (p *Profiler[T, P]) getMockLocation(label string) *profile.Location {
 	locationKey := LocationKey{
-		PC:       0,
 		Function: label,
 	}
 	if v, ok := p.locations.Load(locationKey); ok {
@@ -195,19 +205,9 @@ func (p *Profiler[T, P]) getMockFunction(label string) *profile.Function {
 	return v.(*profile.Function)
 }
 
-func (p *Profiler[T, P]) getSampleValueFromPCs(pcs ...uintptr) P {
-	hasher := hasherPool.Get().(*maphash.Hash)
-	defer func() {
-		hasher.Reset()
-		hasherPool.Put(hasher)
-	}()
-	for _, pc := range pcs {
-		hasher.Write(
-			unsafe.Slice((*byte)(unsafe.Pointer(&pc)), unsafe.Sizeof(pc)),
-		)
-	}
+func (p *Profiler[T, P]) getSampleValueFromPCs(pcs _PCs, scale int64) P {
 	key := SampleKey{
-		Hash: hasher.Sum64(),
+		PCs: pcs,
 	}
 
 	if v, ok := p.samples.Load(key); ok {
@@ -219,14 +219,23 @@ func (p *Profiler[T, P]) getSampleValueFromPCs(pcs ...uintptr) P {
 	v, _ := p.samples.LoadOrStore(key, &SampleInfo[P]{
 		Values:    &value,
 		Locations: p.getLocationsFromPCs(pcs),
+		Scale:     scale,
 	})
 
 	return v.(*SampleInfo[P]).Values
 }
 
-func (p *Profiler[T, P]) getLocationsFromPCs(pcs []uintptr) []*profile.Location {
+func (p *Profiler[T, P]) getLocationsFromPCs(pcs _PCs) []*profile.Location {
 	var locations []*profile.Location
-	frames := runtime.CallersFrames(pcs)
+	n := 0
+	for i := range pcs {
+		if pcs[i] != 0 {
+			n++
+		} else {
+			break
+		}
+	}
+	frames := runtime.CallersFrames(pcs[:n])
 	for {
 		frame, more := frames.Next()
 
@@ -246,6 +255,70 @@ func (p *Profiler[T, P]) getLocationsFromPCs(pcs []uintptr) []*profile.Location 
 	return locations
 }
 
+func (p *Profiler[T, P]) merge(try bool) {
+	if try {
+		if !p.mu.TryLock() {
+			return
+		}
+		defer p.mu.Unlock()
+	} else {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+	}
+
+	p.samples.Range(func(k, _ any) bool {
+		v, ok := p.samples.LoadAndDelete(k)
+		if !ok {
+			return true
+		}
+		info := v.(*SampleInfo[P])
+
+		locationsKey := getLocationsKey(info.Locations)
+
+		sample, ok := p.mergedSamples[locationsKey]
+		if !ok {
+			sample = &MergedSample[P]{
+				Location: info.Locations,
+				Value:    info.Values,
+			}
+			p.mergedSamples[locationsKey] = sample
+		} else {
+			sample.Value.Merge(info.Values)
+		}
+
+		return true
+	})
+}
+
+var hashSeed = maphash.MakeSeed()
+
+var hasherPool = sync.Pool{
+	New: func() any {
+		hasher := new(maphash.Hash)
+		hasher.SetSeed(hashSeed)
+		return hasher
+	},
+}
+
+func getLocationsKey(locations []*profile.Location) uint64 {
+	hasher := hasherPool.Get().(*maphash.Hash)
+	defer func() {
+		hasher.Reset()
+		hasherPool.Put(hasher)
+	}()
+
+	for _, location := range locations {
+		hasher.Write(
+			unsafe.Slice(
+				(*byte)(unsafe.Pointer(&location.ID)),
+				unsafe.Sizeof(location.ID),
+			),
+		)
+	}
+
+	return hasher.Sum64()
+}
+
 func (p *Profiler[T, P]) Write(w io.Writer) error {
 
 	var ptr P
@@ -254,20 +327,17 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 		DefaultSampleType: ptr.DefaultSampleType(),
 	}
 
-	p.samples.Range(func(k, v any) bool {
-		info := v.(*SampleInfo[P])
-		sample := &profile.Sample{
-			Location: info.Locations,
-			Value:    info.Values.Values(),
-		}
-		prof.Sample = append(prof.Sample, sample)
-		return true
-	})
+	p.merge(false)
 
-	prof.Sample = append(prof.Sample, &profile.Sample{
-		Location: p.stackOmittedSample.Locations,
-		Value:    P(&p.stackOmittedSample.Values).Values(),
-	})
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, sample := range p.mergedSamples {
+		prof.Sample = append(prof.Sample, &profile.Sample{
+			Location: sample.Location,
+			Value:    sample.Value.Values(),
+		})
+	}
 
 	p.locations.Range(func(k, v any) bool {
 		location := v.(*profile.Location)
@@ -282,19 +352,6 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 	})
 
 	return prof.Write(w)
-}
-
-var pcsPool = sync.Pool{
-	New: func() any {
-		slice := make([]uintptr, 128)
-		return &slice
-	},
-}
-
-var hasherPool = sync.Pool{
-	New: func() any {
-		return new(maphash.Hash)
-	},
 }
 
 func copyFunction(fn *profile.Function) *profile.Function {
