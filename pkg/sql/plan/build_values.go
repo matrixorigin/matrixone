@@ -27,5 +27,5 @@ func buildValues(stmt *tree.ValuesStatement, ctx CompilerContext, isPrepareStmt 
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	return BuildPlan(ctx, selectStmt, isPrepareStmt)
+	return BuildPlan(ctx, selectStmt, isPrepareStmt, false)
 }

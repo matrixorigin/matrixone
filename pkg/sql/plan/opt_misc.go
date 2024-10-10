@@ -33,8 +33,43 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
 	increaseRefCntForExprList(node.AggList, 1, colRefCnt)
 	increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
+	increaseRefCntForExprList(node.InsertDeleteCols, 2, colRefCnt)
 	for i := range node.OrderBy {
 		increaseRefCnt(node.OrderBy[i].Expr, 1, colRefCnt)
+	}
+	for _, updateCtx := range node.UpdateCtxList {
+		increaseRefCntForColRefList(updateCtx.InsertCols, 2, colRefCnt)
+		increaseRefCntForColRefList(updateCtx.DeleteCols, 2, colRefCnt)
+		if len(updateCtx.PartitionTableIds) > 0 {
+			colRefs := []ColRef{
+				{
+					RelPos: node.BindingTags[1],
+					ColPos: updateCtx.OldPartitionIdx,
+				},
+				{
+					RelPos: node.BindingTags[1],
+					ColPos: updateCtx.NewPartitionIdx,
+				},
+			}
+			increaseRefCntForColRefList(colRefs, 1, colRefCnt)
+		}
+	}
+
+	if node.NodeType == plan.Node_LOCK_OP {
+		var colRefs []ColRef
+		for _, lockTarget := range node.LockTargets {
+			colRefs = append(colRefs, ColRef{
+				RelPos: lockTarget.PrimaryColRelPos,
+				ColPos: lockTarget.PrimaryColIdxInBat,
+			})
+			if lockTarget.IsPartitionTable {
+				colRefs = append(colRefs, ColRef{
+					RelPos: lockTarget.FilterColRelPos,
+					ColPos: lockTarget.FilterColIdxInBat,
+				})
+			}
+		}
+		increaseRefCntForColRefList(colRefs, 1, colRefCnt)
 	}
 
 	for _, childID := range node.Children {
@@ -70,6 +105,15 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_FILL:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
+		}
+
+	case plan.Node_MULTI_UPDATE:
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -122,6 +166,12 @@ func increaseRefCntForExprList(exprs []*plan.Expr, inc int, colRefCnt map[[2]int
 	}
 }
 
+func increaseRefCntForColRefList(cols []plan.ColRef, inc int, colRefCnt map[[2]int32]int) {
+	for _, col := range cols {
+		colRefCnt[[2]int32{col.RelPos, col.ColPos}] += inc
+	}
+}
+
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
 func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node) bool {
 	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil {
@@ -149,13 +199,16 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK || parentType == plan.Node_PRE_INSERT_SK {
 		return false
 	}
+	if parentType == plan.Node_PRE_INSERT || parentType == plan.Node_MULTI_UPDATE || parentType == plan.Node_LOCK_OP {
+		return false
+	}
 
 	childType := builder.qry.Nodes[node.Children[0]].NodeType
 	if childType == plan.Node_VALUE_SCAN || childType == plan.Node_EXTERNAL_SCAN {
-		return false
+		return parentType == plan.Node_PROJECT
 	}
 	if childType == plan.Node_FUNCTION_SCAN || childType == plan.Node_EXTERNAL_FUNCTION {
-		return false
+		return parentType == plan.Node_PROJECT
 	}
 
 	return true
@@ -168,8 +221,52 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.GroupBy, projMap)
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
+	replaceColumnsForExprList(node.InsertDeleteCols, projMap)
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
+	}
+	for _, updateCtx := range node.UpdateCtxList {
+		replaceColumnsForColRefList(updateCtx.InsertCols, projMap)
+		replaceColumnsForColRefList(updateCtx.DeleteCols, projMap)
+		if len(updateCtx.PartitionTableIds) > 0 {
+			oldPartRef := [2]int32{node.BindingTags[1], updateCtx.OldPartitionIdx}
+			newPartRef := [2]int32{node.BindingTags[1], updateCtx.NewPartitionIdx}
+			if expr, ok := projMap[oldPartRef]; ok {
+				if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+					node.BindingTags[1] = e.Col.RelPos
+					updateCtx.OldPartitionIdx = e.Col.ColPos
+				}
+			}
+			if expr, ok := projMap[newPartRef]; ok {
+				if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+					node.BindingTags[1] = e.Col.RelPos
+					updateCtx.NewPartitionIdx = e.Col.ColPos
+				}
+			}
+		}
+
+	}
+
+	if node.NodeType == plan.Node_LOCK_OP {
+		for _, lockTarget := range node.LockTargets {
+			colRef := [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat}
+			if expr, ok := projMap[colRef]; ok {
+				if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+					lockTarget.PrimaryColRelPos = e.Col.RelPos
+					lockTarget.PrimaryColIdxInBat = e.Col.ColPos
+				}
+			}
+
+			if lockTarget.IsPartitionTable {
+				colRef = [2]int32{lockTarget.FilterColRelPos, lockTarget.FilterColIdxInBat}
+				if expr, ok := projMap[colRef]; ok {
+					if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+						lockTarget.FilterColRelPos = e.Col.RelPos
+						lockTarget.FilterColIdxInBat = e.Col.ColPos
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -179,6 +276,17 @@ func replaceColumnsForExprList(exprList []*plan.Expr, projMap map[[2]int32]*plan
 			continue
 		}
 		exprList[i] = replaceColumnsForExpr(expr, projMap)
+	}
+}
+
+func replaceColumnsForColRefList(cols []plan.ColRef, projMap map[[2]int32]*plan.Expr) {
+	for i := range cols {
+		mapID := [2]int32{cols[i].RelPos, cols[i].ColPos}
+		if projExpr, ok := projMap[mapID]; ok {
+			newCol := projExpr.Expr.(*plan.Expr_Col).Col
+			cols[i].RelPos = newCol.RelPos
+			cols[i].ColPos = newCol.ColPos
+		}
 	}
 }
 
@@ -334,9 +442,15 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
 	increaseTagCntForExprList(node.AggList, 1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, 1, tagCnt)
+	increaseTagCntForExprList(node.InsertDeleteCols, 2, tagCnt)
 	for i := range node.OrderBy {
 		increaseTagCnt(node.OrderBy[i].Expr, 1, tagCnt)
 	}
+	for _, updateCtx := range node.UpdateCtxList {
+		increaseTagCntForColRefList(updateCtx.InsertCols, 2, tagCnt)
+		increaseTagCntForColRefList(updateCtx.DeleteCols, 2, tagCnt)
+	}
+
 	for i, childID := range node.Children {
 		node.Children[i] = builder.removeEffectlessLeftJoins(childID, tagCnt)
 	}
@@ -366,8 +480,13 @@ END:
 	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
 	increaseTagCntForExprList(node.AggList, -1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, -1, tagCnt)
+	increaseTagCntForExprList(node.InsertDeleteCols, -2, tagCnt)
 	for i := range node.OrderBy {
 		increaseTagCnt(node.OrderBy[i].Expr, -1, tagCnt)
+	}
+	for _, updateCtx := range node.UpdateCtxList {
+		increaseTagCntForColRefList(updateCtx.InsertCols, -2, tagCnt)
+		increaseTagCntForColRefList(updateCtx.DeleteCols, -2, tagCnt)
 	}
 
 	return nodeID
@@ -379,6 +498,12 @@ func increaseTagCntForExprList(exprs []*plan.Expr, inc int, tagCnt map[int32]int
 			continue
 		}
 		increaseTagCnt(expr, inc, tagCnt)
+	}
+}
+
+func increaseTagCntForColRefList(cols []plan.ColRef, inc int, tagCnt map[int32]int) {
+	for _, col := range cols {
+		tagCnt[col.RelPos] += inc
 	}
 }
 

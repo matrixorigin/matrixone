@@ -17,17 +17,15 @@ package hashmap_util
 import (
 	"runtime"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type HashmapBuilder struct {
@@ -41,6 +39,13 @@ type HashmapBuilder struct {
 	Batches            colexec.Batches
 	executor           []colexec.ExpressionExecutor
 	UniqueJoinKeys     []*vector.Vector
+
+	IsDedup           bool
+	OnDuplicateAction plan.Node_OnDuplicateAction
+	DedupColName      string
+	DedupColTypes     []plan.Type
+
+	IgnoreRows *bitmap.Bitmap
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -69,7 +74,7 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 		hb.executor = make([]colexec.ExpressionExecutor, len(Conditions))
 		hb.keyWidth = 0
 		for i, expr := range Conditions {
-			if _, ok := Conditions[i].Expr.(*pbplan.Expr_Col); !ok {
+			if _, ok := Conditions[i].Expr.(*plan.Expr_Col); !ok {
 				hb.needDupVec = true
 			}
 			typ := expr.Typ
@@ -218,7 +223,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		itr = hb.StrHashMap.NewIterator()
 	}
 
-	if hashOnPK {
+	if hashOnPK || hb.IsDedup {
 		// if hash on primary key, prealloc hashmap size to the count of batch
 		if hb.keyWidth <= 8 {
 			err = hb.IntHashMap.PreAlloc(uint64(hb.InputBatchRowCount))
@@ -237,11 +242,17 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	}
 
+	if hb.IsDedup && hb.InputBatchRowCount > 0 {
+		hb.IgnoreRows = &bitmap.Bitmap{}
+		hb.IgnoreRows.InitWithSize(int64(hb.InputBatchRowCount))
+	}
+
 	var (
 		cardinality uint64
 		sels        []int32
 	)
 
+	vOld := uint64(0)
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
@@ -253,7 +264,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 
 		// if not hash on primary key, estimate the hashmap size after 8192 rows
 		//preAlloc to improve performance and reduce memory reAlloc
-		if !hashOnPK && hb.InputBatchRowCount > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
+		if !hashOnPK && !hb.IsDedup && hb.InputBatchRowCount > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
 			if hb.keyWidth <= 8 {
 				groupCount := hb.IntHashMap.GroupCount()
 				rate := float64(groupCount) / float64(i)
@@ -289,7 +300,19 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 			}
 			ai := int64(v) - 1
 
-			if !hashOnPK && needAllocateSels {
+			if hb.IsDedup {
+				if v <= vOld {
+					switch hb.OnDuplicateAction {
+					case plan.Node_ERROR:
+						return moerr.NewDuplicateEntry(proc.Ctx, hb.vecs[vecIdx1][0].RowToString(vecIdx2+k), hb.DedupColName)
+					case plan.Node_IGNORE:
+						hb.IgnoreRows.Add(uint64(i + k))
+					case plan.Node_UPDATE:
+					}
+				} else {
+					vOld = v
+				}
+			} else if !hashOnPK && needAllocateSels {
 				if hb.MultiSels[ai] == nil {
 					hb.MultiSels[ai] = make([]int32, 0)
 				}
@@ -305,7 +328,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 				}
 			}
 
-			if hashOnPK {
+			if hashOnPK || hb.IsDedup {
 				for j, vec := range hb.vecs[vecIdx1] {
 					err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
 					if err != nil {
@@ -335,6 +358,13 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 					}
 				}
 			}
+		}
+	}
+
+	if hb.IsDedup {
+		err := hb.Batches.Shrink(hb.IgnoreRows, proc)
+		if err != nil {
+			return err
 		}
 	}
 

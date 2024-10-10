@@ -309,5 +309,5 @@ func runSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, err
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return plan.BuildPlan(ctx, stmts[0], false)
+	return plan.BuildPlan(ctx, stmts[0], false, true)
 }

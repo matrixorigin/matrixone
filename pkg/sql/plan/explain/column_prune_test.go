@@ -562,7 +562,7 @@ func buildOneStmt(opt plan2.Optimizer, t *testing.T, sql string) (*plan.Plan, er
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return plan2.BuildPlan(ctx, stmts[0], false)
+	return plan2.BuildPlan(ctx, stmts[0], false, true)
 }
 
 type Entry[K any, V any] struct {

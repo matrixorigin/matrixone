@@ -437,12 +437,12 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	var err error
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
-		nodeID, err = b.builder.buildSelect(subquery.Select, subCtx, false)
+		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
 		if err != nil {
 			return nil, err
 		}
 	case *tree.Select:
-		nodeID, err = b.builder.buildSelect(subquery, subCtx, false)
+		nodeID, err = b.builder.bindSelect(subquery, subCtx, false)
 		if err != nil {
 			return nil, err
 		}
