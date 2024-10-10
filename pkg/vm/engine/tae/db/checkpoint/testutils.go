@@ -43,7 +43,7 @@ type TestRunner interface {
 
 	ExistPendingEntryToGC() bool
 	MaxGlobalCheckpoint() *CheckpointEntry
-	MaxCheckpoint() *CheckpointEntry
+	MaxIncrementalCheckpoint() *CheckpointEntry
 	ForceFlush(ts types.TS, ctx context.Context, duration time.Duration) (err error)
 	ForceFlushWithInterval(ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration) (err error)
 	GetDirtyCollector() logtail.Collector
@@ -59,13 +59,13 @@ func (r *runner) EnableCheckpoint() {
 }
 
 func (r *runner) CleanPenddingCheckpoint() {
-	prev := r.MaxCheckpoint()
+	prev := r.MaxIncrementalCheckpoint()
 	if prev == nil {
 		return
 	}
 	if !prev.IsFinished() {
 		r.storage.Lock()
-		r.storage.entries.Delete(prev)
+		r.storage.incrementals.Delete(prev)
 		r.storage.Unlock()
 	}
 	if prev.IsRunning() {
@@ -77,7 +77,7 @@ func (r *runner) CleanPenddingCheckpoint() {
 	}
 	if !prev.IsFinished() {
 		r.storage.Lock()
-		r.storage.entries.Delete(prev)
+		r.storage.incrementals.Delete(prev)
 		r.storage.Unlock()
 	}
 	if prev.IsRunning() {
@@ -90,7 +90,7 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 		versionInterval = r.options.globalVersionInterval
 	}
 	if r.GetPenddingIncrementalCount() != 0 {
-		end = r.MaxCheckpoint().GetEnd()
+		end = r.MaxIncrementalCheckpoint().GetEnd()
 		r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
 			force:    true,
 			end:      end,
@@ -199,7 +199,7 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time
 
 func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 	now := time.Now()
-	prev := r.MaxCheckpoint()
+	prev := r.MaxIncrementalCheckpoint()
 	if prev != nil && !prev.IsFinished() {
 		return moerr.NewPrevCheckpointNotFinished()
 	}
@@ -249,7 +249,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 	}()
 
 	r.storage.Lock()
-	r.storage.entries.Set(entry)
+	r.storage.incrementals.Set(entry)
 	r.storage.Unlock()
 
 	var files []string
@@ -294,7 +294,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 }
 
 func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err error) {
-	prev := r.MaxCheckpoint()
+	prev := r.MaxIncrementalCheckpoint()
 	if prev != nil && !prev.IsFinished() {
 		return "", moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
 	}
@@ -304,7 +304,7 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	}
 	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
 	r.storage.Lock()
-	r.storage.entries.Set(entry)
+	r.storage.incrementals.Set(entry)
 	now := time.Now()
 	r.storage.Unlock()
 	var files []string

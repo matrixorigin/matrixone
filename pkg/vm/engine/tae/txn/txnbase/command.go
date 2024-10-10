@@ -35,10 +35,11 @@ const (
 	IOET_WALTxnEntry_V1            uint16 = 1
 	IOET_WALTxnEntry_V2            uint16 = 2
 	IOET_WALTxnEntry_V3            uint16 = 3
+	IOET_WALTxnEntry_V4            uint16 = 4
 	IOET_WALTxnCommand_Composed_V1 uint16 = 1
 	IOET_WALTxnCommand_TxnState_V1 uint16 = 1
 
-	IOET_WALTxnEntry_CurrVer            = IOET_WALTxnEntry_V3
+	IOET_WALTxnEntry_CurrVer            = IOET_WALTxnEntry_V4
 	IOET_WALTxnCommand_Composed_CurrVer = IOET_WALTxnCommand_Composed_V1
 	IOET_WALTxnCommand_TxnState_CurrVer = IOET_WALTxnCommand_TxnState_V1
 
@@ -79,12 +80,12 @@ func init() {
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
 			Type:    IOET_WALTxnEntry,
-			Version: IOET_WALTxnEntry_V3,
+			Version: IOET_WALTxnEntry_V4,
 		},
 		nil,
 		func(b []byte) (any, error) {
 			txnEntry := NewEmptyTxnCmd()
-			err := txnEntry.UnmarshalBinaryWithVersion(b, IOET_WALTxnEntry_V3)
+			err := txnEntry.UnmarshalBinaryWithVersion(b, IOET_WALTxnEntry_V4)
 			return txnEntry, err
 		},
 	)

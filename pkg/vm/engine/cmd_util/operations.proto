@@ -15,7 +15,7 @@
  */
 
 syntax = "proto3";
-package db;
+package cmd_util;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 

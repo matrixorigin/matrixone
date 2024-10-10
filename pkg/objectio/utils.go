@@ -30,13 +30,17 @@ import (
 )
 
 var (
-	RowidType types.Type
-	TSType    types.Type
+	VarcharType types.Type
+	RowidType   types.Type
+	TSType      types.Type
+	Uint64Type  types.Type
 )
 
 func init() {
+	VarcharType = types.T_varchar.ToType()
 	RowidType = types.T_Rowid.ToType()
 	TSType = types.T_TS.ToType()
+	Uint64Type = types.T_uint64.ToType()
 }
 
 type CreateObjOpt struct {

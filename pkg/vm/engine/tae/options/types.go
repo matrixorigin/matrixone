@@ -50,6 +50,7 @@ const (
 
 	DefaultScanGCInterval = time.Minute * 30
 	DefaultGCTTL          = time.Hour
+	DefaultGCMergeCount   = 40
 
 	DefaultCatalogGCInterval = time.Minute * 3
 

@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 
@@ -44,27 +45,49 @@ func MergeCheckpoint(
 	sid string,
 	fs fileservice.FileService,
 	ckpEntries []*checkpoint.CheckpointEntry,
-	gcTable *GCTable,
+	bf *bloomfilter.BloomFilter,
+	end *types.TS,
 	pool *mpool.MPool,
-) ([]string, string, error) {
-	objects := gcTable.getObjects()
-	tombstones := gcTable.getTombstones()
+) (deleteFiles []string, checkpointEntry *checkpoint.CheckpointEntry, err error) {
 	ckpData := logtail.NewCheckpointData(sid, pool)
 	datas := make([]*logtail.CheckpointData, 0)
-	deleteFiles := make([]string, 0)
+	deleteFiles = make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
 		logutil.Info("[MergeCheckpoint]",
 			zap.String("checkpoint", ckpEntry.String()))
 		_, data, err := logtail.LoadCheckpointEntriesFromKey(context.Background(), sid, fs,
 			ckpEntry.GetLocation(), ckpEntry.GetVersion(), nil, &types.TS{})
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
 		datas = append(datas, data)
-		nameMeta := blockio.EncodeCheckpointMetadataFileName(
-			checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
-			ckpEntry.GetStart(), ckpEntry.GetEnd())
+		var nameMeta string
+		if ckpEntry.GetType() == checkpoint.ET_Compacted {
+			nameMeta = blockio.EncodeCompactedMetadataFileName(
+				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
+				ckpEntry.GetStart(), ckpEntry.GetEnd())
+		} else {
+			nameMeta = blockio.EncodeCheckpointMetadataFileName(
+				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
+				ckpEntry.GetStart(), ckpEntry.GetEnd())
+		}
+
+		// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
 		deleteFiles = append(deleteFiles, nameMeta)
+
+		locations, err := logtail.LoadCheckpointLocations(
+			ctx, sid, ckpEntry.GetTNLocation(), ckpEntry.GetVersion(), fs)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				deleteFiles = append(deleteFiles, nameMeta)
+				continue
+			}
+			return nil, nil, err
+		}
+
+		for name := range locations {
+			deleteFiles = append(deleteFiles, name)
+		}
 	}
 	defer func() {
 		for _, data := range datas {
@@ -73,97 +96,58 @@ func MergeCheckpoint(
 		ckpData.Close()
 	}()
 	if len(datas) == 0 {
-		return nil, "", nil
-	}
-	objs := make(map[string]*types.TS)
-	{
-		ins := datas[len(datas)-1].GetObjectBatchs()
-		tombstone := datas[len(datas)-1].GetTombstoneObjectBatchs()
-		insDropTs := vector.MustFixedColWithTypeCheck[types.TS](
-			ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
-		tombstoneDropTs := vector.MustFixedColWithTypeCheck[types.TS](
-			tombstone.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
-		for i := 0; i < ins.Length(); i++ {
-			var objectStats objectio.ObjectStats
-			buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			if objects[objectStats.ObjectName().String()] == nil {
-				continue
-			}
-			objs[objectStats.ObjectName().String()] = &insDropTs[i]
-		}
-		for i := 0; i < tombstone.Length(); i++ {
-			var objectStats objectio.ObjectStats
-			buf := tombstone.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			if tombstones[objectStats.ObjectName().String()] == nil {
-				continue
-			}
-			objs[objectStats.ObjectName().String()] = &tombstoneDropTs[i]
-		}
+		return
 	}
 
-	for n, data := range datas {
+	// merge objects referenced by sansphot and pitr
+	for _, data := range datas {
 		ins := data.GetObjectBatchs()
 		tombstone := data.GetTombstoneObjectBatchs()
-		insDropTs := vector.MustFixedColWithTypeCheck[types.TS](
-			ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
-		tombstoneDropTs := vector.MustFixedColWithTypeCheck[types.TS](
-			tombstone.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
-		for i := 0; i < ins.Length(); i++ {
-			var objectStats objectio.ObjectStats
-			buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			if objects[objectStats.ObjectName().String()] == nil {
-				continue
-			}
-			if n == len(datas)-1 &&
-				objectStats.GetAppendable() &&
-				insDropTs[i].IsEmpty() &&
-				objs[objectStats.ObjectName().String()].IsEmpty() {
-				ins.GetVectorByName(catalog.EntryNode_DeleteAt).Update(
-					i, ckpEntries[len(ckpEntries)-1].GetEnd(), false)
-			}
-			appendValToBatch(ins, ckpData.GetObjectBatchs(), i)
-		}
-		for i := 0; i < tombstone.Length(); i++ {
-			var objectStats objectio.ObjectStats
-			buf := tombstone.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			if tombstones[objectStats.ObjectName().String()] == nil {
-				continue
-			}
-			if n == len(datas)-1 &&
-				objectStats.GetAppendable() &&
-				tombstoneDropTs[i].IsEmpty() &&
-				objs[objectStats.ObjectName().String()].IsEmpty() {
-				tombstone.GetVectorByName(catalog.EntryNode_DeleteAt).Update(
-					i, ckpEntries[len(ckpEntries)-1].GetEnd(), false)
-			}
-			appendValToBatch(tombstone, ckpData.GetTombstoneObjectBatchs(), i)
-		}
+		bf.Test(ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
+			func(exists bool, i int) {
+				if !exists {
+					return
+				}
+				appendValToBatch(ins, ckpData.GetObjectBatchs(), i)
+			})
+		bf.Test(tombstone.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
+			func(exists bool, i int) {
+				if !exists {
+					return
+				}
+				appendValToBatch(tombstone, ckpData.GetTombstoneObjectBatchs(), i)
+			})
 	}
 
-	mergePool := dbutils.MakeDefaultSmallPool("merge-checkpoint-pool")
-	defer mergePool.Destory()
-	_, err := mergesort.SortBlockColumns(ckpData.GetObjectBatchs().Vecs, 4, mergePool)
+	tidColIdx := 4
+	objectBatch := containers.ToCNBatch(ckpData.GetObjectBatchs())
+	err = mergesort.SortColumnsByIndex(objectBatch.Vecs, tidColIdx, pool)
 	if err != nil {
-		return nil, "", err
+		return
 	}
 
-	_, err = mergesort.SortBlockColumns(ckpData.GetTombstoneObjectBatchs().Vecs, 4, mergePool)
+	tombstoneBatch := containers.ToCNBatch(ckpData.GetTombstoneObjectBatchs())
+	err = mergesort.SortColumnsByIndex(tombstoneBatch.Vecs, tidColIdx, pool)
 	if err != nil {
-		return nil, "", err
+		return
 	}
 
+	// Update checkpoint Dat[meta]
 	tableInsertOff := make(map[uint64]*tableOffset)
 	tableTombstoneOff := make(map[uint64]*tableOffset)
+	tableInsertTid := vector.MustFixedColNoTypeCheck[uint64](
+		ckpData.GetObjectBatchs().GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+	tableTombstoneTid := vector.MustFixedColNoTypeCheck[uint64](
+		ckpData.GetTombstoneObjectBatchs().GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 	for i := 0; i < ckpData.GetObjectBatchs().Vecs[0].Length(); i++ {
-		var objectStats objectio.ObjectStats
-		buf := ckpData.GetObjectBatchs().GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-		objectStats.UnMarshal(buf)
-		tid := ckpData.GetObjectBatchs().GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
-		logutil.Infof("merge object %v tid is %d", objectStats.ObjectName().String(), tid)
+		tid := tableInsertTid[i]
+		{
+			// TODO: remove debug log
+			var objectStats objectio.ObjectStats
+			buf := ckpData.GetObjectBatchs().GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+			objectStats.UnMarshal(buf)
+			logutil.Infof("merge object %v tid is %d", objectStats.ObjectName().String(), tid)
+		}
 		if tableInsertOff[tid] == nil {
 			tableInsertOff[tid] = &tableOffset{
 				offset: i,
@@ -173,11 +157,14 @@ func MergeCheckpoint(
 		tableInsertOff[tid].end += 1
 	}
 	for i := 0; i < ckpData.GetTombstoneObjectBatchs().Vecs[0].Length(); i++ {
-		var objectStats objectio.ObjectStats
-		buf := ckpData.GetTombstoneObjectBatchs().GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-		objectStats.UnMarshal(buf)
-		tid := ckpData.GetTombstoneObjectBatchs().GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
-		logutil.Infof("merge tombstone %v tid is %d", objectStats.ObjectName().String(), tid)
+		tid := tableTombstoneTid[i]
+		{
+			// TODO: remove debug log
+			var objectStats objectio.ObjectStats
+			buf := ckpData.GetTombstoneObjectBatchs().GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+			objectStats.UnMarshal(buf)
+			logutil.Infof("merge tombstone %v tid is %d", objectStats.ObjectName().String(), tid)
+		}
 		if tableTombstoneOff[tid] == nil {
 			tableTombstoneOff[tid] = &tableOffset{
 				offset: i,
@@ -197,33 +184,36 @@ func MergeCheckpoint(
 		fs, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize,
 	)
 	if err != nil {
-		return nil, "", err
+		return
 	}
-	end := ckpEntries[len(ckpEntries)-1].GetEnd()
 	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetEnd(), false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(end, false)
+	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetStart(), false)
+	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(*end, false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation).Append([]byte(cnLocation), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_EntryType).Append(false, false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_Version).Append(ckpEntries[len(ckpEntries)-1].GetVersion(), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_AllLocations).Append([]byte(tnLocation), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_CheckpointLSN).Append(uint64(0), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_TruncateLSN).Append(uint64(0), false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_Type).Append(int8(checkpoint.ET_Global), false)
+	bat.GetVectorByName(checkpoint.CheckpointAttr_Type).Append(int8(checkpoint.ET_Compacted), false)
 	defer bat.Close()
-	name := blockio.EncodeCheckpointMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, ckpEntries[0].GetStart(), end)
+	name := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, ckpEntries[0].GetStart(), *end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
-		return nil, "", err
+		return
 	}
 	if _, err = writer.Write(containers.ToCNBatch(bat)); err != nil {
-		return nil, "", err
+		return
 	}
 
 	// TODO: checkpoint entry should maintain the location
 	_, err = writer.WriteEnd(ctx)
-	logutil.Infof("write checkpoint %s", name)
-	return deleteFiles, name, err
+	checkpointEntry = checkpoint.NewCheckpointEntry("", ckpEntries[0].GetStart(), *end, checkpoint.ET_Compacted)
+	checkpointEntry.SetLocation(cnLocation, tnLocation)
+	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())
+	checkpointEntry.SetState(checkpoint.ST_Finished)
+	checkpointEntry.SetVersion(logtail.CheckpointCurrentVersion)
+	return
 }
 
 func makeBatchFromSchema(schema *catalog.Schema) *containers.Batch {

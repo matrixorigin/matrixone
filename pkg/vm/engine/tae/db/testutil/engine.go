@@ -17,6 +17,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -100,7 +100,7 @@ func (e *TestEngine) Restart(ctx context.Context) {
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
-		}, gc.CheckerKeyMinTS)
+		}, cmd_util.CheckerKeyMinTS)
 	assert.NoError(e.T, err)
 }
 func (e *TestEngine) RestartDisableGC(ctx context.Context) {
@@ -116,7 +116,7 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
-		}, gc.CheckerKeyMinTS)
+		}, cmd_util.CheckerKeyMinTS)
 	assert.NoError(e.T, err)
 }
 
@@ -388,7 +388,7 @@ func InitTestDBWithDir(
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
-		}, gc.CheckerKeyMinTS)
+		}, cmd_util.CheckerKeyMinTS)
 	return db
 }
 
@@ -409,7 +409,7 @@ func InitTestDB(
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
-		}, gc.CheckerKeyMinTS)
+		}, cmd_util.CheckerKeyMinTS)
 	return db
 }
 

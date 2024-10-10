@@ -293,9 +293,14 @@ func (e *Engine) getOrCreateSnapPart(
 	snap := logtailreplay.NewPartition(e.service, tbl.tableId)
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.service, e.fs, ts, tbl.tableId, nil)
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.service, e.fs, ts, tbl.tableId)
 	if err != nil {
 		return nil, err
+	}
+	logutil.Infof("getOrCreateSnapPart: tableId:%d, ts:%v, ckps:%d", tbl.tableId, ts.ToString(), len(ckps))
+
+	for _, ckp := range ckps {
+		logutil.Infof("getOrCreateSnapPart: tableId:%d, ckp:%s", tbl.tableId, ckp.String())
 	}
 	err = snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,

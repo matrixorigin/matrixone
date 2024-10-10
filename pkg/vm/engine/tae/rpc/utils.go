@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -25,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
@@ -69,7 +69,7 @@ func (is *itemSet) Clear() {
 
 func (h *Handle) prefetchDeleteRowID(
 	_ context.Context,
-	req *db.WriteReq,
+	req *cmd_util.WriteReq,
 	txnMeta *txn.TxnMeta,
 ) error {
 	if len(req.TombstoneStats) == 0 {
@@ -92,7 +92,7 @@ func (h *Handle) prefetchDeleteRowID(
 
 func (h *Handle) prefetchMetadata(
 	_ context.Context,
-	req *db.WriteReq,
+	req *cmd_util.WriteReq,
 	txnMeta *txn.TxnMeta,
 ) error {
 	if len(req.DataObjectStats) == 0 {
@@ -178,14 +178,14 @@ func (h *Handle) TryPrefetchTxn(ctx context.Context, meta *txn.TxnMeta) error {
 	}()
 
 	for _, e := range txnCtx.reqs {
-		if r, ok := e.(*db.WriteReq); ok && r.FileName != "" {
-			if r.Type == db.EntryDelete {
+		if r, ok := e.(*cmd_util.WriteReq); ok && r.FileName != "" {
+			if r.Type == cmd_util.EntryDelete {
 				// start to load deleted row ids
 				deltaLocCnt += len(r.TombstoneStats)
 				if err := h.prefetchDeleteRowID(ctx, r, meta); err != nil {
 					return err
 				}
-			} else if r.Type == db.EntryInsert {
+			} else if r.Type == cmd_util.EntryInsert {
 				metaLocCnt += len(r.DataObjectStats)
 				if err := h.prefetchMetadata(ctx, r, meta); err != nil {
 					return err

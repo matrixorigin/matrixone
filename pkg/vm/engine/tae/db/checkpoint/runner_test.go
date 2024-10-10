@@ -33,7 +33,7 @@ func TestCkpCheck(t *testing.T) {
 			r := NewRunner(context.Background(), nil, nil, nil, nil)
 
 			for i := 0; i < 100; i += 10 {
-				r.storage.entries.Set(&CheckpointEntry{
+				r.storage.incrementals.Set(&CheckpointEntry{
 					start:      types.BuildTS(int64(i), 0),
 					end:        types.BuildTS(int64(i+9), 0),
 					state:      ST_Finished,
@@ -42,7 +42,7 @@ func TestCkpCheck(t *testing.T) {
 				})
 			}
 
-			r.storage.entries.Set(&CheckpointEntry{
+			r.storage.incrementals.Set(&CheckpointEntry{
 				start:      types.BuildTS(int64(100), 0),
 				end:        types.BuildTS(int64(109), 0),
 				state:      ST_Running,
@@ -90,7 +90,7 @@ func TestGetCheckpoints1(t *testing.T) {
 		if i == 4 {
 			entry.state = ST_Pending
 		}
-		r.storage.entries.Set(entry)
+		r.storage.incrementals.Set(entry)
 	}
 
 	ctx := context.Background()
@@ -186,7 +186,7 @@ func TestGetCheckpoints2(t *testing.T) {
 		if i == 4 {
 			entry.state = ST_Pending
 		}
-		r.storage.entries.Set(entry)
+		r.storage.incrementals.Set(entry)
 	}
 
 	ctx := context.Background()
@@ -271,7 +271,7 @@ func TestICKPSeekLT(t *testing.T) {
 		if i == 4 {
 			entry.state = ST_Pending
 		}
-		r.storage.entries.Set(entry)
+		r.storage.incrementals.Set(entry)
 	}
 
 	// 0, 1

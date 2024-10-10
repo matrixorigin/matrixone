@@ -524,7 +524,7 @@ func CopyCheckpointDir(
 	dir string, backup types.TS,
 ) ([]*taeFile, types.TS, error) {
 	decodeFunc := func(name string) (types.TS, types.TS, string) {
-		start, end := blockio.DecodeCheckpointMetadataFileName(name)
+		start, end, _ := blockio.DecodeCheckpointMetadataFileName(name)
 		return start, end, ""
 	}
 	taeFileList, metaFiles, _, err := copyFileAndGetMetaFiles(ctx, srcFs, dstFs, dir, backup, decodeFunc, true)

@@ -159,6 +159,8 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
 		DisableGC:      s.cfg.GCCfg.DisableGC,
 		CheckGC:        s.cfg.GCCfg.CheckGC,
+		CacheSize:      s.cfg.GCCfg.CacheSize,
+		GCMergeCount:   s.cfg.GCCfg.GCMergeCount,
 	}
 
 	mergeCfg := &options.MergeConfig{

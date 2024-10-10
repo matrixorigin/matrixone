@@ -20,6 +20,7 @@ import (
 	"math/rand"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -59,6 +60,10 @@ func (s *ObjectNameShort) Num() uint16 {
 
 func (s *ObjectNameShort) Equal(o []byte) bool {
 	return bytes.Equal(s[:], o)
+}
+
+func (o ObjectName) UnsafeString() string {
+	return util.UnsafeBytesToString(o[NameStringOff : NameStringOff+NameStringLen])
 }
 
 func (o ObjectName) String() string {

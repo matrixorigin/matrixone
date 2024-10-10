@@ -44,7 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -643,7 +643,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 
 			found = true
 			targetTime := v2.ToDatetime().ConvertToGoTime(time.Local)
-			if d := now.Sub(targetTime); d > rpc.AllowPruneDuration {
+			if d := now.Sub(targetTime); d > cmd_util.AllowPruneDuration {
 				d = d / time.Second * time.Second
 				result, err := pruneObj(tbl, d)
 				if err != nil {
@@ -652,7 +652,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 				rs.AppendMustBytesValue(util.UnsafeStringToBytes(result))
 			} else {
 				// try prune obj 24 hours before
-				_, err := pruneObj(tbl, rpc.AllowPruneDuration)
+				_, err := pruneObj(tbl, cmd_util.AllowPruneDuration)
 				if err != nil {
 					return err
 				}

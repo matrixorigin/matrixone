@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package gc
 
 import (
 	"context"
@@ -26,8 +26,6 @@ const (
 	MessgeReplay = iota
 	MessgeNormal
 )
-
-const MinMergeCount = 20
 
 // DiskCleaner is the main structure of v2 operation,
 // and provides "JobFactory" to let tae notify itself

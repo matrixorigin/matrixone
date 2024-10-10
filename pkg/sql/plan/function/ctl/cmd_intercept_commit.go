@@ -17,7 +17,7 @@ package ctl
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -29,7 +29,7 @@ func handleInterceptCommit() handleFunc {
 		},
 		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			var err error
-			payload, err := types.Encode(&db.InterceptCommit{
+			payload, err := types.Encode(&cmd_util.InterceptCommit{
 				TableName: parameter,
 			})
 			return payload, err
