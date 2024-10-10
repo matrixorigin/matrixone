@@ -773,9 +773,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 
 		switch typ.Oid {
 		case types.T_varchar:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 				var val string
@@ -792,9 +792,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 
 		case types.T_text:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 				var val string
@@ -810,9 +810,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_int8:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 				val := row[colIndex].(int8)
@@ -822,9 +822,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_int16:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 				val := row[colIndex].(int16)
@@ -834,9 +834,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_int32:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 
@@ -847,9 +847,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_int64:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 				val := row[colIndex].(int64)
@@ -859,9 +859,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_float64:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 
@@ -872,9 +872,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_float32:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 
@@ -885,9 +885,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_date:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 				val := row[colIndex].(types.Date)
@@ -897,9 +897,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_time:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 				val := row[colIndex].(types.Time)
@@ -909,9 +909,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_datetime:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 				val := row[colIndex].(types.Datetime)
@@ -921,9 +921,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_timestamp:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 				var val types.Timestamp
@@ -945,9 +945,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 			}
 		case types.T_enum:
-			for rowIndex, row := range rows {
+			for rowIdx, row := range rows {
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIndex))
+					nsp.Add(uint64(rowIdx))
 					continue
 				}
 
