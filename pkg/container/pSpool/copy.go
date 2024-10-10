@@ -16,10 +16,11 @@ package pSpool
 
 import (
 	"context"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"math"
 )
 
 // cachedBatch is just like the cachedVectorPool in the original code,
@@ -171,7 +172,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 			}
 
 			typ := *vec.GetType()
-			dst.Vecs[i] = vector.NewVec(typ)
+			dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 
 			if vec.IsConst() {
 				if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {

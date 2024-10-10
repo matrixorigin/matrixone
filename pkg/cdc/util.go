@@ -76,6 +76,33 @@ func extractRowFromEveryVector(
 	return nil
 }
 
+//func extractRowFromWantedVecs(
+//	ctx context.Context,
+//	dataSet *batch.Batch,
+//	rowIndex int,
+//	wantedVecIdxes []int,
+//	row []any,
+//) error {
+//	for i := 0; i < len(row); i++ {
+//		vec := dataSet.Vecs[wantedVecIdxes[i]]
+//		rowIndexBackup := rowIndex
+//		if vec.IsConstNull() {
+//			row[i] = nil
+//			continue
+//		}
+//		if vec.IsConst() {
+//			rowIndex = 0
+//		}
+//
+//		err := extractRowFromVector(ctx, vec, i, row, rowIndex)
+//		if err != nil {
+//			return err
+//		}
+//		rowIndex = rowIndexBackup
+//	}
+//	return nil
+//}
+
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
@@ -253,10 +280,14 @@ func convertColIntoSql(
 		//|   �?   @  @@                  |
 		//+------------------------------+
 		value := data.([]float32)
-		sqlBuff = appendString(sqlBuff, floatArrayToString(value))
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_array_float64:
 		value := data.([]float64)
-		sqlBuff = appendString(sqlBuff, floatArrayToString(value))
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_date:
 		value := data.(types.Date)
 		sqlBuff = appendByte(sqlBuff, '\'')
@@ -367,6 +398,139 @@ func floatArrayToString[T float32 | float64](arr []T) string {
 	str += "]'"
 	return str
 }
+
+//func getPkIdxesAndTypes(ctx context.Context, tableDef *plan.TableDef) (pkIdxes []int, pkAndTsTypes []*types.Type, err error) {
+//	pkIdxes = make([]int, 0, len(tableDef.Pkey.Names))
+//	pkAndTsTypes = make([]*types.Type, 0, len(tableDef.Pkey.Names)+1)
+//	for _, colName := range tableDef.Pkey.Names {
+//		idx, ok := tableDef.Name2ColIndex[colName]
+//		if !ok {
+//			err = moerr.NewInternalErrorf(ctx, "pk column %s not found", colName)
+//			return
+//		}
+//
+//		pkIdxes = append(pkIdxes, int(idx))
+//
+//		col := tableDef.Cols[idx]
+//		pkAndTsTypes = append(pkAndTsTypes, &types.Type{
+//			Oid:   types.T(col.Typ.Id),
+//			Width: col.Typ.Width,
+//			Scale: col.Typ.Scale,
+//		})
+//	}
+//	pkAndTsTypes = append(pkAndTsTypes, &types.Type{
+//		Oid:  types.T_TS,
+//		Size: types.TxnTsSize,
+//	})
+//	return
+//}
+//
+//// getPksFromBat gets the pk from the bat, pk is separated by ',' if it's a multi-column pk
+//func getAllPkAndTsFromBat(
+//	ctx context.Context,
+//	bat *batch.Batch,
+//	tableDef *plan.TableDef,
+//	isDelete bool,
+//) (pks []string, err error) {
+//	if bat == nil || len(bat.Vecs) == 0 {
+//		return
+//	}
+//
+//	pkIdxes, pkAndTsTypes, err := getPkIdxesAndTypes(ctx, tableDef)
+//	if err != nil {
+//		return
+//	}
+//
+//	// pk and ts
+//	var wantedIdxes []int
+//	if isDelete {
+//		wantedIdxes = []int{0, 1}
+//	} else {
+//		wantedIdxes = append(pkIdxes, len(bat.Vecs)-1)
+//	}
+//	readRow := make([]any, len(wantedIdxes))
+//	dataRow := make([]any, len(pkAndTsTypes))
+//
+//	pks = make([]string, bat.Vecs[0].Length())
+//	for i := 0; i < len(pks); i++ {
+//		if pks[i], err = getPkAndTsFromRow(ctx, bat, isDelete, i, pkAndTsTypes, wantedIdxes, readRow, dataRow); err != nil {
+//			return
+//		}
+//	}
+//	return
+//}
+//
+//func getRowPkAndTsFromBat(
+//	ctx context.Context,
+//	bat *batch.Batch,
+//	tableDef *plan.TableDef,
+//	isDelete bool,
+//	offset int,
+//) (s string, err error) {
+//	if bat == nil || len(bat.Vecs) == 0 || offset < 0 || offset >= bat.Vecs[0].Length() {
+//		return
+//	}
+//
+//	pkIdxes, pkAndTsTypes, err := getPkIdxesAndTypes(ctx, tableDef)
+//	if err != nil {
+//		return
+//	}
+//
+//	// pk and ts
+//	var wantedIdxes []int
+//	if isDelete {
+//		wantedIdxes = []int{0, 1}
+//	} else {
+//		wantedIdxes = append(pkIdxes, len(bat.Vecs)-1)
+//	}
+//	readRow := make([]any, len(wantedIdxes))
+//	dataRow := make([]any, len(pkAndTsTypes))
+//
+//	return getPkAndTsFromRow(ctx, bat, isDelete, offset, pkAndTsTypes, wantedIdxes, readRow, dataRow)
+//}
+//
+//func getPkAndTsFromRow(
+//	ctx context.Context,
+//	bat *batch.Batch,
+//	isDelete bool,
+//	offset int,
+//	pkAndTsTypes []*types.Type,
+//	wantedIdxes []int,
+//	readRow []any,
+//	dataRow []any,
+//) (s string, err error) {
+//	if err = extractRowFromWantedVecs(ctx, bat, offset, wantedIdxes, readRow); err != nil {
+//		return
+//	}
+//
+//	row := &readRow
+//	if isDelete && len(pkAndTsTypes) > 2 {
+//		// composite pk
+//		var pkTuple types.Tuple
+//		if pkTuple, _, err = unpackWithSchema(readRow[0].([]byte)); err != nil {
+//			return
+//		}
+//
+//		for j := range pkTuple {
+//			dataRow[j] = pkTuple[j]
+//		}
+//		dataRow[len(pkTuple)] = readRow[1]
+//
+//		row = &dataRow
+//	}
+//
+//	pkBytes := make([]byte, 0, 64)
+//	for j := range pkAndTsTypes {
+//		if j != 0 {
+//			pkBytes = appendByte(pkBytes, ',')
+//		}
+//		if pkBytes, err = convertColIntoSql(ctx, (*row)[j], pkAndTsTypes[j], pkBytes); err != nil {
+//			return
+//		}
+//	}
+//	s = string(pkBytes)
+//	return
+//}
 
 var openDbConn = func(
 	user, password string,
@@ -557,4 +721,11 @@ func GetInitDataKeySql(kek string) (_ string, err error) {
 	}
 
 	return fmt.Sprintf(InsertDataKeyFormat, catalog.System_Account, InitKeyId, encryptedKey), nil
+}
+
+func batchRowCount(bat *batch.Batch) int {
+	if bat == nil || len(bat.Vecs) == 0 {
+		return 0
+	}
+	return bat.Vecs[0].Length()
 }
