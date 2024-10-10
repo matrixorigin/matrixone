@@ -3647,7 +3647,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 				continue
 			}
 
-			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, subInfo.PubName, subInfo.SubName)
+			ses.Infof(ctx, "dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
 			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, pubAccInfo.Id, subInfo.PubName, da.Name); rtnErr != nil {
 				return rtnErr
 			}
@@ -7988,7 +7988,7 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 				Filepath: localPath,
 			},
 		}
-		return processLoadLocal(ses, execCtx, param, loadLocalWriter)
+		return processLoadLocal(ses, execCtx, param, loadLocalWriter, loadLocalReader)
 	})
 
 	// read from pipe and upload

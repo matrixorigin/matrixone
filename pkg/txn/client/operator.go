@@ -315,6 +315,8 @@ func (tc *txnOperator) initReset() {
 	tc.reset.commitCounter = counter{}
 	tc.reset.rollbackCounter = counter{}
 	tc.reset.runSqlCounter = counter{}
+	tc.reset.incrStmtCounter = counter{}
+	tc.reset.rollbackStmtCounter = counter{}
 	tc.reset.fprints = footPrints{}
 	tc.reset.runningSQL.Store(false)
 }
