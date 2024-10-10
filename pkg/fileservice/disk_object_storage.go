@@ -35,6 +35,7 @@ import (
 type diskObjectStorage struct {
 	path            string
 	perfCounterSets []*perfcounter.CounterSet
+	listMaxKeys     int
 }
 
 func newDiskObjectStorage(
@@ -70,6 +71,10 @@ func newDiskObjectStorage(
 }
 
 var _ ObjectStorage = new(diskObjectStorage)
+
+func (d *diskObjectStorage) Concurrency() int64 {
+	return -1 // unlimited
+}
 
 func (d *diskObjectStorage) Delete(ctx context.Context, keys ...string) (err error) {
 	if err := ctx.Err(); err != nil {
@@ -122,27 +127,41 @@ func (d *diskObjectStorage) List(ctx context.Context, prefix string, fn func(isP
 	}
 	defer f.Close()
 
-	infos, err := f.Readdir(-1)
-	if err != nil {
-		return err
-	}
-	slices.SortFunc(infos, func(a, b fs.FileInfo) int {
-		return cmp.Compare(a.Name(), b.Name())
-	})
-
-	for _, info := range infos {
-		name := info.Name()
-		if strings.HasSuffix(name, ".mofstemp") {
-			continue
+	var infos []fs.FileInfo
+	for {
+		if d.listMaxKeys > 0 {
+			infos, err = f.Readdir(d.listMaxKeys)
+		} else {
+			infos, err = f.Readdir(-1)
 		}
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		if more, err := fn(info.IsDir(), path.Join(dir, name), info.Size()); err != nil {
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			return err
-		} else if !more {
+		}
+		if len(infos) == 0 {
 			break
 		}
+		slices.SortFunc(infos, func(a, b fs.FileInfo) int {
+			return cmp.Compare(a.Name(), b.Name())
+		})
+
+		for _, info := range infos {
+			name := info.Name()
+			if strings.HasSuffix(name, ".mofstemp") {
+				continue
+			}
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			if more, err := fn(info.IsDir(), path.Join(dir, name), info.Size()); err != nil {
+				return err
+			} else if !more {
+				break
+			}
+		}
+
 	}
 
 	return nil
