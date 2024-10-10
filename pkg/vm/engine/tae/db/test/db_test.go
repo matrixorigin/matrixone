@@ -5547,7 +5547,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, false)
+			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, nil, false)
 			manager := gc.NewDiskCleaner(cleaner)
 			manager.Start()
 			defer manager.Stop()
@@ -5584,7 +5584,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 			end := entries[num-1].GetEnd()
 			maxEnd := manager.GetCleaner().GetMaxConsumed().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
-			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, false)
+			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, nil, false)
 			manager2 := gc.NewDiskCleaner(cleaner2)
 			manager2.Start()
 			defer manager2.Stop()
@@ -5615,7 +5615,7 @@ func TestGCDropDB(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, false)
+			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, nil, false)
 			manager := gc.NewDiskCleaner(cleaner)
 			manager.Start()
 			defer manager.Stop()
@@ -5655,7 +5655,7 @@ func TestGCDropDB(t *testing.T) {
 			end := entries[num-1].GetEnd()
 			maxEnd := manager.GetCleaner().GetMaxConsumed().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
-			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, false)
+			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, nil, false)
 			manager2 := gc.NewDiskCleaner(cleaner2)
 			manager2.Start()
 			defer manager2.Stop()
@@ -5687,7 +5687,7 @@ func TestGCDropTable(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, false)
+			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, nil, false)
 			manager := gc.NewDiskCleaner(cleaner)
 			manager.Start()
 			defer manager.Stop()
@@ -5742,7 +5742,7 @@ func TestGCDropTable(t *testing.T) {
 			end := entries[num-1].GetEnd()
 			maxEnd := manager.GetCleaner().GetMaxConsumed().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
-			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, false)
+			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner, nil, false)
 			manager2 := gc.NewDiskCleaner(cleaner2)
 			manager2.Start()
 			defer manager2.Stop()
@@ -6514,6 +6514,18 @@ func TestAppendAndGC2(t *testing.T) {
 			panic(fmt.Sprintf("file %s not in meta files", file))
 		}
 		logutil.Infof("file %s in meta files", file)
+	}
+
+	// check gc meta files
+	var gcFile bool
+	for file := range files {
+		if strings.Contains(file, "/gc_") && strings.Contains(file, ".ckp") {
+			gcFile = true
+			break
+		}
+	}
+	if !gcFile {
+		panic("gc meta files not found")
 	}
 }
 
