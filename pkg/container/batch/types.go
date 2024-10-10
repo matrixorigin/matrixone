@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
+// special batch that will never been free.
 var (
 	EmptyBatch = &Batch{rowCount: 0}
 
@@ -33,17 +34,18 @@ var (
 	}
 )
 
-// Batch represents a part of a relationship
-// including an optional list of row numbers, columns and list of attributes
+// Batch represents a part of a relationship,
+// it's the basic unit for data transmission in the computing layer of MatrixOne.
 //
-//	(SelsData, Sels) - list of row numbers
-//	(Attrs) - list of attributes
-//	(vecs) 	- columns
+// this includes information such as
+// column names (Attrs), column data (Vecs), the number of rows (rowCount),
+// aggregation intermediate data (Aggs),
+// and some specific flags like Recursive, ShuffleIDX.
+//
+// offHeap is true means this batch was allocated outside mpool.
 type Batch struct {
 	// For recursive CTE, 1 is last batch, 2 is end of batch
-	Recursive int32
-	// Ro if true, Attrs is read only
-	Ro         bool
+	Recursive  int32
 	ShuffleIDX int32 //used only in shuffle
 	// Attrs column name list, letter case: origin
 	Attrs []string
