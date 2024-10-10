@@ -380,7 +380,7 @@ func Test_doShowSubscriptions(t *testing.T) {
 		// ctx
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 		// ses
