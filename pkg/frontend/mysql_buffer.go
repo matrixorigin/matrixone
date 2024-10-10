@@ -746,7 +746,7 @@ func (c *Conn) Flush() error {
 			return err
 		}
 	}
-	c.ses.CountPacket(1)
+	c.ses.CountFlushPackage(1)
 	c.packetInBuf = 0
 	return err
 }
@@ -789,6 +789,7 @@ func (c *Conn) WriteToConn(buf []byte) error {
 			return err
 		}
 		sendLength += n
+		c.ses.CountOutputBytes(n)
 	}
 	return nil
 }

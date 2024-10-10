@@ -562,7 +562,8 @@ func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, 
 		}
 	}
 	// Case 1: send data as ResultSet
-	resultSetPart := int64(mp.writeBytes)
+	//resultSetPart := int64(mp.writeBytes)
+	resultSetPart := int64(ses.GetOutputBytes())
 	// Case 2: send data as CSV
 	csvPart := ses.writeCsvBytes.Load()
 	bytes = resultSetPart + csvPart
