@@ -35,8 +35,9 @@ const (
 )
 
 type container struct {
-	state int
-	itr   hashmap.Iterator
+	state    int
+	itr      hashmap.Iterator
+	eligible []int64
 
 	batchRowCount int64
 	rbat          *batch.Batch
@@ -111,6 +112,7 @@ func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanHashMap()
 	ctr.state = Build
 	ctr.batchRowCount = 0
+	ctr.eligible = ctr.eligible[:0]
 
 	if antiJoin.ProjectList != nil {
 		if antiJoin.OpAnalyzer != nil {
@@ -129,6 +131,7 @@ func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &antiJoin.ctr
 
+	ctr.eligible = nil
 	ctr.cleanExecutor()
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
