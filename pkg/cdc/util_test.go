@@ -444,7 +444,7 @@ func Test_copyBytes(t *testing.T) {
 
 func Test_extractRowFromEveryVector(t *testing.T) {
 	var err error
-	bat := batch.New(true, []string{"const_null", "const", "normal"})
+	bat := batch.New([]string{"const_null", "const", "normal"})
 	bat.Vecs[0] = testutil.MakeScalarNull(types.T_int32, 3)
 	bat.Vecs[1] = testutil.MakeScalarInt64(1, 3)
 	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
@@ -915,10 +915,10 @@ func TestAesCFBDecodeWithKey_EmptyKey(t *testing.T) {
 func Test_batchRowCount(t *testing.T) {
 	assert.Equal(t, 0, batchRowCount(nil))
 
-	bat := batch.New(true, []string{})
+	bat := batch.New([]string{})
 	assert.Equal(t, 0, batchRowCount(bat))
 
-	bat = batch.New(true, []string{"a", "ts"})
+	bat = batch.New([]string{"a", "ts"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil)
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
 	bat.SetRowCount(3)
