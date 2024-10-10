@@ -55,21 +55,9 @@ func (postdml *PostDml) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	// you may add new context to generate post dml SQL
-	// fulltext post dml
-	if postdml.PostDmlCtx.FullText != nil {
-		return postdml.runPostDmlFullText(proc)
-	}
-
-	return vm.CancelResult, nil
-}
-
-func (postdml *PostDml) runPostDmlFullText(proc *process.Process) (vm.CallResult, error) {
 	analyzer := postdml.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()
-
-	ftctx := postdml.PostDmlCtx.FullText
 
 	result, err := vm.ChildrenCall(postdml.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -79,6 +67,22 @@ func (postdml *PostDml) runPostDmlFullText(proc *process.Process) (vm.CallResult
 		return result, nil
 	}
 
+	// you may add new context to generate post dml SQL
+	// fulltext post dml
+	if postdml.PostDmlCtx.FullText != nil {
+		err := postdml.runPostDmlFullText(proc, result)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+	}
+
+	analyzer.Output(result.Batch)
+	return result, nil
+}
+
+func (postdml *PostDml) runPostDmlFullText(proc *process.Process, result vm.CallResult) error {
+
+	ftctx := postdml.PostDmlCtx.FullText
 	var in_list []any
 
 	bat := result.Batch
@@ -113,8 +117,7 @@ func (postdml *PostDml) runPostDmlFullText(proc *process.Process) (vm.CallResult
 
 	}
 
-	analyzer.Output(result.Batch)
-	return result, nil
+	return nil
 }
 
 func anyslice2str(list []any) string {
