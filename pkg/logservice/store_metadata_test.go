@@ -83,11 +83,15 @@ func TestRemoveMetadata(t *testing.T) {
 }
 
 func TestStartReplicas(t *testing.T) {
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		require.NoError(t, mkdirAll(cfg.DataDir, cfg.FS))
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	require.NoError(t, mkdirAll(cfg.DataDir, cfg.FS))
 	func() {
-		store, err := getTestStore(cfg, false, nil)
+		store, err := getTestStore(genCfg, false, nil)
 		require.NoError(t, err)
 		members := make(map[uint64]dragonboat.Target)
 		members[1] = store.id()
@@ -98,7 +102,9 @@ func TestStartReplicas(t *testing.T) {
 		require.NoError(t, store.startReplica(20, 1, members, false))
 	}()
 
-	store, err := getTestStore(cfg, false, nil)
+	store, err := getTestStore(func() Config {
+		return cfg
+	}, false, nil)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, store.close())
