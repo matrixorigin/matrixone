@@ -15,7 +15,6 @@
 package fileservice
 
 import (
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -23,9 +22,10 @@ import (
 )
 
 type Bytes struct {
-	bytes      []byte
-	deallocate func()
-	refs       *atomic.Int32
+	bytes       []byte
+	deallocator malloc.Deallocator
+	deallocated uint32
+	refs        *atomic.Int32
 }
 
 func (b Bytes) Size() int64 {
@@ -38,7 +38,7 @@ func (b Bytes) Bytes() []byte {
 
 func (b Bytes) Slice(length int) fscache.Data {
 	b.bytes = b.bytes[:length]
-	return b
+	return &b
 }
 
 func (b Bytes) Retain() {
@@ -47,16 +47,18 @@ func (b Bytes) Retain() {
 	}
 }
 
-func (b Bytes) Release() {
+func (b *Bytes) Release() {
 	if b.refs != nil {
 		if n := b.refs.Add(-1); n == 0 {
-			if b.deallocate != nil {
-				b.deallocate()
+			if b.deallocator != nil &&
+				atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
+				b.deallocator.Deallocate(malloc.NoHints)
 			}
 		}
 	} else {
-		if b.deallocate != nil {
-			b.deallocate()
+		if b.deallocator != nil &&
+			atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
+			b.deallocator.Deallocate(malloc.NoHints)
 		}
 	}
 }
@@ -74,11 +76,9 @@ func (b *bytesAllocator) AllocateCacheData(size int) fscache.Data {
 	}
 	var refs atomic.Int32
 	refs.Store(1)
-	return Bytes{
-		bytes: slice,
-		deallocate: sync.OnceFunc(func() {
-			dec.Deallocate(malloc.NoHints)
-		}),
-		refs: &refs,
+	return &Bytes{
+		bytes:       slice,
+		deallocator: dec,
+		refs:        &refs,
 	}
 }
