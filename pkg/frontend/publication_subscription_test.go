@@ -371,3 +371,70 @@ func TestGetSqlForGetDbIdAndType(t *testing.T) {
 		require.Equal(t, k.want, sql)
 	}
 }
+
+func Test_doShowSubscriptions(t *testing.T) {
+	convey.Convey("do show subscriptions", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// ctx
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
+		ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+		// ses
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+		// ss
+		stmts, err := mysql.Parse(ctx, "show subscriptions all", 1)
+		if err != nil {
+			return
+		}
+
+		mockedSubInfoResults := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), nil).AnyTimes()
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(1)).Return(true, nil).AnyTimes()
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(2)).Return(true, nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("sys", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("pub1", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("db1", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("2024-10-10 11:12:00", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(8)).Return("", nil).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(9)).Return(int64(0), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		// begin; commit; rollback
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// get subs
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedSubInfoResults(ctrl))
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		err = doShowSubscriptions(ctx, ses, stmts[0].(*tree.ShowSubscriptions))
+		convey.So(err, convey.ShouldBeNil)
+
+		// status type int8
+		_, ok := ses.mrs.Data[0][8].(int8)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+}
