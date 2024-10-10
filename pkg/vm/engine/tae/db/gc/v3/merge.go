@@ -47,7 +47,6 @@ func MergeCheckpoint(
 	ckpEntries []*checkpoint.CheckpointEntry,
 	bf *bloomfilter.BloomFilter,
 	end *types.TS,
-	encodeName func(string, string, types.TS, types.TS) string,
 	pool *mpool.MPool,
 ) (deleteFiles []string, checkpointEntry *checkpoint.CheckpointEntry, err error) {
 	ckpData := logtail.NewCheckpointData(sid, pool)
@@ -62,9 +61,16 @@ func MergeCheckpoint(
 			return nil, nil, err
 		}
 		datas = append(datas, data)
-		nameMeta := encodeName(
-			checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
-			ckpEntry.GetStart(), ckpEntry.GetEnd())
+		var nameMeta string
+		if ckpEntry.GetType() == checkpoint.ET_Compacted {
+			nameMeta = blockio.EncodeCompactedMetadataFileName(
+				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
+				ckpEntry.GetStart(), ckpEntry.GetEnd())
+		} else {
+			nameMeta = blockio.EncodeCheckpointMetadataFileName(
+				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
+				ckpEntry.GetStart(), ckpEntry.GetEnd())
+		}
 
 		// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
 		deleteFiles = append(deleteFiles, nameMeta)
@@ -207,7 +213,6 @@ func MergeCheckpoint(
 	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())
 	checkpointEntry.SetState(checkpoint.ST_Finished)
 	checkpointEntry.SetVersion(logtail.CheckpointCurrentVersion)
-	logutil.Infof("write checkpoint %s", name)
 	return
 }
 

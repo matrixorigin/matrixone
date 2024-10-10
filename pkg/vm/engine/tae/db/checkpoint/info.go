@@ -39,10 +39,9 @@ type RunnerReader interface {
 	RemoveCheckpointMetaFile(string)
 	AddCheckpointMetaFile(string)
 	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
-	CompactedRange(cnt int) ([]*CheckpointEntry, bool)
-	AddCompacted(entry *CheckpointEntry)
-	GetAllCompactedCheckpoints() []*CheckpointEntry
 	DeleteCompactedEntry(entry *CheckpointEntry)
+	GetCompacted() *CheckpointEntry
+	UpdateCompacted(entry *CheckpointEntry)
 }
 
 func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncateLSN uint64) *containers.Batch {
@@ -82,13 +81,6 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncate
 func (r *runner) GetAllIncrementalCheckpoints() []*CheckpointEntry {
 	r.storage.Lock()
 	snapshot := r.storage.incrementals.Copy()
-	r.storage.Unlock()
-	return snapshot.Items()
-}
-
-func (r *runner) GetAllCompactedCheckpoints() []*CheckpointEntry {
-	r.storage.Lock()
-	snapshot := r.storage.compacted.Copy()
 	r.storage.Unlock()
 	return snapshot.Items()
 }
@@ -177,39 +169,16 @@ func (r *runner) ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry {
 	return incrementals
 }
 
-func (r *runner) CompactedRange(cnt int) ([]*CheckpointEntry, bool) {
-	r.storage.Lock()
-	tree := r.storage.compacted.Copy()
-	r.storage.Unlock()
-	it := tree.Iter()
-	minEntry, ok := tree.Min()
-	if !ok {
-		return nil, false
-	}
-	ok = it.Seek(minEntry)
-	compacted := make([]*CheckpointEntry, 0)
-	if ok {
-		for len(compacted) < cnt {
-			e := it.Item()
-			compacted = append(compacted, e)
-			if !it.Next() {
-				break
-			}
-		}
-	}
-	return compacted, len(compacted) == cnt
-}
-
-func (r *runner) AddCompacted(entry *CheckpointEntry) {
+func (r *runner) GetCompacted() *CheckpointEntry {
 	r.storage.Lock()
 	defer r.storage.Unlock()
-	if entry == nil {
-		panic("nil entry")
-	}
-	if entry.entryType != ET_Compacted {
-		panic("invalid entry type")
-	}
-	r.storage.compacted.Set(entry)
+	return r.storage.compacted.Load()
+}
+
+func (r *runner) UpdateCompacted(entry *CheckpointEntry) {
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	r.storage.compacted.Store(entry)
 	return
 }
 

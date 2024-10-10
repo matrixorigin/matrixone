@@ -17,7 +17,6 @@ package gc
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -323,14 +322,9 @@ func (c *checkpointCleaner) Replay() (err error) {
 		c.sid, maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental,
 	)
 	c.updateScanWaterMark(ckp)
-	compacted := c.checkpointCli.GetAllCompactedCheckpoints()
-	if len(compacted) > 0 {
-		sort.Slice(compacted, func(i, j int) bool {
-			end1 := compacted[i].GetEnd()
-			end2 := compacted[j].GetEnd()
-			return end1.LT(&end2)
-		})
-		end := compacted[len(compacted)-1].GetEnd()
+	compacted := c.checkpointCli.GetCompacted()
+	if compacted != nil {
+		end := compacted.GetEnd()
 		c.updateCheckpointGCWaterMark(&end)
 	}
 	if acctFile == "" {
@@ -539,6 +533,12 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 				zap.String("max-ts", maxTS.ToString()),
 			)
 		}
+		logutil.Info(
+			"GC-TRACE-DELETE-SNAPSHOT-FILE",
+			zap.String("task", c.TaskNameLocked()),
+			zap.String("max-file", thisFile),
+			zap.String("max-ts", thisTS.ToString()),
+		)
 		delete(metaFiles, thisFile)
 
 		return
@@ -560,6 +560,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 			}
 		}
 	}
+	logutil.Infof(" metaFiles: %v", metaFiles)
 
 	return c.mutSetNewMetaFilesLocked(metaFiles)
 }
@@ -584,6 +585,7 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	for _, metaFile := range metaFiles {
 		if (metaFile.Ext() != blockio.CheckpointExt) ||
 			(metaFile.EqualRange(&window.tsRange.start, &window.tsRange.end)) {
+			logutil.Infof("skip file: %s", metaFile.Name())
 			continue
 		}
 		gcWindow := NewGCWindow(c.mp, c.fs.Service)
@@ -631,7 +633,18 @@ func (c *checkpointCleaner) getMetaFilesToMerge(ts *types.TS) (
 		panic(fmt.Sprintf("getMetaFilesToMerge end < start. "+
 			"end: %v, start: %v", ts.ToString(), start.ToString()))
 	}
-	return c.checkpointCli.ICKPRange(&start, ts, 20)
+	var ret []*checkpoint.CheckpointEntry
+	compacted := c.checkpointCli.GetCompacted()
+	ickps := c.checkpointCli.ICKPRange(&start, ts, 20)
+	if compacted != nil {
+		ret = make([]*checkpoint.CheckpointEntry, 0)
+		ret = append(ret, compacted)
+		ret = append(ret, ickps...)
+	} else {
+		ret = ickps
+	}
+	logutil.Infof("getMetaFilesToMerge: start: %v, end: %v", start.ToString(), ts.ToString())
+	return ret
 }
 
 // filterCheckpoints filters the checkpoints with the endTS less than the highWater
@@ -645,7 +658,8 @@ func (c *checkpointCleaner) filterCheckpoints(
 	var i int
 	for i = len(checkpoints) - 1; i >= 0; i-- {
 		endTS := checkpoints[i].GetEnd()
-		if endTS.LT(highWater) {
+		if endTS.LE(highWater) {
+			logutil.Infof("filterCheckpoints: endTS: %v, highWater: %v", endTS.ToString(), highWater.ToString())
 			break
 		}
 	}
@@ -701,6 +715,10 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		return
 	}
 
+	if len(checkpoints) == 1 && checkpoints[0].GetType() == checkpoint.ET_Compacted {
+		return
+	}
+
 	checkpointMaxEnd = checkpoints[len(checkpoints)-1].GetEnd()
 	if checkpointMaxEnd.GT(checkpointLowWaterMark) {
 		panic(fmt.Sprintf("checkpointMaxEnd %s < checkpointLowWaterMark %s", checkpointMaxEnd.ToString(), checkpointLowWaterMark.ToString()))
@@ -740,7 +758,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		checkpointsToMerge,
 		bf,
 		&checkpointMaxEnd,
-		blockio.EncodeCheckpointMetadataFileName,
 		c.mp,
 	); err != nil {
 		extraErrMsg = "MergeCheckpoint failed"
@@ -750,50 +767,30 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		panic("MergeCheckpoint new checkpoint is nil")
 	}
 
-	c.checkpointCli.AddCompacted(newCheckpoint)
+	c.checkpointCli.UpdateCompacted(newCheckpoint)
 
 	// update checkpoint gc water mark
 	newWaterMark := newCheckpoint.GetEnd()
 	c.updateCheckpointGCWaterMark(&newWaterMark)
 
 	deleteFiles = tmpFiles
-
-	// When the compacted tree exceeds 10 entries, you need to merge once
-	compacted, ok := c.checkpointCli.CompactedRange(10)
-	if ok {
-		end := compacted[len(compacted)-1].GetEnd()
-		if tmpFiles, newCheckpoint, err = MergeCheckpoint(c.ctx,
-			c.sid,
-			c.fs.Service,
-			compacted,
-			bf,
-			&end,
-			blockio.EncodeCompactedMetadataFileName,
-			c.mp,
-		); err != nil {
-			extraErrMsg = "MergeCheckpoint: "
-			for _, ckp := range compacted {
-				extraErrMsg += ckp.String() + " "
-			}
-			return
-		}
-		if newCheckpoint == nil {
-			panic("MergeCheckpoint new compacted checkpoint is nil")
-		}
-
-		c.checkpointCli.AddCompacted(newCheckpoint)
-		deleteFiles = append(deleteFiles, tmpFiles...)
-		for _, ckp := range compacted {
-			c.checkpointCli.DeleteCompactedEntry(ckp)
+	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
+	for _, ckp := range gckps {
+		end := ckp.GetEnd()
+		if end.LT(&newWaterMark) {
+			nameMeta := blockio.EncodeCheckpointMetadataFileName(
+				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
+				ckp.GetStart(), ckp.GetEnd())
+			deleteFiles = append(deleteFiles, nameMeta)
 		}
 	}
-
 	if c.GCCheckpointEnabled() {
 		if err = c.fs.DelFiles(c.ctx, deleteFiles); err != nil {
 			extraErrMsg = "DelFiles failed"
 			return err
 		}
 	}
+
 	for _, file := range deleteFiles {
 		if strings.Contains(file, checkpoint.PrefixMetadata) {
 			info := strings.Split(file, checkpoint.CheckpointDir+"/")
@@ -1087,7 +1084,7 @@ func (c *checkpointCleaner) DoCheck() error {
 	defer c.StopMutationTask()
 
 	debugCandidates := c.checkpointCli.GetAllIncrementalCheckpoints()
-	compactedCandidates := c.checkpointCli.GetAllCompactedCheckpoints()
+	compacted := c.checkpointCli.GetCompacted()
 	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
 
 	// no scan watermark, GC has not yet run
@@ -1237,10 +1234,10 @@ func (c *checkpointCleaner) DoCheck() error {
 		)
 	}
 
-	if len(compactedCandidates) == 0 {
+	if compacted == nil {
 		return nil
 	}
-	cend := compactedCandidates[len(compactedCandidates)-1].GetEnd()
+	cend := compacted.GetEnd()
 	dend := debugCandidates[0].GetEnd()
 	if dend.GT(&cend) {
 		return nil
@@ -1274,13 +1271,11 @@ func (c *checkpointCleaner) DoCheck() error {
 		collectObjectsFromCheckpointData(data, ickpObjects)
 	}
 	cptCkpObjects := make(map[string]*ObjectEntry, 0)
-	for _, ckp := range compactedCandidates {
-		data, err := c.collectCkpData(ckp)
-		if err != nil {
-			return err
-		}
-		collectObjectsFromCheckpointData(data, cptCkpObjects)
+	data, err := c.collectCkpData(compacted)
+	if err != nil {
+		return err
 	}
+	collectObjectsFromCheckpointData(data, cptCkpObjects)
 
 	tList, pList := c.mutation.snapshotMeta.AccountToTableSnapshots(accoutSnapshots, pitr)
 	for name, entry := range ickpObjects {

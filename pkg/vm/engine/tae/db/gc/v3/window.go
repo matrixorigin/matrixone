@@ -390,6 +390,26 @@ func collectObjectsFromCheckpointData(data *logtail.CheckpointData, objects map[
 		}
 		objects[name] = object
 	}
+	del := data.GetTombstoneObjectBatchs()
+	delDeleteTSVec := del.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
+	delCreateTSVec := del.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
+	delDbid := del.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
+	delTableID := del.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
+	for i := 0; i < del.Length(); i++ {
+		buf := del.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+		stats := (objectio.ObjectStats)(buf)
+		name := stats.ObjectName().String()
+		deleteTS := vector.GetFixedAtNoTypeCheck[types.TS](delDeleteTSVec, i)
+		createTS := vector.GetFixedAtNoTypeCheck[types.TS](delCreateTSVec, i)
+		object := &ObjectEntry{
+			stats:    &stats,
+			createTS: createTS,
+			dropTS:   deleteTS,
+			db:       vector.GetFixedAtNoTypeCheck[uint64](delDbid, i),
+			table:    vector.GetFixedAtNoTypeCheck[uint64](delTableID, i),
+		}
+		objects[name] = object
+	}
 }
 
 func (w *GCWindow) Close() {

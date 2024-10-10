@@ -16,7 +16,9 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,9 +51,9 @@ import (
 func FilterSortedMetaFilesByTimestamp(
 	ts *types.TS,
 	files []*MetaFile,
-) ([]*MetaFile, bool) {
+) []*MetaFile {
 	if len(files) == 0 {
-		return nil, false
+		return nil
 	}
 
 	prev := files[0]
@@ -61,7 +63,7 @@ func FilterSortedMetaFilesByTimestamp(
 	// it means the ts is in the range of the global checkpoint
 	// ts is within GCKP[0, end]
 	if prev.start.IsEmpty() && ts.LE(&prev.end) {
-		return files[:1], true
+		return files[:1]
 	}
 
 	for i := 1; i < len(files); i++ {
@@ -70,12 +72,12 @@ func FilterSortedMetaFilesByTimestamp(
 		// ts.LE(&curr.end) means the ts is in the range of the checkpoint
 		// ts.LT(&prev.end) means the ts is not in the range of the previous checkpoint
 		if curr.start.IsEmpty() && ts.LE(&curr.end) {
-			return files[:i], true
+			return files[:i]
 		}
 		prev = curr
 	}
 
-	return files, false
+	return files
 }
 
 func ListSnapshotCheckpoint(
@@ -92,16 +94,7 @@ func ListSnapshotCheckpoint(
 	if len(metaFiles) == 0 {
 		return nil, nil
 	}
-	bat, version, closeCBs, err := loadCheckpointMeta(ctx, sid, fs, metaFiles)
-	defer func() {
-		for _, cb := range closeCBs {
-			cb()
-		}
-	}()
-	if err != nil {
-		return nil, err
-	}
-	return ListSnapshotCheckpointWithMeta(bat, version)
+	return loadCheckpointMeta(ctx, sid, fs, metaFiles)
 }
 
 func ListSnapshotMeta(
@@ -150,33 +143,34 @@ func ListSnapshotMeta(
 		logutil.Infof("compactedFiles[%d]: %v", i, file.String())
 	}
 
-	// isRangeHit is a flag, which represents whether the metaFiles passed in meet
-	// the range of this snapshot. If the 'compacted' does not meet the requirements,
-	// then the normal checkpoint must be returned, that is 'metaFiles'.
-	isRangeHit := false
-	var files []*MetaFile
-	var oFiles []*MetaFile
+	retFiles := make([]*MetaFile, 0)
 	if len(compactedFiles) > 0 {
-		files, isRangeHit = FilterSortedMetaFilesByTimestamp(&snapshot, compactedFiles)
-	}
+		file := compactedFiles[len(compactedFiles)-1]
+		retFiles = append(retFiles, file)
+		if snapshot.LE(&compactedFiles[len(compactedFiles)-1].end) {
+			// If this condition is met, you can return the compacted checkpoint + one normal checkpoint,
+			// otherwise you need to call FilterSortedMetaFilesByTimestamp to handle it normally.
 
-	if isRangeHit {
-		logutil.Infof(
-			"ListSnapshotMeta: snapshot=%v files=%v-%v",
-			snapshot.ToString(), files[0].end.ToString(), files[len(files)-1].end.ToString())
-		// The compacted checkpoint meta only contains one checkpoint record,
-		// so you need to read all the meta files
-		return files, nil
+			// The compacted checkpoint already contains the range of the snapshot, but in
+			// order to avoid data loss, an additional checkpoint is still needed, because
+			// the object flushed by the snapshot may be in the next checkpoint
+			for _, f := range metaFiles {
+				if !f.start.IsEmpty() && f.start.GE(&file.end) {
+					retFiles = append(retFiles, f)
+					break
+				}
+			}
+			return retFiles, nil
+		}
 	}
 
 	// The normal checkpoint meta file records a checkpoint interval,
 	// so you only need to read the last meta file
-	oFiles, _ = FilterSortedMetaFilesByTimestamp(&snapshot, metaFiles)
+	ickpFiles := FilterSortedMetaFilesByTimestamp(&snapshot, metaFiles)
 
-	if len(oFiles) == 1 {
-		return oFiles, nil
-	}
-	return oFiles[len(oFiles)-1:], nil
+	retFiles = append(retFiles, ickpFiles...)
+
+	return retFiles, nil
 }
 
 func loadCheckpointMeta(
@@ -184,62 +178,73 @@ func loadCheckpointMeta(
 	sid string,
 	fs fileservice.FileService,
 	metaFiles []*MetaFile,
-) (bat *containers.Batch, checkpointVersion int, releases []func(), err error) {
+) (entries []*CheckpointEntry, err error) {
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
-	bat = containers.NewBatch()
-	releases = make([]func(), 0)
+	bat := containers.NewBatch()
 	var (
-		bats    []*batch.Batch
-		closeCB func()
-		reader  *blockio.BlockReader
+		tmpBat *batch.Batch
 	)
-
-	loader := func(name string) error {
+	loader := func(name string, start, end types.TS) (err error) {
+		var reader *blockio.BlockReader
+		var bats []*batch.Batch
+		var closeCB func()
 		reader, err = blockio.NewFileReader(sid, fs, name)
 		if err != nil {
 			return err
 		}
 		bats, closeCB, err = reader.LoadAllColumns(ctx, nil, common.DebugAllocator)
 		if err != nil {
-			return err
+			return
 		}
-		if closeCB != nil {
-			releases = append(releases, closeCB)
-		}
+		defer func() {
+			if closeCB != nil {
+				closeCB()
+			}
+		}()
 
 		if len(bats) > 1 {
 			panic("unexpected multiple batches in a checkpoint file")
 		}
 		if len(bats) == 0 {
-			return nil
+			return
 		}
-		b := bats[0]
-		if len(bat.Vecs) > 0 {
-			bat.Append(containers.ToTNBatch(b, common.DebugAllocator))
-			return nil
-		}
-		for i := range b.Vecs {
-			var vec containers.Vector
-			if bats[0].Vecs[i].Length() == 0 {
-				vec = containers.MakeVector(colTypes[i], common.DebugAllocator)
-			} else {
-				vec = containers.ToTNVector(bats[0].Vecs[i], common.DebugAllocator)
+		bats[0].SetAttributes(colNames)
+		if tmpBat == nil {
+			tmpBat, err = bats[0].Dup(common.DebugAllocator)
+			if err != nil {
+				return
 			}
-			bat.AddVector(colNames[i], vec)
+		} else {
+			// The incremental checkpoint meta records an interval,
+			// and you need to add the specified checkpoint information to tmpBat
+			// according to start and end.
+			// start is file name start, end is file name end
+			appendCheckpointToBatch(tmpBat, bats[0], start, end, common.DebugAllocator)
 		}
-		return nil
+		return
 	}
 
 	for _, metaFile := range metaFiles {
-		err = loader(CheckpointDir + metaFile.name)
+		err = loader(CheckpointDir+metaFile.name, metaFile.start, metaFile.end)
 		if err != nil {
 			return
 		}
 	}
 
+	for i := range tmpBat.Vecs {
+		var vec containers.Vector
+		if tmpBat.Vecs[i].Length() == 0 {
+			vec = containers.MakeVector(colTypes[i], common.DebugAllocator)
+		} else {
+			vec = containers.ToTNVector(tmpBat.Vecs[i], common.DebugAllocator)
+		}
+		bat.AddVector(colNames[i], vec)
+	}
+	defer tmpBat.Clean(common.DebugAllocator)
 	// in version 1, checkpoint metadata doesn't contain 'version'.
 	vecLen := len(bat.Vecs)
+	var checkpointVersion int
 	if vecLen < CheckpointSchemaColumnCountV1 {
 		checkpointVersion = 1
 	} else if vecLen < CheckpointSchemaColumnCountV2 {
@@ -247,14 +252,14 @@ func loadCheckpointMeta(
 	} else {
 		checkpointVersion = 3
 	}
-	return
+	return ListSnapshotCheckpointWithMeta(bat, checkpointVersion)
 }
 
 func ListSnapshotCheckpointWithMeta(
 	bat *containers.Batch,
 	version int,
 ) ([]*CheckpointEntry, error) {
-
+	defer bat.Close()
 	entries, maxGlobalEnd := ReplayCheckpointEntries(bat, version)
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].end.LT(&entries[j].end)
@@ -268,4 +273,27 @@ func ListSnapshotCheckpointWithMeta(
 
 	}
 	return entries, nil
+}
+
+func appendCheckpointToBatch(dst, src *batch.Batch, start, end types.TS, mp *mpool.MPool) {
+	tSrc := containers.ToTNBatch(src, mp)
+	tDst := containers.ToTNBatch(dst, mp)
+	length := tSrc.Vecs[0].Length() - 1
+	startTs := vector.MustFixedColWithTypeCheck[types.TS](tSrc.Vecs[0].GetDownstreamVector())
+	endTs := vector.MustFixedColWithTypeCheck[types.TS](tSrc.Vecs[1].GetDownstreamVector())
+	for i := length; i >= 0; i-- {
+		if !startTs[i].EQ(&start) || !endTs[i].EQ(&end) {
+			continue
+		}
+		for v, vec := range tSrc.Vecs {
+			val := vec.Get(i)
+			if val == nil {
+				tDst.Vecs[v].Append(val, true)
+			} else {
+				tDst.Vecs[v].Append(val, false)
+			}
+		}
+		return
+	}
+	panic("don't find the value in the batch")
 }

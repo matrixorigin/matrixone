@@ -215,7 +215,7 @@ type runner struct {
 		sync.RWMutex
 		incrementals *btree.BTreeG[*CheckpointEntry]
 		globals      *btree.BTreeG[*CheckpointEntry]
-		compacted    *btree.BTreeG[*CheckpointEntry]
+		compacted    atomic.Pointer[CheckpointEntry]
 	}
 
 	gcTS atomic.Value
@@ -263,11 +263,6 @@ func NewRunner(
 		NoLocks: true,
 	})
 	r.storage.globals = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.LT(&b.end)
-	}, btree.Options{
-		NoLocks: true,
-	})
-	r.storage.compacted = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.end.LT(&b.end)
 	}, btree.Options{
 		NoLocks: true,
@@ -518,12 +513,6 @@ func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 }
 
 func (r *runner) DeleteCompactedEntry(entry *CheckpointEntry) {
-	r.storage.Lock()
-	defer r.storage.Unlock()
-	r.storage.compacted.Delete(entry)
-	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.CheckPoint.DeleteCompactedEntry.Add(1)
-	})
 }
 
 func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
@@ -737,7 +726,14 @@ func (r *runner) tryAddNewCompactedCheckpointEntry(entry *CheckpointEntry) (succ
 	}
 	r.storage.Lock()
 	defer r.storage.Unlock()
-	r.storage.compacted.Set(entry)
+	old := r.storage.compacted.Load()
+	if old != nil {
+		end := old.end
+		if entry.end.LT(&end) {
+			return true
+		}
+	}
+	r.storage.compacted.Store(entry)
 	return true
 }
 
