@@ -242,7 +242,7 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 	}
 	task.nMergedBlk[objIdx]++
 
-	bat := batch.New(true, task.attrs)
+	bat := batch.New(task.attrs)
 	for i, idx := range task.idxs {
 		if idx == objectio.SEQNUM_COMMITTS {
 			id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
