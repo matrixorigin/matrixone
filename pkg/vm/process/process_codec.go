@@ -79,13 +79,13 @@ func (proc *Process) BuildProcessInfo(
 		}
 	}
 	{ // session info
-		var timeBytes []byte
-		var err error
-		if proc.Base.SessionInfo.TimeZone != nil {
-			timeBytes, err = time.Time{}.In(proc.Base.SessionInfo.TimeZone).MarshalBinary()
-			if err != nil {
-				return procInfo, err
-			}
+		loc := proc.Base.SessionInfo.TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		timeBytes, err := time.Time{}.In(loc).MarshalBinary()
+		if err != nil {
+			return procInfo, err
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
@@ -133,7 +133,7 @@ func NewCodecService(
 	udfService udf.Service,
 	engine engine.Engine,
 ) ProcessCodecService {
-	mp, err := mpool.NewMPool("codec", 1024*1024*32, mpool.NoFixed)
+	mp, err := mpool.NewMPool("codec", 1<<40, mpool.NoFixed)
 	if err != nil {
 		panic(err)
 	}

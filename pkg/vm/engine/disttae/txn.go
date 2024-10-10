@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	// "strings"
 	"sync"
 	"time"
 
@@ -106,7 +107,6 @@ func (txn *Transaction) WriteBatch(
 	}()
 
 	txn.readOnly.Store(false)
-	bat.Cnt = 1
 	txn.Lock()
 	defer txn.Unlock()
 	// generate rowid for insert
@@ -534,7 +534,7 @@ func (txn *Transaction) dumpInsertBatchLocked(offset int, size *uint64, pkCount 
 		if err != nil {
 			return err
 		}
-		defer s3Writer.Free(txn.proc)
+		defer s3Writer.Free(txn.proc.GetMPool())
 		for i := 0; i < len(mp[tbKey]); i++ {
 			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
@@ -644,7 +644,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
-		defer s3Writer.Free(txn.proc)
+		defer s3Writer.Free(txn.proc.GetMPool())
 		for i := 0; i < len(mp[tbKey]); i++ {
 			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
@@ -653,7 +653,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(offset int) error {
 			return err
 		}
 		bat := batch.NewWithSize(2)
-		bat.Attrs = []string{catalog2.ObjectAttr_ObjectStats, catalog2.AttrPKVal}
+		bat.Attrs = []string{catalog2.ObjectAttr_ObjectStats, objectio.TombstoneAttr_PK_Attr}
 		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		if err = vector.AppendBytes(
 			bat.GetVector(0), stats.Marshal(), false, txn.proc.GetMPool()); err != nil {
@@ -1100,26 +1100,30 @@ func (txn *Transaction) compactionBlksLocked() error {
 
 // TODO::remove it after workspace refactor.
 func (txn *Transaction) getUncommittedS3Tombstone(
-	statsSlice *objectio.ObjectStatsSlice,
+	appendTo func(stats *objectio.ObjectStats),
 ) (err error) {
 	txn.cn_flushed_s3_tombstone_object_stats_list.RLock()
 	defer txn.cn_flushed_s3_tombstone_object_stats_list.RUnlock()
 
 	for _, stats := range txn.cn_flushed_s3_tombstone_object_stats_list.data {
-		statsSlice.Append(stats[:])
+		appendTo(&stats)
 	}
 
 	return nil
 }
 
 // TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3
-func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error) error {
+func (txn *Transaction) forEachTableHasDeletesLocked(
+	isObject bool,
+	f func(tbl *txnTable) error) error {
 	tables := make(map[uint64]*txnTable)
 	for i := 0; i < len(txn.writes); i++ {
 		e := txn.writes[i]
-		if e.typ != DELETE || e.fileName != "" || e.bat == nil || e.bat.RowCount() == 0 {
+		if e.typ != DELETE || e.bat == nil || e.bat.RowCount() == 0 ||
+			(!isObject && e.fileName != "" || isObject && e.fileName == "") {
 			continue
 		}
+
 		if _, ok := tables[e.tableId]; ok {
 			continue
 		}
@@ -1167,7 +1171,7 @@ func (txn *Transaction) ForEachTableWrites(databaseId uint64, tableId uint64, of
 // Before it gets the cached table, it checks whether the table is deleted by another
 // transaction by go through the delete tables slice, and advance its cachedIndex.
 func (txn *Transaction) getCachedTable(
-	ctx context.Context,
+	_ context.Context,
 	k tableKey,
 ) *txnTableDelegate {
 	var tbl *txnTableDelegate
@@ -1212,6 +1216,11 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.IncrStatementID(ctx, true); err != nil {
 		return nil, err
 	}
+
+	// TODO ghs fixme
+	// if err := txn.transferTombstoneObjects(ctx); err != nil {
+	// 	return nil, err
+	// }
 
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
@@ -1258,7 +1267,7 @@ func (txn *Transaction) delTransaction() {
 		if txn.writes[i].bat == nil {
 			continue
 		}
-		txn.proc.PutBatch(txn.writes[i].bat)
+		txn.writes[i].bat.Clean(txn.proc.Mp())
 	}
 	txn.CleanToFreeBatches()
 	txn.tableCache = nil
@@ -1308,7 +1317,83 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 
 type UT_ForceTransCheck struct{}
 
-func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) error {
+// func (txn *Transaction) transferTombstoneObjects(
+// 	ctx context.Context,
+// ) (err error) {
+
+// 	var start types.TS
+// 	if txn.statementID == 1 {
+// 		start = types.TimestampToTS(txn.timestamps[0])
+// 	} else {
+// 		//statementID > 1
+// 		start = types.TimestampToTS(txn.timestamps[txn.statementID-2])
+// 	}
+
+// 	end := types.TimestampToTS(txn.op.SnapshotTS())
+
+// 	var flow *TransferFlow
+// 	return txn.forEachTableHasDeletesLocked(
+// 		true,
+// 		func(tbl *txnTable) error {
+// 			now := time.Now()
+// 			if flow, err = ConstructCNTombstoneObjectsTransferFlow(
+// 				start, end, tbl, txn, txn.proc.Mp(), txn.proc.GetFileService()); err != nil {
+// 				return err
+// 			} else if flow == nil {
+// 				return nil
+// 			}
+
+// 			defer func() {
+// 				err = flow.Close()
+// 			}()
+
+// if err = flow.Process(ctx); err != nil {
+// 	return err
+// }
+
+// statsList, tail := flow.GetResult()
+// if len(tail) > 0 {
+// 	logutil.Fatal("tombstone sinker tail size is not zero",
+// 		zap.Int("tail", len(tail)))
+// }
+
+// obj := make([]string, 0, len(statsList))
+// for i := range statsList {
+// 	fileName := statsList[i].ObjectLocation().String()
+// 	obj = append(obj, statsList[i].String())
+// 	bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
+// 	bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+// 	if err = vector.AppendBytes(
+// 		bat.GetVector(0), statsList[i].Marshal(), false, tbl.proc.Load().GetMPool()); err != nil {
+// 		return err
+// 	}
+
+// 	bat.SetRowCount(bat.Vecs[0].Length())
+
+// 	if err = txn.WriteFile(
+// 		DELETE,
+// 		tbl.accountId, tbl.db.databaseId, tbl.tableId,
+// 		tbl.db.databaseName, tbl.tableName, fileName,
+// 		bat, txn.tnStores[0],
+// 	); err != nil {
+// 		return err
+// 	}
+// 			}
+
+// 			logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ",
+// 				zap.String("txn-id", txn.op.Txn().DebugString()),
+// 				zap.String("table",
+// 					fmt.Sprintf("%s(%d)-%s(%d)",
+// 						tbl.db.databaseName, tbl.db.databaseId, tbl.tableName, tbl.tableId)),
+// 				zap.Duration("time-spent", time.Since(now)),
+// 				zap.Int("transferred-row-cnt", flow.transferred),
+// 				zap.String("new-files", strings.Join(obj, "; ")))
+
+// 			return nil
+// 		})
+// }
+
+func (txn *Transaction) transferInmemTombstoneLocked(ctx context.Context, commit bool) error {
 	var latestTs timestamp.Timestamp
 	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
@@ -1336,45 +1421,46 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 			txn.resetSnapshot()
 		}
 
-		return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
-
-			ctx := tbl.proc.Load().Ctx
-			state, err := tbl.getPartitionState(ctx)
-			if err != nil {
-				return err
-			}
-			var endTs timestamp.Timestamp
-			if commit {
-				endTs = latestTs
-			} else {
-				endTs = tbl.db.op.SnapshotTS()
-			}
-			deleteObjs, createObjs := state.GetChangedObjsBetween(
-				types.TimestampToTS(ts),
-				types.TimestampToTS(endTs))
-
-			trace.GetService(txn.proc.GetService()).ApplyFlush(
-				tbl.db.op.Txn().ID,
-				tbl.tableId,
-				ts,
-				tbl.db.op.SnapshotTS(),
-				len(deleteObjs))
-
-			if len(deleteObjs) > 0 {
-				if err := TransferTombstones(
-					ctx,
-					tbl,
-					state,
-					deleteObjs,
-					createObjs,
-					txn.proc.Mp(),
-					txn.engine.fs,
-				); err != nil {
+		return txn.forEachTableHasDeletesLocked(
+			false,
+			func(tbl *txnTable) error {
+				ctx := tbl.proc.Load().Ctx
+				state, err := tbl.getPartitionState(ctx)
+				if err != nil {
 					return err
 				}
-			}
-			return nil
-		})
+				var endTs timestamp.Timestamp
+				if commit {
+					endTs = latestTs
+				} else {
+					endTs = tbl.db.op.SnapshotTS()
+				}
+				deleteObjs, createObjs := state.GetChangedObjsBetween(
+					types.TimestampToTS(ts),
+					types.TimestampToTS(endTs))
+
+				trace.GetService(txn.proc.GetService()).ApplyFlush(
+					tbl.db.op.Txn().ID,
+					tbl.tableId,
+					ts,
+					tbl.db.op.SnapshotTS(),
+					len(deleteObjs))
+
+				if len(deleteObjs) > 0 {
+					if err := TransferTombstones(
+						ctx,
+						tbl,
+						state,
+						deleteObjs,
+						createObjs,
+						txn.proc.Mp(),
+						txn.engine.fs,
+					); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
 	}
 	return nil
 }
@@ -1425,7 +1511,7 @@ func (txn *Transaction) GetHaveDDL() bool {
 func (txn *Transaction) CleanToFreeBatches() {
 	for key := range txn.toFreeBatches {
 		for _, bat := range txn.toFreeBatches[key] {
-			txn.proc.PutBatch(bat)
+			bat.Clean(txn.proc.Mp())
 		}
 		delete(txn.toFreeBatches, key)
 	}

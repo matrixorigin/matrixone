@@ -57,6 +57,7 @@ func NewDiskCache(
 	perfCounterSets []*perfcounter.CounterSet,
 	asyncLoad bool,
 	cacheDataAllocator CacheDataAllocator,
+	name string,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -74,10 +75,20 @@ func NewDiskCache(
 		perfCounterSets:    perfCounterSets,
 
 		cache: fifocache.New(
-			capacity,
+
+			func() int64 {
+				// read from global size hint
+				if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
+					return n
+				}
+				// fallback
+				return capacity()
+			},
+
 			func(key string) uint8 {
 				return uint8(xxhash.Sum64String(key))
 			},
+
 			nil,
 			nil,
 			func(path string, _ struct{}) {
@@ -101,6 +112,10 @@ func NewDiskCache(
 		go ret.loadCache()
 	} else {
 		ret.loadCache()
+	}
+
+	if name != "" {
+		allDiskCaches.Store(ret, name)
 	}
 
 	return ret, nil
@@ -611,4 +626,8 @@ func fileSize(info fs.FileInfo) int64 {
 		return int64(sys.Blocks) * 512 // it's always 512, not sys.Blksize
 	}
 	return info.Size()
+}
+
+func (d *DiskCache) Close() {
+	allDiskCaches.Delete(d)
 }

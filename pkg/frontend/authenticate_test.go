@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net"
 	"reflect"
 	"strings"
 	"testing"
@@ -7703,15 +7702,12 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
 	setGlobalPu(pu)
+	setGlobalSessionAlloc(newLeakCheckAllocator())
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	ctx = defines.AttachAccountId(ctx, 0)
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
 
-	ioses, err := NewIOSession(serverConn, pu)
+	ioses, err := NewIOSession(&testConn{}, pu)
 	if err != nil {
 		panic(err)
 	}
@@ -8023,6 +8019,94 @@ func newMrsForPasswordOfUser(rows [][]interface{}) *MysqlResultSet {
 	mrs.AddColumn(col1)
 	mrs.AddColumn(col2)
 	mrs.AddColumn(col3)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForPitrRecord(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("pitr_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_UUID)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("pitr_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	// bigint unsigned
+	col3 := &MysqlColumn{}
+	col3.SetName("create_account")
+	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("create_time")
+	col4.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+
+	// modified_time
+	col5 := &MysqlColumn{}
+	col5.SetName("modified_time")
+	col5.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+
+	// level varchar(10)
+	col6 := &MysqlColumn{}
+	col6.SetName("level")
+	col6.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	// account_id bigint unsigned
+	col7 := &MysqlColumn{}
+	col7.SetName("account_id")
+	col7.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	// account name
+	col8 := &MysqlColumn{}
+	col8.SetName("account_name")
+	col8.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	// db_name
+	col9 := &MysqlColumn{}
+	col9.SetName("db_name")
+	col9.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	// table_name
+	col10 := &MysqlColumn{}
+	col10.SetName("table_name")
+	col10.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	// object_id
+	col11 := &MysqlColumn{}
+	col11.SetName("object_id")
+	col11.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	// pitr length
+	// tiny int unsigned
+	col12 := &MysqlColumn{}
+	col12.SetName("pitr_length")
+	col12.SetColumnType(defines.MYSQL_TYPE_TINY)
+
+	// pitr uint
+	// varchar
+	col13 := &MysqlColumn{}
+	col13.SetName("pitr_uint")
+	col13.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+	mrs.AddColumn(col8)
+	mrs.AddColumn(col9)
+	mrs.AddColumn(col10)
+	mrs.AddColumn(col11)
+	mrs.AddColumn(col12)
+	mrs.AddColumn(col13)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
@@ -10318,10 +10402,9 @@ func TestUpload(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		proc := testutil.NewProc()
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go writeExceptResult(clientConn, []*Packet{
+		tConn := &testConn{}
+		defer tConn.Close()
+		writeExceptResult(tConn, []*Packet{
 			{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1},
 			{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2},
 			{Length: 0, Payload: []byte(""), SequenceID: 3},
@@ -10341,7 +10424,7 @@ func TestUpload(t *testing.T) {
 		pu.FileService = fs
 		setGlobalPu(pu)
 
-		ioses, err := NewIOSession(serverConn, pu)
+		ioses, err := NewIOSession(tConn, pu)
 		assert.Nil(t, err)
 		proto := &testMysqlWriter{
 			ioses: ioses,

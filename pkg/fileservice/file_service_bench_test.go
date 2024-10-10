@@ -26,6 +26,7 @@ func benchmarkFileService(ctx context.Context, b *testing.B, newFS func() FileSe
 
 	b.Run("parallel raed", func(b *testing.B) {
 		fs := newFS()
+		defer fs.Close()
 
 		content := bytes.Repeat([]byte("x"), 16*1024*1024)
 		parts := fixedSplit(content, 512*1024)

@@ -125,6 +125,7 @@ type service struct {
 		checkUpgradeTenantDuration time.Duration
 		upgradeTenantTasks         int
 		finalVersionCompleted      atomic.Bool
+		kek                        string
 	}
 }
 

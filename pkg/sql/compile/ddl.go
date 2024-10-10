@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,7 +72,30 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		}
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
+	err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+
+	if !needSkipDbs[dbName] {
+		newDb, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = '%s', `%s` = '%s' where `%s` = %d and `%s` = '%s'",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newDb.GetDatabaseId(ctx),
+			catalog.MO_PITR_MODIFIED_TIME, types.CurrentTimestamp().String2(time.UTC, 0),
+			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_DB_NAME, dbName)
+
+		err = c.runSqlWithSystemTenant(updatePitrSql)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -1276,6 +1300,28 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
+	// update mo_pitr table
+	// if mo_pitr table contains the same dbName and tblName, then update the table_id and modified_time
+	// otherwise, skip it
+	if !needSkipDbs[dbName] {
+		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
+		if err != nil {
+			return err
+		}
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = '%s' where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newRelation.GetTableID(c.proc.Ctx),
+			catalog.MO_PITR_MODIFIED_TIME, types.CurrentTimestamp().String2(time.UTC, 0),
+			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_DB_NAME, dbName,
+			catalog.MO_PITR_TABLE_NAME, tblName)
+
+		// change ctx
+		err = c.runSqlWithSystemTenant(updatePitrSql)
+		if err != nil {
+			return err
+		}
+	}
+
 	if len(partitionTables) == 0 {
 		return nil
 	}
@@ -1285,6 +1331,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		qry.GetTableDef().TblId,
 		c.proc.GetTxnOperator(),
 	)
+}
+
+func (c *Compile) runSqlWithSystemTenant(sql string) error {
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = context.WithValue(oldCtx, defines.TenantIDKey{}, uint32(0))
+	defer func() {
+		c.proc.Ctx = oldCtx
+	}()
+	return c.runSql(sql)
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -2576,7 +2631,6 @@ last_seq_num | min_value| max_value| start_value| increment_value| cycle| is_cal
 func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, tableDef *plan.TableDef, proc *process.Process, result []interface{}, curval string) (*batch.Batch, error) {
 	var bat batch.Batch
 	bat.Ro = true
-	bat.Cnt = 0
 	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
 	for i := range attrs {
@@ -2686,7 +2740,6 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
 	bat.Ro = true
-	bat.Cnt = 0
 	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
 	for i := range attrs {

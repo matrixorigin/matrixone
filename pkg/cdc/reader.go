@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -71,7 +72,7 @@ func NewTableReader(
 	}
 
 	// batch columns layout:
-	// 1. data: user defined cols | cpk (if need) | commit-ts
+	// 1. data: user defined cols | cpk (if needed) | commit-ts
 	// 2. tombstone: pk/cpk | commit-ts
 	reader.insTsColIdx, reader.insCompositedPkColIdx = len(tableDef.Cols)-1, len(tableDef.Cols)-2
 	reader.delTsColIdx, reader.delCompositedPkColIdx = 1, 0
@@ -169,7 +170,6 @@ func (reader *tableReader) readTableWithTxn(
 	//  to = txn operator snapshot ts
 	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblId)
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
-	//fmt.Fprintln(os.Stderr, reader.info, "from", fromTs.ToString(), "to", toTs.ToString())
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
 	if err != nil {
 		return
@@ -190,12 +190,12 @@ func (reader *tableReader) readTableWithTxn(
 		return atmBatch
 	}
 
-	//batchSize := func(bat *batch.Batch) int {
-	//	if bat == nil {
-	//		return 0
-	//	}
-	//	return bat.Vecs[0].Length()
-	//}
+	recordCount := func(bat *batch.Batch) int {
+		if bat == nil || len(bat.Vecs) == 0 {
+			return 0
+		}
+		return bat.Vecs[0].Length()
+	}
 
 	var curHint engine.ChangesHandle_Hint
 	for {
@@ -211,34 +211,8 @@ func (reader *tableReader) readTableWithTxn(
 			return
 		}
 
-		//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Reader: [%s, %s), "+
-		//	"curHint: %v, insertData is nil: %v, deleteData is nil: %v, "+
-		//	"insertDataSize() = %d, deleteDataSize() = %d\n",
-		//	fromTs.ToString(), toTs.ToString(),
-		//	curHint, insertData == nil, deleteData == nil,
-		//	batchSize(insertData), batchSize(deleteData),
-		//)
-
 		//both nil denote no more data
 		if insertData == nil && deleteData == nil {
-			//FIXME: it is engine's bug
-			//Tail_wip does not finished with Tail_done
-			if insertAtmBatch != nil || deleteAtmBatch != nil {
-				err = reader.sinker.Sink(ctx, &DecoderOutput{
-					outputTyp:      OutputTypeTailDone,
-					insertAtmBatch: insertAtmBatch,
-					deleteAtmBatch: deleteAtmBatch,
-					fromTs:         fromTs,
-					toTs:           toTs,
-				})
-				if err != nil {
-					return err
-				}
-
-				insertAtmBatch = nil
-				deleteAtmBatch = nil
-			}
-
 			// heartbeat
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
 				noMoreData: true,
@@ -247,6 +221,12 @@ func (reader *tableReader) readTableWithTxn(
 			})
 			return
 		}
+
+		count := float64(recordCount(insertData) + recordCount(deleteData))
+		allocated := float64(insertData.Allocated() + deleteData.Allocated())
+		v2.CdcTotalProcessingRecordCountGauge.Add(count)
+		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
+		v2.CdcReadRecordCounter.Add(count)
 
 		switch curHint {
 		case engine.ChangesHandle_Snapshot:
@@ -257,6 +237,9 @@ func (reader *tableReader) readTableWithTxn(
 				fromTs:        fromTs,
 				toTs:          toTs,
 			})
+			if err != nil {
+				return
+			}
 		case engine.ChangesHandle_Tail_wip:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
@@ -274,12 +257,13 @@ func (reader *tableReader) readTableWithTxn(
 				fromTs:         fromTs,
 				toTs:           toTs,
 			})
+			if err != nil {
+				return
+			}
+
+			// reset, allocate new when next wip/done
 			insertAtmBatch = nil
 			deleteAtmBatch = nil
-		}
-
-		if err != nil {
-			return
 		}
 	}
 }

@@ -21,7 +21,9 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -30,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 var (
@@ -55,6 +58,7 @@ var (
 )
 
 type storage struct {
+	logger   *log.MOLogger
 	clock    clock.Clock
 	executor executor.SQLExecutor
 	waiter   client.TimestampWaiter
@@ -63,6 +67,7 @@ type storage struct {
 }
 
 func NewShardStorage(
+	sid string,
 	clock clock.Clock,
 	executor executor.SQLExecutor,
 	waiter client.TimestampWaiter,
@@ -75,6 +80,7 @@ func NewShardStorage(
 		waiter:   waiter,
 		handles:  handles,
 		engine:   engine,
+		logger:   runtime.ServiceRuntime(sid).Logger().Named("shardservice"),
 	}
 }
 
@@ -96,6 +102,7 @@ func (s *storage) Get(
 				shardTableID,
 				txn,
 				&metadata,
+				s.logger,
 			); err != nil {
 				return err
 			}
@@ -124,6 +131,7 @@ func (s *storage) Get(
 					shardTableID,
 					txn,
 					&metadata,
+					s.logger,
 				); err != nil {
 					return err
 				}
@@ -165,13 +173,14 @@ func (s *storage) GetChanged(
 
 	current := make(map[uint64]uint32)
 	now, _ := s.clock.Now()
+	sql := getCheckMetadataSQL(targets)
 	err := s.executor.ExecTxn(
 		ctx,
 		func(
 			txn executor.TxnExecutor,
 		) error {
 			res, err := txn.Exec(
-				getCheckMetadataSQL(targets),
+				sql,
 				executor.StatementOption{},
 			)
 			if err != nil {
@@ -199,6 +208,12 @@ func (s *storage) GetChanged(
 	if err != nil {
 		return err
 	}
+
+	s.logger.Info("get sharding metadata",
+		zap.String("sql", sql),
+		zap.Any("current", current),
+		zap.String("ts", now.DebugString()),
+	)
 
 	for table, version := range tables {
 		new, ok := current[table]
@@ -281,6 +296,7 @@ func (s *storage) Delete(
 				table,
 				txn,
 				&metadata,
+				s.logger,
 			); err != nil {
 				return err
 			}
@@ -354,12 +370,17 @@ func readMetadata(
 	table uint64,
 	txn executor.TxnExecutor,
 	metadata *pb.ShardsMetadata,
+	logger *log.MOLogger,
 ) error {
 	res, err := txn.Exec(
 		getMetadataSQL(table),
 		executor.StatementOption{},
 	)
 	if err != nil {
+		logger.Error("read shard metadata failed",
+			zap.Uint64("table", table),
+			zap.Error(err),
+		)
 		return err
 	}
 	defer res.Close()
@@ -377,7 +398,10 @@ func readMetadata(
 			return false
 		},
 	)
-
+	logger.Info("read shard metadata",
+		zap.Uint64("table", table),
+		zap.Stringer("metadata", metadata),
+	)
 	return nil
 }
 

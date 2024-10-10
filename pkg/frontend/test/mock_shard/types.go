@@ -2,7 +2,6 @@
 // Source: pkg/shardservice/types.go
 
 // Package mock_shard is a generated GoMock package.
-// mockgen -source pkg/shardservice/types.go --destination pkg/frontend/test/mock_shard/types.go -package=mock_shard
 package mock_shard
 
 import (
@@ -165,12 +164,29 @@ func (mr *MockShardServiceMockRecorder) GetStorage() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStorage", reflect.TypeOf((*MockShardService)(nil).GetStorage))
 }
 
+// GetTableShards mocks base method.
+func (m *MockShardService) GetTableShards(table uint64) (shard.ShardsMetadata, []shard.TableShard, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTableShards", table)
+	ret0, _ := ret[0].(shard.ShardsMetadata)
+	ret1, _ := ret[1].([]shard.TableShard)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetTableShards indicates an expected call of GetTableShards.
+func (mr *MockShardServiceMockRecorder) GetTableShards(table interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTableShards", reflect.TypeOf((*MockShardService)(nil).GetTableShards), table)
+}
+
 // HasAllLocalReplicas mocks base method.
-func (m *MockShardService) HasAllLocalReplicas(tableID uint64) bool {
+func (m *MockShardService) HasAllLocalReplicas(tableID uint64) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HasAllLocalReplicas", tableID)
 	ret0, _ := ret[0].(bool)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // HasAllLocalReplicas indicates an expected call of HasAllLocalReplicas.
@@ -180,11 +196,12 @@ func (mr *MockShardServiceMockRecorder) HasAllLocalReplicas(tableID interface{})
 }
 
 // HasLocalReplica mocks base method.
-func (m *MockShardService) HasLocalReplica(tableID, shardID uint64) bool {
+func (m *MockShardService) HasLocalReplica(tableID, shardID uint64) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HasLocalReplica", tableID, shardID)
 	ret0, _ := ret[0].(bool)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // HasLocalReplica indicates an expected call of HasLocalReplica.

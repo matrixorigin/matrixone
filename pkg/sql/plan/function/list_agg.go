@@ -161,6 +161,48 @@ var supportedAggInNewFramework = []FuncNew{
 	},
 
 	{
+		functionId: AVG_TW_CACHE,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, agg.AvgTwCacheSupportedTypes)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    agg.AvgTwCacheReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "avg_tw_cache",
+					aggRegister: agg.RegisterAvgTwCache,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: AVG_TW_RESULT,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, agg.AvgTwResultSupportedTypes)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    agg.AvgTwResultReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "avg_tw_result",
+					aggRegister: agg.RegisterAvgTwResult,
+				},
+			},
+		},
+	},
+
+	{
 		functionId: GROUP_CONCAT,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,

@@ -254,7 +254,8 @@ func TestLogtailBasic(t *testing.T) {
 
 	schema := catalog2.MockSchemaAll(2, -1)
 	schema.Name = "test"
-	schema.Comment = "rows:10;blks=1"
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 1
 	// craete 2 db and 2 tables
 	txnop := p.StartCNTxn()
 	p.CreateDBAndTable(txnop, "todrop", schema)

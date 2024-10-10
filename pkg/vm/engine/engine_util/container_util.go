@@ -15,19 +15,17 @@
 package engine_util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 func NewCNTombstoneBatch(
-	pkAttr string,
 	pkType *types.Type,
+	hidden objectio.HiddenColumnSelection,
 ) *batch.Batch {
-	ret := batch.New(false, []string{catalog.Row_ID, pkAttr})
-	ret.SetVector(objectio.TombstoneAttr_Rowid_Idx, vector.NewVec(objectio.RowidType))
-	ret.SetVector(objectio.TombstoneAttr_PK_Idx, vector.NewVec(*pkType))
-	return ret
+	attrs, attrTypes := objectio.GetTombstoneSchema(*pkType, hidden)
+	return batch.NewWithSchema(
+		false, false, attrs, attrTypes,
+	)
 }

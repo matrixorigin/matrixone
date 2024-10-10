@@ -55,8 +55,7 @@ func (s futureSlice) TypeName() string {
 }
 
 func (s *futureSlice) reset() {
-	for i, f := range s.values {
-		f.Close()
+	for i := range s.values {
 		s.values[i] = nil
 	}
 	s.values = s.values[:0]

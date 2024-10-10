@@ -26,6 +26,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 
@@ -255,12 +257,12 @@ func NewRunner(
 		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(&b.end)
+		return a.end.LT(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
 	r.storage.globals = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(&b.end)
+		return a.end.LT(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
@@ -367,11 +369,11 @@ func (r *runner) getTSTOGC() (ts types.TS, needGC bool) {
 		return
 	}
 	tsTOGC := r.getTSToGC()
-	if tsTOGC.Less(&ts) {
+	if tsTOGC.LT(&ts) {
 		ts = tsTOGC
 	}
 	gcedTS := r.getGCedTS()
-	if gcedTS.GreaterEq(&ts) {
+	if gcedTS.GE(&ts) {
 		return
 	}
 	needGC = true
@@ -448,7 +450,9 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		}
 	}()
 
-	if fields, err = r.doIncrementalCheckpoint(entry); err != nil {
+	var files []string
+	var file string
+	if fields, files, err = r.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
 		return
 	}
@@ -460,15 +464,16 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	entry.SetLSN(lsn, lsnToTruncate)
 	entry.SetState(ST_Finished)
 
-	if err = r.saveCheckpoint(
+	if file, err = r.saveCheckpoint(
 		entry.start, entry.end, lsn, lsnToTruncate,
 	); err != nil {
 		errPhase = "save-ckp"
 		return
 	}
+	files = append(files, file)
 
 	var logEntry wal.LogEntry
-	if logEntry, err = r.wal.RangeCheckpoint(1, lsnToTruncate); err != nil {
+	if logEntry, err = r.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
 		errPhase = "wal-ckp"
 		fatal = true
 		return
@@ -547,13 +552,13 @@ func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.
 	return
 }
 
-func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (err error) {
+func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (name string, err error) {
 	bat := r.collectCheckpointMetadata(start, end, ckpLSN, truncateLSN)
 	defer bat.Close()
-	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
+	name = blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
 	if err != nil {
-		return err
+		return
 	}
 	if _, err = writer.Write(containers.ToCNBatch(bat)); err != nil {
 		return
@@ -569,7 +574,7 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 	return
 }
 
-func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, err error) {
+func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, files []string, err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(r.rt.SID(), entry.start, entry.end, true)
 	data, err := factory(r.catalog)
 	if err != nil {
@@ -577,10 +582,12 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.F
 	}
 	fields = data.ExportStats("")
 	defer data.Close()
-	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	var cnLocation, tnLocation objectio.Location
+	cnLocation, tnLocation, files, err = data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
 		return
 	}
+	files = append(files, cnLocation.Name().String())
 	entry.SetLocation(cnLocation, tnLocation)
 
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
@@ -654,7 +661,7 @@ func (r *runner) doGlobalCheckpoint(
 	fields = data.ExportStats("")
 	defer data.Close()
 
-	cnLocation, tnLocation, _, err := data.WriteTo(
+	cnLocation, tnLocation, files, err := data.WriteTo(
 		r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize,
 	)
 	if err != nil {
@@ -665,12 +672,21 @@ func (r *runner) doGlobalCheckpoint(
 	entry.SetLocation(cnLocation, tnLocation)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
-
-	if err = r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
+	var name string
+	if name, err = r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
 		errPhase = "save"
 		return
 	}
+	files = append(files, name)
 
+	fileEntry, err := store.BuildFilesEntry(files)
+	if err != nil {
+		return
+	}
+	_, err = r.wal.AppendEntry(store.GroupFiles, fileEntry)
+	if err != nil {
+		return
+	}
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DoGlobalCheckPoint.Add(1)
 	})
@@ -947,11 +963,7 @@ func (r *runner) collectTableMemUsage(entry *logtail.DirtyTreeEntry) (memPressur
 		if err != nil {
 			panic(err)
 		}
-		if !table.Stats.Inited {
-			table.Stats.Lock()
-			table.Stats.InitWithLock(r.options.maxFlushInterval)
-			table.Stats.Unlock()
-		}
+		table.Stats.Init(r.options.maxFlushInterval)
 		dirtyTree := entry.GetTree().GetTable(tid)
 		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
 		totalSize += asize + dsize
@@ -985,14 +997,10 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 		table, asize, dsize := ticket.tbl, ticket.asize, ticket.dsize
 		dirtyTree := entry.GetTree().GetTable(table.ID)
 
-		stats := table.Stats
-		stats.Lock()
-		defer stats.Unlock()
-
 		if force {
 			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				stats.ResetDeadlineWithLock()
+				table.Stats.ResetDeadline(r.options.maxFlushInterval)
 			}
 			continue
 		}
@@ -1009,11 +1017,11 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 				return false
 			}
 			// time to flush
-			if stats.FlushDeadline.Before(time.Now()) {
+			if table.Stats.GetFlushDeadline().Before(time.Now()) {
 				return true
 			}
 			// this table is too large, flush it
-			if asize+dsize > stats.FlushMemCapacity {
+			if asize+dsize > int(common.FlushMemCapacity.Load()) {
 				return true
 			}
 			// unflushed data is too large, flush it
@@ -1025,19 +1033,19 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 
 		ready := flushReady()
 
-		if stats.Inited && asize+dsize > 2*1000*1024 {
+		if asize+dsize > 2*1000*1024 {
 			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v, flushReady %v",
 				table.GetLastestSchemaLocked(false).Name,
 				common.HumanReadableBytes(asize+dsize),
 				common.HumanReadableBytes(dsize),
-				time.Until(stats.FlushDeadline),
+				time.Until(table.Stats.GetFlushDeadline()),
 				ready,
 			)
 		}
 
 		if ready {
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				stats.ResetDeadlineWithLock()
+				table.Stats.ResetDeadline(r.options.maxFlushInterval)
 			}
 		}
 	}
@@ -1182,7 +1190,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 				locs = append(locs, e.GetLocation().String())
 				locs = append(locs, strconv.Itoa(int(e.version)))
 				start := e.GetStart()
-				if start.Less(&ckpStart) {
+				if start.LT(&ckpStart) {
 					ckpStart = start
 				}
 				checkpointed = e.GetEnd()
@@ -1198,7 +1206,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			locs = append(locs, e.GetLocation().String())
 			locs = append(locs, strconv.Itoa(int(e.version)))
 			start := e.GetStart()
-			if start.Less(&ckpStart) {
+			if start.LT(&ckpStart) {
 				ckpStart = start
 			}
 			checkpointed = e.GetEnd()
@@ -1237,7 +1245,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 		locs = append(locs, e.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(e.version)))
 		start := e.GetStart()
-		if start.Less(&ckpStart) {
+		if start.LT(&ckpStart) {
 			ckpStart = start
 		}
 		checkpointed = e.GetEnd()

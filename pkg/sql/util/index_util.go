@@ -16,8 +16,10 @@ package util
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -65,6 +67,22 @@ func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	return name, nil
 }
 
+// IsIndexTableName checks if the given table name is an index table name with a valid UUID.
+func IsIndexTableName(tableName string) bool {
+	if strings.HasPrefix(tableName, catalog.UniqueIndexTableNamePrefix) {
+		// Strip the prefix and check if the remaining part is a valid UUID
+		uuidPart := strings.TrimPrefix(tableName, catalog.UniqueIndexTableNamePrefix)
+		_, err := uuid.Parse(uuidPart)
+		return err == nil
+	} else if strings.HasPrefix(tableName, catalog.SecondaryIndexTableNamePrefix) {
+		// Strip the prefix and check if the remaining part is a valid UUID
+		uuidPart := strings.TrimPrefix(tableName, catalog.SecondaryIndexTableNamePrefix)
+		_, err := uuid.Parse(uuidPart)
+		return err == nil
+	}
+	return false // Not an index table name
+}
+
 // BuildUniqueKeyBatch used in test to validate
 // serialWithCompacted(), compactSingleIndexCol() and compactPrimaryCol()
 func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, originTablePrimaryKey string, proc *process.Process, packers *PackerList) (*batch.Batch, int, error) {
@@ -75,14 +93,12 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 		b = &batch.Batch{
 			Attrs: make([]string, 1),
 			Vecs:  make([]*vector.Vector, 1),
-			Cnt:   1,
 		}
 		b.Attrs[0] = catalog.IndexTableIndexColName
 	} else {
 		b = &batch.Batch{
 			Attrs: make([]string, 2),
 			Vecs:  make([]*vector.Vector, 2),
-			Cnt:   1,
 		}
 		b.Attrs[0] = catalog.IndexTableIndexColName
 		b.Attrs[1] = catalog.IndexTablePrimaryColName

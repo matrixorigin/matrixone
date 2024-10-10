@@ -72,9 +72,10 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 
 	plan2.Node_ASSERT: "Assert",
 
-	plan2.Node_INSERT:  "Insert",
-	plan2.Node_DELETE:  "Delete",
-	plan2.Node_REPLACE: "Replace",
+	plan2.Node_INSERT:       "Insert",
+	plan2.Node_DELETE:       "Delete",
+	plan2.Node_REPLACE:      "Replace",
+	plan2.Node_MULTI_UPDATE: "Multi Update",
 
 	plan2.Node_LOCK_OP: "Lock Operator",
 

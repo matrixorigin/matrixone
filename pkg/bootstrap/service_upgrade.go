@@ -19,12 +19,12 @@ import (
 	"fmt"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_3_0"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 var (
@@ -434,6 +434,7 @@ func (s *service) doUpgrade(
 	if upgrade.UpgradeCluster == versions.Yes {
 		s.logger.Info("execute upgrade cluster",
 			zap.String("upgrade", upgrade.String()))
+		ctx = context.WithValue(ctx, v1_3_0.KekKey{}, s.upgrade.kek)
 		if err := h.HandleClusterUpgrade(ctx, txn); err != nil {
 			return 0, err
 		}

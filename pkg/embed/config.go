@@ -140,6 +140,9 @@ func newServiceConfig() ServiceConfig {
 		LogService:    logservice.DefaultConfig(),
 		CN: cnservice.Config{
 			AutomaticUpgrade: true,
+			Frontend: config.FrontendParameters{
+				KeyEncryptionKey: "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y",
+			},
 		},
 	}
 }
@@ -404,12 +407,6 @@ func (c *ServiceConfig) getCNServiceConfig() cnservice.Config {
 	if cfg.Txn.Trace.Dir == "" {
 		cfg.Txn.Trace.Dir = "trace"
 	}
-	return cfg
-}
-
-func (c *ServiceConfig) getProxyConfig() proxy.Config {
-	cfg := c.ProxyConfig
-	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	return cfg
 }
 

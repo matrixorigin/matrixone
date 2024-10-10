@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -139,6 +140,8 @@ type IOVectorCache interface {
 	// Evict triggers eviction
 	// if done is not nil, when eviction finish, target size will be send to the done chan
 	Evict(done chan int64)
+
+	Close()
 }
 
 var slowCacheReadThreshold = time.Second * 0
@@ -172,4 +175,44 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 	}
 
 	return nil
+}
+
+var (
+	GlobalMemoryCacheSizeHint atomic.Int64
+	GlobalDiskCacheSizeHint   atomic.Int64
+
+	allMemoryCaches sync.Map // *MemCache -> name
+	allDiskCaches   sync.Map // *DiskCache -> name
+)
+
+func EvictMemoryCaches() map[string]int64 {
+	ret := make(map[string]int64)
+	ch := make(chan int64, 1)
+
+	allMemoryCaches.Range(func(k, v any) bool {
+		cache := k.(*MemCache)
+		name := v.(string)
+		cache.Evict(ch)
+		ret[name] = <-ch
+
+		return true
+	})
+
+	return ret
+}
+
+func EvictDiskCaches() map[string]int64 {
+	ret := make(map[string]int64)
+	ch := make(chan int64, 1)
+
+	allDiskCaches.Range(func(k, v any) bool {
+		cache := k.(*DiskCache)
+		name := v.(string)
+		cache.Evict(ch)
+		ret[name] = <-ch
+
+		return true
+	})
+
+	return ret
 }

@@ -158,9 +158,9 @@ func TestCheckpointCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	err = txn.Commit(context.Background())
 	assert.Nil(t, err)
-	schema.BlockMaxRows = 10
+	schema.Extra.BlockMaxRows = 10
 	batchCnt := 10
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows)*batchCnt)
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows)*batchCnt)
 	bats := bat.Split(batchCnt)
 
 	pool, _ := ants.NewPool(20)

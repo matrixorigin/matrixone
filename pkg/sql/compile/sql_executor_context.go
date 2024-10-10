@@ -86,6 +86,10 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("not supported in internal sql executor")
 }
 
+func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
+	panic("not supported in internal sql executor")
+}
+
 func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
 	panic("not supported in internal sql executor")
 }
@@ -111,11 +115,57 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 }
 
 func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
-	ctx, t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName(), snapshot)
+	dbName := obj.GetSchemaName()
+	tableName := obj.GetObjName()
+
+	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, err
 	}
-	return t.Stats(ctx, true)
+	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	tableDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var partitionInfo *plan.PartitionByDef
+	for _, def := range tableDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return nil, err
+				}
+				partitionInfo = p
+			}
+			break
+		}
+	}
+	var statsInfo *pb.StatsInfo
+	// This is a partition table.
+	if partitionInfo != nil {
+		statsInfo = plan.NewStatsInfo()
+		for _, partitionTable := range partitionInfo.PartitionTableNames {
+			parCtx, parTable, err := c.getRelation(dbName, partitionTable, snapshot)
+			if err != nil {
+				return nil, err
+			}
+			parStats, err := parTable.Stats(parCtx, true)
+			if err != nil {
+				return nil, err
+			}
+			statsInfo.Merge(parStats)
+		}
+	} else {
+		statsInfo, err = table.Stats(ctx, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return statsInfo, nil
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {
@@ -330,7 +380,8 @@ func (c *compilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error
 func (c *compilerContext) getRelation(
 	dbName string,
 	tableName string,
-	snapshot *plan.Snapshot) (context.Context, engine.Relation, error) {
+	snapshot *plan.Snapshot,
+) (context.Context, engine.Relation, error) {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, nil, err

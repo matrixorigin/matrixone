@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -48,9 +49,63 @@ const (
 	TombstoneAttr_A_PhyAddr_SeqNum = TombstoneAttr_A_PhyAddr_Idx
 	TombstoneAttr_CommitTs_SeqNum  = SEQNUM_COMMITTS
 	TombstoneAttr_Abort_SeqNum     = SEQNUM_ABORT
+
+	TombstonePrimaryKeyIdx = TombstoneAttr_Rowid_Idx
+)
+
+const (
+	PhysicalAddr_Attr    = "__mo_rowid"
+	DefaultCommitTS_Attr = "__mo_%1_commit_time"
+	DefaultAbort_Attr    = "__mo_%1_abort"
+
+	TombstoneAttr_Rowid_Attr    = "__mo_%1_delete_rowid"
+	TombstoneAttr_PK_Attr       = "__mo_%1_pk_val"
+	TombstoneAttr_CommitTs_Attr = DefaultCommitTS_Attr
+	TombstoneAttr_Abort_Attr    = DefaultAbort_Attr
+)
+
+type HiddenColumnSelection uint64
+
+const (
+	HiddenColumnSelection_PhysicalAddr HiddenColumnSelection = 1 << iota
+	HiddenColumnSelection_CommitTS
+	HiddenColumnSelection_Abort
+)
+
+const HiddenColumnSelection_None HiddenColumnSelection = 0
+
+var (
+	TombstoneSeqnums_CN_Created         = []uint16{0, 1}
+	TombstoneSeqnums_CN_Created_PhyAddr = []uint16{0, 1, SEQNUM_ROWID}
+	TombstoneSeqnums_DN_Created         = []uint16{0, 1, TombstoneAttr_CommitTs_SeqNum}
+	TombstoneSeqnums_DN_Created_PhyAddr = []uint16{0, 1, TombstoneAttr_CommitTs_SeqNum, SEQNUM_ROWID}
+
+	TombstoneColumns_CN_Created         = []int{0, 1}
+	TombstoneColumns_CN_Created_PhyAddr = []int{0, 1, SEQNUM_ROWID}
+	TombstoneColumns_TN_Created         = []int{0, 1, TombstoneAttr_CommitTs_SeqNum}
+	TombstoneColumns_TN_Created_PhyAddr = []int{0, 1, TombstoneAttr_CommitTs_SeqNum, SEQNUM_ROWID}
+
+	TombstoneAttrs_CN_Created         = []string{TombstoneAttr_Rowid_Attr, TombstoneAttr_PK_Attr}
+	TombstoneAttrs_CN_Created_PhyAddr = []string{TombstoneAttr_Rowid_Attr, TombstoneAttr_PK_Attr, PhysicalAddr_Attr}
+	TombstoneAttrs_TN_Created         = []string{TombstoneAttr_Rowid_Attr, TombstoneAttr_PK_Attr, TombstoneAttr_CommitTs_Attr}
+	TombstoneAttrs_TN_Created_PhyAddr = []string{TombstoneAttr_Rowid_Attr, TombstoneAttr_PK_Attr, TombstoneAttr_CommitTs_Attr, PhysicalAddr_Attr}
 )
 
 const ZoneMapSize = index.ZMSize
+
+func GetTombstoneAttrs(hidden HiddenColumnSelection) []string {
+	if hidden&HiddenColumnSelection_PhysicalAddr != 0 &&
+		hidden&HiddenColumnSelection_CommitTS != 0 {
+		return TombstoneAttrs_TN_Created_PhyAddr
+	}
+	if hidden&HiddenColumnSelection_PhysicalAddr != 0 {
+		return TombstoneAttrs_CN_Created_PhyAddr
+	}
+	if hidden&HiddenColumnSelection_CommitTS != 0 {
+		return TombstoneAttrs_TN_Created
+	}
+	return TombstoneAttrs_CN_Created
+}
 
 func GetTombstoneCommitTSAttrIdx(columnCnt uint16) uint16 {
 	if columnCnt == 3 {
@@ -59,4 +114,69 @@ func GetTombstoneCommitTSAttrIdx(columnCnt uint16) uint16 {
 		return TombstoneAttr_A_CommitTs_Idx
 	}
 	panic(fmt.Sprintf("invalid tombstone column count %d", columnCnt))
+}
+
+func GetTombstoneSeqnums(hidden HiddenColumnSelection) []uint16 {
+	if hidden&HiddenColumnSelection_PhysicalAddr != 0 &&
+		hidden&HiddenColumnSelection_CommitTS != 0 {
+		return TombstoneSeqnums_DN_Created_PhyAddr
+	}
+	if hidden&HiddenColumnSelection_PhysicalAddr != 0 {
+		return TombstoneSeqnums_CN_Created_PhyAddr
+	}
+	if hidden&HiddenColumnSelection_CommitTS != 0 {
+		return TombstoneSeqnums_DN_Created
+	}
+	return TombstoneSeqnums_CN_Created
+}
+
+func GetTombstoneSchema(
+	pk types.Type, hidden HiddenColumnSelection,
+) (attrs []string, attrTypes []types.Type) {
+	attrs = GetTombstoneAttrs(hidden)
+	attrTypes = GetTombstoneTypes(pk, hidden)
+	return
+}
+func GetTombstoneTypes(
+	pk types.Type, hidden HiddenColumnSelection,
+) []types.Type {
+	if hidden&HiddenColumnSelection_PhysicalAddr != 0 &&
+		hidden&HiddenColumnSelection_CommitTS != 0 {
+		return []types.Type{
+			RowidType,
+			pk,
+			TSType,
+			RowidType,
+		}
+	}
+	if hidden&HiddenColumnSelection_PhysicalAddr != 0 {
+		return []types.Type{
+			RowidType,
+			pk,
+			RowidType,
+		}
+	}
+	if hidden&HiddenColumnSelection_CommitTS != 0 {
+		return []types.Type{
+			RowidType,
+			pk,
+			TSType,
+		}
+	}
+	return []types.Type{
+		RowidType,
+		pk,
+	}
+}
+
+func MustGetPhysicalColumnPosition(seqnums []uint16, colTypes []types.Type) int {
+	for i, seqnum := range seqnums {
+		if seqnum == SEQNUM_ROWID {
+			if colTypes[i] != RowidType {
+				panic(fmt.Sprintf("rowid column should be rowid type but got %s", colTypes[i]))
+			}
+			return i
+		}
+	}
+	return -1
 }

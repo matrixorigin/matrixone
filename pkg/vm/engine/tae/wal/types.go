@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	GroupC uint32 = iota + 10
-	GroupPrepare
+	GroupPrepare = entry.GTCustomized + iota
+	GroupC
 )
 
 type ReplayObserver interface {
@@ -33,7 +33,7 @@ type LogEntry entry.Entry
 
 type Driver interface {
 	GetCheckpointed() uint64
-	RangeCheckpoint(start, end uint64) (e LogEntry, err error)
+	RangeCheckpoint(start, end uint64, files ...string) (e LogEntry, err error)
 	AppendEntry(uint32, LogEntry) (uint64, error)
 	LoadEntry(groupID uint32, lsn uint64) (LogEntry, error)
 	GetCurrSeqNum() uint64
@@ -41,4 +41,6 @@ type Driver interface {
 	Replay(handle store.ApplyHandle) error
 	Start()
 	Close() error
+
+	GetTruncated() uint64
 }

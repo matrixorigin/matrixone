@@ -323,6 +323,10 @@ type BuiltinNumber interface {
 	Ints | UInts | Floats
 }
 
+type Times interface {
+	Date | Time | Datetime | Timestamp
+}
+
 type OrderedT interface {
 	constraints.Ordered
 }
