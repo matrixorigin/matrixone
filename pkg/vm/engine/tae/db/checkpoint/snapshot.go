@@ -74,7 +74,6 @@ func FilterSortedMetaFilesByTimestamp(
 		if curr.start.IsEmpty() && ts.LE(&curr.end) {
 			return files[:i]
 		}
-		prev = curr
 	}
 
 	return files

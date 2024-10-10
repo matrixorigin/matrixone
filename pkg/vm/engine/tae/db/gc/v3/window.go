@@ -462,7 +462,7 @@ func (w *GCWindow) LoadBatchData(
 	for _, s := range w.files {
 		pint += s.ObjectName().String() + ";"
 	}
-	logutil.Infof(pint)
+	logutil.Infof("%s", pint)
 	err := loader(ctx, w.fs, &w.files[0], bat, mp)
 	if err != nil {
 		return false, err
