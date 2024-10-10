@@ -243,6 +243,7 @@ enum MethodType {
   GET_REQUIRED_LSN = 23;
   GET_LATEST_LSN = 24;
   GET_LEADER_ID = 25;
+  CHECK_HEALTH = 26;
 };
 
 enum RecordType {
@@ -319,6 +320,7 @@ message Request {
   ProxyHeartbeat ProxyHeartbeat  = 13;
   uint64 NonVotingReplicaNum     = 14;
   Locality NonVotingLocality     = 15;
+  CheckHealth CheckHealth        = 16;
 };
 
 message LogResponse {
@@ -759,4 +761,8 @@ message ConfigData{
 message Locality {
   // Value is the locality content.
   map<string, string> Value = 1;
+}
+
+message CheckHealth {
+  uint64 ShardID = 1;
 }
