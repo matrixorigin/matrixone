@@ -16,12 +16,12 @@ package rpc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"testing"
 	"time"
 
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"

@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"math/rand"
 	"testing"
 	"time"
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

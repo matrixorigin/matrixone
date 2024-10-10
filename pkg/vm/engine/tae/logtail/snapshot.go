@@ -329,14 +329,6 @@ func isMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
 
-func isMoDB(tid uint64) bool {
-	return tid == catalog2.MO_DATABASE_ID
-}
-
-func isMoCol(tid uint64) bool {
-	return tid == catalog2.MO_COLUMNS_ID
-}
-
 type tombstone struct {
 	pk types.Tuple
 	ts types.TS

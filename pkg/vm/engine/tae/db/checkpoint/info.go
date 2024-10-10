@@ -39,7 +39,6 @@ type RunnerReader interface {
 	RemoveCheckpointMetaFile(string)
 	AddCheckpointMetaFile(string)
 	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
-	DeleteCompactedEntry(entry *CheckpointEntry)
 	GetCompacted() *CheckpointEntry
 	UpdateCompacted(entry *CheckpointEntry)
 }
@@ -179,7 +178,6 @@ func (r *runner) UpdateCompacted(entry *CheckpointEntry) {
 	r.storage.Lock()
 	defer r.storage.Unlock()
 	r.storage.compacted.Store(entry)
-	return
 }
 
 // this API returns the min ts of all checkpoints

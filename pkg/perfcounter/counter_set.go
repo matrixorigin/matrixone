@@ -104,7 +104,6 @@ type TAECounterSet struct {
 		DoIncrementalCheckpoint stats.Counter
 		DeleteGlobalEntry       stats.Counter
 		DeleteIncrementalEntry  stats.Counter
-		DeleteCompactedEntry    stats.Counter
 	}
 
 	Object struct {

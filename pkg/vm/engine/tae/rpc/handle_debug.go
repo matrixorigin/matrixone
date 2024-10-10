@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"strconv"
 	"strings"
 	"time"
@@ -36,7 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -242,11 +241,11 @@ func (h *Handle) HandleDiskCleaner(
 	op := req.Op
 	key := req.Key
 	value := req.Value
-	if op == gc.RemoveChecker {
+	if op == cmd_util.RemoveChecker {
 		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
 	}
 	switch key {
-	case gc.CheckerKeyTTL:
+	case cmd_util.CheckerKeyTTL:
 		// Set a ttl, checkpoints whose endTS is less than this ttl can be consumed
 		var ttl time.Duration
 		ttl, err = time.ParseDuration(value)
@@ -265,9 +264,9 @@ func (h *Handle) HandleDiskCleaner(
 				ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(ttl), 0)
 				endTS := checkpoint.GetEnd()
 				return !endTS.GE(&ts)
-			}, gc.CheckerKeyTTL)
+			}, cmd_util.CheckerKeyTTL)
 		return
-	case gc.CheckerKeyMinTS:
+	case cmd_util.CheckerKeyMinTS:
 		// Set a minTS, checkpoints whose endTS is less than this minTS can be consumed
 		var ts types.TS
 		var pTime int64
@@ -292,7 +291,7 @@ func (h *Handle) HandleDiskCleaner(
 				ckp := item.(*checkpoint.CheckpointEntry)
 				end := ckp.GetEnd()
 				return !end.GE(&ts)
-			}, gc.CheckerKeyMinTS)
+			}, cmd_util.CheckerKeyMinTS)
 		return
 	default:
 		return nil, moerr.NewInvalidArgNoCtx(key, value)

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"path"
 	"sync/atomic"
 	"time"
@@ -259,7 +260,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
 			endTS := checkpoint.GetEnd()
 			return !endTS.GE(&ts)
-		}, gc2.CheckerKeyTTL)
+		}, cmd_util.CheckerKeyTTL)
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
 	// Init gc manager at last

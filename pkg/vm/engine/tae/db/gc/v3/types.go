@@ -70,16 +70,6 @@ const (
 	GCAttrVersion    = "version"
 )
 
-const (
-	AddChecker    = "add_checker"
-	RemoveChecker = "remove_checker"
-)
-
-const (
-	CheckerKeyTTL   = "ttl"
-	CheckerKeyMinTS = "min_ts"
-)
-
 var (
 	BlockSchemaAttr = []string{
 		GCAttrObjectName,

@@ -349,15 +349,11 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	if o == nil || (o.tsRange.start.IsEmpty() && o.tsRange.end.IsEmpty()) {
 		return
 	}
+	w.files = append(w.files, o.files...)
 	if w.tsRange.start.IsEmpty() && w.tsRange.end.IsEmpty() {
 		w.tsRange.start = o.tsRange.start
 		w.tsRange.end = o.tsRange.end
-		w.files = append(w.files, o.files...)
 		return
-	}
-
-	for _, file := range o.files {
-		w.files = append(w.files, file)
 	}
 
 	if w.tsRange.start.GT(&o.tsRange.start) {
@@ -570,7 +566,7 @@ func (w *GCWindow) Compare(
 			bat.CleanOnlyData()
 			done, err := loadfn(context.Background(), nil, nil, w.mp, bat)
 			if err != nil {
-				logutil.Infof("load data error")
+				logutil.Errorf("load data error %v", err)
 				return err
 			}
 

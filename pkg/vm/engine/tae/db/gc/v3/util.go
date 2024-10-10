@@ -17,8 +17,6 @@ package gc
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -64,7 +62,6 @@ func MakeLoadFunc(
 			if _, err := bat.AppendWithCopy(ctx, mp, tail[cursor]); err != nil {
 				return false, err
 			}
-			logutil.Infof("load batch from tail, bat %d", bat.Vecs[0].Length())
 			cursor++
 			return false, nil
 		}

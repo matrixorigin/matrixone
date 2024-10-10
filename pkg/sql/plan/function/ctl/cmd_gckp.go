@@ -15,12 +15,12 @@
 package ctl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"time"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 

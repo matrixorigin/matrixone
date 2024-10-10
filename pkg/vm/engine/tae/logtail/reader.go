@@ -184,7 +184,6 @@ func (r *CheckpointReader) LoadBatchData(
 		return true, nil
 	}
 	key := r.locations[0]
-	logutil.Infof("key is %v", key.String())
 	var reader *blockio.BlockReader
 	reader, err := blockio.NewObjectReader(r.sid, r.fs, key)
 	if err != nil {
@@ -204,14 +203,11 @@ func (r *CheckpointReader) LoadBatchData(
 		}
 		for i := range bats {
 			cnBat := containers.ToCNBatch(bats[i])
-			logutil.Infof("cnBat is %d, bat is %d", cnBat.Vecs[0].Length(), len(bat.Vecs))
 			bat, err = bat.Append(ctx, mp, cnBat)
 			if err != nil {
 				logutil.Infof("err is %v", err)
 				return false, err
 			}
-			//bats[i].Close()
-			logutil.Infof("bat is %d", bat.RowCount())
 		}
 	}
 	r.locations = r.locations[1:]
