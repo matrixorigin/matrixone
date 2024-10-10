@@ -825,6 +825,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.PostDml = &pipeline.PostDml{
 			AddAffectedRows: t.PostDmlCtx.AddAffectedRows,
 			Ref:             t.PostDmlCtx.Ref,
+			PrimaryKeyIdx:   t.PostDmlCtx.PrimaryKeyIdx,
+			PrimaryKeyName:  t.PostDmlCtx.PrimaryKeyName,
 		}
 		if t.PostDmlCtx.FullText != nil {
 			ft := t.PostDmlCtx.FullText
@@ -833,7 +835,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				IsInsert:        ft.IsInsert,
 				SourceTableName: ft.SourceTableName,
 				IndexTableName:  ft.IndexTableName,
-				PrimaryKeyIdx:   ft.PrimaryKeyIdx,
 				Parts:           ft.Parts,
 				AlgoParams:      ft.AlgoParams,
 			}
@@ -1313,6 +1314,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.PostDmlCtx = &postdml.PostDmlCtx{
 			Ref:             t.Ref,
 			AddAffectedRows: t.AddAffectedRows,
+			PrimaryKeyIdx:   t.PrimaryKeyIdx,
+			PrimaryKeyName:  t.PrimaryKeyName,
 		}
 
 		if t.FullText != nil {
@@ -1322,8 +1325,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				IsInsert:        ft.IsInsert,
 				SourceTableName: ft.SourceTableName,
 				IndexTableName:  ft.IndexTableName,
-				PrimaryKeyIdx:   ft.PrimaryKeyIdx,
-				PrimaryKeyName:  ft.PrimaryKeyName,
 				Parts:           ft.Parts,
 				AlgoParams:      ft.AlgoParams,
 			}

@@ -1927,6 +1927,8 @@ func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
 	delCtx := &postdml.PostDmlCtx{
 		Ref:             oldCtx.Ref,
 		AddAffectedRows: oldCtx.AddAffectedRows,
+		PrimaryKeyIdx:   oldCtx.PrimaryKeyIdx,
+		PrimaryKeyName:  oldCtx.PrimaryKeyName,
 	}
 
 	if oldCtx.FullText != nil {
@@ -1935,8 +1937,6 @@ func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
 			IsInsert:        oldCtx.FullText.IsInsert,
 			SourceTableName: oldCtx.FullText.SourceTableName,
 			IndexTableName:  oldCtx.FullText.IndexTableName,
-			PrimaryKeyIdx:   oldCtx.FullText.PrimaryKeyIdx,
-			PrimaryKeyName:  oldCtx.FullText.PrimaryKeyName,
 			Parts:           oldCtx.FullText.Parts,
 			AlgoParams:      oldCtx.FullText.AlgoParams,
 		}

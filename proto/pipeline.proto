@@ -182,7 +182,9 @@ message PostDml {
   // PostDmlCtx
   plan.ObjectRef ref = 1;
   bool add_affected_rows = 2;
-  plan.PostDmlFullTextCtx full_text = 3;
+  int32 primary_key_idx = 3;
+  string primary_key_name = 4;
+  plan.PostDmlFullTextCtx full_text = 5;
 }
 
 message LockTarget {

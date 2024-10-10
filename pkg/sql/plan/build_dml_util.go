@@ -4553,14 +4553,14 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 			ProjectList: postdmlProject,
 			Children:    []int32{lastNodeId},
 			PostDmlCtx: &plan.PostDmlCtx{
-				Ref: indexObjRef,
+				Ref:            indexObjRef,
+				PrimaryKeyIdx:  int32(orgPkColPos),
+				PrimaryKeyName: delCtx.tableDef.Pkey.PkeyColName,
 				FullText: &plan.PostDmlFullTextCtx{
 					IsDelete:        true,
 					IsInsert:        false,
 					SourceTableName: delCtx.tableDef.Name,
 					IndexTableName:  indexTableDef.Name,
-					PrimaryKeyIdx:   int32(orgPkColPos),
-					PrimaryKeyName:  delCtx.tableDef.Pkey.PkeyColName,
 					Parts:           indexdef.Parts,
 					AlgoParams:      indexdef.IndexAlgoParams,
 				},

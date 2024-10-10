@@ -988,16 +988,16 @@ message PostDmlFullTextCtx {
 	bool is_insert = 2;
 	string source_table_name = 3;
 	string index_table_name = 4;
-	int32 primary_key_idx = 5;
-	string primary_key_name = 6;
-	repeated string parts = 7;
-	string algo_params = 8;
+	repeated string parts = 5;
+	string algo_params = 6;
 }
 
 message PostDmlCtx {
 	ObjectRef ref = 1;
 	bool add_affected_rows 	= 2;
-	PostDmlFullTextCtx full_text = 3;
+	int32 primary_key_idx = 3;
+	string primary_key_name = 4;
+	PostDmlFullTextCtx full_text = 5;
 }
 
 message Query {

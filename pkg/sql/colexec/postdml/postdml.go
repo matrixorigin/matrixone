@@ -67,26 +67,19 @@ func (postdml *PostDml) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	// you may add new context to generate post dml SQL
-	// fulltext post dml
-	if postdml.PostDmlCtx.FullText != nil {
-		err := postdml.runPostDmlFullText(proc, result)
-		if err != nil {
-			return vm.CancelResult, err
-		}
+	if err = postdml.runPostDml(proc, result); err != nil {
+		return vm.CancelResult, err
 	}
 
 	analyzer.Output(result.Batch)
 	return result, nil
 }
 
-func (postdml *PostDml) runPostDmlFullText(proc *process.Process, result vm.CallResult) error {
+func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) error {
 
-	ftctx := postdml.PostDmlCtx.FullText
 	var in_list []any
-
 	bat := result.Batch
-	pkvec := bat.Vecs[ftctx.PrimaryKeyIdx]
+	pkvec := bat.Vecs[postdml.PostDmlCtx.PrimaryKeyIdx]
 	//pkTyp := pkvec.GetType()
 	in_list = make([]any, 0, bat.RowCount())
 	for i := 0; i < bat.RowCount(); i++ {
@@ -101,20 +94,26 @@ func (postdml *PostDml) runPostDmlFullText(proc *process.Process, result vm.Call
 	}
 
 	values := anyslice2str(in_list)
-	if ftctx.IsDelete {
-		// append Delete SQL
-		sql := fmt.Sprintf(fulltextDeleteSqlFmt, ftctx.IndexTableName, values)
 
-		logutil.Infof("DELETE SQL : %s", sql)
-		proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)
-	}
+	// you may add new context to generate post dml SQL
+	if postdml.PostDmlCtx.FullText != nil {
+		ftctx := postdml.PostDmlCtx.FullText
+		if ftctx.IsDelete {
+			// append Delete SQL
+			sql := fmt.Sprintf(fulltextDeleteSqlFmt, ftctx.IndexTableName, values)
 
-	if ftctx.IsInsert {
-		sql := fmt.Sprintf(fulltextInsertSqlFmt, ftctx.IndexTableName, ftctx.SourceTableName, ftctx.AlgoParams, ftctx.PrimaryKeyName,
-			strings.Join(ftctx.Parts, ", "), ftctx.SourceTableName, values)
-		logutil.Infof("INSERT SQL : %s", sql)
-		proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)
+			logutil.Infof("DELETE SQL : %s", sql)
+			proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)
+		}
 
+		if ftctx.IsInsert {
+			sql := fmt.Sprintf(fulltextInsertSqlFmt, ftctx.IndexTableName, ftctx.SourceTableName, ftctx.AlgoParams,
+				postdml.PostDmlCtx.PrimaryKeyName,
+				strings.Join(ftctx.Parts, ", "), ftctx.SourceTableName, values)
+			logutil.Infof("INSERT SQL : %s", sql)
+			proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)
+
+		}
 	}
 
 	return nil

@@ -70,8 +70,6 @@ type PostDmlFullTextCtx struct {
 	IsInsert        bool
 	SourceTableName string
 	IndexTableName  string
-	PrimaryKeyIdx   int32
-	PrimaryKeyName  string
 	Parts           []string
 	AlgoParams      string
 }
@@ -79,6 +77,8 @@ type PostDmlFullTextCtx struct {
 type PostDmlCtx struct {
 	Ref             *plan.ObjectRef
 	AddAffectedRows bool
+	PrimaryKeyIdx   int32
+	PrimaryKeyName  string
 
 	// define various context for different tasks
 	FullText *PostDmlFullTextCtx
