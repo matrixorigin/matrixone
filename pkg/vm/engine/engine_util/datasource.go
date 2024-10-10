@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -117,7 +116,7 @@ func (rs *RemoteDataSource) Close() {
 func (rs *RemoteDataSource) applyInMemTombstones(
 	bid *objectio.Blockid,
 	rowsOffset []int64,
-	deletedRows *nulls.Nulls,
+	deletedRows *objectio.Bitmap,
 ) (leftRows []int64) {
 	tombstones := rs.data.GetTombstones()
 	if tombstones == nil || !tombstones.HasAnyInMemoryTombstone() {
@@ -133,7 +132,7 @@ func (rs *RemoteDataSource) applyPersistedTombstones(
 	ctx context.Context,
 	bid *objectio.Blockid,
 	rowsOffset []int64,
-	mask *nulls.Nulls,
+	mask *objectio.Bitmap,
 ) (leftRows []int64, err error) {
 	tombstones := rs.data.GetTombstones()
 	if tombstones == nil || !tombstones.HasAnyTombstoneFile() {
@@ -171,19 +170,18 @@ func (rs *RemoteDataSource) ApplyTombstones(
 
 func (rs *RemoteDataSource) GetTombstones(
 	ctx context.Context, bid *objectio.Blockid,
-) (mask *nulls.Nulls, err error) {
+) (mask objectio.Bitmap, err error) {
 
-	mask = &nulls.Nulls{}
-	mask.InitWithSize(8192)
+	mask = objectio.GetReusableBitmap()
 
-	rs.applyInMemTombstones(bid, nil, mask)
+	rs.applyInMemTombstones(bid, nil, &mask)
 
-	_, err = rs.applyPersistedTombstones(ctx, bid, nil, mask)
-	if err != nil {
+	if _, err = rs.applyPersistedTombstones(ctx, bid, nil, &mask); err != nil {
+		mask.Release()
 		return
 	}
 
-	return mask, nil
+	return
 }
 
 func (rs *RemoteDataSource) SetOrderBy(_ []*plan.OrderBySpec) {
@@ -220,7 +218,7 @@ func NewRemoteDataSource(
 // or the deletes will only record into the `deleteRows` bitmap.
 func FastApplyDeletedRows(
 	leftRows []int64,
-	deletedRows *nulls.Nulls,
+	deletedRows *objectio.Bitmap,
 	o uint32,
 ) []int64 {
 	if len(leftRows) != 0 {

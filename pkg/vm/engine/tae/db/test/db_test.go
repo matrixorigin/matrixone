@@ -4265,9 +4265,10 @@ func TestBlockRead(t *testing.T) {
 				return bat
 			}
 			b1 := buildBatch(colTyps)
+			phyAddrColumnPos := -1
 			cacheBat := batch.EmptyBatchWithSize(len(colIdxs) + 1)
 			err = blockio.BlockDataReadInner(
-				context.Background(), false, info, ds, colIdxs, colTyps,
+				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
 				beforeDel, nil, fileservice.Policy(0), b1, &cacheBat, pool, fs,
 			)
 			assert.NoError(t, err)
@@ -4278,7 +4279,7 @@ func TestBlockRead(t *testing.T) {
 
 			b2 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
-				context.Background(), false, info, ds, colIdxs, colTyps,
+				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
 				afterFirstDel, nil, fileservice.Policy(0), b2, &cacheBat, pool, fs,
 			)
 			assert.NoError(t, err)
@@ -4288,7 +4289,7 @@ func TestBlockRead(t *testing.T) {
 
 			b3 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
-				context.Background(), false, info, ds, colIdxs, colTyps,
+				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
 				afterSecondDel, nil, fileservice.Policy(0), b3, &cacheBat, pool, fs,
 			)
 			assert.NoError(t, err)
@@ -4297,10 +4298,11 @@ func TestBlockRead(t *testing.T) {
 			// read rowid column only
 			b4 := buildBatch([]types.Type{types.T_Rowid.ToType()})
 			err = blockio.BlockDataReadInner(
-				context.Background(), false, info,
+				context.Background(), info,
 				ds,
 				[]uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
+				0,
 				afterSecondDel, nil, fileservice.Policy(0), b4, &cacheBat, pool, fs,
 			)
 			assert.NoError(t, err)
@@ -4311,9 +4313,10 @@ func TestBlockRead(t *testing.T) {
 			//info.Appendable = false
 			b5 := buildBatch([]types.Type{types.T_Rowid.ToType()})
 			err = blockio.BlockDataReadInner(
-				context.Background(), false, info,
+				context.Background(), info,
 				ds, []uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
+				0,
 				afterSecondDel, nil, fileservice.Policy(0), b5, &cacheBat, pool, fs,
 			)
 			assert.NoError(t, err)
@@ -10000,4 +10003,33 @@ func TestTransferInMerge(t *testing.T) {
 	}
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
+}
+
+func TestTransferInMerge2(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, _ := tae.GetRelation()
+	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, txn)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	{
+		tae.MergeBlocks(true)
+		tae.MergeBlocks(true)
+	}
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.CheckRowsByScan(9, true)
+	t.Log(tae.Catalog.SimplePPString(3))
 }

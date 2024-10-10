@@ -61,6 +61,9 @@ func fillRuntimeOptions(opts *options.Options) {
 	if opts.MergeCfg.CNStandaloneTake {
 		common.ShouldStandaloneCNTakeOver.Store(true)
 	}
+	if opts.MergeCfg.DisableZMBasedMerge {
+		common.RuntimeDisableZMBasedMerge.Store(true)
+	}
 }
 
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
@@ -263,7 +266,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			"clean-transfer-table",
 			opts.CheckpointCfg.TransferInterval,
 			func(_ context.Context) (err error) {
-				db.Runtime.PrintVectorPoolUsage()
+				db.Runtime.PoolUsageReport()
 				db.Runtime.TransferDelsMap.Prune(opts.TransferTableTTL)
 				transferTable.RunTTL()
 				return

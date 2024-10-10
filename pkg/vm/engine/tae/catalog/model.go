@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	PhyAddrColumnName    = objectio.DefaultRowid_Attr
+	PhyAddrColumnName    = objectio.PhysicalAddr_Attr
 	PhyAddrColumnComment = "Physical address"
 
 	TenantSysID = uint32(0)
