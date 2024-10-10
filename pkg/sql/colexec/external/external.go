@@ -148,7 +148,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		}
 	}
 	if external.ctr.buf == nil {
-		external.ctr.buf = batch.New(false, param.Attrs)
+		external.ctr.buf = batch.New(param.Attrs)
 		var flag bool
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
