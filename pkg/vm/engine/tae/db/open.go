@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -248,8 +248,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	cleaner := gc2.NewCheckpointCleaner(opts.Ctx, opts.SID, fs, db.BGCheckpointRunner, opts.GCCfg.DisableGC)
-	cleaner.SetCheckGC(opts.GCCfg.CheckGC)
+	cleaner := gc2.NewCheckpointCleaner(opts.Ctx,
+		opts.SID, fs, db.BGCheckpointRunner,
+		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
+		gc2.WithCheckOption(opts.GCCfg.CheckGC),
+		gc2.WithGCCheckpointOption(!opts.CheckpointCfg.DisableGCCheckpoint))
 	cleaner.AddChecker(
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)
@@ -286,11 +289,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CheckpointCfg.DisableGCCheckpoint {
 					return nil
 				}
-				consumed := db.DiskCleaner.GetCleaner().GetMaxConsumed()
-				if consumed == nil {
+				gcWaterMark := db.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
+				if gcWaterMark == nil {
 					return nil
 				}
-				return db.BGCheckpointRunner.GCByTS(ctx, consumed.GetEnd())
+				return db.BGCheckpointRunner.GCByTS(ctx, *gcWaterMark)
 			}),
 		gc.WithCronJob(
 			"catalog-gc",
@@ -299,11 +302,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CatalogCfg.DisableGC {
 					return nil
 				}
-				consumed := db.DiskCleaner.GetCleaner().GetMaxConsumed()
-				if consumed == nil {
+				gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
+				if gcWaterMark == nil {
 					return nil
 				}
-				db.Catalog.GCByTS(ctx, consumed.GetEnd())
+				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
 				return nil
 			}),
 		gc.WithCronJob(
@@ -311,7 +314,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) error {
 				logutil.Info(db.Runtime.ExportLogtailStats())
-				ckp := db.BGCheckpointRunner.MaxCheckpoint()
+				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
 				if ckp != nil {
 					// use previous end to gc logtail
 					ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here

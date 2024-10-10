@@ -213,8 +213,9 @@ type runner struct {
 	// memory storage of the checkpoint entries
 	storage struct {
 		sync.RWMutex
-		entries *btree.BTreeG[*CheckpointEntry]
-		globals *btree.BTreeG[*CheckpointEntry]
+		incrementals *btree.BTreeG[*CheckpointEntry]
+		globals      *btree.BTreeG[*CheckpointEntry]
+		compacted    atomic.Pointer[CheckpointEntry]
 	}
 
 	gcTS atomic.Value
@@ -256,7 +257,7 @@ func NewRunner(
 		observers: new(observers),
 		wal:       wal,
 	}
-	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
+	r.storage.incrementals = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.end.LT(&b.end)
 	}, btree.Options{
 		NoLocks: true,
@@ -380,6 +381,7 @@ func (r *runner) getTSTOGC() (ts types.TS, needGC bool) {
 	return
 }
 
+// PXU TODO: delete in the loop
 func (r *runner) gcCheckpointEntries(ts types.TS) {
 	if ts.IsEmpty() {
 		return
@@ -400,7 +402,7 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 
 func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	now := time.Now()
-	entry := r.MaxCheckpoint()
+	entry := r.MaxIncrementalCheckpoint()
 	// In some unit tests, ckp is managed manually, and ckp deletion (CleanPendingCheckpoint)
 	// can be called when the queue still has unexecuted task.
 	// Add `entry == nil` here as protective codes
@@ -496,7 +498,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 func (r *runner) DeleteIncrementalEntry(entry *CheckpointEntry) {
 	r.storage.Lock()
 	defer r.storage.Unlock()
-	r.storage.entries.Delete(entry)
+	r.storage.incrementals.Delete(entry)
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DeleteIncrementalEntry.Add(1)
 	})
@@ -509,6 +511,10 @@ func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 		counter.TAE.CheckPoint.DeleteGlobalEntry.Add(1)
 	})
 }
+
+func (r *runner) DeleteCompactedEntry(entry *CheckpointEntry) {
+}
+
 func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
 	iarg, sarg, flush := fault.TriggerFault("flush_table_error")
 	if flush && (iarg == 0 || rand.Int63n(iarg) == 0) {
@@ -714,14 +720,31 @@ func (r *runner) tryAddNewGlobalCheckpointEntry(entry *CheckpointEntry) (success
 	return true
 }
 
+func (r *runner) tryAddNewCompactedCheckpointEntry(entry *CheckpointEntry) (success bool) {
+	if entry.entryType != ET_Compacted {
+		panic("tryAddNewCompactedCheckpointEntry entry type is error")
+	}
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	old := r.storage.compacted.Load()
+	if old != nil {
+		end := old.end
+		if entry.end.LT(&end) {
+			return true
+		}
+	}
+	r.storage.compacted.Store(entry)
+	return true
+}
+
 func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (success bool) {
 	r.storage.Lock()
 	defer r.storage.Unlock()
-	maxEntry, _ := r.storage.entries.Max()
+	maxEntry, _ := r.storage.incrementals.Max()
 
 	// if it's the first entry, add it
 	if maxEntry == nil {
-		r.storage.entries.Set(entry)
+		r.storage.incrementals.Set(entry)
 		success = true
 		return
 	}
@@ -742,7 +765,7 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 		return
 	}
 
-	r.storage.entries.Set(entry)
+	r.storage.incrementals.Set(entry)
 
 	success = true
 	return
@@ -757,7 +780,7 @@ func (r *runner) tryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success
 	}
 	r.storage.Lock()
 	defer r.storage.Unlock()
-	it := r.storage.entries.Iter()
+	it := r.storage.incrementals.Iter()
 	for it.Next() {
 		e := it.Item()
 		e.ckpLSN = 0
@@ -780,7 +803,7 @@ func (r *runner) tryScheduleCheckpoint(endts types.TS) {
 	if r.disabled.Load() {
 		return
 	}
-	entry := r.MaxCheckpoint()
+	entry := r.MaxIncrementalCheckpoint()
 	global := r.MaxGlobalCheckpoint()
 
 	// no prev checkpoint found. try schedule the first
@@ -805,9 +828,9 @@ func (r *runner) tryScheduleCheckpoint(endts types.TS) {
 			}
 			tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
 			tree.GetTree().Compact()
-			if !tree.IsEmpty() && entry.CheckPrintTime() {
+			if !tree.IsEmpty() && entry.TooOld() {
 				logutil.Infof("waiting for dirty tree %s", tree.String())
-				entry.IncrWaterLine()
+				entry.DeferRetirement()
 			}
 			return tree.IsEmpty()
 		}
@@ -817,7 +840,7 @@ func (r *runner) tryScheduleCheckpoint(endts types.TS) {
 			return
 		}
 		entry.SetState(ST_Running)
-		v2.TaskCkpEntryPendingDurationHistogram.Observe(time.Since(entry.lastPrint).Seconds())
+		v2.TaskCkpEntryPendingDurationHistogram.Observe(entry.Age().Seconds())
 		r.incrementalCheckpointQueue.Enqueue(struct{}{})
 		return
 	}
@@ -1135,12 +1158,14 @@ func (r *runner) GetDirtyCollector() logtail.Collector {
 	return r.source
 }
 
-func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (locations string, checkpointed types.TS, err error) {
+func (r *runner) CollectCheckpointsInRange(
+	ctx context.Context, start, end types.TS,
+) (locations string, checkpointed types.TS, err error) {
 	if r.IsTSStale(end) {
 		return "", types.TS{}, moerr.NewInternalErrorf(ctx, "ts %v is staled", end.ToString())
 	}
 	r.storage.Lock()
-	tree := r.storage.entries.Copy()
+	tree := r.storage.incrementals.Copy()
 	global, _ := r.storage.globals.Max()
 	r.storage.Unlock()
 	locs := make([]string, 0)

@@ -17,6 +17,7 @@ package engine_util
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -418,6 +419,7 @@ func (sinker *Sinker) pushStaged(
 
 	sinker.staged.inMemory = append(sinker.staged.inMemory, bat)
 	sinker.staged.inMemorySize += bat.Size()
+	logutil.Infof("inMemory is %d, bat is %d", len(sinker.staged.inMemory), bat.Vecs[0].Length())
 	if sinker.staged.inMemorySize >= sinker.staged.memorySizeThreshold {
 		return sinker.trySpill(ctx)
 	}
@@ -550,6 +552,7 @@ func (sinker *Sinker) Write(
 
 	offset := 0
 	left := data.RowCount()
+	logutil.Infof("write %d rows", left)
 	for left > 0 {
 		if curr == nil {
 			curr = sinker.popStaged()
@@ -568,7 +571,7 @@ func (sinker *Sinker) Write(
 		if currPos+toAdd > objectio.BlockMaxRows {
 			toAdd = objectio.BlockMaxRows - currPos
 		}
-		if err = curr.Union(data, offset, toAdd, sinker.mp); err != nil {
+		if err = curr.UnionWindow(data, offset, toAdd, sinker.mp); err != nil {
 			return
 		}
 		if curr.RowCount() == objectio.BlockMaxRows {
@@ -593,7 +596,8 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 		return nil
 	}
 	// spill the remaining data
-	if sinker.staged.inMemorySize >= sinker.config.tailSizeCap {
+	if sinker.staged.inMemorySize > 0 &&
+		sinker.staged.inMemorySize >= sinker.config.tailSizeCap {
 		if err := sinker.trySpill(ctx); err != nil {
 			return err
 		}
@@ -610,6 +614,7 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 			}
 		}
 		sinker.result.tail = sinker.staged.inMemory
+		logutil.Infof("tail size: %d", sinker.staged.inMemorySize)
 		sinker.clearInMemoryStaged()
 	}
 
