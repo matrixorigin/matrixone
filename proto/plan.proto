@@ -617,10 +617,11 @@ message UpdateCtx {
 
 	repeated uint64 partition_table_ids		= 3;
 	repeated string partition_table_names	= 4;
-	int32 partition_idx						= 5;
+	int32 old_partition_idx					= 5;
+	int32 new_partition_idx					= 6;
 
-	repeated ColRef insert_cols	= 6 [(gogoproto.nullable) = false];
-	repeated ColRef delete_cols	= 7 [(gogoproto.nullable) = false];
+	repeated ColRef insert_cols	= 7 [(gogoproto.nullable) = false];
+	repeated ColRef delete_cols	= 8 [(gogoproto.nullable) = false];
 }
 
 message InsertCtx {

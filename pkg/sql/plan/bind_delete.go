@@ -246,7 +246,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 
 		if tableDef.Partition != nil {
 			partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[i], tableDef)
-			updateCtx.PartitionIdx = int32(len(selectNode.ProjectList) - 1)
+			updateCtx.OldPartitionIdx = int32(len(selectNode.ProjectList) - 1)
 			updateCtx.PartitionTableIds = partitionTableIDs
 			updateCtx.PartitionTableNames = partitionTableNames
 			dmlNode.BindingTags = append(dmlNode.BindingTags, selectNodeTag)
@@ -263,7 +263,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 				if tableDef.Partition != nil {
 					lockTarget.IsPartitionTable = true
 					lockTarget.PartitionTableIds = updateCtx.PartitionTableIds
-					lockTarget.FilterColIdxInBat = updateCtx.PartitionIdx
+					lockTarget.FilterColIdxInBat = updateCtx.OldPartitionIdx
 					lockTarget.FilterColRelPos = selectNodeTag
 				}
 				lockTargets = append(lockTargets, lockTarget)
@@ -428,5 +428,9 @@ func (builder *QueryBuilder) updateLocksOnDemand(nodeID int32) {
 		node.LockTargets[0].LockTable = true
 		logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
 		logutil.Infof("the outcnt stats is %f", node.Stats.Outcnt)
+
+		if len(node.LockTargets) > 1 && node.LockTargets[1].IsPartitionTable {
+			node.LockTargets[1].LockTable = true
+		}
 	}
 }

@@ -278,7 +278,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		}
 		if tableDef.Partition != nil {
 			partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[i], tableDef)
-			updateCtx.PartitionIdx = int32(len(selectNode.ProjectList))
+			updateCtx.NewPartitionIdx = int32(len(selectNode.ProjectList))
 			updateCtx.PartitionTableIds = partitionTableIDs
 			updateCtx.PartitionTableNames = partitionTableNames
 			partitionExpr, err = getRemapParitionExpr(tableDef, selectNodeTag, colName2Idx, true)
@@ -323,7 +323,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 				if tableDef.Partition != nil {
 					lockTarget.IsPartitionTable = true
 					lockTarget.PartitionTableIds = updateCtx.PartitionTableIds
-					lockTarget.FilterColIdxInBat = updateCtx.PartitionIdx
+					lockTarget.FilterColIdxInBat = updateCtx.NewPartitionIdx
 					lockTarget.FilterColRelPos = selectNodeTag
 				}
 				lockTargets = append(lockTargets, lockTarget)

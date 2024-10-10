@@ -807,7 +807,8 @@ func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpd
 			DeleteCols:          deleteCols,
 			PartitionTableIDs:   updateCtx.PartitionTableIds,
 			PartitionTableNames: updateCtx.PartitionTableNames,
-			PartitionIdx:        int(updateCtx.PartitionIdx),
+			OldPartitionIdx:     int(updateCtx.OldPartitionIdx),
+			NewPartitionIdx:     int(updateCtx.NewPartitionIdx),
 		}
 	}
 

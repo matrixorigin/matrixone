@@ -60,6 +60,10 @@ func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
 				logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
 				logutil.Infof("the outcnt stats is %f", n.Stats.Outcnt)
 				n.LockTargets[0].LockTable = reCheckIfNeed
+
+				if len(n.LockTargets) > 1 && n.LockTargets[1].IsPartitionTable {
+					n.LockTargets[1].LockTable = true
+				}
 			}
 		}
 	}
@@ -715,6 +719,29 @@ func remapPartitionExprColRef(expr *Expr, tableName string, relPos int32, colPos
 			if err = remapPartitionExprColRef(order.Expr, tableName, relPos, colPosMap, containTableName); err != nil {
 				return
 			}
+		}
+	}
+	return
+}
+
+func getPartColsFromExpr(expr *Expr, colNameMap map[string]bool) {
+	switch ne := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colNameMap[ne.Col.Name] = true
+
+	case *plan.Expr_F:
+		for _, arg := range ne.F.GetArgs() {
+			getPartColsFromExpr(arg, colNameMap)
+		}
+
+	case *plan.Expr_W:
+		getPartColsFromExpr(ne.W.WindowFunc, colNameMap)
+
+		for _, arg := range ne.W.PartitionBy {
+			getPartColsFromExpr(arg, colNameMap)
+		}
+		for _, order := range ne.W.OrderBy {
+			getPartColsFromExpr(order.Expr, colNameMap)
 		}
 	}
 	return

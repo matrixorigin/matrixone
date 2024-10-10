@@ -120,8 +120,8 @@ func (update *MultiUpdate) insert_table(
 	inputBatch *batch.Batch,
 	insertBatch *batch.Batch) (err error) {
 	if len(updateCtx.PartitionTableIDs) > 0 {
-		partTableNulls := inputBatch.Vecs[updateCtx.PartitionIdx].GetNulls()
-		partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.PartitionIdx])
+		partTableNulls := inputBatch.Vecs[updateCtx.NewPartitionIdx].GetNulls()
+		partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.NewPartitionIdx])
 
 		for partIdx := range len(updateCtx.PartitionTableIDs) {
 			insertBatch.CleanOnlyData()
@@ -181,11 +181,12 @@ func (update *MultiUpdate) check_null_and_insert_table(
 	idxPkNulls := inputBatch.Vecs[updateCtx.InsertCols[0]].GetNulls()
 
 	if len(updateCtx.PartitionTableIDs) > 0 {
+		partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.NewPartitionIdx])
+		partTableNulls := inputBatch.Vecs[updateCtx.NewPartitionIdx].GetNulls()
+
 		for partIdx := range len(updateCtx.PartitionTableIDs) {
 			insertBatch.CleanOnlyData()
 			expected := int32(partIdx)
-			partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.PartitionIdx])
-			partTableNulls := inputBatch.Vecs[updateCtx.PartitionIdx].GetNulls()
 
 			for i, partition := range partTableIDs {
 				if !partTableNulls.Contains(uint64(i)) {
@@ -207,9 +208,13 @@ func (update *MultiUpdate) check_null_and_insert_table(
 				}
 			}
 
-			err = updateCtx.PartitionSources[partIdx].Write(proc.Ctx, insertBatch)
-			if err != nil {
-				return err
+			newRowCount := insertBatch.Vecs[0].Length()
+			if newRowCount > 0 {
+				insertBatch.SetRowCount(newRowCount)
+				err = updateCtx.PartitionSources[partIdx].Write(proc.Ctx, insertBatch)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	} else {
@@ -229,8 +234,11 @@ func (update *MultiUpdate) check_null_and_insert_table(
 			}
 		}
 
-		insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
-		err = updateCtx.Source.Write(proc.Ctx, insertBatch)
+		newRowCount := insertBatch.Vecs[0].Length()
+		if newRowCount > 0 {
+			insertBatch.SetRowCount(newRowCount)
+			err = updateCtx.Source.Write(proc.Ctx, insertBatch)
+		}
 	}
 	return
 }
