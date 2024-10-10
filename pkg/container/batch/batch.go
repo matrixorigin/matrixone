@@ -24,20 +24,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-func New(ro bool, attrs []string) *Batch {
+func New(attrs []string) *Batch {
 	return &Batch{
-		Ro:       ro,
 		Attrs:    attrs,
 		Vecs:     make([]*vector.Vector, len(attrs)),
 		rowCount: 0,
 	}
 }
 
-func NewOffHeap(ro bool, attrs []string) *Batch {
-	ret := New(ro, attrs)
+func NewOffHeap(attrs []string) *Batch {
+	ret := New(attrs)
 	ret.offHeap = true
 	return ret
 }
@@ -61,8 +59,8 @@ func NewOffHeapWithSize(n int) *Batch {
 	return ret
 }
 
-func NewWithSchema(ro bool, offHeap bool, attrs []string, attTypes []types.Type) *Batch {
-	bat := New(ro, attrs)
+func NewWithSchema(offHeap bool, attrs []string, attTypes []types.Type) *Batch {
+	bat := New(attrs)
 	for i, t := range attTypes {
 		if offHeap {
 			bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
@@ -104,7 +102,6 @@ func SetLength(bat *Batch, n int) {
 
 func (bat *Batch) Slice(from, to int) *Batch {
 	return &Batch{
-		Ro:       bat.Ro,
 		Attrs:    bat.Attrs[from:to],
 		Vecs:     bat.Vecs[from:to],
 		rowCount: bat.rowCount,
@@ -299,12 +296,6 @@ func (bat *Batch) VectorCount() int {
 	return len(bat.Vecs)
 }
 
-func (bat *Batch) Prefetch(poses []int32, vecs []*vector.Vector) {
-	for i, pos := range poses {
-		vecs[i] = bat.GetVector(pos)
-	}
-}
-
 func (bat *Batch) SetAttributes(attrs []string) {
 	bat.Attrs = attrs
 }
@@ -401,13 +392,6 @@ func (bat *Batch) String() string {
 		buf.WriteString(fmt.Sprintf("%d : %s\n", i, vec.String()))
 	}
 	return buf.String()
-}
-
-func (bat *Batch) Log(tag string) {
-	if bat == nil || bat.rowCount < 1 {
-		return
-	}
-	logutil.Info("\n" + tag + "\n" + bat.String())
 }
 
 // Dup used to copy a Batch object, this method will create a new batch
