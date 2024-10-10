@@ -301,11 +301,13 @@ const (
 // Key/Index related constants
 const (
 	UniqueIndexSuffix             = "unique_"
+	FullTextIndexSuffix           = "fulltext_"
 	SecondaryIndexSuffix          = "secondary_"
 	PrefixIndexTableName          = "__mo_index_"
 	IndexTableNamePrefix          = PrefixIndexTableName
 	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
 	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
+	FullTextIndexTableNamePrefix  = PrefixIndexTableName + FullTextIndexSuffix
 
 	/************ 0. Regular Secondary Index ************/
 
@@ -345,6 +347,12 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
+
+	/************ 3. FULLTEXT Index **************/
+
+	FullTextIndex_TabCol_Word     = "word"
+	FullTextIndex_TabCol_Id       = "doc_id"
+	FullTextIndex_TabCol_Position = "pos"
 )
 
 const (

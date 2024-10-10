@@ -2540,7 +2540,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("ngram_token_size", 1, 10, false),
-		Default:           int64(2),
+		Default:           int64(3),
 	},
 	"offline_mode": {
 		Name:              "offline_mode",
@@ -3524,6 +3524,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableBoolType("disable_agg_statement"),
+		Default:           int64(0),
+	},
+	"experimental_fulltext_index": {
+		Name:              "experimental_fulltext_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
 		Default:           int64(0),
 	},
 }
