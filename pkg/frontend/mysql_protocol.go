@@ -543,7 +543,6 @@ const defaultTcp4PackageSize = 1<<14 - 66
 
 // CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
 // return 0 value, if the connection is closed.
-// return -1 value, if the session is nil unexpected.
 //
 // packet cnt has 3 part:
 // 1st part: flush op cnt.
@@ -562,11 +561,7 @@ const defaultTcp4PackageSize = 1<<14 - 66
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
 	ses := mp.GetSession()
 	if ses == nil {
-		if mp.quit.Load() {
-			return 0, 0
-		} else {
-			return -1, -1
-		}
+		return 0, 0
 	}
 	// Case 1: send data as ResultSet
 	resultSetPart := int64(ses.GetOutputBytes())
