@@ -122,7 +122,7 @@ func (update *MultiUpdate) delete_table(
 }
 
 func newDeleteBatch(inputBatch *batch.Batch, mainPkIdx int) *batch.Batch {
-	buf := batch.New(false, []string{catalog.Row_ID, "pk"})
+	buf := batch.New([]string{catalog.Row_ID, "pk"})
 	buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
 	buf.SetVector(1, vector.NewVec(*inputBatch.Vecs[mainPkIdx].GetType()))
 	return buf
