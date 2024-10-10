@@ -1498,7 +1498,7 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, expr *plan.Expr, 
 			return 1
 		}
 	}
-	if s.Overlap > 0.25 {
+	if s.Overlap > 0.5 {
 		if sortOrder == 0 || sortOrder == 1 {
 			sel = sel * math.Pow(10, float64(sortOrder+1))
 		} else {
