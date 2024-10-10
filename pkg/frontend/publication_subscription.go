@@ -1124,7 +1124,7 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 			pubTime,
 			subName,
 			subTime,
-			int(subInfo.Status),
+			int8(subInfo.Status),
 		})
 	}
 	ses.SetMysqlResultSet(rs)
