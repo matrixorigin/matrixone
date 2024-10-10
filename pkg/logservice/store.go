@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -181,6 +182,27 @@ func newLogStore(cfg Config,
 		return nil, err
 	}
 	return ls, nil
+}
+
+// newLogStoreWithRetry mainly used in tests which create new log store.
+// If an error occurred and the error is syscall.EADDRINUSE, retry to
+// create a new log store instance.
+func newLogStoreWithRetry(
+	genCfg func() Config,
+	taskServiceGetter func() taskservice.TaskService,
+	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType),
+	rt runtime.Runtime,
+) (*store, error) {
+	for {
+		s, err := newLogStore(genCfg(), taskServiceGetter, onReplicaChanged, rt)
+		if err != nil {
+			if strings.Contains(err.Error(), "address already in use") {
+				continue
+			}
+			return nil, err
+		}
+		return s, nil
+	}
 }
 
 func (l *store) close() error {
