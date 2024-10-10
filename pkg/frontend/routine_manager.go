@@ -51,6 +51,7 @@ type RoutineManager struct {
 	// reportSystemStatusTime is the time when report system status last time.
 	reportSystemStatusTime atomic.Pointer[time.Time]
 	cancel                 context.CancelFunc
+	testMode               bool
 }
 
 type AccountRoutineManager struct {
@@ -382,7 +383,7 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 
 	req := ToRequest(payload)
 	//handle request
-	err = routine.handleRequest(req)
+	err = handleRequest(routine, req)
 	if err != nil {
 		if !skipClientQuit(err.Error()) {
 			ses.Error(ctx,
