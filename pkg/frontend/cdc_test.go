@@ -1161,10 +1161,10 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		uint64(0),
 	))
 
-	sql4 := "insert into mo_catalog.mo_cdc_watermark values .*0, '00000000-0000-0000-0000-000000000000', 1001, '0-0'.*"
+	sql4 := "insert into mo_catalog.mo_cdc_watermark values .*0, '00000000-0000-0000-0000-000000000000', '1001_0', '0-0'.*"
 	mock.ExpectExec(sql4).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql5 := "select watermark from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = 1001"
+	sql5 := "select watermark from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = '1001_0'"
 	mock.ExpectQuery(sql5).WillReturnRows(sqlmock.NewRows(
 		[]string{
 			"watermark",
@@ -1173,7 +1173,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		"0-0",
 	))
 
-	sql6 := "update mo_catalog.mo_cdc_watermark set watermark='0-0' where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = 1001"
+	sql6 := "update mo_catalog.mo_cdc_watermark set watermark='0-0' where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = '1001_0'"
 	mock.ExpectExec(sql6).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {

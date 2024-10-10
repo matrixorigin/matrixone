@@ -90,9 +90,9 @@ func (reader *tableReader) Close() {}
 func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine) {
-	logutil.Infof("^^^^^ tableReader(%s).Run: start", reader.info.SourceTblName)
+	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 	defer func() {
-		logutil.Infof("^^^^^ tableReader(%s).Run: end", reader.info.SourceTblName)
+		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
 	}()
 
 	for {
@@ -105,13 +105,13 @@ func (reader *tableReader) Run(
 		}
 
 		if err := reader.readTable(ctx, ar); err != nil {
-			logutil.Errorf("reader %v failed err:%v", reader.info, err)
+			logutil.Errorf("cdc tableReader(%v) failed, err: %v\n", reader.info, err)
 
-			// if stale read, restart reader
+			// if stale read, try to restart reader
 			var moErr *moerr.Error
 			if errors.As(err, &moErr) && moErr.ErrorCode() == moerr.ErrStaleRead {
 				if err = reader.restartFunc(reader.info); err != nil {
-					logutil.Errorf("reader %v restart failed, err:%v", reader.info, err)
+					logutil.Errorf("cdc tableReader(%v) restart failed, err: %v\n", reader.info, err)
 					return
 				}
 				continue
@@ -170,7 +170,7 @@ func (reader *tableReader) readTableWithTxn(
 	//step2 : define time range
 	//	from = last wmark
 	//  to = txn operator snapshot ts
-	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblId)
+	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblIdStr)
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
 	start := time.Now()
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)

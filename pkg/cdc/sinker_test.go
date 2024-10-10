@@ -449,7 +449,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	watermarkUpdater := &WatermarkUpdater{
 		watermarkMap: &sync.Map{},
 	}
-	watermarkUpdater.UpdateMem(1, t0)
+	watermarkUpdater.UpdateMem("1_0", t0)
 
 	tableDef := &plan.TableDef{
 		Cols: []*plan.ColDef{

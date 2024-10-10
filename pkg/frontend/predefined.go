@@ -254,7 +254,7 @@ var (
 	MoCatalogMoCdcWatermarkDDL = `create table mo_catalog.mo_cdc_watermark (
     			account_id bigint unsigned,			
     			task_id uuid,
-    			table_id bigint unsigned,			
+    			table_id varchar(64),			
     			watermark varchar(128),			
     			primary key(account_id,task_id,table_id)
 			)`
