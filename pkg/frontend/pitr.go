@@ -1726,7 +1726,7 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 
 			// if the pitr level is account, the scource account must be same
 			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountName != string(stmt.AccountName) {
-				return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v", pitrRecord.pitrName, string(stmt.SrcAccountName))
+				return moerr.NewInternalErrorNoCtxf("pitr %s is created for account `%s` not allowed to restore account `%s`", pitrRecord.pitrName, pitrRecord.accountName, string(stmt.SrcAccountName))
 			}
 
 			// if the pitr level is database or table, return err
