@@ -16,12 +16,9 @@ package multi_update
 
 import (
 	"bytes"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -174,19 +171,6 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 
 func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batch) (err error) {
 	for i, updateCtx := range update.MultiUpdateCtx {
-		if len(updateCtx.DeleteCols) > 0 && len(updateCtx.InsertCols) > 0 && updateCtx.TableDef.Name == "p_table_14" {
-			col1 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])
-			fmt.Printf("--- col1 = %v \n", col1)
-			col2 := vector.MustFixedColWithTypeCheck[types.Date](bat.Vecs[1])
-			fmt.Printf("--- col2 = %v \n", col2)
-			col3 := vector.InefficientMustStrCol(bat.Vecs[2])
-			fmt.Printf("--- col3 = %v \n", col3)
-			oldPartIDs := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[updateCtx.OldPartitionIdx])
-			fmt.Printf("--- oldPartIDs = %v \n", oldPartIDs)
-			newPartIDs := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[updateCtx.NewPartitionIdx])
-			fmt.Printf("--- newPartIDs = %v \n", newPartIDs)
-		}
-
 		// delete rows
 		if len(updateCtx.DeleteCols) > 0 {
 			err = update.delete_table(proc, updateCtx, bat, i)

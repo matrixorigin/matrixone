@@ -170,17 +170,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 			} else {
 				args := make([]*plan.Expr, argsLen)
 
-				if !idxDef.Unique {
-					argsLen--
-				}
-
 				for k := 0; k < argsLen; k++ {
 					colPos := colName2Idx[tableDef.Name+"."+idxDef.Parts[k]]
 					args[k] = DeepCopyExpr(selectNode.ProjectList[colPos])
-				}
-
-				if !idxDef.Unique {
-					args[len(idxDef.Parts)-1] = DeepCopyExpr(selectNode.ProjectList[pkPos])
 				}
 
 				fnName := "serial"

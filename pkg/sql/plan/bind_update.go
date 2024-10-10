@@ -55,7 +55,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 		}
 
-		// TODO: support update primary key or unique key or secondary key
+		// TODO: support update primary key or unique key or secondary key or master index or ivfflat index
 		var pkAndUkCols = make(map[string]bool)
 		if tableDef.Pkey != nil {
 			for _, colName := range tableDef.Pkey.Names {
@@ -64,7 +64,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		for _, idxDef := range tableDef.Indexes {
 			if !idxDef.TableExist || !idxDef.Unique {
-				continue
+				if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+					continue
+				}
 			}
 
 			for _, colName := range idxDef.Parts {
@@ -74,7 +76,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
 			if pkAndUkCols[colName] {
-				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update primary key or unique key")
+				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update primary key or unique key or master index or ivfflat index")
 			}
 
 			if !dmlCtx.updatePartCol[i] {
@@ -379,20 +381,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			idxNodeTag := idxNode.BindingTags[0]
 
 			oldIdx := len(finalProjList)
-			idxColIdx := idxNode.TableDef.Name2ColIndex[catalog.IndexTableIndexColName]
-			finalProjList = append(finalProjList, &plan.Expr{
-				Typ: idxNode.TableDef.Cols[idxColIdx].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: idxNodeTag,
-						ColPos: idxColIdx,
-					},
-				},
-			})
-			deleteCols[0].RelPos = finalProjTag
-			deleteCols[0].ColPos = int32(oldIdx)
-
-			oldIdx = len(finalProjList)
 			rowIDIdx := idxNode.TableDef.Name2ColIndex[catalog.Row_ID]
 			finalProjList = append(finalProjList, &plan.Expr{
 				Typ: idxNode.TableDef.Cols[rowIDIdx].Typ,
@@ -400,6 +388,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					Col: &plan.ColRef{
 						RelPos: idxNodeTag,
 						ColPos: rowIDIdx,
+					},
+				},
+			})
+			deleteCols[0].RelPos = finalProjTag
+			deleteCols[0].ColPos = int32(oldIdx)
+
+			oldIdx = len(finalProjList)
+			idxColIdx := idxNode.TableDef.Name2ColIndex[catalog.IndexTableIndexColName]
+			finalProjList = append(finalProjList, &plan.Expr{
+				Typ: idxNode.TableDef.Cols[idxColIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxNodeTag,
+						ColPos: idxColIdx,
 					},
 				},
 			})
