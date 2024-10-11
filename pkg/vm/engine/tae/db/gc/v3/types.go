@@ -15,6 +15,8 @@
 package gc
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -182,6 +184,16 @@ type GCMetaFile struct {
 	name       string
 	start, end types.TS
 	ext        string
+}
+
+func (f *GCMetaFile) String() string {
+	return fmt.Sprintf(
+		"GCFile[%s-%s-%s-%s]",
+		f.name,
+		f.ext,
+		f.start.ToString(),
+		f.end.ToString(),
+	)
 }
 
 func (f *GCMetaFile) FullName(dir string) string {
