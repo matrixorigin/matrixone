@@ -16,11 +16,13 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -125,6 +127,54 @@ func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error
 	return err
 }
 
+func (srv *ServiceOfCompile) recordRunningCompile2(runningCompile *Compile, txn txnClient.TxnOperator) {
+	if runningCompile.queryStatus == nil {
+		runningCompile.queryStatus = newQueryDoneWaiter()
+	} else {
+		runningCompile.queryStatus.clear()
+	}
+
+	runningCompile.proc.SetBaseProcessRunningStatus(true)
+	_, queryCancel := process.GetQueryCtxFromProc(runningCompile.proc)
+
+	srv.Lock()
+	srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
+		queryCancel: queryCancel,
+		queryDone:   runningCompile.queryStatus,
+	}
+
+	if txn != nil {
+		txn.EnterRunSql()
+	}
+	srv.Unlock()
+}
+
+// thisQueryStillRunning return nil if this query is still in running.
+// return error once query was canceled or txn was done.
+func thisQueryStillRunning(proc *process.Process, txn txnClient.TxnOperator) error {
+	if err := proc.GetQueryContextError(); err != nil {
+		return err
+	}
+	if txn != nil && txn.Status() != pbtxn.TxnStatus_Active {
+		return moerr.NewInternalError(proc.Ctx, "transaction is not active.")
+	}
+	return nil
+}
+
+func (srv *ServiceOfCompile) removeRunningCompile2(c *Compile, txn txnClient.TxnOperator) {
+	if txn != nil {
+		txn.ExitRunSql()
+	}
+	c.queryStatus.noticeQueryCompleted()
+	c.proc.SetBaseProcessRunningStatus(false)
+
+	srv.Lock()
+	delete(srv.aliveCompiles, c)
+	srv.Unlock()
+
+	c.queryStatus.clear()
+}
+
 func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) {
 	c.queryStatus.noticeQueryCompleted()
 	c.proc.SetBaseProcessRunningStatus(false)
@@ -138,7 +188,6 @@ func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) {
 
 func (srv *ServiceOfCompile) putCompile(c *Compile) {
 	if !c.isPrepare {
-		// c.FreeMsg = time.Now().String() + " : " + string(debug.Stack())
 		reuse.Free[Compile](c, nil)
 	}
 }
