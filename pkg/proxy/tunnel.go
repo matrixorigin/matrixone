@@ -235,6 +235,13 @@ func (t *tunnel) getConns() (*MySQLConn, *MySQLConn) {
 	return t.mu.clientConn, t.mu.serverConn
 }
 
+// getServerConn returns the ServerConn in the tunnel.
+func (t *tunnel) getServerConn() ServerConn {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.mu.sc
+}
+
 // setError tries to set the tunnel error if there is no error.
 func (t *tunnel) setError(err error) {
 	select {
@@ -491,6 +498,12 @@ func (t *tunnel) Close() error {
 		}
 		if !t.connCacheEnabled && sc != nil {
 			_ = sc.Close()
+		}
+
+		// close the server connection
+		serverC := t.getServerConn()
+		if serverC != nil {
+			_ = serverC.Close()
 		}
 	})
 	return nil

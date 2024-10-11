@@ -55,8 +55,6 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtSelect2)
 		defer ses.ExitFPrint(FPResultRowStmtSelect2)
-		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
-		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
 		/*
 			Step 2: Start pipeline
@@ -99,8 +97,6 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtExplainAnalyze2)
 		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze2)
-		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
-		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
 		/*
 			Step 1: Start
@@ -141,8 +137,6 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtExplainAnalyze2)
 		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze2)
-		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
-		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
 		/*
 			Step 1: Start
@@ -176,8 +170,6 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtDefault2)
 		defer ses.ExitFPrint(FPResultRowStmtDefault2)
-		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
-		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
 		/*
 			Step 2: Start pipeline
