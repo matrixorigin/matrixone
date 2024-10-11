@@ -7,8 +7,9 @@ package mock_frontend
 import (
 	"bytes"
 	context "context"
-	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	reflect "reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"

@@ -608,7 +608,7 @@ func TestGetExprValue(t *testing.T) {
 		relData := &memoryengine.MemRelationData{
 			Shards: ranges,
 		}
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
 		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
@@ -634,13 +634,12 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -745,13 +744,12 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 

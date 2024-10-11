@@ -278,7 +278,7 @@ func BlockCompactionRead(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (*batch.Batch, error) {
-	cacheBat := batch.EmptyBatchWithSize(len(seqnums) + 1)
+	cacheBat := batch.EmptyBatchWithSize(len(seqnums))
 
 	release, err := LoadColumns(
 		ctx, seqnums, colTypes, fs, location, &cacheBat, mp, fileservice.Policy(0),
