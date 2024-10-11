@@ -99,7 +99,15 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
 
-		bs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+		if filter.ctr.bs == nil {
+			filter.ctr.bs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
+		} else {
+			ok := vector.ReuseFunctionFixedTypeParameter[bool](vec, filter.ctr.bs)
+			if !ok {
+				filter.ctr.bs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
+			}
+		}
+		bs := filter.ctr.bs
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
