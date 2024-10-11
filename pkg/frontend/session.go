@@ -1095,7 +1095,7 @@ func (ses *Session) SetUserName(uname string) {
 func (ses *Session) GetConnectionID() uint32 {
 	protocol := ses.GetResponser()
 	if protocol != nil {
-		return ses.GetResponser().GetU32(CONNID)
+		return protocol.GetU32(CONNID)
 	}
 	return 0
 }
