@@ -918,7 +918,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 			stmt: &tree.CreatePitr{
 				Level: tree.PITRLEVELCLUSTER,
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and obj_id = 9223372036854775807;",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and obj_id = 18446744073709551615;",
 		},
 		{
 			createAccount:   "sys",
