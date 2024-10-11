@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
 
@@ -105,10 +104,6 @@ type checkpointCleaner struct {
 	mPool *mpool.MPool
 
 	sid string
-
-	// wal is the WAL driver which is used here to append gc
-	// meta files to WAL.
-	wal wal.Driver
 }
 
 func NewCheckpointCleaner(
@@ -116,7 +111,6 @@ func NewCheckpointCleaner(
 	sid string,
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.RunnerReader,
-	wal wal.Driver,
 	disableGC bool,
 ) Cleaner {
 	cleaner := &checkpointCleaner{
@@ -125,7 +119,6 @@ func NewCheckpointCleaner(
 		fs:        fs,
 		ckpClient: ckpClient,
 		disableGC: disableGC,
-		wal:       wal,
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.minMergeCount.count = MinMergeCount
@@ -1086,14 +1079,15 @@ func (c *checkpointCleaner) createNewInput(
 
 // appendFilesToWAL append the GC meta files to WAL.
 func (c *checkpointCleaner) appendFilesToWAL(files ...string) error {
-	if c.wal == nil {
+	driver := c.ckpClient.GetDriver()
+	if driver == nil {
 		return nil
 	}
 	entry, err := store.BuildFilesEntry(files)
 	if err != nil {
 		return err
 	}
-	_, err = c.wal.AppendEntry(store.GroupFiles, entry)
+	_, err = driver.AppendEntry(store.GroupFiles, entry)
 	if err != nil {
 		return err
 	}

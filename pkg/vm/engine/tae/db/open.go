@@ -253,7 +253,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		opts.SID,
 		fs,
 		db.BGCheckpointRunner,
-		db.Wal,
 		opts.GCCfg.DisableGC,
 	)
 	cleaner.SetCheckGC(opts.GCCfg.CheckGC)
