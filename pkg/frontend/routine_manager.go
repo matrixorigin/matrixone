@@ -382,7 +382,7 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 
 	req := ToRequest(payload)
 	//handle request
-	err = handleRequest(routine, req)
+	err = routine.handleRequest(req)
 	if err != nil {
 		if !skipClientQuit(err.Error()) {
 			ses.Error(ctx,

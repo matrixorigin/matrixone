@@ -225,10 +225,6 @@ func (rt *Routine) reportSystemStatus() (r bool) {
 	return
 }
 
-var handleRequest = func(rt *Routine, req *Request) error {
-	return rt.handleRequest(req)
-}
-
 func (rt *Routine) handleRequest(req *Request) error {
 	var routineCtx context.Context
 	var err error
