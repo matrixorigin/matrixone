@@ -28,7 +28,7 @@ type HeapSampleValues struct {
 	InuseBytes       ShardedCounter[int64, atomic.Int64, *atomic.Int64]
 }
 
-var _ SampleValues = new(HeapSampleValues)
+var _ SampleValues[*HeapSampleValues] = new(HeapSampleValues)
 
 func (h *HeapSampleValues) Init() {
 	h.AllocatedObjects = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
@@ -69,6 +69,13 @@ func (h *HeapSampleValues) Values() []int64 {
 		h.InuseObjects.Load(),
 		h.InuseBytes.Load(),
 	}
+}
+
+func (h *HeapSampleValues) Merge(from *HeapSampleValues) {
+	h.AllocatedObjects.Add(from.AllocatedObjects.Load())
+	h.AllocatedBytes.Add(from.AllocatedBytes.Load())
+	h.InuseObjects = from.InuseObjects
+	h.InuseBytes = from.InuseBytes
 }
 
 type ProfileAllocator[U Allocator] struct {
