@@ -82,6 +82,14 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			updateCtx.PartitionSources = partitionRels
 		}
 	}
+	mainCtx := update.MultiUpdateCtx[0]
+	if len(mainCtx.DeleteCols) > 0 && len(mainCtx.InsertCols) > 0 {
+		update.ctr.action = actionUpdate
+	} else if len(mainCtx.InsertCols) > 0 {
+		update.ctr.action = actionInsert
+	} else {
+		update.ctr.action = actionDelete
+	}
 
 	return nil
 }

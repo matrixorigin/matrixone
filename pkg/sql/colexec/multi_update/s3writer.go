@@ -589,6 +589,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// normal table
 			if bats[0] != nil && bats[0].RowCount() > 0 {
 				resetMergeBlockForOldCN(proc, bats[0])
+				update.addInsertAffectRows(writer.insertBlockRowCount[i][0])
 				err = writer.updateCtxs[i].Source.Write(proc.Ctx, bats[0])
 				if err != nil {
 					return
@@ -599,6 +600,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			for partIdx, bat := range bats {
 				if bat != nil && bat.RowCount() > 0 {
 					resetMergeBlockForOldCN(proc, bat)
+					update.addInsertAffectRows(writer.insertBlockRowCount[i][partIdx])
 					err = writer.updateCtxs[i].PartitionSources[partIdx].Write(proc.Ctx, bat)
 					if err != nil {
 						return
