@@ -693,7 +693,7 @@ func (ses *feSessionImpl) EnterFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addEnter(idx)
 		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.SetFootPrints(ses.fprints.prints[:])
+			ses.txnHandler.txnOp.SetFootPrints(idx, true)
 		}
 	}
 }
@@ -702,7 +702,7 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addExit(idx)
 		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.SetFootPrints(ses.fprints.prints[:])
+			ses.txnHandler.txnOp.SetFootPrints(idx, false)
 		}
 	}
 }
