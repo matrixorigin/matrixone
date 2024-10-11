@@ -1835,8 +1835,8 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 					//check
 					ret := reflect.DeepEqual(data, val)
 					fmt.Println(i)
-					fmt.Println(data)
-					fmt.Println(val)
+					fmt.Println("want", data)
+					fmt.Println("get", val)
 					require.True(t, ret)
 				}
 			}
