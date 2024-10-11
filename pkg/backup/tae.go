@@ -417,10 +417,8 @@ func execBackup(
 	if err != nil {
 		return err
 	}
-	if filesList != nil {
-		for _, file := range taeFileList {
-			*filesList = append(*filesList, file)
-		}
+	if filesList != nil && len(taeFileList) > 0 {
+		*filesList = append(*filesList, taeFileList...)
 	}
 	return err
 }
