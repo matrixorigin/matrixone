@@ -82,6 +82,14 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			updateCtx.PartitionSources = partitionRels
 		}
 	}
+	mainCtx := update.MultiUpdateCtx[0]
+	if len(mainCtx.DeleteCols) > 0 && len(mainCtx.InsertCols) > 0 {
+		update.ctr.action = actionUpdate
+	} else if len(mainCtx.InsertCols) > 0 {
+		update.ctr.action = actionInsert
+	} else {
+		update.ctr.action = actionDelete
+	}
 
 	return nil
 }
@@ -129,7 +137,6 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 				continue
 			}
 
-			ctr.affectedRows += uint64(input.Batch.RowCount())
 			err = ctr.s3Writer.append(proc, input.Batch)
 			if err != nil {
 				return vm.CancelResult, err
@@ -163,7 +170,6 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 		return vm.CancelResult, err
 	}
 
-	update.ctr.affectedRows += uint64(input.Batch.RowCount())
 	analyzer.Output(input.Batch)
 
 	return input, nil

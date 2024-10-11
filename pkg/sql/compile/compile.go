@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -328,7 +329,14 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	case Remote:
 		err := s.RemoteRun(c)
-		c.addAffectedRows(s.affectedRows())
+		//@FIXME not a good choice
+		if _, ok := s.RootOp.(*multi_update.MultiUpdate); ok && len(s.PreScopes) > 0 {
+			for _, ps := range s.PreScopes[0].PreScopes {
+				c.addAffectedRows(ps.affectedRows())
+			}
+		} else {
+			c.addAffectedRows(s.affectedRows())
+		}
 		return err
 	case CreateDatabase:
 		err := s.CreateDatabase(c)

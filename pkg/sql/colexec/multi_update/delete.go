@@ -77,6 +77,7 @@ func (update *MultiUpdate) delete_table(
 			rowCount := deleteBatch.Vecs[0].Length()
 			if rowCount > 0 {
 				deleteBatch.SetRowCount(rowCount)
+				update.addDeleteAffectRows(uint64(rowCount))
 				err = updateCtx.PartitionSources[partIdx].Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
 				if err != nil {
 					return err
@@ -114,6 +115,7 @@ func (update *MultiUpdate) delete_table(
 		rowCount := deleteBatch.Vecs[0].Length()
 		if rowCount > 0 {
 			deleteBatch.SetRowCount(rowCount)
+			update.addDeleteAffectRows(uint64(rowCount))
 			err = updateCtx.Source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
 		}
 	}

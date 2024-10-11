@@ -1563,30 +1563,33 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		var oldPartRel, newPartRel [2]int32
 		var oldPartExpr, newPartExpr *Expr
-		if node.UpdateCtxList[0].TableDef.Partition != nil {
-			oldPartExpr = &Expr{
-				// Typ: node.ProjectList[len(node.ProjectList)-1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: node.BindingTags[1],
-						ColPos: node.UpdateCtxList[0].OldPartitionIdx,
+		mainTableCtx := node.UpdateCtxList[0]
+		if mainTableCtx.TableDef.Partition != nil {
+			if mainTableCtx.OldPartitionIdx > -1 {
+				oldPartExpr = &Expr{
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: node.BindingTags[1],
+							ColPos: mainTableCtx.OldPartitionIdx,
+						},
 					},
-				},
+				}
+				increaseRefCnt(oldPartExpr, 1, colRefCnt)
+				oldPartRel = [2]int32{node.BindingTags[1], mainTableCtx.OldPartitionIdx}
 			}
-			increaseRefCnt(oldPartExpr, 1, colRefCnt)
-			oldPartRel = [2]int32{node.BindingTags[1], node.UpdateCtxList[0].OldPartitionIdx}
 
-			newPartExpr = &Expr{
-				// Typ: node.ProjectList[len(node.ProjectList)-1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: node.BindingTags[1],
-						ColPos: node.UpdateCtxList[0].NewPartitionIdx,
+			if mainTableCtx.NewPartitionIdx > -1 {
+				newPartExpr = &Expr{
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: node.BindingTags[1],
+							ColPos: mainTableCtx.NewPartitionIdx,
+						},
 					},
-				},
+				}
+				increaseRefCnt(newPartExpr, 1, colRefCnt)
+				newPartRel = [2]int32{node.BindingTags[1], mainTableCtx.NewPartitionIdx}
 			}
-			increaseRefCnt(newPartExpr, 1, colRefCnt)
-			newPartRel = [2]int32{node.BindingTags[1], node.UpdateCtxList[0].NewPartitionIdx}
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -1594,15 +1597,19 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		if node.UpdateCtxList[0].TableDef.Partition != nil {
-			if newPos, ok := childRemapping.globalToLocal[oldPartRel]; ok {
-				node.UpdateCtxList[0].OldPartitionIdx = newPos[1]
+		if mainTableCtx.TableDef.Partition != nil {
+			if mainTableCtx.OldPartitionIdx > -1 {
+				if newPos, ok := childRemapping.globalToLocal[oldPartRel]; ok {
+					mainTableCtx.OldPartitionIdx = newPos[1]
+				}
+				increaseRefCnt(oldPartExpr, -1, colRefCnt)
 			}
-			increaseRefCnt(oldPartExpr, -1, colRefCnt)
-			if newPos, ok := childRemapping.globalToLocal[newPartRel]; ok {
-				node.UpdateCtxList[0].NewPartitionIdx = newPos[1]
+			if mainTableCtx.NewPartitionIdx > -1 {
+				if newPos, ok := childRemapping.globalToLocal[newPartRel]; ok {
+					mainTableCtx.NewPartitionIdx = newPos[1]
+				}
+				increaseRefCnt(newPartExpr, -1, colRefCnt)
 			}
-			increaseRefCnt(oldPartExpr, -1, colRefCnt)
 		}
 
 		remapInfo.tip = "UpdateCtxList"

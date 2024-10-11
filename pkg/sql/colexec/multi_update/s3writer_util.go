@@ -111,11 +111,13 @@ func appendCfgToWriter(writer *s3Writer, tableDef *plan.TableDef) {
 		writer.deleteBlockMap[thisIdx] = make([]map[types.Blockid]*deleteBlockData, 1)
 		writer.deleteBlockInfo[thisIdx] = make([]*deleteBlockInfo, 1)
 		writer.insertBlockInfo[thisIdx] = make([]*batch.Batch, 1)
+		writer.insertBlockRowCount[thisIdx] = make([]uint64, 1)
 	} else {
 		partitionCount := len(tableDef.Partition.PartitionTableNames)
 		writer.deleteBlockMap[thisIdx] = make([]map[types.Blockid]*deleteBlockData, partitionCount)
 		writer.deleteBlockInfo[thisIdx] = make([]*deleteBlockInfo, partitionCount)
 		writer.insertBlockInfo[thisIdx] = make([]*batch.Batch, partitionCount)
+		writer.insertBlockRowCount[thisIdx] = make([]uint64, partitionCount)
 	}
 }
 
