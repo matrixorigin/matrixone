@@ -369,7 +369,7 @@ func TestBalanceWithSingleTable(t *testing.T) {
 			s3 := services[2]
 			table := uint64(1)
 			shards := uint32(3)
-			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1, s2, s3)
 			waitReplicaCount(table, s1, 3)
 
 			s2.options.disableHeartbeat.Store(false)
