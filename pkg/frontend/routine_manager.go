@@ -373,7 +373,6 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
-	routine.updateGoroutineId()
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	payload := msg
