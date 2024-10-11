@@ -104,7 +104,10 @@ func BackupData(
 		return err
 	}
 	count := config.Parallelism
-	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
+
+	// The first return value of execBackup is for the ut case
+	_, err = execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
+	return err
 }
 
 func getParallelCount(count int) int {
@@ -268,7 +271,7 @@ func execBackup(
 	count int,
 	ts types.TS,
 	typ string,
-) error {
+) ([]*taeFile, error) {
 	backupTime := names[0]
 	trimInfo := names[1]
 	names = names[1:]
@@ -296,16 +299,16 @@ func execBackup(
 		}
 		ckpStr := strings.Split(name, ":")
 		if len(ckpStr) != 2 && i > 0 {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
+			return nil, moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
 		metaLoc := ckpStr[0]
 		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		key, err := blockio.EncodeLocationFromString(metaLoc)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		var oneNames []*objectio.BackupObject
 		var data *logtail.CheckpointData
@@ -315,7 +318,7 @@ func execBackup(
 			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), &softDeletes, &baseTS)
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		defer data.Close()
 		oNames = append(oNames, oneNames...)
@@ -336,7 +339,7 @@ func execBackup(
 		var err error
 		ckpStr := strings.Split(trimInfo, ":")
 		if len(ckpStr) != 5 {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
+			return nil, moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
 		cnLoc = ckpStr[0]
 		mergeEnd = ckpStr[2]
@@ -346,25 +349,25 @@ func execBackup(
 		start = types.StringToTS(mergeStart)
 		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	// copy data
 	taeFileList, err := parallelCopyData(srcFs, dstFs, files, parallelNum, gcFileMap)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// copy checkpoint and gc meta
 	sizeList, minTs, err := CopyCheckpointDir(ctx, srcFs, dstFs, "ckp", start)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	taeFileList = append(taeFileList, sizeList...)
 	sizeList, err = CopyGCDir(ctx, srcFs, dstFs, "gc", start, minTs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	copyDuration += time.Since(now)
 	taeFileList = append(taeFileList, sizeList...)
@@ -372,7 +375,7 @@ func execBackup(
 	if trimInfo != "" {
 		cnLocation, err := blockio.EncodeLocationFromString(cnLoc)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		var (
 			checkpointFiles []string
@@ -383,7 +386,7 @@ func execBackup(
 		for _, name := range checkpointFiles {
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			taeFileList = append(taeFileList, &taeFile{
 				path:     dentry.Name,
@@ -393,15 +396,15 @@ func execBackup(
 			})
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		file, err := checkpoint.MergeCkpMeta(ctx, sid, dstFs, cnLocation, tnLocation, start, end)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		dentry, err := dstFs.StatFile(ctx, file)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		taeFileList = append(taeFileList, &taeFile{
 			path:     "ckp/" + dentry.Name,
@@ -414,9 +417,9 @@ func execBackup(
 	//save tae files size
 	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime, start.ToString(), typ)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return taeFileList, err
 }
 
 // CopyCheckpointDir copy checkpoint dir from srcFs to dstFs
