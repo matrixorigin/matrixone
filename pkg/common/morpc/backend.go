@@ -580,6 +580,10 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
 			n++
 			if err != nil || rb.options.disconnectAfterRead == n {
+				if err == nil {
+					err = backendClosed
+				}
+
 				rb.logger.Error("read from backend failed", zap.Error(err))
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()
