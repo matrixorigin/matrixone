@@ -132,7 +132,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 		func(rt runtime.Runtime) {
 			defer func() {
 				if r := recover(); r != nil {
-					assert.Equal(t, "cannot upgrade to version 1.3.0, because version 1.2.3 is in upgrading", r)
+					assert.Equal(t, "cannot upgrade to version 2.0.0, because version 1.2.3 is in upgrading", r)
 				} else {
 					t.Errorf("Expected panic but did not occur")
 				}
@@ -175,7 +175,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 				exec,
 				func(s *service) {
 					h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
-					h2 := newTestVersionHandler("1.3.0", "1.2.0", versions.Yes, versions.No, 2)
+					h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
 					s.handles = append(s.handles, h1)
 					s.handles = append(s.handles, h2)
 				},
@@ -193,7 +193,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 		func(rt runtime.Runtime) {
 			defer func() {
 				if r := recover(); r != nil {
-					assert.Equal(t, "cannot upgrade to version 1.3.0 with versionOffset[2], because version 1.3.0 with versionOffset[1] is in upgrading", r)
+					assert.Equal(t, "cannot upgrade to version 2.0.0 with versionOffset[2], because version 2.0.0 with versionOffset[1] is in upgrading", r)
 				} else {
 					t.Errorf("Expected panic but did not occur")
 				}
@@ -220,7 +220,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 						typs,
 						mpool.MustNewZero())
 					memRes.NewBatch()
-					executor.AppendStringRows(memRes, 0, []string{"1.3.0"})
+					executor.AppendStringRows(memRes, 0, []string{"2.0.0"})
 					executor.AppendFixedRows(memRes, 1, []uint32{1})
 					executor.AppendFixedRows(memRes, 2, []int32{0})
 					return memRes.GetResult(), nil
@@ -236,7 +236,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 				exec,
 				func(s *service) {
 					h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
-					h2 := newTestVersionHandler("1.3.0", "1.2.0", versions.Yes, versions.No, 2)
+					h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
 					s.handles = append(s.handles, h1)
 					s.handles = append(s.handles, h2)
 				},
@@ -270,7 +270,7 @@ func newServiceForTest(
 	}
 	s.mu.tenants = make(map[int32]bool)
 	initUpgrade(s)
-	//s.handles = append(s.handles, v1_3_0.Handler)
+	//s.handles = append(s.handles, v2_0_0.Handler)
 	for _, opt := range opts {
 		opt(s)
 	}
