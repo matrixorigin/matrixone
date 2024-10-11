@@ -744,5 +744,4 @@ func getPartColsFromExpr(expr *Expr, colNameMap map[string]bool) {
 			getPartColsFromExpr(order.Expr, colNameMap)
 		}
 	}
-	return
 }
