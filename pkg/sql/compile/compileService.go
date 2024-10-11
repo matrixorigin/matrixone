@@ -61,10 +61,9 @@ type compileAdditionalInformation struct {
 }
 
 // kill one query and block until it was completed.
-func (info *compileAdditionalInformation) kill(errResult error) {
+func (info *compileAdditionalInformation) kill() {
 	info.queryCancel()
 	info.queryDone.checkCompleted()
-	info.mustReturnError = errResult
 }
 
 type queryDoneWaiter chan bool
@@ -114,35 +113,27 @@ func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error
 
 	srv.Lock()
 	srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
-		mustReturnError: nil,
-		queryCancel:     queryCancel,
-		queryDone:       runningCompile.queryStatus,
+		queryCancel: queryCancel,
+		queryDone:   runningCompile.queryStatus,
 	}
 	srv.Unlock()
 
 	err := queryCtx.Err()
 	if err != nil {
-		_, _ = srv.removeRunningCompile(runningCompile)
+		srv.removeRunningCompile(runningCompile)
 	}
 	return err
 }
 
-func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) (mustReturnError bool, err error) {
+func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) {
 	c.queryStatus.noticeQueryCompleted()
 	c.proc.SetBaseProcessRunningStatus(false)
 
 	srv.Lock()
-
-	// todo: because we don't deal with the mustReturnError now, I just ignore it.
-	//if item, ok := srv.aliveCompiles[c]; ok {
-	//	err = item.mustReturnError
-	//}
 	delete(srv.aliveCompiles, c)
 	srv.Unlock()
 
 	c.queryStatus.clear()
-	//return err != nil, err
-	return false, nil
 }
 
 func (srv *ServiceOfCompile) putCompile(c *Compile) {
@@ -167,7 +158,7 @@ func (srv *ServiceOfCompile) ResumeService() {
 	srv.Unlock()
 }
 
-func (srv *ServiceOfCompile) KillAllQueriesWithError(err error) {
+func (srv *ServiceOfCompile) KillAllQueriesWithError() {
 	logutil.Infof("compile service starts to kill all running queries.")
 	start := time.Now()
 	defer func() {
@@ -175,6 +166,6 @@ func (srv *ServiceOfCompile) KillAllQueriesWithError(err error) {
 	}()
 
 	for _, v := range srv.aliveCompiles {
-		v.kill(err)
+		v.kill()
 	}
 }

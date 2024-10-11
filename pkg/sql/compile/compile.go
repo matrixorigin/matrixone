@@ -423,35 +423,41 @@ func (c *Compile) printPipeline() {
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
 */
-// run once
-func (c *Compile) runOnce() error {
-	var wg sync.WaitGroup
-	err := c.lockMetaTables()
-	if err != nil {
+
+// prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
+//
+// for example
+// 1. lock table.
+// 2. init data source.
+func (c *Compile) prePipelineInitializer() (err error) {
+	// do table lock.
+	if err = c.lockMetaTables(); err != nil {
+		return err
+	}
+	if err = c.lockTable(); err != nil {
 		return err
 	}
 
-	err = c.lockTable()
-	if err != nil {
-		return err
-	}
-	errC := make(chan error, len(c.scopes))
+	// init data source.
 	for _, s := range c.scopes {
-		err = s.InitAllDataSource(c)
-		if err != nil {
+		if err = s.InitAllDataSource(c); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
+// run once
+func (c *Compile) runOnce() (err error) {
 	if err = GetCompileService().recordRunningCompile(c); err != nil {
 		return err
 	}
 	defer func() {
-		_, _ = GetCompileService().removeRunningCompile(c)
+		GetCompileService().removeRunningCompile(c)
 	}()
 
-	//c.printPipeline()
-
+	var wg sync.WaitGroup
+	errC := make(chan error, len(c.scopes))
 	for i := range c.scopes {
 		wg.Add(1)
 		scope := c.scopes[i]

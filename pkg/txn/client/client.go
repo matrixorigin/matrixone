@@ -612,7 +612,7 @@ func (client *txnClient) Resume() {
 // NodeRunningPipelineManager to avoid packages import cycles.
 type NodeRunningPipelineManager interface {
 	PauseService()
-	KillAllQueriesWithError(err error)
+	KillAllQueriesWithError()
 	ResumeService()
 }
 
@@ -638,7 +638,7 @@ func (client *txnClient) AbortAllRunningTxn() {
 		// the newer timestamp from logtail consumer.
 		client.timestampWaiter.Pause()
 	}
-	runningPipelines.KillAllQueriesWithError(nil)
+	runningPipelines.KillAllQueriesWithError()
 
 	client.mu.Unlock()
 	runningPipelines.ResumeService()

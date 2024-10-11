@@ -195,7 +195,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			return err
 		}
 		defer func() {
-			_, _ = GetCompileService().removeRunningCompile(runCompile)
+			GetCompileService().removeRunningCompile(runCompile)
 		}()
 
 		err = s.MergeRun(runCompile)

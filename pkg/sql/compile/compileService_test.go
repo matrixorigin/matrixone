@@ -52,7 +52,7 @@ func TestCompileService(t *testing.T) {
 			<-cc.proc.Ctx.Done()
 
 			doneRoutine.Add(1)
-			_, _ = service.removeRunningCompile(cc)
+			service.removeRunningCompile(cc)
 			service.putCompile(cc)
 			wg.Done()
 		}(c)
@@ -61,7 +61,7 @@ func TestCompileService(t *testing.T) {
 
 	// 2. kill all running Compile.
 	service.PauseService()
-	service.KillAllQueriesWithError(nil)
+	service.KillAllQueriesWithError()
 	service.ResumeService()
 
 	require.Equal(t, int32(10), doneRoutine.Load())
