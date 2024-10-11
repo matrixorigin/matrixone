@@ -83,7 +83,7 @@ func NewS3FS(
 	var err error
 	switch {
 
-	case strings.Contains(args.Endpoint, "ctyunapi.cn"):
+	case args.IsMinio || strings.Contains(args.Endpoint, "ctyunapi.cn"):
 		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err

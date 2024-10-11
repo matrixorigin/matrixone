@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -77,6 +78,15 @@ func testObjectStorage[T ObjectStorage](
 		// delete
 		err = storage.Delete(ctx, name)
 		assert.Nil(t, err)
+		err = storage.Delete(ctx, name, name)
+		assert.Nil(t, err)
+
+		// file not found
+		_, err = storage.Stat(ctx, "filenotexists")
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+		_, err = storage.Read(ctx, "filenotexists", nil, nil)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+
 	})
 
 }
