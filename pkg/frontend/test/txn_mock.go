@@ -312,14 +312,6 @@ func (m *MockTxnClient) New(ctx context.Context, commitTS timestamp.Timestamp, o
 	return ret0, ret1
 }
 
-func (m *MockTxnClient) RestartTxn(
-	ctx context.Context,
-	op client.TxnOperator,
-	ts timestamp.Timestamp,
-	options ...client.TxnOption) (client.TxnOperator, error) {
-	panic("unimplemented")
-}
-
 // New indicates an expected call of New.
 func (mr *MockTxnClientMockRecorder) New(ctx, commitTS interface{}, options ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
@@ -366,6 +358,26 @@ func (m *MockTxnClient) RefreshExpressionEnabled() bool {
 func (mr *MockTxnClientMockRecorder) RefreshExpressionEnabled() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RefreshExpressionEnabled", reflect.TypeOf((*MockTxnClient)(nil).RefreshExpressionEnabled))
+}
+
+// RestartTxn mocks base method.
+func (m *MockTxnClient) RestartTxn(ctx context.Context, txnOp client.TxnOperator, commitTS timestamp.Timestamp, options ...client.TxnOption) (client.TxnOperator, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, txnOp, commitTS}
+	for _, a := range options {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "RestartTxn", varargs...)
+	ret0, _ := ret[0].(client.TxnOperator)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RestartTxn indicates an expected call of RestartTxn.
+func (mr *MockTxnClientMockRecorder) RestartTxn(ctx, txnOp, commitTS interface{}, options ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, txnOp, commitTS}, options...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RestartTxn", reflect.TypeOf((*MockTxnClient)(nil).RestartTxn), varargs...)
 }
 
 // Resume mocks base method.
@@ -436,10 +448,6 @@ func (m *MockTxnOperator) AddLockTable(locktable lock.LockTable) error {
 	ret := m.ctrl.Call(m, "AddLockTable", locktable)
 	ret0, _ := ret[0].(error)
 	return ret0
-}
-
-func (m *MockTxnOperator) HasLockTable(table uint64) bool {
-	return true
 }
 
 // AddLockTable indicates an expected call of AddLockTable.
@@ -562,6 +570,30 @@ func (mr *MockTxnOperatorMockRecorder) Debug(ctx, ops interface{}) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debug", reflect.TypeOf((*MockTxnOperator)(nil).Debug), ctx, ops)
 }
 
+// EnterIncrStmt mocks base method.
+func (m *MockTxnOperator) EnterIncrStmt() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "EnterIncrStmt")
+}
+
+// EnterIncrStmt indicates an expected call of EnterIncrStmt.
+func (mr *MockTxnOperatorMockRecorder) EnterIncrStmt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterIncrStmt", reflect.TypeOf((*MockTxnOperator)(nil).EnterIncrStmt))
+}
+
+// EnterRollbackStmt mocks base method.
+func (m *MockTxnOperator) EnterRollbackStmt() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "EnterRollbackStmt")
+}
+
+// EnterRollbackStmt indicates an expected call of EnterRollbackStmt.
+func (mr *MockTxnOperatorMockRecorder) EnterRollbackStmt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterRollbackStmt", reflect.TypeOf((*MockTxnOperator)(nil).EnterRollbackStmt))
+}
+
 // EnterRunSql mocks base method.
 func (m *MockTxnOperator) EnterRunSql() {
 	m.ctrl.T.Helper()
@@ -572,6 +604,30 @@ func (m *MockTxnOperator) EnterRunSql() {
 func (mr *MockTxnOperatorMockRecorder) EnterRunSql() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterRunSql", reflect.TypeOf((*MockTxnOperator)(nil).EnterRunSql))
+}
+
+// ExitIncrStmt mocks base method.
+func (m *MockTxnOperator) ExitIncrStmt() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ExitIncrStmt")
+}
+
+// ExitIncrStmt indicates an expected call of ExitIncrStmt.
+func (mr *MockTxnOperatorMockRecorder) ExitIncrStmt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitIncrStmt", reflect.TypeOf((*MockTxnOperator)(nil).ExitIncrStmt))
+}
+
+// ExitRollbackStmt mocks base method.
+func (m *MockTxnOperator) ExitRollbackStmt() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ExitRollbackStmt")
+}
+
+// ExitRollbackStmt indicates an expected call of ExitRollbackStmt.
+func (mr *MockTxnOperatorMockRecorder) ExitRollbackStmt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitRollbackStmt", reflect.TypeOf((*MockTxnOperator)(nil).ExitRollbackStmt))
 }
 
 // ExitRunSql mocks base method.
@@ -628,18 +684,18 @@ func (mr *MockTxnOperatorMockRecorder) GetWorkspace() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkspace", reflect.TypeOf((*MockTxnOperator)(nil).GetWorkspace))
 }
 
-// IsRetry mocks base method.
-func (m *MockTxnOperator) IsRetry() bool {
+// HasLockTable mocks base method.
+func (m *MockTxnOperator) HasLockTable(table uint64) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IsRetry")
+	ret := m.ctrl.Call(m, "HasLockTable", table)
 	ret0, _ := ret[0].(bool)
 	return ret0
 }
 
-// IsRetry indicates an expected call of IsRetry.
-func (mr *MockTxnOperatorMockRecorder) IsRetry() *gomock.Call {
+// HasLockTable indicates an expected call of HasLockTable.
+func (mr *MockTxnOperatorMockRecorder) HasLockTable(table interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockTxnOperator)(nil).IsRetry))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasLockTable", reflect.TypeOf((*MockTxnOperator)(nil).HasLockTable), table)
 }
 
 // IsSnapOp mocks base method.
@@ -725,18 +781,6 @@ func (mr *MockTxnOperatorMockRecorder) RemoveWaitLock(key interface{}) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveWaitLock", reflect.TypeOf((*MockTxnOperator)(nil).RemoveWaitLock), key)
 }
 
-// ResetRetry mocks base method.
-func (m *MockTxnOperator) ResetRetry(arg0 bool) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "ResetRetry", arg0)
-}
-
-// ResetRetry indicates an expected call of ResetRetry.
-func (mr *MockTxnOperatorMockRecorder) ResetRetry(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetRetry", reflect.TypeOf((*MockTxnOperator)(nil).ResetRetry), arg0)
-}
-
 // Rollback mocks base method.
 func (m *MockTxnOperator) Rollback(ctx context.Context) error {
 	m.ctrl.T.Helper()
@@ -752,15 +796,15 @@ func (mr *MockTxnOperatorMockRecorder) Rollback(ctx interface{}) *gomock.Call {
 }
 
 // SetFootPrints mocks base method.
-func (m *MockTxnOperator) SetFootPrints(prints [][2]uint32) {
+func (m *MockTxnOperator) SetFootPrints(id int, enter bool) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetFootPrints", prints)
+	m.ctrl.Call(m, "SetFootPrints", id, enter)
 }
 
 // SetFootPrints indicates an expected call of SetFootPrints.
-func (mr *MockTxnOperatorMockRecorder) SetFootPrints(prints interface{}) *gomock.Call {
+func (mr *MockTxnOperatorMockRecorder) SetFootPrints(id, enter interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFootPrints", reflect.TypeOf((*MockTxnOperator)(nil).SetFootPrints), prints)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFootPrints", reflect.TypeOf((*MockTxnOperator)(nil).SetFootPrints), id, enter)
 }
 
 // Snapshot mocks base method.
