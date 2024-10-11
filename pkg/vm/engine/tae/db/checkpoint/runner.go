@@ -674,6 +674,7 @@ func (r *runner) doGlobalCheckpoint(
 	}
 
 	entry.SetLocation(cnLocation, tnLocation)
+	files = append(files, cnLocation.Name().String())
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
 	var name string
