@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,7 +53,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
 )
 
 const (
@@ -481,6 +482,8 @@ func (txn *Transaction) EndStatement() {
 }
 
 func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error {
+	txn.op.EnterIncrStmt()
+	defer txn.op.ExitIncrStmt()
 	if !commit {
 		if !txn.startStatementCalled {
 			logutil.Fatal("BUG: StartStatement not called")
@@ -657,6 +660,8 @@ func (txn *Transaction) gcObjs(start int) error {
 }
 
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
+	txn.op.EnterRollbackStmt()
+	defer txn.op.ExitRollbackStmt()
 	txn.Lock()
 	defer txn.Unlock()
 

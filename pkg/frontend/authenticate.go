@@ -30,6 +30,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tidwall/btree"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -57,8 +61,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/tidwall/btree"
-	"golang.org/x/sync/errgroup"
 )
 
 type TenantInfo struct {
@@ -3534,7 +3536,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		if rtnErr != nil {
 			return rtnErr
 		}
-
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getAccountIdNamesSql)
 		_, nameInfoMap, rtnErr := getAccounts(ctx, bh)
 		if rtnErr != nil {
 			return rtnErr
@@ -3566,18 +3568,21 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		//step 8 : drop table mo_mysql_compatibility_mode
 		//step 9 : drop table %!%mo_increment_columns
 		for _, sql = range getSqlForDropAccount() {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
 				return rtnErr
 			}
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getPubInfoSql)
 		// unpublish all publications
 		pubInfos, rtnErr := getPubInfos(deleteCtx, bh, "")
 		if rtnErr != nil {
 			return
 		}
 		for _, pubInfo := range pubInfos {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, pubInfo.PubName)
 			if rtnErr = dropPublication(deleteCtx, bh, true, pubInfo.PubName); rtnErr != nil {
 				return
 			}
@@ -3587,6 +3592,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		databases = make(map[string]int8)
 		dbSql = "show databases;"
 		bh.ClearExecResultSet()
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dbSql)
 		rtnErr = bh.Exec(deleteCtx, dbSql)
 		if rtnErr != nil {
 			return rtnErr
@@ -3623,12 +3629,14 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		}
 
 		for _, sql = range sqlsForDropDatabases {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
 				return rtnErr
 			}
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getSubsSql)
 		// alter sub_account field in mo_pubs which contains accountName
 		subInfos, rtnErr := getSubInfosFromSub(deleteCtx, bh, "")
 		if rtnErr != nil {
@@ -3640,51 +3648,60 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 				continue
 			}
 
+			ses.Infof(ctx, "dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
 			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, pubAccInfo.Id, subInfo.PubName, da.Name); rtnErr != nil {
 				return rtnErr
 			}
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
 		// delete records in mo_subs
 		if rtnErr = deleteMoSubsBySubAccountId(deleteCtx, bh); rtnErr != nil {
 			return rtnErr
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
 		// drop table mo_mysql_compatibility_mode
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoPubsSql)
 		// drop table mo_pubs
 		rtnErr = bh.Exec(deleteCtx, dropMoPubsSql)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
 		// drop autoIcr table
 		rtnErr = bh.Exec(deleteCtx, dropAutoIcrColSql)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoIndexes)
 		// drop mo_catalog.mo_indexes under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoIndexes)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoTablePartitions)
 		// drop mo_catalog.mo_table_partitions under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoRetention)
 		rtnErr = bh.Exec(deleteCtx, dropMoRetention)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
 		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
 		if rtnErr != nil {
 			return rtnErr
@@ -3692,6 +3709,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 
 		// delete the pitr record in the mo_pitr created by the account which is dropped
 		sql = getSqlForDeletePitrFromMoPitr(uint64(accountId))
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
 			return rtnErr
@@ -3702,6 +3720,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		if rtnErr != nil {
 			return rtnErr
 		}
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
 			return rtnErr
@@ -3710,6 +3729,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		// get all cluster table in the mo_catalog
 		sql = "show tables from mo_catalog;"
 		bh.ClearExecResultSet()
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
 			return rtnErr
@@ -3734,6 +3754,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		for clusterTable := range clusterTables {
 			sql = fmt.Sprintf("delete from mo_catalog.`%s` where account_id = %d;", clusterTable, accountId)
 			bh.ClearExecResultSet()
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
 				return rtnErr
@@ -4263,7 +4284,7 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 }
 
 // doRevokePrivilege accomplishes the RevokePrivilege statement
-func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivilege) (err error) {
+func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivilege, bh BackgroundExec) (err error) {
 	var vr *verifiedRole
 	var objType objectType
 	var privLevel privilegeLevelType
@@ -4276,20 +4297,9 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
 	checkedPrivilegeTypes := make([]PrivilegeType, len(rp.Privileges))
-
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	//handle "IF EXISTS"
 	//step 1: check roles. exists or not.
@@ -4528,7 +4538,7 @@ func matchPrivilegeTypeWithObjectType(ctx context.Context, privType PrivilegeTyp
 }
 
 // doGrantPrivilege accomplishes the GrantPrivilege statement
-func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege) (err error) {
+func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege, bh BackgroundExec) (err error) {
 	var erArray []ExecResult
 	var roleId int64
 	var privType PrivilegeType
@@ -4550,22 +4560,10 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 		userId = account.GetUserID()
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
 	//Get primary keys
 	//step 1: get role_id
 	verifiedRoles := make([]*verifiedRole, len(gp.Roles))
 	checkedPrivilegeTypes := make([]PrivilegeType, len(gp.Privileges))
-
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	for i, role := range gp.Roles {
 		//check Grant privilege on xxx yyy to moadmin(accountadmin)
@@ -7968,7 +7966,7 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 				Filepath: localPath,
 			},
 		}
-		return processLoadLocal(ses, execCtx, param, loadLocalWriter)
+		return processLoadLocal(ses, execCtx, param, loadLocalWriter, loadLocalReader)
 	})
 
 	// read from pipe and upload
@@ -8713,8 +8711,8 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
 	}
-	currentRole := tenantInfo.GetDefaultRole()
-	if len(currentRole) == 0 {
+	curRole := tenantInfo.GetDefaultRole()
+	if len(curRole) == 0 {
 		return err
 	}
 
@@ -8731,7 +8729,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	// 2.grant database privilege
 	switch st := stmt.(type) {
 	case *tree.CreateDatabase:
-		sql = getSqlForGrantOwnershipOnDatabase(string(st.Name), currentRole)
+		sql = getSqlForGrantOwnershipOnDatabase(string(st.Name), curRole)
 	case *tree.CreateTable:
 		// get database name
 		var dbName string
@@ -8742,13 +8740,18 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		}
 		// get table name
 		tableName := string(st.Table.ObjectName)
-		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, currentRole)
+		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, curRole)
 	}
 
-	bh := ses.GetBackgroundExec(tenantCtx)
+	rp, err := mysql.Parse(tenantCtx, sql, 1)
+	if err != nil {
+		return err
+	}
+
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
-	err = bh.Exec(tenantCtx, sql)
+	err = doGrantPrivilege(tenantCtx, ses, &rp[0].(*tree.Grant).GrantPrivilege, bh)
 	if err != nil {
 		return err
 	}
@@ -8763,8 +8766,8 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
 	}
-	currentRole := tenantInfo.GetDefaultRole()
-	if len(currentRole) == 0 {
+	curRole := tenantInfo.GetDefaultRole()
+	if len(curRole) == 0 {
 		return err
 	}
 
@@ -8781,7 +8784,7 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	// 2.grant database privilege
 	switch st := stmt.(type) {
 	case *tree.DropDatabase:
-		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), currentRole)
+		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), curRole)
 	case *tree.DropTable:
 		// get database name
 		var dbName string
@@ -8792,13 +8795,18 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		}
 		// get table name
 		tableName := string(st.Names[0].ObjectName)
-		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, currentRole)
+		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, curRole)
 	}
 
-	bh := ses.GetBackgroundExec(tenantCtx)
+	rp, err := mysql.Parse(tenantCtx, sql, 1)
+	if err != nil {
+		return err
+	}
+
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
-	err = bh.Exec(tenantCtx, sql)
+	err = doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh)
 	if err != nil {
 		return err
 	}

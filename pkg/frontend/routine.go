@@ -152,13 +152,10 @@ func (rt *Routine) getConnectionID() uint32 {
 	return rt.getProtocol().GetU32(CONNID)
 }
 
-func (rt *Routine) updateGoroutineId() {
+func (rt *Routine) getGoroutineId() uint64 {
 	if rt.goroutineID == 0 {
 		rt.goroutineID = GetRoutineId()
 	}
-}
-
-func (rt *Routine) getGoroutineId() uint64 {
 	return rt.goroutineID
 }
 
@@ -523,6 +520,7 @@ func NewRoutine(ctx context.Context, protocol MysqlRrWr, parameters *config.Fron
 		parameters:        parameters,
 		printInfoOnce:     true,
 		mc:                newMigrateController(),
+		goroutineID:       GetRoutineId(),
 	}
 	protocol.UpdateCtx(cancelRoutineCtx)
 

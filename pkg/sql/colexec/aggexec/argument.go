@@ -29,11 +29,25 @@ type sBytesArg struct {
 }
 
 func (arg *sFixedArg[T]) prepare(v *vector.Vector) {
-	arg.w = vector.GenerateFunctionFixedTypeParameter[T](v)
+	if arg.w == nil {
+		arg.w = vector.GenerateFunctionFixedTypeParameter[T](v)
+	} else {
+		ok := vector.ReuseFunctionFixedTypeParameter(v, arg.w)
+		if !ok {
+			arg.w = vector.GenerateFunctionFixedTypeParameter[T](v)
+		}
+	}
 }
 
 func (arg *sBytesArg) prepare(v *vector.Vector) {
-	arg.w = vector.GenerateFunctionStrParameter(v)
+	if arg.w == nil {
+		arg.w = vector.GenerateFunctionStrParameter(v)
+	} else {
+		ok := vector.ReuseFunctionStrParameter(v, arg.w)
+		if !ok {
+			arg.w = vector.GenerateFunctionStrParameter(v)
+		}
+	}
 }
 
 // mArg1 and mArg2 are the interface of multi columns aggregation's argument.
