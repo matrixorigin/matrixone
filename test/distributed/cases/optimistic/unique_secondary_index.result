@@ -259,7 +259,7 @@ create table index_table_04 (col1 bigint not null auto_increment,col2 varchar(25
 insert into index_table_04(col2,col3,col4)  select 'apple',1,'10';
 insert into index_table_04(col2,col3,col4)  select 'apple',2,'11';
 insert into index_table_04(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry 'apple,2' for key '(col2,col3)'
+Duplicate entry '(apple,2)' for key '(col2,col3)'
 insert into index_table_04(col2,col3,col4)  select NULL,NULL,'13';
 select * from index_table_04;
 col1    col2    col3    col4

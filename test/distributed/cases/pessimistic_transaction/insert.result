@@ -161,7 +161,7 @@ a    b
 2    2
 2    3
 insert into t1 values(2, '3');
-Duplicate entry '(2,3)' for key 'a,b'
+Duplicate entry '(2,3)' for key '(a,b)'
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(1, 2, 3) on duplicate key update a=5;
@@ -503,14 +503,14 @@ drop table if exists indup_11;
 create table indup_11(a int, b varchar(20), primary key(a, b));
 insert into indup_11(a, b) values (1, "2");
 insert into indup_11(b, a) values ("2", 1);
-Duplicate entry '(1,2)' for key 'a,b'
+Duplicate entry '(1,2)' for key '(a,b)'
 drop table indup_11;
 drop table if exists t4;
 create table t4(col1 int, col2 decimal, col3 smallint, primary key(col1, col3));
 insert into t4 (col1, col2, col3) values(6, 6, 8);
 insert into t4 (col2, col3, col1) values(2, 3, 1);
 insert into t4 (col3, col1) values (8, 6);
-Duplicate entry '(6,8)' for key 'col1,col3'
+Duplicate entry '(6,8)' for key '(col1,col3)'
 select * from t4;
 col1    col2    col3
 6    6    8
