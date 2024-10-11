@@ -818,16 +818,15 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}()
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
 		var scopes []*Scope
-		var scope *Scope
 		scopes, err = c.compilePlanScope(int32(i), qry.Steps[i], qry.Nodes)
 		if err != nil {
 			return nil, err
 		}
-		scope, err = c.compileSteps(qry, scopes, qry.Steps[i])
+		scopes, err = c.compileSteps(qry, scopes, qry.Steps[i])
 		if err != nil {
 			return nil, err
 		}
-		steps = append(steps, scope)
+		steps = append(steps, scopes...)
 	}
 
 	return steps, err
@@ -860,38 +859,38 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 	return nil
 }
 
-func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope, error) {
+func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
-		return ss[0], nil
+		return ss, nil
 	}
 
-	//switch qry.StmtType {
-	//case plan.Query_DELETE:
-	//	updateScopesLastFlag(ss)
-	//	return ss[0], nil
-	//case plan.Query_INSERT:
-	//	updateScopesLastFlag(ss)
-	//	return ss[0], nil
-	//case plan.Query_UPDATE:
-	//	updateScopesLastFlag(ss)
-	//	return ss[0], nil
-	//default:
-	var rs *Scope
-	if c.IsSingleScope(ss) {
-		rs = ss[0]
-	} else {
-		ss = c.mergeShuffleScopesIfNeeded(ss, false)
-		rs = c.newMergeScope(ss)
+	switch qry.StmtType {
+	case plan.Query_DELETE:
+		updateScopesLastFlag(ss)
+		return ss, nil
+	case plan.Query_INSERT:
+		updateScopesLastFlag(ss)
+		return ss, nil
+	case plan.Query_UPDATE:
+		updateScopesLastFlag(ss)
+		return ss, nil
+	default:
+		var rs *Scope
+		if c.IsSingleScope(ss) {
+			rs = ss[0]
+		} else {
+			ss = c.mergeShuffleScopesIfNeeded(ss, false)
+			rs = c.newMergeScope(ss)
+		}
+		updateScopesLastFlag([]*Scope{rs})
+		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
+		rs.setRootOperator(
+			output.NewArgument().
+				WithFunc(c.fill).
+				WithBlock(c.needBlock),
+		)
+		return []*Scope{rs}, nil
 	}
-	updateScopesLastFlag([]*Scope{rs})
-	c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
-	rs.setRootOperator(
-		output.NewArgument().
-			WithFunc(c.fill).
-			WithBlock(c.needBlock),
-	)
-	return rs, nil
-	//}
 }
 
 func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node) ([]*Scope, error) {
