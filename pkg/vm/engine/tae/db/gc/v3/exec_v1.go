@@ -35,7 +35,7 @@ import (
 
 const (
 	Default_Coarse_EstimateRows = 10000000
-	Default_Coarse_Probility    = 0.0001
+	Default_Coarse_Probility    = 0.00001
 	Default_CanGC_TailSize      = 64 * malloc.MB
 )
 

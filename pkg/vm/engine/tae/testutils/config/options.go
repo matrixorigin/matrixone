@@ -58,6 +58,7 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.GCCfg.ScanGCInterval = time.Millisecond * 10
 	opts.GCCfg.GCTTL = time.Millisecond * 1
 	opts.GCCfg.CacheSize = 1
+	opts.GCCfg.GCProbility = 0.000001
 	opts.CatalogCfg = new(options.CatalogCfg)
 	opts.CatalogCfg.GCInterval = time.Millisecond * 1
 	opts.Ctx = context.Background()

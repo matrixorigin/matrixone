@@ -91,6 +91,8 @@ type checkpointCleaner struct {
 	config struct {
 		canGCCacheSize          int
 		maxMergeCheckpointCount int
+		estimateRows            int
+		probility               float64
 	}
 
 	// checker is to check whether the checkpoint can be consumed
@@ -125,6 +127,22 @@ func WithMaxMergeCheckpointCount(
 ) CheckpointCleanerOption {
 	return func(e *checkpointCleaner) {
 		e.config.maxMergeCheckpointCount = count
+	}
+}
+
+func WithGCProbility(
+	probility float64,
+) CheckpointCleanerOption {
+	return func(e *checkpointCleaner) {
+		e.config.probility = probility
+	}
+}
+
+func WithEstimateRows(
+	rows int,
+) CheckpointCleanerOption {
+	return func(e *checkpointCleaner) {
+		e.config.estimateRows = rows
 	}
 }
 
@@ -1063,6 +1081,8 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		c.mutation.snapshotMeta,
 		memoryBuffer,
 		c.config.canGCCacheSize,
+		c.config.estimateRows,
+		c.config.probility,
 		c.mp,
 		c.fs.Service,
 	); err != nil {
@@ -1210,6 +1230,8 @@ func (c *checkpointCleaner) DoCheck() error {
 		c.mutation.snapshotMeta,
 		buffer,
 		c.config.canGCCacheSize,
+		c.config.estimateRows,
+		c.config.probility,
 		c.mp,
 		c.fs.Service,
 	); err != nil {
@@ -1230,6 +1252,8 @@ func (c *checkpointCleaner) DoCheck() error {
 		c.mutation.snapshotMeta,
 		buffer,
 		c.config.canGCCacheSize,
+		c.config.estimateRows,
+		c.config.probility,
 		c.mp,
 		c.fs.Service,
 	); err != nil {

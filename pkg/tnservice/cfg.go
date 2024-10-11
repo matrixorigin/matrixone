@@ -131,6 +131,8 @@ type Config struct {
 		CheckGC        bool          `toml:"check-gc"`
 		CacheSize      int           `toml:"cache-size"`
 		GCMergeCount   int           `toml:"gc-merge-count"`
+		GCestimateRows int           `toml:"gc-estimate-rows"`
+		GCProbility    float64       `toml:"gc-probility"`
 	}
 
 	Merge struct {

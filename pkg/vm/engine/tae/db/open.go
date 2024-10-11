@@ -253,6 +253,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		opts.SID, fs, db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
 		gc2.WithMaxMergeCheckpointCount(opts.GCCfg.GCMergeCount),
+		gc2.WithEstimateRows(opts.GCCfg.GCestimateRows),
+		gc2.WithGCProbility(opts.GCCfg.GCProbility),
 		gc2.WithCheckOption(opts.GCCfg.CheckGC),
 		gc2.WithGCCheckpointOption(!opts.CheckpointCfg.DisableGCCheckpoint))
 	cleaner.AddChecker(
