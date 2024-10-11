@@ -368,10 +368,7 @@ func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 // workaround for issue #19192
 func skipExecuteMOFunc(ctx context.Context, rel engine.Relation) bool {
 	def := rel.GetTableDef(ctx)
-	if strings.ToUpper(def.TableType) == "V" {
-		return true
-	}
-	return false
+	return strings.ToUpper(def.TableType) == "V"
 }
 
 func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
