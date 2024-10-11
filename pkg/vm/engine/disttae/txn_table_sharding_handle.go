@@ -27,12 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -366,6 +368,12 @@ func HandleShardingReadNext(
 	if isEnd {
 		return buffer.EncodeBytes(types.EncodeBool(&isEnd)), nil
 	}
+
+	logutil.Infof("xxxx HandleShardingReadNext, txn:%s,name:%s,id:%d, bat:%s",
+		tbl.db.op.Txn().DebugString(),
+		tbl.tableDef.Name,
+		tbl.tableId,
+		common.MoBatchToString(bat, 10))
 
 	var w bytes.Buffer
 	if _, err := w.Write(types.EncodeBool(&isEnd)); err != nil {
