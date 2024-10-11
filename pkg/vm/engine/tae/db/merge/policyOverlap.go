@@ -62,7 +62,7 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	if len(m.objects) < 2 {
 		return nil
 	}
-	if cpu > 90 {
+	if cpu > 80 {
 		return nil
 	}
 	objs, taskHostKind := m.reviseDataObjs(config)
@@ -89,8 +89,7 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 			continue
 		}
 
-		if zm := obj.SortKeyZoneMap(); set.size < common.Const1GBytes &&
-			index.StrictlyCompareZmMaxAndMin(set.maxValue, zm.GetMinBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) > 0 {
+		if zm := obj.SortKeyZoneMap(); index.StrictlyCompareZmMaxAndMin(set.maxValue, zm.GetMinBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) > 0 {
 			// zm is overlapped
 			set.add(obj)
 			continue
