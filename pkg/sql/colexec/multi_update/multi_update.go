@@ -129,7 +129,6 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 				continue
 			}
 
-			ctr.affectedRows += uint64(input.Batch.RowCount())
 			err = ctr.s3Writer.append(proc, input.Batch)
 			if err != nil {
 				return vm.CancelResult, err
@@ -163,7 +162,6 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 		return vm.CancelResult, err
 	}
 
-	update.ctr.affectedRows += uint64(input.Batch.RowCount())
 	analyzer.Output(input.Batch)
 
 	return input, nil

@@ -145,6 +145,7 @@ func (update *MultiUpdate) insert_table(
 			rowCount := insertBatch.Vecs[0].Length()
 			if rowCount > 0 {
 				insertBatch.SetRowCount(rowCount)
+				update.addInsertAffectRows(uint64(rowCount))
 				err = updateCtx.PartitionSources[partIdx].Write(proc.Ctx, insertBatch)
 				if err != nil {
 					return err
@@ -162,6 +163,7 @@ func (update *MultiUpdate) insert_table(
 		rowCount := insertBatch.Vecs[0].Length()
 		if rowCount > 0 {
 			insertBatch.SetRowCount(rowCount)
+			update.addInsertAffectRows(uint64(rowCount))
 			err = updateCtx.Source.Write(proc.Ctx, insertBatch)
 		}
 	}
@@ -211,6 +213,7 @@ func (update *MultiUpdate) check_null_and_insert_table(
 			newRowCount := insertBatch.Vecs[0].Length()
 			if newRowCount > 0 {
 				insertBatch.SetRowCount(newRowCount)
+				update.addInsertAffectRows(uint64(newRowCount))
 				err = updateCtx.PartitionSources[partIdx].Write(proc.Ctx, insertBatch)
 				if err != nil {
 					return err
@@ -237,6 +240,7 @@ func (update *MultiUpdate) check_null_and_insert_table(
 		newRowCount := insertBatch.Vecs[0].Length()
 		if newRowCount > 0 {
 			insertBatch.SetRowCount(newRowCount)
+			update.addInsertAffectRows(uint64(newRowCount))
 			err = updateCtx.Source.Write(proc.Ctx, insertBatch)
 		}
 	}

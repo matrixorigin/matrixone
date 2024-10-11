@@ -73,6 +73,7 @@ type MultiUpdate struct {
 type container struct {
 	state        vm.CtrState
 	affectedRows uint64
+	action       actionType
 
 	s3Writer *s3Writer
 
@@ -162,4 +163,20 @@ func (update *MultiUpdate) GetAffectedRows() uint64 {
 
 func (update *MultiUpdate) SetAffectedRows(affectedRows uint64) {
 	update.ctr.affectedRows = affectedRows
+}
+
+func (update *MultiUpdate) addInsertAffectRows(rowCount uint64) {
+	switch update.ctr.action {
+	case actionInsert:
+		update.ctr.affectedRows += rowCount
+	}
+}
+
+func (update *MultiUpdate) addDeleteAffectRows(rowCount uint64) {
+	switch update.ctr.action {
+	case actionDelete:
+		update.ctr.affectedRows += rowCount
+	case actionUpdate:
+		update.ctr.affectedRows += rowCount
+	}
 }
