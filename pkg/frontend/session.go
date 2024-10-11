@@ -780,8 +780,9 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 	ses.EnterFPrint(FPGetShareTxnBackgroundExec)
 	defer ses.ExitFPrint(FPGetShareTxnBackgroundExec)
 	var txnOp TxnOperator
-	if ses.GetTxnHandler() != nil {
-		txnOp = ses.GetTxnHandler().GetTxn()
+	txnHandle := ses.GetTxnHandler()
+	if txnHandle != nil {
+		txnOp = txnHandle.GetTxn()
 	}
 
 	var callback outputCallBackFunc
@@ -1103,13 +1104,14 @@ func (ses *Session) GetConnectionID() uint32 {
 func (ses *Session) SetConnectionID(v uint32) {
 	protocol := ses.GetResponser()
 	if protocol != nil {
-		ses.GetResponser().SetU32(CONNID, v)
+		protocol.SetU32(CONNID, v)
 	}
 }
 
 func (ses *Session) skipAuthForSpecialUser() bool {
-	if ses.GetTenantInfo() != nil {
-		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
+	acc := ses.GetTenantInfo()
+	if acc != nil {
+		ok, _, _ := isSpecialUser(acc.GetUser())
 		return ok
 	}
 	return false
@@ -1720,8 +1722,9 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
 	nodeCtx := cancelRequestCtx
-	if ses.getRoutineManager() != nil && ses.getRoutineManager().baseService != nil {
-		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, ses.getRoutineManager().baseService.ID())
+	rm := ses.getRoutineManager()
+	if rm != nil && rm.baseService != nil {
+		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, rm.baseService.ID())
 	}
 	ctx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 
@@ -1798,8 +1801,9 @@ func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fi
 	ses.initLogger()
 	if ses.logLevel.Enabled(level) {
 		fields = append(fields, zap.String("session_info", ses.debugStr)) // not use ses.GetDebugStr() because this func may be locked.
-		if ses.tenant != nil {
-			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
+		acc := ses.GetTenantInfo()
+		if acc != nil {
+			fields = append(fields, zap.String("role", acc.GetDefaultRole()))
 		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
@@ -1815,8 +1819,9 @@ func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string
 	if ses.logLevel.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
 		fields = append(fields, zap.String("session_info", ses.debugStr))
-		if ses.tenant != nil {
-			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
+		acc := ses.GetTenantInfo()
+		if acc != nil {
+			fields = append(fields, zap.String("role", acc.GetDefaultRole()))
 		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
