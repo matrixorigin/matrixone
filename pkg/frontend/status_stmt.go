@@ -56,8 +56,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			}
 
 			ep.init()
-			fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
-			setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 			runBegin := time.Now()
 			/*
 				Start pipeline
@@ -85,8 +83,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return moerr.NewInternalError(execCtx.reqCtx, "select without it generates the result rows")
 		}
 	case *tree.CreateTable:
-		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
-		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
 		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 			return
@@ -137,13 +133,11 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if st.Local {
 				loadLocalErrGroup = new(errgroup.Group)
 				loadLocalErrGroup.Go(func() error {
-					return processLoadLocal(ses, execCtx, st.Param, execCtx.loadLocalWriter)
+					return processLoadLocal(ses, execCtx, st.Param, execCtx.loadLocalWriter, execCtx.proc.GetLoadLocalReader())
 				})
 			}
 		}
 
-		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
-		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 			if loadLocalErrGroup != nil { // release resources
 				err2 := execCtx.proc.Base.LoadLocalReader.Close()
