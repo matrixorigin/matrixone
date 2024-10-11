@@ -264,9 +264,11 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	for i, tableDef := range dmlCtx.tableDefs {
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
 		updateCtx := &plan.UpdateCtx{
-			ObjRef:     dmlCtx.objRefs[i],
-			TableDef:   tableDef,
-			InsertCols: insertCols,
+			ObjRef:          dmlCtx.objRefs[i],
+			TableDef:        tableDef,
+			InsertCols:      insertCols,
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		}
 		if tableDef.Partition != nil {
 			partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[i], tableDef)
@@ -347,9 +349,11 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 			}
 
 			dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
-				ObjRef:     idxObjRefs[i][j],
-				TableDef:   idxTableDef,
-				InsertCols: idxInsertCols,
+				ObjRef:          idxObjRefs[i][j],
+				TableDef:        idxTableDef,
+				InsertCols:      idxInsertCols,
+				OldPartitionIdx: -1,
+				NewPartitionIdx: -1,
 			})
 		}
 

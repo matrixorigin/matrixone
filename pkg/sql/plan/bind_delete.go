@@ -240,8 +240,10 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 		pkPos := colName2Idx[i][tableDef.Pkey.PkeyColName]
 		rowIDPos := colName2Idx[i][catalog.Row_ID]
 		updateCtx := &plan.UpdateCtx{
-			TableDef: DeepCopyTableDef(tableDef, true),
-			ObjRef:   DeepCopyObjectRef(dmlCtx.objRefs[i]),
+			TableDef:        DeepCopyTableDef(tableDef, true),
+			ObjRef:          DeepCopyObjectRef(dmlCtx.objRefs[i]),
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		}
 
 		if tableDef.Partition != nil {
@@ -341,8 +343,10 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 			}
 
 			dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
-				TableDef: DeepCopyTableDef(idxNode.TableDef, true),
-				ObjRef:   DeepCopyObjectRef(idxNode.ObjRef),
+				TableDef:        DeepCopyTableDef(idxNode.TableDef, true),
+				ObjRef:          DeepCopyObjectRef(idxNode.ObjRef),
+				OldPartitionIdx: -1,
+				NewPartitionIdx: -1,
 				DeleteCols: []plan.ColRef{
 					{
 						RelPos: idxNode.BindingTags[0],

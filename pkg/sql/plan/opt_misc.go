@@ -41,15 +41,18 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 		increaseRefCntForColRefList(updateCtx.InsertCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.DeleteCols, 2, colRefCnt)
 		if len(updateCtx.PartitionTableIds) > 0 {
-			colRefs := []ColRef{
-				{
+			colRefs := make([]ColRef, 0, 2)
+			if updateCtx.OldPartitionIdx > -1 {
+				colRefs = append(colRefs, ColRef{
 					RelPos: node.BindingTags[1],
 					ColPos: updateCtx.OldPartitionIdx,
-				},
-				{
+				})
+			}
+			if updateCtx.NewPartitionIdx > -1 {
+				colRefs = append(colRefs, ColRef{
 					RelPos: node.BindingTags[1],
 					ColPos: updateCtx.NewPartitionIdx,
-				},
+				})
 			}
 			increaseRefCntForColRefList(colRefs, 1, colRefCnt)
 		}
@@ -231,16 +234,20 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 		if len(updateCtx.PartitionTableIds) > 0 {
 			oldPartRef := [2]int32{node.BindingTags[1], updateCtx.OldPartitionIdx}
 			newPartRef := [2]int32{node.BindingTags[1], updateCtx.NewPartitionIdx}
-			if expr, ok := projMap[oldPartRef]; ok {
-				if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-					node.BindingTags[1] = e.Col.RelPos
-					updateCtx.OldPartitionIdx = e.Col.ColPos
+			if updateCtx.OldPartitionIdx > -1 {
+				if expr, ok := projMap[oldPartRef]; ok {
+					if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+						node.BindingTags[1] = e.Col.RelPos
+						updateCtx.OldPartitionIdx = e.Col.ColPos
+					}
 				}
 			}
-			if expr, ok := projMap[newPartRef]; ok {
-				if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-					node.BindingTags[1] = e.Col.RelPos
-					updateCtx.NewPartitionIdx = e.Col.ColPos
+			if updateCtx.NewPartitionIdx > -1 {
+				if expr, ok := projMap[newPartRef]; ok {
+					if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+						node.BindingTags[1] = e.Col.RelPos
+						updateCtx.NewPartitionIdx = e.Col.ColPos
+					}
 				}
 			}
 		}

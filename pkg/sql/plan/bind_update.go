@@ -355,9 +355,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
-			ObjRef:     dmlCtx.objRefs[i],
-			TableDef:   tableDef,
-			InsertCols: insertCols,
+			ObjRef:          dmlCtx.objRefs[i],
+			TableDef:        tableDef,
+			InsertCols:      insertCols,
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 			DeleteCols: []plan.ColRef{
 				{
 					RelPos: finalProjTag,
