@@ -17,6 +17,7 @@ package backup
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/panjf2000/ants/v2"
 	"github.com/prashantv/gostub"
 	"path"
@@ -141,8 +142,10 @@ func TestBackupData(t *testing.T) {
 	for _, location := range files {
 		locations = append(locations, location)
 	}
-	fileList, err := execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full")
+	fileList := make([]*taeFile, 0)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
 	assert.Nil(t, err)
+	logutil.Infof("fileListsss: %v", fileList)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
 		_, ok := fileMap[file.path]
