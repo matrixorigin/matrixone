@@ -2246,7 +2246,22 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 
 // processLoadLocal executes the load data local.
 // load data local interaction: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_local_infile_request.html
-func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, reader *io.PipeReader) (err error) {
+	//pipewriter may stick when there is no reader reading on the pipereader.
+	//so we need to make sure the pipewriter.write returns.
+	//issue3976
+	quitC := make(chan int)
+	go func() {
+		select {
+		case <-execCtx.reqCtx.Done():
+			//close reader
+			_ = reader.Close()
+		case <-quitC:
+		}
+	}()
+	defer func() {
+		close(quitC)
+	}()
 	mysqlRrWr := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		err2 := writer.Close()
@@ -2473,7 +2488,6 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeStart)
 	defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeStart)
-	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
 	txnOp.GetWorkspace().StartStatement()
@@ -2488,7 +2502,6 @@ func executeStmtWithWorkspace(ses FeSession,
 		if txnOp != nil {
 			ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeEnd)
 			defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeEnd)
-			setFPrints(txnOp, execCtx.ses.GetFPrints())
 			//most of the cases, txnOp will not nil except that "set autocommit = 1"
 			//commit the txn immediately then the txnOp is nil.
 			txnOp.GetWorkspace().EndStatement()
@@ -2517,7 +2530,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 	}
 	ses.EnterFPrint(FPExecStmtWithIncrStmtBeforeIncr)
 	defer ses.ExitFPrint(FPExecStmtWithIncrStmtBeforeIncr)
-	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//3. increase statement id
 	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
 	if err != nil {
@@ -2534,8 +2546,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 		//if txnOp != nil {
 		//	err = rollbackLastStmt(execCtx, txnOp, err)
 		//}
-		tempTxn := ses.GetTxnHandler().GetTxn()
-		setFPrints(tempTxn, ses.GetFPrints())
 	}()
 
 	err = dispatchStmt(ses, execCtx)
