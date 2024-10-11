@@ -6516,6 +6516,18 @@ func TestAppendAndGC2(t *testing.T) {
 		}
 		logutil.Infof("file %s in meta files", file)
 	}
+
+	// check gc meta files
+	var gcFile bool
+	for file := range files {
+		if strings.Contains(file, "/gc_") && strings.Contains(file, ".ckp") {
+			gcFile = true
+			break
+		}
+	}
+	if !gcFile {
+		panic("gc meta files not found")
+	}
 }
 
 func TestSnapshotGC(t *testing.T) {
