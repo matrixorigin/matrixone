@@ -51,7 +51,6 @@ type RoutineManager struct {
 	// reportSystemStatusTime is the time when report system status last time.
 	reportSystemStatusTime atomic.Pointer[time.Time]
 	cancel                 context.CancelFunc
-	testMode               bool
 }
 
 type AccountRoutineManager struct {

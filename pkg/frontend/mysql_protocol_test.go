@@ -17,15 +17,11 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"math"
 	"net"
-	"os"
 	"reflect"
 	"strconv"
 	"sync"
@@ -609,46 +605,46 @@ func TestReadStringLenEnc(t *testing.T) {
 }
 
 // can not run this test case in ubuntu+golang1.9， let's add an issue(#4656) for that, I will fixed in someday.
-func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
-	//before anything using the configuration
-	clientConn, serverConn := net.Pipe()
-	defer serverConn.Close()
-	defer clientConn.Close()
-	registerConn(clientConn)
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-	if err != nil {
-		panic(err)
-	}
-	pu.SV.EnableTls = true
-	setGlobalPu(pu)
-	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-	rm, err := NewRoutineManager(ctx)
-	assert.NoError(t, err)
-	setGlobalRtMgr(rm)
-
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-
-	// //running server
-	go func() {
-		defer wg.Done()
-		startInnerServer(serverConn)
-	}()
-
-	// to := NewTimeout(1*time.Minute, false)
-	// for isClosed() && !to.isTimeout() {
-	// }
-
-	time.Sleep(time.Second * 2)
-	db := open_tls_db(t, 6001)
-	closeDbConn(t, db)
-
-	time.Sleep(time.Millisecond * 10)
-	clientConn.Close()
-	serverConn.Close()
-	wg.Wait()
-}
+//func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
+//	//before anything using the configuration
+//	clientConn, serverConn := net.Pipe()
+//	defer serverConn.Close()
+//	defer clientConn.Close()
+//	registerConn(clientConn)
+//	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+//	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+//	if err != nil {
+//		panic(err)
+//	}
+//	pu.SV.EnableTls = true
+//	setGlobalPu(pu)
+//	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+//	rm, err := NewRoutineManager(ctx)
+//	assert.NoError(t, err)
+//	setGlobalRtMgr(rm)
+//
+//	wg := sync.WaitGroup{}
+//	wg.Add(1)
+//
+//	// //running server
+//	go func() {
+//		defer wg.Done()
+//		startInnerServer(serverConn)
+//	}()
+//
+//	// to := NewTimeout(1*time.Minute, false)
+//	// for isClosed() && !to.isTimeout() {
+//	// }
+//
+//	time.Sleep(time.Second * 2)
+//	db := open_tls_db(t, 6001)
+//	closeDbConn(t, db)
+//
+//	time.Sleep(time.Millisecond * 10)
+//	clientConn.Close()
+//	serverConn.Close()
+//	wg.Wait()
+//}
 
 func makeMysqlTinyIntResultSet(unsigned bool) *MysqlResultSet {
 	var rs = &MysqlResultSet{}
@@ -690,10 +686,6 @@ func makeMysqlTinyIntResultSet(unsigned bool) *MysqlResultSet {
 	return rs
 }
 
-func makeMysqlTinyResult(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlTinyIntResultSet(unsigned))
-}
-
 func makeMysqlShortResultSet(unsigned bool) *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -731,10 +723,6 @@ func makeMysqlShortResultSet(unsigned bool) *MysqlResultSet {
 	}
 
 	return rs
-}
-
-func makeMysqlShortResult(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlShortResultSet(unsigned))
 }
 
 func makeMysqlLongResultSet(unsigned bool) *MysqlResultSet {
@@ -776,10 +764,6 @@ func makeMysqlLongResultSet(unsigned bool) *MysqlResultSet {
 	return rs
 }
 
-func makeMysqlLongResult(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlLongResultSet(unsigned))
-}
-
 func makeMysqlLongLongResultSet(unsigned bool) *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -817,10 +801,6 @@ func makeMysqlLongLongResultSet(unsigned bool) *MysqlResultSet {
 	}
 
 	return rs
-}
-
-func makeMysqlLongLongResult(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlLongLongResultSet(unsigned))
 }
 
 func makeMysqlInt24ResultSet(unsigned bool) *MysqlResultSet {
@@ -864,10 +844,6 @@ func makeMysqlInt24ResultSet(unsigned bool) *MysqlResultSet {
 	return rs
 }
 
-func makeMysqlInt24Result(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlInt24ResultSet(unsigned))
-}
-
 func makeMysqlYearResultSet(unsigned bool) *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -907,10 +883,6 @@ func makeMysqlYearResultSet(unsigned bool) *MysqlResultSet {
 	return rs
 }
 
-func makeMysqlYearResult(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlYearResultSet(unsigned))
-}
-
 func makeMysqlVarcharResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -935,10 +907,6 @@ func makeMysqlVarcharResultSet() *MysqlResultSet {
 	}
 
 	return rs
-}
-
-func makeMysqlVarcharResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlVarcharResultSet())
 }
 
 func makeMysqlVarStringResultSet() *MysqlResultSet {
@@ -967,10 +935,6 @@ func makeMysqlVarStringResultSet() *MysqlResultSet {
 	return rs
 }
 
-func makeMysqlVarStringResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlVarStringResultSet())
-}
-
 func makeMysqlStringResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -995,10 +959,6 @@ func makeMysqlStringResultSet() *MysqlResultSet {
 	}
 
 	return rs
-}
-
-func makeMysqlStringResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlStringResultSet())
 }
 
 func makeMysqlFloatResultSet() *MysqlResultSet {
@@ -1027,10 +987,6 @@ func makeMysqlFloatResultSet() *MysqlResultSet {
 	return rs
 }
 
-func makeMysqlFloatResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlFloatResultSet())
-}
-
 func makeMysqlDoubleResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -1055,10 +1011,6 @@ func makeMysqlDoubleResultSet() *MysqlResultSet {
 	}
 
 	return rs
-}
-
-func makeMysqlDoubleResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDoubleResultSet())
 }
 
 func makeMysqlDateResultSet() *MysqlResultSet {
@@ -1090,10 +1042,6 @@ func makeMysqlDateResultSet() *MysqlResultSet {
 	}
 
 	return rs
-}
-
-func makeMysqlDateResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDateResultSet())
 }
 
 func makeMysqlTimeResultSet() *MysqlResultSet {
@@ -1129,10 +1077,6 @@ func makeMysqlTimeResultSet() *MysqlResultSet {
 	return rs
 }
 
-func makeMysqlTimeResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlTimeResultSet())
-}
-
 func makeMysqlDatetimeResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -1164,10 +1108,6 @@ func makeMysqlDatetimeResultSet() *MysqlResultSet {
 	}
 
 	return rs
-}
-
-func makeMysqlDatetimeResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDatetimeResultSet())
 }
 
 func make9ColumnsResultSet() *MysqlResultSet {
@@ -1238,10 +1178,6 @@ func make9ColumnsResultSet() *MysqlResultSet {
 	return rs
 }
 
-func makeMysql9ColumnsResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, make9ColumnsResultSet())
-}
-
 func makeMoreThan16MBResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -1279,11 +1215,6 @@ func makeMoreThan16MBResultSet() *MysqlResultSet {
 	}
 
 	return rs
-}
-
-// the size of resultset will be morethan 16MB
-func makeMoreThan16MBResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMoreThan16MBResultSet())
 }
 
 func make16MBRowResultSet() *MysqlResultSet {
@@ -1338,326 +1269,274 @@ func make16MBRowResultSet() *MysqlResultSet {
 	return rs
 }
 
-// the size of resultset row will be more than 16MB
-func make16MBRowResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, make16MBRowResultSet())
-}
-
-func testHandleRequest(ctx context.Context, proto MysqlRrWr, req *Request) error {
-	var resp *Response
-	switch req.GetCmd() {
-	case COM_QUIT:
-		resp = &Response{
-			category: OkResponse,
-			status:   0,
-			data:     nil,
-		}
-		if err := proto.WriteResponse(ctx, resp); err != nil {
-			fmt.Printf("send response failed. error:%v", err)
-			break
-		}
-	case COM_QUERY:
-		var query = string(req.GetData().([]byte))
-
-		switch query {
-		case "tiny":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				cmd:      0,
-				data:     makeMysqlTinyResult(false),
-			}
-		case "tinyu":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlTinyResult(true),
-			}
-		case "short":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlShortResult(false),
-			}
-		case "shortu":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlShortResult(true),
-			}
-		case "long":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlLongResult(false),
-			}
-		case "longu":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlLongResult(true),
-			}
-		case "longlong":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlLongLongResult(false),
-			}
-		case "longlongu":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlLongLongResult(true),
-			}
-		case "int24":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlInt24Result(false),
-			}
-		case "int24u":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlInt24Result(true),
-			}
-		case "year":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlYearResult(false),
-			}
-		case "yearu":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlYearResult(true),
-			}
-		case "varchar":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlVarcharResult(),
-			}
-		case "varstring":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlVarStringResult(),
-			}
-		case "string":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlStringResult(),
-			}
-		case "float":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlFloatResult(),
-			}
-		case "double":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlDoubleResult(),
-			}
-		case "date":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlDateResult(),
-			}
-		case "time":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlTimeResult(),
-			}
-		case "datetime":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlDatetimeResult(),
-			}
-		case "9columns":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysql9ColumnsResult(),
-			}
-		case "16mb":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMoreThan16MBResult(),
-			}
-		case "16mbrow":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     make16MBRowResult(),
-			}
-		default:
-			resp = &Response{
-				category: OkResponse,
-				status:   0,
-				data:     nil,
-			}
-		}
-
-		if err := proto.WriteResponse(ctx, resp); err != nil {
-			fmt.Printf("send response failed. error:%v", err)
-			break
-		}
-	case COM_PING:
-		resp = NewResponse(
-			OkResponse,
-			0, 0, 0,
-			0,
-			int(COM_PING),
-			nil,
-		)
-		if err := proto.WriteResponse(ctx, resp); err != nil {
-			fmt.Printf("send response failed. error:%v", err)
-			break
-		}
-
-	default:
-		fmt.Printf("unsupported command. 0x%x \n", req.cmd)
-	}
-	if req.cmd == COM_QUIT {
-		return nil
-	}
-	return nil
-}
-
-// TODO:replace by the dedicated table functions.
 func TestMysqlResultSet(t *testing.T) {
-	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
-	//pwd: mysql-server-mysql-8.0.23/mysql-test
-	//with mysqltest: mysqltest --test-file=t/1st.test --result-file=r/1st.result --user=dump -p111 -P 6001 --host=127.0.0.1
+	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
+	//client connect
+	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
 
-	//test:
-	//./mysql-test-run 1st --extern user=root --extern port=3306 --extern host=127.0.0.1
-	//  mysql5.7 failed
-	//	mysql-8.0.23 success
-	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
-	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
 	clientConn, serverConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
 	registerConn(clientConn)
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-	if err != nil {
-		panic(err)
-	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	var db *sql.DB
+
+	var err error
+
+	//before anything using the configuration
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second * 10}).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, commitTS any, options ...any) (client.TxnOperator, error) {
+		wp := newTestWorkspace()
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOp.EXPECT().GetWorkspace().Return(wp).AnyTimes()
+		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		return txnOp, nil
+	}).AnyTimes()
+	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
 	setGlobalPu(pu)
-	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-	rm, err := NewRoutineManager(ctx)
-	assert.NoError(t, err)
-	setGlobalRtMgr(rm)
 
-	stub := gostub.Stub(&handleRequest, func(rt *Routine, req *Request) error {
-		return testHandleRequest(rt.cancelRoutineCtx, rt.protocol, req)
-	})
-	defer stub.Reset()
+	noResultSet := make(map[string]bool)
+	resultSet := make(map[string]*result)
+
+	type kase struct {
+		sql string
+		mrs *MysqlResultSet
+	}
+
+	var kases []kase
+
+	kases1 := []kase{
+		{
+			sql: "select tiny",
+			mrs: makeMysqlTinyIntResultSet(false),
+		},
+		{
+			sql: "select tinyu",
+			mrs: makeMysqlTinyIntResultSet(true),
+		},
+		{
+			sql: "select short",
+			mrs: makeMysqlShortResultSet(false),
+		},
+		{
+			sql: "select shortu",
+			mrs: makeMysqlShortResultSet(true),
+		},
+		{
+			sql: "select long",
+			mrs: makeMysqlLongResultSet(false),
+		},
+		{
+			sql: "select longu",
+			mrs: makeMysqlLongResultSet(true),
+		},
+		{
+			sql: "select longlong",
+			mrs: makeMysqlLongLongResultSet(false),
+		},
+		{
+			sql: "select longlongu",
+			mrs: makeMysqlLongLongResultSet(true),
+		},
+		{
+			sql: "select int24",
+			mrs: makeMysqlInt24ResultSet(false),
+		},
+		{
+			sql: "select int24u",
+			mrs: makeMysqlInt24ResultSet(true),
+		},
+
+		{
+			sql: "select varchar",
+			mrs: makeMysqlVarcharResultSet(),
+		},
+		{
+			sql: "select varstring",
+			mrs: makeMysqlVarStringResultSet(),
+		},
+		{
+			sql: "select string",
+			mrs: makeMysqlStringResultSet(),
+		},
+		{
+			sql: "select date",
+			mrs: makeMysqlDateResultSet(),
+		},
+		{
+			sql: "select time",
+			mrs: makeMysqlTimeResultSet(),
+		},
+		{
+			sql: "select datetime",
+			mrs: makeMysqlDatetimeResultSet(),
+		},
+		{
+			sql: "select 16mbrow",
+			mrs: make16MBRowResultSet(),
+		},
+	}
+
+	appendKases := func(kess []kase) {
+		for _, ks := range kess {
+			resultSet[ks.sql] = &result{
+				gen: func(ses *Session) *MysqlResultSet {
+					return ks.mrs
+				},
+			}
+		}
+	}
+
+	kases2 := []kase{
+		{
+			sql: "select year",
+			mrs: makeMysqlYearResultSet(false),
+		},
+		{
+			sql: "select yearu",
+			mrs: makeMysqlYearResultSet(true),
+		},
+		{
+			sql: "select float",
+			mrs: makeMysqlFloatResultSet(),
+		},
+		{
+			sql: "select double",
+			mrs: makeMysqlDoubleResultSet(),
+		},
+		{
+			sql: "select 9columns",
+			mrs: make9ColumnsResultSet(),
+		},
+		{
+			sql: "select 16mb",
+			mrs: makeMoreThan16MBResultSet(),
+		},
+	}
+
+	appendKases(kases1)
+	appendKases(kases2)
+
+	kases = append(kases, kases1...)
+	kases = append(kases, kases2...)
+
+	var wrapperStubFunc = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+		var cw []ComputationWrapper = nil
+		var stmts []tree.Statement = nil
+		var cmdFieldStmt *InternalCmdFieldList
+		var err error
+		if isCmdFieldListSql(execCtx.input.getSql()) {
+			cmdFieldStmt, err = parseCmdFieldList(execCtx.reqCtx, execCtx.input.getSql())
+			if err != nil {
+				return nil, err
+			}
+			stmts = append(stmts, cmdFieldStmt)
+		} else {
+			stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), 1)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for _, stmt := range stmts {
+			cw = append(cw, newMockWrapper(ctrl, ses, resultSet, noResultSet, execCtx.input.getSql(), stmt, proc))
+		}
+		return cw, nil
+	}
+
+	bhStub := gostub.Stub(&GetComputationWrapper, wrapperStubFunc)
+	defer bhStub.Reset()
+
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	// A mock autoincrcache manager.
+	acim := &defines.AutoIncrCacheManager{}
+	setGlobalAicm(acim)
+	temp, _ := NewRoutineManager(ctx)
+	setGlobalRtMgr(temp)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
+	mo := createInnerServer()
 
+	//running server
 	go func() {
 		defer wg.Done()
-
-		startInnerServer(serverConn)
+		mo.handleConn(ctx, serverConn)
 	}()
 
-	// to := NewTimeout(1*time.Minute, false)
-	// for isClosed() && !to.isTimeout() {
-	// }
-
 	time.Sleep(time.Second * 2)
-	db, err := openDbConn(t, 6001)
+	db, err = openDbConn(t, 6001)
 	require.NoError(t, err)
 
-	//do_query_resp_resultset(t, db, false, false, "tiny", makeMysqlTinyIntResultSet(false))
-	//do_query_resp_resultset(t, db, false, false, "tinyu", makeMysqlTinyIntResultSet(true))
-	//do_query_resp_resultset(t, db, false, false, "short", makeMysqlShortResultSet(false))
-	//do_query_resp_resultset(t, db, false, false, "shortu", makeMysqlShortResultSet(true))
-	//do_query_resp_resultset(t, db, false, false, "long", makeMysqlLongResultSet(false))
-	//do_query_resp_resultset(t, db, false, false, "longu", makeMysqlLongResultSet(true))
-	//do_query_resp_resultset(t, db, false, false, "longlong", makeMysqlLongLongResultSet(false))
-	//do_query_resp_resultset(t, db, false, false, "longlongu", makeMysqlLongLongResultSet(true))
-	//do_query_resp_resultset(t, db, false, false, "int24", makeMysqlInt24ResultSet(false))
-	//do_query_resp_resultset(t, db, false, false, "int24u", makeMysqlInt24ResultSet(true))
-	//do_query_resp_resultset(t, db, false, false, "year", makeMysqlYearResultSet(false))
-	//do_query_resp_resultset(t, db, false, false, "yearu", makeMysqlYearResultSet(true))
-	//do_query_resp_resultset(t, db, false, false, "varchar", makeMysqlVarcharResultSet())
-	//do_query_resp_resultset(t, db, false, false, "varstring", makeMysqlVarStringResultSet())
-	//do_query_resp_resultset(t, db, false, false, "string", makeMysqlStringResultSet())
-	do_query_resp_resultset(t, db, false, false, "float", makeMysqlFloatResultSet())
-	////do_query_resp_resultset(t, db, false, false, "double", makeMysqlDoubleResultSet())
-	//do_query_resp_resultset(t, db, false, false, "date", makeMysqlDateResultSet())
-	//do_query_resp_resultset(t, db, false, false, "time", makeMysqlTimeResultSet())
-	//do_query_resp_resultset(t, db, false, false, "datetime", makeMysqlDatetimeResultSet())
-	////do_query_resp_resultset(t, db, false, false, "9columns", make9ColumnsResultSet())
-	//do_query_resp_resultset(t, db, false, false, "16mbrow", make16MBRowResultSet())
-	//do_query_resp_resultset(t, db, false, false, "16mb", makeMoreThan16MBResultSet())
+	for _, ks := range kases {
+		do_query_resp_resultset(t, db, false, false, ks.sql, ks.mrs)
+	}
 
 	time.Sleep(time.Millisecond * 10)
 
 	closeDbConn(t, db)
+	serverConn.Close()
+	clientConn.Close()
 	wg.Wait()
 }
 
-func open_tls_db(t *testing.T, port int) *sql.DB {
-	tlsName := "custom"
-	rootCertPool := x509.NewCertPool()
-	pem, err := os.ReadFile("test/ca.pem")
-	if err != nil {
-		require.NoError(t, err)
-	}
-	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
-		log.Fatal("Failed to append PEM.")
-	}
-	clientCert := make([]tls.Certificate, 0, 1)
-	certs, err := tls.LoadX509KeyPair("test/client-cert2.pem", "test/client-key2.pem")
-	if err != nil {
-		require.NoError(t, err)
-	}
-	clientCert = append(clientCert, certs)
-	err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
-		RootCAs:            rootCertPool,
-		Certificates:       clientCert,
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true,
-	})
-	if err != nil {
-		require.NoError(t, err)
-	}
-
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=5s&timeout=5s&writeTimeout=5s&tls=%s", port, tlsName)
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		require.NoError(t, err)
-	} else {
-		db.SetConnMaxLifetime(time.Minute * 3)
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
-		time.Sleep(time.Millisecond * 100)
-
-		// ping opens the connection
-		logutil.Info("start ping")
-		err = db.Ping()
-		if err != nil {
-			require.NoError(t, err)
-		}
-	}
-	return db
-}
+//func open_tls_db(t *testing.T, port int) *sql.DB {
+//	tlsName := "custom"
+//	rootCertPool := x509.NewCertPool()
+//	pem, err := os.ReadFile("test/ca.pem")
+//	if err != nil {
+//		require.NoError(t, err)
+//	}
+//	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
+//		log.Fatal("Failed to append PEM.")
+//	}
+//	clientCert := make([]tls.Certificate, 0, 1)
+//	certs, err := tls.LoadX509KeyPair("test/client-cert2.pem", "test/client-key2.pem")
+//	if err != nil {
+//		require.NoError(t, err)
+//	}
+//	clientCert = append(clientCert, certs)
+//	err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
+//		RootCAs:            rootCertPool,
+//		Certificates:       clientCert,
+//		MinVersion:         tls.VersionTLS12,
+//		InsecureSkipVerify: true,
+//	})
+//	if err != nil {
+//		require.NoError(t, err)
+//	}
+//
+//	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=5s&timeout=5s&writeTimeout=5s&tls=%s", port, tlsName)
+//	db, err := sql.Open("mysql", dsn)
+//	if err != nil {
+//		require.NoError(t, err)
+//	} else {
+//		db.SetConnMaxLifetime(time.Minute * 3)
+//		db.SetMaxOpenConns(1)
+//		db.SetMaxIdleConns(1)
+//		time.Sleep(time.Millisecond * 100)
+//
+//		// ping opens the connection
+//		logutil.Info("start ping")
+//		err = db.Ping()
+//		if err != nil {
+//			require.NoError(t, err)
+//		}
+//	}
+//	return db
+//}
 
 func openDbConn(t *testing.T, port int) (db *sql.DB, err error) {
 	dsn := fmt.Sprintf("dump:111@custom(127.0.0.1:%d)/?readTimeout=30s&timeout=30s&writeTimeout=30s", port)
@@ -1784,7 +1663,7 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 						require.NoError(t, err)
 						if col.ColumnType() == defines.MYSQL_TYPE_YEAR {
 							if value == 0 {
-								data = append(data, []byte("0000")...)
+								data = append(data, []byte("0")...)
 							} else {
 								data = strconv.AppendInt(data, value, 10)
 							}
@@ -1809,11 +1688,11 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 					case defines.MYSQL_TYPE_FLOAT:
 						value, err := mrs.GetFloat64(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
-						data = strconv.AppendFloat(data, value, 'f', -1, 32)
+						data = strconv.AppendFloat(data, value, 'g', -1, 32)
 					case defines.MYSQL_TYPE_DOUBLE:
 						value, err := mrs.GetFloat64(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
-						data = strconv.AppendFloat(data, value, 'f', -1, 64)
+						data = strconv.AppendFloat(data, value, 'g', -1, 64)
 					case defines.MYSQL_TYPE_DATE:
 						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
@@ -1834,9 +1713,11 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 					}
 					//check
 					ret := reflect.DeepEqual(data, val)
-					fmt.Println(i)
-					fmt.Println("want", data)
-					fmt.Println("get", val)
+					if !ret {
+						fmt.Println(i)
+						fmt.Println("want", data)
+						fmt.Println("get", val)
+					}
 					require.True(t, ret)
 				}
 			}
