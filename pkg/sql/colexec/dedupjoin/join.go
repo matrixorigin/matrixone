@@ -16,12 +16,14 @@ package dedupjoin
 
 import (
 	"bytes"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -251,7 +253,17 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 
 			switch ap.OnDuplicateAction {
 			case plan.Node_ERROR:
-				return moerr.NewDuplicateEntry(proc.Ctx, ctr.vecs[0].RowToString(i+k), ap.DedupColName)
+				var rowStr string
+				if len(ap.DedupColTypes) == 1 {
+					rowStr = ctr.vecs[0].RowToString(i + k)
+				} else {
+					rowItems, err := types.StringifyTuple(ctr.vecs[0].GetBytesAt(i+k), ap.DedupColTypes)
+					if err != nil {
+						return err
+					}
+					rowStr = "(" + strings.Join(rowItems, ",") + ")"
+				}
+				return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 			case plan.Node_IGNORE:
 				ctr.matched.Add(vals[k] - 1)
 			case plan.Node_UPDATE: // TODO

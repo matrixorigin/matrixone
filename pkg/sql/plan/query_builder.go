@@ -499,6 +499,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+		if node.JoinType == plan.Node_DEDUP && len(node.DedupColTypes) == 0 {
+			node.DedupColTypes = []plan.Type{node.OnList[0].GetF().Args[0].Typ}
+		}
+
 		childProjList := builder.qry.Nodes[leftID].ProjectList
 		for i, globalRef := range leftRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {

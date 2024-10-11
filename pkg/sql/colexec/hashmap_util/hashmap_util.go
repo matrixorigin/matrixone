@@ -16,6 +16,7 @@ package hashmap_util
 
 import (
 	"runtime"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -304,7 +305,17 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 				if v <= vOld {
 					switch hb.OnDuplicateAction {
 					case plan.Node_ERROR:
-						return moerr.NewDuplicateEntry(proc.Ctx, hb.vecs[vecIdx1][0].RowToString(vecIdx2+k), hb.DedupColName)
+						var rowStr string
+						if len(hb.DedupColTypes) == 1 {
+							rowStr = hb.vecs[vecIdx1][0].RowToString(vecIdx2 + k)
+						} else {
+							rowItems, err := types.StringifyTuple(hb.vecs[vecIdx1][0].GetBytesAt(vecIdx2+k), hb.DedupColTypes)
+							if err != nil {
+								return err
+							}
+							rowStr = "(" + strings.Join(rowItems, ",") + ")"
+						}
+						return moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName)
 					case plan.Node_IGNORE:
 						hb.IgnoreRows.Add(uint64(i + k))
 					case plan.Node_UPDATE:

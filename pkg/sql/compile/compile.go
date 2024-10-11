@@ -865,13 +865,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	}
 
 	switch qry.StmtType {
-	case plan.Query_DELETE:
-		updateScopesLastFlag(ss)
-		return ss, nil
-	case plan.Query_INSERT:
-		updateScopesLastFlag(ss)
-		return ss, nil
-	case plan.Query_UPDATE:
+	case plan.Query_DELETE, plan.Query_INSERT, plan.Query_UPDATE:
 		updateScopesLastFlag(ss)
 		return ss, nil
 	default:
