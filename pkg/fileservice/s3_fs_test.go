@@ -1165,3 +1165,61 @@ func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 		}
 	})
 }
+
+func TestS3FSFromEnv(t *testing.T) {
+
+	// test disk backed S3
+	t.Setenv("TEST_S3FS_DISK", "name=disk,endpoint=disk,bucket="+t.TempDir())
+
+	// examples
+	//t.Setenv("TEST_S3FS_ALIYUN", "name=aliyun,endpoint=oss-cn-shenzhen.aliyuncs.com,region=oss-cn-shenzhen,bucket=reus-test,key-id=aaa,key-secret=bbb")
+	//t.Setenv("TEST_S3FS_QCLOUD", "name=qcloud,endpoint=https://cos.ap-guangzhou.myqcloud.com,region=ap-guangzhou,bucket=mofstest-1251598405,key-id=aaa,key-secret=bbb")
+
+	// emulate env vars and get test specs
+	for _, pairs := range os.Environ() {
+		name, value, ok := strings.Cut(pairs, "=")
+		if !ok {
+			continue
+		}
+		// env vars begin with TEST_S3FS_
+		if !strings.HasPrefix(name, "TEST_S3FS_") {
+			continue
+		}
+
+		// parse args
+		reader := csv.NewReader(strings.NewReader(value))
+		argStrs, err := reader.Read()
+		if err != nil {
+			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			continue
+		}
+		var args ObjectStorageArguments
+		if err := args.SetFromString(argStrs); err != nil {
+			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			continue
+		}
+
+		// test
+		t.Run(args.Name, func(t *testing.T) {
+			testFileService(t, 0, func(name string) FileService {
+				args.Name = name
+				args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+
+				fs, err := NewS3FS(
+					context.Background(),
+					args,
+					DisabledCacheConfig,
+					nil,
+					true,
+					false,
+				)
+				if err != nil {
+					t.Fatalf("invalid S3FS: %+v", args)
+				}
+
+				return fs
+			})
+		})
+
+	}
+}

@@ -105,6 +105,11 @@ func NewAwsSDKv2(
 			),
 		)
 	}
+
+	// http client
+	httpClient := newHTTPClient(args)
+	loadConfigOptions = append(loadConfigOptions, config.WithHTTPClient(httpClient))
+
 	config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
 	if err != nil {
 		return nil, err
@@ -114,7 +119,7 @@ func NewAwsSDKv2(
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
 			opts.Retryer = newAWSRetryer()
-			opts.HTTPClient = newHTTPClient(args)
+			opts.HTTPClient = httpClient
 		},
 	}
 
