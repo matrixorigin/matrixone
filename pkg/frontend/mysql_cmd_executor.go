@@ -1414,13 +1414,39 @@ func handleRevokeRole(ses FeSession, execCtx *ExecCtx, rr *tree.RevokeRole) erro
 }
 
 // handleGrantRole grants the privilege to the role
-func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) error {
-	return doGrantPrivilege(execCtx.reqCtx, ses, gp)
+func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) (err error) {
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	return doGrantPrivilege(ctx, ses, gp, bh)
 }
 
 // handleRevokePrivilege revokes the privilege from the user or role
-func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) error {
-	return doRevokePrivilege(execCtx.reqCtx, ses, rp)
+func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	return doRevokePrivilege(ctx, ses, rp, bh)
 }
 
 // handleSwitchRole switches the role to another role
@@ -2018,7 +2044,12 @@ func checkModify(plan0 *plan.Plan, ses FeSession) bool {
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cws []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
+	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
+		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
+		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
+		cws = append(cws, tcw)
+		return cws, nil
+	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
@@ -2552,7 +2583,7 @@ func dispatchStmt(ses FeSession,
 	ses.EnterFPrint(FPDispatchStmt)
 	defer ses.ExitFPrint(FPDispatchStmt)
 	//5. check plan within txn
-	if execCtx.cw.Plan() != nil {
+	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
 		if checkModify(execCtx.cw.Plan(), ses) {
 
 			//plan changed
@@ -3095,7 +3126,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
