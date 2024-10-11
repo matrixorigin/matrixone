@@ -402,7 +402,7 @@ func TestExpressionReset(t *testing.T) {
 		t.Log(tree)
 
 		inputs := []*batch.Batch{
-			batch.New(true, nil),
+			batch.New(nil),
 		}
 		inputs[0].SetRowCount(100)
 		result, err = executor.Eval(proc, inputs, nil)
