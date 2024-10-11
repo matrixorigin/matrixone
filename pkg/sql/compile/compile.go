@@ -865,33 +865,33 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 		return ss[0], nil
 	}
 
-	switch qry.StmtType {
-	case plan.Query_DELETE:
-		updateScopesLastFlag(ss)
-		return ss[0], nil
-	case plan.Query_INSERT:
-		updateScopesLastFlag(ss)
-		return ss[0], nil
-	case plan.Query_UPDATE:
-		updateScopesLastFlag(ss)
-		return ss[0], nil
-	default:
-		var rs *Scope
-		if c.IsSingleScope(ss) {
-			rs = ss[0]
-		} else {
-			ss = c.mergeShuffleScopesIfNeeded(ss, false)
-			rs = c.newMergeScope(ss)
-		}
-		updateScopesLastFlag([]*Scope{rs})
-		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
-		rs.setRootOperator(
-			output.NewArgument().
-				WithFunc(c.fill).
-				WithBlock(c.needBlock),
-		)
-		return rs, nil
+	//switch qry.StmtType {
+	//case plan.Query_DELETE:
+	//	updateScopesLastFlag(ss)
+	//	return ss[0], nil
+	//case plan.Query_INSERT:
+	//	updateScopesLastFlag(ss)
+	//	return ss[0], nil
+	//case plan.Query_UPDATE:
+	//	updateScopesLastFlag(ss)
+	//	return ss[0], nil
+	//default:
+	var rs *Scope
+	if c.IsSingleScope(ss) {
+		rs = ss[0]
+	} else {
+		ss = c.mergeShuffleScopesIfNeeded(ss, false)
+		rs = c.newMergeScope(ss)
 	}
+	updateScopesLastFlag([]*Scope{rs})
+	c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
+	rs.setRootOperator(
+		output.NewArgument().
+			WithFunc(c.fill).
+			WithBlock(c.needBlock),
+	)
+	return rs, nil
+	//}
 }
 
 func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node) ([]*Scope, error) {
