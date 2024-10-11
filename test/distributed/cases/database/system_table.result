@@ -305,12 +305,6 @@ reserved1    TEXT(0)    YES        null
 reserved2    TEXT(0)    YES        null        
 reserved3    TEXT(0)    YES        null        
 reserved4    TEXT(0)    YES        null        
-show columns from `mo_cdc_watermark`;
-Field    Type    Null    Key    Default    Extra    Comment
-account_id    BIGINT UNSIGNED(64)    NO    PRI    null        
-task_id    UUID(0)    NO    PRI    null        
-table_id    VARCHAR(64)    NO    PRI    null        
-watermark    VARCHAR(128)    YES        null        
 show columns from `mo_data_key`;
 Field    Type    Null    Key    Default    Extra    Comment
 account_id    BIGINT UNSIGNED(64)    NO    PRI    null        
