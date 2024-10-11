@@ -310,6 +310,10 @@ func (r *runner) AddCheckpointMetaFile(name string) {
 	r.checkpointMetaFiles.files[name] = struct{}{}
 }
 
+func (r *runner) GetDriver() wal.Driver {
+	return r.wal
+}
+
 func (r *runner) RemoveCheckpointMetaFile(name string) {
 	r.checkpointMetaFiles.Lock()
 	defer r.checkpointMetaFiles.Unlock()
