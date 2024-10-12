@@ -844,8 +844,8 @@ type OBCUConfig struct {
 const CUUnitDefault = 1.002678e-06
 const CUCpuPriceDefault = 3.45e-14
 const CUMemPriceDefault = 4.56e-24
-const CUIOInPriceDefault = 5.67e-06
-const CUIOOutPriceDefault = 6.78e-06
+const CUIOInPriceDefault = 1e-06
+const CUIOOutPriceDefault = 1e-06
 const CUTrafficPrice0Default = 7.89e-10
 const CUTrafficPrice1Default = 7.89e-10
 const CUTrafficPrice2Default = 7.89e-10

@@ -2942,6 +2942,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 		statsInfo.Reset()
 		//average parse duration
+		statsInfo.ParseStartTime = beginInstant
 		statsInfo.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
 
 		tenant := ses.GetTenantNameWithStmt(stmt)
