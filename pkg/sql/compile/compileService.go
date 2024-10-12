@@ -53,9 +53,6 @@ type ServiceOfCompile struct {
 // compileAdditionalInformation holds additional information for one compile.
 // to help control one compile.
 type compileAdditionalInformation struct {
-	// mustReturnError holds an error that must be returned if set.
-	mustReturnError error
-
 	// queryCancel is a method to cancel an ongoing query.
 	queryCancel context.CancelFunc
 	// queryDone is a waiter that checks if this query has been completed or not.
