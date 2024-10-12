@@ -292,7 +292,7 @@ apple
 bread
 chart
 update index_table_05 set col2='bread' where col1=1;
-Duplicate entry 'bread' for key 'col2'
+Duplicate entry 'bread' for key '__mo_index_idx_col'
 select * from index_table_05;
 col1    col2    col3    col4
 1    apple    1    10
@@ -590,7 +590,7 @@ apple
 bread
 chart
 update create_index_19 set col2='bread' where col1=1;
-Duplicate entry 'bread' for key 'col2'
+Duplicate entry 'bread' for key '__mo_index_idx_col'
 select * from create_index_19;
 col1    col2    col3    col4
 1    apple    1    10
