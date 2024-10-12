@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -6515,6 +6516,18 @@ func TestAppendAndGC2(t *testing.T) {
 		}
 		logutil.Infof("file %s in meta files", file)
 	}
+
+	// check gc meta files
+	var gcFile bool
+	for file := range files {
+		if strings.Contains(file, "/gc_") && strings.Contains(file, ".ckp") {
+			gcFile = true
+			break
+		}
+	}
+	if !gcFile {
+		panic("gc meta files not found")
+	}
 }
 
 func TestSnapshotGC(t *testing.T) {
@@ -6849,7 +6862,14 @@ func TestPitrMeta(t *testing.T) {
 	pitrSchema.AppendCol("col2", types.T_uint64.ToType())
 	pitrSchema.AppendCol("col3", types.T_uint64.ToType())
 	pitrSchema.AppendCol("col4", types.T_uint64.ToType())
-	pitrSchema.AppendCol("col5", types.T_varchar.ToType())
+	pitrSchema.AppendPKCol("col5", types.T_varchar.ToType(), 0)
+	pkConstraint := &engine.PrimaryKeyDef{
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "col5",
+			Names:       []string{"col5"},
+		},
+	}
+	constraintDef.Cts = append(constraintDef.Cts, pkConstraint)
 	pitrSchema.AppendCol("col6", types.T_uint64.ToType())
 	pitrSchema.AppendCol("col7", types.T_varchar.ToType())
 	pitrSchema.AppendCol("col8", types.T_varchar.ToType())
@@ -6858,7 +6878,6 @@ func TestPitrMeta(t *testing.T) {
 	pitrSchema.AppendCol("col11", types.T_uint8.ToType())
 	pitrSchema.AppendCol("col12", types.T_varchar.ToType())
 	pitrSchema.Constraint, _ = constraintDef.MarshalBinary()
-	pitrSchema.AppendFakePKCol()
 	pitrSchema.ColDefs[len(pitrSchema.ColDefs)-1].NullAbility = true
 
 	_ = pitrSchema.Finalize(false)
@@ -6925,8 +6944,8 @@ func TestPitrMeta(t *testing.T) {
 		data.Vecs[9].Append([]byte("varchar"), false)
 		txn1, _ := db.StartTxn(nil)
 		database, _ = txn1.GetDatabase("db1")
-		rel, _ := database.GetRelationByID(rel3.ID())
-		err = rel.Append(context.Background(), data)
+		rel3, _ = database.GetRelationByID(rel3.ID())
+		err = rel3.Append(context.Background(), data)
 		data.Close()
 		assert.Nil(t, err)
 		assert.Nil(t, txn1.Commit(context.Background()))
@@ -6934,18 +6953,42 @@ func TestPitrMeta(t *testing.T) {
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
-
 	pool, err := ants.NewPool(20)
 	assert.Nil(t, err)
 	defer pool.Release()
 	var wg sync.WaitGroup
-
 	for _, data1 := range bats {
 		wg.Add(1)
 		err = pool.Submit(testutil.AppendClosure(t, data1, schema1.Name, db, &wg))
 		assert.Nil(t, err)
 	}
 	wg.Wait()
+	testutils.WaitExpect(10000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
+
+	txn, err := db.StartTxn(nil)
+	require.NoError(t, err)
+	db1, err := txn.GetDatabase("db1")
+	assert.NoError(t, err)
+	rel, err := db1.GetRelationByName(pitrSchema.Name)
+	assert.NoError(t, err)
+	filter := handle.NewEQFilter([]byte("cluster"))
+	id, offset, err := rel.GetByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	_, _, err = rel.GetValue(id, offset, 5, false)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+	if err != nil {
+		t.Logf("range delete %v, rollbacking", err)
+		_ = txn.Rollback(context.Background())
+		return
+	}
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
