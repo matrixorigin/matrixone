@@ -19,34 +19,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 )
 
-func IsValidArg(parameter string, proc *process.Process) (*db.DiskCleaner, error) {
+func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner, error) {
 	parameters := strings.Split(parameter, ".")
 	if len(parameters) > 3 || len(parameters) < 2 {
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid argument!")
 	}
 	op := parameters[0]
 	switch op {
-	case gc.AddChecker:
-	case gc.RemoveChecker:
+	case cmd_util.AddChecker:
+	case cmd_util.RemoveChecker:
 		break
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid operation!")
 	}
 	key := parameters[1]
 	switch key {
-	case gc.CheckerKeyTTL:
-	case gc.CheckerKeyMinTS:
+	case cmd_util.CheckerKeyTTL:
+	case cmd_util.CheckerKeyMinTS:
 		break
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid key!")
 	}
-	return &db.DiskCleaner{
+	return &cmd_util.DiskCleaner{
 		Op:    op,
 		Key:   key,
 		Value: parameters[2],
