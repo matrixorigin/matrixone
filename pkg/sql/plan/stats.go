@@ -1487,11 +1487,11 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 
 func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr, sortOrder int) float64 {
 	sel := expr.Selectivity
-	if s == nil {
-		if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
-			//speicial handle for isnull
-			return sel
-		}
+	if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
+		//speicial handle for isnull
+		return sel
+	}
+	if s == nil || s.ShuffleRangeMap[colname] == nil {
 		if sel <= 0.01 {
 			return sel * 100
 		} else {
@@ -1502,12 +1502,10 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 		return sel * math.Pow(10, float64(sortOrder+1))
 	}
 	overlap := s.ShuffleRangeMap[colname].Overlap
-
 	if overlap > 0.5 {
 		return 1
 	}
 	ret := sel * math.Pow(10000, overlap/2)
-
 	if ret > 1 {
 		ret = 1
 	}
