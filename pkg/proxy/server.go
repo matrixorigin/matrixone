@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/version"
-	"go.uber.org/zap"
 )
 
 var statsFamilyName = "proxy counter"
@@ -72,6 +73,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		panic("runtime of proxy is not set")
 	}
 
+	frontend.InitServerLevelVars(config.UUID)
 	var err error
 	if s.haKeeperClient == nil {
 		ctx, cancel := context.WithTimeout(ctx, time.Second*3)

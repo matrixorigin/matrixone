@@ -371,17 +371,9 @@ func (n *Bitmap) Count() int {
 }
 
 func (n *Bitmap) ToArray() []uint64 {
-	var res []uint64
-	if n.EmptyByFlag() {
-		return res
-	}
-
-	itr := n.Iterator()
-	for itr.HasNext() {
-		r := itr.Next()
-		res = append(res, r)
-	}
-	return res
+	rows := make([]uint64, 0, n.Count())
+	ToArray(n, &rows)
+	return rows
 }
 
 func (n *Bitmap) ToI64Array() []int64 {
@@ -506,5 +498,15 @@ func (n *Bitmap) Clear() {
 	n.count = 0
 	for i := range n.data {
 		n.data[i] = 0
+	}
+}
+
+func ToArray[T int64 | uint64 | int | int32 | uint32](bm *Bitmap, rows *[]T) {
+	if bm.IsEmpty() {
+		return
+	}
+	it := bm.Iterator()
+	for it.HasNext() {
+		*rows = append(*rows, T(it.Next()))
 	}
 }
