@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
 
 const (
@@ -268,7 +269,8 @@ func handleCreateCdc(ses *Session, execCtx *ExecCtx, create *tree.CreateCDC) err
 }
 
 func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err error) {
-	ts := getGlobalPu().TaskService
+	service := ses.GetService()
+	ts := getPu(service).TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
@@ -398,7 +400,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 			}
 
 			// TODO replace with creatorAccountId
-			if err = initAesKeyWrapper(ctx, tx, catalog.System_Account); err != nil {
+			if err = initAesKeyWrapper(ctx, tx, catalog.System_Account, service); err != nil {
 				return
 			}
 
@@ -1398,7 +1400,7 @@ func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId 
 		return err
 	}
 
-	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper().SV.KeyEncryptionKey))
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(cdc.cnUUID).SV.KeyEncryptionKey))
 	return
 }
 
@@ -1492,7 +1494,7 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		)
 	}
 
-	return runUpdateCdcTask(ctx, targetTaskStatus, uint64(accountId), taskName, conds...)
+	return runUpdateCdcTask(ctx, targetTaskStatus, uint64(accountId), taskName, ses.GetService(), conds...)
 }
 
 func runUpdateCdcTask(
@@ -1500,9 +1502,9 @@ func runUpdateCdcTask(
 	targetTaskStatus task.TaskStatus,
 	accountId uint64,
 	taskName string,
-	conds ...taskservice.Condition,
-) (err error) {
-	ts := getGlobalPu().TaskService
+	service string,
+	conds ...taskservice.Condition) (err error) {
+	ts := getPu(service).TaskService
 	if ts == nil {
 		return nil
 	}
@@ -1681,7 +1683,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	)
 
 	ctx := defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
-	pu := getGlobalPu()
+	pu := getPu(ses.GetService())
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -1806,11 +1808,11 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 var (
 	queryTableWrapper  = queryTable
 	decrypt            = cdc2.AesCFBDecodeWithKey
-	getGlobalPuWrapper = getGlobalPu
+	getGlobalPuWrapper = getPu
 	initAesKeyWrapper  = initAesKeyBySqlExecutor
 )
 
-func initAesKeyBySqlExecutor(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32) (err error) {
+func initAesKeyBySqlExecutor(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32, service string) (err error) {
 	if len(cdc2.AesKey) > 0 {
 		return nil
 	}
@@ -1831,6 +1833,6 @@ func initAesKeyBySqlExecutor(ctx context.Context, executor taskservice.SqlExecut
 		return moerr.NewInternalError(ctx, "no data key")
 	}
 
-	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper().SV.KeyEncryptionKey))
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey))
 	return
 }
