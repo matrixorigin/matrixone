@@ -279,6 +279,16 @@ func explainStep(ctx context.Context, step *plan.Node, nodes []*plan.Node, setti
 				}
 			}
 
+			if nodedescImpl.Node.NodeType == plan.Node_MULTI_UPDATE {
+				msgInfo, err := nodedescImpl.GetUpdateCtxInfo(ctx, options)
+				if err != nil {
+					return err
+				}
+				for _, line := range msgInfo {
+					settings.buffer.PushNewLine(line, false, settings.level)
+				}
+			}
+
 			if nodedescImpl.Node.NodeType == plan.Node_FUZZY_FILTER {
 				buf := bytes.NewBuffer(make([]byte, 0, 360))
 				buf.WriteString("Build on: ")
