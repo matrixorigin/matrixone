@@ -114,7 +114,7 @@ const (
 			mo_catalog.mo_cdc_watermark w 
 		join 
 			mo_catalog.mo_tables t 
-		on w.table_id = t.rel_id 
+		on cast(SUBSTRING_INDEX(w.table_id,'_',1) as bigint unsigned) = t.rel_id 
 		where w.account_id = %d and w.task_id = '%s'`
 
 	getDataKeyFormat = "select encrypted_key from mo_catalog.mo_data_key where account_id = %d and key_id = '%s'"
@@ -1032,6 +1032,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	//step2 : get source tableid
 	var info *cdc2.DbTableInfo
 	dbTableInfos := make([]*cdc2.DbTableInfo, 0, len(cdc.tables.Pts))
+	tblIdStrMap := make(map[string]bool)
 	for _, tuple := range cdc.tables.Pts {
 		accId, accName, dbName, tblName := tuple.Source.AccountId, tuple.Source.Account, tuple.Source.Database, tuple.Source.Table
 		if needSkipThisTable(accName, dbName, tblName, &cdc.filters) {
@@ -1039,7 +1040,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 			continue
 		}
 		//get dbid tableid for the source table
-		info, err = cdc.retrieveTable(ctx, accId, accName, dbName, tblName)
+		info, err = cdc.retrieveTable(ctx, accId, accName, dbName, tblName, tblIdStrMap)
 		if err != nil {
 			return err
 		}
@@ -1095,7 +1096,7 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 	} else if count == 0 {
 		for _, info = range dbTableInfos {
 			// use startTs as watermark
-			if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info.SourceTblId, cdc.startTs); err != nil {
+			if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info.SourceTblIdStr, cdc.startTs); err != nil {
 				return err
 			}
 		}
@@ -1201,7 +1202,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	return nil
 }
 
-func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, dbName, tblName string) (*cdc2.DbTableInfo, error) {
+func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, dbName, tblName string, tblIdStrMap map[string]bool) (*cdc2.DbTableInfo, error) {
 	var dbId, tblId uint64
 	var err error
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -1209,6 +1210,16 @@ func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, db
 	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return nil, res.Error()
+	}
+
+	getTblIdStr := func(tblId uint64) string {
+		for i := 0; ; i++ {
+			tblIdStr := fmt.Sprintf("%d_%d", tblId, i)
+			if _, ok := tblIdStrMap[tblIdStr]; !ok {
+				tblIdStrMap[tblIdStr] = true
+				return tblIdStr
+			}
+		}
 	}
 
 	/*
@@ -1235,6 +1246,7 @@ func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, db
 		SourceAccountId:   accId,
 		SourceDbId:        dbId,
 		SourceTblId:       tblId,
+		SourceTblIdStr:    getTblIdStr(tblId),
 	}, err
 }
 
@@ -1312,11 +1324,11 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 	ctx := defines.AttachAccountId(context.Background(), uint32(cdc.cdcTask.Accounts[0].GetId()))
 
 	// add watermark to updater
-	watermark, err := cdc.sunkWatermarkUpdater.GetFromDb(info.SourceTblId)
+	watermark, err := cdc.sunkWatermarkUpdater.GetFromDb(info.SourceTblIdStr)
 	if err != nil {
 		return err
 	}
-	cdc.sunkWatermarkUpdater.UpdateMem(info.SourceTblId, watermark)
+	cdc.sunkWatermarkUpdater.UpdateMem(info.SourceTblIdStr, watermark)
 
 	tableDef, err := cdc2.GetTableDef(ctx, txnOp, cdc.cnEngine, info.SourceTblId)
 	if err != nil {
@@ -1355,18 +1367,18 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 }
 
 func (cdc *CdcTask) ResetWatermarkForTable(info *cdc2.DbTableInfo) (err error) {
-	tblId := info.SourceTblId
+	tblIdStr := info.SourceTblIdStr
 	// delete old watermark of table
-	cdc.sunkWatermarkUpdater.DeleteFromMem(tblId)
-	if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tblId); err != nil {
+	cdc.sunkWatermarkUpdater.DeleteFromMem(tblIdStr)
+	if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tblIdStr); err != nil {
 		return
 	}
 
 	// use start_ts as init watermark
-	if err = cdc.sunkWatermarkUpdater.InsertIntoDb(tblId, cdc.startTs); err != nil {
+	if err = cdc.sunkWatermarkUpdater.InsertIntoDb(tblIdStr, cdc.startTs); err != nil {
 		return
 	}
-	cdc.sunkWatermarkUpdater.UpdateMem(tblId, cdc.startTs)
+	cdc.sunkWatermarkUpdater.UpdateMem(tblIdStr, cdc.startTs)
 	return
 }
 
