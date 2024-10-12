@@ -113,7 +113,6 @@ const (
 type Session struct {
 	feSessionImpl
 
-	service    string
 	logger     *log.MOLogger
 	logLevel   zapcore.Level
 	loggerOnce sync.Once
@@ -526,10 +525,9 @@ func NewSession(
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnOp TxnOperator
 	var err error
-	txnHandler := InitTxnHandler(service, getGlobalPu().StorageEngine, connCtx, txnOp)
+	txnHandler := InitTxnHandler(service, getPu(service).StorageEngine, connCtx, txnOp)
 
 	ses := &Session{
-		service: service,
 		feSessionImpl: feSessionImpl{
 			pool:       mp,
 			txnHandler: txnHandler,
@@ -538,6 +536,7 @@ func NewSession(
 			outputCallback: getDataFromPipeline,
 			timeZone:       time.Local,
 			respr:          NewMysqlResp(proto),
+			service:        service,
 		},
 		errInfo: &errInfo{
 			codes:  make([]uint16, 0, MoDefaultErrorCount),
@@ -563,6 +562,7 @@ func NewSession(
 	ses.buf = buffer.New()
 	ses.sqlHelper = &SqlHelper{ses: ses}
 	ses.uuid, _ = uuid.NewV7()
+	pu := getPu(service)
 	if ses.pool == nil {
 		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
 		// fixed pool size can be another param, or should be computed from cap,
@@ -571,7 +571,7 @@ func NewSession(
 		// XXX MPOOL
 		// We don't have a way to close a session, so the only sane way of creating
 		// a mpool is to use NoFixed
-		ses.pool, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
+		ses.pool, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), pu.SV.GuestMmuLimitation, mpool.NoFixed)
 		if err != nil {
 			panic(err)
 		}
@@ -579,19 +579,19 @@ func NewSession(
 	ses.proc = process.NewTopProcess(
 		context.TODO(),
 		ses.pool,
-		getGlobalPu().TxnClient,
+		pu.TxnClient,
 		nil,
-		getGlobalPu().FileService,
-		getGlobalPu().LockService,
-		getGlobalPu().QueryClient,
-		getGlobalPu().HAKeeperClient,
-		getGlobalPu().UdfService,
-		getGlobalAic())
+		pu.FileService,
+		pu.LockService,
+		pu.QueryClient,
+		pu.HAKeeperClient,
+		pu.UdfService,
+		getAicm(service))
 
-	ses.proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
-	ses.proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
-	ses.proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
-	ses.proc.Base.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+	ses.proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	ses.proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	ses.proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
+	ses.proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
@@ -600,10 +600,6 @@ func NewSession(
 		ss.Close()
 	})
 	return ses
-}
-
-func (ses *Session) GetService() string {
-	return ses.service
 }
 
 // ReserveConnAndClose closes the session with the connection is reserved.
@@ -856,7 +852,7 @@ func (ses *Session) AppendData(row []interface{}) {
 func (ses *Session) InitExportConfig(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep = &ExportConfig{userConfig: ep}
+	ses.ep = &ExportConfig{userConfig: ep, service: ses.service}
 }
 
 func (ses *Session) GetExportConfig() *ExportConfig {
@@ -1726,7 +1722,7 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
 	defer ses.ResetFPrints()
-	parameters := getGlobalPu().SV
+	parameters := getPu(ses.GetService()).SV
 
 	//all offspring related to the request inherit the txnCtx
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration)
