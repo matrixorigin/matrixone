@@ -490,7 +490,7 @@ func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 		return ncpu
 	}
 
-	return ret3
+	return (ret3/ncpu + 1) * ncpu
 }
 
 // default shuffle type for scan is hash
