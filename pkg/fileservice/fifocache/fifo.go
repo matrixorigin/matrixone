@@ -39,7 +39,7 @@ type Cache[K comparable, V any] struct {
 		_      cpu.CacheLinePad
 	}
 
-	queueLock sync.Mutex
+	queueLock sync.RWMutex
 	used1     int64
 	queue1    Queue[*_CacheItem[K, V]]
 	used2     int64
@@ -164,6 +164,7 @@ func (c *Cache[K, V]) Delete(key K) {
 	// queues will be update in evict
 }
 
+// must call evict with queueLock held
 func (c *Cache[K, V]) evict(done chan int64, overEvict int64) {
 	var target int64
 	for {

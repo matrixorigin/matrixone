@@ -54,13 +54,17 @@ func (t *testSampleValues) Values() []int64 {
 	}
 }
 
+func (t *testSampleValues) Merge(from *testSampleValues) {
+	t.N.Add(from.N.Load())   // accumulated
+	t.A.Store(from.A.Load()) // non-accumulated
+}
+
 func TestProfiler(t *testing.T) {
 	testProfiler(t, io.Discard)
 }
 
 func TestProfilerWrite(t *testing.T) {
-	t.Skip()
-	f, err := os.Create("test_profile")
+	f, err := os.CreateTemp(t.TempDir(), "test_profile")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -257,7 +257,7 @@ func makePlan2Int32ConstExpr(v int32) *plan.Expr_Lit {
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
 func MakeFilterMockBatchs() *batch.Batch {
-	bat := batch.New(true, []string{"a", "b", "c"})
+	bat := batch.New([]string{"a", "b", "c"})
 	vecs := make([]*vector.Vector, 3)
 	vecs[0] = testutil.MakeInt32Vector([]int32{
 		1,

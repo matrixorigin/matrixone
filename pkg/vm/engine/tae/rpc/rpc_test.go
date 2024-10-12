@@ -436,7 +436,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		index.ObjectPrefixFn,
 		index.BlockPrefixFn)
 	for _, view := range physicals {
-		bat := batch.New(true, []string{hideDef[0].Name, schema.GetPrimaryKey().GetName()})
+		bat := batch.New([]string{hideDef[0].Name, schema.GetPrimaryKey().GetName()})
 		bat.Vecs[0], _ = view.Vecs[0].GetDownstreamVector().Window(0, 5)
 		bat.Vecs[1], _ = view.Vecs[1].GetDownstreamVector().Window(0, 5)
 		_, err := writer.WriteBatch(bat)
@@ -702,7 +702,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	defer cv.Close()
 
 	assert.NoError(t, txn.Commit(context.Background()))
-	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
+	delBat := batch.New([]string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0], _ = cv.Vecs[0].GetDownstreamVector().Window(0, 20)
 	delBat.Vecs[1], _ = cv.Vecs[1].GetDownstreamVector().Window(0, 20)
 
@@ -968,7 +968,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	assert.NoError(t, err)
 	defer cv.Close()
 
-	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
+	delBat := batch.New([]string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0] = cv.Vecs[0].GetDownstreamVector()
 	delBat.Vecs[1] = cv.Vecs[1].GetDownstreamVector()
 
@@ -1288,7 +1288,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	defer v.Close()
 
 	_ = it.Close()
-	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
+	delBat := batch.New([]string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0] = v.Vecs[0].GetDownstreamVector()
 	delBat.Vecs[1] = v.Vecs[1].GetDownstreamVector()
 
@@ -1637,7 +1637,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.NoError(t, err)
 		defer v.Close()
 
-		delBat = batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
+		delBat = batch.New([]string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 		delBat.Vecs[0] = v.Vecs[0].GetDownstreamVector()
 		delBat.Vecs[1] = v.Vecs[1].GetDownstreamVector()
 
