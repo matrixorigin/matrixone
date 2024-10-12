@@ -449,16 +449,6 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		}
 	}
 
-	if len(ndesc.Node.UpdateCtxList) > 0 {
-		msgInfo, err := ndesc.GetUpdateCtxInfo(ctx, options)
-		if err != nil {
-			return nil, err
-		}
-		if len(msgInfo) > 0 {
-			lines = append(lines, msgInfo...)
-		}
-	}
-
 	return lines, nil
 }
 
