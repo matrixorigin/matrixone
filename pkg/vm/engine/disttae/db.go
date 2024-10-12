@@ -293,7 +293,7 @@ func (e *Engine) getOrCreateSnapPart(
 	snap := logtailreplay.NewPartition(e.service, tbl.tableId)
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.service, e.fs, ts, tbl.tableId, nil)
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.service, e.fs, ts, tbl.tableId)
 	if err != nil {
 		return nil, err
 	}

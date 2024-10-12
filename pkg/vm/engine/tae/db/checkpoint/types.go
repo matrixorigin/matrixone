@@ -38,6 +38,7 @@ const (
 	ET_Global EntryType = iota
 	ET_Incremental
 	ET_Backup
+	ET_Compacted
 )
 
 type Runner interface {
