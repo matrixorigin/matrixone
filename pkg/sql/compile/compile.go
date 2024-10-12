@@ -452,7 +452,7 @@ func (c *Compile) runOnce() (err error) {
 	var wg sync.WaitGroup
 
 	if c.execType == plan2.ExecTypeTP && len(c.scopes) == 1 {
-		if err := c.run(c.scopes[0]); err != nil {
+		if err = c.run(c.scopes[0]); err != nil {
 			return err
 		}
 	} else {

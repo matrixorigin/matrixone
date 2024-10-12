@@ -230,15 +230,14 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		stats.ResetBuildReaderTimeConsumption()
 
 		// running.
-		if err = runC.prePipelineInitializer(); err != nil {
-			return nil, err
-		}
-		runC.MessageBoard.BeforeRunonce()
-		if err = runC.runOnce(); err == nil {
-			if runC.anal != nil {
-				runC.anal.retryTimes = retryTimes
+		if err = runC.prePipelineInitializer(); err == nil {
+			runC.MessageBoard.BeforeRunonce()
+			if err = runC.runOnce(); err == nil {
+				if runC.anal != nil {
+					runC.anal.retryTimes = retryTimes
+				}
+				break
 			}
-			break
 		}
 
 		c.fatalLog(retryTimes, err)
