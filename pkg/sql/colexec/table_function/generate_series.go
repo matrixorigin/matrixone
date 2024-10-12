@@ -166,10 +166,24 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 	} else if len(tf.ctr.executorsForArgs) == 2 {
 		startVec = tf.ctr.argVecs[0]
 		endVec = tf.ctr.argVecs[1]
+		startTyp := tf.ctr.argVecs[0].GetType()
+		endTyp := tf.ctr.argVecs[1].GetType()
+		if startTyp.Oid != endTyp.Oid {
+			return moerr.NewInvalidInputf(proc.Ctx, "generate_series start type %s is not the same as end type %s", startTyp.Oid.String(), endTyp.Oid.String())
+		}
 	} else {
 		startVec = tf.ctr.argVecs[0]
 		endVec = tf.ctr.argVecs[1]
 		stepVec = tf.ctr.argVecs[2]
+		startTyp := tf.ctr.argVecs[0].GetType()
+		endTyp := tf.ctr.argVecs[1].GetType()
+		stepTyp := tf.ctr.argVecs[2].GetType()
+		if startTyp.Oid != endTyp.Oid {
+			return moerr.NewInvalidInputf(proc.Ctx, "generate_series start type %s is not the same as end type %s", startTyp.Oid.String(), endTyp.Oid.String())
+		}
+		if startTyp.Oid != stepTyp.Oid {
+			return moerr.NewInvalidInputf(proc.Ctx, "generate_series start type %s is not the same as step type %s", startTyp.Oid.String(), stepTyp.Oid.String())
+		}
 	}
 
 	resTyp := tf.ctr.argVecs[0].GetType()
