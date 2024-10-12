@@ -26,10 +26,12 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/stretchr/testify/require"
 )
 
 type mockNetConn struct {
@@ -277,12 +279,20 @@ func TestAccountParser(t *testing.T) {
 	}
 }
 
+func newTestPu() *config.ParameterUnit {
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	return pu
+}
+
 func createNewClientConn(t *testing.T) (ClientConn, func()) {
 	s := goetty.NewIOSession(goetty.WithSessionConn(1,
 		newMockNetConn("127.0.0.1", 30001,
 			"127.0.0.1", 30010, nil)),
 		goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())))
 	ctx, cancel := context.WithCancel(context.Background())
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 	clientBaseConnID = 90
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()

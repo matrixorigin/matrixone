@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"go.uber.org/zap"
@@ -478,7 +479,7 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		mergeTable = c.inputs.tables[0]
 	}
 	c.inputs.RUnlock()
-	_, err = mergeTable.SaveFullTable(maxConsumed.GetStart(), maxConsumed.GetEnd(), c.fs, nil)
+	name, err := mergeTable.SaveFullTable(maxConsumed.GetStart(), maxConsumed.GetEnd(), c.fs)
 	if err != nil {
 		logutil.Errorf("SaveTable failed: %v", err.Error())
 		return err
@@ -489,6 +490,11 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		return err
 	}
 	c.updateMinMerged(maxConsumed)
+
+	if err := c.appendFilesToWAL(name); err != nil {
+		logutil.Errorf("append gc file to WAL failed: %v", err)
+		return err
+	}
 	return nil
 }
 
@@ -1018,6 +1024,7 @@ func (c *checkpointCleaner) createNewInput(
 			zap.String("snapshots", c.snapshotMeta.String()))
 	}()
 	var data *logtail.CheckpointData
+	var gcFiles []string
 	for _, candidate := range ckps {
 		startts, endts := candidate.GetStart(), candidate.GetEnd()
 		data, err = c.collectCkpData(candidate)
@@ -1037,6 +1044,9 @@ func (c *checkpointCleaner) createNewInput(
 		logutil.Errorf("SaveMeta is failed")
 		return
 	}
+	if snapSize > 0 {
+		gcFiles = append(gcFiles, name)
+	}
 	name = blockio.EncodeTableMetadataFileName(GCMetaDir,
 		PrefixAcctMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
 	tableSize, err = c.snapshotMeta.SaveTableInfo(name, c.fs.Service)
@@ -1044,18 +1054,44 @@ func (c *checkpointCleaner) createNewInput(
 		logutil.Errorf("SaveTableInfo is failed")
 		return
 	}
-	files := c.GetAndClearOutputs()
-	_, err = input.SaveTable(
+	if tableSize > 0 {
+		gcFiles = append(gcFiles, name)
+	}
+
+	name, err = input.SaveTable(
 		ckps[0].GetStart(),
 		ckps[len(ckps)-1].GetEnd(),
 		c.fs,
-		files,
 	)
 	if err != nil {
 		return
 	}
+	gcFiles = append(gcFiles, name)
+
+	err = c.appendFilesToWAL(gcFiles...)
+	if err != nil {
+		logutil.Errorf("append gc files to WAL failed: %v", err)
+		return
+	}
 
 	return
+}
+
+// appendFilesToWAL append the GC meta files to WAL.
+func (c *checkpointCleaner) appendFilesToWAL(files ...string) error {
+	driver := c.ckpClient.GetDriver()
+	if driver == nil {
+		return nil
+	}
+	entry, err := store.BuildFilesEntry(files)
+	if err != nil {
+		return err
+	}
+	_, err = driver.AppendEntry(store.GroupFiles, entry)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *checkpointCleaner) updateSnapshot(
