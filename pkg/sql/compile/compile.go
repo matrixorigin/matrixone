@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -166,7 +167,7 @@ func (c *Compile) GetMessageCenter() *message.MessageCenter {
 	return nil
 }
 
-func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch) error, sql string) {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) {
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	c.proc = proc
@@ -300,6 +301,7 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
+
 	switch s.Magic {
 	case Normal:
 		err := s.Run(c)
@@ -3921,8 +3923,24 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var nodes engine.Nodes
 	var txnOp client.TxnOperator
 
-	//------------------------------------------------------------------------------------------------------------------
 	ctx := c.proc.GetTopContext()
+
+	stats := statistic.StatsInfoFromContext(ctx)
+	ctx = perfcounter.AttachS3RequestKey(ctx, &perfcounter.CounterSet{})
+	defer func() {
+		if retrievedCounter, ok := perfcounter.GetS3RequestKey(ctx); ok {
+			stats.AddCompileS3Request(statistic.S3Request{
+				List:        retrievedCounter.FileService.S3.List.Load(),
+				Head:        retrievedCounter.FileService.S3.Head.Load(),
+				Put:         retrievedCounter.FileService.S3.Put.Load(),
+				Get:         retrievedCounter.FileService.S3.Get.Load(),
+				Delete:      retrievedCounter.FileService.S3.Delete.Load(),
+				DeleteMulti: retrievedCounter.FileService.S3.DeleteMulti.Load(),
+			})
+		}
+	}()
+
+	//------------------------------------------------------------------------------------------------------------------
 	txnOp = c.proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&

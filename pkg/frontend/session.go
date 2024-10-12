@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -865,12 +866,22 @@ func (ses *Session) GetShowStmtType() ShowStatementType {
 	return ses.showStmtType
 }
 
-func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch) error {
+func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perfcounter.CounterSet) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return func(bat *batch.Batch) error {
-		return ses.outputCallback(ses, execCtx, bat)
+	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		return ses.outputCallback(ses, execCtx, bat, crs)
 	}
+}
+
+// S3Request 结构用于记录每种 S3 操作的次数
+type S3Request struct {
+	List        int64 `json:"List"`
+	Head        int64 `json:"Head"`
+	Put         int64 `json:"Put"`
+	Get         int64 `json:"Get"`
+	Delete      int64 `json:"Delete"`
+	DeleteMulti int64 `json:"DeleteMulti"`
 }
 
 func (ses *Session) GetErrInfo() *errInfo {

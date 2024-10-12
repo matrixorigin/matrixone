@@ -829,6 +829,7 @@ type Relation interface {
 
 	GetHideKeys(context.Context) ([]*Attribute, error)
 
+	// Note: Write Will access Fileservice
 	Write(context.Context, *batch.Batch) error
 
 	Update(context.Context, *batch.Batch) error
@@ -885,6 +886,7 @@ type Relation interface {
 
 	GetProcess() any
 
+	// Note: GetColumMetadataScanInfo Will access Fileservice
 	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
 
 	// PrimaryKeysMayBeModified reports whether any rows with any primary keys in keyVector was modified during `from` to `to`

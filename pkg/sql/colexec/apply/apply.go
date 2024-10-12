@@ -114,7 +114,7 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.rbat.CleanOnlyData()
 		}
 
-		err = ctr.probe(apply, proc, &probeResult)
+		err = ctr.probe(apply, proc, &probeResult, analyzer)
 		if err != nil {
 			return result, err
 		}
@@ -130,14 +130,14 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallResult) error {
+func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallResult, analyzer process.Analyzer) error {
 	inbat := ctr.inbat
 	count := inbat.RowCount()
 	tfResult := vm.NewCallResult()
 	var err error
 	for i := ctr.batIdx; i < count; i++ {
 		if ctr.tfFinish {
-			err = ap.TableFunction.ApplyStart(i, proc)
+			err = ap.TableFunction.ApplyStart(i, proc, analyzer)
 			if err != nil {
 				return err
 			}

@@ -176,6 +176,8 @@ type Scope struct {
 	// Proc contains the execution context.
 	Proc *process.Process
 
+	ScopeAnalyzer *ScopeAnalyzer
+
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
 	PartialResults     []any
@@ -250,7 +252,7 @@ type Compile struct {
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
-	fill func(*batch.Batch) error
+	fill func(*batch.Batch, *perfcounter.CounterSet) error
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
@@ -337,4 +339,41 @@ type fuzzyCheck struct {
 type MultiTableIndex struct {
 	IndexAlgo string
 	IndexDefs map[string]*plan.IndexDef
+}
+
+// ----------------------------------------------------------------------------------------------------------------
+type ScopeAnalyzer struct {
+	start        time.Time
+	wait         time.Duration
+	isStoped     bool
+	TimeConsumed int64
+}
+
+func (sa *ScopeAnalyzer) Start() {
+	sa.start = time.Now()
+	sa.wait = 0
+}
+
+func (sa *ScopeAnalyzer) Prepare() {
+	sa.Reset()
+	sa.Start()
+}
+
+func (sa *ScopeAnalyzer) Stop() {
+	if sa.isStoped {
+		return
+	}
+	duration := time.Since(sa.start)
+	sa.TimeConsumed = duration.Nanoseconds()
+	sa.isStoped = true
+}
+
+func (sa *ScopeAnalyzer) Reset() {
+	sa.wait = 0
+	sa.TimeConsumed = 0
+	sa.isStoped = false
+}
+
+func NewScopeAnalyzer() *ScopeAnalyzer {
+	return &ScopeAnalyzer{}
 }

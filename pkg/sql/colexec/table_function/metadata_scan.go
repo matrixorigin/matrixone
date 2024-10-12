@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,7 +51,7 @@ func metadataScanPrepare(proc *process.Process, tableFunction *TableFunction) (t
 	return &metadataScanState{}, err
 }
 
-func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 
 	source := tf.ctr.argVecs[0]
@@ -73,9 +74,14 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 		return err
 	}
 
-	metaInfos, err := rel.GetColumMetadataScanInfo(proc.Ctx, colname)
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+	metaInfos, err := rel.GetColumMetadataScanInfo(newCtx, colname)
 	if err != nil {
 		return err
+	}
+	if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
+		analyzer.AddS3RequestCount(retrievedCounter)
+		analyzer.AddDiskIO(retrievedCounter)
 	}
 
 	for i := range metaInfos {

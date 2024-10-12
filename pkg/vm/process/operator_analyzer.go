@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 type MetricType int
@@ -42,12 +43,16 @@ type Analyzer interface {
 	AddScanTime(t time.Time)
 	AddInsertTime(t time.Time)
 	AddIncrementTime(t time.Time)
+	AddS3RequestCount(counter *perfcounter.CounterSet)
+	AddDiskIO(counter *perfcounter.CounterSet)
 	GetOpStats() *OperatorStats
 	Reset()
 
 	InputBlock()
 	ScanBytes(*batch.Batch)
 }
+
+//AddS3Request()
 
 // Operator Resource operatorAnalyzer
 type operatorAnalyzer struct {
@@ -109,8 +114,8 @@ func (opAlyzr *operatorAnalyzer) Stop() {
 	}
 
 	// Update the statistical information of the operation analyzer
-	opAlyzr.opStats.TotalWaitTimeConsumed += waitDuration.Nanoseconds()
-	opAlyzr.opStats.TotalTimeConsumed += totalDuration.Nanoseconds()
+	opAlyzr.opStats.WaitTimeConsumed += waitDuration.Nanoseconds()
+	opAlyzr.opStats.TimeConsumed += totalDuration.Nanoseconds()
 	opAlyzr.opStats.CallNum++
 }
 
@@ -118,14 +123,14 @@ func (opAlyzr *operatorAnalyzer) Alloc(size int64) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.Alloc: operatorAnalyzer.opStats is nil")
 	}
-	opAlyzr.opStats.TotalMemorySize += size
+	opAlyzr.opStats.MemorySize += size
 }
 
 func (opAlyzr *operatorAnalyzer) InputBlock() {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.InputBlock: operatorAnalyzer.opStats is nil")
 	}
-	opAlyzr.opStats.TotalInputBlocks += 1
+	opAlyzr.opStats.InputBlocks += 1
 }
 
 func (opAlyzr *operatorAnalyzer) Input(bat *batch.Batch) {
@@ -134,8 +139,8 @@ func (opAlyzr *operatorAnalyzer) Input(bat *batch.Batch) {
 	}
 
 	if bat != nil && opAlyzr.isFirst {
-		opAlyzr.opStats.TotalInputSize += int64(bat.Size())
-		opAlyzr.opStats.TotalInputRows += int64(bat.RowCount())
+		opAlyzr.opStats.InputSize += int64(bat.Size())
+		opAlyzr.opStats.InputRows += int64(bat.RowCount())
 	}
 }
 
@@ -145,8 +150,8 @@ func (opAlyzr *operatorAnalyzer) Output(bat *batch.Batch) {
 	}
 
 	if bat != nil && opAlyzr.isLast {
-		opAlyzr.opStats.TotalOutputSize += int64(bat.Size())
-		opAlyzr.opStats.TotalOutputRows += int64(bat.RowCount())
+		opAlyzr.opStats.OutputSize += int64(bat.Size())
+		opAlyzr.opStats.OutputRows += int64(bat.RowCount())
 	}
 }
 
@@ -164,7 +169,7 @@ func (opAlyzr *operatorAnalyzer) ScanBytes(bat *batch.Batch) {
 	}
 
 	if bat != nil {
-		opAlyzr.opStats.TotalScanBytes += int64(bat.Size())
+		opAlyzr.opStats.ScanBytes += int64(bat.Size())
 	}
 }
 
@@ -174,7 +179,7 @@ func (opAlyzr *operatorAnalyzer) Network(bat *batch.Batch) {
 	}
 
 	if bat != nil {
-		opAlyzr.opStats.TotalNetworkIO += int64(bat.Size())
+		opAlyzr.opStats.NetworkIO += int64(bat.Size())
 	}
 }
 
@@ -202,6 +207,30 @@ func (opAlyzr *operatorAnalyzer) AddIncrementTime(t time.Time) {
 	opAlyzr.opStats.AddOpMetric(OpIncrementTime, duration.Nanoseconds())
 }
 
+func (opAlyzr *operatorAnalyzer) AddS3RequestCount(counter *perfcounter.CounterSet) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddS3RequestCount: operatorAnalyzer.opStats is nil")
+	}
+
+	opAlyzr.opStats.S3List += counter.FileService.S3.List.Load()
+	opAlyzr.opStats.S3Head += counter.FileService.S3.Head.Load()
+	opAlyzr.opStats.S3Put += counter.FileService.S3.Put.Load()
+	opAlyzr.opStats.S3Get += counter.FileService.S3.Get.Load()
+	opAlyzr.opStats.S3Delete += counter.FileService.S3.Delete.Load()
+	opAlyzr.opStats.S3DeleteMulti += counter.FileService.S3.DeleteMulti.Load()
+}
+
+func (opAlyzr *operatorAnalyzer) AddDiskIO(counter *perfcounter.CounterSet) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddDiskIO: operatorAnalyzer.opStats is nil")
+	}
+
+	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.Read.Load()
+	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.Write.Load()
+	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.UnderlyingRead.Load()
+	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.UnderlyingWrite.Load()
+}
+
 func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.GetOpStats(): operatorAnalyzer.opStats is nil")
@@ -210,19 +239,26 @@ func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 }
 
 type OperatorStats struct {
-	OperatorName          string               `json:"-"`
-	CallNum               int                  `json:"CallCount,omitempty"`
-	TotalTimeConsumed     int64                `json:"TotalTimeConsumed,omitempty"`
-	TotalWaitTimeConsumed int64                `json:"TotalWaitTimeConsumed,omitempty"`
-	TotalMemorySize       int64                `json:"TotalMemorySize,omitempty"`
-	TotalInputRows        int64                `json:"TotalInputRows,omitempty"`
-	TotalInputSize        int64                `json:"TotalInputSize,omitempty"`
-	TotalOutputRows       int64                `json:"TotalOutputRows,omitempty"`
-	TotalOutputSize       int64                `json:"TotalOutputSize,omitempty"`
-	TotalNetworkIO        int64                `json:"TotalNetworkIO,omitempty"`
-	TotalInputBlocks      int64                `json:"-"`
-	TotalScanBytes        int64                `json:"-"`
-	OperatorMetrics       map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
+	OperatorName     string               `json:"-"`
+	CallNum          int                  `json:"CallCount,omitempty"`
+	TimeConsumed     int64                `json:"TimeConsumed,omitempty"`
+	WaitTimeConsumed int64                `json:"WaitTimeConsumed,omitempty"`
+	MemorySize       int64                `json:"MemorySize,omitempty"`
+	InputRows        int64                `json:"InputRows,omitempty"`
+	InputSize        int64                `json:"InputSize,omitempty"`
+	OutputRows       int64                `json:"OutputRows,omitempty"`
+	OutputSize       int64                `json:"OutputSize,omitempty"`
+	NetworkIO        int64                `json:"NetworkIO,omitempty"`
+	S3List           int64                `json:"S3List,omitempty"`
+	S3Head           int64                `json:"S3Head,omitempty"`
+	S3Put            int64                `json:"S3Put,omitempty"`
+	S3Get            int64                `json:"S3Get,omitempty"`
+	S3Delete         int64                `json:"S3Delete,omitempty"`
+	S3DeleteMulti    int64                `json:"S3DeleteMulti,omitempty"`
+	InputBlocks      int64                `json:"-"`
+	ScanBytes        int64                `json:"-"`
+	DiskIO           int64                `json:"-"`
+	OperatorMetrics  map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
 }
 
 func NewOperatorStats(operatorName string) *OperatorStats {
@@ -268,6 +304,31 @@ func (ps *OperatorStats) String() string {
 		}
 	}
 
+	//return fmt.Sprintf(" CallNum:%d "+
+	//	"TimeCost:%dns "+
+	//	"WaitTime:%dns "+
+	//	"InRows:%d "+
+	//	"OutRows:%d "+
+	//	"InSize:%dbytes "+
+	//	"InBlock:%d "+
+	//	"OutSize:%dbytes "+
+	//	"MemSize:%dbytes "+
+	//	"ScanBytes:%dbytes "+
+	//	"NetworkIO:%dbytes"+
+	//	"%s",
+	//	ps.CallNum,
+	//	ps.TimeConsumed,
+	//	ps.WaitTimeConsumed,
+	//	ps.InputRows,
+	//	ps.OutputRows,
+	//	ps.InputSize,
+	//	ps.InputBlocks,
+	//	ps.OutputSize,
+	//	ps.MemorySize,
+	//	ps.ScanBytes,
+	//	ps.NetworkIO,
+	//	metricsStr)
+
 	return fmt.Sprintf(" CallNum:%d "+
 		"TimeCost:%dns "+
 		"WaitTime:%dns "+
@@ -278,20 +339,35 @@ func (ps *OperatorStats) String() string {
 		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
 		"ScanBytes:%dbytes "+
-		"NetworkIO:%dbytes"+
+		"NetworkIO:%dbytes "+
+		"DiskIO:%dbytes "+
+		"S3List:%d "+
+		"S3Head:%d "+
+		"S3Put:%d "+
+		"S3Get:%d "+
+		"S3Delete:%d "+
+		"S3DeleteMulti:%d"+
 		"%s",
 		ps.CallNum,
-		ps.TotalTimeConsumed,
-		ps.TotalWaitTimeConsumed,
-		ps.TotalInputRows,
-		ps.TotalOutputRows,
-		ps.TotalInputSize,
-		ps.TotalInputBlocks,
-		ps.TotalOutputSize,
-		ps.TotalMemorySize,
-		ps.TotalScanBytes,
-		ps.TotalNetworkIO,
+		ps.TimeConsumed,
+		ps.WaitTimeConsumed,
+		ps.InputRows,
+		ps.OutputRows,
+		ps.InputSize,
+		ps.InputBlocks,
+		ps.OutputSize,
+		ps.MemorySize,
+		ps.ScanBytes,
+		ps.NetworkIO,
+		ps.DiskIO,
+		ps.S3List,
+		ps.S3Head,
+		ps.S3Put,
+		ps.S3Get,
+		ps.S3Delete,
+		ps.S3DeleteMulti,
 		metricsStr)
+
 }
 
 func (ps *OperatorStats) ReducedString() string {
@@ -323,14 +399,25 @@ func (ps *OperatorStats) ReducedString() string {
 		"Network:%dbytes"+
 		"%s",
 		ps.CallNum,
-		ps.TotalTimeConsumed,
-		ps.TotalWaitTimeConsumed,
-		ps.TotalInputRows,
-		ps.TotalOutputRows,
-		ps.TotalInputSize,
-		ps.TotalOutputSize,
-		ps.TotalMemorySize,
-		ps.TotalNetworkIO,
+		ps.TimeConsumed,
+		ps.WaitTimeConsumed,
+		ps.InputRows,
+		ps.OutputRows,
+		ps.InputSize,
+		ps.OutputSize,
+		ps.MemorySize,
+		ps.NetworkIO,
 		metricsStr,
 	)
 }
+
+//type S3RequestKey struct{}
+//
+//func AttachS3RequestKey(ctx context.Context, counter perfcounter.CounterSet) context.Context {
+//	return context.WithValue(ctx, S3RequestKey{}, counter)
+//}
+//
+//func GetS3RequestKey(ctx context.Context) (perfcounter.CounterSet, bool) {
+//	counter, ok := ctx.Value(S3RequestKey{}).(perfcounter.CounterSet)
+//	return counter, ok
+//}

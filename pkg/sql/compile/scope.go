@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -31,6 +33,7 @@ import (
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
@@ -41,12 +44,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 func newScope(magic magicType) *Scope {
@@ -126,10 +127,17 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 }
 
 // Run read data from storage engine and run the instructions of scope.
+// Note: The prepare time for executing the `scope`.`Run()` method is very short, and no statistics are done
 func (s *Scope) Run(c *Compile) (err error) {
+	//if s.ScopeAnalyzer == nil {
+	//	s.ScopeAnalyzer = NewScopeAnalyzer()
+	//}
+	//s.ScopeAnalyzer.Reset()
+	//s.ScopeAnalyzer.Start()
+	//defer s.ScopeAnalyzer.Stop()
+
 	var p *pipeline.Pipeline
 	defer func() {
-
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 			c.proc.Error(c.proc.Ctx, "panic in scope run",
@@ -142,11 +150,13 @@ func (s *Scope) Run(c *Compile) (err error) {
 	}()
 
 	if s.RootOp == nil {
+		//s.ScopeAnalyzer.Stop()
 		// it's a fake scope
 		return nil
 	}
 
 	if s.DataSource == nil {
+		//s.ScopeAnalyzer.Stop()
 		p = pipeline.NewMerge(s.RootOp)
 		_, err = p.MergeRun(s.Proc)
 	} else {
@@ -156,6 +166,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
+			//s.ScopeAnalyzer.Stop()
 			_, err = p.ConstRun(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
@@ -177,6 +188,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
 				tag = s.DataSource.node.RecvMsgList[0].MsgTag
 			}
+
+			//s.ScopeAnalyzer.Stop()
 			_, err = p.Run(s.DataSource.R, tag, s.Proc)
 		}
 	}
@@ -230,6 +243,13 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Reset()
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
@@ -330,6 +350,14 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return s.MergeRun(c)
 	}
 
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	} else {
+		s.ScopeAnalyzer.Reset()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
@@ -404,9 +432,11 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	}
 
 	if parallelScope == s {
+		s.ScopeAnalyzer.Stop()
 		return parallelScope.Run(c)
 	}
 
+	s.ScopeAnalyzer.Stop()
 	setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
 	err = parallelScope.MergeRun(c)
 	return err
@@ -772,6 +802,23 @@ func (s *Scope) replace(c *Compile) error {
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
+	ctx := c.proc.GetTopContext()
+
+	stats := statistic.StatsInfoFromContext(ctx)
+	ctx = perfcounter.AttachS3RequestKey(ctx, &perfcounter.CounterSet{})
+	defer func() {
+		if retrievedCounter, ok := perfcounter.GetS3RequestKey(ctx); ok {
+			stats.AddCompileS3Request(statistic.S3Request{
+				List:        retrievedCounter.FileService.S3.List.Load(),
+				Head:        retrievedCounter.FileService.S3.Head.Load(),
+				Put:         retrievedCounter.FileService.S3.Put.Load(),
+				Get:         retrievedCounter.FileService.S3.Get.Load(),
+				Delete:      retrievedCounter.FileService.S3.Delete.Load(),
+				DeleteMulti: retrievedCounter.FileService.S3.DeleteMulti.Load(),
+			})
+		}
+	}()
+
 	// receive runtime filter and optimized the datasource.
 	if err = s.handleRuntimeFilter(c); err != nil {
 		return

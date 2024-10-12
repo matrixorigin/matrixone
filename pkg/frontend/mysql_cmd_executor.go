@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -432,13 +433,13 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 // getDataFromPipeline: extract the data from the pipeline.
 // obj: session
-func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) error {
+func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs *perfcounter.CounterSet) error {
 	_, task := gotrace.NewTask(context.TODO(), "frontend.WriteDataToClient")
 	defer task.End()
 	ses := obj.(*Session)
 
 	begin := time.Now()
-	err := ses.GetResponser().RespResult(execCtx, bat)
+	err := ses.GetResponser().RespResult(execCtx, crs, bat)
 	if err != nil {
 		return err
 	}
@@ -1841,12 +1842,12 @@ func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explai
 	bat.Vecs[0] = vec
 	bat.SetRowCount(count)
 
-	err := fill(session, execCtx, bat)
+	err := fill(session, execCtx, bat, nil)
 	if err != nil {
 		return err
 	}
 	// to trigger save result meta
-	err = fill(session, execCtx, nil)
+	err = fill(session, execCtx, nil, nil)
 	return err
 }
 
@@ -1876,12 +1877,12 @@ func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufi
 	bat.Vecs[0] = vec
 	bat.SetRowCount(count)
 
-	err := fill(session, execCtx, bat)
+	err := fill(session, execCtx, bat, nil)
 	if err != nil {
 		return err
 	}
 	// to trigger save result meta
-	err = fill(session, execCtx, nil)
+	err = fill(session, execCtx, nil, nil)
 	return err
 }
 

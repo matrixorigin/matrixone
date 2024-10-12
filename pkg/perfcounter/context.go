@@ -75,3 +75,15 @@ func WithCounterSetFrom(ctx context.Context, fromCtx context.Context) context.Co
 	}
 	return ctx
 }
+
+// ----------------------------------------------------------------------------------------------------------------------
+type S3RequestKey struct{}
+
+func AttachS3RequestKey(ctx context.Context, counter *CounterSet) context.Context {
+	return context.WithValue(ctx, S3RequestKey{}, counter)
+}
+
+func GetS3RequestKey(ctx context.Context) (*CounterSet, bool) {
+	counter, ok := ctx.Value(S3RequestKey{}).(*CounterSet)
+	return counter, ok
+}

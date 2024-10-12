@@ -265,6 +265,10 @@ type StatsInfo struct {
 
 	// The following attributes are independent statistics for special operations in `CompileQuery` phase, used for reference.
 	CompileTableScanDuration int64 `json:"CompileTableScanDuration"`
+
+	BuildPlanS3Request         S3Request `json:"BuildPlanS3Request"`
+	CompileS3Request           S3Request `json:"CompileS3Request"`
+	PipelineSchedulerS3Request S3Request `json:"PipelineSchedulerS3Request"`
 	//--------------------------------------------------------------------------------
 
 	//PipelineTimeConsumption      time.Duration
@@ -288,6 +292,16 @@ type StatsInfo struct {
 	ExecutionEndTime   time.Time `json:"ExecutionEndTime"`
 
 	WaitActiveCost time.Duration `json:"WaitActive"`
+}
+
+// S3Request 结构用于记录每种 S3 操作的次数
+type S3Request struct {
+	List        int64 `json:"List"`
+	Head        int64 `json:"Head"`
+	Put         int64 `json:"Put"`
+	Get         int64 `json:"Get"`
+	Delete      int64 `json:"Delete"`
+	DeleteMulti int64 `json:"DeleteMulti"`
 }
 
 func (stats *StatsInfo) CompileStart() {
@@ -428,6 +442,45 @@ func (stats *StatsInfo) AddCompileTableScanConsumption(d time.Duration) {
 	}
 	atomic.AddInt64(&stats.CompileTableScanDuration, int64(d))
 }
+
+// --------------------------------------------------------------------------------------------------------------
+func (stats *StatsInfo) AddBuildPlanS3Request(sreq S3Request) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.BuildPlanS3Request.List, sreq.List)
+	atomic.AddInt64(&stats.BuildPlanS3Request.Head, sreq.Head)
+	atomic.AddInt64(&stats.BuildPlanS3Request.Put, sreq.Put)
+	atomic.AddInt64(&stats.BuildPlanS3Request.Get, sreq.Get)
+	atomic.AddInt64(&stats.BuildPlanS3Request.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.BuildPlanS3Request.DeleteMulti, sreq.DeleteMulti)
+}
+
+func (stats *StatsInfo) AddCompileS3Request(sreq S3Request) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.CompileS3Request.List, sreq.List)
+	atomic.AddInt64(&stats.CompileS3Request.Head, sreq.Head)
+	atomic.AddInt64(&stats.CompileS3Request.Put, sreq.Put)
+	atomic.AddInt64(&stats.CompileS3Request.Get, sreq.Get)
+	atomic.AddInt64(&stats.CompileS3Request.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.CompileS3Request.DeleteMulti, sreq.DeleteMulti)
+}
+
+func (stats *StatsInfo) AddPipelineSchedulerS3Request(sreq S3Request) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PipelineSchedulerS3Request.List, sreq.List)
+	atomic.AddInt64(&stats.PipelineSchedulerS3Request.Head, sreq.Head)
+	atomic.AddInt64(&stats.PipelineSchedulerS3Request.Put, sreq.Put)
+	atomic.AddInt64(&stats.PipelineSchedulerS3Request.Get, sreq.Get)
+	atomic.AddInt64(&stats.PipelineSchedulerS3Request.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.PipelineSchedulerS3Request.DeleteMulti, sreq.DeleteMulti)
+}
+
+//--------------------------------------------------------------------------------------------------------------
 
 func (stats *StatsInfo) SetWaitActiveCost(cost time.Duration) {
 	if stats == nil {

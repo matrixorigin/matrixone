@@ -134,16 +134,25 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 		if node.AnalyzeInfo == nil {
 			node.AnalyzeInfo = &plan.AnalyzeInfo{}
 		}
-		node.AnalyzeInfo.InputRows += op.OpStats.TotalInputRows
-		node.AnalyzeInfo.OutputRows += op.OpStats.TotalOutputRows
-		node.AnalyzeInfo.InputSize += op.OpStats.TotalInputSize
-		node.AnalyzeInfo.OutputSize += op.OpStats.TotalOutputSize
-		node.AnalyzeInfo.TimeConsumed += op.OpStats.TotalTimeConsumed
-		node.AnalyzeInfo.MemorySize += op.OpStats.TotalMemorySize
-		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
-		node.AnalyzeInfo.ScanBytes += op.OpStats.TotalScanBytes
-		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
-		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
+		node.AnalyzeInfo.InputRows += op.OpStats.InputRows
+		node.AnalyzeInfo.OutputRows += op.OpStats.OutputRows
+		node.AnalyzeInfo.InputSize += op.OpStats.InputSize
+		node.AnalyzeInfo.OutputSize += op.OpStats.OutputSize
+		node.AnalyzeInfo.TimeConsumed += op.OpStats.TimeConsumed
+		node.AnalyzeInfo.MemorySize += op.OpStats.MemorySize
+		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.WaitTimeConsumed
+		node.AnalyzeInfo.ScanBytes += op.OpStats.ScanBytes
+		node.AnalyzeInfo.NetworkIO += op.OpStats.NetworkIO
+		node.AnalyzeInfo.InputBlocks += op.OpStats.InputBlocks
+
+		node.AnalyzeInfo.S3List += op.OpStats.S3List
+		node.AnalyzeInfo.S3Head += op.OpStats.S3Head
+		node.AnalyzeInfo.S3Put += op.OpStats.S3Put
+		node.AnalyzeInfo.S3Get += op.OpStats.S3Get
+		node.AnalyzeInfo.S3Delete += op.OpStats.S3Delete
+		node.AnalyzeInfo.S3DeleteMulti += op.OpStats.S3DeleteMulti
+		node.AnalyzeInfo.DiskIO += op.OpStats.DiskIO
+
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
 
@@ -155,10 +164,10 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 				}
 			}
 			if isMinor {
-				scopeParalleInfo.NodeIdxTimeConsumeMinor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+				scopeParalleInfo.NodeIdxTimeConsumeMinor[op.NodeIdx] += op.OpStats.TimeConsumed
 			}
 		} else if _, isMajorOp := vm.MajorOpMap[op.OpName]; isMajorOp {
-			scopeParalleInfo.NodeIdxTimeConsumeMajor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+			scopeParalleInfo.NodeIdxTimeConsumeMajor[op.NodeIdx] += op.OpStats.TimeConsumed
 		}
 	}
 
@@ -222,9 +231,11 @@ func (c *Compile) fillPlanNodeAnalyzeInfo() {
 	// Summarize the S3 resources executed by SQL into curNode
 	// TODO: Actually, S3 resources may not necessarily be used by the current node.
 	// We will handle it this way for now and optimize it in the future
-	curNode := c.anal.qry.Nodes[c.anal.curNodeIdx]
-	curNode.AnalyzeInfo.S3IOInputCount = c.anal.phyPlan.S3IOInputCount
-	curNode.AnalyzeInfo.S3IOOutputCount = c.anal.phyPlan.S3IOOutputCount
+	/*
+		curNode := c.anal.qry.Nodes[c.anal.curNodeIdx]
+		curNode.AnalyzeInfo.S3IOInputCount = c.anal.phyPlan.S3IOInputCount
+		curNode.AnalyzeInfo.S3IOOutputCount = c.anal.phyPlan.S3IOOutputCount
+	*/
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -236,6 +247,10 @@ func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]
 		DataSource:   ConvertSourceToPhySource(scope.DataSource),
 		PreScopes:    []models.PhyScope{},
 		RootOperator: ConvertOperatorToPhyOperator(scope.RootOp, receiverMap),
+	}
+
+	if scope.ScopeAnalyzer != nil {
+		phyScope.PrepareTimeConsumed = scope.ScopeAnalyzer.TimeConsumed
 	}
 
 	if scope.Proc != nil {
@@ -454,6 +469,7 @@ func getExplainOption(options []tree.OptionElem) *ExplainOption {
 	return es
 }
 
+// makeExplainPhyPlanBuffer used to explain phyplan statement
 func makeExplainPhyPlanBuffer(ss []*Scope, queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption) *bytes.Buffer {
 	receiverMap := make(map[*process.WaitRegister]int)
 	for i := range ss {
@@ -513,7 +529,7 @@ func explainScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, 
 	}
 }
 
-// showSingleScope generates and outputs a string representation of a single Scope.
+// explainSingleScope generates and outputs a string representation of a single Scope.
 // It includes header information of Scope, data source information, and pipeline tree information.
 // In addition, it recursively displays information from any PreScopes.
 func explainSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption, buffer *bytes.Buffer) {
@@ -527,6 +543,11 @@ func explainSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitR
 
 	if option.Verbose || option.Analyze {
 		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr))
+		if scope.ScopeAnalyzer != nil {
+			buffer.WriteString(fmt.Sprintf(" PrepareTimeConsumed: %dns", scope.ScopeAnalyzer.TimeConsumed))
+		} else {
+			buffer.WriteString(" PrepareTimeConsumed: 0ns")
+		}
 	} else {
 		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Mcpu, receiverStr))
 	}
@@ -631,8 +652,8 @@ func handlePhyOperator(op *models.PhyOperator, stats *GblStats) {
 
 	// Accumulate stats from the current operator
 	if op.OpStats != nil && op.NodeIdx >= 0 {
-		stats.TimeConsumed += op.OpStats.TotalTimeConsumed
-		stats.MemorySize += op.OpStats.TotalWaitTimeConsumed
+		stats.TimeConsumed += op.OpStats.TimeConsumed
+		stats.MemorySize += op.OpStats.WaitTimeConsumed
 	}
 
 	// Recursively process child operators

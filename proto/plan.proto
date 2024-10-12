@@ -662,7 +662,13 @@ message AnalyzeInfo {
 	int64 insertTime = 14;
 	repeated int64 time_consumed_array_major = 15;
 	repeated int64 time_consumed_array_minor = 16;
-	int64 input_blocks=17;
+	int64 input_blocks = 17;
+	int64 s3_list = 18;
+	int64 s3_head = 19;
+	int64 s3_put = 20;
+	int64 s3_get = 21;
+	int64 s3_delete = 22;
+	int64 s3_delete_multi = 23;
 }
 
 message PartitionPrune {
