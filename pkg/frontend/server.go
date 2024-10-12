@@ -358,7 +358,8 @@ func getServerLevelVars(service string) *ServerLevelVariables {
 }
 
 func InitServerLevelVars(service string) {
-	serverVarsMap.Store(service, &ServerLevelVariables{})
+	serverVarsMap.LoadOrStore(service, &ServerLevelVariables{})
+	getServerLevelVars(service)
 }
 
 func getSessionAlloc(service string) Allocator {
