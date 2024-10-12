@@ -54,7 +54,7 @@ type SampleValues[T any] interface {
 	SampleTypes() []*profile.ValueType
 	DefaultSampleType() string
 	Values() []int64
-	Merge(from T)
+	Merge(with []T) T
 }
 
 type LocationKey struct {
@@ -73,7 +73,7 @@ type SampleKey struct {
 
 type MergedSample[T any] struct {
 	Location []*profile.Location
-	Value    T
+	Values   []T
 }
 
 func NewProfiler[T any, P interface {
@@ -277,11 +277,21 @@ func (p *Profiler[T, P]) merge(try bool) {
 		if !ok {
 			sample = &MergedSample[P]{
 				Location: info.Locations,
-				Value:    info.Values,
+				Values:   []P{info.Values},
 			}
 			p.mergedSamples[locationsKey] = sample
 		} else {
-			sample.Value.Merge(info.Values)
+			sample.Values = append(sample.Values, info.Values)
+			if len(sample.Values) > 16 {
+				// merge
+				toMerge := sample.Values[:8]
+				rest := sample.Values[8:]
+				sample.Values = append(
+					sample.Values[:0],
+					toMerge[0].Merge(toMerge[1:]),
+				)
+				sample.Values = append(sample.Values, rest...)
+			}
 		}
 
 		return true
@@ -331,9 +341,10 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 	defer p.mu.Unlock()
 
 	for _, sample := range p.mergedSamples {
+		merged := sample.Values[0].Merge(sample.Values[1:])
 		prof.Sample = append(prof.Sample, &profile.Sample{
 			Location: sample.Location,
-			Value:    sample.Value.Values(),
+			Value:    merged.Values(),
 		})
 	}
 
