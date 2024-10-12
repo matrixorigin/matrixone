@@ -859,7 +859,7 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 	appendBat(bat, sm.objects)
 	appendBatForMap(bat, sm.pitr.tid, sm.pitr.objects)
 	appendBat(deltaBat, sm.tombstones)
-	appendBatForMap(bat, sm.pitr.tid, sm.pitr.tombstones)
+	appendBatForMap(deltaBat, sm.pitr.tid, sm.pitr.tombstones)
 	defer bat.Close()
 	defer deltaBat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)

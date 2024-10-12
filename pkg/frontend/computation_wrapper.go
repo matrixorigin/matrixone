@@ -414,11 +414,12 @@ func createCompile(
 ) (retCompile *compile.Compile, err error) {
 
 	addr := ""
-	if len(getGlobalPu().ClusterNodes) > 0 {
-		addr = getGlobalPu().ClusterNodes[0].Addr
+	pu := getPu(ses.GetService())
+	if len(pu.ClusterNodes) > 0 {
+		addr = pu.ClusterNodes[0].Addr
 	}
 	proc.ReplaceTopCtx(execCtx.reqCtx)
-	proc.Base.FileService = getGlobalPu().FileService
+	proc.Base.FileService = pu.FileService
 
 	var tenant string
 	tInfo := ses.GetTenantInfo()
