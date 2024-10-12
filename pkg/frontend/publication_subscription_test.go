@@ -19,14 +19,15 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_doCreatePublication(t *testing.T) {
@@ -75,7 +76,7 @@ func Test_doCreatePublication(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
@@ -193,7 +194,7 @@ func Test_doAlterPublication(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
@@ -292,7 +293,7 @@ func Test_doDropPublication(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
@@ -379,7 +380,7 @@ func Test_doShowSubscriptions(t *testing.T) {
 		// ctx
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 		// ses

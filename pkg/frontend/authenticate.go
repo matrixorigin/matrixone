@@ -2751,7 +2751,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	//encryption the password
 	encryption = HashPassWord(password)
 
-	if execResultArrayHasData(erArray) || getGlobalPu().SV.SkipCheckPrivilege {
+	if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
 			return err
@@ -3794,7 +3794,7 @@ func postDropSuspendAccount(
 	if accountID == 0 {
 		return err
 	}
-	qc := getGlobalPu().QueryClient
+	qc := getPu(ses.GetService()).QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
@@ -3846,6 +3846,7 @@ func postProcessCdc(
 			task.TaskStatus_CancelRequested,
 			targetAccountID,
 			"",
+			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
@@ -3855,6 +3856,7 @@ func postProcessCdc(
 			task.TaskStatus_PauseRequested,
 			targetAccountID,
 			"",
+			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
@@ -3864,6 +3866,7 @@ func postProcessCdc(
 			task.TaskStatus_ResumeRequested,
 			targetAccountID,
 			"",
+			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
@@ -7278,7 +7281,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 		v2.Step2DurationHistogram.Observe(time.Since(start2).Seconds())
 
 		// create tables for new account
-		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, getGlobalPu())
+		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, getPu(ses.GetService()))
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7624,7 +7627,7 @@ func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *Tenan
 	}
 
 	// create sub for other privileged tenants' to-all-pub
-	pubAllAccounts := pubsub.SplitAccounts(getGlobalPu().SV.PubAllAccounts)
+	pubAllAccounts := pubsub.SplitAccounts(getPu(bh.Service()).SV.PubAllAccounts)
 	for _, accountName := range pubAllAccounts {
 		accountInfo, ok := accNameInfoMap[accountName]
 		if !ok {
@@ -7993,7 +7996,7 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 		},
 	}
 
-	fileService := getGlobalPu().FileService
+	fileService := getPu(ses.GetService()).FileService
 	_ = fileService.Delete(execCtx.reqCtx, ioVector.FilePath)
 	err := fileService.Write(execCtx.reqCtx, ioVector)
 	err = errors.Join(err, loadLocalErrGroup.Wait())
@@ -8907,7 +8910,7 @@ func postAlterSessionStatus(
 	tenantId int64,
 	status string) error {
 	logutil.Infof("[set restricted] post set account id %d status : %s", tenantId, status)
-	qc := getGlobalPu().QueryClient
+	qc := getPu(ses.GetService()).QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
