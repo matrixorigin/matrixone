@@ -47,6 +47,10 @@ type backExec struct {
 	backSes *backSession
 }
 
+func (back *backExec) Service() string {
+	return back.backSes.GetService()
+}
+
 func (back *backExec) Close() {
 	tempExecCtx := ExecCtx{
 		ses:    back.backSes,
@@ -229,29 +233,31 @@ func doComQueryInBack(
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
+	service := backSes.GetService()
+	pu := getPu(service)
 	proc := process.NewTopProcess(
 		execCtx.reqCtx,
 		backSes.pool,
-		getGlobalPu().TxnClient,
+		pu.TxnClient,
 		nil,
-		getGlobalPu().FileService,
-		getGlobalPu().LockService,
-		getGlobalPu().QueryClient,
-		getGlobalPu().HAKeeperClient,
-		getGlobalPu().UdfService,
-		getGlobalAic())
+		pu.FileService,
+		pu.LockService,
+		pu.QueryClient,
+		pu.HAKeeperClient,
+		pu.UdfService,
+		getAicm(service))
 	proc.Base.Id = backSes.getNextProcessId()
-	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
-	proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
-	proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
-	proc.Base.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
+	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.Base.SessionInfo = process.SessionInfo{
 		User:          backSes.respr.GetStr(USERNAME),
-		Host:          getGlobalPu().SV.Host,
+		Host:          pu.SV.Host,
 		Database:      backSes.respr.GetStr(DBNAME),
-		Version:       makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
+		Version:       makeServerVersion(pu, serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
-		StorageEngine: getGlobalPu().StorageEngine,
+		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
 	}
 	proc.SetStmtProfile(&backSes.stmtProfile)
@@ -289,7 +295,7 @@ func doComQueryInBack(
 		execCtx, backSes.respr.GetStr(DBNAME),
 		input,
 		backSes.respr.GetStr(USERNAME),
-		getGlobalPu().StorageEngine,
+		pu.StorageEngine,
 		proc,
 		backSes,
 	)
@@ -652,12 +658,12 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 }
 
 type backSession struct {
-	service string
 	feSessionImpl
 }
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
-	txnHandler := InitTxnHandler(ses.GetService(), getGlobalPu().StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
+	service := ses.GetService()
+	txnHandler := InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
 	backSes := &backSession{
 		feSessionImpl: feSessionImpl{
 			pool:           ses.GetMemPool(),
@@ -674,15 +680,11 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 			label:          make(map[string]string),
 			timeZone:       time.Local,
 			respr:          defResper,
+			service:        service,
 		},
 	}
-	backSes.service = ses.GetService()
 	backSes.uuid, _ = uuid.NewV7()
 	return backSes
-}
-
-func (backSes *backSession) GetService() string {
-	return backSes.service
 }
 
 func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
@@ -891,7 +893,7 @@ func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExe
 }
 
 func (backSes *backSession) GetStorage() engine.Engine {
-	return getGlobalPu().StorageEngine
+	return getPu(backSes.GetService()).StorageEngine
 }
 
 func (backSes *backSession) GetStatsCache() *plan2.StatsCache {
