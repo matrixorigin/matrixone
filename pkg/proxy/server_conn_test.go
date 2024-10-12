@@ -246,6 +246,7 @@ func (s *testCNServer) Start() error {
 				c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()),
 					goetty.WithSessionConn(uint64(cid), conn))
 				pu := config.NewParameterUnit(&fp, nil, nil, nil)
+				frontend.SetSessionAlloc("", frontend.NewSessionAllocator(pu))
 				ios, err := frontend.NewIOSession(c.RawConn(), pu, s.service)
 				if err != nil {
 					return err
