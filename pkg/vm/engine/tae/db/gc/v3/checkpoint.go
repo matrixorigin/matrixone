@@ -1448,8 +1448,8 @@ func (c *checkpointCleaner) tryScanLocked(
 	}
 
 	var newWindow *GCWindow
-	var newFiles []string
-	if newWindow, newFiles, err = c.scanCheckpointsLocked(
+	var files []string
+	if newWindow, files, err = c.scanCheckpointsLocked(
 		candidates, memoryBuffer,
 	); err != nil {
 		logutil.Error(
@@ -1463,9 +1463,9 @@ func (c *checkpointCleaner) tryScanLocked(
 	c.updateScanWaterMark(candidates[len(candidates)-1])
 
 	for _, stats := range c.GetScannedWindowLocked().files {
-		newFiles = append(newFiles, stats.ObjectName().String())
+		files = append(files, stats.ObjectName().String())
 	}
-	if err = c.appendFilesToWAL(newFiles...); err != nil {
+	if err = c.appendFilesToWAL(files...); err != nil {
 		logutil.Error(
 			"GC-APPEND-SNAPSHOT-TO-WAL-ERROR",
 			zap.String("task", c.TaskNameLocked()),
