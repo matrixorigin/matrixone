@@ -82,7 +82,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		catalog2.SetupDefines("")
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.reqCtx = ctx
@@ -149,7 +149,7 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.reqCtx = ctx
 		ec.ses = &Session{}
@@ -210,7 +210,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		txn := InitTxnHandler("", eng, ctx, nil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.reqCtx = ctx
 		ec.ses = &Session{}
@@ -239,10 +239,10 @@ func TestSession_TxnBegin(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		setGlobalSessionAlloc(newLeakCheckAllocator())
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
 		catalog2.SetupDefines("")
-		ioSes, err := NewIOSession(&testConn{}, pu)
+		ioSes, err := NewIOSession(&testConn{}, pu, "")
 		if err != nil {
 			panic(err)
 		}
@@ -259,8 +259,8 @@ func TestSession_TxnBegin(t *testing.T) {
 		hints := engine.Hints{CommitOrRollbackTimeout: time.Second * 10}
 		eng.EXPECT().Hints().Return(hints).AnyTimes()
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		getGlobalPu().TxnClient = txnClient
-		getGlobalPu().StorageEngine = eng
+		getPu("").TxnClient = txnClient
+		getPu("").StorageEngine = eng
 		session := NewSession(ctx, "", proto, nil)
 
 		var c clock.Clock
@@ -305,7 +305,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 			t.Error(err)
 		}
 
-		ioses, err := NewIOSession(&testConn{}, pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		if err != nil {
 			t.Error(err)
 		}
@@ -353,8 +353,8 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-		setGlobalPu(pu)
-		setGlobalSessionAlloc(newLeakCheckAllocator())
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
 		ses := genSession(ctrl, pu)
 
 		var ts *timestamp.Timestamp
@@ -385,7 +385,7 @@ var genSession1 = func(t *testing.T, ctrl *gomock.Controller, pu *config.Paramet
 	if err != nil {
 		t.Error(err)
 	}
-	ioses, err := NewIOSession(&testConn{}, pu)
+	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
 		t.Error(err)
 	}
@@ -400,8 +400,8 @@ func TestSession_GetTempTableStorage(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-	setGlobalPu(pu)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
 	ses := genSession1(t, ctrl, pu)
 	assert.Panics(t, func() {
 		_ = ses.GetTxnHandler().GetTempStorage()
@@ -414,8 +414,8 @@ func TestIfInitedTempEngine(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-	setGlobalPu(pu)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
 	ses := genSession1(t, ctrl, pu)
 	assert.False(t, ses.GetTxnHandler().HasTempEngine())
 }
@@ -426,8 +426,8 @@ func TestSetTempTableStorage(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-	setGlobalPu(pu)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
 	ses := genSession1(t, ctrl, pu)
 
 	ck := clock.NewHLCClock(func() int64 {
@@ -513,18 +513,18 @@ func TestSession_Migrate(t *testing.T) {
 		rel.EXPECT().GetTableID(gomock.Any()).Return(tid).AnyTimes()
 		db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(rel, nil).AnyTimes()
-		setGlobalPu(&config.ParameterUnit{
+		setPu("", &config.ParameterUnit{
 			SV:            sv,
 			TxnClient:     txnClient,
 			StorageEngine: eng,
 		})
 
 		mockBS := MockBaseService{}
-		rm, _ := NewRoutineManager(context.Background())
+		rm, _ := NewRoutineManager(context.Background(), "")
 		rm.baseService = &mockBS
-		setGlobalRtMgr(rm)
+		setRtMgr("", rm)
 		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-		ioses, err := NewIOSession(&testConn{}, getGlobalPu())
+		ioses, err := NewIOSession(&testConn{}, getPu(""), "")
 		if err != nil {
 			panic(err)
 		}

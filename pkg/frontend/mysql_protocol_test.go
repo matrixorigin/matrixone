@@ -65,8 +65,8 @@ func registerConn(clientConn net.Conn) {
 }
 func createInnerServer() *MOServer {
 
-	rm := getGlobalRtMgr()
-	pu := getGlobalPu()
+	rm := getRtMgr("")
+	pu := getPu("")
 	mo := &MOServer{
 		addr:        "",
 		uaddr:       pu.SV.UnixSocketAddress,
@@ -99,15 +99,16 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	setGlobalPu(pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
 	acim := &defines.AutoIncrCacheManager{}
-	setGlobalAicm(acim)
-	rm, _ := NewRoutineManager(ctx)
-	setGlobalRtMgr(rm)
+	setAicm("", acim)
+	rm, _ := NewRoutineManager(ctx, "")
+	setRtMgr("", rm)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -198,7 +199,7 @@ func TestKill(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	setGlobalPu(pu)
+	setPu("", pu)
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
 
@@ -266,9 +267,9 @@ func TestKill(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	// A mock autoincrcache manager.
 	acim := &defines.AutoIncrCacheManager{}
-	setGlobalAicm(acim)
-	temp, _ := NewRoutineManager(ctx)
-	setGlobalRtMgr(temp)
+	setAicm("", acim)
+	temp, _ := NewRoutineManager(ctx, "")
+	setRtMgr("", temp)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -1305,7 +1306,7 @@ func TestMysqlResultSet(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	setGlobalPu(pu)
+	setPu("", pu)
 
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)
@@ -1462,9 +1463,9 @@ func TestMysqlResultSet(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	// A mock autoincrcache manager.
 	acim := &defines.AutoIncrCacheManager{}
-	setGlobalAicm(acim)
-	temp, _ := NewRoutineManager(ctx)
-	setGlobalRtMgr(temp)
+	setAicm("", acim)
+	temp, _ := NewRoutineManager(ctx, "")
+	setRtMgr("", temp)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -1755,8 +1756,8 @@ func Test_writePackets(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		if err != nil {
 			panic(err)
 		}
@@ -1773,7 +1774,7 @@ func Test_writePackets(t *testing.T) {
 	//
 	//	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	//	pu.SV.SkipCheckUser = true
-	//	setGlobalPu(pu)
+	//	setPu("",pu)
 	//	ioses, err := NewIOSession(serverConn, pu)
 	//	if err != nil {
 	//		panic(err)
@@ -1791,7 +1792,7 @@ func Test_writePackets(t *testing.T) {
 	//
 	//	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	//	pu.SV.SkipCheckUser = true
-	//	setGlobalPu(pu)
+	//	setPu("",pu)
 	//	ioses, err := NewIOSession(serverConn, pu)
 	//	if err != nil {
 	//		panic(err)
@@ -1810,8 +1811,8 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -1828,8 +1829,8 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		// fill proto.ses
@@ -1852,8 +1853,8 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		// fill proto.ses
@@ -1875,8 +1876,8 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -1977,8 +1978,8 @@ func TestSendPrepareResponse(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 		proto.SetSession(&Session{
@@ -2014,8 +2015,8 @@ func TestSendPrepareResponse(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2049,8 +2050,8 @@ func FuzzParseExecuteData(f *testing.F) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
-	setGlobalPu(pu)
-	ioses, err := NewIOSession(&testConn{}, pu)
+	setPu("", pu)
+	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
 		f.Error(err)
 	}
@@ -2175,8 +2176,8 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2196,8 +2197,8 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2217,8 +2218,8 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2241,8 +2242,8 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2265,8 +2266,8 @@ func Test_send_packet(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2280,8 +2281,8 @@ func Test_send_packet(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2305,8 +2306,8 @@ func Test_analyse320resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2348,8 +2349,8 @@ func Test_analyse320resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2391,8 +2392,8 @@ func Test_analyse41resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(tConn, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(tConn, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2438,8 +2439,8 @@ func Test_analyse41resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(tConn, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(tConn, pu, "")
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
@@ -2538,8 +2539,8 @@ func Test_handleHandshake(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(&testConn{}, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
@@ -2573,8 +2574,8 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
-	setGlobalPu(pu)
-	ioses, err := NewIOSession(&testConn{}, pu)
+	setPu("", pu)
+	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
 		t.Error(err)
 	}
@@ -2608,8 +2609,8 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
-	setGlobalPu(pu)
-	ioses, err := NewIOSession(&testConn{}, pu)
+	setPu("", pu)
+	ioses, err := NewIOSession(&testConn{}, pu, "")
 	convey.ShouldBeNil(err)
 	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 	proto.Close()
