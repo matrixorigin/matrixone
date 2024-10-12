@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package gc
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -65,7 +66,7 @@ func (g *GCWorker) resetObjects() {
 	g.objects = make([]string, 0)
 }
 
-func (g *GCWorker) ExecDelete(ctx context.Context, names []string, disableGC bool) error {
+func (g *GCWorker) ExecDelete(ctx context.Context, names []string) error {
 	g.Lock()
 	g.objects = append(g.objects, names...)
 	if len(g.objects) == 0 {
@@ -81,18 +82,14 @@ func (g *GCWorker) ExecDelete(ctx context.Context, names []string, disableGC boo
 			zap.Int("file count", deleteCount),
 			zap.String("time cost", time.Since(now).String()))
 	}()
-	logutil.Infof("[DB GC] disableGC: %v, files to delete: %v", disableGC, g.objects)
-	var err error
-	if !disableGC {
-		err = g.fs.DelFiles(ctx, g.objects)
-	}
+	logutil.Infof("[DB GC] files to delete: %v", g.objects)
+	err := g.fs.DelFiles(ctx, g.objects)
 	g.Lock()
 	defer g.Unlock()
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		g.state = Idle
 		return err
 	}
-	g.cleaner.updateOutputs(g.objects)
 	g.resetObjects()
 	g.state = Idle
 	return nil
