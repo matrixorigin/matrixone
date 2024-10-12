@@ -1506,11 +1506,7 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 	if overlap > 0.5 {
 		return 1
 	}
-	ret := sel * math.Pow(10000, overlap)
-
-	if colname == "k" {
-		logutil.Infof("block selectivity, expr %v sel %v overlap %v ret %v", expr.GetF().Func.ObjName, expr.Selectivity, overlap, ret)
-	}
+	ret := sel * math.Pow(10000, overlap/2)
 
 	if ret > 1 {
 		ret = 1
