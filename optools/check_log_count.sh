@@ -106,7 +106,7 @@ check_log_count() {
 show_log_info() {
     top_n=20
     cat $out_log_count | grep -v "collecttime" | while read _date _time _val _node _role _level; do
-        echo_proxy "top $top_n log info time-range [ ~ $_date $_time]"
+        echo_proxy "top $top_n log caller info, time-range [ (? - $metric_interval sec) ~ $_date $_time]"
         local sql="select cast(count(1) / $metric_interval as decimal(15,2)) cnt_per_sec, level, caller from system.log_info where timestamp between date_sub('$_date $_time', interval 60 second) and '$_date $_time' group by level, caller order by cnt_per_sec desc limit $top_n;"
         echo_proxy "Query: $sql"
         $mod -e "$sql"
