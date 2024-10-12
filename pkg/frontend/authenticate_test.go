@@ -11068,11 +11068,15 @@ func Test_checkPitrDup(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		sql := getSqlForCheckDupPitrFormat(0, 0)
+		stmt := &tree.CreatePitr{
+			Level: tree.PITRLEVELACCOUNT,
+		}
+
+		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt)
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		isDup, err := checkPitrDup(ctx, bh, 0, 0)
+		isDup, err := checkPitrDup(ctx, bh, tenant.Tenant, 0, stmt)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(isDup, convey.ShouldBeFalse)
 	})
@@ -11106,14 +11110,17 @@ func Test_checkPitrDup(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 		ses.SetTenantInfo(tenant)
+		stmt := &tree.CreatePitr{
+			Level: tree.PITRLEVELACCOUNT,
+		}
 
-		sql := getSqlForCheckDupPitrFormat(0, 0)
+		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt)
 		mrs := newMrsForPasswordOfUser([][]interface{}{
 			{1},
 		})
 		bh.sql2result[sql] = mrs
 
-		isDup, err := checkPitrDup(ctx, bh, 0, 0)
+		isDup, err := checkPitrDup(ctx, bh, tenant.Tenant, 0, stmt)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(isDup, convey.ShouldBeTrue)
 	})
