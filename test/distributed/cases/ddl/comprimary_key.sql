@@ -22,7 +22,6 @@ create table cpk_table_1(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 ti
 insert into cpk_table_1 select * from ex_table_cpk;
 select col3,col18 from cpk_table_1;
 -- 唯一性验证
--- @pattern
 insert into cpk_table_1 select * from ex_table_cpk;
 
 -- 复合主键tinyint+datetime+int
@@ -30,7 +29,6 @@ create  table  cpk_table_2(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 
 insert into cpk_table_2 select * from ex_table_cpk;
 select col1,col12,col3 from cpk_table_2;
 -- 唯一性验证
--- @pattern
 insert into cpk_table_2 select * from ex_table_cpk;
 
 -- 复合主键smallint+float+timestamp+varchar
@@ -136,5 +134,4 @@ CREATE TABLE test (
 );
 insert into test values(3,"019126ce-64a8-78cf-1234-be2626281abd","task3");
 insert into test values(3,"019126ce-64a8-78cf-5678-be2626281abd","task4");
--- @pattern
 insert into test values(3,"019126ce-64a8-78cf-5678-be2626281abd","task4");
