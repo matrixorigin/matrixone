@@ -21,13 +21,14 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
 )
 
 func Test_checkPitrInValidDurtion(t *testing.T) {
@@ -118,9 +119,9 @@ func Test_createPubByPitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -157,9 +158,9 @@ func Test_createPubByPitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -198,9 +199,9 @@ func Test_createPubByPitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -241,9 +242,9 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -320,9 +321,9 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -401,9 +402,9 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -483,9 +484,9 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -564,9 +565,9 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -660,9 +661,9 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -757,9 +758,9 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -853,9 +854,9 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -952,9 +953,9 @@ func Test_doRestorePitrValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -1032,9 +1033,9 @@ func Test_doRestorePitrValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -1096,4 +1097,94 @@ func Test_doRestorePitrValid(t *testing.T) {
 		err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
+}
+
+func TestGetSqlForCheckPitrDup(t *testing.T) {
+	tests := []struct {
+		createAccount   string
+		createAccountId uint64
+		stmt            *tree.CreatePitr
+		expected        string
+	}{
+		{
+			createAccount:   "sys",
+			createAccountId: 0,
+			stmt: &tree.CreatePitr{
+				Level: tree.PITRLEVELCLUSTER,
+			},
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and obj_id = 18446744073709551615;",
+		},
+		{
+			createAccount:   "sys",
+			createAccountId: 0,
+			stmt: &tree.CreatePitr{
+				Level: tree.PITRLEVELACCOUNT,
+			},
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'sys';",
+		},
+		{
+			createAccount:   "testAccount",
+			createAccountId: 1,
+			stmt: &tree.CreatePitr{
+				Level: tree.PITRLEVELACCOUNT,
+			},
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and account_name = 'testAccount';",
+		},
+		{
+			createAccount:   "sys",
+			createAccountId: 0,
+			stmt: &tree.CreatePitr{
+				Level:       tree.PITRLEVELACCOUNT,
+				AccountName: "testAccountName",
+			},
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'testAccountName';",
+		},
+		{
+			createAccount:   "sys",
+			createAccountId: 0,
+			stmt: &tree.CreatePitr{
+				Level:        tree.PITRLEVELDATABASE,
+				DatabaseName: "testDb",
+			},
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb';",
+		},
+		{
+			createAccount:   "testAccount",
+			createAccountId: 1,
+			stmt: &tree.CreatePitr{
+				Level:        tree.PITRLEVELDATABASE,
+				DatabaseName: "testDb",
+			},
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb';",
+		},
+		{
+			createAccount:   "sys",
+			createAccountId: 0,
+			stmt: &tree.CreatePitr{
+				Level:        tree.PITRLEVELTABLE,
+				DatabaseName: "testDb",
+				TableName:    "testTable",
+			},
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and table_name = 'testTable';",
+		},
+		{
+			createAccount:   "testAccount",
+			createAccountId: 1,
+			stmt: &tree.CreatePitr{
+				Level:        tree.PITRLEVELTABLE,
+				DatabaseName: "testDb",
+				TableName:    "testTable",
+			},
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and table_name = 'testTable';",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			result := getSqlForCheckPitrDup(tt.createAccount, tt.createAccountId, tt.stmt)
+			if result != tt.expected {
+				t.Errorf("expected %s, got %s", tt.expected, result)
+			}
+		})
+	}
 }
