@@ -46,7 +46,7 @@ func TestCNServer(t *testing.T) {
 	temp := os.TempDir()
 
 	frontend.InitServerLevelVars("")
-	frontend.SetSessionAlloc("", frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 
 	t.Run("error", func(t *testing.T) {
 		addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
@@ -250,7 +250,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 func TestRouter_SelectByConnID(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	frontend.InitServerLevelVars("")
-	frontend.SetSessionAlloc("", frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
@@ -271,7 +271,7 @@ func TestRouter_SelectByConnID(t *testing.T) {
 
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
 	frontend.InitServerLevelVars(cn1.uuid)
-	frontend.SetSessionAlloc(cn1.uuid, frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc(cn1.uuid, frontend.NewSessionAllocator(newTestPu()))
 	_, _, err := ru.Connect(cn1, testPacket, nil)
 	require.NoError(t, err)
 
@@ -298,7 +298,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	defer st.Stop()
 	hc := &mockHAKeeperClient{}
 	frontend.InitServerLevelVars("")
-	frontend.SetSessionAlloc("", frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 	// Construct backend CN servers.
 	temp := os.TempDir()
 	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
@@ -359,7 +359,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	frontend.InitServerLevelVars(cn.uuid)
-	frontend.SetSessionAlloc(cn.uuid, frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu1 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
@@ -378,7 +378,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	frontend.InitServerLevelVars(cn.uuid)
-	frontend.SetSessionAlloc(cn.uuid, frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu2 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
@@ -397,7 +397,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	frontend.InitServerLevelVars(cn.uuid)
-	frontend.SetSessionAlloc(cn.uuid, frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu3 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
