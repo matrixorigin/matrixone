@@ -162,7 +162,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		tableDef := dmlCtx.tableDefs[i]
 
-		for _, col := range tableDef.Cols {
+		for originPos, col := range tableDef.Cols {
 			if colPos, ok := updateColName2Idx[alias+"."+col.Name]; ok {
 				updateExpr := selectNode.ProjectList[colPos]
 				if isDefaultValExpr(updateExpr) { // set col = default
@@ -203,6 +203,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					//	}
 					//}
 					return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update column with on update")
+				}
+				if col.Typ.Id == int32(types.T_enum) {
+					selectNode.ProjectList[originPos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
+					if err != nil {
+						return 0, err
+					}
 				}
 			}
 		}

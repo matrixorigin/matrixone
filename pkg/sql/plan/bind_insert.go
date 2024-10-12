@@ -74,6 +74,8 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	}
 
 	selectNode := builder.qry.Nodes[lastNodeID]
+	selectNodeTag := selectNode.BindingTags[0]
+	partitionExprIdx := int32(len(selectNode.ProjectList) - 1)
 	idxObjRefs := make([][]*plan.ObjectRef, len(dmlCtx.tableDefs))
 	idxTableDefs := make([][]*plan.TableDef, len(dmlCtx.tableDefs))
 
@@ -83,6 +85,34 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
 			}
 
+		}
+	}
+
+	//lock main table
+	for _, col := range dmlCtx.tableDefs[0].Cols {
+		mainTableDef := dmlCtx.tableDefs[0]
+		if col.Name == mainTableDef.Pkey.PkeyColName && mainTableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+			lockTarget := &plan.LockTarget{
+				TableId:            mainTableDef.TblId,
+				PrimaryColIdxInBat: int32(colName2Idx[mainTableDef.Name+"."+col.Name]),
+				PrimaryColRelPos:   selectNodeTag,
+				PrimaryColTyp:      col.Typ,
+			}
+			if mainTableDef.Partition != nil {
+				partitionTableIDs, _ := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[0], mainTableDef)
+				lockTarget.IsPartitionTable = true
+				lockTarget.PartitionTableIds = partitionTableIDs
+				lockTarget.FilterColIdxInBat = partitionExprIdx
+				lockTarget.FilterColRelPos = selectNodeTag
+			}
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_LOCK_OP,
+				Children:    []int32{lastNodeID},
+				TableDef:    dmlCtx.tableDefs[0],
+				BindingTags: []int32{builder.genNewTag()},
+				LockTargets: []*plan.LockTarget{lockTarget},
+			}, bindCtx)
+			break
 		}
 	}
 
@@ -257,8 +287,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		NodeType:    plan.Node_MULTI_UPDATE,
 		BindingTags: []int32{builder.genNewTag()},
 	}
-	selectNodeTag := selectNode.BindingTags[0]
-	var partitionExpr *plan.Expr
 	var lockTargets []*plan.LockTarget
 
 	for i, tableDef := range dmlCtx.tableDefs {
@@ -272,34 +300,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		}
 		if tableDef.Partition != nil {
 			partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[i], tableDef)
-			updateCtx.NewPartitionIdx = int32(len(selectNode.ProjectList))
+			updateCtx.NewPartitionIdx = partitionExprIdx
 			updateCtx.PartitionTableIds = partitionTableIDs
 			updateCtx.PartitionTableNames = partitionTableNames
-			partitionExpr, err = getRemapParitionExpr(tableDef, selectNodeTag, colName2Idx, true)
-			if err != nil {
-				return -1, err
-			}
-
-			projectList := make([]*plan.Expr, len(selectNode.ProjectList)+1)
-			for i := range selectNode.ProjectList {
-				projectList[i] = &plan.Expr{
-					Typ: selectNode.ProjectList[i].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: selectNodeTag,
-							ColPos: int32(i),
-						},
-					},
-				}
-			}
-			projectList[len(selectNode.ProjectList)] = partitionExpr
-			selectNodeTag = builder.genNewTag()
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_PROJECT,
-				Children:    []int32{lastNodeID},
-				BindingTags: []int32{selectNodeTag},
-				ProjectList: projectList,
-			}, bindCtx)
 			dmlNode.BindingTags = append(dmlNode.BindingTags, selectNodeTag)
 		}
 
@@ -307,22 +310,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 			if col.Name == catalog.Row_ID {
 				continue
 			}
-			if col.Name == tableDef.Pkey.PkeyColName && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-				lockTarget := &plan.LockTarget{
-					TableId:            tableDef.TblId,
-					PrimaryColIdxInBat: int32(colName2Idx[tableDef.Name+"."+col.Name]),
-					PrimaryColRelPos:   selectNodeTag,
-					PrimaryColTyp:      col.Typ,
-				}
-				if tableDef.Partition != nil {
-					lockTarget.IsPartitionTable = true
-					lockTarget.PartitionTableIds = updateCtx.PartitionTableIds
-					lockTarget.FilterColIdxInBat = updateCtx.NewPartitionIdx
-					lockTarget.FilterColRelPos = selectNodeTag
-				}
-				lockTargets = append(lockTargets, lockTarget)
-			}
-
 			insertCols[k].RelPos = selectNodeTag
 			insertCols[k].ColPos = colName2Idx[tableDef.Name+"."+col.Name]
 		}
@@ -630,6 +617,14 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 			},
 			BindingTags: []int32{preInsertTag},
 		}, tmpCtx)
+	}
+
+	if tableDef.Partition != nil {
+		partitionExpr, err := getRemapParitionExpr(tableDef, projTag1, colName2Idx, true)
+		if err != nil {
+			return 0, nil, err
+		}
+		projList2 = append(projList2, partitionExpr)
 	}
 
 	lastNodeID = builder.appendNode(&plan.Node{
