@@ -12,23 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fscache
+package fifocache
 
 import (
-	"context"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
-type CacheKey = pb.CacheKey
-
-type DataCache interface {
-	EnsureNBytes(want int, evictTaget int)
-	Capacity() int64
-	Used() int64
-	Available() int64
-	Get(context.Context, CacheKey) (Data, bool)
-	Set(context.Context, CacheKey, Data) error
-	DeletePaths(context.Context, []string)
-	Flush()
-	Evict(chan int64)
+func BenchmarkEnsureNBytesAndSet(b *testing.B) {
+	cache := NewDataCache(
+		fscache.ConstCapacity(1024),
+		nil, nil, nil,
+	)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			cache.EnsureNBytes(1, 1)
+		}
+	})
 }
