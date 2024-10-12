@@ -436,6 +436,7 @@ func (r *reader) Read(
 	if r.readBlockCnt > 256 {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
+	r.readBlockCnt++
 
 	if r.cacheBatch == nil {
 		cacheBatch := batch.EmptyBatchWithSize(len(r.columns.seqnums) + 1)
