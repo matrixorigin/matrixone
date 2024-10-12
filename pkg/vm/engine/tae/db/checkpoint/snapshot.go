@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -133,14 +132,14 @@ func ListSnapshotMeta(
 		return metaFiles[i].end.LT(&metaFiles[j].end)
 	})
 
-	for i, file := range metaFiles {
-		// TODO: remove debug log
-		logutil.Infof("metaFiles[%d]: %v", i, file.String())
-	}
-	for i, file := range compactedFiles {
-		// TODO: remove debug log
-		logutil.Infof("compactedFiles[%d]: %v", i, file.String())
-	}
+	//for i, file := range metaFiles {
+	//	// TODO: remove debug log
+	//	logutil.Infof("metaFiles[%d]: %v", i, file.String())
+	//}
+	//for i, file := range compactedFiles {
+	//	// TODO: remove debug log
+	//	logutil.Infof("compactedFiles[%d]: %v", i, file.String())
+	//}
 
 	retFiles := make([]*MetaFile, 0)
 	if len(compactedFiles) > 0 {
