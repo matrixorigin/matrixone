@@ -76,15 +76,22 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		return
 	}
 	metaFiles := make([]*MetaFile, 0)
+	compactedFiles := make([]*MetaFile, 0)
 	r.checkpointMetaFiles.Lock()
 	for i, dir := range dirs {
 		r.checkpointMetaFiles.files[dir.Name] = struct{}{}
-		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		metaFiles = append(metaFiles, &MetaFile{
+		start, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		metaFile := &MetaFile{
 			start: start,
 			end:   end,
 			index: i,
-		})
+			name:  dir.Name,
+		}
+		if ext == blockio.CompactedExt {
+			compactedFiles = append(compactedFiles, metaFile)
+			continue
+		}
+		metaFiles = append(metaFiles, metaFile)
 	}
 	r.checkpointMetaFiles.Unlock()
 	sort.Slice(metaFiles, func(i, j int) bool {
@@ -92,49 +99,76 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := blockio.NewFileReader(r.rt.SID(), r.rt.Fs.Service, CheckpointDir+dir.Name)
-	if err != nil {
-		return
-	}
-	bats, closeCB, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if closeCB != nil {
-			closeCB()
+	replayEntries := func(name string, ckpBat *containers.Batch) (entries []*CheckpointEntry, maxGlobalEnd types.TS, err error) {
+		reader, err := blockio.NewFileReader(r.rt.SID(), r.rt.Fs.Service, CheckpointDir+name)
+		if err != nil {
+			return
 		}
-	}()
+		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
+		if err != nil {
+			return
+		}
+		if len(bats) == 0 {
+			return
+		}
+		defer func() {
+			if closeCB != nil {
+				closeCB()
+			}
+		}()
+		colNames := CheckpointSchema.Attrs()
+		colTypes := CheckpointSchema.Types()
+		var checkpointVersion int
+		// in version 1, checkpoint metadata doesn't contain 'version'.
+		vecLen := len(bats[0].Vecs)
+		logutil.Infof("checkpoint version: %d, list and load duration: %v", vecLen, time.Since(t0))
+		if vecLen < CheckpointSchemaColumnCountV1 {
+			checkpointVersion = 1
+		} else if vecLen < CheckpointSchemaColumnCountV2 {
+			checkpointVersion = 2
+		} else {
+			checkpointVersion = 3
+		}
+		for i := range bats[0].Vecs {
+			var vec containers.Vector
+			if bats[0].Vecs[i].Length() == 0 {
+				vec = containers.MakeVector(colTypes[i], common.CheckpointAllocator)
+			} else {
+				vec = containers.ToTNVector(bats[0].Vecs[i], common.CheckpointAllocator)
+			}
+			ckpBat.AddVector(colNames[i], vec)
+		}
+		c.readDuration += time.Since(t0)
+		entries, maxGlobalEnd = ReplayCheckpointEntries(ckpBat, checkpointVersion)
+		return
+	}
+
+	{
+		// replay compacted tree
+		for _, file := range compactedFiles {
+			compacted := containers.NewBatch()
+			defer compacted.Close()
+			entry, _, err := replayEntries(file.name, compacted)
+			if err != nil {
+				logutil.Errorf("replay compacted checkpoint file %s failed: %v", file.name, err.Error())
+			}
+			if len(entry) != 1 {
+				for _, e := range entry {
+					logutil.Infof("compacted checkpoint entry: %v", e.String())
+				}
+				panic("invalid compacted checkpoint file")
+			}
+			r.tryAddNewCompactedCheckpointEntry(entry[0])
+		}
+	}
+
 	bat := containers.NewBatch()
 	defer bat.Close()
-	colNames := CheckpointSchema.Attrs()
-	colTypes := CheckpointSchema.Types()
-	var checkpointVersion int
-	// in version 1, checkpoint metadata doesn't contain 'version'.
-	vecLen := len(bats[0].Vecs)
-	logutil.Infof("checkpoint version: %d, list and load duration: %v", vecLen, time.Since(t0))
-	if vecLen < CheckpointSchemaColumnCountV1 {
-		checkpointVersion = 1
-	} else if vecLen < CheckpointSchemaColumnCountV2 {
-		checkpointVersion = 2
-	} else {
-		checkpointVersion = 3
+	entries, maxGlobalEnd, err := replayEntries(dir.Name, bat)
+	if err != nil {
+		logutil.Infof("replay checkpoint file %s failed: %v", dir.Name, err.Error())
+		return
 	}
-	for i := range bats[0].Vecs {
-		if len(bats) == 0 {
-			continue
-		}
-		var vec containers.Vector
-		if bats[0].Vecs[i].Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], common.CheckpointAllocator)
-		} else {
-			vec = containers.ToTNVector(bats[0].Vecs[i], common.CheckpointAllocator)
-		}
-		bat.AddVector(colNames[i], vec)
-	}
-	c.readDuration += time.Since(t0)
-
-	entries, maxGlobalEnd := ReplayCheckpointEntries(bat, checkpointVersion)
 	c.ckpEntries = entries
 
 	// step2. read checkpoint data, output is the ckpdatas
@@ -391,7 +425,7 @@ func MergeCkpMeta(
 	}
 	metaFiles := make([]*MetaFile, 0)
 	for i, dir := range dirs {
-		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		start, end, _ := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
 			end:   end,
