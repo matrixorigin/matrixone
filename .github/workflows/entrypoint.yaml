@@ -72,3 +72,8 @@ jobs:
       S3BUCKET: ${{ secrets.S3BUCKET }}
       DOCU_GROUP_HOOK: ${{ secrets.DOCU_GROUP_HOOK }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      EE_DB_ADDR: ${{ secrets.EE_DB_ADDR }}
+      EE_DB_PORT: ${{ secrets.EE_DB_PORT }}
+      EE_DB_USER: ${{ secrets.EE_DB_USER }}
+      EE_DB_PASSWORD: ${{ secrets.EE_DB_PASSWORD }}
+      EE_DB_DB: ${{ secrets.EE_DB_DB }}
