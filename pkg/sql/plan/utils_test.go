@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,4 +41,27 @@ func Test_removeIf(t *testing.T) {
 	assert.Equal(t, []string{}, res2)
 
 	assert.Equal(t, []string(nil), RemoveIf[string](nil, nil))
+}
+
+func TestOffsetToString(t *testing.T) {
+	tests := []struct {
+		offset int
+		want   string
+	}{
+		{3600, "+01:00"},
+		{7200, "+02:00"},
+		{-3600, "-01:00"},
+		{-7200, "-02:00"},
+		{0, "+00:00"},
+		{3660, "+01:01"},
+		{-3660, "-01:01"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("offset %d", tt.offset), func(t *testing.T) {
+			if got := offsetToString(tt.offset); got != tt.want {
+				t.Errorf("offsetToString(%d) = %v, want %v", tt.offset, got, tt.want)
+			}
+		})
+	}
 }
