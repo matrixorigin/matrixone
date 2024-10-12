@@ -34,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -144,7 +144,7 @@ func getSqlForAccountInfo(like *tree.ComparisonExpr, accId int64, needObjectCoun
 func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (resp any, tried bool, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-		req := db.StorageUsageReq{}
+		req := cmd_util.StorageUsageReq{}
 		for x := range accIds {
 			req.AccIds = append(req.AccIds, accIds[x]...)
 		}
@@ -153,7 +153,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	}
 
 	responseUnmarshaler := func(payload []byte) (any, error) {
-		usage := &db.StorageUsageResp_V2{}
+		usage := &cmd_util.StorageUsageResp_V2{}
 		if err := usage.Unmarshal(payload); err != nil {
 			return nil, err
 		}
@@ -176,7 +176,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 		// try the previous RPC method
 		payload_V0 := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
 		responseUnmarshaler_V0 := func(payload []byte) (interface{}, error) {
-			usage := &db.StorageUsageResp_V0{}
+			usage := &cmd_util.StorageUsageResp_V0{}
 			if err := usage.Unmarshal(payload); err != nil {
 				return nil, err
 			}
@@ -204,7 +204,7 @@ func handleStorageUsageResponse_V0(
 	ctx context.Context,
 	sid string,
 	fs fileservice.FileService,
-	usage *db.StorageUsageResp_V0,
+	usage *cmd_util.StorageUsageResp_V0,
 	logger SessionLogger,
 ) (map[int64]uint64, error) {
 	result := make(map[int64]uint64, 0)
@@ -245,7 +245,7 @@ func handleStorageUsageResponse_V0(
 
 func handleStorageUsageResponse(
 	ctx context.Context,
-	usage *db.StorageUsageResp_V2,
+	usage *cmd_util.StorageUsageResp_V2,
 ) (map[int64]uint64, error) {
 	result := make(map[int64]uint64, 0)
 
@@ -280,7 +280,7 @@ func checkStorageUsageCache(accIds [][]int64) (result map[int64]uint64, succeed 
 	return result, true
 }
 
-func updateStorageUsageCache(usages *db.StorageUsageResp_V2) {
+func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V2) {
 
 	if len(usages.AccIds) == 0 {
 		return
@@ -330,12 +330,12 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 	}
 
 	if tried {
-		usage, ok := response.(*db.StorageUsageResp_V0)
+		usage, ok := response.(*cmd_util.StorageUsageResp_V0)
 		if !ok {
 			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
 		}
 
-		fs, err := fileservice.Get[fileservice.FileService](getGlobalPu().FileService, defines.SharedFileServiceName)
+		fs, err := fileservice.Get[fileservice.FileService](getPu(ses.GetService()).FileService, defines.SharedFileServiceName)
 		if err != nil {
 			return nil, err
 		}
@@ -344,7 +344,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 		return handleStorageUsageResponse_V0(ctx, ses.GetService(), fs, usage, ses.GetLogger())
 
 	} else {
-		usage, ok := response.(*db.StorageUsageResp_V2)
+		usage, ok := response.(*cmd_util.StorageUsageResp_V2)
 		if !ok || usage.Magic != logtail.StorageUsageMagic {
 			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
 		}
