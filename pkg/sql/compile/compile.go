@@ -449,15 +449,9 @@ func (c *Compile) prePipelineInitializer() (err error) {
 
 // run once
 func (c *Compile) runOnce() (err error) {
-	if err = GetCompileService().recordRunningCompile(c); err != nil {
-		return err
-	}
-	defer func() {
-		GetCompileService().removeRunningCompile(c)
-	}()
-
 	var wg sync.WaitGroup
 	errC := make(chan error, len(c.scopes))
+
 	for i := range c.scopes {
 		wg.Add(1)
 		scope := c.scopes[i]

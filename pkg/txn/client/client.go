@@ -641,7 +641,6 @@ func (client *txnClient) AbortAllRunningTxn() {
 	runningPipelines.KillAllQueriesWithError()
 
 	client.mu.Unlock()
-	runningPipelines.ResumeService()
 
 	for _, op := range ops {
 		op.reset.cannotCleanWorkspace = true
@@ -654,6 +653,7 @@ func (client *txnClient) AbortAllRunningTxn() {
 		op.reset.cannotCleanWorkspace = false
 		op.notifyActive()
 	}
+	runningPipelines.ResumeService()
 
 	if client.timestampWaiter != nil {
 		// After rollback all transactions, resume the timestamp waiter channel.

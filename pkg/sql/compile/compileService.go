@@ -98,36 +98,12 @@ func InitCompileService() *ServiceOfCompile {
 
 func (srv *ServiceOfCompile) getCompile(proc *process.Process) *Compile {
 	runningCompile := reuse.Alloc[Compile](nil)
-	// runningCompile.AllocMsg = time.Now().String() + " : " + string(debug.Stack())
 	runningCompile.proc = proc
 	return runningCompile
 }
 
-func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error {
-	if runningCompile.queryStatus == nil {
-		runningCompile.queryStatus = newQueryDoneWaiter()
-	} else {
-		runningCompile.queryStatus.clear()
-	}
-
-	runningCompile.proc.SetBaseProcessRunningStatus(true)
-	queryCtx, queryCancel := process.GetQueryCtxFromProc(runningCompile.proc)
-
-	srv.Lock()
-	srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
-		queryCancel: queryCancel,
-		queryDone:   runningCompile.queryStatus,
-	}
-	srv.Unlock()
-
-	err := queryCtx.Err()
-	if err != nil {
-		srv.removeRunningCompile(runningCompile)
-	}
-	return err
-}
-
-func (srv *ServiceOfCompile) recordRunningCompile2(runningCompile *Compile, txn txnClient.TxnOperator) {
+// recordRunningCompile record a running query to the compileService.
+func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile, txn txnClient.TxnOperator) {
 	if runningCompile.queryStatus == nil {
 		runningCompile.queryStatus = newQueryDoneWaiter()
 	} else {
@@ -161,21 +137,11 @@ func thisQueryStillRunning(proc *process.Process, txn txnClient.TxnOperator) err
 	return nil
 }
 
-func (srv *ServiceOfCompile) removeRunningCompile2(c *Compile, txn txnClient.TxnOperator) {
+// removeRunningCompile remove a running query from the compileService.
+func (srv *ServiceOfCompile) removeRunningCompile(c *Compile, txn txnClient.TxnOperator) {
 	if txn != nil {
 		txn.ExitRunSql()
 	}
-	c.queryStatus.noticeQueryCompleted()
-	c.proc.SetBaseProcessRunningStatus(false)
-
-	srv.Lock()
-	delete(srv.aliveCompiles, c)
-	srv.Unlock()
-
-	c.queryStatus.clear()
-}
-
-func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) {
 	c.queryStatus.noticeQueryCompleted()
 	c.proc.SetBaseProcessRunningStatus(false)
 

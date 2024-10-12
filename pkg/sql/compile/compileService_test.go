@@ -47,12 +47,12 @@ func TestCompileService(t *testing.T) {
 		c := service.getCompile(p)
 		c.InitPipelineContextToExecuteQuery()
 
-		require.NoError(t, service.recordRunningCompile(c))
+		service.recordRunningCompile(c, nil)
 		go func(cc *Compile) {
 			<-cc.proc.Ctx.Done()
 
 			doneRoutine.Add(1)
-			service.removeRunningCompile(cc)
+			service.removeRunningCompile(cc, nil)
 			service.putCompile(cc)
 			wg.Done()
 		}(c)
