@@ -487,11 +487,6 @@ func mustValueCanRead(
 			}
 			defer res.Close()
 
-			//for test issue-19202
-			logutil.Infof("xxxx txn:%s execute select value from %s where id=%d",
-				txn.Txn().Txn().DebugString(),
-				table, id)
-
 			res.ReadRows(
 				func(rows int, cols []*vector.Vector) bool {
 					require.Equal(t, 1, rows)
@@ -499,6 +494,15 @@ func mustValueCanRead(
 					return true
 				},
 			)
+			//logutil.Infof("xxxx txn:%s execute select value from %s where id=%d, actual:%d",
+			//	txn.Txn().Txn().DebugString(),
+			//	table, id, actual)
+			//for test issue-19202
+			if actual == 0 {
+				logutil.Infof("xxxx txn:%s execute select value from %s where id=%d",
+					txn.Txn().Txn().DebugString(),
+					table, id)
+			}
 			return nil
 		},
 		executor.Options{}.

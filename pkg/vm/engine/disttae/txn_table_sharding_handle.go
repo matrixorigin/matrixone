@@ -369,7 +369,8 @@ func HandleShardingReadNext(
 		return buffer.EncodeBytes(types.EncodeBool(&isEnd)), nil
 	}
 
-	logutil.Infof("xxxx HandleShardingReadNext, txn:%s,name:%s,id:%d, bat:%s",
+	logutil.Infof("xxxx HandleShardingReadNext, stream:%s, txn:%s,name:%s,id:%d, bat:%s",
+		streamID.String(),
 		tbl.db.op.Txn().DebugString(),
 		tbl.tableDef.Name,
 		tbl.tableId,
