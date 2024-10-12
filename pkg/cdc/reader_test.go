@@ -412,7 +412,7 @@ func allocTestBatch(
 	batchSize int,
 	mp *mpool.MPool,
 ) *batch.Batch {
-	batchData := batch.New(true, attrName)
+	batchData := batch.New(attrName)
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {

@@ -22,8 +22,8 @@ sleep(5)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 1,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 show tables;
 Tables_in_test
@@ -44,8 +44,8 @@ sleep(3)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 2,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
@@ -103,8 +103,8 @@ sleep(3)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 3,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
@@ -199,8 +199,8 @@ sleep(2)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 6,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
@@ -223,8 +223,8 @@ sleep(3)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 7,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
@@ -270,8 +270,8 @@ sleep(2)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 8,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
@@ -289,8 +289,8 @@ sleep(2)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 9,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 drop snapshot if exists sp02;
 create snapshot sp02 for account sys;
@@ -336,8 +336,8 @@ sleep(2)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 10,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
@@ -365,8 +365,8 @@ sleep(2)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 11,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
@@ -402,8 +402,8 @@ sleep(2)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 12,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
@@ -440,8 +440,8 @@ sleep(2)
 select mo_ctl('cn', 'task', ':retention');
 mo_ctl(cn, task, :retention)
 {\n  "method": "TASK",\n  "result": {\n    "RequestID": 14,\n    "CmdMethod": 13,\n    "RunTask": {\n      "Result": "OK"\n    },\n    "GetReplicaCount": {},\n    "GoMaxProcsResponse": {},\n    "GoMemLimitResponse": {},\n    "FileServiceCacheResponse": {},\n    "FileServiceCacheEvictResponse": {}\n  }\n}\n
-select sleep(1);
-sleep(1)
+select sleep(2);
+sleep(2)
 0
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline

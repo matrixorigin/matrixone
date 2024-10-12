@@ -1414,13 +1414,39 @@ func handleRevokeRole(ses FeSession, execCtx *ExecCtx, rr *tree.RevokeRole) erro
 }
 
 // handleGrantRole grants the privilege to the role
-func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) error {
-	return doGrantPrivilege(execCtx.reqCtx, ses, gp)
+func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) (err error) {
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	return doGrantPrivilege(ctx, ses, gp, bh)
 }
 
 // handleRevokePrivilege revokes the privilege from the user or role
-func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) error {
-	return doRevokePrivilege(execCtx.reqCtx, ses, rp)
+func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	return doRevokePrivilege(ctx, ses, rp, bh)
 }
 
 // handleSwitchRole switches the role to another role
@@ -1798,7 +1824,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 }
 
 func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill outputCallBackFunc) error {
-	bat := batch.New(true, []string{explainColName})
+	bat := batch.New([]string{explainColName})
 	rs := buffer.Lines
 	vs := make([][]byte, len(rs))
 
@@ -1825,7 +1851,7 @@ func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explai
 }
 
 func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufio.Reader, session *Session, fill outputCallBackFunc) error {
-	bat := batch.New(true, []string{explainColName})
+	bat := batch.New([]string{explainColName})
 	vs := make([][]byte, 0)
 	count := 0
 	for {
@@ -2018,7 +2044,12 @@ func checkModify(plan0 *plan.Plan, ses FeSession) bool {
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cws []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
+	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
+		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
+		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
+		cws = append(cws, tcw)
+		return cws, nil
+	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
@@ -2241,7 +2272,22 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 
 // processLoadLocal executes the load data local.
 // load data local interaction: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_local_infile_request.html
-func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, reader *io.PipeReader) (err error) {
+	//pipewriter may stick when there is no reader reading on the pipereader.
+	//so we need to make sure the pipewriter.write returns.
+	//issue3976
+	quitC := make(chan int)
+	go func() {
+		select {
+		case <-execCtx.reqCtx.Done():
+			//close reader
+			_ = reader.Close()
+		case <-quitC:
+		}
+	}()
+	defer func() {
+		close(quitC)
+	}()
 	mysqlRrWr := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		err2 := writer.Close()
@@ -2468,7 +2514,6 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeStart)
 	defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeStart)
-	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
 	txnOp.GetWorkspace().StartStatement()
@@ -2483,7 +2528,6 @@ func executeStmtWithWorkspace(ses FeSession,
 		if txnOp != nil {
 			ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeEnd)
 			defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeEnd)
-			setFPrints(txnOp, execCtx.ses.GetFPrints())
 			//most of the cases, txnOp will not nil except that "set autocommit = 1"
 			//commit the txn immediately then the txnOp is nil.
 			txnOp.GetWorkspace().EndStatement()
@@ -2512,7 +2556,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 	}
 	ses.EnterFPrint(FPExecStmtWithIncrStmtBeforeIncr)
 	defer ses.ExitFPrint(FPExecStmtWithIncrStmtBeforeIncr)
-	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//3. increase statement id
 	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
 	if err != nil {
@@ -2529,8 +2572,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 		//if txnOp != nil {
 		//	err = rollbackLastStmt(execCtx, txnOp, err)
 		//}
-		tempTxn := ses.GetTxnHandler().GetTxn()
-		setFPrints(tempTxn, ses.GetFPrints())
 	}()
 
 	err = dispatchStmt(ses, execCtx)
@@ -2542,7 +2583,7 @@ func dispatchStmt(ses FeSession,
 	ses.EnterFPrint(FPDispatchStmt)
 	defer ses.ExitFPrint(FPDispatchStmt)
 	//5. check plan within txn
-	if execCtx.cw.Plan() != nil {
+	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
 		if checkModify(execCtx.cw.Plan(), ses) {
 
 			//plan changed
@@ -3085,7 +3126,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}

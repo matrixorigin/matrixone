@@ -227,6 +227,7 @@ func HandleShardingReadRanges(
 	ranges, err := tbl.doRanges(
 		ctx,
 		param.RangesParam.Exprs,
+		2,
 		nil,
 	)
 	if err != nil {

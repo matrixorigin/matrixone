@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 func TestString(t *testing.T) {
@@ -49,7 +50,6 @@ func TestNormalDeletion(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 
@@ -153,7 +153,7 @@ func TestSplitBatch(t *testing.T) {
 			name: "test_partition_table_1",
 			fields: fields{
 				ctr: container{
-					resBat:           batch.New(false, []string{"rowid", "pk", "partition_id"}),
+					resBat:           batch.New([]string{"rowid", "pk", "partition_id"}),
 					partitionSources: []engine.Relation{nil, nil},
 				},
 				DeleteCtx: &DeleteCtx{
