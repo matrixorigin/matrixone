@@ -190,7 +190,7 @@ func TestHandler_Handle(t *testing.T) {
 		RebalanceDisabled: true,
 	}
 	frontend.InitServerLevelVars("")
-	frontend.SetSessionAlloc("", frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 	hc := &mockHAKeeperClient{}
 	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
@@ -199,7 +199,7 @@ func TestHandler_Handle(t *testing.T) {
 	require.NoError(t, os.RemoveAll(addr))
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	frontend.InitServerLevelVars(cn1.uuid)
-	frontend.SetSessionAlloc(cn1.uuid, frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc(cn1.uuid, frontend.NewSessionAllocator(newTestPu()))
 	hc.updateCN(cn1.uuid, cn1.addr, map[string]metadata.LabelList{})
 	// start backend server.
 	stopFn := startTestCNServer(t, ctx, addr, nil, withService(cn1.uuid))
