@@ -111,10 +111,6 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				return err
 			}
 
-			if skipExecuteMOFunc(foolCtx, rel) {
-				continue
-			}
-
 			// get the table definition information and check whether the current table is a partition table
 			var engineDefs []engine.TableDef
 			engineDefs, err = rel.TableDefs(foolCtx)
@@ -233,10 +229,6 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
 				return err
-			}
-
-			if skipExecuteMOFunc(foolCtx, rel) {
-				continue
 			}
 
 			var oSize, iSize uint64
@@ -365,12 +357,6 @@ func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return moTableColMaxMinImpl("mo_table_col_min", ivecs, result, proc, length, selectList)
 }
 
-// workaround for issue #19192
-func skipExecuteMOFunc(ctx context.Context, rel engine.Relation) bool {
-	def := rel.GetTableDef(ctx)
-	return strings.ToUpper(def.TableType) == "V"
-}
-
 func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if !ok || proc.GetTxnOperator() == nil {
@@ -452,10 +438,6 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			tableColumns, err := rel.TableColumns(ctx)
 			if err != nil {
 				return err
-			}
-
-			if skipExecuteMOFunc(ctx, rel) {
-				continue
 			}
 
 			//ranges, err := rel.Ranges(ctx, nil)
