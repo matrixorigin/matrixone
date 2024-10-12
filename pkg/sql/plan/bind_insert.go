@@ -89,8 +89,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	}
 
 	//lock main table
-	for _, col := range dmlCtx.tableDefs[0].Cols {
-		mainTableDef := dmlCtx.tableDefs[0]
+	var lockTargets []*plan.LockTarget
+	mainTableDef := dmlCtx.tableDefs[0]
+	for _, col := range mainTableDef.Cols {
 		if col.Name == mainTableDef.Pkey.PkeyColName && mainTableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 			lockTarget := &plan.LockTarget{
 				TableId:            mainTableDef.TblId,
@@ -105,15 +106,52 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 				lockTarget.FilterColIdxInBat = partitionExprIdx
 				lockTarget.FilterColRelPos = selectNodeTag
 			}
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_LOCK_OP,
-				Children:    []int32{lastNodeID},
-				TableDef:    dmlCtx.tableDefs[0],
-				BindingTags: []int32{builder.genNewTag()},
-				LockTargets: []*plan.LockTarget{lockTarget},
-			}, bindCtx)
+			lockTargets = append(lockTargets, lockTarget)
 			break
 		}
+	}
+	// lock unique key table
+	compUniqueIdxLockPos := int32(len(selectNode.ProjectList))
+	for j, idxDef := range mainTableDef.Indexes {
+		if !idxDef.TableExist || skipUniqueIdx[j] {
+			continue
+		}
+		if !idxDef.Unique {
+			if len(idxDef.Parts) > 0 {
+				compUniqueIdxLockPos++
+			}
+			continue
+		}
+		_, idxTableDef := builder.compCtx.Resolve(dmlCtx.objRefs[0].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
+		if len(idxDef.Parts) == 1 {
+			pos := colName2Idx[mainTableDef.Name+"."+idxDef.Parts[0]]
+			lockTarget := &plan.LockTarget{
+				TableId:            idxTableDef.TblId,
+				PrimaryColIdxInBat: pos,
+				PrimaryColRelPos:   selectNodeTag,
+				PrimaryColTyp:      selectNode.ProjectList[int(pos)].Typ,
+			}
+			lockTargets = append(lockTargets, lockTarget)
+		} else {
+			lockTarget := &plan.LockTarget{
+				TableId:            idxTableDef.TblId,
+				PrimaryColIdxInBat: compUniqueIdxLockPos,
+				PrimaryColRelPos:   selectNodeTag,
+				PrimaryColTyp:      makeHiddenColTyp(),
+			}
+			lockTargets = append(lockTargets, lockTarget)
+			compUniqueIdxLockPos++
+		}
+	}
+	if len(lockTargets) > 0 {
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lastNodeID},
+			TableDef:    dmlCtx.tableDefs[0],
+			BindingTags: []int32{builder.genNewTag()},
+			LockTargets: lockTargets,
+		}, bindCtx)
+		reCheckifNeedLockWholeTable(builder)
 	}
 
 	// handle primary/unique key confliction
@@ -287,7 +325,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		NodeType:    plan.Node_MULTI_UPDATE,
 		BindingTags: []int32{builder.genNewTag()},
 	}
-	var lockTargets []*plan.LockTarget
 
 	for i, tableDef := range dmlCtx.tableDefs {
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
@@ -326,15 +363,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 				if col.Name == catalog.Row_ID {
 					continue
 				}
-				if tableDef.Indexes[j].Unique && col.Name == idxTableDef.Pkey.PkeyColName {
-					lockTargets = append(lockTargets, &plan.LockTarget{
-						TableId:            idxTableDef.TblId,
-						PrimaryColIdxInBat: int32(colName2Idx[idxTableDef.Name+"."+col.Name]),
-						PrimaryColRelPos:   selectNodeTag,
-						PrimaryColTyp:      col.Typ,
-					})
-				}
-
 				idxInsertCols[k].RelPos = selectNodeTag
 				idxInsertCols[k].ColPos = int32(colName2Idx[idxTableDef.Name+"."+col.Name])
 			}
@@ -348,18 +376,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 			})
 		}
 
-	}
-
-	if len(lockTargets) > 0 {
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{lastNodeID},
-			TableDef:    dmlCtx.tableDefs[0],
-			BindingTags: []int32{builder.genNewTag()},
-			LockTargets: lockTargets,
-		}, bindCtx)
-
-		reCheckifNeedLockWholeTable(builder)
 	}
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)

@@ -22,8 +22,10 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -92,7 +94,7 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 			continue
 		}
 		require.NoError(t, err)
-		require.Equal(t, tc.op.GetAffectedRows(), tc.affectedRows)
+		require.Equal(t, tc.affectedRows, tc.op.GetAffectedRows())
 
 		tc.op.Children[0].Reset(proc, false, nil)
 		tc.op.Reset(proc, false, nil)
@@ -348,7 +350,7 @@ func makeTestPkArray(from int64, rowCount int) []int64 {
 func makeTestPartitionArray(rowCount int, partitionCount int) []int32 {
 	val := make([]int32, rowCount)
 	for i := 0; i < rowCount; i++ {
-		val[i] = int32(i / partitionCount)
+		val[i] = int32(i % partitionCount)
 	}
 	return val
 }
@@ -359,4 +361,17 @@ func makeTestVarcharArray(rowCount int) []string {
 		val[i] = strconv.Itoa(i)
 	}
 	return val
+}
+
+func makeTestRowIDVector(m *mpool.MPool, objectID *types.Objectid, blockNum uint16, rowCount int) *vector.Vector {
+	blockID := types.NewBlockidWithObjectID(objectID, blockNum+1000)
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	for i := 0; i < rowCount; i++ {
+		rowID := types.NewRowid(blockID, uint32(i)+1)
+		if err := vector.AppendFixed(vec, *rowID, false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
 }

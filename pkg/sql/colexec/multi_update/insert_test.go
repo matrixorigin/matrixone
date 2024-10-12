@@ -250,15 +250,13 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	}
 
 	if isPartition {
-		for i, updateCtx := range updateCtxs {
-			partTblIDs := make([]uint64, len(tableDef.Partition.PartitionTableNames))
-			for j := range tableDef.Partition.PartitionTableNames {
-				partTblIDs[j] = uint64(i*1000 + j)
-			}
-			updateCtx.NewPartitionIdx = colCount
-			updateCtx.PartitionTableIDs = partTblIDs
-			updateCtx.PartitionTableNames = tableDef.Partition.PartitionTableNames
+		partTblIDs := make([]uint64, len(tableDef.Partition.PartitionTableNames))
+		for j := range tableDef.Partition.PartitionTableNames {
+			partTblIDs[j] = uint64(1000 + j)
 		}
+		updateCtxs[0].NewPartitionIdx = colCount
+		updateCtxs[0].PartitionTableIDs = partTblIDs
+		updateCtxs[0].PartitionTableNames = tableDef.Partition.PartitionTableNames
 	}
 
 	return updateCtxs

@@ -165,14 +165,20 @@ func (update *MultiUpdate) SetAffectedRows(affectedRows uint64) {
 	update.ctr.affectedRows = affectedRows
 }
 
-func (update *MultiUpdate) addInsertAffectRows(rowCount uint64) {
+func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCount uint64) {
+	if tableType != UpdateMainTable {
+		return
+	}
 	switch update.ctr.action {
 	case actionInsert:
 		update.ctr.affectedRows += rowCount
 	}
 }
 
-func (update *MultiUpdate) addDeleteAffectRows(rowCount uint64) {
+func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCount uint64) {
+	if tableType != UpdateMainTable {
+		return
+	}
 	switch update.ctr.action {
 	case actionDelete:
 		update.ctr.affectedRows += rowCount
