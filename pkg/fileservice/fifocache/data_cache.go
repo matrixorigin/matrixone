@@ -43,8 +43,8 @@ func NewDataCache(
 var _ fscache.DataCache = new(DataCache)
 
 func (d *DataCache) Available() int64 {
-	d.fifo.queueLock.Lock()
-	defer d.fifo.queueLock.Unlock()
+	d.fifo.queueLock.RLock()
+	defer d.fifo.queueLock.RUnlock()
 	ret := d.fifo.capacity() - d.fifo.used1 - d.fifo.used2
 	if ret < 0 {
 		ret = 0
@@ -74,10 +74,13 @@ func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 	}
 }
 
-func (d *DataCache) EnsureNBytes(n int) {
+func (d *DataCache) EnsureNBytes(want int, target int) {
+	if int(d.Available()) >= want {
+		return
+	}
 	d.fifo.queueLock.Lock()
 	defer d.fifo.queueLock.Unlock()
-	d.fifo.evict(nil, int64(n))
+	d.fifo.evict(nil, int64(target))
 }
 
 func (d *DataCache) Evict(ch chan int64) {
@@ -100,7 +103,7 @@ func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.D
 }
 
 func (d *DataCache) Used() int64 {
-	d.fifo.queueLock.Lock()
-	defer d.fifo.queueLock.Unlock()
+	d.fifo.queueLock.RLock()
+	defer d.fifo.queueLock.RUnlock()
 	return d.fifo.used1 + d.fifo.used2
 }

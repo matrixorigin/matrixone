@@ -29,29 +29,17 @@ import (
 )
 
 func TestNewAtomicBatch(t *testing.T) {
-	fromTs := types.BuildTS(1, 1)
-	toTs := types.BuildTS(2, 1)
-	wanted := &AtomicBatch{
-		Mp:   nil,
-		From: fromTs,
-		To:   toTs,
-		Rows: btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
-	}
-	actual := NewAtomicBatch(nil, fromTs, toTs)
-	assert.Equal(t, wanted.From, actual.From)
-	assert.Equal(t, wanted.To, actual.To)
+	actual := NewAtomicBatch(testutil.TestUtilMp)
 	assert.NotNil(t, actual.Rows)
 	assert.Equal(t, 0, actual.Rows.Len())
 }
 
 func TestAtomicBatch_Append(t *testing.T) {
 	atomicBat := &AtomicBatch{
-		From:    types.BuildTS(1, 1),
-		To:      types.BuildTS(2, 1),
 		Batches: []*batch.Batch{},
 		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
 	}
-	bat := batch.New(true, []string{"pk", "ts"})
+	bat := batch.New([]string{"pk", "ts"})
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
 	bat.Vecs[1] = testutil.MakeTSVector([]types.TS{types.BuildTS(1, 1)}, nil)
 
@@ -61,13 +49,11 @@ func TestAtomicBatch_Append(t *testing.T) {
 }
 
 func TestAtomicBatch_Close(t *testing.T) {
-	bat := batch.New(false, []string{"attr1"})
+	bat := batch.New([]string{"attr1"})
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
 
 	type fields struct {
 		Mp      *mpool.MPool
-		From    types.TS
-		To      types.TS
 		Batches []*batch.Batch
 		Rows    *btree.BTreeG[AtomicBatchRow]
 	}
@@ -87,8 +73,6 @@ func TestAtomicBatch_Close(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			bat := &AtomicBatch{
 				Mp:      tt.fields.Mp,
-				From:    tt.fields.From,
-				To:      tt.fields.To,
 				Batches: tt.fields.Batches,
 				Rows:    tt.fields.Rows,
 			}
@@ -100,8 +84,6 @@ func TestAtomicBatch_Close(t *testing.T) {
 func TestAtomicBatch_GetRowIterator(t *testing.T) {
 	type fields struct {
 		Mp      *mpool.MPool
-		From    types.TS
-		To      types.TS
 		Batches []*batch.Batch
 		Rows    *btree.BTreeG[AtomicBatchRow]
 	}
@@ -121,12 +103,11 @@ func TestAtomicBatch_GetRowIterator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			bat := &AtomicBatch{
 				Mp:      tt.fields.Mp,
-				From:    tt.fields.From,
-				To:      tt.fields.To,
 				Batches: tt.fields.Batches,
 				Rows:    tt.fields.Rows,
 			}
-			bat.GetRowIterator()
+			it := bat.GetRowIterator()
+			it.Close()
 		})
 	}
 }
@@ -193,14 +174,12 @@ func Test_atomicBatchRowIter(t *testing.T) {
 	rows.Set(row2)
 	rows.Set(row3)
 
-	bat := batch.New(false, []string{"attr1"})
+	bat := batch.New([]string{"attr1"})
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
 
 	// at init position (before the first row)
 	iter := &atomicBatchRowIter{
-		bat:      &AtomicBatch{Batches: []*batch.Batch{bat}, Rows: rows, Mp: testutil.TestUtilMp},
-		iter:     rows.Iter(),
-		initIter: rows.Iter(),
+		iter: rows.Iter(),
 	}
 
 	// first row
@@ -210,26 +189,18 @@ func Test_atomicBatchRowIter(t *testing.T) {
 	err := iter.Row(context.Background(), []any{})
 	assert.NoError(t, err)
 
-	// first row can't go back
-	ok := iter.Prev()
-	assert.Equal(t, false, ok)
-
-	// first row -> second row -> first row
+	// second row
 	iter.Next()
 	item = iter.Item()
 	assert.Equal(t, row2, item)
-	iter.Prev()
-	item = iter.Item()
-	assert.Equal(t, row1, item)
 
-	// reset position
-	iter.Reset()
+	// third row
 	iter.Next()
 	item = iter.Item()
-	assert.Equal(t, row1, item)
+	assert.Equal(t, row3, item)
 
-	err = iter.Close()
-	assert.NoError(t, err)
+	assert.False(t, iter.Next())
+	iter.Close()
 }
 
 func TestDbTableInfo_String(t *testing.T) {
@@ -339,17 +310,12 @@ func TestOutputType_String(t *testing.T) {
 		want string
 	}{
 		{
-			t:    OutputTypeCheckpoint,
-			want: "Checkpoint",
+			t:    OutputTypeSnapshot,
+			want: "Snapshot",
 		},
 		{
-			t:    OutputTypeTailDone,
-			want: "TailDone",
-		},
-
-		{
-			t:    OutputTypeUnfinishedTailWIP,
-			want: "UnfinishedTailWIP",
+			t:    OutputTypeTail,
+			want: "Tail",
 		},
 		{
 			t:    100,

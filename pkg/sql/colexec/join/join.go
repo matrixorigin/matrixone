@@ -166,14 +166,14 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 
 	mpbat := ctr.mp.GetBatches()
 	if ctr.rbat == nil {
-		ctr.rbat = batch.NewWithSize(len(ap.Result))
+		ctr.rbat = batch.NewOffHeapWithSize(len(ap.Result))
 		for i, rp := range ap.Result {
 			if rp.Rel == 0 {
-				ctr.rbat.Vecs[i] = vector.NewVec(*ap.ctr.inbat.Vecs[rp.Pos].GetType())
+				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ap.ctr.inbat.Vecs[rp.Pos].GetType())
 				// for inner join, if left batch is sorted , then output batch is sorted
 				ctr.rbat.Vecs[i].SetSorted(ap.ctr.inbat.Vecs[rp.Pos].GetSorted())
 			} else {
-				ctr.rbat.Vecs[i] = vector.NewVec(*mpbat[0].Vecs[rp.Pos].GetType())
+				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*mpbat[0].Vecs[rp.Pos].GetType())
 			}
 		}
 	} else {

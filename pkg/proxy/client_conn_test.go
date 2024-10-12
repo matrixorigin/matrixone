@@ -26,10 +26,11 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/stretchr/testify/require"
 )
 
 type mockNetConn struct {
@@ -283,6 +284,7 @@ func createNewClientConn(t *testing.T) (ClientConn, func()) {
 			"127.0.0.1", 30010, nil)),
 		goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())))
 	ctx, cancel := context.WithCancel(context.Background())
+	frontend.SetSessionAlloc("", frontend.NewLeakCheckAllocator())
 	clientBaseConnID = 90
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
