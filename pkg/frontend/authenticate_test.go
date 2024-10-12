@@ -173,7 +173,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -301,7 +301,7 @@ func Test_initFunction(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -5869,7 +5869,7 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 			proc: proc,
@@ -5878,7 +5878,7 @@ func Test_doInterpretCall(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -5911,14 +5911,14 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: ctx, proc: proc, ses: ses}
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -5963,7 +5963,7 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -5971,7 +5971,7 @@ func Test_doInterpretCall(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: ctx, proc: proc,
 			ses: ses}
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6394,7 +6394,7 @@ func Test_doAlterUser(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6449,7 +6449,7 @@ func Test_doAlterUser(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6499,7 +6499,7 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6574,7 +6574,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6628,7 +6628,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6682,7 +6682,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6732,7 +6732,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6783,7 +6783,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6830,7 +6830,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6884,7 +6884,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6928,7 +6928,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6976,7 +6976,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7024,7 +7024,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7082,7 +7082,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7142,7 +7142,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7188,7 +7188,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7385,13 +7385,13 @@ func Test_genRevokeCases(t *testing.T) {
 func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
-	setGlobalPu(pu)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	ctx = defines.AttachAccountId(ctx, 0)
 
-	ioses, err := NewIOSession(&testConn{}, pu)
+	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
 		panic(err)
 	}
@@ -7414,7 +7414,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 
 	_ = ses.InitSystemVariables(ctx)
 
-	rm, _ := NewRoutineManager(ctx)
+	rm, _ := NewRoutineManager(ctx, "")
 	rm.baseService = new(MockBaseService)
 	ses.rm = rm
 
@@ -7514,6 +7514,10 @@ func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
 
 func (bt *backgroundExecTest) ClearExecResultSet() {
 	//bt.init()
+}
+
+func (bt *backgroundExecTest) Service() string {
+	return ""
 }
 
 var _ BackgroundExec = &backgroundExecTest{}
@@ -8413,7 +8417,7 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8453,7 +8457,7 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8501,7 +8505,7 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8544,7 +8548,7 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8585,7 +8589,7 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8633,7 +8637,7 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8697,7 +8701,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8753,7 +8757,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8811,7 +8815,7 @@ func TestDoAlterAccountConfig(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8868,7 +8872,7 @@ func TestInsertRecordToMoMysqlCompatibilityMode(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8919,7 +8923,7 @@ func TestDeleteRecordToMoMysqlCompatbilityMode(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8970,7 +8974,7 @@ func TestGetVersionCompatibility(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9017,7 +9021,7 @@ func TestCheckStageExistOrNot(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9063,7 +9067,7 @@ func TestCheckStageExistOrNot(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9140,7 +9144,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9194,7 +9198,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9248,7 +9252,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9300,7 +9304,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9356,7 +9360,7 @@ func TestDoCreateStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9414,7 +9418,7 @@ func TestDoCreateStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9474,7 +9478,7 @@ func TestDoCreateStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9532,7 +9536,7 @@ func TestDoCreateStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9592,7 +9596,7 @@ func TestDoCreateStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9652,7 +9656,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9715,7 +9719,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9778,7 +9782,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9839,7 +9843,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9900,7 +9904,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9962,7 +9966,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10106,9 +10110,9 @@ func TestUpload(t *testing.T) {
 		pu.SV.SaveQueryResult = "on"
 		//file service
 		pu.FileService = fs
-		setGlobalPu(pu)
+		setPu("", pu)
 
-		ioses, err := NewIOSession(tConn, pu)
+		ioses, err := NewIOSession(tConn, pu, "")
 		assert.Nil(t, err)
 		proto := &testMysqlWriter{
 			ioses: ioses,
@@ -10155,9 +10159,9 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		setGlobalPu(pu)
+		setPu("", pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10201,9 +10205,9 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10247,9 +10251,9 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10301,9 +10305,9 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10355,9 +10359,9 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10407,9 +10411,9 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10463,9 +10467,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10524,9 +10528,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10585,9 +10589,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10650,9 +10654,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10715,9 +10719,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10781,9 +10785,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10847,9 +10851,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10913,9 +10917,9 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10958,9 +10962,9 @@ func TestCheckTimeStampValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11002,9 +11006,9 @@ func TestCheckTimeStampValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11053,9 +11057,9 @@ func Test_checkPitrDup(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11096,9 +11100,9 @@ func Test_checkPitrDup(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
