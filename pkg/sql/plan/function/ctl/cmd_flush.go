@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -50,7 +50,7 @@ func handleFlush() handleFunc {
 				if err != nil {
 					return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: table id parse fail")
 				}
-				payload, err := types.Encode(&db.FlushTable{TableID: tblId})
+				payload, err := types.Encode(&cmd_util.FlushTable{TableID: tblId})
 				if err != nil {
 					return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
 				}
@@ -74,7 +74,7 @@ func handleFlush() handleFunc {
 			if err != nil {
 				return nil, err
 			}
-			payload, err := types.Encode(&db.FlushTable{TableID: rel.GetTableID(proc.Ctx)})
+			payload, err := types.Encode(&cmd_util.FlushTable{TableID: rel.GetTableID(proc.Ctx)})
 			if err != nil {
 				return nil, moerr.NewInternalError(ctx, "payload encode err")
 			}
