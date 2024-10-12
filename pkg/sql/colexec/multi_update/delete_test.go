@@ -114,6 +114,9 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 	var bats = make([]*batch.Batch, size)
 	affectRows := 0
 	partitionCount := 3
+	mainObjectID := types.NewObjectid()
+	uniqueObjectID := types.NewObjectid()
+	secondaryObjectID := types.NewObjectid()
 	for i := 0; i < size; i++ {
 		rowCount := colexec.DefaultBatchSize
 		if i == size-1 {
@@ -122,7 +125,7 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 
 		rows := makeTestPkArray(int64(affectRows), rowCount)
 		columnA := testutil.MakeInt64Vector(rows, nil)
-		columnRowID := testutil.NewRowidVector(rowCount, types.T_Rowid.ToType(), mp, false, nil)
+		columnRowID := makeTestRowIDVector(mp, mainObjectID, uint16(i), rowCount)
 		attrs := []string{"main_rowid", "a"}
 
 		bat := &batch.Batch{
@@ -131,7 +134,7 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		}
 
 		if hasUniqueKey {
-			columnRowID := testutil.NewRowidVector(rowCount, types.T_Rowid.ToType(), mp, false, nil)
+			columnRowID := makeTestRowIDVector(mp, uniqueObjectID, uint16(i), rowCount)
 			columnPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnPk)
@@ -139,7 +142,7 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		}
 
 		if hasSecondaryKey {
-			columnRowID := testutil.NewRowidVector(rowCount, types.T_Rowid.ToType(), mp, false, nil)
+			columnRowID := makeTestRowIDVector(mp, secondaryObjectID, uint16(i), rowCount)
 			columnPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnPk)
@@ -227,15 +230,13 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	}
 
 	if isPartition {
-		for i, updateCtx := range updateCtxs {
-			partTblIDs := make([]uint64, len(tableDef.Partition.PartitionTableNames))
-			for j := range tableDef.Partition.PartitionTableNames {
-				partTblIDs[j] = uint64(i*1000 + j)
-			}
-			updateCtx.OldPartitionIdx = colCount
-			updateCtx.PartitionTableIDs = partTblIDs
-			updateCtx.PartitionTableNames = tableDef.Partition.PartitionTableNames
+		partTblIDs := make([]uint64, len(tableDef.Partition.PartitionTableNames))
+		for j := range tableDef.Partition.PartitionTableNames {
+			partTblIDs[j] = uint64(1000 + j)
 		}
+		updateCtxs[0].OldPartitionIdx = colCount
+		updateCtxs[0].PartitionTableIDs = partTblIDs
+		updateCtxs[0].PartitionTableNames = tableDef.Partition.PartitionTableNames
 	}
 
 	return updateCtxs

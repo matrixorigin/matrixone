@@ -113,7 +113,13 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// lock unique key table
 	compUniqueIdxLockPos := int32(len(selectNode.ProjectList))
 	for _, idxDef := range mainTableDef.Indexes {
-		if !idxDef.TableExist || !idxDef.Unique {
+		if !idxDef.TableExist {
+			continue
+		}
+		if !idxDef.Unique {
+			if len(idxDef.Parts) > 0 {
+				compUniqueIdxLockPos++
+			}
 			continue
 		}
 		_, idxTableDef := builder.compCtx.Resolve(dmlCtx.objRefs[0].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)

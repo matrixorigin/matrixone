@@ -206,6 +206,7 @@ func fetchMainTableBatchs(
 	mp := proc.GetMPool()
 	retBats := make([]*batch.Batch, src.Length())
 	srcBats := src.TakeBatchs()
+
 	defer func() {
 		for i, bat := range srcBats {
 			for _, vec := range bat.Vecs {

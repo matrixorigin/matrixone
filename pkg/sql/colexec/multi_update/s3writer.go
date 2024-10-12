@@ -169,6 +169,11 @@ func (writer *s3Writer) append(proc *process.Process, inBatch *batch.Batch) (err
 }
 
 func (writer *s3Writer) prepareDeleteBatchs(proc *process.Process, idx int, partIdx int, src []*batch.Batch) ([]*batch.Batch, error) {
+	defer func() {
+		for _, bat := range src {
+			bat.Clean(proc.GetMPool())
+		}
+	}()
 	// split delete batchs by BlockID
 	if writer.deleteBlockMap[idx][partIdx] == nil {
 		writer.deleteBlockMap[idx][partIdx] = make(map[types.Blockid]*deleteBlockData)
@@ -246,7 +251,8 @@ func (writer *s3Writer) prepareDeleteBatchs(proc *process.Process, idx int, part
 		bat.Clean(proc.GetMPool())
 		delete(blockMap, blkid)
 	}
-	return deleteBats.TakeBatchs(), nil
+	retBatchs := deleteBats.TakeBatchs()
+	return retBatchs, nil
 }
 
 func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
@@ -471,7 +477,7 @@ func (writer *s3Writer) fillDeleteBlockInfo(
 
 	objId := objStats.ObjectName().ObjectId()[:]
 	targetBloInfo.name = fmt.Sprintf("%s|%d", objId, deletion.FlushDeltaLoc)
-	targetBloInfo.rawRowCount = uint64(rowCount)
+	targetBloInfo.rawRowCount += uint64(rowCount)
 
 	if err = vector.AppendBytes(
 		targetBloInfo.bat.GetVector(0), objStats.Marshal(), false, proc.GetMPool()); err != nil {
@@ -536,7 +542,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 		if len(partBlockInfos) == 1 {
 			// normal table
 			if partBlockInfos[0] != nil && partBlockInfos[0].bat.RowCount() > 0 {
-				update.addDeleteAffectRows(partBlockInfos[0].rawRowCount)
+				update.addDeleteAffectRows(writer.updateCtxs[i].TableType, partBlockInfos[0].rawRowCount)
 				err = writer.updateCtxs[i].Source.Delete(proc.Ctx, partBlockInfos[0].bat, partBlockInfos[0].name)
 				if err != nil {
 					return
@@ -546,7 +552,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// partition table
 			for partIdx, blockInfo := range partBlockInfos {
 				if blockInfo != nil && blockInfo.bat.RowCount() > 0 {
-					update.addDeleteAffectRows(blockInfo.rawRowCount)
+					update.addDeleteAffectRows(writer.updateCtxs[i].TableType, blockInfo.rawRowCount)
 					err = writer.updateCtxs[i].PartitionSources[partIdx].Delete(proc.Ctx, blockInfo.bat, blockInfo.name)
 					if err != nil {
 						return
@@ -562,7 +568,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// normal table
 			for blockID, blockData := range blocks[0] {
 				name := fmt.Sprintf("%s|%d", blockID, blockData.typ)
-				update.addDeleteAffectRows(uint64(blockData.bat.RowCount()))
+				update.addDeleteAffectRows(writer.updateCtxs[i].TableType, uint64(blockData.bat.RowCount()))
 				err = writer.updateCtxs[i].Source.Delete(proc.Ctx, blockData.bat, name)
 				if err != nil {
 					return
@@ -573,7 +579,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			for partIdx, blockDatas := range blocks {
 				for blockID, blockData := range blockDatas {
 					name := fmt.Sprintf("%s|%d", blockID, blockData.typ)
-					update.addDeleteAffectRows(uint64(blockData.bat.RowCount()))
+					update.addDeleteAffectRows(writer.updateCtxs[i].TableType, uint64(blockData.bat.RowCount()))
 					err = writer.updateCtxs[i].PartitionSources[partIdx].Delete(proc.Ctx, blockData.bat, name)
 					if err != nil {
 						return
@@ -589,7 +595,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// normal table
 			if bats[0] != nil && bats[0].RowCount() > 0 {
 				resetMergeBlockForOldCN(proc, bats[0])
-				update.addInsertAffectRows(writer.insertBlockRowCount[i][0])
+				update.addInsertAffectRows(writer.updateCtxs[i].TableType, writer.insertBlockRowCount[i][0])
 				err = writer.updateCtxs[i].Source.Write(proc.Ctx, bats[0])
 				if err != nil {
 					return
@@ -600,7 +606,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			for partIdx, bat := range bats {
 				if bat != nil && bat.RowCount() > 0 {
 					resetMergeBlockForOldCN(proc, bat)
-					update.addInsertAffectRows(writer.insertBlockRowCount[i][partIdx])
+					update.addInsertAffectRows(writer.updateCtxs[i].TableType, writer.insertBlockRowCount[i][partIdx])
 					err = writer.updateCtxs[i].PartitionSources[partIdx].Write(proc.Ctx, bat)
 					if err != nil {
 						return
@@ -612,11 +618,21 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 
 	//write tail batch to workspace
 	bats := writer.cacheBatchs.TakeBatchs()
-	for _, bat := range bats {
+	defer func() {
+		for i := range bats {
+			if bats[i] != nil {
+				bats[i].Clean(proc.GetMPool())
+				bats[i] = nil
+			}
+		}
+	}()
+	for i, bat := range bats {
 		err = update.updateOneBatch(proc, bat)
 		if err != nil {
 			return
 		}
+		bat.Clean(proc.Mp())
+		bats[i] = nil
 	}
 
 	return nil
@@ -644,6 +660,16 @@ func (writer *s3Writer) reset(proc *process.Process) (err error) {
 			if blockInfo != nil {
 				blockInfo.bat.CleanOnlyData()
 				blockInfo.rawRowCount = 0
+			}
+		}
+	}
+	for _, datas := range writer.deleteBlockMap {
+		for _, data := range datas {
+			for k, block := range data {
+				if block != nil && block.bat != nil {
+					block.bat.Clean(proc.Mp())
+				}
+				delete(data, k)
 			}
 		}
 	}
@@ -697,6 +723,17 @@ func (writer *s3Writer) free(proc *process.Process) (err error) {
 		}
 	}
 	writer.deleteBuf = nil
+
+	for _, datas := range writer.deleteBlockMap {
+		for _, data := range datas {
+			for _, block := range data {
+				if block != nil && block.bat != nil {
+					block.bat.Clean(proc.Mp())
+				}
+			}
+		}
+	}
+	writer.deleteBlockMap = nil
 
 	return
 }
