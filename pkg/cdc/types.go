@@ -125,6 +125,7 @@ type DbTableInfo struct {
 	SourceAccountId   uint64
 	SourceDbId        uint64
 	SourceTblId       uint64
+	SourceTblIdStr    string
 
 	SinkAccountName string
 	SinkDbName      string
