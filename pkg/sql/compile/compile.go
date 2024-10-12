@@ -112,7 +112,7 @@ func NewCompile(
 	cnLabel map[string]string,
 	startAt time.Time,
 ) *Compile {
-	c := GetCompileService().getCompile(proc)
+	c := allocateNewCompile(proc)
 
 	c.e = e
 	c.db = db
@@ -145,7 +145,7 @@ func (c *Compile) Release() {
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 	}
-	GetCompileService().putCompile(c)
+	releaseCompile(c)
 }
 
 func (c Compile) TypeName() string {

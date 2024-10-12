@@ -44,7 +44,7 @@ func TestCompileService(t *testing.T) {
 	for _, p := range inputs {
 		wg.Add(1)
 
-		c := service.getCompile(p)
+		c := allocateNewCompile(p)
 		c.InitPipelineContextToExecuteQuery()
 
 		service.recordRunningCompile(c, nil)
@@ -53,7 +53,7 @@ func TestCompileService(t *testing.T) {
 
 			doneRoutine.Add(1)
 			service.removeRunningCompile(cc, nil)
-			service.putCompile(cc)
+			releaseCompile(cc)
 			wg.Done()
 		}(c)
 	}

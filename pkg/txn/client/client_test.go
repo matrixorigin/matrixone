@@ -148,7 +148,7 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 type fakeRunningPipelinesManager struct{}
 
 func (m *fakeRunningPipelinesManager) PauseService()                   {}
-func (m *fakeRunningPipelinesManager) KillAllQueriesWithError(_ error) {}
+func (m *fakeRunningPipelinesManager) KillAllQueriesWithError() {}
 func (m *fakeRunningPipelinesManager) ResumeService()                  {}
 
 func TestTxnClientAbortAllRunningTxn(t *testing.T) {

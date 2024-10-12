@@ -96,10 +96,17 @@ func InitCompileService() *ServiceOfCompile {
 	return srv
 }
 
-func (srv *ServiceOfCompile) getCompile(proc *process.Process) *Compile {
+// todo: maybe we can do the record action while allocating a new compile structure next day.
+func allocateNewCompile(proc *process.Process) *Compile {
 	runningCompile := reuse.Alloc[Compile](nil)
 	runningCompile.proc = proc
 	return runningCompile
+}
+
+func releaseCompile(c *Compile) {
+	if !c.isPrepare {
+		reuse.Free[Compile](c, nil)
+	}
 }
 
 // recordRunningCompile record a running query to the compileService.
@@ -152,12 +159,6 @@ func (srv *ServiceOfCompile) removeRunningCompile(c *Compile, txn txnClient.TxnO
 	c.queryStatus.clear()
 }
 
-func (srv *ServiceOfCompile) putCompile(c *Compile) {
-	if !c.isPrepare {
-		reuse.Free[Compile](c, nil)
-	}
-}
-
 func (srv *ServiceOfCompile) aliveCompile() int {
 	srv.Lock()
 	l := len(srv.aliveCompiles)
@@ -173,6 +174,9 @@ func (srv *ServiceOfCompile) ResumeService() {
 	srv.Unlock()
 }
 
+// KillAllQueriesWithError cancel all the running queries' context to terminate all the running queries.
+//
+// this function will block until all record compiles were done.
 func (srv *ServiceOfCompile) KillAllQueriesWithError() {
 	logutil.Infof("compile service starts to kill all running queries.")
 	start := time.Now()
