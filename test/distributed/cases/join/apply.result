@@ -213,3 +213,44 @@ select count(*) from jt cross apply unnest(tags, '$') u where id = 20;
 count(*)
 0
 drop table jt;
+drop table if exists t1;
+create table t1(a int, b int);
+insert into t1 values(1,3),(1,-1);
+select * from t1 cross apply generate_series(t1.a,t1.b,1)g;
+a    b    result
+1    3    1
+1    3    2
+1    3    3
+select * from t1 outer apply generate_series(t1.a,t1.b,1)g;
+a    b    result
+1    3    1
+1    3    2
+1    3    3
+1    -1    null
+select * from t1 cross apply generate_series(t1.a,t1.b,-1)g;
+a    b    result
+1    -1    1
+1    -1    0
+1    -1    -1
+select * from t1 outer apply generate_series(t1.a,t1.b,-1)g;
+a    b    result
+1    3    null
+1    -1    1
+1    -1    0
+1    -1    -1
+drop table t1;
+drop table if exists t2;
+create table t2(id int,j json);
+insert into t2 values(1,'{"tag1": "v1", "tag2": "v2", "tag3": "v3"}');
+insert into t2 values(2,null);
+select t2.id,tf.* from t2 cross apply unnest(t2.j,'$')tf;
+id    col    seq    key    path    index    value    this
+1    t2.j    0    tag1    $.tag1    null    "v1"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
+1    t2.j    1    tag2    $.tag2    null    "v2"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
+1    t2.j    2    tag3    $.tag3    null    "v3"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
+select t2.id,tf.* from t2 outer apply unnest(t2.j,'$')tf;
+id    col    seq    key    path    index    value    this
+1    t2.j    0    tag1    $.tag1    null    "v1"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
+1    t2.j    1    tag2    $.tag2    null    "v2"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
+1    t2.j    2    tag3    $.tag3    null    "v3"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
+2    null    null    null    null    null    null    null
