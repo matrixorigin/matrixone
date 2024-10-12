@@ -737,7 +737,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		tmpDelFiles      []string
 		deleteFiles      []string
 		tmpNewFiles      []string
-		newFiles         []string
 		newCheckpoint    *checkpoint.CheckpointEntry
 		checkpointMaxEnd types.TS
 		toMergeEntries   []*checkpoint.CheckpointEntry
@@ -813,7 +812,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	if newCheckpoint == nil {
 		panic("MergeCheckpoint new checkpoint is nil")
 	}
-	newFiles = tmpNewFiles
+	newFiles := tmpNewFiles
 	for _, stats := range c.GetScannedWindowLocked().files {
 		newFiles = append(newFiles, stats.ObjectName().String())
 	}
