@@ -244,6 +244,7 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 						val, ok := ures[i][arg.Attrs[j]]
 						err = vector.AppendBytes(vec, val, !ok || val == nil, proc.Mp())
 						vec.SetClass(vector.CONSTANT)
+						vec.SetLength(len(ures))
 					}
 				} else {
 					val, ok := ures[i][arg.Attrs[j]]
