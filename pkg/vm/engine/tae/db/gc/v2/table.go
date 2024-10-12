@@ -275,27 +275,31 @@ func (t *GCTable) collectData() []*containers.Batch {
 	return bats
 }
 
-// SaveTable is to write data to s3
-func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.BlockObject, error) {
+// SaveTable is to write data to s3.
+// It returns the gc meta file name and the error.
+func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS) (string, error) {
 	bats := t.collectData()
 	defer t.closeBatch(bats)
 	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	for i := range bats {
 		if _, err := writer.WriteWithoutSeqnum(containers.ToCNBatch(bats[i])); err != nil {
-			return nil, err
+			return "", err
 		}
 	}
 
-	blocks, err := writer.WriteEnd(context.Background())
-	return blocks, err
+	_, err = writer.WriteEnd(context.Background())
+	if err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // SaveFullTable is to write data to s3
-func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.BlockObject, error) {
+func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS) (string, error) {
 	now := time.Now()
 	var bats []*containers.Batch
 	var blocks []objectio.BlockObject
@@ -330,17 +334,17 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
 	writer, err = objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	for i := range bats {
 		if _, err := writer.WriteWithoutSeqnum(containers.ToCNBatch(bats[i])); err != nil {
-			return nil, err
+			return "", err
 		}
 	}
 
 	blocks, err = writer.WriteEnd(context.Background())
 	writeCost = time.Since(now)
-	return blocks, err
+	return name, err
 }
 
 func (t *GCTable) rebuildTable(bats []*containers.Batch, idx BatchType, objects map[string]*ObjectEntry) {
