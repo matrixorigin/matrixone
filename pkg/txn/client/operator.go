@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -36,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 var (
@@ -244,6 +245,8 @@ type txnOperator struct {
 		commitCounter        counter
 		rollbackCounter      counter
 		runSqlCounter        counter
+		incrStmtCounter      counter
+		rollbackStmtCounter  counter
 		fprints              footPrints
 		runningSQL           atomic.Bool
 	}
@@ -312,6 +315,8 @@ func (tc *txnOperator) initReset() {
 	tc.reset.commitCounter = counter{}
 	tc.reset.rollbackCounter = counter{}
 	tc.reset.runSqlCounter = counter{}
+	tc.reset.incrStmtCounter = counter{}
+	tc.reset.rollbackStmtCounter = counter{}
 	tc.reset.fprints = footPrints{}
 	tc.reset.runningSQL.Store(false)
 }
@@ -1369,14 +1374,39 @@ func (tc *txnOperator) inRollback() bool {
 	return tc.reset.rollbackCounter.more()
 }
 
+func (tc *txnOperator) EnterIncrStmt() {
+	tc.reset.incrStmtCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitIncrStmt() {
+	tc.reset.incrStmtCounter.addExit()
+}
+
+func (tc *txnOperator) inIncrStmt() bool {
+	return tc.reset.incrStmtCounter.more()
+}
+
+func (tc *txnOperator) EnterRollbackStmt() {
+	tc.reset.rollbackStmtCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitRollbackStmt() {
+	tc.reset.rollbackStmtCounter.addExit()
+}
+func (tc *txnOperator) inRollbackStmt() bool {
+	return tc.reset.rollbackStmtCounter.more()
+}
+
 func (tc *txnOperator) counter() string {
-	return fmt.Sprintf("commit: %s rollback: %s runSql: %s footPrints: %s",
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s footPrints: %s",
 		tc.reset.commitCounter.String(),
 		tc.reset.rollbackCounter.String(),
 		tc.reset.runSqlCounter.String(),
+		tc.reset.incrStmtCounter.String(),
+		tc.reset.rollbackStmtCounter.String(),
 		tc.reset.fprints.String())
 }
 
-func (tc *txnOperator) SetFootPrints(prints [][2]uint32) {
-	tc.reset.fprints.setFPrints(prints)
+func (tc *txnOperator) SetFootPrints(id int, enter bool) {
+	tc.reset.fprints.add(id, enter)
 }

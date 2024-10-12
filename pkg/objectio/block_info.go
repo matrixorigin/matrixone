@@ -225,6 +225,10 @@ func MakeBlockInfoSlice(cnt int) BlockInfoSlice {
 	return make([]byte, cnt*BlockInfoSize)
 }
 
+func PreAllocBlockInfoSlice(cnt int, preAllocSize int) BlockInfoSlice {
+	return make([]byte, cnt*BlockInfoSize, preAllocSize*BlockInfoSize)
+}
+
 func MultiObjectStatsToBlockInfoSlice(objs []ObjectStats, withFirstEmpty bool) BlockInfoSlice {
 	offset := 0
 	var ret BlockInfoSlice

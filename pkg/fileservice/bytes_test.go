@@ -12,23 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fscache
+package fileservice
 
 import (
-	"context"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/stretchr/testify/assert"
 )
 
-type CacheKey = pb.CacheKey
-
-type DataCache interface {
-	EnsureNBytes(want int, evictTaget int)
-	Capacity() int64
-	Used() int64
-	Available() int64
-	Get(context.Context, CacheKey) (Data, bool)
-	Set(context.Context, CacheKey, Data) error
-	DeletePaths(context.Context, []string)
-	Flush()
-	Evict(chan int64)
+func TestBytes(t *testing.T) {
+	t.Run("Bytes without refs", func(t *testing.T) {
+		bytes, deallocator, err := ioAllocator().Allocate(42, malloc.NoHints)
+		assert.Nil(t, err)
+		bs := &Bytes{
+			bytes:       bytes,
+			deallocator: deallocator,
+		}
+		bs.Release()
+	})
 }
