@@ -275,3 +275,24 @@ drop pitr if exists pitr13;
 drop database if exists db01;
 -- @session
 drop account if exists acc01;
+
+drop pitr if exists pitr111;
+create pitr pitr111 range 1 'h';
+drop pitr if exists pitr122;
+create pitr pitr122 range 1 'd';
+drop pitr if exists pitr111;
+drop pitr if exists pitr122;
+
+create database db01;
+drop pitr if exists pitr10;
+create pitr pitr10 for database db01 range 1 'h';
+drop pitr if exists pitr11;
+create pitr pitr11 for database db01 range 1 'd';
+drop database if exists db01;
+create database db01;
+drop pitr if exists pitr12;
+create pitr pitr12 for database db01 range 1 'd';
+drop pitr if exists pitr10;
+drop pitr if exists pitr11;
+drop pitr if exists pitr12;
+drop database if exists db01;
