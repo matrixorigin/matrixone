@@ -48,17 +48,19 @@ func MergeCheckpoint(
 	bf *bloomfilter.BloomFilter,
 	end *types.TS,
 	pool *mpool.MPool,
-) (deleteFiles []string, checkpointEntry *checkpoint.CheckpointEntry, err error) {
+) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, err error) {
 	ckpData := logtail.NewCheckpointData(sid, pool)
 	datas := make([]*logtail.CheckpointData, 0)
 	deleteFiles = make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
 		logutil.Info("[MergeCheckpoint]",
 			zap.String("checkpoint", ckpEntry.String()))
-		_, data, err := logtail.LoadCheckpointEntriesFromKey(context.Background(), sid, fs,
+		var data *logtail.CheckpointData
+		var locations map[string]objectio.Location
+		_, data, err = logtail.LoadCheckpointEntriesFromKey(context.Background(), sid, fs,
 			ckpEntry.GetLocation(), ckpEntry.GetVersion(), nil, &types.TS{})
 		if err != nil {
-			return nil, nil, err
+			return
 		}
 		datas = append(datas, data)
 		var nameMeta string
@@ -75,14 +77,14 @@ func MergeCheckpoint(
 		// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
 		deleteFiles = append(deleteFiles, nameMeta)
 
-		locations, err := logtail.LoadCheckpointLocations(
+		locations, err = logtail.LoadCheckpointLocations(
 			ctx, sid, ckpEntry.GetTNLocation(), ckpEntry.GetVersion(), fs)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				deleteFiles = append(deleteFiles, nameMeta)
 				continue
 			}
-			return nil, nil, err
+			return
 		}
 
 		for name := range locations {
@@ -98,6 +100,8 @@ func MergeCheckpoint(
 	if len(datas) == 0 {
 		return
 	}
+
+	newFiles = make([]string, 0)
 
 	// merge objects referenced by sansphot and pitr
 	for _, data := range datas {
@@ -180,12 +184,13 @@ func MergeCheckpoint(
 	for tid, table := range tableTombstoneOff {
 		ckpData.UpdateTombstoneInsertMeta(tid, int32(table.offset), int32(table.end))
 	}
-	cnLocation, tnLocation, _, err := ckpData.WriteTo(
+	cnLocation, tnLocation, files, err := ckpData.WriteTo(
 		fs, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize,
 	)
 	if err != nil {
 		return
 	}
+	newFiles = append(newFiles, files...)
 	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetStart(), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(*end, false)
@@ -213,6 +218,7 @@ func MergeCheckpoint(
 	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())
 	checkpointEntry.SetState(checkpoint.ST_Finished)
 	checkpointEntry.SetVersion(logtail.CheckpointCurrentVersion)
+	newFiles = append(newFiles, name)
 	return
 }
 

@@ -1153,7 +1153,6 @@ func (data *CheckpointData) WriteTo(
 
 	segmentid2 := objectio.NewSegmentid()
 	name2 := objectio.BuildObjectName(segmentid2, 0)
-	checkpointFiles = append(checkpointFiles, name2.String())
 	writer2, err := blockio.NewBlockWriterNew(fs, name2, 0, nil, false)
 	if err != nil {
 		return

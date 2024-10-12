@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,6 +42,7 @@ type RunnerReader interface {
 	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
 	GetCompacted() *CheckpointEntry
 	UpdateCompacted(entry *CheckpointEntry)
+	GetDriver() wal.Driver
 }
 
 func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncateLSN uint64) *containers.Batch {

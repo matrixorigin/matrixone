@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"go.uber.org/zap"
@@ -735,6 +736,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	var (
 		tmpFiles         []string
 		deleteFiles      []string
+		newFiles         []string
 		newCheckpoint    *checkpoint.CheckpointEntry
 		checkpointMaxEnd types.TS
 		toMergeEntries   []*checkpoint.CheckpointEntry
@@ -795,7 +797,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		c.mp,
 	)
 
-	if tmpFiles, newCheckpoint, err = MergeCheckpoint(
+	if tmpFiles, newFiles, newCheckpoint, err = MergeCheckpoint(
 		c.ctx,
 		c.sid,
 		c.fs.Service,
@@ -809,6 +811,20 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	}
 	if newCheckpoint == nil {
 		panic("MergeCheckpoint new checkpoint is nil")
+	}
+
+	for _, stats := range c.GetScannedWindowLocked().files {
+		newFiles = append(newFiles, stats.ObjectName().String())
+	}
+
+	if err = c.appendFilesToWAL(newFiles...); err != nil {
+		logutil.Error(
+			"GC-TRACE-MERGE-CHECKPOINT-FILES",
+			zap.String("task", c.TaskNameLocked()),
+			zap.Int("file len", len(newFiles)),
+			zap.Error(err),
+		)
+		return
 	}
 
 	c.checkpointCli.UpdateCompacted(newCheckpoint)
@@ -1087,6 +1103,15 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		c.fs.Service,
 	); err != nil {
 		extraErrMsg = fmt.Sprintf("ExecuteGlobalCheckpointBasedGC %v failed", gckp.String())
+		return nil, err
+	}
+
+	if err = c.appendFilesToWAL(scannedWindow.metaDir + metafile); err != nil {
+		logutil.Error(
+			"GC-TRACE-APPEND-FILES-TO-WAL-FAILED",
+			zap.String("task", c.TaskNameLocked()),
+			zap.String("metafile", metafile),
+			zap.Error(err))
 		return nil, err
 	}
 	c.mutAddMetaFileLocked(metafile, GCMetaFile{
@@ -1423,7 +1448,8 @@ func (c *checkpointCleaner) tryScanLocked(
 	}
 
 	var newWindow *GCWindow
-	if newWindow, err = c.scanCheckpointsLocked(
+	var newFiles []string
+	if newWindow, newFiles, err = c.scanCheckpointsLocked(
 		candidates, memoryBuffer,
 	); err != nil {
 		logutil.Error(
@@ -1435,6 +1461,18 @@ func (c *checkpointCleaner) tryScanLocked(
 	}
 	c.mutAddScannedLocked(newWindow)
 	c.updateScanWaterMark(candidates[len(candidates)-1])
+
+	for _, stats := range c.GetScannedWindowLocked().files {
+		newFiles = append(newFiles, stats.ObjectName().String())
+	}
+	if err = c.appendFilesToWAL(newFiles...); err != nil {
+		logutil.Error(
+			"GC-APPEND-SNAPSHOT-TO-WAL-ERROR",
+			zap.String("task", c.TaskNameLocked()),
+			zap.Error(err),
+		)
+		return
+	}
 	return
 }
 
@@ -1484,6 +1522,23 @@ func (c *checkpointCleaner) RemoveChecker(key string) error {
 	return nil
 }
 
+// appendFilesToWAL append the GC meta files to WAL.
+func (c *checkpointCleaner) appendFilesToWAL(files ...string) error {
+	driver := c.checkpointCli.GetDriver()
+	if driver == nil {
+		return nil
+	}
+	entry, err := store.BuildFilesEntry(files)
+	if err != nil {
+		return err
+	}
+	_, err = driver.AppendEntry(store.GroupFiles, entry)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // this function will update:
 // `c.mutation.metaFiles`
 // `c.mutation.snapshotMeta`
@@ -1491,7 +1546,7 @@ func (c *checkpointCleaner) RemoveChecker(key string) error {
 func (c *checkpointCleaner) scanCheckpointsLocked(
 	ckps []*checkpoint.CheckpointEntry,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
-) (gcWindow *GCWindow, err error) {
+) (gcWindow *GCWindow, newFiles []string, err error) {
 	now := time.Now()
 
 	var (
@@ -1509,6 +1564,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 	}()
 
 	var snapshotFile, accountFile GCMetaFile
+	newFiles = make([]string, 0, 3)
 	saveSnapshot := func() (err2 error) {
 		name := blockio.EncodeSnapshotMetadataFileName(
 			PrefixSnapMeta,
@@ -1525,6 +1581,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 			)
 			return
 		}
+		newFiles = append(newFiles, GCMetaDir+name)
 		snapshotFile = GCMetaFile{
 			name:  name,
 			start: ckps[0].GetStart(),
@@ -1545,6 +1602,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 				zap.Error(err2),
 			)
 		}
+		newFiles = append(newFiles, GCMetaDir+name)
 		accountFile = GCMetaFile{
 			name:  name,
 			start: ckps[0].GetStart(),
@@ -1568,7 +1626,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		gcWindow = nil
 		return
 	}
-
+	newFiles = append(newFiles, gcWindow.metaDir+gcMetaFile)
 	c.mutAddMetaFileLocked(snapshotFile.name, snapshotFile)
 	c.mutAddMetaFileLocked(accountFile.name, accountFile)
 	c.mutAddMetaFileLocked(gcMetaFile, GCMetaFile{
