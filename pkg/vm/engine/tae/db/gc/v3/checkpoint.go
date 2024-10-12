@@ -734,8 +734,9 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	now := time.Now()
 
 	var (
-		tmpFiles         []string
+		tmpDelFiles      []string
 		deleteFiles      []string
+		tmpNewFiles      []string
 		newFiles         []string
 		newCheckpoint    *checkpoint.CheckpointEntry
 		checkpointMaxEnd types.TS
@@ -797,7 +798,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		c.mp,
 	)
 
-	if tmpFiles, newFiles, newCheckpoint, err = MergeCheckpoint(
+	if tmpDelFiles, tmpNewFiles, newCheckpoint, err = MergeCheckpoint(
 		c.ctx,
 		c.sid,
 		c.fs.Service,
@@ -812,7 +813,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	if newCheckpoint == nil {
 		panic("MergeCheckpoint new checkpoint is nil")
 	}
-
+	newFiles = tmpNewFiles
 	for _, stats := range c.GetScannedWindowLocked().files {
 		newFiles = append(newFiles, stats.ObjectName().String())
 	}
@@ -833,7 +834,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	newWaterMark := newCheckpoint.GetEnd()
 	c.updateCheckpointGCWaterMark(&newWaterMark)
 
-	deleteFiles = tmpFiles
+	deleteFiles = tmpDelFiles
 	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
 	for _, ckp := range gckps {
 		end := ckp.GetEnd()
@@ -1448,8 +1449,8 @@ func (c *checkpointCleaner) tryScanLocked(
 	}
 
 	var newWindow *GCWindow
-	var files []string
-	if newWindow, files, err = c.scanCheckpointsLocked(
+	var tmpNewFiles []string
+	if newWindow, tmpNewFiles, err = c.scanCheckpointsLocked(
 		candidates, memoryBuffer,
 	); err != nil {
 		logutil.Error(
@@ -1461,7 +1462,7 @@ func (c *checkpointCleaner) tryScanLocked(
 	}
 	c.mutAddScannedLocked(newWindow)
 	c.updateScanWaterMark(candidates[len(candidates)-1])
-
+	files := tmpNewFiles
 	for _, stats := range c.GetScannedWindowLocked().files {
 		files = append(files, stats.ObjectName().String())
 	}
