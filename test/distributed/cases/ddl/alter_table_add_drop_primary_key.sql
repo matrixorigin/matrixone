@@ -142,7 +142,6 @@ show create table pri10;
 show columns from pri10;
 insert into pri10 (col1, col2) values (1, null);
 insert into pri10 values (-2, 'p');
--- @pattern
 insert into pri10 (col1, col2) values (1, 'a');
 select * from pri10;
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri10' and COLUMN_NAME not like '__mo%';
