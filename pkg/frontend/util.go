@@ -26,8 +26,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
@@ -498,7 +500,7 @@ func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement,
 }
 
 func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
-	str := SubStringFromBegin(stmtStr, int(getGlobalPu().SV.LengthOfQueryPrinted))
+	str := SubStringFromBegin(stmtStr, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	var outBytes, outPacket int64
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:
@@ -1123,11 +1125,14 @@ func skipClientQuit(info string) bool {
 // for some special statement, like 'set_var', we need to use the stmt.
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
-	sql           string
-	hashedSql     string
-	stmt          tree.Statement
-	sqlSourceType []string
-	isRestore     bool
+	sql                 string
+	hashedSql           string
+	stmtName            string
+	stmt                tree.Statement
+	preparePlan         *plan.Plan // binary protocol execute
+	sqlSourceType       []string
+	isRestore           bool
+	isBinaryProtExecute bool
 	// operator account, the account executes restoration
 	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
 	opAccount uint32
@@ -1144,6 +1149,10 @@ func (ui *UserInput) genHash() {
 
 func (ui *UserInput) getHash() string {
 	return ui.hashedSql
+}
+
+func (ui *UserInput) getPreparePlan() *plan.Plan {
+	return ui.preparePlan
 }
 
 // getStmt if the stmt is not nil, we neglect the sql.
@@ -1783,4 +1792,60 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 		}
 	}
 	return cols, nil
+}
+
+var _ Allocator = new(LeakCheckAllocator)
+
+const (
+	leakCheckAllocatorModeNormal = iota
+	leakCheckAllocatorModeAllocReturnErr
+	leakCheckAllocatorModeAllocPanic
+)
+
+type LeakCheckAllocator struct {
+	sync.Mutex
+	allocated uint64
+	freed     uint64
+	records   map[unsafe.Pointer]int
+	mod       int
+}
+
+func NewLeakCheckAllocator() *LeakCheckAllocator {
+	return &LeakCheckAllocator{
+		records: make(map[unsafe.Pointer]int),
+	}
+}
+
+func (lca *LeakCheckAllocator) Alloc(capacity int) ([]byte, error) {
+	lca.Lock()
+	defer lca.Unlock()
+	if lca.mod == leakCheckAllocatorModeAllocReturnErr {
+		return nil, moerr.NewInternalErrorNoCtx("leak check allocator returns eror")
+	} else if lca.mod == leakCheckAllocatorModeAllocPanic {
+		panic("leak check allocator panic")
+	}
+	buf := make([]byte, capacity)
+	lca.allocated += uint64(len(buf))
+	lca.records[unsafe.Pointer(&buf[0])] = capacity
+	return buf, nil
+}
+
+func (lca *LeakCheckAllocator) Free(bytes []byte) {
+	if len(bytes) == 0 {
+		return
+	}
+	lca.Lock()
+	defer lca.Unlock()
+	if _, ok := lca.records[unsafe.Pointer(&bytes[0])]; ok {
+		delete(lca.records, unsafe.Pointer(&bytes[0]))
+	} else {
+		panic(fmt.Sprintf("no such ptr %v", unsafe.Pointer(&bytes[0])))
+	}
+	lca.freed += uint64(len(bytes))
+}
+
+func (lca *LeakCheckAllocator) CheckBalance() bool {
+	lca.Lock()
+	defer lca.Unlock()
+	return lca.allocated == lca.freed && len(lca.records) == 0
 }

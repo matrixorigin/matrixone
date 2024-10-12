@@ -608,7 +608,7 @@ func TestGetExprValue(t *testing.T) {
 		relData := &memoryengine.MemRelationData{
 			Shards: ranges,
 		}
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
 		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
@@ -648,7 +648,7 @@ func TestGetExprValue(t *testing.T) {
 		}
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		ses.SetDatabaseName("db")
 		var c clock.Clock
@@ -758,7 +758,7 @@ func TestGetExprValue(t *testing.T) {
 		}
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
@@ -913,7 +913,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-	setGlobalPu(pu)
+	setPu("", pu)
 	ses1 := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
@@ -1501,11 +1501,11 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
 
-		rm, err := NewRoutineManager(ctx)
+		rm, err := NewRoutineManager(ctx, "")
 		assert.Nil(t, err)
 		ses.rm = rm
 
