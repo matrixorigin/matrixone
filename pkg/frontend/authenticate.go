@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -2750,7 +2751,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	//encryption the password
 	encryption = HashPassWord(password)
 
-	if execResultArrayHasData(erArray) || getGlobalPu().SV.SkipCheckPrivilege {
+	if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
 			return err
@@ -3793,7 +3794,7 @@ func postDropSuspendAccount(
 	if accountID == 0 {
 		return err
 	}
-	qc := getGlobalPu().QueryClient
+	qc := getPu(ses.GetService()).QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
@@ -3845,6 +3846,7 @@ func postProcessCdc(
 			task.TaskStatus_CancelRequested,
 			targetAccountID,
 			"",
+			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
@@ -3854,6 +3856,7 @@ func postProcessCdc(
 			task.TaskStatus_PauseRequested,
 			targetAccountID,
 			"",
+			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
@@ -3863,6 +3866,7 @@ func postProcessCdc(
 			task.TaskStatus_ResumeRequested,
 			targetAccountID,
 			"",
+			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
@@ -4283,7 +4287,7 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 }
 
 // doRevokePrivilege accomplishes the RevokePrivilege statement
-func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivilege) (err error) {
+func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivilege, bh BackgroundExec) (err error) {
 	var vr *verifiedRole
 	var objType objectType
 	var privLevel privilegeLevelType
@@ -4296,20 +4300,9 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
 	checkedPrivilegeTypes := make([]PrivilegeType, len(rp.Privileges))
-
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	//handle "IF EXISTS"
 	//step 1: check roles. exists or not.
@@ -4548,7 +4541,7 @@ func matchPrivilegeTypeWithObjectType(ctx context.Context, privType PrivilegeTyp
 }
 
 // doGrantPrivilege accomplishes the GrantPrivilege statement
-func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege) (err error) {
+func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege, bh BackgroundExec) (err error) {
 	var erArray []ExecResult
 	var roleId int64
 	var privType PrivilegeType
@@ -4570,22 +4563,10 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 		userId = account.GetUserID()
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
 	//Get primary keys
 	//step 1: get role_id
 	verifiedRoles := make([]*verifiedRole, len(gp.Roles))
 	checkedPrivilegeTypes := make([]PrivilegeType, len(gp.Privileges))
-
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	for i, role := range gp.Roles {
 		//check Grant privilege on xxx yyy to moadmin(accountadmin)
@@ -7287,7 +7268,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 		v2.Step2DurationHistogram.Observe(time.Since(start2).Seconds())
 
 		// create tables for new account
-		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, getGlobalPu())
+		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, getPu(ses.GetService()))
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7633,7 +7614,7 @@ func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *Tenan
 	}
 
 	// create sub for other privileged tenants' to-all-pub
-	pubAllAccounts := pubsub.SplitAccounts(getGlobalPu().SV.PubAllAccounts)
+	pubAllAccounts := pubsub.SplitAccounts(getPu(bh.Service()).SV.PubAllAccounts)
 	for _, accountName := range pubAllAccounts {
 		accountInfo, ok := accNameInfoMap[accountName]
 		if !ok {
@@ -8002,7 +7983,7 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 		},
 	}
 
-	fileService := getGlobalPu().FileService
+	fileService := getPu(ses.GetService()).FileService
 	_ = fileService.Delete(execCtx.reqCtx, ioVector.FilePath)
 	err := fileService.Write(execCtx.reqCtx, ioVector)
 	err = errors.Join(err, loadLocalErrGroup.Wait())
@@ -8733,8 +8714,8 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
 	}
-	currentRole := tenantInfo.GetDefaultRole()
-	if len(currentRole) == 0 {
+	curRole := tenantInfo.GetDefaultRole()
+	if len(curRole) == 0 {
 		return err
 	}
 
@@ -8751,7 +8732,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	// 2.grant database privilege
 	switch st := stmt.(type) {
 	case *tree.CreateDatabase:
-		sql = getSqlForGrantOwnershipOnDatabase(string(st.Name), currentRole)
+		sql = getSqlForGrantOwnershipOnDatabase(string(st.Name), curRole)
 	case *tree.CreateTable:
 		// get database name
 		var dbName string
@@ -8762,13 +8743,18 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		}
 		// get table name
 		tableName := string(st.Table.ObjectName)
-		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, currentRole)
+		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, curRole)
 	}
 
-	bh := ses.GetBackgroundExec(tenantCtx)
+	rp, err := mysql.Parse(tenantCtx, sql, 1)
+	if err != nil {
+		return err
+	}
+
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
-	err = bh.Exec(tenantCtx, sql)
+	err = doGrantPrivilege(tenantCtx, ses, &rp[0].(*tree.Grant).GrantPrivilege, bh)
 	if err != nil {
 		return err
 	}
@@ -8783,8 +8769,8 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
 	}
-	currentRole := tenantInfo.GetDefaultRole()
-	if len(currentRole) == 0 {
+	curRole := tenantInfo.GetDefaultRole()
+	if len(curRole) == 0 {
 		return err
 	}
 
@@ -8801,7 +8787,7 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	// 2.grant database privilege
 	switch st := stmt.(type) {
 	case *tree.DropDatabase:
-		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), currentRole)
+		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), curRole)
 	case *tree.DropTable:
 		// get database name
 		var dbName string
@@ -8812,13 +8798,18 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		}
 		// get table name
 		tableName := string(st.Names[0].ObjectName)
-		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, currentRole)
+		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, curRole)
 	}
 
-	bh := ses.GetBackgroundExec(tenantCtx)
+	rp, err := mysql.Parse(tenantCtx, sql, 1)
+	if err != nil {
+		return err
+	}
+
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
-	err = bh.Exec(tenantCtx, sql)
+	err = doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh)
 	if err != nil {
 		return err
 	}
@@ -8906,7 +8897,7 @@ func postAlterSessionStatus(
 	tenantId int64,
 	status string) error {
 	logutil.Infof("[set restricted] post set account id %d status : %s", tenantId, status)
-	qc := getGlobalPu().QueryClient
+	qc := getPu(ses.GetService()).QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}

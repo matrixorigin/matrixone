@@ -3,10 +3,13 @@
 
 -- case 1
 -- just check colomn statment, check_val
--- more details in https://github.com/matrixorigin/MO-Cloud/issues/2726#issuecomment-2008930179
--- file size: < 1KB, raw tcp packet: 15
--- stats[7] = {client sended pkg} + 15 ~= 18
-set @tcp_cnt=3;
+-- (discarded) more details in https://github.com/matrixorigin/MO-Cloud/issues/2726#issuecomment-2008930179
+-- (discarded) file size: < 1KB, raw tcp packet: 15
+-- (discarded) stats[7] = {client sended pkg} + 15 ~= 18
+-- more details in https://github.com/matrixorigin/MO-Cloud/issues/4204#issuecomment-2404229597
+-- raw tcp packet: 5, all mysql package send without tcp flush op.
+-- stats[7] = 5
+set @tcp_cnt=5;
 -- @ignore:2,3,4
 select statement, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement='select * from 32kb_8192row_int order by a' order by request_at desc limit 1;
 
@@ -22,12 +25,13 @@ select left(statement, 47) stmt, json_unquote(json_extract(stats, '$[7]')) betwe
 
 -- case:load_1751_rows
 -- more in https://github.com/matrixorigin/matrixone/issues/10863#issuecomment-1684904316
--- file size: 404 KB, raw tcp packet: 14
--- stats[7] = (404 / 16) ~= 25
+-- file size: 404 KB
+-- package_cnt{send from client} = 25, while tcp ack cnt: 14 (caused by ack merged)
+-- stats[7] = (404 / 16) + {client sended pkg=1~2} ~= 25+1
 set @tcp_cnt=1;
 -- @ignore:2,3,4
 select left(statement, 16) as stmt, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement like 'load data infile%rawlog_withnull.csv%' and statement_type = 'Load' order by request_at desc limit 1;
-set @tcp_cnt=25;
+set @tcp_cnt=26;
 -- @ignore:2,3,4
 select left(statement, 22) as stmt, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement like 'load data local%rawlog_withnull.csv%' and statement_type = 'Load' order by request_at desc limit 1;
 
