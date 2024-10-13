@@ -38,5 +38,5 @@ use test;
 show tables;
 -- @session:id=3&user=sys:dump&password=111
 drop account acc0;
-select mo_ctl('cn', 'task', 'retention:*/5 * * * * ?');
-select mo_ctl('cn', 'task', 'retention:* */10 * * * * ?');
+select mo_ctl('cn', 'task', 'retention:*/5 * * * *');
+select mo_ctl('cn', 'task', 'retention:0 */15 * * * *');

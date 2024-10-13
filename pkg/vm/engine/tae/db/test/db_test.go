@@ -7427,7 +7427,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.CreateRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend2(bats[0], true)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -7486,7 +7486,7 @@ func TestGlobalCheckpoint6(t *testing.T) {
 	bat := catalog.MockBatch(schema, batchsize*(restartCnt+1))
 	bats := bat.Split(restartCnt + 1)
 
-	tae.CreateRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend2(bats[0], true)
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	err = tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
