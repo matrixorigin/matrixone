@@ -168,6 +168,9 @@ func NewService(
 		morpc.WithServerLogger(service.runtime.Logger().RawLogger()),
 	)
 	if err != nil {
+		if closeErr := store.close(); closeErr != nil {
+			service.runtime.Logger().Error("failed to close log store", zap.Error(closeErr))
+		}
 		return nil, err
 	}
 

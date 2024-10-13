@@ -619,7 +619,6 @@ func (ses *Session) Close() {
 	ses.ep = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler.Close()
-		ses.txnHandler = nil
 	}
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.execCtx = nil

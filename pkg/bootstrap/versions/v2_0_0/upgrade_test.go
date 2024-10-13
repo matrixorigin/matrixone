@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1_3_0
+package v2_0_0
 
 import (
 	"context"
@@ -251,7 +251,7 @@ func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
 
 	v := &versionHandle{
 		metadata: versions.Version{
-			Version: "v1.3.0",
+			Version: "v2.0.0",
 		},
 	}
 	sid := ""
@@ -279,7 +279,7 @@ func Test_versionHandle_HandleClusterUpgrade1(t *testing.T) {
 
 	v := &versionHandle{
 		metadata: versions.Version{
-			Version: "v1.3.0",
+			Version: "v2.0.0",
 		},
 	}
 	sid := ""
