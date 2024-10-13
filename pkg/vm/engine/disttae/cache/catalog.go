@@ -144,7 +144,7 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 					if item.deleted {
 						deletedItems = append(deletedItems, item)
 					}
-				} else {
+				} else if item.Id > catalog.MO_COLUMNS_ID {
 					deletedItems = append(deletedItems, item)
 				}
 			}
