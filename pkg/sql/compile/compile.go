@@ -435,7 +435,7 @@ func (c *Compile) runOnce() error {
 	if err != nil {
 		return err
 	}
-	errC := make(chan error, len(c.scopes))
+
 	for _, s := range c.scopes {
 		err = s.InitAllDataSource(c)
 		if err != nil {
@@ -452,45 +452,52 @@ func (c *Compile) runOnce() error {
 
 	//c.printPipeline()
 
-	for i := range c.scopes {
-		wg.Add(1)
-		scope := c.scopes[i]
-		errSubmit := ants.Submit(func() {
-			defer func() {
-				if e := recover(); e != nil {
-					err := moerr.ConvertPanicError(c.proc.Ctx, e)
-					c.proc.Error(c.proc.Ctx, "panic in run",
-						zap.String("sql", c.sql),
-						zap.String("error", err.Error()))
-					errC <- err
-				}
-				wg.Done()
-			}()
-			errC <- c.run(scope)
-		})
-		if errSubmit != nil {
-			errC <- errSubmit
-			wg.Done()
+	if c.execType == plan2.ExecTypeTP && len(c.scopes) == 1 {
+		if err := c.run(c.scopes[0]); err != nil {
+			return err
 		}
-	}
-	wg.Wait()
-	close(errC)
-
-	errList := make([]error, 0, len(c.scopes))
-	for e := range errC {
-		if e != nil {
-			errList = append(errList, e)
-			if c.isRetryErr(e) {
-				return e
+	} else {
+		errC := make(chan error, len(c.scopes))
+		for i := range c.scopes {
+			wg.Add(1)
+			scope := c.scopes[i]
+			errSubmit := ants.Submit(func() {
+				defer func() {
+					if e := recover(); e != nil {
+						err := moerr.ConvertPanicError(c.proc.Ctx, e)
+						c.proc.Error(c.proc.Ctx, "panic in run",
+							zap.String("sql", c.sql),
+							zap.String("error", err.Error()))
+						errC <- err
+					}
+					wg.Done()
+				}()
+				errC <- c.run(scope)
+			})
+			if errSubmit != nil {
+				errC <- errSubmit
+				wg.Done()
 			}
 		}
-	}
+		wg.Wait()
+		close(errC)
 
-	if len(errList) > 0 {
-		err = errList[0]
-	}
-	if err != nil {
-		return err
+		errList := make([]error, 0, len(c.scopes))
+		for e := range errC {
+			if e != nil {
+				errList = append(errList, e)
+				if c.isRetryErr(e) {
+					return e
+				}
+			}
+		}
+
+		if len(errList) > 0 {
+			err = errList[0]
+		}
+		if err != nil {
+			return err
+		}
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
@@ -1498,6 +1505,14 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ret.DataSource = &Source{isConst: true, node: n}
 
 		currentFirstFlag := c.anal.isFirst
+
+		// bad here.
+		// this will generate a pipeline `value_scan(empty batch, nil) -> projection(1, a, b) -> output.`
+		//
+		// we cannot ensure empty batch has enough count of vectors for column projection.
+		// for resolve this bug, I do a hack at method `ColumnExpressionExecutor.Eval` with `[hack-#002]` Flag.
+		//
+		// build a value scan from an EmptyTable with same table structure is the correct way.
 		op := constructValueScan()
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ret.setRootOperator(op)
@@ -1580,6 +1595,16 @@ func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.Exter
 	return ss, nil
 }
 
+func GetExternParallelSize(totalSize int64, cpuNum int) int {
+	parallelSize := int(totalSize / int64(colexec.WriteS3Threshold))
+	if parallelSize < 1 {
+		return 1
+	} else if parallelSize < cpuNum {
+		return parallelSize
+	}
+	return cpuNum
+}
+
 func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	visibleCols := make([]*plan.ColDef, 0)
 	if param.Strict {
@@ -1611,46 +1636,52 @@ func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.E
 		}
 	}
 
+	parallelSize := GetExternParallelSize(fileSize[0], mcpu)
+
 	var fileOffset [][]int64
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
-		arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], visibleCols)
+		arr, err := external.ReadFileOffset(param, parallelSize, fileSize[i], visibleCols)
 		fileOffset = append(fileOffset, arr)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	ss := make([]*Scope, len(c.cnList))
+	var ss []*Scope
 	pre := 0
 	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
-		ss[i].IsLoad = true
-		count := ID2Addr[i]
+	for i := 0; i < len(c.cnList); i++ {
+		scope := c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
+		ss = append(ss, scope)
+		scope.IsLoad = true
+		count := min(parallelSize, ID2Addr[i])
+		scope.NodeInfo.Mcpu = count
 		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 		for j := range fileOffsetTmp {
 			preIndex := pre
 			fileOffsetTmp[j] = &pipeline.FileOffset{}
 			fileOffsetTmp[j].Offset = make([]int64, 0)
-			if param.Parallel {
-				if param.Strict {
-					if 2*preIndex+2*count < len(fileOffset[j]) {
-						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-					} else if 2*preIndex < len(fileOffset[j]) {
-						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
-					} else {
-						continue
-					}
-				} else {
+			if param.Strict {
+				if 2*preIndex+2*count < len(fileOffset[j]) {
 					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+				} else if 2*preIndex < len(fileOffset[j]) {
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+				} else {
+					continue
 				}
+			} else {
+				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
 			}
 		}
 		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].setRootOperator(op)
+		scope.setRootOperator(op)
 		pre += count
+		if parallelSize <= count {
+			break
+		}
+		parallelSize -= count
 	}
 	c.anal.isFirst = false
 	return ss, nil
@@ -1697,7 +1728,6 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	op := constructValueScan()
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	op.NodeType = n.NodeType
 	if n.RowsetData != nil {
 		op.RowsetData = n.RowsetData
 		op.ColCount = len(n.TableDef.Cols)
@@ -2576,6 +2606,12 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 		}
+	case plan.Node_OUTERAPPLY:
+		for i := range rs {
+			op := constructApply(node, right, apply.OUTER, c.proc)
+			op.SetIdx(c.anal.curNodeIdx)
+			rs[i].setRootOperator(op)
+		}
 	default:
 		panic("unknown apply")
 	}
@@ -2984,8 +3020,9 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 	}
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
+	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
 	for _, cn := range c.cnList {
-		scopes := c.newScopeListWithNode(plan2.GetShuffleDop(cn.Mcpu), len(inputSS), cn.Addr)
+		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
 				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
@@ -3569,7 +3606,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
 
-	dop := plan2.GetShuffleDop(ncpu)
+	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
 	shuffleJoins := make([]*Scope, 0, len(c.cnList)*dop)
 	shuffleBuilds := make([]*Scope, 0, len(c.cnList)*dop)
 
@@ -3806,7 +3843,15 @@ func (c *Compile) expandRanges(
 	if err != nil {
 		return nil, err
 	}
-	relData, err = rel.Ranges(ctx, blockFilterList, c.TxnOffset)
+	preAllocSize := 2
+	if !c.IsTpQuery() {
+		if len(blockFilterList) > 0 {
+			preAllocSize = 64
+		} else {
+			preAllocSize = int(n.Stats.BlockNum)
+		}
+	}
+	relData, err = rel.Ranges(ctx, blockFilterList, preAllocSize, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -3820,7 +3865,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, blockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3842,7 +3887,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, blockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}

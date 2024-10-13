@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
 
 const (
@@ -113,7 +114,7 @@ const (
 			mo_catalog.mo_cdc_watermark w 
 		join 
 			mo_catalog.mo_tables t 
-		on w.table_id = t.rel_id 
+		on cast(SUBSTRING_INDEX(w.table_id,'_',1) as bigint unsigned) = t.rel_id 
 		where w.account_id = %d and w.task_id = '%s'`
 
 	getDataKeyFormat = "select encrypted_key from mo_catalog.mo_data_key where account_id = %d and key_id = '%s'"
@@ -268,7 +269,8 @@ func handleCreateCdc(ses *Session, execCtx *ExecCtx, create *tree.CreateCDC) err
 }
 
 func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err error) {
-	ts := getGlobalPu().TaskService
+	service := ses.GetService()
+	ts := getPu(service).TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
@@ -398,7 +400,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 			}
 
 			// TODO replace with creatorAccountId
-			if err = initAesKeyWrapper(ctx, tx, catalog.System_Account); err != nil {
+			if err = initAesKeyWrapper(ctx, tx, catalog.System_Account, service); err != nil {
 				return
 			}
 
@@ -969,6 +971,7 @@ type CdcTask struct {
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
 	sunkWatermarkUpdater *cdc2.WatermarkUpdater
+	holdCh               chan int
 }
 
 func NewCdcTask(
@@ -1029,6 +1032,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	//step2 : get source tableid
 	var info *cdc2.DbTableInfo
 	dbTableInfos := make([]*cdc2.DbTableInfo, 0, len(cdc.tables.Pts))
+	tblIdStrMap := make(map[string]bool)
 	for _, tuple := range cdc.tables.Pts {
 		accId, accName, dbName, tblName := tuple.Source.AccountId, tuple.Source.Account, tuple.Source.Database, tuple.Source.Table
 		if needSkipThisTable(accName, dbName, tblName, &cdc.filters) {
@@ -1036,7 +1040,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 			continue
 		}
 		//get dbid tableid for the source table
-		info, err = cdc.retrieveTable(ctx, accId, accName, dbName, tblName)
+		info, err = cdc.retrieveTable(ctx, accId, accName, dbName, tblName, tblIdStrMap)
 		if err != nil {
 			return err
 		}
@@ -1055,11 +1059,11 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 
 	if firstTime {
 		// hold
-		ch := make(chan int, 1)
+		cdc.holdCh = make(chan int, 1)
 		select {
 		case <-ctx.Done():
 			break
-		case <-ch:
+		case <-cdc.holdCh:
 			break
 		}
 	}
@@ -1092,7 +1096,7 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 	} else if count == 0 {
 		for _, info = range dbTableInfos {
 			// use startTs as watermark
-			if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info.SourceTblId, cdc.startTs); err != nil {
+			if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info.SourceTblIdStr, cdc.startTs); err != nil {
 				return err
 			}
 		}
@@ -1198,7 +1202,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	return nil
 }
 
-func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, dbName, tblName string) (*cdc2.DbTableInfo, error) {
+func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, dbName, tblName string, tblIdStrMap map[string]bool) (*cdc2.DbTableInfo, error) {
 	var dbId, tblId uint64
 	var err error
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -1206,6 +1210,16 @@ func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, db
 	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return nil, res.Error()
+	}
+
+	getTblIdStr := func(tblId uint64) string {
+		for i := 0; ; i++ {
+			tblIdStr := fmt.Sprintf("%d_%d", tblId, i)
+			if _, ok := tblIdStrMap[tblIdStr]; !ok {
+				tblIdStrMap[tblIdStr] = true
+				return tblIdStr
+			}
+		}
 	}
 
 	/*
@@ -1232,6 +1246,7 @@ func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, db
 		SourceAccountId:   accId,
 		SourceDbId:        dbId,
 		SourceTblId:       tblId,
+		SourceTblIdStr:    getTblIdStr(tblId),
 	}, err
 }
 
@@ -1295,7 +1310,13 @@ func (cdc *CdcTask) Cancel() error {
 	if cdc.activeRoutine.Cancel != nil {
 		close(cdc.activeRoutine.Cancel)
 	}
-	return cdc.sunkWatermarkUpdater.DeleteAllFromDb()
+
+	if err := cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
+		return err
+	}
+
+	cdc.holdCh <- 1
+	return nil
 }
 
 func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client.TxnOperator) error {
@@ -1303,11 +1324,11 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 	ctx := defines.AttachAccountId(context.Background(), uint32(cdc.cdcTask.Accounts[0].GetId()))
 
 	// add watermark to updater
-	watermark, err := cdc.sunkWatermarkUpdater.GetFromDb(info.SourceTblId)
+	watermark, err := cdc.sunkWatermarkUpdater.GetFromDb(info.SourceTblIdStr)
 	if err != nil {
 		return err
 	}
-	cdc.sunkWatermarkUpdater.UpdateMem(info.SourceTblId, watermark)
+	cdc.sunkWatermarkUpdater.UpdateMem(info.SourceTblIdStr, watermark)
 
 	tableDef, err := cdc2.GetTableDef(ctx, txnOp, cdc.cnEngine, info.SourceTblId)
 	if err != nil {
@@ -1322,6 +1343,7 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		tableDef,
 		cdc2.DefaultRetryTimes,
 		cdc2.DefaultRetryDuration,
+		cdc.activeRoutine,
 	)
 	if err != nil {
 		return err
@@ -1345,18 +1367,18 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 }
 
 func (cdc *CdcTask) ResetWatermarkForTable(info *cdc2.DbTableInfo) (err error) {
-	tblId := info.SourceTblId
+	tblIdStr := info.SourceTblIdStr
 	// delete old watermark of table
-	cdc.sunkWatermarkUpdater.DeleteFromMem(tblId)
-	if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tblId); err != nil {
+	cdc.sunkWatermarkUpdater.DeleteFromMem(tblIdStr)
+	if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tblIdStr); err != nil {
 		return
 	}
 
 	// use start_ts as init watermark
-	if err = cdc.sunkWatermarkUpdater.InsertIntoDb(tblId, cdc.startTs); err != nil {
+	if err = cdc.sunkWatermarkUpdater.InsertIntoDb(tblIdStr, cdc.startTs); err != nil {
 		return
 	}
-	cdc.sunkWatermarkUpdater.UpdateMem(tblId, cdc.startTs)
+	cdc.sunkWatermarkUpdater.UpdateMem(tblIdStr, cdc.startTs)
 	return
 }
 
@@ -1378,7 +1400,7 @@ func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId 
 		return err
 	}
 
-	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper().SV.KeyEncryptionKey))
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(cdc.cnUUID).SV.KeyEncryptionKey))
 	return
 }
 
@@ -1472,7 +1494,7 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		)
 	}
 
-	return runUpdateCdcTask(ctx, targetTaskStatus, uint64(accountId), taskName, conds...)
+	return runUpdateCdcTask(ctx, targetTaskStatus, uint64(accountId), taskName, ses.GetService(), conds...)
 }
 
 func runUpdateCdcTask(
@@ -1480,9 +1502,9 @@ func runUpdateCdcTask(
 	targetTaskStatus task.TaskStatus,
 	accountId uint64,
 	taskName string,
-	conds ...taskservice.Condition,
-) (err error) {
-	ts := getGlobalPu().TaskService
+	service string,
+	conds ...taskservice.Condition) (err error) {
+	ts := getPu(service).TaskService
 	if ts == nil {
 		return nil
 	}
@@ -1537,12 +1559,18 @@ func updateCdcTask(
 		_ = rows.Close()
 	}()
 
+	empty := true
 	for rows.Next() {
+		empty = false
 		if err = rows.Scan(&taskId); err != nil {
 			return 0, err
 		}
 		tInfo := taskservice.CdcTaskKey{AccountId: accountId, TaskId: taskId}
 		taskKeyMap[tInfo] = struct{}{}
+	}
+
+	if taskName != "" && empty {
+		return 0, moerr.NewInternalErrorf(ctx, "no cdc task found, task name: %s", taskName)
 	}
 
 	var prepare *sql.Stmt
@@ -1655,7 +1683,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	)
 
 	ctx := defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
-	pu := getGlobalPu()
+	pu := getPu(ses.GetService())
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -1673,7 +1701,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	defer func() {
 		cdc2.FinishTxnOp(ctx, err, txnOp, pu.StorageEngine)
 	}()
-	timestamp := txnOp.SnapshotTS().ToStdTime().String()
+	timestamp := txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
 
 	// get from task table
 	sql := getSqlForGetTask(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
@@ -1769,7 +1797,7 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 				return
 			}
 
-			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark.ToStdTime().String())
+			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark.ToStdTime().In(time.Local).String())
 		}
 	}
 
@@ -1780,11 +1808,11 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 var (
 	queryTableWrapper  = queryTable
 	decrypt            = cdc2.AesCFBDecodeWithKey
-	getGlobalPuWrapper = getGlobalPu
+	getGlobalPuWrapper = getPu
 	initAesKeyWrapper  = initAesKeyBySqlExecutor
 )
 
-func initAesKeyBySqlExecutor(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32) (err error) {
+func initAesKeyBySqlExecutor(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32, service string) (err error) {
 	if len(cdc2.AesKey) > 0 {
 		return nil
 	}
@@ -1805,6 +1833,6 @@ func initAesKeyBySqlExecutor(ctx context.Context, executor taskservice.SqlExecut
 		return moerr.NewInternalError(ctx, "no data key")
 	}
 
-	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper().SV.KeyEncryptionKey))
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey))
 	return
 }

@@ -37,6 +37,7 @@ func (c *DashboardCreator) initFrontendDashboard() error {
 			c.initFrontendPubSubDuration(),
 			c.initFrontendSQLLength(),
 			c.initFrontendCdc(),
+			c.initFrontendCdcDuration(),
 		)...)
 	if err != nil {
 		return err
@@ -247,13 +248,9 @@ func (c *DashboardCreator) initFrontendCdc() dashboard.Option {
 			3,
 			[]string{
 				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_processing_record_count", `type="total"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_processing_record_count", `type="snapshot"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_processing_record_count", `type="tail"`) + `)`,
 			},
 			[]string{
 				"total",
-				"snapshot",
-				"tail",
 			}),
 
 		c.withMultiGraph(
@@ -261,13 +258,32 @@ func (c *DashboardCreator) initFrontendCdc() dashboard.Option {
 			3,
 			[]string{
 				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_allocated_batch_bytes", `type="total"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_allocated_batch_bytes", `type="snapshot"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_allocated_batch_bytes", `type="tail"`) + `)`,
 			},
 			[]string{
 				"total",
-				"snapshot",
-				"tail",
 			}),
+	)
+}
+
+func (c *DashboardCreator) initFrontendCdcDuration() dashboard.Option {
+	return dashboard.Row(
+		"Cdc Duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="read"`),
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="append"`),
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="sink"`),
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="send-sql"`),
+			},
+			[]string{
+				"read",
+				"append",
+				"sink",
+				"send-sql",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
 	)
 }

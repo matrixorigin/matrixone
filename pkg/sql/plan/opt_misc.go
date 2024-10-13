@@ -478,12 +478,15 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 
 }
 
-func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) float64 {
+func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) (float64, bool) {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType != plan.Node_JOIN {
-		return 1
+		return 1, true
 	}
-	result := getHashColsNDVRatio(builder.qry.Nodes[node.Children[1]].NodeId, builder)
+	result, ok := getHashColsNDVRatio(builder.qry.Nodes[node.Children[1]].NodeId, builder)
+	if !ok {
+		return 1, false
+	}
 
 	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
@@ -515,18 +518,18 @@ func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) float64 {
 	}
 
 	if len(hashCols) == 0 {
-		return 0.0001
+		return 1, false
 	}
 
 	tableDef := findHashOnPKTable(node.Children[1], hashCols[0].RelPos, builder)
 	if tableDef == nil {
-		return 0.0001
+		return 1, false
 	}
 	hashColPos := make([]int32, len(hashCols))
 	for i := range hashCols {
 		hashColPos[i] = hashCols[i].ColPos
 	}
-	return builder.getColNDVRatio(hashColPos, tableDef) * result
+	return builder.getColNDVRatio(hashColPos, tableDef) * result, true
 }
 
 func checkExprInTags(expr *plan.Expr, tags []int32) bool {

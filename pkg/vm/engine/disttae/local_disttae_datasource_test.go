@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -113,6 +112,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 		bat := engine_util.NewCNTombstoneBatch(
 			&int32Type,
+			objectio.HiddenColumnSelection_None,
 		)
 
 		for j := 0; j < 10; j++ {
@@ -134,10 +134,11 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss)
 	}
 
-	deletedMask := &nulls.Nulls{}
+	deletedMask := objectio.GetReusableBitmap()
+	defer deletedMask.Release()
 	for i := range tombstoneRowIds {
 		bid := tombstoneRowIds[i].BorrowBlockID()
-		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, deletedMask)
+		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, &deletedMask)
 		require.NoError(t, err)
 		require.Zero(t, len(left))
 

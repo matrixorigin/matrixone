@@ -583,6 +583,10 @@ func (ms *mockShardService) Close() error {
 	return nil
 }
 
+func (ms *mockShardService) GetTableShards(tableID uint64) (pb.ShardsMetadata, []pb.TableShard, error) {
+	return pb.ShardsMetadata{}, nil, nil
+}
+
 var _ logservice.CNHAKeeperClient = new(testHAKeeperClient)
 
 type testHAKeeperClient struct {
@@ -610,6 +614,9 @@ func (ha *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservice
 }
 func (ha *testHAKeeperClient) GetClusterState(ctx context.Context) (logservice2.CheckerState, error) {
 	return logservice2.CheckerState{}, nil
+}
+func (ha *testHAKeeperClient) CheckLogServiceHealth(_ context.Context) error {
+	return nil
 }
 
 func (ha *testHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, error) {

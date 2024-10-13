@@ -19,9 +19,10 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -339,6 +340,7 @@ type BackgroundExec interface {
 	GetExecResultBatches() []*batch.Batch
 	ClearExecResultBatches()
 	Clear()
+	Service() string
 }
 
 var _ BackgroundExec = &backExec{}
@@ -370,7 +372,6 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
 	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.SetCnt(1)
 		prepareStmt.InsertBat.Clean(prepareStmt.proc.Mp())
 		prepareStmt.InsertBat = nil
 	}
@@ -398,28 +399,42 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 }
 
-var _ buf.Allocator = &SessionAllocator{}
+type Allocator interface {
+	// Alloc allocate a []byte with len(data) >= size, and the returned []byte cannot
+	// be expanded in use.
+	Alloc(capacity int) ([]byte, error)
+	// Free the allocated memory
+	Free([]byte)
+}
+
+var _ Allocator = &SessionAllocator{}
 
 type SessionAllocator struct {
 	allocator *malloc.ManagedAllocator[malloc.Allocator]
 }
 
-func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+var baseSessionAllocator = sync.OnceValue(func() malloc.Allocator {
 	// default
 	allocator := malloc.GetDefault(nil)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounter.WithLabelValues("session-allocate"),
+		metric.MallocGauge.WithLabelValues("session-inuse"),
+		metric.MallocCounter.WithLabelValues("session-allocate-objects"),
+		metric.MallocGauge.WithLabelValues("session-inuse-objects"),
+	)
+	return allocator
+})
+
+func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+	// base
+	allocator := baseSessionAllocator()
 	// size bounded
 	allocator = malloc.NewSizeBoundedAllocator(
 		allocator,
 		uint64(pu.SV.GuestMmuLimitation),
 		nil,
-	)
-	// with metrics
-	allocator = malloc.NewMetricsAllocator(
-		allocator,
-		metric.MallocCounterSessionAllocateBytes,
-		metric.MallocGaugeSessionInuseBytes,
-		metric.MallocCounterSessionAllocateObjects,
-		metric.MallocGaugeSessionInuseObjects,
 	)
 	ret := &SessionAllocator{
 		// managed
@@ -663,6 +678,11 @@ type feSessionImpl struct {
 	// reserved because the connection is still in use in proxy's connection cache.
 	// Default is false, means that the network connection should be closed.
 	reserveConn bool
+	service     string
+}
+
+func (ses *feSessionImpl) GetService() string {
+	return ses.service
 }
 
 func (ses *feSessionImpl) GetMySQLParser() *mysql.MySQLParser {
@@ -673,7 +693,7 @@ func (ses *feSessionImpl) EnterFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addEnter(idx)
 		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.SetFootPrints(ses.fprints.prints[:])
+			ses.txnHandler.txnOp.SetFootPrints(idx, true)
 		}
 	}
 }
@@ -682,7 +702,7 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addExit(idx)
 		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.SetFootPrints(ses.fprints.prints[:])
+			ses.txnHandler.txnOp.SetFootPrints(idx, false)
 		}
 	}
 }
@@ -1147,6 +1167,7 @@ type MysqlReader interface {
 	Property
 	Read() ([]byte, error)
 	ReadLoadLocalPacket() ([]byte, error)
+	FreeLoadLocal()
 	Free(buf []byte)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error
@@ -1216,4 +1237,14 @@ type CsvWriter interface {
 // MemWriter write batch into memory pool
 type MemWriter interface {
 	MediaWriter
+}
+
+// ServerLevelVariables holds the variables are shared in single frontend mo server instance.
+// these variables should be initialized at the server startup.
+type ServerLevelVariables struct {
+	RtMgr           atomic.Value
+	Pu              atomic.Value
+	Aicm            atomic.Value
+	moServerStarted atomic.Bool
+	sessionAlloc    atomic.Value
 }

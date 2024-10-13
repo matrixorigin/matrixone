@@ -35,7 +35,6 @@ const (
 	threshHoldForShuffleJoin        = 120000
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 8000000
-	MAXShuffleDOP                   = 64
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
@@ -466,11 +465,32 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 
 }
 
-func GetShuffleDop(cpunum int) (dop int) {
-	if cpunum < MAXShuffleDOP {
-		return cpunum
+func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
+	maxret := ncpu * 4
+	if maxret > 64 {
+		maxret = 64 // to avoid a hang bug, fix this in the future
 	}
-	return MAXShuffleDOP
+	// these magic number comes from hashmap resize factor. see hashtable/common.go, in maxElemCnt function
+	ret1 := int(hashmapSize/float64(lencn)/12800000) + 1
+	if ret1 >= maxret {
+		return maxret
+	}
+
+	ret2 := int(hashmapSize/float64(lencn)/6000000) + 1
+	if ret2 >= maxret {
+		return ret1
+	}
+
+	ret3 := int(hashmapSize/float64(lencn)/2666666) + 1
+	if ret3 >= maxret {
+		return ret2
+	}
+
+	if ret3 <= ncpu {
+		return ncpu
+	}
+
+	return (ret3/ncpu + 1) * ncpu
 }
 
 // default shuffle type for scan is hash

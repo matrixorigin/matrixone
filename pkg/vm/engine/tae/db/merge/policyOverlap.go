@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ policy = (*objOverlapPolicy)(nil)
@@ -85,14 +86,14 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 		}
 		return zmA.CompareMax(zmB)
 	})
-	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: minValue(t)}
+	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: []byte{}}
 	for _, obj := range m.objects {
 		if len(set.entries) == 0 {
 			set.add(t, obj)
 			continue
 		}
 
-		if compute.CompareGeneric(set.maxValue, obj.SortKeyZoneMap().GetMin(), t) > 0 {
+		if zm := obj.SortKeyZoneMap(); index.StrictlyCompareZmMaxAndMin(set.maxValue, zm.GetMinBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) > 0 {
 			// zm is overlapped
 			set.add(t, obj)
 			continue
@@ -143,22 +144,21 @@ func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry) {
 
 type entrySet struct {
 	entries  []*catalog.ObjectEntry
-	maxValue any
+	maxValue []byte
 	size     int
 }
 
 func (s *entrySet) reset(t types.T) {
 	s.entries = s.entries[:0]
-	s.maxValue = minValue(t)
+	s.maxValue = []byte{}
 	s.size = 0
 }
 
 func (s *entrySet) add(t types.T, obj *catalog.ObjectEntry) {
 	s.entries = append(s.entries, obj)
 	s.size += int(obj.OriginSize())
-	zmMax := obj.SortKeyZoneMap().GetMax()
-	if compute.CompareGeneric(s.maxValue, zmMax, t) < 0 {
-		s.maxValue = zmMax
+	if zm := obj.SortKeyZoneMap(); len(s.maxValue) == 0 || compute.Compare(s.maxValue, zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) < 0 {
+		s.maxValue = zm.GetMaxBuf()
 	}
 }
 

@@ -40,7 +40,7 @@ func TestCoarseFilterTombstoneObject(t *testing.T) {
 	rowids := make([]types.Rowid, rowCnt)
 	oss := make([]objectio.ObjectStats, ssCnt)
 	for i := 0; i < ssCnt; i++ {
-		writer := ConstructTombstoneWriter(false, fs)
+		writer := ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 		assert.NotNil(t, writer)
 
 		bat := batch.NewWithSize(2)

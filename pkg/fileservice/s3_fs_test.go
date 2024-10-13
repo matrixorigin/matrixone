@@ -1137,3 +1137,31 @@ func TestS3FSIOMerger(t *testing.T) {
 	assert.True(t, counterSet.FileService.S3.Get.Load() < int64(nThreads))
 
 }
+
+func BenchmarkS3FSAllocateCacheData(b *testing.B) {
+	fs, err := NewS3FS(
+		context.Background(),
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    b.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(b, err)
+	defer fs.Close()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			data := fs.AllocateCacheData(42)
+			data.Release()
+		}
+	})
+}

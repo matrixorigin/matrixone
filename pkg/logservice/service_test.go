@@ -39,9 +39,13 @@ import (
 func runServiceTest(t *testing.T,
 	hakeeper bool, startReplica bool, fn func(*testing.T, *Service)) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg,
+	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -83,9 +87,55 @@ func runServiceTest(t *testing.T,
 
 func TestNewService(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg,
+	service, err := NewServiceWithRetry(genCfg,
+		newFS(),
+		nil,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
+	require.NoError(t, err)
+	assert.NoError(t, service.Close())
+}
+
+func TestNewServiceRetry(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg0 := getServiceTestConfig()
+	genCfg0 := func() Config {
+		return cfg0
+	}
+	defer vfs.ReportLeakedFD(cfg0.FS, t)
+	service0, err := NewServiceWithRetry(genCfg0,
+		newFS(),
+		nil,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service0.Close())
+	}()
+
+	var cfg Config
+	first := true
+	genCfg := func() Config {
+		if first {
+			first = false
+			return cfg0
+		} else {
+			cfg = getServiceTestConfig()
+			return cfg
+		}
+	}
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -1319,6 +1369,29 @@ func TestServiceLeaderID(t *testing.T) {
 		resp := s.handleGetLeaderID(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(1), resp.LogResponse.LeaderID)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
+func TestServiceCheckHealth(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = s.ID()
+		require.NoError(t, s.store.startHAKeeperReplica(1, peers, false))
+		s.store.hakeeperTick()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		_, err := s.store.addLogStoreHeartbeat(ctx, s.store.getHeartbeatMessage())
+		assert.NoError(t, err)
+
+		req := pb.Request{
+			Method: pb.CHECK_HEALTH,
+			CheckHealth: &pb.CheckHealth{
+				ShardID: 1,
+			},
+		}
+		resp := s.handleCheckHealth(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 	}
 	runServiceTest(t, false, true, fn)
 }

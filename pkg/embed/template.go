@@ -141,6 +141,7 @@ backend = "DISK-ETL"
 [cn]
 uuid = "{{.I}}-cn-{{.ID}}"
 port-base = {{NextBasePort}}
+auto-upgrade = false
 
 [cn.txn.trace]
 dir = "trace{{.I}}"
@@ -151,44 +152,6 @@ type = "distributed-tae"
 [cn.frontend]
 port = {{NextBasePort}}
 unix-socket = "{{.DataDir}}/mysql{{.I}}.sock"
-`))
-
-	proxyConfig = template.Must(template.New("proxy").Funcs(templateFuncs).Parse(`
-service-type = "PROXY"
-data-dir = "{{.DataDir}}"
-
-[log]
-level = "info"
-format = "console"
-max-size = 512
-
-[hakeeper-client]
-service-addresses = [
-  "127.0.0.1:{{.ServicePort}}",
-]
-
-[[fileservice]]
-name = "LOCAL"
-backend = "DISK"
-
-[[fileservice]]
-name = "SHARED"
-backend = "S3"
-[fileservice.s3]
-endpoint = "disk"
-bucket = "{{.DataDir}}/s3"
-
-[fileservice.cache]
-memory-capacity = "32MB"
-disk-capacity = "32MB"
-disk-path = "{{.DataDir}}file-service-cache"
-
-[[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
-
-[proxy]
-uuid = "proxy"
 `))
 )
 

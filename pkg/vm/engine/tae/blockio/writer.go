@@ -29,18 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-// ConstructTombstoneWriter withHidden: true for add hidden columns `commitTs` and `abort`
-// object file created by `CN` with `withHidden` is false
+// ConstructTombstoneWriter hiddenSelection: true for add hidden columns `commitTs` and `abort`
+// object file created by `CN` with `hiddenSelection` is false
 func ConstructTombstoneWriter(
-	withHidden bool,
+	hiddenSelection objectio.HiddenColumnSelection,
 	fs fileservice.FileService,
 ) *BlockWriter {
-	var seqnums []uint16
-	if withHidden {
-		seqnums = objectio.TombstoneSeqnums_DN_Created
-	} else {
-		seqnums = objectio.TombstoneSeqnums_CN_Created
-	}
+	seqnums := objectio.GetTombstoneSeqnums(hiddenSelection)
 	sortkeyPos := objectio.TombstonePrimaryKeyIdx
 	sortkeyIsPK := true
 	isTombstone := true

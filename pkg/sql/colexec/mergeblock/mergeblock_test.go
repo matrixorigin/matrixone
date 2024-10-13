@@ -104,7 +104,6 @@ func TestMergeBlock(t *testing.T) {
 				string(objectio.ZeroObjectStats[:])},
 				nil),
 		},
-		Cnt: 1,
 	}
 	batch1.SetRowCount(3)
 

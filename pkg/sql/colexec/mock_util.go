@@ -120,7 +120,7 @@ func makeMockVecs() []*vector.Vector {
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
 func MakeMockBatchs() *batch.Batch {
-	bat := batch.New(true, []string{"a", "b", "c", "d", "e"})
+	bat := batch.New([]string{"a", "b", "c", "d", "e"})
 	vecs := makeMockVecs()
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
@@ -138,7 +138,7 @@ func makeMockTimeWinVecs() []*vector.Vector {
 }
 
 func MakeMockTimeWinBatchs() *batch.Batch {
-	bat := batch.New(true, []string{"ts", "b"})
+	bat := batch.New([]string{"ts", "b"})
 	vecs := makeMockTimeWinVecs()
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
@@ -147,7 +147,7 @@ func MakeMockTimeWinBatchs() *batch.Batch {
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e date)
 func MakeMockBatchsWithRowID() *batch.Batch {
-	bat := batch.New(true, []string{catalog.Row_ID, "a", "b", "c", "d", "e"})
+	bat := batch.New([]string{catalog.Row_ID, "a", "b", "c", "d", "e"})
 	vecs := makeMockVecs()
 
 	uuid1 := objectio.NewSegmentid()
@@ -165,7 +165,7 @@ func MakeMockBatchsWithRowID() *batch.Batch {
 // new batchs with schema : (a int auto_increment, b uuid, c varchar, d json, e date)
 // vecs[0] is null,  use for test preinsert...
 func MakeMockBatchsWithNullVec() *batch.Batch {
-	bat := batch.New(true, []string{"a", "b", "c", "d", "e"})
+	bat := batch.New([]string{"a", "b", "c", "d", "e"})
 	vecs := makeMockVecs()
 	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{0, 1})
 	bat.Vecs = vecs

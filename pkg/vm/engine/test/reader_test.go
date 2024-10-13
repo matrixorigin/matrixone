@@ -782,7 +782,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 				TableName:    tableName,
 			},
 		}
-		relData, err := rel.Ranges(ctx, nil, 0)
+		relData, err := rel.Ranges(ctx, nil, 2, 0)
 		require.NoError(t, err)
 		//TODO:: attach tombstones.
 		//tombstones, err := rel.CollectTombstones(
@@ -1048,7 +1048,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	shardSvr := testutil.MockShardService()
 	delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
 
-	relData, err := delegate.Ranges(ctx, nil, 0)
+	relData, err := delegate.Ranges(ctx, nil, 2, 0)
 	require.NoError(t, err)
 
 	tomb, err := delegate.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
@@ -1212,7 +1212,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		relData, err := rel.Ranges(ctx, nil, 0)
+		relData, err := rel.Ranges(ctx, nil, 2, 0)
 		require.NoError(t, err)
 
 		shardSvr := testutil.MockShardService()
@@ -1282,6 +1282,7 @@ func Test_SimpleReader(t *testing.T) {
 	pkType := types.T_int32.ToType()
 	bat1 := engine_util.NewCNTombstoneBatch(
 		&pkType,
+		objectio.HiddenColumnSelection_None,
 	)
 	defer bat1.Clean(mp)
 	obj := types.NewObjectid()
@@ -1345,6 +1346,7 @@ func Test_SimpleReader(t *testing.T) {
 	defer blockio.Stop("")
 	bat2 := engine_util.NewCNTombstoneBatch(
 		&pkType,
+		objectio.HiddenColumnSelection_None,
 	)
 	defer bat2.Clean(mp)
 	done, err := r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
@@ -1370,7 +1372,6 @@ func Test_SimpleReader(t *testing.T) {
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
 		),
-		engine_util.WithTombstone(),
 	)
 
 	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)

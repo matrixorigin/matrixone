@@ -129,6 +129,10 @@ type Config struct {
 		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
 		DisableGC      bool          `toml:"disable-gc"`
 		CheckGC        bool          `toml:"check-gc"`
+		CacheSize      int           `toml:"cache-size"`
+		GCMergeCount   int           `toml:"gc-merge-count"`
+		GCestimateRows int           `toml:"gc-estimate-rows"`
+		GCProbility    float64       `toml:"gc-probility"`
 	}
 
 	Merge struct {
@@ -136,6 +140,8 @@ type Config struct {
 		CNStandaloneTake bool          `toml:"offload-when-standalone"`
 		CNTakeOverExceed toml.ByteSize `toml:"offload-exceed"`
 		CNMergeMemHint   toml.ByteSize `toml:"offload-mem-hint"`
+
+		DisableZMBasedMerge bool `toml:"disable-zm-based-merge"`
 	}
 
 	LogtailServer struct {

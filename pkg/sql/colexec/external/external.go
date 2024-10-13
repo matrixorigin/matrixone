@@ -148,7 +148,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		}
 	}
 	if external.ctr.buf == nil {
-		external.ctr.buf = batch.New(false, param.Attrs)
+		external.ctr.buf = batch.New(param.Attrs)
 		var flag bool
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
@@ -265,7 +265,6 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	bat = &batch.Batch{
 		Attrs: make([]string, num),
 		Vecs:  make([]*vector.Vector, num),
-		Cnt:   1,
 	}
 
 	mp := proc.GetMPool()
