@@ -18,6 +18,8 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -27,9 +29,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 var ErrNoMore = moerr.NewInternalErrorNoCtx("no more")
+
+func StreamBatchProcess(
+	ctx context.Context,
+	// sourcer loads data into the input batch. The input batch is always empty
+	sourcer func(context.Context, *batch.Batch, *mpool.MPool) (bool, error),
+	// processor always do some in-place operations on the input batch
+	processor func(context.Context, *batch.Batch, *mpool.MPool) error,
+	// sinker always copy the input batch
+	sinker func(context.Context, *batch.Batch) error,
+	buffer containers.IBatchBuffer,
+	mp *mpool.MPool,
+) error {
+	bat := buffer.Fetch()
+	defer buffer.Putback(bat, mp)
+	for {
+		bat.CleanOnlyData()
+		done, err := sourcer(ctx, bat, mp)
+		if err != nil {
+			return err
+		}
+		if done {
+			break
+		}
+		if err := processor(ctx, bat, mp); err != nil {
+			return err
+		}
+		if err := sinker(ctx, bat); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func ForeachObjectsExecute(
 	onObject func(*objectio.ObjectStats) error,

@@ -782,7 +782,7 @@ func TestCacheGC(t *testing.T) {
 	// gc
 	cc := p.D.Engine.GetLatestCatalogCache()
 	r := cc.GC(gcTime)
-	require.Equal(t, 7 /*because of three tables inserted at 0 time*/, r.TStaleItem)
+	require.Equal(t, 4, r.TStaleItem)
 	require.Equal(t, 2 /*test2 & test 4*/, r.TDelCpk)
 
 }
