@@ -22,17 +22,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPartitionBasedTableCanBeCreated(
@@ -492,6 +494,15 @@ func mustValueCanRead(
 					return true
 				},
 			)
+			//logutil.Infof("xxxx txn:%s execute select value from %s where id=%d, actual:%d",
+			//	txn.Txn().Txn().DebugString(),
+			//	table, id, actual)
+			//for test issue-19202
+			if actual == 0 {
+				logutil.Infof("xxxx txn:%s execute select value from %s where id=%d",
+					txn.Txn().Txn().DebugString(),
+					table, id)
+			}
 			return nil
 		},
 		executor.Options{}.
