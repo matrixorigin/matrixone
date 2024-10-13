@@ -2247,7 +2247,7 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	if length == 0 {
 		return skipWrite, readTime, writeTime, errorInvalidLength0
 	}
-	ses.CountPayload(len(payload))
+	ses.CountPayload(length)
 
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
 	// Then write will return error, but we need to read the rest of the data and not write it to pipe.

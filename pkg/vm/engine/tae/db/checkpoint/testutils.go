@@ -215,7 +215,12 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 		fields   []zap.Field
 	)
 
-	if prev != nil {
+	if prev == nil {
+		global := r.MaxGlobalCheckpoint()
+		if global != nil {
+			start = global.end
+		}
+	} else {
 		start = prev.end.Next()
 	}
 

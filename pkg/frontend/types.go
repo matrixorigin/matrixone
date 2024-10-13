@@ -714,7 +714,7 @@ func (ses *feSessionImpl) Close() {
 	}
 	ses.mrs = nil
 	if ses.txnHandler != nil {
-		ses.txnHandler = nil
+		ses.txnHandler.Close()
 	}
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.Close()
