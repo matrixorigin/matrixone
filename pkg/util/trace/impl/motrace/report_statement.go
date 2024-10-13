@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -445,6 +446,10 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(userCol, table.StringField(s.User))
 	row.SetColumnVal(hostCol, table.StringField(s.Host))
 	row.SetColumnVal(dbCol, table.StringField(s.Database))
+	if s.AggrCount > 1 && GetTracerProvider().enableStmtMerge {
+		s.Statement = "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.StmtBuilder.String()
+		s.StmtBuilder.Reset()
+	}
 	row.SetColumnVal(stmtCol, table.StringField(s.Statement))
 	row.SetColumnVal(stmtTagCol, table.StringField(s.StatementTag))
 	row.SetColumnVal(sqlTypeCol, table.StringField(s.SqlSourceType))
