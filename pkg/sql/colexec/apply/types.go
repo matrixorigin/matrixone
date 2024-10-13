@@ -44,6 +44,7 @@ type container struct {
 
 	batIdx   int
 	tfFinish bool
+	tfNull   bool
 	sels     []int32
 }
 
