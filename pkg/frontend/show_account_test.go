@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,7 +87,7 @@ func Test_updateCount(t *testing.T) {
 }
 
 func Test_updateStorageUsageCache(t *testing.T) {
-	rep := db.StorageUsageResp_V2{}
+	rep := cmd_util.StorageUsageResp_V2{}
 
 	for i := 0; i < 10; i++ {
 		rep.AccIds = append(rep.AccIds, int64(i))
@@ -106,7 +106,7 @@ func Test_updateStorageUsageCache(t *testing.T) {
 }
 
 func Test_checkStorageUsageCache(t *testing.T) {
-	rep := db.StorageUsageResp_V2{}
+	rep := cmd_util.StorageUsageResp_V2{}
 
 	for i := 0; i < 10; i++ {
 		rep.AccIds = append(rep.AccIds, int64(i))
@@ -130,7 +130,7 @@ func Test_checkStorageUsageCache(t *testing.T) {
 }
 
 func Test_GetObjectCount(t *testing.T) {
-	rep := db.StorageUsageResp_V2{}
+	rep := cmd_util.StorageUsageResp_V2{}
 
 	for i := 0; i < 10; i++ {
 		rep.AccIds = append(rep.AccIds, int64(i))
