@@ -111,6 +111,8 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 	return nil
 }
 
+func (s *consoleSinker) Close() {}
+
 var _ Sinker = new(mysqlSinker)
 
 type mysqlSinker struct {
@@ -478,6 +480,20 @@ func (s *mysqlSinker) getDeleteRowBuf(ctx context.Context) (err error) {
 
 	s.rowBuf = appendByte(s.rowBuf, ')')
 	return
+}
+
+func (s *mysqlSinker) Close() {
+	s.mysql.Close()
+	s.sqlBuf = nil
+	s.rowBuf = nil
+	s.insertPrefix = nil
+	s.deletePrefix = nil
+	s.tsInsertPrefix = nil
+	s.tsDeletePrefix = nil
+	s.insertTypes = nil
+	s.deleteTypes = nil
+	s.insertRow = nil
+	s.deleteRow = nil
 }
 
 type mysqlSink struct {

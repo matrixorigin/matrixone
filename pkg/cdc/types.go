@@ -59,6 +59,7 @@ type Reader interface {
 // Sinker manages and drains the sql parts
 type Sinker interface {
 	Sink(ctx context.Context, data *DecoderOutput) error
+	Close()
 }
 
 // Sink represents the destination mysql or matrixone

@@ -783,3 +783,47 @@ func Test_mysqlSinker_sinkTail(t *testing.T) {
 		})
 	}
 }
+
+func Test_consoleSinker_Close(t *testing.T) {
+	type fields struct {
+		dbTblInfo        *DbTableInfo
+		watermarkUpdater *WatermarkUpdater
+	}
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		{
+			fields: fields{
+				dbTblInfo:        &DbTableInfo{},
+				watermarkUpdater: nil,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &consoleSinker{
+				dbTblInfo:        tt.fields.dbTblInfo,
+				watermarkUpdater: tt.fields.watermarkUpdater,
+			}
+			s.Close()
+		})
+	}
+}
+
+func Test_mysqlSinker_Close(t *testing.T) {
+	sink := &mysqlSink{
+		user:          "root",
+		password:      "123456",
+		ip:            "127.0.0.1",
+		port:          3306,
+		retryTimes:    3,
+		retryDuration: 3 * time.Second,
+	}
+
+	sinker := &mysqlSinker{
+		mysql: sink,
+	}
+
+	sinker.Close()
+}
