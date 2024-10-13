@@ -22,7 +22,7 @@ import (
 type CacheKey = pb.CacheKey
 
 type DataCache interface {
-	EnsureNBytes(n int)
+	EnsureNBytes(want int, evictTaget int)
 	Capacity() int64
 	Used() int64
 	Available() int64

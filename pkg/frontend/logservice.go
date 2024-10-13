@@ -164,7 +164,7 @@ const (
 )
 
 func handleShowLogserviceReplicas(execCtx *ExecCtx, ses *Session) error {
-	pu := getGlobalPu()
+	pu := getPu(ses.GetService())
 	if pu == nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "global pu is not set")
 	}
@@ -294,7 +294,7 @@ func (rs replicas) String() string {
 }
 
 func handleShowLogserviceStores(execCtx *ExecCtx, ses *Session) error {
-	pu := getGlobalPu()
+	pu := getPu(ses.GetService())
 	if pu == nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "global pu is not set")
 	}
@@ -360,7 +360,7 @@ const (
 )
 
 func handleShowLogserviceSettings(execCtx *ExecCtx, ses *Session) error {
-	pu := getGlobalPu()
+	pu := getPu(ses.GetService())
 	if pu == nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "global pu is not set")
 	}
@@ -395,7 +395,7 @@ func formatLocalityValue(vv map[string]string) string {
 }
 
 func handleSetLogserviceSettings(execCtx *ExecCtx, ses *Session, stmt tree.Statement) error {
-	pu := getGlobalPu()
+	pu := getPu(ses.GetService())
 	if pu == nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "global pu is not set")
 	}

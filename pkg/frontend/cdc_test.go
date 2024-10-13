@@ -670,7 +670,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	pu.TaskService = &testTaskService{
 		db: db,
 	}
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	create := &tree.CreateCDC{
 		IfNotExists: false,
@@ -693,7 +693,7 @@ func Test_handleCreateCdc(t *testing.T) {
 
 	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
 	defer func() { cdc2.AesKey = "" }()
-	stub := gostub.Stub(&initAesKeyWrapper, func(context.Context, taskservice.SqlExecutor, uint32) (err error) {
+	stub := gostub.Stub(&initAesKeyWrapper, func(context.Context, taskservice.SqlExecutor, uint32, string) (err error) {
 		return nil
 	})
 	defer stub.Reset()
@@ -1161,10 +1161,10 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		uint64(0),
 	))
 
-	sql4 := "insert into mo_catalog.mo_cdc_watermark values .*0, '00000000-0000-0000-0000-000000000000', 1001, '0-0'.*"
+	sql4 := "insert into mo_catalog.mo_cdc_watermark values .*0, '00000000-0000-0000-0000-000000000000', '1001_0', '0-0'.*"
 	mock.ExpectExec(sql4).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql5 := "select watermark from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = 1001"
+	sql5 := "select watermark from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = '1001_0'"
 	mock.ExpectQuery(sql5).WillReturnRows(sqlmock.NewRows(
 		[]string{
 			"watermark",
@@ -1173,7 +1173,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		"0-0",
 	))
 
-	sql6 := "update mo_catalog.mo_cdc_watermark set watermark='0-0' where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = 1001"
+	sql6 := "update mo_catalog.mo_cdc_watermark set watermark='0-0' where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = '1001_0'"
 	mock.ExpectExec(sql6).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -1714,7 +1714,7 @@ func Test_updateCdc_cancel(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -1801,7 +1801,7 @@ func Test_updateCdc_cancel_all(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -1905,7 +1905,7 @@ func Test_updateCdc_pause(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -1998,7 +1998,7 @@ func Test_updateCdc_pause_all(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -2100,7 +2100,7 @@ func Test_updateCdc_restart(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -2198,7 +2198,7 @@ func Test_updateCdc_resume(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -2279,7 +2279,7 @@ func Test_getTaskCkp(t *testing.T) {
 				accountId: sysAccountID,
 				taskId:    "taskID-1",
 			},
-			wantS: "{\n  \"db1.tb1\": 1970-01-01 00:00:00 +0000 UTC,\n}",
+			wantS: "{\n  \"db1.tb1\": " + timestamp.Timestamp{}.ToStdTime().In(time.Local).String() + ",\n}",
 		},
 	}
 	for _, tt := range tests {
@@ -2419,7 +2419,7 @@ func Test_handleShowCdc(t *testing.T) {
 		StorageEngine: eng,
 		TxnClient:     txnClient,
 	}
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	//////////
 
@@ -2853,7 +2853,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 
 func Test_execFrontend(t *testing.T) {
 	pu := config.ParameterUnit{}
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -2928,7 +2928,7 @@ func Test_getSqlForGetTask(t *testing.T) {
 func Test_initAesKey(t *testing.T) {
 	{
 		cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.NoError(t, err)
 
 		cdc2.AesKey = ""
@@ -2941,7 +2941,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer queryTableStub.Reset()
 
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.Equal(t, e, err)
 	}
 
@@ -2951,7 +2951,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer queryTableStub.Reset()
 
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.Error(t, err)
 	}
 
@@ -2966,7 +2966,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer decryptStub.Reset()
 
-		getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func() *config.ParameterUnit {
+		getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func(string) *config.ParameterUnit {
 			return &config.ParameterUnit{
 				SV: &config.FrontendParameters{
 					KeyEncryptionKey: "kek",
@@ -2975,7 +2975,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer getGlobalPuStub.Reset()
 
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.NoError(t, err)
 		assert.Equal(t, "aesKey", cdc2.AesKey)
 		cdc2.AesKey = ""
@@ -3120,7 +3120,7 @@ func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
 	})
 	defer decryptStub.Reset()
 
-	getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func() *config.ParameterUnit {
+	getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func(string) *config.ParameterUnit {
 		return &config.ParameterUnit{
 			SV: &config.FrontendParameters{
 				KeyEncryptionKey: "kek",

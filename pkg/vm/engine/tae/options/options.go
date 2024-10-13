@@ -207,6 +207,10 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.GCCfg.ScanGCInterval = DefaultScanGCInterval
 	}
 
+	if o.GCCfg.GCMergeCount <= 0 {
+		o.GCCfg.GCMergeCount = DefaultGCMergeCount
+	}
+
 	if o.SchedulerCfg == nil {
 		ioworkers := DefaultIOWorkers
 		procs := runtime.GOMAXPROCS(0)

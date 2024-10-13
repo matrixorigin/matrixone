@@ -59,6 +59,7 @@ type Reader interface {
 // Sinker manages and drains the sql parts
 type Sinker interface {
 	Sink(ctx context.Context, data *DecoderOutput) error
+	Close()
 }
 
 // Sink represents the destination mysql or matrixone
@@ -125,6 +126,7 @@ type DbTableInfo struct {
 	SourceAccountId   uint64
 	SourceDbId        uint64
 	SourceTblId       uint64
+	SourceTblIdStr    string
 
 	SinkAccountName string
 	SinkDbName      string

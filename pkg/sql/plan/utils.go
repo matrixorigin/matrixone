@@ -20,19 +20,21 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"go.uber.org/zap"
 	"math"
 	"path"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1073,6 +1075,16 @@ func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
 	if tableDef.ClusterBy != nil {
 		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
 	}
+
+	if tableDef.Pkey == nil {
+		// view has no pk
+		logutil.Warn("GetSortOrderByName table has no PK",
+			zap.String("dbName", tableDef.DbName),
+			zap.String("tableName", tableDef.Name),
+			zap.String("relKind", tableDef.TableType))
+		return -1
+	}
+
 	if catalog.IsFakePkName(tableDef.Pkey.PkeyColName) {
 		return -1
 	}
@@ -2638,4 +2650,19 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 	}
 
 	return
+}
+
+func getOffsetFromUTC() string {
+	now := time.Now()
+	_, localOffset := now.Zone()
+	return offsetToString(localOffset)
+}
+
+func offsetToString(offset int) string {
+	hours := offset / 3600
+	minutes := (offset % 3600) / 60
+	if hours < 0 {
+		return fmt.Sprintf("-%02d:%02d", -hours, -minutes)
+	}
+	return fmt.Sprintf("+%02d:%02d", hours, minutes)
 }
