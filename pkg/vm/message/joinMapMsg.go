@@ -43,7 +43,7 @@ func (js *JoinSels) Free() {
 func (js *JoinSels) Insert(k, v int32) {
 	i := k / 1024
 	j := k % 1024
-	if js.sels[i] == nil {
+	if len(js.sels) <= int(i) {
 		js.sels = append(js.sels, make([][]int32, 1024))
 	}
 	//if js.sels[i][j] == nil {
