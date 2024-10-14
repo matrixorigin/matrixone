@@ -195,6 +195,8 @@ Project
 drop table t;
 create table t (id int);
 insert into t select result from generate_series(1,100.0) g;
-invalid input: generate_series start type BIGINT is not the same as end type DECIMAL64
+invalid input: generate_series end must be int32 or int64
 insert into t select result from generate_series(1,1e2) g;
-invalid input: generate_series start type BIGINT is not the same as end type DOUBLE
+invalid input: generate_series end must be int32 or int64
+insert into t select result from generate_series(1,100, "step") g;
+invalid input: generate_series step must be int32 or int64
