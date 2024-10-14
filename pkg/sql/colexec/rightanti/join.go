@@ -262,7 +262,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
 	}
 	count := bat.RowCount()
-	mSels := ctr.mp.Sels()
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
 	}
@@ -308,7 +307,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 				}
 				ctr.matched.Add(vals[k] - 1)
 			} else {
-				sels := mSels[vals[k]-1]
+				sels := ctr.mp.GetSels(vals[k] - 1)
 				for _, sel := range sels {
 					if ctr.matched.Contains(uint64(sel)) {
 						continue

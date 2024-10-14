@@ -195,7 +195,6 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(mpbat[0], proc.Mp())
 	}
 
-	mSels := ctr.mp.Sels()
 	count := ap.ctr.inbat.RowCount()
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
@@ -236,7 +235,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 					}
 					rowCount++
 				} else {
-					sels := mSels[idx]
+					sels := ctr.mp.GetSels(idx)
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err := ctr.rbat.Vecs[j].UnionMulti(ap.ctr.inbat.Vecs[rp.Pos], int64(i+k), len(sels), proc.Mp()); err != nil {
@@ -260,7 +259,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 					}
 					rowCount++
 				} else {
-					sels := mSels[idx]
+					sels := ctr.mp.GetSels(idx)
 					for _, sel := range sels {
 						if err := ctr.evalApCondForOneSel(ap.ctr.inbat, ctr.rbat, ap, proc, int64(i+k), int64(sel)); err != nil {
 							return err

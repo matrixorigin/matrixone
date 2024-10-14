@@ -234,7 +234,6 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
 	}
 	count := ap.ctr.buf.RowCount()
-	mSels := ctr.mp.Sels()
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
 	}
@@ -307,7 +306,7 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 					rowCountIncrese++
 				}
 			} else {
-				sels := mSels[vals[k]-1]
+				sels := ctr.mp.GetSels(vals[k] - 1)
 				if ap.Cond != nil {
 					for _, sel := range sels {
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize

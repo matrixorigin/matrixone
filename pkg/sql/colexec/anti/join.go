@@ -199,7 +199,6 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 	}
 
 	count := inbat.RowCount()
-	mSels := ctr.mp.Sels()
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
 	}
@@ -251,7 +250,7 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 					}
 				} else {
 					matched := false // mark if any tuple satisfies the condition
-					sels := mSels[vals[k]-1]
+					sels := ctr.mp.GetSels(vals[k] - 1)
 					for _, sel := range sels {
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 						if err := colexec.SetJoinBatchValues(ctr.joinBat1, inbat, int64(i+k),
