@@ -327,9 +327,10 @@ const (
 	/************ 2. IVF_FLAT Secondary Index ************/
 
 	// IVF_FLAT Table Types
-	SystemSI_IVFFLAT_TblType_Metadata  = "metadata"
-	SystemSI_IVFFLAT_TblType_Centroids = "centroids"
-	SystemSI_IVFFLAT_TblType_Entries   = "entries"
+	IVFFLAT_Table_Prefix               = "ivf_"
+	SystemSI_IVFFLAT_TblType_Metadata  = IVFFLAT_Table_Prefix + "metadata"
+	SystemSI_IVFFLAT_TblType_Centroids = IVFFLAT_Table_Prefix + "centroids"
+	SystemSI_IVFFLAT_TblType_Entries   = IVFFLAT_Table_Prefix + "entries"
 
 	// IVF_FLAT MetadataTable - Column names
 	SystemSI_IVFFLAT_TblCol_Metadata_key = "__mo_index_key"

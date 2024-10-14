@@ -1,4 +1,3 @@
--- @bvt:issue#18406
 SET experimental_ivf_index = 1;
 
 -- pre
@@ -716,4 +715,3 @@ select * from vector_index_08;
 -- post
 SET experimental_ivf_index = 0;
 drop database vecdb2;
--- @bvt:issue

@@ -80,11 +80,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	idxTableDefs := make([][]*plan.TableDef, len(dmlCtx.tableDefs))
 
 	for _, tableDef := range dmlCtx.tableDefs {
+		if strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix) {
+			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into index table")
+		}
+
 		for _, idxDef := range tableDef.Indexes {
 			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
 				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
 			}
-
 		}
 	}
 
