@@ -12,11 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package gc
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -64,16 +70,6 @@ const (
 	GCDeleteTS       = "delete_time"
 	GCAttrTombstone  = "tombstone"
 	GCAttrVersion    = "version"
-)
-
-const (
-	AddChecker    = "add_checker"
-	RemoveChecker = "remove_checker"
-)
-
-const (
-	CheckerKeyTTL   = "ttl"
-	CheckerKeyMinTS = "min_ts"
 )
 
 var (
@@ -155,20 +151,140 @@ type Cleaner interface {
 	TryGC() error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error
-	GetMaxConsumed() *checkpoint.CheckpointEntry
+	GetScanWaterMark() *checkpoint.CheckpointEntry
+	GetCheckpointGCWaterMark() *types.TS
+	GetScannedWindow() *GCWindow
 	Stop()
-	// for test
-	SetMinMergeCountForTest(count int)
 	GetMinMerged() *checkpoint.CheckpointEntry
-	GeteCkpStage() *types.TS
-	CheckGC() error
+	DoCheck() error
 	GetPITRs() (*logtail.PitrInfo, error)
-	GetInputs() *GCTable
 	SetTid(tid uint64)
-	EnableGCForTest()
-	DisableGCForTest()
-	IsEnableGC() bool
-	SetCheckGC(enable bool)
+	EnableGC()
+	DisableGC()
+	GCEnabled() bool
 	GetMPool() *mpool.MPool
 	GetSnapshots() (map[uint32]containers.Vector, error)
+}
+
+var ObjectTableAttrs []string
+var ObjectTableTypes []types.Type
+var ObjectTableSeqnums []uint16
+var ObjectTableMetaAttrs []string
+var ObjectTableMetaTypes []types.Type
+
+var FSinkerFactory engine_util.FileSinkerFactory
+
+const ObjectTablePrimaryKeyIdx = 0
+const ObjectTableVersion = 0
+const (
+	DefaultInMemoryStagedSize = mpool.MB * 32
+)
+
+type GCMetaFile struct {
+	name       string
+	start, end types.TS
+	ext        string
+}
+
+func (f *GCMetaFile) String() string {
+	return fmt.Sprintf(
+		"GCFile[%s-%s-%s-%s]",
+		f.name,
+		f.ext,
+		f.start.ToString(),
+		f.end.ToString(),
+	)
+}
+
+func (f *GCMetaFile) FullName(dir string) string {
+	return dir + f.name
+}
+
+func (f *GCMetaFile) Start() *types.TS {
+	return &f.start
+}
+func (f *GCMetaFile) End() *types.TS {
+	return &f.end
+}
+func (f *GCMetaFile) Ext() string {
+	return f.ext
+}
+func (f *GCMetaFile) Name() string {
+	return f.name
+}
+func (f *GCMetaFile) EqualRange(start, end *types.TS) bool {
+	return f.start == *start && f.end == *end
+}
+
+func init() {
+	ObjectTableAttrs = []string{
+		"stats",
+		"created_ts",
+		"deleted_ts",
+		"db_id",
+		"table_id",
+	}
+	ObjectTableTypes = []types.Type{
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		objectio.TSType,
+		objectio.TSType,
+		objectio.Uint64Type,
+		objectio.Uint64Type,
+	}
+	ObjectTableSeqnums = []uint16{0, 1, 2, 3, 4}
+
+	ObjectTableMetaAttrs = []string{
+		"stats",
+	}
+
+	ObjectTableMetaTypes = []types.Type{
+		objectio.VarcharType,
+	}
+
+	FSinkerFactory = engine_util.NewFSinkerImplFactory(
+		ObjectTableSeqnums,
+		ObjectTablePrimaryKeyIdx,
+		true,
+		false,
+		ObjectTableVersion,
+	)
+}
+
+func NewObjectTableBatch() *batch.Batch {
+	ret := batch.New(ObjectTableAttrs)
+	ret.SetVector(0, vector.NewVec(ObjectTableTypes[0]))
+	ret.SetVector(1, vector.NewVec(ObjectTableTypes[1]))
+	ret.SetVector(2, vector.NewVec(ObjectTableTypes[2]))
+	ret.SetVector(3, vector.NewVec(ObjectTableTypes[3]))
+	ret.SetVector(4, vector.NewVec(ObjectTableTypes[4]))
+	return ret
+}
+
+func addObjectToBatch(
+	bat *batch.Batch,
+	stats *objectio.ObjectStats,
+	object *ObjectEntry,
+	mPool *mpool.MPool,
+) error {
+	err := vector.AppendBytes(bat.Vecs[0], stats[:], false, mPool)
+	if err != nil {
+		return err
+	}
+	err = vector.AppendFixed[types.TS](bat.Vecs[1], object.createTS, false, mPool)
+	if err != nil {
+		return err
+	}
+	err = vector.AppendFixed[types.TS](bat.Vecs[2], object.dropTS, false, mPool)
+	if err != nil {
+		return err
+	}
+	err = vector.AppendFixed[uint64](bat.Vecs[3], object.db, false, mPool)
+	if err != nil {
+		return err
+	}
+	err = vector.AppendFixed[uint64](bat.Vecs[4], object.table, false, mPool)
+	if err != nil {
+		return err
+	}
+	return nil
 }

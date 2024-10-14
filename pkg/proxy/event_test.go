@@ -140,7 +140,7 @@ func runEventTest(t *testing.T,
 	require.NoError(t, os.RemoveAll(addr1))
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
 	frontend.InitServerLevelVars(cn1.uuid)
-	frontend.SetSessionAlloc(cn1.uuid, frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc(cn1.uuid, frontend.NewSessionAllocator(newTestPu()))
 	stopFn1 := startTestCNServer(t, tp.ctx, addr1, nil, withService(cn1.uuid))
 	defer func() {
 		require.NoError(t, stopFn1())
@@ -150,7 +150,7 @@ func runEventTest(t *testing.T,
 	require.NoError(t, os.RemoveAll(addr2))
 	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{})
 	frontend.InitServerLevelVars(cn2.uuid)
-	frontend.SetSessionAlloc(cn2.uuid, frontend.NewLeakCheckAllocator())
+	frontend.SetSessionAlloc(cn2.uuid, frontend.NewSessionAllocator(newTestPu()))
 	stopFn2 := startTestCNServer(t, tp.ctx, addr2, nil, withService(cn2.uuid))
 	defer func() {
 		require.NoError(t, stopFn2())

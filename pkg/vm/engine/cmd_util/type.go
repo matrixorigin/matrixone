@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1_3_0
+package cmd_util
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/cdc"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
+import "time"
+
+const AllowPruneDuration = 24 * time.Hour
+
+const (
+	CheckerKeyTTL   = "ttl"
+	CheckerKeyMinTS = "min_ts"
+
+	AddChecker    = "add_checker"
+	RemoveChecker = "remove_checker"
 )
-
-var InsertInitDataKey = func(txn executor.TxnExecutor, kek string) (err error) {
-	sql, err := cdc.GetInitDataKeySql(kek)
-	if err != nil {
-		return
-	}
-	_, err = txn.Exec(sql, executor.StatementOption{})
-	return
-}

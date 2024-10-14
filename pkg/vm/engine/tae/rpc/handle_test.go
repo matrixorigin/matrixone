@@ -21,9 +21,9 @@ import (
 
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
@@ -71,37 +71,37 @@ func TestHandleInspectPolicy(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, asyncTxn.Commit(context.Background()))
 
-	resp := &db.InspectResp{}
-	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &db.InspectTN{
-		AccessInfo: db.AccessInfo{},
+	resp := &cmd_util.InspectResp{}
+	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &cmd_util.InspectTN{
+		AccessInfo: cmd_util.AccessInfo{},
 		Operation:  "policy",
 	}, resp)
 	require.NoError(t, err)
 	require.Equal(t, "(*) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
 
-	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &db.InspectTN{
-		AccessInfo: db.AccessInfo{},
+	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &cmd_util.InspectTN{
+		AccessInfo: cmd_util.AccessInfo{},
 		Operation:  "policy -t db1.test1 -r 0 -m 0",
 	}, resp)
 	require.NoError(t, err)
 	require.Equal(t, "(1000-test1) maxMergeObjN: 0, maxOsizeObj: 128MB, minOsizeQualified: 0MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
 
-	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &db.InspectTN{
-		AccessInfo: db.AccessInfo{},
+	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &cmd_util.InspectTN{
+		AccessInfo: cmd_util.AccessInfo{},
 		Operation:  "policy -t db1.test1 -s true",
 	}, resp)
 	require.NoError(t, err)
 	require.Equal(t, "(1000-test1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
 
-	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &db.InspectTN{
-		AccessInfo: db.AccessInfo{},
+	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &cmd_util.InspectTN{
+		AccessInfo: cmd_util.AccessInfo{},
 		Operation:  "policy -t db1.test1 -s true",
 	}, resp)
 	require.NoError(t, err)
 	require.Equal(t, "run err: internal error: test1 is already locked", resp.Message)
 
-	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &db.InspectTN{
-		AccessInfo: db.AccessInfo{},
+	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &cmd_util.InspectTN{
+		AccessInfo: cmd_util.AccessInfo{},
 		Operation:  "policy -t db1.test1",
 	}, resp)
 	require.NoError(t, err)
