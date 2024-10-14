@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 	"strings"
@@ -33,7 +33,7 @@ func handleAddFaultPoint() handleFunc {
 			// parameter like "name.freq.action.iarg.sarg"
 			parameters := strings.Split(parameter, ".")
 			if len(parameters) == 1 {
-				payload, err := types.Encode(&db.FaultPoint{
+				payload, err := types.Encode(&cmd_util.FaultPoint{
 					Name: parameters[0],
 				})
 				if err != nil {
@@ -55,7 +55,7 @@ func handleAddFaultPoint() handleFunc {
 				return nil, moerr.NewInternalErrorf(proc.Ctx, "handleAddFaultPoint: %s", err.Error())
 			}
 			sarg := parameters[4]
-			payload, err := types.Encode(&db.FaultPoint{
+			payload, err := types.Encode(&cmd_util.FaultPoint{
 				Name:   name,
 				Freq:   freq,
 				Action: action,
