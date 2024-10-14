@@ -198,7 +198,7 @@ func TestGetInitPort(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			port := getInitPort(name)
+			port := getInitValue(name)
 			add(port)
 		}()
 	}
