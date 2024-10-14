@@ -178,13 +178,15 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 }
 
 // processPhyScope Recursive traversal of PhyScope and processing of PhyOperators within it
-func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
+func processPhyScope(scope *models.PhyScope, nodes []*plan.Node, stats *statistic.StatsInfo) {
 	if scope == nil {
 		return
 	}
 
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
+		stats.AddScopePrepareDuration(scope.PrepareTimeConsumed)
+
 		scopeParallInfo := NewParallelScopeInfo()
 		applyOpStatsToNode(scope.RootOperator, nodes, scopeParallInfo)
 
@@ -199,7 +201,7 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 
 	// handle preScopes recursively
 	for _, preScope := range scope.PreScopes {
-		processPhyScope(&preScope, nodes)
+		processPhyScope(&preScope, nodes, stats)
 	}
 }
 
@@ -213,19 +215,19 @@ func (c *Compile) hasValidQueryPlan() bool {
 	return false
 }
 
-func (c *Compile) fillPlanNodeAnalyzeInfo() {
+func (c *Compile) fillPlanNodeAnalyzeInfo(stats *statistic.StatsInfo) {
 	if c.anal == nil {
 		return
 	}
 
 	// handle local scopes
 	for _, localScope := range c.anal.phyPlan.LocalScope {
-		processPhyScope(&localScope, c.anal.qry.Nodes)
+		processPhyScope(&localScope, c.anal.qry.Nodes, stats)
 	}
 
 	// handle remote run scopes
 	for _, remoteScope := range c.anal.phyPlan.RemoteScope {
-		processPhyScope(&remoteScope, c.anal.qry.Nodes)
+		processPhyScope(&remoteScope, c.anal.qry.Nodes, stats)
 	}
 
 	// Summarize the S3 resources executed by SQL into curNode

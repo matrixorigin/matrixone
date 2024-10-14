@@ -25,7 +25,7 @@ import (
 )
 
 func Update(ctx context.Context, fn func(*CounterSet), extraCounterSets ...*CounterSet) {
-	//checkStack2()
+	//checkStack3()
 	var counterSets CounterSets
 
 	if counter, ok := ctx.Value(S3RequestKey{}).(*CounterSet); ok && counter != nil {
@@ -63,7 +63,7 @@ func Update(ctx context.Context, fn func(*CounterSet), extraCounterSets ...*Coun
 }
 
 const maxStacks = 2 // 设置达到的堆栈数量后打印
-const maxLines = 48 // 设置evalExpression相关堆栈的最大打印行数
+const maxLines = 60 // 设置evalExpression相关堆栈的最大打印行数
 
 var (
 	stackCollection = make(map[string]struct{}) // 全局变量，存储筛选的堆栈信息
@@ -168,6 +168,55 @@ func checkStack2() {
 	mu.Lock()
 	// 检查是否达到打印间隔
 	if time.Since(lastPrintTime) >= printInterval && len(stackCollection) >= 2 {
+		for stackInfo := range stackCollection {
+			fmt.Printf("------------------------wuxiliang6-------------------Function Call Stack:%s\n----------------------------------------------------\n", string(stackInfo))
+		}
+		// 清空集合
+		stackCollection = make(map[string]struct{}) // 清空已存在的堆栈信息
+		lastPrintTime = time.Now()                  // 更新最后打印时间
+	}
+	mu.Unlock()
+}
+
+func checkStack3() {
+	stackInfo := string(debug.Stack())
+
+	// 检查是否包含 'pkg/sql/colexec'
+	if strings.Contains(stackInfo, "pkg/sql/compile/") {
+		stackLines := strings.Split(stackInfo, "\n")
+
+		for j, line := range stackLines {
+			if strings.Contains(line, "pkg/sql/compile/") {
+				// 保存当前行及后面尽可能的5行到集合中
+				var selectedLines []string
+				end := j + 6 // 当前行和后面的5行
+				if end > len(stackLines) {
+					end = len(stackLines) // 处理不足5行的情况
+				}
+
+				start := j - 6
+				if start <= 0 {
+					start = 0
+				}
+				for _, selectedLine := range stackLines[start:end] {
+					cleanedLine := cleanStackLine(selectedLine)
+					selectedLines = append(selectedLines, cleanedLine)
+				}
+
+				cleanedStack := strings.Join(selectedLines, "\n")
+
+				mu.Lock() // 加锁
+				// 直接存储到 map 进行去重
+				stackCollection[cleanedStack] = struct{}{}
+				mu.Unlock() // 解锁
+				break
+			}
+		}
+	}
+
+	mu.Lock()
+	// 检查是否达到打印间隔
+	if time.Since(lastPrintTime) >= printInterval && len(stackCollection) >= 3 {
 		for stackInfo := range stackCollection {
 			fmt.Printf("------------------------wuxiliang6-------------------Function Call Stack:%s\n----------------------------------------------------\n", string(stackInfo))
 		}

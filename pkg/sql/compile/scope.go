@@ -598,10 +598,23 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 		}
 
-		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)
+		crs := new(perfcounter.CounterSet)
+		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList, crs)
 		if err != nil {
 			return err
 		}
+
+		ctx := c.proc.GetTopContext()
+		stats := statistic.StatsInfoFromContext(ctx)
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:        crs.FileService.S3.List.Load(),
+			Head:        crs.FileService.S3.Head.Load(),
+			Put:         crs.FileService.S3.Put.Load(),
+			Get:         crs.FileService.S3.Get.Load(),
+			Delete:      crs.FileService.S3.Delete.Load(),
+			DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+		})
+
 		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
 		//relData.AttachTombstones()
 		s.NodeInfo.Data = relData
@@ -802,30 +815,12 @@ func (s *Scope) replace(c *Compile) error {
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
-	ctx := c.proc.GetTopContext()
-
-	stats := statistic.StatsInfoFromContext(ctx)
-	ctx = perfcounter.AttachS3RequestKey(ctx, &perfcounter.CounterSet{})
-	defer func() {
-		if retrievedCounter, ok := perfcounter.GetS3RequestKey(ctx); ok {
-			stats.AddCompileS3Request(statistic.S3Request{
-				List:        retrievedCounter.FileService.S3.List.Load(),
-				Head:        retrievedCounter.FileService.S3.Head.Load(),
-				Put:         retrievedCounter.FileService.S3.Put.Load(),
-				Get:         retrievedCounter.FileService.S3.Get.Load(),
-				Delete:      retrievedCounter.FileService.S3.Delete.Load(),
-				DeleteMulti: retrievedCounter.FileService.S3.DeleteMulti.Load(),
-			})
-		}
-	}()
-
 	// receive runtime filter and optimized the datasource.
 	if err = s.handleRuntimeFilter(c); err != nil {
 		return
 	}
 
 	switch {
-
 	// If this was a remote-run pipeline. Reader should be generated from Engine.
 	case s.IsRemote:
 		// this cannot use c.proc.Ctx directly, please refer to `default case`.
@@ -850,9 +845,13 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		}
 	// Reader can be generated from local relation.
 	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
+		ctx := c.proc.Ctx
+		stats := statistic.StatsInfoFromContext(ctx)
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 		readers, err = s.DataSource.Rel.BuildReaders(
-			c.proc.Ctx,
+			newCtx,
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
@@ -861,6 +860,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
 		)
+
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:        crs.FileService.S3.List.Load(),
+			Head:        crs.FileService.S3.Head.Load(),
+			Put:         crs.FileService.S3.Put.Load(),
+			Get:         crs.FileService.S3.Get.Load(),
+			Delete:      crs.FileService.S3.Delete.Load(),
+			DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+		})
 
 		if err != nil {
 			return
@@ -924,9 +932,14 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 
 		var mainRds []engine.Reader
 		var subRds []engine.Reader
+
+		stats := statistic.StatsInfoFromContext(ctx)
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+
 		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
 			mainRds, err = s.DataSource.Rel.BuildReaders(
-				c.proc.Ctx,
+				newCtx,
 				c.proc,
 				s.DataSource.FilterExpr,
 				s.NodeInfo.Data,
@@ -946,7 +959,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			}
 			var subRel engine.Relation
 			for num, relName := range s.DataSource.PartitionRelationNames {
-				subRel, err = db.Relation(ctx, relName, c.proc)
+				subRel, err = db.Relation(newCtx, relName, c.proc)
 				if err != nil {
 					return
 				}
@@ -961,7 +974,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 				}
 
 				subRds, err = subRel.BuildReaders(
-					ctx,
+					newCtx,
 					c.proc,
 					s.DataSource.FilterExpr,
 					subBlkList,
@@ -976,6 +989,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 				readers = append(readers, subRds...)
 			}
 		}
+
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:        crs.FileService.S3.List.Load(),
+			Head:        crs.FileService.S3.Head.Load(),
+			Put:         crs.FileService.S3.Put.Load(),
+			Get:         crs.FileService.S3.Get.Load(),
+			Delete:      crs.FileService.S3.Delete.Load(),
+			DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+		})
 
 	}
 	// just for quick GC.

@@ -3816,7 +3816,7 @@ func collectTombstones(
 func (c *Compile) expandRanges(
 	n *plan.Node,
 	rel engine.Relation,
-	blockFilterList []*plan.Expr) (engine.RelData, error) {
+	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
 	var err error
 	var db engine.Database
 	var relData engine.RelData
@@ -3864,7 +3864,9 @@ func (c *Compile) expandRanges(
 			preAllocSize = int(n.Stats.BlockNum)
 		}
 	}
-	relData, err = rel.Ranges(ctx, blockFilterList, preAllocSize, c.TxnOffset)
+
+	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+	relData, err = rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -3874,11 +3876,11 @@ func (c *Compile) expandRanges(
 		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
 			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
 				partTableName := partitionItem.PartitionTableName
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				subrelation, err := db.Relation(newCtx, partTableName, c.proc)
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, blockFilterList, 2, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3896,11 +3898,11 @@ func (c *Compile) expandRanges(
 			partitionTableNames := partitionInfo.PartitionTableNames
 			for i := 0; i < partitionNum; i++ {
 				partTableName := partitionTableNames[i]
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				subrelation, err := db.Relation(newCtx, partTableName, c.proc)
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, blockFilterList, 2, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3914,6 +3916,7 @@ func (c *Compile) expandRanges(
 			}
 		}
 	}
+
 	return relData, nil
 
 }
@@ -3929,24 +3932,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var nodes engine.Nodes
 	var txnOp client.TxnOperator
 
-	ctx := c.proc.GetTopContext()
-
-	stats := statistic.StatsInfoFromContext(ctx)
-	ctx = perfcounter.AttachS3RequestKey(ctx, &perfcounter.CounterSet{})
-	defer func() {
-		if retrievedCounter, ok := perfcounter.GetS3RequestKey(ctx); ok {
-			stats.AddCompileS3Request(statistic.S3Request{
-				List:        retrievedCounter.FileService.S3.List.Load(),
-				Head:        retrievedCounter.FileService.S3.Head.Load(),
-				Put:         retrievedCounter.FileService.S3.Put.Load(),
-				Get:         retrievedCounter.FileService.S3.Get.Load(),
-				Delete:      retrievedCounter.FileService.S3.Delete.Load(),
-				DeleteMulti: retrievedCounter.FileService.S3.DeleteMulti.Load(),
-			})
-		}
-	}()
-
 	//------------------------------------------------------------------------------------------------------------------
+	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
@@ -4021,10 +4008,21 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			}
 		}
 
-		relData, err = c.expandRanges(n, rel, filterExpr)
+		crs := new(perfcounter.CounterSet)
+		relData, err = c.expandRanges(n, rel, filterExpr, crs)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+
+		stats := statistic.StatsInfoFromContext(ctx)
+		stats.AddCompileS3Request(statistic.S3Request{
+			List:        crs.FileService.S3.List.Load(),
+			Head:        crs.FileService.S3.Head.Load(),
+			Put:         crs.FileService.S3.Put.Load(),
+			Get:         crs.FileService.S3.Get.Load(),
+			Delete:      crs.FileService.S3.Delete.Load(),
+			DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+		})
 	} else {
 		// add current CN
 		nodes = append(nodes, engine.Node{
@@ -4058,15 +4056,30 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				hasTombstone bool
 				err2         error
 			)
+
 			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
+				crs := new(perfcounter.CounterSet)
+				newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
-					ctx, &blk.BlockID, fs,
+					newCtx, &blk.BlockID, fs,
 				); err2 != nil {
 					return false, err2
 				} else if blk.IsAppendable() || hasTombstone {
 					newRelData.AppendBlockInfo(&blk)
 					return true, nil
 				}
+
+				stats := statistic.StatsInfoFromContext(ctx)
+				stats.AddCompileS3Request(statistic.S3Request{
+					List:        crs.FileService.S3.List.Load(),
+					Head:        crs.FileService.S3.Head.Load(),
+					Put:         crs.FileService.S3.Put.Load(),
+					Get:         crs.FileService.S3.Get.Load(),
+					Delete:      crs.FileService.S3.Delete.Load(),
+					DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+				})
+
 				if c.evalAggOptimize(n, blk, partialResults, partialResultTypes, columnMap) != nil {
 					partialResults = nil
 					return false, nil

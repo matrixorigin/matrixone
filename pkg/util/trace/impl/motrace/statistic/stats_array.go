@@ -255,20 +255,21 @@ type StatsInfo struct {
 	CompileDuration   time.Duration `json:"CompileDuration"`
 	ExecutionDuration time.Duration `json:"ExecutionDuration"`
 	// Statistics on the time consumption of the output operator in generating data for query statements
-	OutputDuration      int64 `json:"OutputDuration"`
-	BuildReaderDuration int64 `json:"BuildReaderDuration"`
+	OutputDuration      int64 `json:"OutputDuration"`      // unit: ns
+	BuildReaderDuration int64 `json:"BuildReaderDuration"` // unit: ns
 
 	//--------------------------------------------------------------------------------
 	// The following attributes are independent statistics for special operations in `buildPlan` phase, used for reference.
-	BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`
-	BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"`
+	BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
+	BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
 
 	// The following attributes are independent statistics for special operations in `CompileQuery` phase, used for reference.
-	CompileTableScanDuration int64 `json:"CompileTableScanDuration"`
+	CompileTableScanDuration int64 `json:"CompileTableScanDuration"` // unit: ns
 
-	BuildPlanS3Request         S3Request `json:"BuildPlanS3Request"`
-	CompileS3Request           S3Request `json:"CompileS3Request"`
-	PipelineSchedulerS3Request S3Request `json:"PipelineSchedulerS3Request"`
+	BuildPlanS3Request    S3Request `json:"BuildPlanS3Request"`
+	CompileS3Request      S3Request `json:"CompileS3Request"`
+	ScopePrepareS3Request S3Request `json:"ScopePrepareS3Request"`
+	ScopePrepareDuration  int64     `json:"ScopePrepareDuration"` // unit: ns
 	//--------------------------------------------------------------------------------
 
 	//PipelineTimeConsumption      time.Duration
@@ -468,16 +469,23 @@ func (stats *StatsInfo) AddCompileS3Request(sreq S3Request) {
 	atomic.AddInt64(&stats.CompileS3Request.DeleteMulti, sreq.DeleteMulti)
 }
 
-func (stats *StatsInfo) AddPipelineSchedulerS3Request(sreq S3Request) {
+func (stats *StatsInfo) AddScopePrepareS3Request(sreq S3Request) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.PipelineSchedulerS3Request.List, sreq.List)
-	atomic.AddInt64(&stats.PipelineSchedulerS3Request.Head, sreq.Head)
-	atomic.AddInt64(&stats.PipelineSchedulerS3Request.Put, sreq.Put)
-	atomic.AddInt64(&stats.PipelineSchedulerS3Request.Get, sreq.Get)
-	atomic.AddInt64(&stats.PipelineSchedulerS3Request.Delete, sreq.Delete)
-	atomic.AddInt64(&stats.PipelineSchedulerS3Request.DeleteMulti, sreq.DeleteMulti)
+	atomic.AddInt64(&stats.ScopePrepareS3Request.List, sreq.List)
+	atomic.AddInt64(&stats.ScopePrepareS3Request.Head, sreq.Head)
+	atomic.AddInt64(&stats.ScopePrepareS3Request.Put, sreq.Put)
+	atomic.AddInt64(&stats.ScopePrepareS3Request.Get, sreq.Get)
+	atomic.AddInt64(&stats.ScopePrepareS3Request.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.ScopePrepareS3Request.DeleteMulti, sreq.DeleteMulti)
+}
+
+func (stats *StatsInfo) AddScopePrepareDuration(d int64) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.ScopePrepareDuration, d)
 }
 
 //--------------------------------------------------------------------------------------------------------------
