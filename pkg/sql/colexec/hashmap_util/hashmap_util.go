@@ -342,7 +342,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 			hb.MultiSels.Free()
 		}
 	} else {
-		if hb.InputBatchRowCount == int(hb.IntHashMap.GroupCount()) {
+		if hb.InputBatchRowCount == int(hb.StrHashMap.GroupCount()) {
 			hb.MultiSels.Free()
 		}
 	}
