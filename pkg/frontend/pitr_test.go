@@ -36,6 +36,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "h",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
@@ -46,6 +47,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "d",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
@@ -56,6 +58,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "mo",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
@@ -66,6 +69,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "y",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
@@ -76,6 +80,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "h",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().Add(time.Duration(-2)*time.Hour).UnixNano(), pitr)
@@ -86,6 +91,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "h",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().Add(time.Duration(2)*time.Hour).UnixNano(), pitr)
@@ -96,6 +102,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "d",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().Add(time.Duration(25)*time.Hour).UnixNano(), pitr)
