@@ -22,7 +22,6 @@ import (
 
 func (bf *BloomFilter) Clean() {
 	bf.bitmap.Reset()
-	bf.bitmap = nil
 	bf.hashSeed = nil
 	bf.keys = nil
 	bf.states = nil

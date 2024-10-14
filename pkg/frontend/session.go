@@ -789,8 +789,9 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 	ses.EnterFPrint(FPGetShareTxnBackgroundExec)
 	defer ses.ExitFPrint(FPGetShareTxnBackgroundExec)
 	var txnOp TxnOperator
-	if ses.GetTxnHandler() != nil {
-		txnOp = ses.GetTxnHandler().GetTxn()
+	txnHandle := ses.GetTxnHandler()
+	if txnHandle != nil {
+		txnOp = txnHandle.GetTxn()
 	}
 
 	var callback outputCallBackFunc
@@ -1104,7 +1105,7 @@ func (ses *Session) SetUserName(uname string) {
 func (ses *Session) GetConnectionID() uint32 {
 	protocol := ses.GetResponser()
 	if protocol != nil {
-		return ses.GetResponser().GetU32(CONNID)
+		return protocol.GetU32(CONNID)
 	}
 	return 0
 }
@@ -1112,13 +1113,14 @@ func (ses *Session) GetConnectionID() uint32 {
 func (ses *Session) SetConnectionID(v uint32) {
 	protocol := ses.GetResponser()
 	if protocol != nil {
-		ses.GetResponser().SetU32(CONNID, v)
+		protocol.SetU32(CONNID, v)
 	}
 }
 
 func (ses *Session) skipAuthForSpecialUser() bool {
-	if ses.GetTenantInfo() != nil {
-		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
+	acc := ses.GetTenantInfo()
+	if acc != nil {
+		ok, _, _ := isSpecialUser(acc.GetUser())
 		return ok
 	}
 	return false
@@ -1729,8 +1731,9 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
 	nodeCtx := cancelRequestCtx
-	if ses.getRoutineManager() != nil && ses.getRoutineManager().baseService != nil {
-		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, ses.getRoutineManager().baseService.ID())
+	rm := ses.getRoutineManager()
+	if rm != nil && rm.baseService != nil {
+		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, rm.baseService.ID())
 	}
 	ctx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 
