@@ -146,6 +146,6 @@ count(*)
 select count(*) from t1 join t2 on t1.c1=t2.c1 join t3 where t1.c1=1;
 count(*)
 1000000
-select count(*) from (t1 join t2 on t1.c1=t2.c1 join t3 on t2.c3=t3.c3 and t3.c2=1 ) join (t4 join t5 on t4.c1=t5.c1 join t6 on t5.c3=t6.c3 and t6.c2=1);
+select count(*) from (t1 join t2 on t1.c1=t2.c1 join t3 on t2.c3=t3.c3 and t1.c2=1 and t2.c2=1 and t3.c2=1 ) join (t4 join t5 on t4.c1=t5.c1 join t6 on t5.c3=t6.c3 and t4.c2=1 and t5.c2=1 and t6.c2=1);
 count(*)
 0

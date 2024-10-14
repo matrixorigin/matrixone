@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -30,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -132,7 +135,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 		func(rt runtime.Runtime) {
 			defer func() {
 				if r := recover(); r != nil {
-					assert.Equal(t, "cannot upgrade to version 1.3.0, because version 1.2.3 is in upgrading", r)
+					assert.Equal(t, "cannot upgrade to version 2.0.0, because version 1.2.3 is in upgrading", r)
 				} else {
 					t.Errorf("Expected panic but did not occur")
 				}
@@ -175,7 +178,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 				exec,
 				func(s *service) {
 					h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
-					h2 := newTestVersionHandler("1.3.0", "1.2.0", versions.Yes, versions.No, 2)
+					h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
 					s.handles = append(s.handles, h1)
 					s.handles = append(s.handles, h2)
 				},
@@ -193,7 +196,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 		func(rt runtime.Runtime) {
 			defer func() {
 				if r := recover(); r != nil {
-					assert.Equal(t, "cannot upgrade to version 1.3.0 with versionOffset[2], because version 1.3.0 with versionOffset[1] is in upgrading", r)
+					assert.Equal(t, "cannot upgrade to version 2.0.0 with versionOffset[2], because version 2.0.0 with versionOffset[1] is in upgrading", r)
 				} else {
 					t.Errorf("Expected panic but did not occur")
 				}
@@ -220,7 +223,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 						typs,
 						mpool.MustNewZero())
 					memRes.NewBatch()
-					executor.AppendStringRows(memRes, 0, []string{"1.3.0"})
+					executor.AppendStringRows(memRes, 0, []string{"2.0.0"})
 					executor.AppendFixedRows(memRes, 1, []uint32{1})
 					executor.AppendFixedRows(memRes, 2, []int32{0})
 					return memRes.GetResult(), nil
@@ -236,7 +239,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 				exec,
 				func(s *service) {
 					h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
-					h2 := newTestVersionHandler("1.3.0", "1.2.0", versions.Yes, versions.No, 2)
+					h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
 					s.handles = append(s.handles, h1)
 					s.handles = append(s.handles, h2)
 				},
@@ -246,6 +249,62 @@ func TestDoCheckUpgrade(t *testing.T) {
 			defer cancel()
 
 			b.doCheckUpgrade(ctx)
+		},
+	)
+}
+
+func TestDoUpgrade(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Expected no panic")
+				}
+			}()
+
+			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				return executor.Result{}, nil
+			})
+
+			b := newServiceForTest(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				sqlExecutor,
+				func(s *service) {
+					h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
+					h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
+					s.handles = append(s.handles, h1)
+					s.handles = append(s.handles, h2)
+				},
+			)
+
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				return executor.Result{}, nil
+			}, txnOperator)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			versionUpg := versions.VersionUpgrade{
+				FromVersion:        "1.2.0",
+				ToVersion:          "2.0.0",
+				FinalVersion:       "2.0.0",
+				FinalVersionOffset: 10,
+				State:              versions.StateCreated,
+				UpgradeOrder:       1,
+				UpgradeCluster:     versions.Yes,
+				UpgradeTenant:      versions.No,
+			}
+
+			_, err := b.doUpgrade(ctx, versionUpg, txnExecutor)
+			assert.NoError(t, err)
 		},
 	)
 }
@@ -270,7 +329,7 @@ func newServiceForTest(
 	}
 	s.mu.tenants = make(map[int32]bool)
 	initUpgrade(s)
-	//s.handles = append(s.handles, v1_3_0.Handler)
+	//s.handles = append(s.handles, v2_0_0.Handler)
 	for _, opt := range opts {
 		opt(s)
 	}

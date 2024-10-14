@@ -186,27 +186,22 @@ type Conn struct {
 	allocator         *BufferAllocator
 	ses               *Session
 	closeFunc         sync.Once
+	service           string
 }
 
 // NewIOSession create a new io session
-func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (_ *Conn, err error) {
-	// just for ut
-	_, ok := globalSessionAlloc.Load().(Allocator)
-	if !ok {
-		allocator := NewSessionAllocator(pu)
-		setGlobalSessionAlloc(allocator)
-	}
-
+func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *Conn, err error) {
 	c := &Conn{
 		conn:              conn,
 		localAddr:         conn.LocalAddr().String(),
 		remoteAddr:        conn.RemoteAddr().String(),
 		fixBuf:            MemBlock{},
 		dynamicWrBuf:      list.New(),
-		allocator:         &BufferAllocator{allocator: getGlobalSessionAlloc()},
+		allocator:         &BufferAllocator{allocator: getSessionAlloc(service)},
 		timeout:           pu.SV.SessionTimeout.Duration,
 		maxBytesToFlush:   int(pu.SV.MaxBytesInOutbufToFlush * 1024),
 		allowedPacketSize: int(MaxPayloadSize),
+		service:           service,
 	}
 
 	defer func() {
@@ -278,7 +273,7 @@ func (c *Conn) Close() error {
 			return
 		}
 		c.ses = nil
-		rm := getGlobalRtMgr()
+		rm := getRtMgr(c.service)
 		if rm != nil {
 			rm.Closed(c)
 		}
@@ -734,6 +729,7 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
+	c.ses.CountFlushPackage(1)
 	err = c.WriteToConn(c.fixBuf.AvailableData())
 	if err != nil {
 		return err
@@ -746,7 +742,6 @@ func (c *Conn) Flush() error {
 			return err
 		}
 	}
-	c.ses.CountPacket(1)
 	c.packetInBuf = 0
 	return err
 }
@@ -789,6 +784,7 @@ func (c *Conn) WriteToConn(buf []byte) error {
 			return err
 		}
 		sendLength += n
+		c.ses.CountOutputBytes(n)
 	}
 	return nil
 }

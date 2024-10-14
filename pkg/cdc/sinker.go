@@ -111,6 +111,8 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 	return nil
 }
 
+func (s *consoleSinker) Close() {}
+
 var _ Sinker = new(mysqlSinker)
 
 type mysqlSinker struct {
@@ -199,7 +201,7 @@ var NewMysqlSinker = func(
 }
 
 func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error) {
-	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceTblId)
+	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceTblIdStr)
 	if data.toTs.LE(&watermark) {
 		logutil.Errorf("^^^^^ Sinker: unexpected watermark: %s, current watermark: %s",
 			data.toTs.ToString(), watermark.ToString())
@@ -207,7 +209,7 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error)
 	}
 
 	if data.noMoreData {
-		s.watermarkUpdater.UpdateMem(s.dbTblInfo.SourceTblId, data.toTs)
+		s.watermarkUpdater.UpdateMem(s.dbTblInfo.SourceTblIdStr, data.toTs)
 		return
 	}
 
@@ -478,6 +480,20 @@ func (s *mysqlSinker) getDeleteRowBuf(ctx context.Context) (err error) {
 
 	s.rowBuf = appendByte(s.rowBuf, ')')
 	return
+}
+
+func (s *mysqlSinker) Close() {
+	s.mysql.Close()
+	s.sqlBuf = nil
+	s.rowBuf = nil
+	s.insertPrefix = nil
+	s.deletePrefix = nil
+	s.tsInsertPrefix = nil
+	s.tsDeletePrefix = nil
+	s.insertTypes = nil
+	s.deleteTypes = nil
+	s.insertRow = nil
+	s.deleteRow = nil
 }
 
 type mysqlSink struct {
