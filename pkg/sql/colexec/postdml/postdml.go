@@ -29,8 +29,9 @@ import (
 const opName = "postdml"
 
 var (
-	fulltextInsertSqlFmt = "INSERT INTO %s SELECT f.* FROM %s as %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) as f WHERE %s IN (%s)"
-	fulltextDeleteSqlFmt = "DELETE FROM %s WHERE doc_id IN (%s)"
+	fulltextInsertSqlFmt    = "INSERT INTO %s SELECT f.* FROM %s as %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) as f WHERE %s IN (%s)"
+	fulltextDeleteSqlFmt    = "DELETE FROM %s WHERE doc_id IN (%s)"
+	fulltextDeleteAllSqlFmt = "DELETE FROM %s"
 )
 
 func (postdml *PostDml) String(buf *bytes.Buffer) {
@@ -120,8 +121,14 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 		}
 
 		if ftctx.IsDelete {
+			var sql string
 			// append Delete SQL
-			sql := fmt.Sprintf(fulltextDeleteSqlFmt, indextbl, values)
+			if ftctx.IsDeleteWithoutFilters {
+				// delete all
+				sql = fmt.Sprintf(fulltextDeleteAllSqlFmt, indextbl)
+			} else {
+				sql = fmt.Sprintf(fulltextDeleteSqlFmt, indextbl, values)
+			}
 
 			logutil.Infof("DELETE SQL : %s", sql)
 			proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)

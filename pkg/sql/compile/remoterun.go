@@ -831,12 +831,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if t.PostDmlCtx.FullText != nil {
 			ft := t.PostDmlCtx.FullText
 			fulltext := &plan.PostDmlFullTextCtx{
-				IsDelete:        ft.IsDelete,
-				IsInsert:        ft.IsInsert,
-				SourceTableName: ft.SourceTableName,
-				IndexTableName:  ft.IndexTableName,
-				Parts:           ft.Parts,
-				AlgoParams:      ft.AlgoParams,
+				IsDelete:               ft.IsDelete,
+				IsInsert:               ft.IsInsert,
+				SourceTableName:        ft.SourceTableName,
+				IndexTableName:         ft.IndexTableName,
+				Parts:                  ft.Parts,
+				AlgoParams:             ft.AlgoParams,
+				IsDeleteWithoutFilters: ft.IsDeleteWithoutFilters,
 			}
 			in.PostDml.FullText = fulltext
 		}
@@ -1321,12 +1322,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		if t.FullText != nil {
 			ft := t.FullText
 			fulltext := &postdml.PostDmlFullTextCtx{
-				IsDelete:        ft.IsDelete,
-				IsInsert:        ft.IsInsert,
-				SourceTableName: ft.SourceTableName,
-				IndexTableName:  ft.IndexTableName,
-				Parts:           ft.Parts,
-				AlgoParams:      ft.AlgoParams,
+				IsDelete:               ft.IsDelete,
+				IsInsert:               ft.IsInsert,
+				SourceTableName:        ft.SourceTableName,
+				IndexTableName:         ft.IndexTableName,
+				Parts:                  ft.Parts,
+				AlgoParams:             ft.AlgoParams,
+				IsDeleteWithoutFilters: ft.IsDeleteWithoutFilters,
 			}
 			arg.PostDmlCtx.FullText = fulltext
 		}

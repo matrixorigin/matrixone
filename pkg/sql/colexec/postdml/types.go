@@ -70,12 +70,13 @@ func (postdml *PostDml) Release() {
 }
 
 type PostDmlFullTextCtx struct {
-	IsDelete        bool
-	IsInsert        bool
-	SourceTableName string
-	IndexTableName  string
-	Parts           []string
-	AlgoParams      string
+	IsDelete               bool
+	IsInsert               bool
+	SourceTableName        string
+	IndexTableName         string
+	Parts                  []string
+	AlgoParams             string
+	IsDeleteWithoutFilters bool
 }
 
 type PostDmlCtx struct {

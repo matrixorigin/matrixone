@@ -1933,12 +1933,13 @@ func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
 
 	if oldCtx.FullText != nil {
 		delCtx.FullText = &postdml.PostDmlFullTextCtx{
-			IsDelete:        oldCtx.FullText.IsDelete,
-			IsInsert:        oldCtx.FullText.IsInsert,
-			SourceTableName: oldCtx.FullText.SourceTableName,
-			IndexTableName:  oldCtx.FullText.IndexTableName,
-			Parts:           oldCtx.FullText.Parts,
-			AlgoParams:      oldCtx.FullText.AlgoParams,
+			IsDelete:               oldCtx.FullText.IsDelete,
+			IsInsert:               oldCtx.FullText.IsInsert,
+			SourceTableName:        oldCtx.FullText.SourceTableName,
+			IndexTableName:         oldCtx.FullText.IndexTableName,
+			Parts:                  oldCtx.FullText.Parts,
+			AlgoParams:             oldCtx.FullText.AlgoParams,
+			IsDeleteWithoutFilters: oldCtx.FullText.IsDeleteWithoutFilters,
 		}
 	}
 

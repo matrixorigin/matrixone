@@ -990,6 +990,7 @@ message PostDmlFullTextCtx {
 	string index_table_name = 4;
 	repeated string parts = 5;
 	string algo_params = 6;
+	bool is_delete_without_filters = 7;
 }
 
 message PostDmlCtx {
