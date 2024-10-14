@@ -135,7 +135,7 @@ func testS3FS(
 			switch storage := fs.storage.(type) {
 			case *AwsSDKv2:
 				storage.listMaxKeys = 5
-			case *AwsSDKv1:
+			case *diskObjectStorage:
 				storage.listMaxKeys = 5
 			}
 
@@ -255,6 +255,38 @@ func testS3FS(
 				false,
 			)
 			assert.Nil(t, err)
+			return fs
+		})
+	})
+
+	t.Run("overwrite concurrency", func(t *testing.T) {
+		testFileService(t, policy, func(name string) FileService {
+			ctx := context.Background()
+			fs, err := NewS3FS(
+				ctx,
+				ObjectStorageArguments{
+					Name:        name,
+					Endpoint:    config.Endpoint,
+					Bucket:      config.Bucket,
+					KeyPrefix:   time.Now().Format("2006-01-02.15:04:05.000000"),
+					RoleARN:     config.RoleARN,
+					Concurrency: 1024,
+				},
+				DisabledCacheConfig,
+				nil,
+				true,
+				false,
+			)
+			assert.Nil(t, err)
+
+			// to test continuation
+			switch storage := fs.storage.(type) {
+			case *AwsSDKv2:
+				storage.listMaxKeys = 5
+			case *diskObjectStorage:
+				storage.listMaxKeys = 5
+			}
+
 			return fs
 		})
 	})
