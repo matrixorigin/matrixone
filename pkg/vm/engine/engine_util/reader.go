@@ -433,7 +433,7 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.readBlockCnt > 128 {
+	if r.readBlockCnt > 100 {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 	r.readBlockCnt++
