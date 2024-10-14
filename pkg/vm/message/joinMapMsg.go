@@ -17,10 +17,9 @@ package message
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,7 +40,6 @@ func (js *JoinSels) Init() {
 }
 
 func (js *JoinSels) Free() {
-	js.sels = nil
 	if len(js.sels) > 1 {
 		var maxSels int
 		for i := range js.sels {
@@ -53,6 +51,7 @@ func (js *JoinSels) Free() {
 		}
 		logutil.Infof("lensels %v maxsels %v", maxSels)
 	}
+	js.sels = nil
 }
 
 func (js *JoinSels) InsertSel(k, v int32) {
