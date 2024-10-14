@@ -154,7 +154,7 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 }
 
 func (writer *s3Writer) append(proc *process.Process, inBatch *batch.Batch) (err error) {
-	err = writer.cacheBatchs.Push(proc.Mp(), inBatch)
+	err = writer.cacheBatchs.Extend(proc.Mp(), inBatch)
 	if err != nil {
 		return
 	}
@@ -203,6 +203,10 @@ func (writer *s3Writer) prepareDeleteBatchs(proc *process.Process, idx int, part
 
 			if blockMap[blkid] == nil {
 				blockMap[blkid] = newDeleteBlockData(bat, 1)
+				err := blockMap[blkid].bat.PreExtend(proc.GetMPool(), colexec.DefaultBatchSize)
+				if err != nil {
+					return nil, err
+				}
 				strSegid := string(segid[:])
 				if writer.segmentMap[strSegid] == colexec.TxnWorkSpaceIdType {
 					blockMap[blkid].typ = deletion.RawBatchOffset
@@ -243,13 +247,11 @@ func (writer *s3Writer) prepareDeleteBatchs(proc *process.Process, idx int, part
 	deleteBats := batch.NewCompactBatchs()
 	for _, blkid := range blkids {
 		bat := blockMap[blkid].bat
-		//todo deleteBats can take bat's ownership
+		delete(blockMap, blkid)
 		err := deleteBats.Push(proc.GetMPool(), bat)
 		if err != nil {
 			return nil, err
 		}
-		bat.Clean(proc.GetMPool())
-		delete(blockMap, blkid)
 	}
 	retBatchs := deleteBats.TakeBatchs()
 	return retBatchs, nil

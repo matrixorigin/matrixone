@@ -206,6 +206,12 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 		return false
 	}
 
+	for _, e := range node.ProjectList {
+		if !exprCanRemoveProject(e) {
+			return false
+		}
+	}
+
 	childType := builder.qry.Nodes[node.Children[0]].NodeType
 	if childType == plan.Node_VALUE_SCAN || childType == plan.Node_EXTERNAL_SCAN {
 		return parentType == plan.Node_PROJECT
@@ -214,6 +220,22 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 		return parentType == plan.Node_PROJECT
 	}
 
+	return true
+}
+
+func exprCanRemoveProject(expr *Expr) bool {
+	switch ne := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if ne.F.Func.ObjName == "sleep" {
+			return false
+		}
+		for _, arg := range ne.F.GetArgs() {
+			canRemove := exprCanRemoveProject(arg)
+			if !canRemove {
+				return canRemove
+			}
+		}
+	}
 	return true
 }
 
