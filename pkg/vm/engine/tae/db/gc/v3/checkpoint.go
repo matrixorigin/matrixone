@@ -311,6 +311,16 @@ func (c *checkpointCleaner) Replay() (err error) {
 			readDirs = append(readDirs, dir)
 		}
 	}
+
+	// In the normal process, readDirs is empty, and it is impossible to have snapFile and acctFile,
+	// but when upgrading from 1.2 to 1.3, there may be such a situation, so you need to replay table info first
+	if acctFile != "" {
+		if err = c.mutation.snapshotMeta.ReadTableInfo(
+			c.ctx, GCMetaDir+acctFile, c.fs.Service,
+		); err != nil {
+			return
+		}
+	}
 	if len(readDirs) == 0 {
 		return
 	}
@@ -332,13 +342,6 @@ func (c *checkpointCleaner) Replay() (err error) {
 			return
 		}
 		c.mutAddScannedLocked(window)
-	}
-	if acctFile != "" {
-		if err = c.mutation.snapshotMeta.ReadTableInfo(
-			c.ctx, GCMetaDir+acctFile, c.fs.Service,
-		); err != nil {
-			return
-		}
 	}
 	if snapFile != "" {
 		if err = c.mutation.snapshotMeta.ReadMeta(
