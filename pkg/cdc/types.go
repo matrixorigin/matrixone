@@ -69,13 +69,15 @@ type Sink interface {
 }
 
 type ActiveRoutine struct {
+	Pause  chan struct{}
 	Cancel chan struct{}
 }
 
 func NewCdcActiveRoutine() *ActiveRoutine {
-	activeRoutine := &ActiveRoutine{}
-	activeRoutine.Cancel = make(chan struct{})
-	return activeRoutine
+	return &ActiveRoutine{
+		Pause:  make(chan struct{}),
+		Cancel: make(chan struct{}),
+	}
 }
 
 type OutputType int

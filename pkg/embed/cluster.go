@@ -41,10 +41,10 @@ var (
 	minPort = uint64(10000)
 	maxPort = uint64(60000)
 
-	basePort     = getInitPort("")
+	basePort     = getInitValue("mo-test.port")
 	basePortStep = uint64(20)
 
-	clusterID atomic.Uint64
+	clusterID = getInitValue("mo-test.cluster")
 )
 
 type cluster struct {
@@ -74,7 +74,7 @@ func NewCluster(
 	opts ...Option,
 ) (Cluster, error) {
 	c := &cluster{
-		id:    clusterID.Add(1),
+		id:    atomic.AddUint64(&clusterID, 1),
 		state: stopped,
 	}
 	for _, opt := range opts {
@@ -371,9 +371,9 @@ func genConfig(
 	return nil
 }
 
-func getInitPort(name string) uint64 {
+func getInitValue(name string) uint64 {
 	if name == "" {
-		name = "mo-test.port"
+		panic("name cannot be empty")
 	}
 
 	fileName := filepath.Join(
