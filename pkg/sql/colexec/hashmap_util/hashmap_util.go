@@ -232,7 +232,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	} else {
 		if needAllocateSels {
-			hb.MultiSels.Init()
+			hb.MultiSels.Init(hb.InputBatchRowCount)
 		}
 	}
 

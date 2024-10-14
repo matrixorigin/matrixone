@@ -20,8 +20,6 @@ import (
 	"strconv"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -30,28 +28,17 @@ import (
 
 var _ Message = new(JoinMapMsg)
 
-const selsDivideLength = 512
+const selsDivideLength = 1024
 
 type JoinSels struct {
 	sels [][][]int32
 }
 
-func (js *JoinSels) Init() {
-	js.sels = make([][][]int32, 0, 1)
+func (js *JoinSels) Init(len int) {
+	js.sels = make([][][]int32, 0, len/selsDivideLength+1)
 }
 
 func (js *JoinSels) Free() {
-	if len(js.sels) > 1 {
-		var maxSels int
-		for i := range js.sels {
-			for j := range js.sels[i] {
-				if len(js.sels[i][j]) > maxSels {
-					maxSels = len(js.sels[i][j])
-				}
-			}
-		}
-		logutil.Infof("lensels %v maxsels %v", len(js.sels), maxSels)
-	}
 	js.sels = nil
 }
 
