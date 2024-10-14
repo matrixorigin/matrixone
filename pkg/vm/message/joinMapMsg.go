@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -40,6 +42,17 @@ func (js *JoinSels) Init() {
 
 func (js *JoinSels) Free() {
 	js.sels = nil
+	if len(js.sels) > 1 {
+		var maxSels int
+		for i := range js.sels {
+			for j := range js.sels[i] {
+				if len(js.sels[i][j]) > maxSels {
+					maxSels = len(js.sels[i][j])
+				}
+			}
+		}
+		logutil.Infof("lensels %v maxsels %v", maxSels)
+	}
 }
 
 func (js *JoinSels) InsertSel(k, v int32) {
