@@ -460,6 +460,7 @@ func saveMallocProfile() {
 	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*3, moerr.CauseSaveMallocProfileTimeout)
 	defer cancel()
 	if err := globalEtlFS.Write(ctx, writeVec); err != nil {
-		logutil.GetGlobalLogger().Error("failed to save malloc profile", zap.Error(errors.Join(err, context.Cause(ctx))))
+		err = errors.Join(err, context.Cause(ctx))
+		logutil.GetGlobalLogger().Error("failed to save malloc profile", zap.Error(err))
 	}
 }

@@ -16,6 +16,7 @@ package clusterservice
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -239,7 +240,7 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 	}
 	proxyClient := c.client.(labelSupportedClient)
 	if err := proxyClient.UpdateCNLabel(ctx, label); err != nil {
-		return err
+		return errors.Join(err, context.Cause(ctx))
 	}
 	return nil
 }
@@ -253,7 +254,7 @@ func (c *cluster) DebugUpdateCNWorkState(uuid string, state int) error {
 	}
 	proxyClient := c.client.(labelSupportedClient)
 	if err := proxyClient.UpdateCNWorkState(ctx, wstate); err != nil {
-		return err
+		return errors.Join(err, context.Cause(ctx))
 	}
 	return nil
 }
@@ -325,6 +326,7 @@ func (c *cluster) refresh() {
 
 	details, err := c.client.GetClusterDetails(ctx)
 	if err != nil {
+		err = errors.Join(err, context.Cause(ctx))
 		c.logger.Error("failed to refresh cluster details from hakeeper",
 			zap.Error(err))
 		return
