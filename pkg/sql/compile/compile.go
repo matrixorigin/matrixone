@@ -2605,6 +2605,12 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 		}
+	case plan.Node_OUTERAPPLY:
+		for i := range rs {
+			op := constructApply(node, right, apply.OUTER, c.proc)
+			op.SetIdx(c.anal.curNodeIdx)
+			rs[i].setRootOperator(op)
+		}
 	default:
 		panic("unknown apply")
 	}
