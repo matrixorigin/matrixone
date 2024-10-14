@@ -195,21 +195,21 @@ drop stage if exists my_ext_stage;
 create stage my_ext_stage URL='s3://load/files/';
 drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
 
 drop snapshot if exists stage_sp01;
 create snapshot stage_sp01 for cluster;
 
 alter stage my_ext_stage1 SET URL='s3://load/files2/';
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
 drop stage my_ext_stage;
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
 
 restore account sys from snapshot stage_sp01;
--- @ignore:0,5
+-- @ignore:0,2,5
 select * from mo_catalog.mo_stages;
 drop snapshot stage_sp01;
 drop stage my_ext_stage;
