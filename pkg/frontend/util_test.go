@@ -1629,23 +1629,3 @@ func Test_extractTableDefColumns(t *testing.T) {
 		assert.NotNil(t, err)
 	})
 }
-
-func Test_yyy(t *testing.T) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*3, moerr.NewInternalErrorNoCtx("cause : Test_yyy timeout"))
-	defer cancel()
-	time.Sleep(time.Second * 5)
-	select {
-	case <-ctx.Done():
-		fmt.Println(ctx.Err(), context.Cause(ctx))
-	}
-}
-
-func Test_yyy2(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-	defer cancel()
-	time.Sleep(time.Second * 5)
-	select {
-	case <-ctx.Done():
-		fmt.Println(ctx.Err(), context.Cause(ctx))
-	}
-}
