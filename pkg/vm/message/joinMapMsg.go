@@ -54,7 +54,7 @@ func (js *JoinSels) Insert(k, v int32) {
 		js.sels[i] = append(js.sels[i], make([]int32, 0))
 	}
 	if js.sels[i][j] == nil {
-		js.sels[i][j] = make([]int32, 0, 4)
+		js.sels[i][j] = make([]int32, 0)
 	}
 	js.sels[i][j] = append(js.sels[i][j], v)
 }
