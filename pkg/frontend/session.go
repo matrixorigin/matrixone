@@ -174,6 +174,8 @@ type Session struct {
 	// sentRows used to record rows it sent to client for motrace.StatementInfo.
 	// If there is NO exec_plan, sentRows will be 0.
 	sentRows atomic.Int64
+	// writeBytes count of bytes send back to client.
+	writeBytes int
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
 	// packetCounter count the tcp packet send to client.
@@ -429,13 +431,15 @@ func (ses *Session) CountPayload(length int) {
 	}
 	ses.payloadCounter += int64(length)
 }
-func (ses *Session) CountPacket(delta int64) {
+
+// CountFlushPackage count the raw conn flush op.
+func (ses *Session) CountFlushPackage(delta int64) {
 	if ses == nil {
 		return
 	}
 	ses.packetCounter.Add(delta)
 }
-func (ses *Session) GetPacketCnt() int64 {
+func (ses *Session) GetFlushPacketCnt() int64 {
 	if ses == nil {
 		return 0
 	}
@@ -447,6 +451,16 @@ func (ses *Session) ResetPacketCounter() {
 	}
 	ses.packetCounter.Store(0)
 	ses.payloadCounter = 0
+	ses.writeBytes = 0
+}
+func (ses *Session) CountOutputBytes(delta int) {
+	if ses == nil {
+		return
+	}
+	ses.writeBytes += delta
+}
+func (ses *Session) GetOutputBytes() int {
+	return ses.writeBytes
 }
 
 // SetTStmt do set the Session.tStmt
@@ -605,7 +619,6 @@ func (ses *Session) Close() {
 	ses.ep = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler.Close()
-		ses.txnHandler = nil
 	}
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.execCtx = nil

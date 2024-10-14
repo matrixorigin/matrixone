@@ -17,18 +17,12 @@ package gossip
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
 )
-
-func getRandomPort() int {
-	rand.New(rand.NewSource(time.Now().UnixNano()))
-	return rand.Intn(65535-1024) + 1024
-}
 
 func TestNodeGossip(t *testing.T) {
 	defer leaktest.AfterTest(t)()
@@ -47,7 +41,7 @@ func TestNodeGossip(t *testing.T) {
 		}))
 	assert.NoError(t, err)
 	assert.NotNil(t, n1)
-	err = n1.Create()
+	err = n1.CreateWithRetry()
 	if err != nil {
 		return
 	}
@@ -74,7 +68,7 @@ func TestNodeGossip(t *testing.T) {
 		}))
 	assert.NoError(t, err)
 	assert.NotNil(t, n2)
-	err = n2.Create()
+	err = n2.CreateWithRetry()
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, n2.Leave(time.Millisecond*300))
@@ -83,4 +77,44 @@ func TestNodeGossip(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, n2.NumMembers())
 	assert.NotNil(t, n2.DistKeyCacheGetter()())
+}
+
+func TestNodeCreateRetry(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+	svcPort := getRandomPort()
+	cachePort := getRandomPort()
+	n1, err := NewNode(ctx, "n1",
+		WithListenAddrFn(func() string {
+			return fmt.Sprintf("127.0.0.1:%d", svcPort)
+		}),
+		WithServiceAddrFn(func() string {
+			return fmt.Sprintf("127.0.0.1:%d", svcPort)
+		}),
+		WithCacheServerAddrFn(func() string {
+			return fmt.Sprintf("127.0.0.1:%d", cachePort)
+		}))
+	assert.NoError(t, err)
+	assert.NotNil(t, n1)
+	err = n1.CreateWithRetry()
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, n1.Leave(time.Millisecond*300))
+	}()
+
+	n2, err := NewNode(ctx, "n2",
+		WithListenAddrFn(func() string {
+			return fmt.Sprintf("127.0.0.1:%d", svcPort)
+		}),
+		WithServiceAddrFn(func() string {
+			return fmt.Sprintf("127.0.0.1:%d", svcPort)
+		}),
+		WithCacheServerAddrFn(func() string {
+			return fmt.Sprintf("127.0.0.1:%d", cachePort)
+		}))
+	assert.NoError(t, err)
+	assert.NotNil(t, n2)
+	err = n2.CreateWithRetry()
+	assert.NoError(t, err)
+	assert.NoError(t, n2.Leave(time.Millisecond*300))
 }
