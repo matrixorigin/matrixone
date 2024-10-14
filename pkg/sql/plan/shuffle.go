@@ -38,7 +38,6 @@ const (
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
-	shuffleBucket                   = 1024 * 1024 * 2
 )
 
 const (
@@ -467,17 +466,31 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 }
 
 func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
-	num := int(hashmapSize/float64(lencn)/shuffleBucket + 1)
-	if num <= ncpu {
+	maxret := ncpu * 4
+	if maxret > 64 {
+		maxret = 64 // to avoid a hang bug, fix this in the future
+	}
+	// these magic number comes from hashmap resize factor. see hashtable/common.go, in maxElemCnt function
+	ret1 := int(hashmapSize/float64(lencn)/12800000) + 1
+	if ret1 >= maxret {
+		return maxret
+	}
+
+	ret2 := int(hashmapSize/float64(lencn)/6000000) + 1
+	if ret2 >= maxret {
+		return ret1
+	}
+
+	ret3 := int(hashmapSize/float64(lencn)/2666666) + 1
+	if ret3 >= maxret {
+		return ret2
+	}
+
+	if ret3 <= ncpu {
 		return ncpu
 	}
-	if num >= ncpu*4 {
-		num = ncpu * 4
-	}
-	if num > 64 {
-		num = 64
-	}
-	return num
+
+	return (ret3/ncpu + 1) * ncpu
 }
 
 // default shuffle type for scan is hash
