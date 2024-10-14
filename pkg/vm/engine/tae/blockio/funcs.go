@@ -34,7 +34,7 @@ func LoadColumnsData(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	cacheBat *batch.Batch,
+	cacheVectors containers.Vectors, // cacheVectors.Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), err error) {
@@ -50,16 +50,15 @@ func LoadColumnsData(
 	}
 	release = func() {
 		objectio.ReleaseIOVector(&ioVectors)
-		cacheBat.FreeColumns(m)
+		cacheVectors.Free(m)
 	}
 	for i := range cols {
-		if err = objectio.MustVectorTo(cacheBat.Vecs[i], ioVectors.Entries[i].CachedData.Bytes()); err != nil {
+		if err = objectio.MustVectorTo(&cacheVectors[i], ioVectors.Entries[i].CachedData.Bytes()); err != nil {
 			release()
 			release = nil
 			return
 		}
 	}
-	cacheBat.SetRowCount(cacheBat.Vecs[0].Length())
 	return
 }
 
@@ -134,12 +133,12 @@ func LoadTombstoneColumns(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	cacheBat *batch.Batch, // cacheBat.Allocated() must be 0
+	cacheVectors containers.Vectors, // cacheVectors.Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (meta objectio.ObjectDataMeta, release func(), err error) {
 	return LoadColumnsData(
-		ctx, cols, typs, fs, location, cacheBat, m, policy,
+		ctx, cols, typs, fs, location, cacheVectors, m, policy,
 	)
 }
 
@@ -149,12 +148,12 @@ func LoadColumns(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	cacheBat *batch.Batch, // fillBatch.Allocated() must be 0
+	cacheVectors containers.Vectors, // Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (release func(), err error) {
 	_, release, err = LoadColumnsData(
-		ctx, cols, typs, fs, location, cacheBat, m, policy,
+		ctx, cols, typs, fs, location, cacheVectors, m, policy,
 	)
 	return
 }

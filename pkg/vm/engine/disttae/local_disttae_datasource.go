@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -1020,7 +1021,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	}
 
 	attrs := objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_CommitTS)
-	emptyBatch := batch.EmptyBatchWithAttrs(attrs)
+	cacheVectors := containers.NewVectors(len(attrs))
 
 	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
@@ -1045,7 +1046,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
 			if _, release, err = blockio.ReadDeletes(
-				ls.ctx, location, ls.fs, obj.GetCNCreated(), &emptyBatch,
+				ls.ctx, location, ls.fs, obj.GetCNCreated(), cacheVectors,
 			); err != nil {
 				return nil, err
 			}
@@ -1053,9 +1054,9 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			var deletedRowIds []objectio.Rowid
 			var commit []types.TS
 
-			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](emptyBatch.Vecs[0])
+			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](&cacheVectors[0])
 			if !obj.GetCNCreated() {
-				commit = vector.MustFixedColWithTypeCheck[types.TS](emptyBatch.Vecs[1])
+				commit = vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[1])
 			}
 
 			for i := 0; i < len(rowIds); i++ {

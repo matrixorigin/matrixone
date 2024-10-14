@@ -38,3 +38,10 @@ func (vs Vectors) Allocated() int {
 	}
 	return n
 }
+
+func (vs Vectors) Rows() int {
+	if len(vs) == 0 {
+		return 0
+	}
+	return vs[0].Length()
+}
