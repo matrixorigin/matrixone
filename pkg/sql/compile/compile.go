@@ -330,13 +330,14 @@ func (c *Compile) run(s *Scope) error {
 	case Remote:
 		err := s.RemoteRun(c)
 		//@FIXME not a good choice
-		if _, ok := s.RootOp.(*multi_update.MultiUpdate); ok && len(s.PreScopes) > 0 {
-			for _, ps := range s.PreScopes[0].PreScopes {
-				c.addAffectedRows(ps.affectedRows())
+		if _, ok := s.RootOp.(*multi_update.MultiUpdate); ok {
+			if len(s.PreScopes) > 0 {
+				for _, ps := range s.PreScopes[0].PreScopes {
+					c.addAffectedRows(ps.affectedRows())
+				}
 			}
-		} else {
-			c.addAffectedRows(s.affectedRows())
 		}
+		c.addAffectedRows(s.affectedRows())
 		return err
 	case CreateDatabase:
 		err := s.CreateDatabase(c)
