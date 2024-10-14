@@ -94,7 +94,7 @@ func DoTxnRequest[
 		})
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*10)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*10, moerr.CauseDoTxnRequest)
 	defer cancel()
 
 	var result *rpc.SendResult

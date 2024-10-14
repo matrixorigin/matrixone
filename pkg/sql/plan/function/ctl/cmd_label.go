@@ -205,7 +205,7 @@ func handleSyncCommit(
 			addrs = append(addrs, c.QueryAddress)
 			return true
 		})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseHandleSyncCommit)
 	defer cancel()
 	maxCommitTS := timestamp.Timestamp{}
 	for _, addr := range addrs {

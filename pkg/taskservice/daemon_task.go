@@ -84,7 +84,7 @@ func newResumeTask(r *taskRunner, t *daemonTask) *resumeTask {
 }
 
 func (t *resumeTask) Handle(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseResumeTaskHandle)
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
@@ -131,7 +131,7 @@ func newRestartTask(r *taskRunner, t *daemonTask) *restartTask {
 }
 
 func (t *restartTask) Handle(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseRestartTaskHandle)
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
@@ -178,7 +178,7 @@ func newPauseTask(r *taskRunner, t *daemonTask) *pauseTask {
 }
 
 func (t *pauseTask) Handle(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CausePauseTaskHandle)
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
@@ -221,7 +221,7 @@ func newCancelTask(r *taskRunner, t *daemonTask) *cancelTask {
 }
 
 func (t *cancelTask) Handle(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseCancelTaskHandle)
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
@@ -381,7 +381,7 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 }
 
 func (r *taskRunner) queryDaemonTasks(ctx context.Context, c ...Condition) []task.DaemonTask {
-	ctx, cancel := context.WithTimeout(ctx, r.options.fetchTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, r.options.fetchTimeout, moerr.CauseQueryDaemonTasks)
 	defer cancel()
 	t, err := r.service.QueryDaemonTask(ctx, c...)
 	if err != nil {
@@ -420,7 +420,7 @@ func (r *taskRunner) startTasks(ctx context.Context) []task.DaemonTask {
 		hakeeperClient := r.getClient()
 		// account -> cn map. in all c
 		if hakeeperClient != nil {
-			ctx2, cancel := context.WithTimeout(ctx, time.Second*5)
+			ctx2, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseStartTasks)
 			defer cancel()
 			state, err := hakeeperClient.GetClusterState(ctx2)
 			if err != nil {

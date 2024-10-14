@@ -73,7 +73,7 @@ func (s *service) AddStatementFilter(
 		return moerr.NewNotSupportedNoCtxf("method %s not support", method)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseAddStatementFilter)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -95,7 +95,7 @@ func (s *service) AddStatementFilter(
 }
 
 func (s *service) ClearStatementFilters() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseClearStatementFilters)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -125,7 +125,7 @@ func (s *service) ClearStatementFilters() error {
 }
 
 func (s *service) RefreshStatementFilters() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseRefreshStatementFilters)
 	defer cancel()
 
 	var filters []StatementFilter

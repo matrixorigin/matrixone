@@ -171,7 +171,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 		return 0, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseWriteRowRecords)
 	defer cancel()
 
 	err = bulkInsert(ctx, dbConn, records, tbl)

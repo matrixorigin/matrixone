@@ -16,12 +16,14 @@ package datasync
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"go.uber.org/zap"
 )
 
 const (
@@ -133,7 +135,7 @@ func (c *logClient) getLeaderID(ctx context.Context) (uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetLeaderID)
 	defer cancel()
 	leaderID, err := c.client.GetLeaderID(ctx)
 	if err != nil {
@@ -146,7 +148,7 @@ func (c *logClient) write(ctx context.Context, data []byte) (uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientWrite)
 	defer cancel()
 	return c.client.Append(ctx, pb.LogRecord{Data: data})
 }
@@ -155,7 +157,7 @@ func (c *logClient) readEntries(ctx context.Context, lsn uint64) ([]logservice.L
 	if err := c.prepare(ctx); err != nil {
 		return nil, 0, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientReadEntries)
 	defer cancel()
 	return c.client.Read(ctx, lsn, recordMaxSize)
 }
@@ -164,7 +166,7 @@ func (c *logClient) truncate(ctx context.Context, lsn uint64) error {
 	if err := c.prepare(ctx); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientTruncate)
 	defer cancel()
 	return c.client.Truncate(ctx, lsn)
 }
@@ -173,7 +175,7 @@ func (c *logClient) getTruncatedLsn(ctx context.Context) (uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetTruncatedLsn)
 	defer cancel()
 	return c.client.GetTruncatedLsn(ctx)
 }
@@ -182,7 +184,7 @@ func (c *logClient) getLatestLsn(ctx context.Context) (uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetLatestLsn)
 	defer cancel()
 	return c.client.GetLatestLsn(ctx)
 }
@@ -191,7 +193,7 @@ func (c *logClient) setRequiredLsn(ctx context.Context, lsn uint64) error {
 	if err := c.prepare(ctx); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientSetRequiredLsn)
 	defer cancel()
 	return c.client.SetRequiredLsn(ctx, lsn)
 }
@@ -200,7 +202,7 @@ func (c *logClient) getRequiredLsn(ctx context.Context) (uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetRequiredLsn)
 	defer cancel()
 	return c.client.GetRequiredLsn(ctx)
 }

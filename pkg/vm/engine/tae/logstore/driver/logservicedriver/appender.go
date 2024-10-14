@@ -20,11 +20,13 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	"go.uber.org/zap"
 )
 
 type driverAppender struct {
@@ -65,7 +67,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
 	defer logSlowAppend()()
-	ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), appendTimeout, moerr.CauseDriverAppender1)
 
 	var timeoutSpan trace.Span
 	// Before issue#10467 is resolved, we skip this span,
@@ -85,7 +87,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
-			ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), appendTimeout, moerr.CauseDriverAppender2)
 			ctx, timeoutSpan = trace.Debug(ctx, "appender retry",
 				trace.WithProfileGoroutine(),
 				trace.WithProfileHeap(),

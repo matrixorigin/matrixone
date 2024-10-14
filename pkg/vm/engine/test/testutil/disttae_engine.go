@@ -191,7 +191,7 @@ func (de *TestDisttaeEngine) NewTxnOperator(
 func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 	ts := de.Now()
 	ticker := time.NewTicker(time.Second)
-	ctx, cancel := context.WithTimeout(ctx, time.Second*60)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*60, moerr.CauseWaitLogtail)
 	defer cancel()
 
 	done := false

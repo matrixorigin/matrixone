@@ -320,7 +320,7 @@ func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 	tenantFetchFunc := func() (int32, string, error) {
 		return int32(tenantID), finalVersion, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*30, moerr.CauseCheckTenantUpgrade)
 	defer cancel()
 	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
 		return err
@@ -330,7 +330,7 @@ func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 
 // UpgradeTenant Manual command tenant upgrade entrance
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseUpgradeTenant)
 	defer cancel()
 	if _, err := s.bootstrapService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount); err != nil {
 		return err
@@ -523,9 +523,10 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 	s.initHakeeperClientOnce.Do(func() {
 		s.hakeeperConnected = make(chan struct{})
 
-		ctx, cancel := context.WithTimeout(
+		ctx, cancel := context.WithTimeoutCause(
 			context.Background(),
 			s.cfg.HAKeeper.DiscoveryTimeout.Duration,
+			moerr.CauseGetHAKeeperClient,
 		)
 		defer cancel()
 		client, err = logservice.NewCNHAKeeperClient(ctx, s.cfg.UUID, s.cfg.HAKeeper.ClientConfig)
@@ -899,7 +900,7 @@ func (s *service) bootstrap() error {
 		s.options.bootstrapOptions...,
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseBootstrap)
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
 	defer cancel()
 
@@ -913,7 +914,7 @@ func (s *service) bootstrap() error {
 
 	if s.cfg.AutomaticUpgrade {
 		return s.stopper.RunTask(func(ctx context.Context) {
-			ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
+			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseBootstrap2)
 			defer cancel()
 			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
 				if err != context.Canceled {
@@ -982,7 +983,7 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 			},
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*3, moerr.CauseSaveProfile)
 	defer cancel()
 	err = etlFS.Write(ctx, writeVec)
 	if err != nil {

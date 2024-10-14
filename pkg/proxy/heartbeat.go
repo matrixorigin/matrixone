@@ -18,8 +18,10 @@ import (
 	"context"
 	"time"
 
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func (s *Server) heartbeat(ctx context.Context) {
@@ -44,7 +46,7 @@ func (s *Server) heartbeat(ctx context.Context) {
 }
 
 func (s *Server) doHeartbeat(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, s.config.HAKeeper.HeartbeatTimeout.Duration)
+	ctx, cancel := context.WithTimeoutCause(ctx, s.config.HAKeeper.HeartbeatTimeout.Duration, moerr.CauseDoHeartbeat)
 	defer cancel()
 	_, err := s.haKeeperClient.SendProxyHeartbeat(ctx, pb.ProxyHeartbeat{
 		UUID:          s.config.UUID,

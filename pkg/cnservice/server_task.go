@@ -125,7 +125,7 @@ func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
 
 func (s *service) canClaimDaemonTask(taskAccount string) bool {
 	const accountKey = "account"
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*3, moerr.CauseCanClaimDaemonTask)
 	defer cancel()
 
 	state, err := s._hakeeperClient.GetClusterState(ctx)
@@ -300,7 +300,7 @@ func (s *service) registerExecutorsLocked() {
 			}
 			sql := fmt.Sprintf("select mo_ctl('CN', 'MERGEOBJECTS', 'o:%d.%d:%s')",
 				mergeTask.TblId, mergeTask.AccountId, strings.Join(objs, ","))
-			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			ctx, cancel := context.WithTimeoutCause(ctx, 10*time.Minute, moerr.CauseMergeObject)
 			defer cancel()
 			opts := executor.Options{}.WithWaitCommittedLogApplied()
 			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
@@ -309,7 +309,7 @@ func (s *service) registerExecutorsLocked() {
 	)
 
 	s.task.runner.RegisterExecutor(task.TaskCode_Retention, func(ctx context.Context, task task.Task) error {
-		ctx1, cancel1 := context.WithTimeout(ctx, 10*time.Second)
+		ctx1, cancel1 := context.WithTimeoutCause(ctx, 10*time.Second, moerr.CauseRetention)
 		result, err := s.sqlExecutor.Exec(ctx1, "select account_id from mo_catalog.mo_account;",
 			executor.Options{}.WithWaitCommittedLogApplied())
 		cancel1()
@@ -328,7 +328,7 @@ func (s *service) registerExecutorsLocked() {
 		})
 
 		for _, accountID := range accounts {
-			ctx2, cancel2 := context.WithTimeout(ctx, 15*time.Second)
+			ctx2, cancel2 := context.WithTimeoutCause(ctx, 15*time.Second, moerr.CauseRetention2)
 			err = s.sqlExecutor.ExecTxn(ctx2, func(txn executor.TxnExecutor) error {
 				results, err := txn.Exec("select database_name, table_name, retention_deadline from mo_catalog.mo_retention", executor.StatementOption{})
 				if err != nil {

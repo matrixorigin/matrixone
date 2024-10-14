@@ -479,9 +479,10 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 	storage := th.storage
-	ctx2, cancel := context.WithTimeout(
+	ctx2, cancel := context.WithTimeoutCause(
 		th.txnCtx,
 		storage.Hints().CommitOrRollbackTimeout,
+		moerr.CauseCommitUnsafe,
 	)
 	defer cancel()
 	val, e := execCtx.ses.GetSessionSysVar("mo_pk_check_by_dn")
@@ -591,9 +592,10 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 			th.txnCtx = context.WithValue(th.txnCtx, defines.TemporaryTN{}, th.tempStorage)
 		}
 	}
-	ctx2, cancel := context.WithTimeout(
+	ctx2, cancel := context.WithTimeoutCause(
 		th.txnCtx,
 		th.storage.Hints().CommitOrRollbackTimeout,
+		moerr.CauseRollbackUnsafe,
 	)
 	defer cancel()
 	defer func() {

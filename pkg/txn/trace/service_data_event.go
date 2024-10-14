@@ -224,7 +224,7 @@ func (s *service) ApplyDeleteObject(
 }
 
 func (s *service) AddTableFilter(name string, columns []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseAddTableFilter)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -264,7 +264,7 @@ func (s *service) AddTableFilter(name string, columns []string) error {
 }
 
 func (s *service) ClearTableFilters() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseClearTableFilters)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -294,7 +294,7 @@ func (s *service) ClearTableFilters() error {
 }
 
 func (s *service) RefreshTableFilters() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseRefreshTableFilters)
 	defer cancel()
 
 	var filters []EntryFilter

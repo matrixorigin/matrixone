@@ -19,6 +19,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -139,7 +140,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	ctx, cancel = context.WithTimeoutCause(ctx, getGlobalPu().SV.SessionTimeout.Duration, moerr.CauseInternalExecutorExec)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer func() {
@@ -163,7 +164,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	ctx, cancel = context.WithTimeoutCause(ctx, getGlobalPu().SV.SessionTimeout.Duration, moerr.CauseInternalExecutorQuery)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()

@@ -21,6 +21,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
@@ -33,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"go.uber.org/zap"
 )
 
 const (
@@ -498,7 +499,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 func (s *LogtailServer) getSubLogtailPhase(
 	ctx context.Context, sub subscription, from, to timestamp.Timestamp,
 ) (*LogtailPhase, error) {
-	sendCtx, cancel := context.WithTimeout(ctx, sub.timeout)
+	sendCtx, cancel := context.WithTimeoutCause(ctx, sub.timeout, moerr.CauseGetSubLogtailPhase)
 	defer cancel()
 
 	var subErr error
@@ -538,7 +539,7 @@ func (s *LogtailServer) getSubLogtailPhase(
 
 func (s *LogtailServer) sendSubscription(ctx context.Context, p1, p2 *LogtailPhase) {
 	sub := p1.sub
-	sendCtx, cancel := context.WithTimeout(ctx, sub.timeout)
+	sendCtx, cancel := context.WithTimeoutCause(ctx, sub.timeout, moerr.CauseSendSubscription)
 	defer cancel()
 	tail, cb := newLogtailMerger(p1, p2).Merge()
 	// send subscription response

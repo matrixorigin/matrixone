@@ -141,7 +141,7 @@ func (c *txnClient) getLatestCheckpoint(ctx context.Context) (*api.CheckpointRes
 		return nil, moerr.NewInternalError(ctx, "cannot get request")
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*2)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*2, moerr.CauseTxnClientGetLatestCheckpoint)
 	defer cancel()
 	result, err := c.client.Send(ctx, []txn.TxnRequest{
 		{

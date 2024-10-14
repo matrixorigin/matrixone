@@ -156,13 +156,13 @@ func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uin
 		panic(err)
 	}
 	t0 := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.ReadDuration, moerr.CauseReadFromLogService)
 	records, nextLsn, err = client.c.Read(ctx, lsn, uint64(size))
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
 			logutil.Infof("LogService Driver: retry read err is %v", err)
-			ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.ReadDuration, moerr.CauseReadFromLogService2)
 			records, nextLsn, err = client.c.Read(ctx, lsn, uint64(size))
 			cancel()
 			return err == nil

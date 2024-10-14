@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/util/format"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -62,7 +63,7 @@ func handleRemoveRemoteLockTable(
 			addrs = append(addrs, c.QueryAddress)
 			return true
 		})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseHandleRemoveRemoteLockTable)
 	defer cancel()
 
 	total := 0
@@ -117,7 +118,7 @@ func handleGetLatestBind(
 			addr = t.QueryAddress
 			return true
 		})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseHandleGetLatestBind)
 	defer cancel()
 
 	req := qt.NewRequest(querypb.CmdMethod_GetLatestBind)

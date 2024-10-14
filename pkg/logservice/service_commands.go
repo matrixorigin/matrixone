@@ -20,11 +20,13 @@ import (
 	"reflect"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
@@ -198,7 +200,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 	defer func() {
 		v2.LogHeartbeatHistogram.Observe(time.Since(start).Seconds())
 	}()
-	ctx2, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx2, cancel := context.WithTimeoutCause(ctx, 3*time.Second, moerr.CauseLogServiceHeartbeat)
 	defer cancel()
 
 	if s.haClient == nil {

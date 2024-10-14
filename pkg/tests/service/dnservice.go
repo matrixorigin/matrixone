@@ -203,8 +203,9 @@ func buildTNConfig(
 func buildTNOptions(cfg *tnservice.Config, filter FilterFunc) tnOptions {
 	// factory to construct client for hakeeper
 	hakeeperClientFactory := func() (logservice.TNHAKeeperClient, error) {
-		ctx, cancel := context.WithTimeout(
+		ctx, cancel := context.WithTimeoutCause(
 			context.Background(), cfg.HAKeeper.DiscoveryTimeout.Duration,
+			moerr.CauseBuildTNOptions,
 		)
 		defer cancel()
 
@@ -222,8 +223,9 @@ func buildTNOptions(cfg *tnservice.Config, filter FilterFunc) tnOptions {
 
 	// factory to construct client for log service
 	logServiceClientFactory := func(shard metadata.TNShard) (logservice.Client, error) {
-		ctx, cancel := context.WithTimeout(
+		ctx, cancel := context.WithTimeoutCause(
 			context.Background(), cfg.LogService.ConnectTimeout.Duration,
+			moerr.CauseBuildTNOptions2,
 		)
 		defer cancel()
 

@@ -20,11 +20,12 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 type ShardInfo struct {
@@ -46,7 +47,7 @@ func GetShardInfo(
 	respPool.New = func() interface{} {
 		return &RPCResponse{pool: respPool}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseGetShardInfo)
 	defer cancel()
 	cc, err := getRPCClient(
 		ctx,

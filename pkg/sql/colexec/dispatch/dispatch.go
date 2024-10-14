@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -169,7 +170,7 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	cnt := len(dispatch.RemoteRegs)
 	for cnt > 0 {
-		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), waitNotifyTimeout)
+		timeoutCtx, timeoutCancel := context.WithTimeoutCause(context.Background(), waitNotifyTimeout, moerr.CauseWaitRemoteRegsReady)
 		select {
 		case <-timeoutCtx.Done():
 			timeoutCancel()

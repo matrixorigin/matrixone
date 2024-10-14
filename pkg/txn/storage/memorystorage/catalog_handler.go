@@ -50,7 +50,7 @@ func NewCatalogHandler(
 	upstream *MemHandler,
 ) (*CatalogHandler, error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Hour, moerr.CauseNewCatalogHandler)
 	defer cancel()
 
 	handler := &CatalogHandler{

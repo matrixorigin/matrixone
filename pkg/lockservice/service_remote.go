@@ -20,12 +20,13 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"go.uber.org/zap"
 )
 
 var methodVersions = map[pb.Method]int64{
@@ -85,7 +86,7 @@ func (s *service) initRemote() {
 			req.Method = pb.Method_CannotCommit
 			req.CannotCommit.OrphanTxnList = txn
 
-			ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseInitRemote1)
 			defer cancel()
 
 			resp, err := s.remote.client.Send(ctx, req)
@@ -102,7 +103,7 @@ func (s *service) initRemote() {
 			req.Method = pb.Method_GetActiveTxn
 			req.GetActiveTxn.ServiceID = txn.CreatedOn
 
-			ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseInitRemote2)
 			defer cancel()
 
 			resp, err := s.remote.client.Send(ctx, req)
@@ -459,7 +460,7 @@ func (s *service) getLocalLockTable(
 func (s *service) getTxnWaitingListOnRemote(
 	txnID []byte,
 	createdOn string) ([]pb.WaitTxn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseGetTxnWaitingListOnRemote)
 	defer cancel()
 
 	req := acquireRequest()
@@ -514,7 +515,7 @@ func getLockTableBind(
 	originTableID uint64,
 	serviceID string,
 	sharding pb.Sharding) (pb.LockTable, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseGetLockTableBind)
 	defer cancel()
 
 	req := acquireRequest()

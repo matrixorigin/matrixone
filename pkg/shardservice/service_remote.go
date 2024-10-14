@@ -157,7 +157,7 @@ func (s *service) validReplica(
 func (s *service) send(
 	req *pb.Request,
 ) (*pb.Response, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTimeout, moerr.CauseSend)
 	defer cancel()
 
 	return s.unwrapError(

@@ -214,7 +214,7 @@ func Shutdown(ctx context.Context) error {
 	}
 	GetTracerProvider().SetEnable(false)
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	shutdownCtx, cancel := context.WithTimeoutCause(context.Background(), 5*time.Minute, moerr.CauseShutdown)
 	defer cancel()
 	for _, p := range GetTracerProvider().spanProcessors {
 		if err := p.Shutdown(shutdownCtx); err != nil {

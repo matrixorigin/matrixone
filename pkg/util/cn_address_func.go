@@ -43,7 +43,7 @@ func AddressFunc(
 		if getClient == nil || getClient() == nil {
 			return "", moerr.NewNoHAKeeper(ctx)
 		}
-		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseAddressFunc)
 		defer cancel()
 		selector := clusterservice.NewSelector().SelectByLabel(nil, clusterservice.EQ)
 		if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(runtime.BackgroundCNSelector); exist {

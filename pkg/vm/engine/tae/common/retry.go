@@ -29,7 +29,7 @@ func RetryWithIntervalAndTimeout(
 	timeout time.Duration,
 	interval time.Duration, suppressTimout bool) (err error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseRetryWithIntervalAndTimeout)
 	defer cancel()
 
 	ticker := time.NewTicker(interval)

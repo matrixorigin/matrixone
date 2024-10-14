@@ -24,12 +24,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 const (
@@ -399,7 +400,7 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	defer t.finishTransfer(start)
 	t.logger.Info("transfer begin")
 
-	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, defaultTransferTimeout, moerr.CauseTransfer)
 	defer cancel()
 
 	csp, scp := t.getPipes()
@@ -434,7 +435,7 @@ func (t *tunnel) transferSync(ctx context.Context) error {
 	start := time.Now()
 	defer t.finishTransfer(start)
 	t.logger.Info("transfer begin")
-	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, defaultTransferTimeout, moerr.CauseTransferSync)
 	defer cancel()
 	if err := t.doReplaceConnection(ctx, true); err != nil {
 		v2.ProxyTransferFailCounter.Inc()

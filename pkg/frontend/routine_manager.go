@@ -214,7 +214,7 @@ func (rm *RoutineManager) getConnID() (uint32, error) {
 	if getGlobalPu().HAKeeperClient == nil {
 		return nextConnectionID(), nil
 	}
-	ctx, cancel := context.WithTimeout(rm.ctx, time.Second*2)
+	ctx, cancel := context.WithTimeoutCause(rm.ctx, time.Second*2, moerr.CauseGetConnID)
 	defer cancel()
 	connID, err := getGlobalPu().HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
 	if err != nil {

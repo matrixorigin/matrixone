@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
-	"go.uber.org/zap"
 )
 
 type operator struct {
@@ -392,7 +393,7 @@ func (op *operator) waitClusterConditionLocked(
 func (op *operator) waitHAKeeperRunningLocked(
 	client logservice.CNHAKeeperClient,
 ) error {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*2)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*2, moerr.CauseWaitHAKeeperRunningLocked)
 	defer cancel()
 
 	// wait HAKeeper running
@@ -413,7 +414,7 @@ func (op *operator) waitHAKeeperRunningLocked(
 }
 
 func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*30, moerr.CauseWaitAnyShardReadyLocked)
 	defer cancel()
 
 	// wait shard ready
@@ -453,7 +454,7 @@ func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) 
 
 func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, error) {
 	getClient := func() (logservice.CNHAKeeperClient, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseWaitHAKeeperReadyLocked)
 		defer cancel()
 		client, err := logservice.NewCNHAKeeperClient(
 			ctx,
@@ -470,7 +471,7 @@ func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, erro
 		return client, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
 	defer cancel()
 	for {
 		select {

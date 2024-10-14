@@ -20,13 +20,14 @@ import (
 	"math"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 var (
@@ -458,7 +459,7 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 		}
 
 		// no timeout, keep retry until TxnService.Close
-		ctx, cancel := context.WithTimeout(ctx, time.Duration(math.MaxInt64))
+		ctx, cancel := context.WithTimeoutCause(ctx, time.Duration(math.MaxInt64), moerr.CauseStartAsyncCommitTask)
 		defer cancel()
 
 		if result := s.parallelSendWithRetry(ctx, requests, rollbackIgnoreErrorCodes); result != nil {

@@ -25,10 +25,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
+	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/stretchr/testify/assert"
 )
 
 type allocatedPorts struct {
@@ -148,7 +150,7 @@ func RunClientTest(
 			}
 			scfg := cCfgFn(readOnly, cfg.LogServiceServiceAddr())
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*3, moerr.CauseRunClientTest)
 			defer cancel()
 			c, err := NewClient(ctx, sid, scfg)
 			assert.NoError(t, err)

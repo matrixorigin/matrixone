@@ -24,7 +24,7 @@ import (
 
 // ReadFile read all data from file
 func ReadFile(fs fileservice.ReplaceableFileService, file string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseReadFile)
 	defer cancel()
 
 	vec := &fileservice.IOVector{
@@ -47,7 +47,7 @@ func ReadFile(fs fileservice.ReplaceableFileService, file string) ([]byte, error
 
 // WriteFile write data to file
 func WriteFile(fs fileservice.ReplaceableFileService, file string, data []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseWriteFile)
 	defer cancel()
 
 	vec := fileservice.IOVector{

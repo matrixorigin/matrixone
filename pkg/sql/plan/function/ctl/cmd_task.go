@@ -70,7 +70,7 @@ func handleTask(
 			Data:   "OK",
 		}, nil
 	case getUser:
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 5*time.Second, moerr.CauseHandleTask)
 		state, err := proc.GetHaKeeper().GetClusterState(ctx)
 		cancel()
 		if err != nil {
@@ -139,7 +139,7 @@ func transferTaskToCN(qc qclient.QueryClient, target string, taskCode int32) (re
 		func(cn metadata.CNService) bool {
 			req := qc.NewRequest(querypb.CmdMethod_RunTask)
 			req.RunTask = &querypb.RunTaskRequest{TaskCode: taskCode}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseTransferTaskToCN)
 			defer cancel()
 
 			resp, err = qc.SendMessage(ctx, cn.QueryAddress, req)

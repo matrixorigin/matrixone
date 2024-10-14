@@ -19,12 +19,14 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_3_0"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 var (
@@ -268,7 +270,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 // according to the created upgrade steps
 func (s *service) asyncUpgradeTask(ctx context.Context) {
 	fn := func() (bool, error) {
-		ctx, cancel := context.WithTimeout(ctx, time.Hour*24)
+		ctx, cancel := context.WithTimeoutCause(ctx, time.Hour*24, moerr.CauseAsyncUpgradeTask)
 		defer cancel()
 
 		var err error

@@ -528,7 +528,7 @@ func (c *PushClient) resume() {
 }
 
 func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
-	ctx, cancel := context.WithTimeout(ctx, maxTimeToWaitServerResponse)
+	ctx, cancel := context.WithTimeoutCause(ctx, maxTimeToWaitServerResponse, moerr.CauseReceiveOneLogtail)
 	defer cancel()
 
 	// Client receives one logtail counter.
@@ -684,7 +684,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 	}
 	defer func() {
 		//same timeout value as it in frontend
-		ctx2, cancel := context.WithTimeout(ctx, e.Hints().CommitOrRollbackTimeout)
+		ctx2, cancel := context.WithTimeoutCause(ctx, e.Hints().CommitOrRollbackTimeout, moerr.CauseReplayCatalogCache)
 		defer cancel()
 		if err != nil {
 			_ = op.Rollback(ctx2)
@@ -1422,7 +1422,7 @@ func (s *logTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	// set a default deadline for ctx if it doesn't have.
 	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel := context.WithTimeout(ctx, defaultRequestDeadline)
+		newCtx, cancel := context.WithTimeoutCause(ctx, defaultRequestDeadline, moerr.CauseSubscribeTable)
 		_ = cancel
 		return s.logTailClient.Subscribe(newCtx, tblId)
 	}
@@ -1434,7 +1434,7 @@ func (s *logTailSubscriber) unSubscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	// set a default deadline for ctx if it doesn't have.
 	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel := context.WithTimeout(ctx, defaultRequestDeadline)
+		newCtx, cancel := context.WithTimeoutCause(ctx, defaultRequestDeadline, moerr.CauseUnSubscribeTable)
 		_ = cancel
 		return s.logTailClient.Unsubscribe(newCtx, tblId)
 	}

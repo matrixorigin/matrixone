@@ -21,13 +21,14 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/backup"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"go.uber.org/zap"
 )
 
 var (
@@ -216,7 +217,7 @@ func waitHAKeeperReady(
 	cfg logservice.HAKeeperClientConfig,
 ) (logservice.CNHAKeeperClient, error) {
 	getClient := func() (logservice.CNHAKeeperClient, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseWaitHAKeeperReader1)
 		defer cancel()
 		client, err := logservice.NewCNHAKeeperClient(ctx, service, cfg)
 		if err != nil {
@@ -226,7 +227,7 @@ func waitHAKeeperReady(
 		return client, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReader2)
 	defer cancel()
 	for {
 		select {
@@ -243,7 +244,7 @@ func waitHAKeeperReady(
 }
 
 func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*2)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*2, moerr.CauseWaitHAKeeperRunning)
 	defer cancel()
 
 	// wait HAKeeper running
@@ -264,7 +265,7 @@ func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
 }
 
 func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*30, moerr.CauseWaitAnyShardReady)
 	defer cancel()
 
 	// wait shard ready

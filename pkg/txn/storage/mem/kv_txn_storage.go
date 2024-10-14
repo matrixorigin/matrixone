@@ -443,7 +443,7 @@ func (kv *KVTxnStorage) getWriteKeysLocked(txnMeta txn.TxnMeta) [][]byte {
 }
 
 func (kv *KVTxnStorage) saveLog(log *KVLog) (logservice.Lsn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseSaveLog)
 	defer cancel()
 	data := log.MustMarshal()
 	record := kv.logClient.GetLogRecord(len(data))

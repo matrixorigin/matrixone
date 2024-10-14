@@ -22,10 +22,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"go.uber.org/zap"
 )
 
 const (
@@ -93,7 +95,7 @@ func (l *store) setInitialClusterInfo(
 		nextIDByKey,
 		nonVotingLocality,
 	)
-	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseSetInitialClusterInfo)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
@@ -112,7 +114,7 @@ func (l *store) setInitialClusterInfo(
 
 func (l *store) updateIDAlloc(count uint64) error {
 	cmd := hakeeper.GetAllocateIDCmd(pb.CNAllocateID{Batch: count})
-	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseUpdateIDAlloc)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
@@ -203,7 +205,7 @@ func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
 	}
 	l.runtime.Logger().Debug(fmt.Sprintf("cluster health check generated %d schedule commands", len(cmds)))
 	if len(cmds) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseHealthCheck)
 		defer cancel()
 		for _, cmd := range cmds {
 			l.runtime.Logger().Debug("adding schedule command to hakeeper", zap.String("command", cmd.LogString()))
@@ -255,7 +257,7 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 		}
 
 		addFn := func() error {
-			ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseLogServiceBootstrap)
 			defer cancel()
 			if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 				l.runtime.Logger().Error("failed to add schedule commands", zap.Error(err))
@@ -315,7 +317,7 @@ func (l *store) setBootstrapState(success bool) error {
 		state = pb.HAKeeperBootstrapFailed
 	}
 	cmd := hakeeper.GetSetStateCmd(state)
-	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseSetBootstrapState)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	_, err := l.propose(ctx, session, cmd)
@@ -323,7 +325,7 @@ func (l *store) setBootstrapState(success bool) error {
 }
 
 func (l *store) getCheckerState() (*pb.CheckerState, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseGetCheckerState)
 	defer cancel()
 	s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
 	if err != nil {
@@ -349,7 +351,7 @@ func (l *store) getScheduleCommand(check bool,
 
 func (l *store) setTaskTableUser(user pb.TaskTableUser) error {
 	cmd := hakeeper.GetTaskTableUserCmd(user)
-	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseSetTaskTableUser)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)

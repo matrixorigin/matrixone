@@ -29,6 +29,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -44,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 func WithEnable(
@@ -413,7 +414,7 @@ func (s *service) watch(ctx context.Context) {
 	defer ticker.Stop()
 
 	fetch := func() ([]string, []string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWatch)
 		defer cancel()
 		var features []string
 		var states []string
@@ -504,7 +505,7 @@ func (s *service) updateState(feature, state string) error {
 		return moerr.NewNotSupportedNoCtxf("feature %s", feature)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseUpdateState)
 	defer cancel()
 
 	now, _ := s.clock.Now()

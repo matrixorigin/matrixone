@@ -23,6 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -34,8 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 // NewTestTxnService create a test TxnService for test
@@ -199,7 +201,7 @@ func (s *TestSender) setFilter(filter func(*txn.TxnRequest) bool) {
 
 // Send TxnSender send
 func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseTestSenderSend)
 	s.mu.Lock()
 	s.mu.cancels = append(s.mu.cancels, cancel)
 	s.mu.Unlock()

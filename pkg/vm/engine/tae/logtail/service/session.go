@@ -315,7 +315,7 @@ func NewSession(
 				sendFunc := func() error {
 					defer ss.responses.Release(msg.response)
 
-					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
+					ctx, cancel := context.WithTimeoutCause(ss.sessionCtx, msg.timeout, moerr.CauseNewSession)
 					defer cancel()
 
 					now := time.Now()
@@ -474,7 +474,7 @@ func (ss *Session) Publish(
 		}
 	}
 
-	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
+	sendCtx, cancel := context.WithTimeoutCause(ctx, ss.sendTimeout, moerr.CausePublish)
 	defer cancel()
 
 	beforeSend := time.Now()
