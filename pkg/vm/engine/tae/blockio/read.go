@@ -574,6 +574,9 @@ func readBlockData(
 				colPos++
 			}
 		}
+
+		result.SetRowCount(result.Vecs[0].Length())
+
 		return
 	}
 
@@ -757,7 +760,7 @@ func IsRowDeletedByLocation(
 		return rowids[i].GE(row)
 	})
 	if createdByCN {
-		deleted = idx < len(rowids)
+		deleted = (idx < len(rowids)) && (rowids[idx].EQ(row))
 	} else {
 		tss := vector.MustFixedColNoTypeCheck[types.TS](data.Vecs[1])
 		for i := idx; i < len(rowids); i++ {

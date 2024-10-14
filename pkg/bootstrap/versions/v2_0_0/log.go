@@ -12,18 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1_3_0
+package v2_0_0
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/cdc"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 )
 
-var InsertInitDataKey = func(txn executor.TxnExecutor, kek string) (err error) {
-	sql, err := cdc.GetInitDataKeySql(kek)
-	if err != nil {
-		return
-	}
-	_, err = txn.Exec(sql, executor.StatementOption{})
-	return
+func getLogger(sid string) *log.MOLogger {
+	return runtime.ServiceRuntime(sid).Logger()
 }
