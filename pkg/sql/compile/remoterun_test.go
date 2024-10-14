@@ -16,9 +16,10 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -56,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -224,9 +224,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&mergegroup.MergeGroup{},
 		&mergetop.MergeTop{},
 		&mergeorder.MergeOrder{},
-		&mark.MarkJoin{
-			Conditions: [][]*plan.Expr{nil, nil},
-		},
 		&table_function.TableFunction{},
 		&external.External{
 			Es: &external.ExternalParam{
