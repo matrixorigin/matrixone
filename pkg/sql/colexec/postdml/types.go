@@ -21,6 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// PostDml is Post action right after pipeline of INSERT/UPDATE/DELETE finished.
+// For fulltext search, it will grab all primary keys from the scan sink and generate a DELETE and/or INSERT SQL for index table to proc.Base.PostDmlSqlList
+// Eventually, All SQLs in proc.Base.PostDmlSqlList will be executed after the pipeline finished.
+// You can define your own context and add the post action handler in PostDml for your own Post DML action in this Node.
 var _ vm.Operator = new(PostDml)
 
 type container struct {
