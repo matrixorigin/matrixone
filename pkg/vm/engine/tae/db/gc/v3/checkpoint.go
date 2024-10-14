@@ -299,7 +299,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 			ext:   ext,
 		}
 	}
-	readDirs := make([]fileservice.DirEntry, 0)
+	gcMetaDirs := make([]fileservice.DirEntry, 0)
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.SnapshotExt || ext == blockio.AcctExt {
@@ -308,11 +308,11 @@ func (c *checkpointCleaner) Replay() (err error) {
 		if maxConsumedStart.IsEmpty() || maxConsumedStart.LT(&end) {
 			maxConsumedStart = start
 			maxConsumedEnd = end
-			readDirs = append(readDirs, dir)
+			gcMetaDirs = append(gcMetaDirs, dir)
 		}
 	}
 
-	// In the normal process, readDirs is empty, and it is impossible to have snapFile and acctFile,
+	// In the normal process, gcMetaDirs is empty, and it is impossible to have snapFile and acctFile,
 	// but when upgrading from 1.2 to 1.3, there may be such a situation, so you need to replay table info first
 	if acctFile != "" {
 		if err = c.mutation.snapshotMeta.ReadTableInfo(
@@ -321,11 +321,11 @@ func (c *checkpointCleaner) Replay() (err error) {
 			return
 		}
 	}
-	if len(readDirs) == 0 {
+	if len(gcMetaDirs) == 0 {
 		return
 	}
 	logger := logutil.Info
-	for _, dir := range readDirs {
+	for _, dir := range gcMetaDirs {
 		start := time.Now()
 		window := NewGCWindow(c.mp, c.fs.Service)
 		err = window.ReadTable(c.ctx, GCMetaDir+dir.Name, c.fs)
