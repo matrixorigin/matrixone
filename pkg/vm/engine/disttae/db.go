@@ -107,6 +107,7 @@ func (e *Engine) init(ctx context.Context) error {
 			DatabaseName: catalog.MO_CATALOG,
 			TableId:      catalog.MO_DATABASE_ID,
 			TableName:    catalog.MO_DATABASE,
+			Constraint:   catalog.GetDefines(e.service).MoDatabaseConstraint,
 			Kind:         catalog.SystemOrdinaryRel,
 		}
 		bat, err := catalog.GenCreateTableTuple(tbl, m, packer)
@@ -165,6 +166,7 @@ func (e *Engine) init(ctx context.Context) error {
 			DatabaseName: catalog.MO_CATALOG,
 			TableId:      catalog.MO_TABLES_ID,
 			TableName:    catalog.MO_TABLES,
+			Constraint:   catalog.GetDefines(e.service).MoTableConstraint,
 			Kind:         catalog.SystemOrdinaryRel,
 		}
 		bat, err := catalog.GenCreateTableTuple(tbl, m, packer)
@@ -213,6 +215,7 @@ func (e *Engine) init(ctx context.Context) error {
 			DatabaseName: catalog.MO_CATALOG,
 			TableId:      catalog.MO_COLUMNS_ID,
 			TableName:    catalog.MO_COLUMNS,
+			Constraint:   catalog.GetDefines(e.service).MoColumnConstraint,
 			Kind:         catalog.SystemOrdinaryRel,
 		}
 		bat, err := catalog.GenCreateTableTuple(tbl, m, packer)
