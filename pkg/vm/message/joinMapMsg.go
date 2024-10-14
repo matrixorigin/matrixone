@@ -34,7 +34,7 @@ type JoinSels struct {
 	sels [][][]int32
 }
 
-func (js *JoinSels) Init(len int) {
+func (js *JoinSels) InitSel(len int) {
 	js.sels = make([][][]int32, 0, len/selsDivideLength+1)
 }
 
@@ -49,7 +49,8 @@ func (js *JoinSels) InsertSel(k, v int32) {
 		if i == 0 {
 			js.sels = append(js.sels, make([][]int32, 16))
 		} else {
-			js.sels = append(js.sels, make([][]int32, selsDivideLength))
+			s := make([][]int32, selsDivideLength)
+			js.sels = append(js.sels, s)
 		}
 	}
 	if len(js.sels[i]) <= int(j) {
