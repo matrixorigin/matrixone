@@ -157,7 +157,11 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 	// 4. delete retention info
-	return c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
+	err = c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return nil
+	}
+	return err
 }
 
 func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
@@ -2359,7 +2363,11 @@ func (s *Scope) DropTable(c *Compile) error {
 		return nil
 	}
 	deleteRetentionSQL := fmt.Sprintf(deleteMoRetentionWithDatabaseNameAndTableNameFormat, dbName, tblName)
-	return c.runSql(deleteRetentionSQL)
+	err = c.runSql(deleteRetentionSQL)
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return nil
+	}
+	return err
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
