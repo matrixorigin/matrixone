@@ -32,15 +32,14 @@ type JoinSels struct {
 	sels [][][]int32
 }
 
-func (js *JoinSels) Init() {
-	js.sels = make([][][]int32, 0, 1)
-}
-
 func (js *JoinSels) Free() {
 	js.sels = nil
 }
 
 func (js *JoinSels) Insert(k, v int32) {
+	if js.sels == nil {
+		js.sels = make([][][]int32, 0, 1)
+	}
 	i := k / 1024
 	j := k % 1024
 	if js.sels[i] == nil {
