@@ -53,16 +53,20 @@ func initStartAndEndNumNoTypeCheck(gs *genNumState[int64], proc *process.Process
 	} else {
 		if startVec.GetType().Oid == types.T_int32 {
 			gs.start = int64(vector.GetFixedAtNoTypeCheck[int32](startVec, nth))
-		} else {
+		} else if startVec.GetType().Oid == types.T_int64 {
 			gs.start = vector.GetFixedAtNoTypeCheck[int64](startVec, nth)
+		} else {
+			return moerr.NewInvalidInput(proc.Ctx, "generate_series start must be int32 or int64")
 		}
 	}
 
 	// end vec is always not null
 	if endVec.GetType().Oid == types.T_int32 {
 		gs.end = int64(vector.GetFixedAtNoTypeCheck[int32](endVec, nth))
-	} else {
+	} else if endVec.GetType().Oid == types.T_int64 {
 		gs.end = vector.GetFixedAtNoTypeCheck[int64](endVec, nth)
+	} else {
+		return moerr.NewInvalidInput(proc.Ctx, "generate_series end must be int32 or int64")
 	}
 
 	if stepVec == nil {
@@ -74,8 +78,10 @@ func initStartAndEndNumNoTypeCheck(gs *genNumState[int64], proc *process.Process
 	} else {
 		if stepVec.GetType().Oid == types.T_int32 {
 			gs.step = int64(vector.GetFixedAtNoTypeCheck[int32](stepVec, nth))
-		} else {
+		} else if stepVec.GetType().Oid == types.T_int64 {
 			gs.step = vector.GetFixedAtNoTypeCheck[int64](stepVec, nth)
+		} else {
+			return moerr.NewInvalidInput(proc.Ctx, "generate_series step must be int32 or int64")
 		}
 	}
 	if gs.step == 0 {
@@ -166,24 +172,10 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 	} else if len(tf.ctr.executorsForArgs) == 2 {
 		startVec = tf.ctr.argVecs[0]
 		endVec = tf.ctr.argVecs[1]
-		startTyp := tf.ctr.argVecs[0].GetType()
-		endTyp := tf.ctr.argVecs[1].GetType()
-		if startTyp.Oid != endTyp.Oid {
-			return moerr.NewInvalidInputf(proc.Ctx, "generate_series start type %s is not the same as end type %s", startTyp.Oid.String(), endTyp.Oid.String())
-		}
 	} else {
 		startVec = tf.ctr.argVecs[0]
 		endVec = tf.ctr.argVecs[1]
 		stepVec = tf.ctr.argVecs[2]
-		startTyp := tf.ctr.argVecs[0].GetType()
-		endTyp := tf.ctr.argVecs[1].GetType()
-		stepTyp := tf.ctr.argVecs[2].GetType()
-		if startTyp.Oid != endTyp.Oid {
-			return moerr.NewInvalidInputf(proc.Ctx, "generate_series start type %s is not the same as end type %s", startTyp.Oid.String(), endTyp.Oid.String())
-		}
-		if startTyp.Oid != stepTyp.Oid {
-			return moerr.NewInvalidInputf(proc.Ctx, "generate_series start type %s is not the same as step type %s", startTyp.Oid.String(), stepTyp.Oid.String())
-		}
 	}
 
 	resTyp := tf.ctr.argVecs[0].GetType()
