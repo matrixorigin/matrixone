@@ -99,6 +99,8 @@ func (reader *tableReader) Run(
 		select {
 		case <-ctx.Done():
 			return
+		case <-ar.Pause:
+			return
 		case <-ar.Cancel:
 			return
 		case <-reader.tick.C:
@@ -184,6 +186,21 @@ func (reader *tableReader) readTableWithTxn(
 	var insertData, deleteData *batch.Batch
 	var insertAtmBatch, deleteAtmBatch *AtomicBatch
 
+	defer func() {
+		if insertData != nil {
+			insertData.Clean(reader.mp)
+		}
+		if deleteData != nil {
+			deleteData.Clean(reader.mp)
+		}
+		if insertAtmBatch != nil {
+			insertAtmBatch.Close()
+		}
+		if deleteAtmBatch != nil {
+			deleteAtmBatch.Close()
+		}
+	}()
+
 	allocateAtomicBatchIfNeed := func(atmBatch *AtomicBatch) *AtomicBatch {
 		if atmBatch == nil {
 			atmBatch = NewAtomicBatch(reader.mp)
@@ -219,6 +236,8 @@ func (reader *tableReader) readTableWithTxn(
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-ar.Pause:
 			return
 		case <-ar.Cancel:
 			return
