@@ -44,11 +44,18 @@ func (js *JoinSels) Insert(k, v int32) {
 	i := k / 1024
 	j := k % 1024
 	if len(js.sels) <= int(i) {
-		js.sels = append(js.sels, make([][]int32, 1024))
+		if i == 0 {
+			js.sels = append(js.sels, make([][]int32, 16))
+		} else {
+			js.sels = append(js.sels, make([][]int32, 1024))
+		}
 	}
-	//if js.sels[i][j] == nil {
-	//	js.sels[i][j] = make([]int32, 0, 4)
-	//}
+	if len(js.sels[i]) <= int(j) {
+		js.sels[i] = append(js.sels[i], make([]int32, 0))
+	}
+	if js.sels[i][j] == nil {
+		js.sels[i][j] = make([]int32, 0, 4)
+	}
 	js.sels[i][j] = append(js.sels[i][j], v)
 }
 

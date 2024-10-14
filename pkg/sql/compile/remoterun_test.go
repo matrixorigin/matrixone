@@ -292,7 +292,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Filter), Filter: &plan.Expr{}},
 		{Op: int32(vm.Semi), SemiJoin: &pipeline.SemiJoin{}},
 		{Op: int32(vm.Single), SingleJoin: &pipeline.SingleJoin{}},
-		{Op: int32(vm.Mark), MarkJoin: &pipeline.MarkJoin{}},
 		{Op: int32(vm.Top), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.Intersect), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.IntersectAll), Anti: &pipeline.AntiJoin{}},
