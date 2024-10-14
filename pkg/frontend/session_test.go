@@ -380,21 +380,21 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 	})
 }
 
-func TestSession_GetTempTableStorage(t *testing.T) {
-	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-		session := NewSession(context.Background(), "", proto, nil)
-		return session
+var genSession1 = func(t *testing.T, ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	if err != nil {
+		t.Error(err)
 	}
+	ioses, err := NewIOSession(&testConn{}, pu, "")
+	if err != nil {
+		t.Error(err)
+	}
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	session := NewSession(context.Background(), "", proto, nil)
+	return session
+}
 
+func TestSession_GetTempTableStorage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -402,28 +402,13 @@ func TestSession_GetTempTableStorage(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
-	ses := genSession(ctrl, pu)
+	ses := genSession1(t, ctrl, pu)
 	assert.Panics(t, func() {
 		_ = ses.GetTxnHandler().GetTempStorage()
 	})
 }
 
 func TestIfInitedTempEngine(t *testing.T) {
-
-	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-		session := NewSession(context.Background(), "", proto, nil)
-		return session
-	}
-
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -431,25 +416,11 @@ func TestIfInitedTempEngine(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
-	ses := genSession(ctrl, pu)
+	ses := genSession1(t, ctrl, pu)
 	assert.False(t, ses.GetTxnHandler().HasTempEngine())
 }
 
 func TestSetTempTableStorage(t *testing.T) {
-	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-		session := NewSession(context.Background(), "", proto, nil)
-		return session
-	}
-
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -457,7 +428,7 @@ func TestSetTempTableStorage(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
-	ses := genSession(ctrl, pu)
+	ses := genSession1(t, ctrl, pu)
 
 	ck := clock.NewHLCClock(func() int64 {
 		return time.Now().Unix()
@@ -547,6 +518,11 @@ func TestSession_Migrate(t *testing.T) {
 			TxnClient:     txnClient,
 			StorageEngine: eng,
 		})
+
+		mockBS := MockBaseService{}
+		rm, _ := NewRoutineManager(context.Background(), "")
+		rm.baseService = &mockBS
+		setRtMgr("", rm)
 		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 		ioses, err := NewIOSession(&testConn{}, getPu(""), "")
 		if err != nil {
@@ -560,6 +536,7 @@ func TestSession_Migrate(t *testing.T) {
 		}
 		session.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(), ses: session}
 		proto.ses = session
+		session.setRoutineManager(rm)
 		return session
 	}
 	ctrl := gomock.NewController(t)
@@ -582,4 +559,13 @@ func TestSession_Migrate(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "d1", s.GetDatabaseName())
 	assert.Equal(t, 2, len(s.prepareStmts))
+}
+
+func Test_connectionid(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	s := newSes(nil, ctrl)
+	s.SetConnectionID(10)
+	x := s.GetConnectionID()
+	assert.Equal(t, uint32(10), x)
 }
