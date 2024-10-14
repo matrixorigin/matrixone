@@ -67,6 +67,7 @@ type operatorAnalyzer struct {
 
 var _ Analyzer = &operatorAnalyzer{}
 
+// NewAnalyzer is used to provide resource statistics services for physical plann operators
 func NewAnalyzer(idx int, isFirst bool, isLast bool, operatorName string) Analyzer {
 	return &operatorAnalyzer{
 		nodeIdx:              idx,
@@ -75,6 +76,13 @@ func NewAnalyzer(idx int, isFirst bool, isLast bool, operatorName string) Analyz
 		wait:                 0,
 		childrenCallDuration: 0,
 		opStats:              NewOperatorStats(operatorName),
+	}
+}
+
+// NewTempAnalyzer is used to provide resource statistics services for non operator logic
+func NewTempAnalyzer() Analyzer {
+	return &operatorAnalyzer{
+		opStats: NewOperatorStats("temp Analyzer"),
 	}
 }
 

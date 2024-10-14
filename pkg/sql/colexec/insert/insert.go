@@ -236,15 +236,14 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 				return input, err
 			}
 
-			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+			crs := new(perfcounter.CounterSet)
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 			err = insert.ctr.partitionSources[partIdx].Write(newCtx, insert.ctr.buf)
 			if err != nil {
 				return input, err
 			}
-			if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-				analyzer.AddS3RequestCount(retrievedCounter)
-				analyzer.AddDiskIO(retrievedCounter)
-			}
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 		}
 	} else {
 		insert.ctr.buf.CleanOnlyData()
@@ -258,16 +257,16 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		}
 		insert.ctr.buf.SetRowCount(input.Batch.RowCount())
 
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
 		// insert into table, insertBat will be deeply copied into txn's workspace.
 		err = insert.ctr.source.Write(newCtx, insert.ctr.buf)
 		if err != nil {
 			return input, err
 		}
-		if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-			analyzer.AddS3RequestCount(retrievedCounter)
-			analyzer.AddDiskIO(retrievedCounter)
-		}
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddDiskIO(crs)
 	}
 
 	if insert.InsertCtx.AddAffectedRows {
@@ -280,15 +279,15 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 
 func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batch, analyzer process.Analyzer) error {
 	if writer.StashBatch(proc, bat) {
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
 		blockInfos, stats, err := writer.SortAndSync(newCtx, proc)
 		if err != nil {
 			return err
 		}
-		if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-			analyzer.AddS3RequestCount(retrievedCounter)
-			analyzer.AddDiskIO(retrievedCounter)
-		}
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddDiskIO(crs)
 
 		err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
 		if err != nil {
@@ -299,15 +298,15 @@ func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batc
 }
 
 func flushTailBatch(proc *process.Process, writer *colexec.S3Writer, result *vm.CallResult, analyzer process.Analyzer) error {
-	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+	crs := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
 	blockInfos, stats, err := writer.FlushTailBatch(newCtx, proc)
 	if err != nil {
 		return err
 	}
-	if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-		analyzer.AddS3RequestCount(retrievedCounter)
-		analyzer.AddDiskIO(retrievedCounter)
-	}
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddDiskIO(crs)
 
 	// if stats is not zero, then the blockInfos must not be nil
 	if !stats.IsZero() {

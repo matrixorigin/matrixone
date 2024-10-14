@@ -276,15 +276,14 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			delete(blockId_rowIdBatch, blkid)
 		}
 
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		_, stats, err := s3writer.SortAndSync(newCtx, proc)
 		if err != nil {
 			return 0, err
 		}
-		if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-			analyzer.AddS3RequestCount(retrievedCounter)
-			analyzer.AddDiskIO(retrievedCounter)
-		}
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddDiskIO(crs)
 
 		bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
 		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))

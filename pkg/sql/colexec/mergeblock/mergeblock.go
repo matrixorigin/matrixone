@@ -91,27 +91,27 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		// 'i' aligns with partition number
 		for i := range mergeBlock.container.partitionSources {
 			if mergeBlock.container.mp[i].RowCount() > 0 {
-				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+				crs := new(perfcounter.CounterSet)
+				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
 				// batches in mp will be deeply copied into txn's workspace.
 				if err = mergeBlock.container.partitionSources[i].Write(newCtx, mergeBlock.container.mp[i]); err != nil {
 					return input, err
 				}
-				if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-					analyzer.AddS3RequestCount(retrievedCounter)
-					analyzer.AddDiskIO(retrievedCounter)
-				}
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
 			}
 
 			for _, bat := range mergeBlock.container.mp2[i] {
-				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+				crs := new(perfcounter.CounterSet)
+				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 				// batches in mp2 will be deeply copied into txn's workspace.
 				if err = mergeBlock.container.partitionSources[i].Write(newCtx, bat); err != nil {
 					return input, err
 				}
-				if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-					analyzer.AddS3RequestCount(retrievedCounter)
-					analyzer.AddDiskIO(retrievedCounter)
-				}
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
+
 				bat.Clean(proc.GetMPool())
 			}
 			mergeBlock.container.mp2[i] = mergeBlock.container.mp2[i][:0]
@@ -119,27 +119,26 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 	} else {
 		// handle origin/main table.
 		if mergeBlock.container.mp[0].RowCount() > 0 {
-			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+			crs := new(perfcounter.CounterSet)
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
 			//batches in mp will be deeply copied into txn's workspace.
 			if err = mergeBlock.container.source.Write(newCtx, mergeBlock.container.mp[0]); err != nil {
 				return input, err
 			}
-			if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-				analyzer.AddS3RequestCount(retrievedCounter)
-				analyzer.AddDiskIO(retrievedCounter)
-			}
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 		}
 
 		for _, bat := range mergeBlock.container.mp2[0] {
-			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+			crs := new(perfcounter.CounterSet)
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 			//batches in mp2 will be deeply copied into txn's workspace.
 			if err = mergeBlock.container.source.Write(newCtx, bat); err != nil {
 				return input, err
 			}
-			if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-				analyzer.AddS3RequestCount(retrievedCounter)
-				analyzer.AddDiskIO(retrievedCounter)
-			}
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 
 			bat.Clean(proc.GetMPool())
 		}

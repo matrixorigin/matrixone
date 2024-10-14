@@ -116,16 +116,16 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		// read data from storage engine
 		tableScan.ctr.buf.CleanOnlyData()
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		isEnd, err := tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
 		if err != nil {
 			e = err
 			return vm.CancelResult, err
 		}
-		if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-			analyzer.AddS3RequestCount(retrievedCounter)
-			analyzer.AddDiskIO(retrievedCounter)
-		}
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddDiskIO(crs)
 
 		if isEnd {
 			e = err

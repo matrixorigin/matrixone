@@ -1156,15 +1156,14 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		return err
 	}
 
-	newCtx := perfcounter.AttachS3RequestKey(ctx, &perfcounter.CounterSet{})
+	crs := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 	// getZonemapBatch will access Fileservice
 	if err := getZonemapBatch(newCtx, param, proc, param.Filter.blockReader, bat); err != nil {
 		return err
 	}
-	if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-		analyzer.AddS3RequestCount(retrievedCounter)
-		analyzer.AddDiskIO(retrievedCounter)
-	}
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddDiskIO(crs)
 
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		param.Filter.blockReader = nil

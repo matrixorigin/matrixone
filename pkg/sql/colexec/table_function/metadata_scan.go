@@ -74,15 +74,14 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 		return err
 	}
 
-	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+	crs := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 	metaInfos, err := rel.GetColumMetadataScanInfo(newCtx, colname)
 	if err != nil {
 		return err
 	}
-	if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-		analyzer.AddS3RequestCount(retrievedCounter)
-		analyzer.AddDiskIO(retrievedCounter)
-	}
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddDiskIO(crs)
 
 	for i := range metaInfos {
 		err = fillMetadataInfoBat(s.batch, proc, tf, metaInfos[i])

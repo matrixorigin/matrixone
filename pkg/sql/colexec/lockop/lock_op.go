@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -247,13 +248,26 @@ func LockTable(
 	parker := types.NewPacker()
 	defer parker.Close()
 
+	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	analyzer := process.NewTempAnalyzer()
+	defer func() {
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:        analyzer.GetOpStats().S3List,
+			Head:        analyzer.GetOpStats().S3Head,
+			Put:         analyzer.GetOpStats().S3Put,
+			Get:         analyzer.GetOpStats().S3Get,
+			Delete:      analyzer.GetOpStats().S3Delete,
+			DeleteMulti: analyzer.GetOpStats().S3DeleteMulti,
+		})
+	}()
+
 	opts := DefaultLockOptions(parker).
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		eng,
-		nil,
+		analyzer,
 		nil,
 		tableID,
 		proc,
@@ -263,6 +277,7 @@ func LockTable(
 	if err != nil {
 		return err
 	}
+
 	// If the returned timestamp is not empty, we should return a retry error,
 	if !refreshTS.IsEmpty() {
 		if !defChanged {
@@ -293,6 +308,19 @@ func LockRows(
 	parker := types.NewPacker()
 	defer parker.Close()
 
+	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	analyzer := process.NewTempAnalyzer()
+	defer func() {
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:        analyzer.GetOpStats().S3List,
+			Head:        analyzer.GetOpStats().S3Head,
+			Put:         analyzer.GetOpStats().S3Put,
+			Get:         analyzer.GetOpStats().S3Get,
+			Delete:      analyzer.GetOpStats().S3Delete,
+			DeleteMulti: analyzer.GetOpStats().S3DeleteMulti,
+		})
+	}()
+
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
 		WithLockSharding(sharding).
@@ -302,7 +330,7 @@ func LockRows(
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		eng,
-		nil,
+		analyzer,
 		rel,
 		tableID,
 		proc,

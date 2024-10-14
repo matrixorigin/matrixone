@@ -261,17 +261,16 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 			tempRows := uint64(deletion.ctr.resBat.RowCount())
 			if tempRows > 0 {
 				affectedRows += tempRows
-				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+
+				crs := new(perfcounter.CounterSet)
+				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 				err = deletion.ctr.partitionSources[partIdx].Delete(newCtx, deletion.ctr.resBat, catalog.Row_ID)
 				if err != nil {
 					deletion.ctr.resBat.Clean(proc.Mp())
 					return result, err
 				}
-
-				if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-					analyzer.AddS3RequestCount(retrievedCounter)
-					analyzer.AddDiskIO(retrievedCounter)
-				}
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
 			}
 		}
 	} else {
@@ -282,16 +281,14 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 		}
 		affectedRows = uint64(deletion.ctr.resBat.RowCount())
 		if affectedRows > 0 {
-			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, &perfcounter.CounterSet{})
+			crs := new(perfcounter.CounterSet)
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 			err = deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, catalog.Row_ID)
 			if err != nil {
 				return result, err
 			}
-			if retrievedCounter, ok := perfcounter.GetS3RequestKey(newCtx); ok {
-				analyzer.AddS3RequestCount(retrievedCounter)
-				analyzer.AddDiskIO(retrievedCounter)
-			}
-
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 		}
 	}
 
