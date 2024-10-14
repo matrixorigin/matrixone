@@ -15,8 +15,9 @@
 package hashmap_util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"runtime"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -334,5 +335,16 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	}
 
+	// if groupcount == inputrowcount, it means building hashmap on unique rows
+	// we can free sels now
+	if hb.keyWidth <= 8 {
+		if hb.InputBatchRowCount == int(hb.IntHashMap.GroupCount()) {
+			hb.MultiSels.Free()
+		}
+	} else {
+		if hb.InputBatchRowCount == int(hb.IntHashMap.GroupCount()) {
+			hb.MultiSels.Free()
+		}
+	}
 	return nil
 }

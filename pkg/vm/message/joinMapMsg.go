@@ -125,6 +125,10 @@ func (jm *JoinMap) PushedRuntimeFilterIn() bool {
 	return jm.runtimeFilter_In
 }
 
+func (jm *JoinMap) HashOnUnique() bool {
+	return jm.multiSels.sels == nil
+}
+
 func (jm *JoinMap) GetSels(k uint64) []int32 {
 	return jm.multiSels.GetSels(int32(k))
 }

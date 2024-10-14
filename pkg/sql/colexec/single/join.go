@@ -218,7 +218,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Proc
 				}
 				continue
 			}
-			if ap.HashOnPK {
+			if ap.HashOnPK || ctr.mp.HashOnUnique() {
 				idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 				matched := false
 				if ap.Cond != nil {

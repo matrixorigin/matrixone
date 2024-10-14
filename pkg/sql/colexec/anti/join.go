@@ -227,7 +227,7 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 				continue
 			}
 			if ap.Cond != nil {
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, inbat, int64(i+k),
 						1, ctr.cfs1); err != nil {

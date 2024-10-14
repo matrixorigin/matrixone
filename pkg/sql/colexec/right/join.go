@@ -256,7 +256,7 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 			if zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
-			if ap.HashOnPK {
+			if ap.HashOnPK || ctr.mp.HashOnUnique() {
 				idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 				if ap.Cond != nil {
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, ap.ctr.buf, int64(i+k),

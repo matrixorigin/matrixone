@@ -220,7 +220,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 			idx := vals[k] - 1
 
 			if ap.Cond == nil {
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err := ctr.rbat.Vecs[j].UnionOne(ap.ctr.inbat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
@@ -253,7 +253,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 					rowCount += len(sels)
 				}
 			} else {
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					if err := ctr.evalApCondForOneSel(ap.ctr.inbat, ctr.rbat, ap, proc, int64(i+k), int64(idx)); err != nil {
 						return err
 					}

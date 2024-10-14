@@ -220,7 +220,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 			}
 			if ap.Cond != nil {
 				matched := false // mark if any tuple satisfies the condition
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
