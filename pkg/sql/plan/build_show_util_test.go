@@ -168,7 +168,7 @@ func buildTestCreateTableStmt(opt Optimizer, sql string) (*TableDef, error) {
 	}
 	// this sql always return single statement
 	context := opt.CurrentContext()
-	ddlPlan, err := BuildPlan(context, statements[0], false, true)
+	ddlPlan, err := BuildPlan(context, statements[0], false)
 	//if ddlPlan != nil {
 	//	testDeepCopy(ddlPlan)
 	//}

@@ -967,7 +967,7 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	es.CmpContext = ses.GetTxnCompileCtx()
 
 	//get query optimizer and execute Optimize
-	exPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, true)
+	exPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1084,7 +1084,7 @@ func createPrepareStmt(
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
 
-	preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt, false)
+	preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -1131,7 +1131,7 @@ func createPrepareStmt(
 }
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
-	deallocatePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st, false)
+	deallocatePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return err
 	}
@@ -1885,7 +1885,7 @@ func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufi
 	return err
 }
 
-func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement, isExplain bool) (*plan2.Plan, error) {
+func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	var ret *plan2.Plan
 	var err error
 
@@ -1937,7 +1937,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, isExplain)
+			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 			if err != nil {
 				return nil, err
 			}
@@ -1960,7 +1960,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 		opt := plan2.NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, isPrepareStmt, isExplain)
+		optimized, err := opt.Optimize(stmt, isPrepareStmt)
 		if err != nil {
 			return nil, err
 		}
@@ -1970,7 +1970,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 			},
 		}
 	default:
-		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, isExplain)
+		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 	}
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt

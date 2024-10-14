@@ -92,11 +92,7 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	}, err
 }
 
-func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepareStmt bool, skipStats bool, isExplain bool) (*Plan, error) {
-	// if !isExplain {
-	// 	return buildDelete(stmt, ctx, isPrepareStmt)
-	// }
-
+func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
@@ -130,7 +126,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	}, err
 }
 
-func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepareStmt bool, skipStats bool, isExplain bool) (*Plan, error) {
+func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	// if !isExplain {
 	// 	return buildTableUpdate(stmt, ctx, isPrepareStmt)
 	// }
@@ -168,14 +164,14 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	}, err
 }
 
-func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, isExplain bool) (*Plan, error) {
+func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildExplainHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	//get query optimizer and execute Optimize
-	plan, err := BuildPlan(ctx, stmt, isPrepareStmt, isExplain)
+	plan, err := BuildPlan(ctx, stmt, isPrepareStmt)
 	if err != nil {
 		return nil, err
 	}
@@ -200,14 +196,14 @@ func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bo
 }
 
 func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool) (*Plan, error) {
-	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, false)
+	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
 func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepareStmt bool) (*Plan, error) {
-	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, true)
+	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, isExplain bool) (*Plan, error) {
+func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildPlanHistogram.Observe(time.Since(start).Seconds())
@@ -228,9 +224,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, isE
 	case *tree.Replace:
 		return buildReplace(stmt, ctx, isPrepareStmt, false)
 	case *tree.Update:
-		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false, isExplain)
+		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
-		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false, isExplain)
+		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.BeginTransaction:
 		return buildBeginTransaction(stmt, ctx)
 	case *tree.CommitTransaction:

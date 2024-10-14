@@ -1170,7 +1170,7 @@ func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return BuildPlan(ctx, stmts[0], false, true)
+	return BuildPlan(ctx, stmts[0], false)
 }
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {

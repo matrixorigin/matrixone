@@ -1011,7 +1011,7 @@ func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, e
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return plan.BuildPlan(ctx, stmts[0], false, false)
+	return plan.BuildPlan(ctx, stmts[0], false)
 }
 
 func Test_getSqlType(t *testing.T) {

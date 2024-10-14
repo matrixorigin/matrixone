@@ -26,11 +26,11 @@ import (
 func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			return BuildPlan(ctx, stmt, true, false)
+			return BuildPlan(ctx, stmt, true)
 		}
 	} else if s, ok := stmt.(*tree.Replace); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			return BuildPlan(ctx, stmt, true, false)
+			return BuildPlan(ctx, stmt, true)
 		}
 	}
 
@@ -40,7 +40,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := NewPrepareOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, true, false)
+		optimized, err := opt.Optimize(stmt, true)
 		if err != nil {
 			return nil, err
 		}
@@ -50,7 +50,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 			},
 		}, nil
 	default:
-		return BuildPlan(ctx, stmt, true, false)
+		return BuildPlan(ctx, stmt, true)
 	}
 }
 

@@ -308,7 +308,7 @@ func (exec *txnExecutor) Exec(
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
 	compileContext.SetRootSql(sql)
 
-	pn, err := plan.BuildPlan(compileContext, stmts[0], false, false)
+	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -320,7 +320,7 @@ func (exec *txnExecutor) Exec(
 	c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
 		return plan.BuildPlan(
 			exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-			stmts[0], false, false)
+			stmts[0], false)
 	})
 
 	result := executor.NewResult(exec.s.mp)
