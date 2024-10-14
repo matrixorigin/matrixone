@@ -17,9 +17,10 @@ package message
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -49,7 +50,7 @@ func (js *JoinSels) Free() {
 				}
 			}
 		}
-		logutil.Infof("lensels %v maxsels %v", maxSels)
+		logutil.Infof("lensels %v maxsels %v", len(js.sels), maxSels)
 	}
 	js.sels = nil
 }
