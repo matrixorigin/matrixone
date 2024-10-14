@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -502,7 +503,7 @@ func doLock(
 		}
 
 		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
-		changed, err := fn(proc, rel, tableID, eng, vec, snapshotTS, newSnapshotTS)
+		changed, err := fn(proc, rel, analyzer, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -831,6 +832,7 @@ func getRowsFilter(
 func hasNewVersionInRange(
 	proc *process.Process,
 	rel engine.Relation,
+	analyzer process.Analyzer,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
@@ -851,9 +853,19 @@ func hasNewVersionInRange(
 			return false, err
 		}
 	}
+
+	crs := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	defer func() {
+		if analyzer != nil {
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
+		}
+	}()
+
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
-	return rel.PrimaryKeysMayBeModified(proc.Ctx, fromTS, toTS, vec)
+	return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, vec)
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
