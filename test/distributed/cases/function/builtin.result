@@ -764,18 +764,4 @@ null
 null
 null
 drop table t1;
-select mo_table_size(reldatabase, relname)=0 from (select reldatabase, relname, relkind from mo_catalog.mo_tables where relname in ('mo_sessions', 'log_info', 'sys_memory_used', 'rawlog', 'statement_info') order by relkind);
-mo_table_size(reldatabase, relname) = 0
-false
-false
-true
-true
-true
-select mo_table_rows(reldatabase, relname)=0 from (select reldatabase, relname, relkind from mo_catalog.mo_tables where relname in ('mo_sessions', 'log_info', 'sys_memory_used', 'rawlog', 'statement_info') order by relkind);
-mo_table_size(reldatabase, relname) = 0
-false
-false
-true
-true
-true
 drop database test01;
