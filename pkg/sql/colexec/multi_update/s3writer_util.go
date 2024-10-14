@@ -157,6 +157,10 @@ func cloneSomeVecFromCompactBatchs(
 				typ := oldBat.Vecs[oldColIdx].GetType()
 				newBat.Vecs[newColIdx] = vector.NewVec(*typ)
 			}
+			err = newBat.PreExtend(proc.GetMPool(), colexec.DefaultBatchSize)
+			if err != nil {
+				return nil, err
+			}
 
 			for rowIdx, partition := range rid2pid {
 				if !nulls.Contains(uint64(i)) {
@@ -241,6 +245,10 @@ func fetchMainTableBatchs(
 			for newColIdx, oldColIdx := range cols {
 				typ := oldBat.Vecs[oldColIdx].GetType()
 				newBat.Vecs[newColIdx] = vector.NewVec(*typ)
+			}
+			err = newBat.PreExtend(proc.GetMPool(), colexec.DefaultBatchSize)
+			if err != nil {
+				return nil, err
 			}
 
 			for rowIdx, partition := range rid2pid {
