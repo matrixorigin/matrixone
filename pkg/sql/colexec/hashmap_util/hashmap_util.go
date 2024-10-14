@@ -289,7 +289,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 			ai := int64(v) - 1
 
 			if !hashOnPK && needAllocateSels {
-				hb.MultiSels.Insert(int32(ai), int32(i+k))
+				hb.MultiSels.InsertSel(int32(ai), int32(i+k))
 			}
 		}
 
