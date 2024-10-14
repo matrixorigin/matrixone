@@ -539,6 +539,8 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sql string) (er
 		select {
 		case <-ctx.Done():
 			return
+		case <-ar.Pause:
+			return
 		case <-ar.Cancel:
 			return
 		default:
