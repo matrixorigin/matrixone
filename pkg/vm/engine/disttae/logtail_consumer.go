@@ -337,15 +337,32 @@ func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
 		ts))
 }
 
+func (c *PushClient) skipSubscribeIf(
+	ctx context.Context, tbl *txnTable) (bool, *logtailreplay.PartitionState) {
+	//if table has been subscribed, return quickly.
+	if ps, ok := c.isSubscribed(tbl.db.databaseId, tbl.tableId); ok {
+		return true, ps
+	}
+
+	// no need to subscribe a view
+	// for issue #19192
+	if strings.ToUpper(tbl.relKind) == "V" {
+		return true, nil
+	}
+
+	return false, nil
+}
+
 func (c *PushClient) toSubscribeTable(
 	ctx context.Context,
 	tbl *txnTable) (ps *logtailreplay.PartitionState, err error) {
 
-	tableId := tbl.tableId
-	//if table has been subscribed, return quickly.
-	if ps, ok := c.isSubscribed(tbl.db.databaseId, tableId); ok {
+	var skip bool
+	if skip, ps = c.skipSubscribeIf(ctx, tbl); skip {
 		return ps, nil
 	}
+
+	tableId := tbl.tableId
 
 	state, err := c.toSubIfUnsubscribed(ctx, tbl.db.databaseId, tableId)
 	if err != nil {

@@ -74,6 +74,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		panic("runtime of proxy is not set")
 	}
 
+	frontend.InitServerLevelVars(config.UUID)
 	var err error
 	if s.haKeeperClient == nil {
 		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*3, moerr.CauseNewServer)

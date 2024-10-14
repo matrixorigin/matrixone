@@ -278,7 +278,12 @@ func Test_mysqlSink_Send(t *testing.T) {
 		retryDuration: DefaultRetryDuration,
 		conn:          db,
 	}
-	err = sink.Send(context.Background(), NewCdcActiveRoutine(), "sql")
+	ar := NewCdcActiveRoutine()
+	err = sink.Send(context.Background(), ar, "sql")
+	assert.NoError(t, err)
+
+	close(ar.Pause)
+	err = sink.Send(context.Background(), ar, "sql")
 	assert.NoError(t, err)
 }
 
@@ -449,7 +454,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	watermarkUpdater := &WatermarkUpdater{
 		watermarkMap: &sync.Map{},
 	}
-	watermarkUpdater.UpdateMem(1, t0)
+	watermarkUpdater.UpdateMem("1_0", t0)
 
 	tableDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
@@ -782,4 +787,48 @@ func Test_mysqlSinker_sinkTail(t *testing.T) {
 			tt.wantErr(t, s.sinkTail(tt.args.ctx, tt.args.insertBatch, tt.args.deleteBatch), fmt.Sprintf("sinkTail(%v, %v, %v)", tt.args.ctx, tt.args.insertBatch, tt.args.deleteBatch))
 		})
 	}
+}
+
+func Test_consoleSinker_Close(t *testing.T) {
+	type fields struct {
+		dbTblInfo        *DbTableInfo
+		watermarkUpdater *WatermarkUpdater
+	}
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		{
+			fields: fields{
+				dbTblInfo:        &DbTableInfo{},
+				watermarkUpdater: nil,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &consoleSinker{
+				dbTblInfo:        tt.fields.dbTblInfo,
+				watermarkUpdater: tt.fields.watermarkUpdater,
+			}
+			s.Close()
+		})
+	}
+}
+
+func Test_mysqlSinker_Close(t *testing.T) {
+	sink := &mysqlSink{
+		user:          "root",
+		password:      "123456",
+		ip:            "127.0.0.1",
+		port:          3306,
+		retryTimes:    3,
+		retryDuration: 3 * time.Second,
+	}
+
+	sinker := &mysqlSinker{
+		mysql: sink,
+	}
+
+	sinker.Close()
 }

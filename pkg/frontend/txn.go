@@ -216,6 +216,9 @@ func (th *TxnHandler) Close() {
 		th.txnCtxCancel()
 	}
 	th.txnCtx = nil
+	th.shareTxn = false
+	th.serverStatus = defaultServerStatus
+	th.optionBits = defaultOptionBits
 }
 
 func (th *TxnHandler) GetConnCtx() context.Context {
@@ -346,7 +349,7 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 // createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn
 func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	var err error
-	if getGlobalPu().TxnClient == nil {
+	if getPu(execCtx.ses.GetService()).TxnClient == nil {
 		panic("must set txn client")
 	}
 
@@ -407,7 +410,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 
-	th.txnOp, err = getGlobalPu().TxnClient.New(
+	th.txnOp, err = getPu(execCtx.ses.GetService()).TxnClient.New(
 		th.txnCtx,
 		execCtx.ses.getLastCommitTS(),
 		opts...)

@@ -104,7 +104,7 @@ func BackupData(
 		return err
 	}
 	count := config.Parallelism
-	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
+	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType, nil)
 }
 
 func getParallelCount(count int) int {
@@ -268,6 +268,7 @@ func execBackup(
 	count int,
 	ts types.TS,
 	typ string,
+	filesList *[]*taeFile,
 ) error {
 	backupTime := names[0]
 	trimInfo := names[1]
@@ -416,7 +417,10 @@ func execBackup(
 	if err != nil {
 		return err
 	}
-	return nil
+	if filesList != nil && len(taeFileList) > 0 {
+		*filesList = append(*filesList, taeFileList...)
+	}
+	return err
 }
 
 // CopyCheckpointDir copy checkpoint dir from srcFs to dstFs
@@ -524,7 +528,7 @@ func CopyCheckpointDir(
 	dir string, backup types.TS,
 ) ([]*taeFile, types.TS, error) {
 	decodeFunc := func(name string) (types.TS, types.TS, string) {
-		start, end := blockio.DecodeCheckpointMetadataFileName(name)
+		start, end, _ := blockio.DecodeCheckpointMetadataFileName(name)
 		return start, end, ""
 	}
 	taeFileList, metaFiles, _, err := copyFileAndGetMetaFiles(ctx, srcFs, dstFs, dir, backup, decodeFunc, true)

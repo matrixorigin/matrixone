@@ -152,7 +152,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			bb.WriteString(envStmt)
 			bb.WriteString(" // ")
 			bb.WriteString(execSql)
-			text = SubStringFromBegin(bb.String(), int(getGlobalPu().SV.LengthOfQueryPrinted))
+			text = SubStringFromBegin(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		} else {
 			// ignore envStmt == ""
 			// case: exec `set @t = 2;` will trigger an internal query with the same session.
@@ -160,11 +160,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 			//	+ cw.GetAst().Format(fmtCtx)
 			//  + envStmt = fmtCtx.String()
-			text = SubStringFromBegin(envStmt, int(getGlobalPu().SV.LengthOfQueryPrinted))
+			text = SubStringFromBegin(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		}
 	} else {
 		stmID, _ = uuid.NewV7()
-		text = SubStringFromBegin(envStmt, int(getGlobalPu().SV.LengthOfQueryPrinted))
+		text = SubStringFromBegin(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
 	ses.SetStmtType(getStatementType(statement).GetStatementType())
@@ -471,7 +471,7 @@ func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	txnHandler := ses.GetTxnHandler()
 	txn := txnHandler.GetTxn()
 	//TODO: check meta data
-	if dbMeta, err = getGlobalPu().StorageEngine.Database(ctx, db, txn); err != nil {
+	if dbMeta, err = getPu(ses.GetService()).StorageEngine.Database(ctx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
 	}
@@ -1460,9 +1460,9 @@ func doKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
 	//false: kill a query in a connection
 	idThatKill := uint64(ses.GetConnectionID())
 	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
-		err = getGlobalRtMgr().kill(execCtx.reqCtx, true, idThatKill, k.ConnectionId, "")
+		err = getRtMgr(ses.GetService()).kill(execCtx.reqCtx, true, idThatKill, k.ConnectionId, "")
 	} else {
-		err = getGlobalRtMgr().kill(execCtx.reqCtx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
+		err = getRtMgr(ses.GetService()).kill(execCtx.reqCtx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
 	}
 	return err
 }
@@ -2116,7 +2116,7 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, stmt tree.Statement) error {
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
-	if getGlobalPu().SV.SkipCheckPrivilege {
+	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return nil
 	}
 
@@ -2164,7 +2164,7 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateCanExecuteStatementAndPlan")
 	defer task.End()
-	if getGlobalPu().SV.SkipCheckPrivilege {
+	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return nil
 	}
 
@@ -2185,7 +2185,7 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
 	defer task.End()
-	if getGlobalPu().SV.SkipCheckPrivilege {
+	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return nil
 	}
 	err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
@@ -2246,7 +2246,7 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	if length == 0 {
 		return skipWrite, readTime, writeTime, errorInvalidLength0
 	}
-	ses.CountPayload(len(payload))
+	ses.CountPayload(length)
 
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
 	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
@@ -2645,7 +2645,7 @@ func executeStmt(ses *Session,
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			if getGlobalPu().SV.DisableSelectInto {
+			if getPu(ses.GetService()).SV.DisableSelectInto {
 				err = moerr.NewSyntaxError(execCtx.reqCtx, "Unsupport select statement")
 				return
 			}
@@ -2809,20 +2809,21 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc := ses.proc
 	proc.ReplaceTopCtx(execCtx.reqCtx)
 
+	pu := getPu(ses.GetService())
 	proc.CopyValueScanBatch(ses.proc)
 	proc.Base.Id = ses.getNextProcessId()
-	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
-	proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
-	proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
-	proc.Base.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
+	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.Base.SessionInfo = process.SessionInfo{
 		User:                 ses.GetUserName(),
-		Host:                 getGlobalPu().SV.Host,
+		Host:                 pu.SV.Host,
 		ConnectionID:         uint64(resper.GetU32(CONNID)),
 		Database:             ses.GetDatabaseName(),
-		Version:              makeServerVersion(getGlobalPu(), version),
+		Version:              makeServerVersion(pu, version),
 		TimeZone:             ses.GetTimeZone(),
-		StorageEngine:        getGlobalPu().StorageEngine,
+		StorageEngine:        pu.StorageEngine,
 		LastInsertID:         ses.GetLastInsertID(),
 		SqlHelper:            ses.GetSqlHelper(),
 		Buf:                  ses.GetBuffer(),
@@ -2871,7 +2872,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	cws, err := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
 		ses.GetUserName(),
-		getGlobalPu().StorageEngine,
+		pu.StorageEngine,
 		proc, ses)
 
 	ParseDuration := time.Since(beginInstant)
@@ -3065,7 +3066,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_QUERY:
 		var query = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
-		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getGlobalPu().SV.LengthOfQueryPrinted))))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {

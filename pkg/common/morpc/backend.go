@@ -149,7 +149,7 @@ type remoteBackend struct {
 	conn         goetty.IOSession
 	writeC       chan *Future
 	stopWriteC   chan struct{}
-	resetConnC   chan struct{}
+	resetConnC   chan error
 	stopper      *stopper.Stopper
 	readStopper  *stopper.Stopper
 	closeOnce    sync.Once
@@ -209,7 +209,7 @@ func NewRemoteBackend(
 		readStopper: stopper.NewStopper(fmt.Sprintf("backend-read-%s", remote)),
 		remote:      remote,
 		codec:       codec,
-		resetConnC:  make(chan struct{}, 1),
+		resetConnC:  make(chan error, 1),
 		stopWriteC:  make(chan struct{}),
 	}
 
@@ -580,10 +580,14 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
 			n++
 			if err != nil || rb.options.disconnectAfterRead == n {
+				if err == nil {
+					err = backendClosed
+				}
+
 				rb.logger.Error("read from backend failed", zap.Error(err))
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()
-				rb.scheduleResetConn()
+				rb.scheduleResetConn(err)
 				return
 			}
 			rb.metrics.receiveCounter.Inc()
@@ -636,10 +640,10 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 	case f := <-rb.writeC:
 		handleHeartbeat()
 		messages = append(messages, f)
-	case <-rb.resetConnC:
+	case err := <-rb.resetConnC:
 		// If the connect needs to be reset, then all futures in the waiting response state will never
 		// get the response and need to be notified of an error immediately.
-		rb.makeAllWaitingFutureFailed()
+		rb.makeAllWaitingFutureFailed(err)
 		if err := rb.handleResetConn(); err != nil {
 			rb.changeToStopping()
 			return nil, true
@@ -678,7 +682,7 @@ func (rb *remoteBackend) makeAllWritesDoneWithClosed() {
 	}
 }
 
-func (rb *remoteBackend) makeAllWaitingFutureFailed() {
+func (rb *remoteBackend) makeAllWaitingFutureFailed(err error) {
 	var ids []uint64
 	var waitings []*Future
 	func() {
@@ -695,7 +699,7 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed() {
 	}()
 
 	for i, f := range waitings {
-		f.error(ids[i], backendClosed, nil)
+		f.error(ids[i], err, nil)
 	}
 }
 
@@ -939,7 +943,7 @@ func (rb *remoteBackend) runningLocked() bool {
 	return rb.stateMu.state == stateRunning
 }
 
-func (rb *remoteBackend) scheduleResetConn() {
+func (rb *remoteBackend) scheduleResetConn(err error) {
 	rb.stateMu.RLock()
 	defer rb.stateMu.RUnlock()
 
@@ -948,7 +952,7 @@ func (rb *remoteBackend) scheduleResetConn() {
 	}
 
 	select {
-	case rb.resetConnC <- struct{}{}:
+	case rb.resetConnC <- err:
 		rb.logger.Debug("schedule reset remote connection")
 	default:
 	}

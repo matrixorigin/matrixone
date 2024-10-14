@@ -12,13 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1_3_0
+package fifocache
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
-func getLogger(sid string) *log.MOLogger {
-	return runtime.ServiceRuntime(sid).Logger()
+func BenchmarkEnsureNBytesAndSet(b *testing.B) {
+	cache := NewDataCache(
+		fscache.ConstCapacity(1024),
+		nil, nil, nil,
+	)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			cache.EnsureNBytes(1, 1)
+		}
+	})
 }

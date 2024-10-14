@@ -215,7 +215,9 @@ func newClientConn(
 	}
 	fp.SetDefaultValues()
 	pu := config.NewParameterUnit(&fp, nil, nil, nil)
-	ios, err := frontend.NewIOSession(c.RawConn(), pu)
+	frontend.InitServerLevelVars(cfg.UUID)
+	frontend.SetSessionAlloc(cfg.UUID, frontend.NewSessionAllocator(pu))
+	ios, err := frontend.NewIOSession(c.RawConn(), pu, cfg.UUID)
 	if err != nil {
 		return nil, err
 	}

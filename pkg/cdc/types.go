@@ -59,6 +59,7 @@ type Reader interface {
 // Sinker manages and drains the sql parts
 type Sinker interface {
 	Sink(ctx context.Context, data *DecoderOutput) error
+	Close()
 }
 
 // Sink represents the destination mysql or matrixone
@@ -68,13 +69,15 @@ type Sink interface {
 }
 
 type ActiveRoutine struct {
+	Pause  chan struct{}
 	Cancel chan struct{}
 }
 
 func NewCdcActiveRoutine() *ActiveRoutine {
-	activeRoutine := &ActiveRoutine{}
-	activeRoutine.Cancel = make(chan struct{})
-	return activeRoutine
+	return &ActiveRoutine{
+		Pause:  make(chan struct{}),
+		Cancel: make(chan struct{}),
+	}
 }
 
 type OutputType int
@@ -125,6 +128,7 @@ type DbTableInfo struct {
 	SourceAccountId   uint64
 	SourceDbId        uint64
 	SourceTblId       uint64
+	SourceTblIdStr    string
 
 	SinkAccountName string
 	SinkDbName      string

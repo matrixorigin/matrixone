@@ -28,14 +28,14 @@ import (
 
 type Profiler[T any, P interface {
 	*T
-	SampleValues
+	SampleValues[P]
 }] struct {
 	locations sync.Map // LocationKey -> *profile.Location
 	functions sync.Map // FunctionKey -> *profile.Function
 	samples   sync.Map // SampleKey -> *SampleInfo[P]
 
 	mu            sync.Mutex
-	mergedSamples map[uint64]*profile.Sample
+	mergedSamples map[uint64]*MergedSample[P]
 
 	// special samples
 	stackOmittedSample SampleInfo[T]
@@ -49,11 +49,12 @@ type SampleInfo[T any] struct {
 	Scale     int64
 }
 
-type SampleValues interface {
+type SampleValues[T any] interface {
 	Init()
 	SampleTypes() []*profile.ValueType
 	DefaultSampleType() string
 	Values() []int64
+	Merge(with []T) T
 }
 
 type LocationKey struct {
@@ -70,12 +71,17 @@ type SampleKey struct {
 	PCs _PCs
 }
 
+type MergedSample[T any] struct {
+	Location []*profile.Location
+	Values   []T
+}
+
 func NewProfiler[T any, P interface {
 	*T
-	SampleValues
+	SampleValues[P]
 }]() *Profiler[T, P] {
 	ret := &Profiler[T, P]{
-		mergedSamples: make(map[uint64]*profile.Sample),
+		mergedSamples: make(map[uint64]*MergedSample[P]),
 	}
 
 	ret.stackOmittedSample.Locations = []*profile.Location{
@@ -266,17 +272,25 @@ func (p *Profiler[T, P]) merge(try bool) {
 		info := v.(*SampleInfo[P])
 
 		locationsKey := getLocationsKey(info.Locations)
-		values := info.Values.Values()
 
 		sample, ok := p.mergedSamples[locationsKey]
 		if !ok {
-			p.mergedSamples[locationsKey] = &profile.Sample{
+			sample = &MergedSample[P]{
 				Location: info.Locations,
-				Value:    info.Values.Values(),
+				Values:   []P{info.Values},
 			}
+			p.mergedSamples[locationsKey] = sample
 		} else {
-			for i, value := range values {
-				sample.Value[i] += value
+			sample.Values = append(sample.Values, info.Values)
+			if len(sample.Values) > 16 {
+				// merge
+				toMerge := sample.Values[:8]
+				rest := sample.Values[8:]
+				sample.Values = append(
+					sample.Values[:0],
+					toMerge[0].Merge(toMerge[1:]),
+				)
+				sample.Values = append(sample.Values, rest...)
 			}
 		}
 
@@ -327,7 +341,11 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 	defer p.mu.Unlock()
 
 	for _, sample := range p.mergedSamples {
-		prof.Sample = append(prof.Sample, sample)
+		merged := sample.Values[0].Merge(sample.Values[1:])
+		prof.Sample = append(prof.Sample, &profile.Sample{
+			Location: sample.Location,
+			Value:    merged.Values(),
+		})
 	}
 
 	p.locations.Range(func(k, v any) bool {

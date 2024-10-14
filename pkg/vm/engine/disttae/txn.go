@@ -900,12 +900,8 @@ func (txn *Transaction) deleteTableWrites(
 		if e.bat == nil || e.bat.RowCount() == 0 {
 			continue
 		}
-		if e.typ == ALTER {
-			continue
-		}
-		// for 3 and 4 above.
-		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc ||
-			e.bat.Attrs[0] == catalog.BlockMeta_DeltaLoc {
+		if e.typ == ALTER || e.typ == DELETE ||
+			e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
 			continue
 		}
 		sels = sels[:0]

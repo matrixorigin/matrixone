@@ -54,6 +54,7 @@ type MOServer struct {
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
+	service   string
 }
 
 // Server interface is for mock MOServer
@@ -88,7 +89,7 @@ func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
 	mo.running = true
 	mo.startListener()
-	setMoServerStarted(true)
+	setMoServerStarted(mo.service, true)
 	return nil
 }
 
@@ -189,7 +190,7 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 		}
 	}()
 
-	rs, err = NewIOSession(conn, mo.pu)
+	rs, err = NewIOSession(conn, mo.pu, mo.service)
 	if err != nil {
 		logutil.Error("NewIOSession error", zap.Error(err))
 		return
@@ -221,7 +222,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
-	tempCtx, tempCancel := context.WithTimeoutCause(ctx, getGlobalPu().SV.SessionTimeout.Duration, moerr.CauseHandshake)
+	tempCtx, tempCancel := context.WithTimeoutCause(ctx, getPu(mo.service).SV.SessionTimeout.Duration, moerr.CauseHandshake)
 	defer tempCancel()
 
 	routine := rm.getRoutine(rs)
@@ -345,57 +346,73 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-var globalRtMgr atomic.Value
-var globalPu atomic.Value
-var globalAicm atomic.Value
-var moServerStarted atomic.Bool
-var globalSessionAlloc atomic.Value
+var serverVarsMap sync.Map
 
-func getGlobalSessionAlloc() Allocator {
-	return globalSessionAlloc.Load().(Allocator)
+func init() {
+	InitServerLevelVars("")
 }
 
-func setGlobalSessionAlloc(s Allocator) {
-	globalSessionAlloc.Store(s)
+func getServerLevelVars(service string) *ServerLevelVariables {
+	//always there
+	ret, _ := serverVarsMap.Load(service)
+	return ret.(*ServerLevelVariables)
 }
 
-func setGlobalRtMgr(rtMgr *RoutineManager) {
-	globalRtMgr.Store(rtMgr)
+func InitServerLevelVars(service string) {
+	serverVarsMap.LoadOrStore(service, &ServerLevelVariables{})
+	getServerLevelVars(service)
 }
 
-func getGlobalRtMgr() *RoutineManager {
-	v := globalRtMgr.Load()
+func getSessionAlloc(service string) Allocator {
+	return getServerLevelVars(service).sessionAlloc.Load().(Allocator)
+}
+
+func setSessionAlloc(service string, s Allocator) {
+	getServerLevelVars(service).sessionAlloc.Store(s)
+}
+
+func SetSessionAlloc(service string, s Allocator) {
+	setSessionAlloc(service, s)
+}
+
+func setRtMgr(service string, rtMgr *RoutineManager) {
+	getServerLevelVars(service).RtMgr.Store(rtMgr)
+}
+
+func getRtMgr(service string) *RoutineManager {
+	v := getServerLevelVars(service).RtMgr.Load()
 	if v != nil {
 		return v.(*RoutineManager)
 	}
 	return nil
 }
 
-func setGlobalPu(pu *config.ParameterUnit) {
-	globalPu.Store(pu)
+func setPu(service string, pu *config.ParameterUnit) {
+	getServerLevelVars(service).Pu.Store(pu)
 }
 
-func getGlobalPu() *config.ParameterUnit {
-	return globalPu.Load().(*config.ParameterUnit)
+func getPu(service string) *config.ParameterUnit {
+	return getServerLevelVars(service).Pu.Load().(*config.ParameterUnit)
 }
 
-func setGlobalAicm(aicm *defines.AutoIncrCacheManager) {
-	globalAicm.Store(aicm)
+func setAicm(service string, aicm *defines.AutoIncrCacheManager) {
+	getServerLevelVars(service).Aicm.Store(aicm)
 }
 
-func getGlobalAic() *defines.AutoIncrCacheManager {
-	if globalAicm.Load() != nil {
-		return globalAicm.Load().(*defines.AutoIncrCacheManager)
+func getAicm(service string) *defines.AutoIncrCacheManager {
+	ret := getServerLevelVars(service).Aicm
+	if ret.Load() != nil {
+		return ret.Load().(*defines.AutoIncrCacheManager)
 	}
 	return nil
 }
 
-func MoServerIsStarted() bool {
-	return moServerStarted.Load()
+func MoServerIsStarted(service string) bool {
+	return getServerLevelVars(service).moServerStarted.Load()
 }
 
-func setMoServerStarted(b bool) {
-	moServerStarted.Store(b)
+func setMoServerStarted(service string, b bool) {
+	getServerLevelVars(service).moServerStarted.Store(b)
 }
 
 func NewMOServer(
@@ -405,14 +422,19 @@ func NewMOServer(
 	aicm *defines.AutoIncrCacheManager,
 	baseService BaseService,
 ) *MOServer {
-	setGlobalPu(pu)
-	setGlobalAicm(aicm)
-	setGlobalSessionAlloc(NewSessionAllocator(pu))
-	rm, err := NewRoutineManager(ctx)
+	service := ""
+	if baseService != nil {
+		service = baseService.ID()
+	}
+	InitServerLevelVars(service)
+	setPu(service, pu)
+	setAicm(service, aicm)
+	setSessionAlloc(service, NewSessionAllocator(pu))
+	rm, err := NewRoutineManager(ctx, service)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	setGlobalRtMgr(rm)
+	setRtMgr(service, rm)
 	rm.setBaseService(baseService)
 	if baseService != nil {
 		rm.setSessionMgr(baseService.SessionMgr())
@@ -426,6 +448,7 @@ func NewMOServer(
 		readTimeout: pu.SV.SessionTimeout.Duration,
 		pu:          pu,
 		handler:     rm.Handler,
+		service:     service,
 	}
 	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {

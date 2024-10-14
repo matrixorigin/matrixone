@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -515,6 +516,15 @@ func (r *shardingLocalReader) Read(
 		if err != nil || isEnd {
 			r.close()
 		}
+		//for test issue-19202
+		logutil.Infof("xxxx shardingLocalReader read, "+
+			"txn:%s, table:%s, isEnd:%v,err:%v, bat:%s, state:%v",
+			r.tblDelegate.origin.db.op.Txn().DebugString(),
+			r.tblDelegate.origin.tableName,
+			isEnd,
+			err,
+			common.MoBatchToString(bat, 10),
+			r.iteratePhase)
 	}()
 
 	for {

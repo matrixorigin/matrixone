@@ -115,7 +115,9 @@ func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Durati
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
 	pu := config.NewParameterUnit(&fp, nil, nil, nil)
-	ios, err := frontend.NewIOSession(c.RawConn(), pu)
+	frontend.InitServerLevelVars(cn.uuid)
+	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(pu))
+	ios, err := frontend.NewIOSession(c.RawConn(), pu, cn.uuid)
 	if err != nil {
 		return nil, err
 	}
