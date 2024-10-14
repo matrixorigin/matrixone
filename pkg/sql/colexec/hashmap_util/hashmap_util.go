@@ -230,6 +230,10 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 				return err
 			}
 		}
+	} else {
+		if needAllocateSels {
+			hb.MultiSels.Init()
+		}
 	}
 
 	var (
