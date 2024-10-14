@@ -776,16 +776,16 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		switch typ.Oid {
 		case types.T_varchar:
 			for rowIdx, row := range rows {
+				var val string
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
-				}
-				var val string
-				strVal, ok := row[colIndex].(string)
-				if ok {
-					val = strVal
 				} else {
-					val = fmt.Sprintf("%v", row[colIndex])
+					strVal, ok := row[colIndex].(string)
+					if ok {
+						val = strVal
+					} else {
+						val = fmt.Sprintf("%v", row[colIndex])
+					}
 				}
 				err := vector.AppendBytes(bat.Vecs[colIndex], []byte(val), false, pool)
 				if err != nil {
@@ -795,17 +795,18 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 
 		case types.T_text:
 			for rowIdx, row := range rows {
+				var val string
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
-				}
-				var val string
-				strVal, ok := row[colIndex].(string)
-				if ok {
-					val = strVal
 				} else {
-					val = fmt.Sprintf("%v", row[colIndex])
+					strVal, ok := row[colIndex].(string)
+					if ok {
+						val = strVal
+					} else {
+						val = fmt.Sprintf("%v", row[colIndex])
+					}
 				}
+
 				err := vector.AppendBytes(bat.Vecs[colIndex], []byte(val), false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -813,11 +814,12 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_int8:
 			for rowIdx, row := range rows {
+				var val int8
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(int8)
 				}
-				val := row[colIndex].(int8)
 				err := vector.AppendFixed[int8](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -825,11 +827,13 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_int16:
 			for rowIdx, row := range rows {
+				var val int16
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(int16)
 				}
-				val := row[colIndex].(int16)
+
 				err := vector.AppendFixed[int16](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -837,12 +841,13 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_int32:
 			for rowIdx, row := range rows {
+				var val int32
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(int32)
 				}
 
-				val := row[colIndex].(int32)
 				err := vector.AppendFixed[int32](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -850,11 +855,13 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_int64:
 			for rowIdx, row := range rows {
+				var val int64
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(int64)
 				}
-				val := row[colIndex].(int64)
+
 				err := vector.AppendFixed[int64](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -862,12 +869,13 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_float64:
 			for rowIdx, row := range rows {
+				var val float64
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(float64)
 				}
 
-				val := row[colIndex].(float64)
 				err := vector.AppendFixed[float64](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -875,12 +883,13 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_float32:
 			for rowIdx, row := range rows {
+				var val float32
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(float32)
 				}
 
-				val := row[colIndex].(float32)
 				err := vector.AppendFixed[float32](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -888,11 +897,13 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_date:
 			for rowIdx, row := range rows {
+				var val types.Date
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(types.Date)
 				}
-				val := row[colIndex].(types.Date)
+
 				err := vector.AppendFixed[types.Date](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -900,11 +911,13 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_time:
 			for rowIdx, row := range rows {
+				var val types.Time
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(types.Time)
 				}
-				val := row[colIndex].(types.Time)
+
 				err := vector.AppendFixed[types.Time](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -912,11 +925,13 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_datetime:
 			for rowIdx, row := range rows {
+				var val types.Datetime
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(types.Datetime)
 				}
-				val := row[colIndex].(types.Datetime)
+
 				err := vector.AppendFixed[types.Datetime](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
@@ -924,22 +939,22 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_timestamp:
 			for rowIdx, row := range rows {
+				var val types.Timestamp
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
-				}
-				var val types.Timestamp
-				timeStampRowVal := row[colIndex]
-				switch v := timeStampRowVal.(type) {
-				case types.Timestamp:
-					val = v
-				case string:
-					val, err = types.ParseTimestamp(time.Local, v, typ.Scale)
-					if err != nil {
-						return nil, nil, err
+				} else {
+					timeStampRowVal := row[colIndex]
+					switch v := timeStampRowVal.(type) {
+					case types.Timestamp:
+						val = v
+					case string:
+						val, err = types.ParseTimestamp(time.Local, v, typ.Scale)
+						if err != nil {
+							return nil, nil, err
+						}
+					default:
+						return nil, nil, moerr.NewInternalErrorNoCtxf("%v can't convert to timestamp type", v)
 					}
-				default:
-					return nil, nil, moerr.NewInternalErrorNoCtxf("%v can't convert to timestamp type", v)
 				}
 				err := vector.AppendFixed[types.Timestamp](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
@@ -948,12 +963,13 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			}
 		case types.T_enum:
 			for rowIdx, row := range rows {
+				var val types.Enum
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(types.Enum)
 				}
 
-				val := row[colIndex].(types.Enum)
 				err := vector.AppendFixed[types.Enum](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
