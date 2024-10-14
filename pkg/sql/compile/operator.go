@@ -375,18 +375,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := mergecte.NewArgument()
 		op.SetInfo(&info)
 		return op
-	case vm.Mark:
-		t := sourceOp.(*mark.MarkJoin)
-		op := mark.NewArgument()
-		op.Result = t.Result
-		op.Conditions = t.Conditions
-		op.Cond = t.Cond
-		op.OnList = t.OnList
-		op.HashOnPK = t.HashOnPK
-		op.JoinMapTag = t.JoinMapTag
-		op.ProjectList = t.ProjectList
-		op.SetInfo(&info)
-		return op
 	case vm.TableFunction:
 		t := sourceOp.(*table_function.TableFunction)
 		op := table_function.NewArgument()
@@ -1545,15 +1533,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 			ret.NeedBatches = true
 			ret.NeedAllocateSels = true
 		}
-		ret.JoinMapTag = arg.JoinMapTag
-
-	case vm.Mark:
-		arg := op.(*mark.MarkJoin)
-		ret.NeedHashMap = true
-		ret.Conditions = arg.Conditions[1]
-		ret.NeedBatches = true
-		ret.HashOnPK = arg.HashOnPK
-		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.Join:
