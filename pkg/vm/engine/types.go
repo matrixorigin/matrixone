@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -632,7 +631,7 @@ type Tombstoner interface {
 	ApplyInMemTombstones(
 		bid *types.Blockid,
 		rowsOffset []int64,
-		deleted *nulls.Nulls,
+		deleted *objectio.Bitmap,
 	) (left []int64)
 
 	// it applies the block related tombstones from the persisted tombstone file
@@ -643,7 +642,7 @@ type Tombstoner interface {
 		snapshot *types.TS,
 		bid *types.Blockid,
 		rowsOffset []int64,
-		deletedMask *nulls.Nulls,
+		deletedMask *objectio.Bitmap,
 	) (left []int64, err error)
 
 	// a.merge(b) => a = a U b
@@ -765,7 +764,7 @@ type DataSource interface {
 
 	GetTombstones(
 		ctx context.Context, bid *objectio.Blockid,
-	) (deletedRows *nulls.Nulls, err error)
+	) (deletedRows objectio.Bitmap, err error)
 
 	SetOrderBy(orderby []*plan.OrderBySpec)
 
@@ -814,7 +813,7 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
+	Ranges(context.Context, []*plan.Expr, int, int) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
@@ -898,9 +897,13 @@ type Relation interface {
 	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 }
 
-type Reader interface {
+type BaseReader interface {
 	Close() error
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)
+}
+
+type Reader interface {
+	BaseReader
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
 	SetFilterZM(objectio.ZoneMap)

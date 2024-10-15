@@ -48,10 +48,23 @@ func (t *testSampleValues) DefaultSampleType() string {
 }
 
 func (t *testSampleValues) Values() []int64 {
-	return []int64{
-		t.N.Load(),
-		t.A.Load(),
+	n := t.N.Load()
+	a := t.A.Load()
+	return []int64{n, a}
+}
+
+func (t *testSampleValues) Merge(merges []*testSampleValues) *testSampleValues {
+	n := t.N.Load()
+	a := t.A.Load()
+	for _, merge := range merges {
+		n += merge.N.Load()
+		a += merge.A.Load()
 	}
+	ret := new(testSampleValues)
+	ret.Init()
+	ret.N.Add(n)
+	ret.A.Add(a)
+	return ret
 }
 
 func TestProfiler(t *testing.T) {
@@ -59,8 +72,7 @@ func TestProfiler(t *testing.T) {
 }
 
 func TestProfilerWrite(t *testing.T) {
-	t.Skip()
-	f, err := os.Create("test_profile")
+	f, err := os.CreateTemp(t.TempDir(), "test_profile")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +90,17 @@ func testProfiler(t *testing.T, w io.Writer) {
 	}
 	if err := profiler.Write(w); err != nil {
 		t.Fatal(err)
+	}
+	for _, mergedSample := range profiler.mergedSamples {
+		mergedValue := mergedSample.Values[0].Merge(mergedSample.Values[1:])
+		values := mergedValue.Values()
+		for _, value := range values {
+			if value > 0 {
+				if value < 30000 {
+					t.Fatalf("got %+v", values)
+				}
+			}
+		}
 	}
 }
 

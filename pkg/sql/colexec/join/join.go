@@ -166,14 +166,14 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 
 	mpbat := ctr.mp.GetBatches()
 	if ctr.rbat == nil {
-		ctr.rbat = batch.NewWithSize(len(ap.Result))
+		ctr.rbat = batch.NewOffHeapWithSize(len(ap.Result))
 		for i, rp := range ap.Result {
 			if rp.Rel == 0 {
-				ctr.rbat.Vecs[i] = vector.NewVec(*ap.ctr.inbat.Vecs[rp.Pos].GetType())
+				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ap.ctr.inbat.Vecs[rp.Pos].GetType())
 				// for inner join, if left batch is sorted , then output batch is sorted
 				ctr.rbat.Vecs[i].SetSorted(ap.ctr.inbat.Vecs[rp.Pos].GetSorted())
 			} else {
-				ctr.rbat.Vecs[i] = vector.NewVec(*mpbat[0].Vecs[rp.Pos].GetType())
+				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*mpbat[0].Vecs[rp.Pos].GetType())
 			}
 		}
 	} else {
@@ -195,7 +195,6 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(mpbat[0], proc.Mp())
 	}
 
-	mSels := ctr.mp.Sels()
 	count := ap.ctr.inbat.RowCount()
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
@@ -221,7 +220,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 			idx := vals[k] - 1
 
 			if ap.Cond == nil {
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err := ctr.rbat.Vecs[j].UnionOne(ap.ctr.inbat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
@@ -236,7 +235,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 					}
 					rowCount++
 				} else {
-					sels := mSels[idx]
+					sels := ctr.mp.GetSels(idx)
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err := ctr.rbat.Vecs[j].UnionMulti(ap.ctr.inbat.Vecs[rp.Pos], int64(i+k), len(sels), proc.Mp()); err != nil {
@@ -254,13 +253,13 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 					rowCount += len(sels)
 				}
 			} else {
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					if err := ctr.evalApCondForOneSel(ap.ctr.inbat, ctr.rbat, ap, proc, int64(i+k), int64(idx)); err != nil {
 						return err
 					}
 					rowCount++
 				} else {
-					sels := mSels[idx]
+					sels := ctr.mp.GetSels(idx)
 					for _, sel := range sels {
 						if err := ctr.evalApCondForOneSel(ap.ctr.inbat, ctr.rbat, ap, proc, int64(i+k), int64(sel)); err != nil {
 							return err

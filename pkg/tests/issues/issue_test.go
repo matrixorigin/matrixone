@@ -197,8 +197,8 @@ func TestWWConflict(t *testing.T) {
 func cleanDatabase(
 	t *testing.T,
 	ctx context.Context,
-	cn cnservice.Service, dbName string) {
-
+	cn cnservice.Service, dbName string,
+) {
 	exec := cn.GetSQLExecutor()
 	require.NotNil(t, exec)
 
@@ -207,7 +207,6 @@ func cleanDatabase(
 		require.NoError(t, eng.Delete(ctx, dbName, txn.Txn()))
 		return nil
 	}, executor.Options{})
-
 }
 
 // #18754
@@ -373,5 +372,106 @@ func TestCNFlushS3Deletes(t *testing.T) {
 					return true
 				})
 			}
+		})
+}
+
+//#16493
+/*
+// create table t (id int auto_increment primary key, id2 int);
+// 				CN1 										CN2
+// insert into t(id2) values (1), (2)
+// 											insert into t(id) values (3)
+// insert into t(id2) values (1), (2)
+
+There is no lock competition, but there is data modification
+*/
+func TestDedupForAutoPk(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			cn1, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			cn2, err := c.GetCNService(1)
+			require.NoError(t, err)
+
+			db := testutils.GetDatabaseName(t)
+			table := "t"
+
+			testutils.CreateTableAndWaitCNApplied(
+				t,
+				db,
+				table,
+				"create table "+table+" (id int auto_increment primary key, id2 int)",
+				cn1,
+				cn2,
+			)
+
+			committedAt := testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+"(id2) values (1), (2)",
+			)
+
+			exec2 := testutils.GetSQLExecutor(cn2)
+			err = exec2.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"insert into "+table+"(id) values (3)",
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+					res.Close()
+					return nil
+				},
+				executor.Options{}.
+					WithDatabase(db).
+					WithMinCommittedTS(committedAt),
+			)
+			require.NoError(t, err)
+
+			exec1 := testutils.GetSQLExecutor(cn1)
+			err = exec1.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"insert into "+table+"(id2) values (1), (2)",
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+					res.Close()
+					return nil
+				},
+				executor.Options{}.
+					WithDatabase(db).
+					WithWaitCommittedLogApplied(),
+			)
+			require.NoError(t, err)
+
+			// check the result
+			exec := testutils.GetSQLExecutor(cn1)
+			res, err := exec.Exec(
+				ctx,
+				"select id from t;",
+				executor.Options{}.
+					WithDatabase(db).
+					WithWaitCommittedLogApplied(),
+			)
+			require.NoError(t, err)
+
+			res.ReadRows(
+				func(rows int, cols []*vector.Vector) bool {
+					for i := 0; i < rows; i++ {
+						n := executor.GetFixedRows[int32](cols[0])[i]
+						t.Logf("the value of rows %d is %d", i, n)
+					}
+					return true
+				},
+			)
+			res.Close()
 		})
 }

@@ -115,7 +115,27 @@ type StorageTxnOperator struct {
 	meta     txn.TxnMeta
 }
 
-func (s *StorageTxnOperator) SetFootPrints(prints [][2]uint32) {
+func (s *StorageTxnOperator) EnterIncrStmt() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *StorageTxnOperator) ExitIncrStmt() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *StorageTxnOperator) EnterRollbackStmt() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *StorageTxnOperator) ExitRollbackStmt() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *StorageTxnOperator) SetFootPrints(id int, enter bool) {
 	//TODO implement me
 	panic("implement me")
 }

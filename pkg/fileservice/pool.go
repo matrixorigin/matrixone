@@ -44,6 +44,10 @@ func (pb PutBack[T]) Put() {
 	}
 }
 
+func (pb PutBack[T]) Idx() int {
+	return pb.idx
+}
+
 func NewPool[T any](
 	capacity uint32,
 	newFunc func() T,
@@ -64,6 +68,16 @@ func NewPool[T any](
 		pool.pool[i].Value = newFunc()
 	}
 	return pool
+}
+
+func (p *Pool[T]) InUseCount() int {
+	count := 0
+	for i := uint32(0); i < p.capacity; i++ {
+		if p.pool[i].Taken.Load() == 1 {
+			count++
+		}
+	}
+	return count
 }
 
 func (p *Pool[T]) Get(ptr *T) PutBack[T] {

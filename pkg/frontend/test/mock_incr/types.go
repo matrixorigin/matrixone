@@ -16,6 +16,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	incrservice "github.com/matrixorigin/matrixone/pkg/incrservice"
+	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -63,7 +64,7 @@ func (m *MockAutoIncrementService) Create(ctx context.Context, tableID uint64, c
 }
 
 // Create indicates an expected call of Create.
-func (mr *MockAutoIncrementServiceMockRecorder) Create(ctx, tableID, caches, txn any) *gomock.Call {
+func (mr *MockAutoIncrementServiceMockRecorder) Create(ctx, tableID, caches, txn interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockAutoIncrementService)(nil).Create), ctx, tableID, caches, txn)
 }
@@ -78,7 +79,7 @@ func (m *MockAutoIncrementService) CurrentValue(ctx context.Context, tableID uin
 }
 
 // CurrentValue indicates an expected call of CurrentValue.
-func (mr *MockAutoIncrementServiceMockRecorder) CurrentValue(ctx, tableID, col any) *gomock.Call {
+func (mr *MockAutoIncrementServiceMockRecorder) CurrentValue(ctx, tableID, col interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentValue", reflect.TypeOf((*MockAutoIncrementService)(nil).CurrentValue), ctx, tableID, col)
 }
@@ -92,9 +93,24 @@ func (m *MockAutoIncrementService) Delete(ctx context.Context, tableID uint64, t
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockAutoIncrementServiceMockRecorder) Delete(ctx, tableID, txn any) *gomock.Call {
+func (mr *MockAutoIncrementServiceMockRecorder) Delete(ctx, tableID, txn interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockAutoIncrementService)(nil).Delete), ctx, tableID, txn)
+}
+
+// GetLastAllocateTS mocks base method.
+func (m *MockAutoIncrementService) GetLastAllocateTS(ctx context.Context, tableID uint64, colName string) (timestamp.Timestamp, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLastAllocateTS", ctx, tableID, colName)
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLastAllocateTS indicates an expected call of GetLastAllocateTS.
+func (mr *MockAutoIncrementServiceMockRecorder) GetLastAllocateTS(ctx, tableID, colName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastAllocateTS", reflect.TypeOf((*MockAutoIncrementService)(nil).GetLastAllocateTS), ctx, tableID, colName)
 }
 
 // InsertValues mocks base method.
@@ -107,7 +123,7 @@ func (m *MockAutoIncrementService) InsertValues(ctx context.Context, tableID uin
 }
 
 // InsertValues indicates an expected call of InsertValues.
-func (mr *MockAutoIncrementServiceMockRecorder) InsertValues(ctx, tableID, bat, estimate any) *gomock.Call {
+func (mr *MockAutoIncrementServiceMockRecorder) InsertValues(ctx, tableID, bat, estimate interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertValues", reflect.TypeOf((*MockAutoIncrementService)(nil).InsertValues), ctx, tableID, bat, estimate)
 }
@@ -121,7 +137,7 @@ func (m *MockAutoIncrementService) Reload(ctx context.Context, tableID uint64) e
 }
 
 // Reload indicates an expected call of Reload.
-func (mr *MockAutoIncrementServiceMockRecorder) Reload(ctx, tableID any) *gomock.Call {
+func (mr *MockAutoIncrementServiceMockRecorder) Reload(ctx, tableID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reload", reflect.TypeOf((*MockAutoIncrementService)(nil).Reload), ctx, tableID)
 }
@@ -135,7 +151,7 @@ func (m *MockAutoIncrementService) Reset(ctx context.Context, oldTableID, newTab
 }
 
 // Reset indicates an expected call of Reset.
-func (mr *MockAutoIncrementServiceMockRecorder) Reset(ctx, oldTableID, newTableID, keep, txn any) *gomock.Call {
+func (mr *MockAutoIncrementServiceMockRecorder) Reset(ctx, oldTableID, newTableID, keep, txn interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reset", reflect.TypeOf((*MockAutoIncrementService)(nil).Reset), ctx, oldTableID, newTableID, keep, txn)
 }
@@ -186,7 +202,7 @@ func (m *MockincrTableCache) adjust(ctx context.Context, cols []incrservice.Auto
 }
 
 // adjust indicates an expected call of adjust.
-func (mr *MockincrTableCacheMockRecorder) adjust(ctx, cols any) *gomock.Call {
+func (mr *MockincrTableCacheMockRecorder) adjust(ctx, cols interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "adjust", reflect.TypeOf((*MockincrTableCache)(nil).adjust), ctx, cols)
 }
@@ -241,9 +257,24 @@ func (m *MockincrTableCache) currentValue(ctx context.Context, tableID uint64, c
 }
 
 // currentValue indicates an expected call of currentValue.
-func (mr *MockincrTableCacheMockRecorder) currentValue(ctx, tableID, col any) *gomock.Call {
+func (mr *MockincrTableCacheMockRecorder) currentValue(ctx, tableID, col interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "currentValue", reflect.TypeOf((*MockincrTableCache)(nil).currentValue), ctx, tableID, col)
+}
+
+// getLastAllocateTS mocks base method.
+func (m *MockincrTableCache) getLastAllocateTS(colName string) (timestamp.Timestamp, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "getLastAllocateTS", colName)
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// getLastAllocateTS indicates an expected call of getLastAllocateTS.
+func (mr *MockincrTableCacheMockRecorder) getLastAllocateTS(colName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getLastAllocateTS", reflect.TypeOf((*MockincrTableCache)(nil).getLastAllocateTS), colName)
 }
 
 // insertAutoValues mocks base method.
@@ -256,7 +287,7 @@ func (m *MockincrTableCache) insertAutoValues(ctx context.Context, tableID uint6
 }
 
 // insertAutoValues indicates an expected call of insertAutoValues.
-func (mr *MockincrTableCacheMockRecorder) insertAutoValues(ctx, tableID, bat, estimate any) *gomock.Call {
+func (mr *MockincrTableCacheMockRecorder) insertAutoValues(ctx, tableID, bat, estimate interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "insertAutoValues", reflect.TypeOf((*MockincrTableCache)(nil).insertAutoValues), ctx, tableID, bat, estimate)
 }
@@ -299,23 +330,24 @@ func (m *MockvalueAllocator) EXPECT() *MockvalueAllocatorMockRecorder {
 }
 
 // allocate mocks base method.
-func (m *MockvalueAllocator) allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error) {
+func (m *MockvalueAllocator) allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "allocate", ctx, tableID, col, count, txnOp)
 	ret0, _ := ret[0].(uint64)
 	ret1, _ := ret[1].(uint64)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret2, _ := ret[2].(timestamp.Timestamp)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
 }
 
 // allocate indicates an expected call of allocate.
-func (mr *MockvalueAllocatorMockRecorder) allocate(ctx, tableID, col, count, txnOp any) *gomock.Call {
+func (mr *MockvalueAllocatorMockRecorder) allocate(ctx, tableID, col, count, txnOp interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "allocate", reflect.TypeOf((*MockvalueAllocator)(nil).allocate), ctx, tableID, col, count, txnOp)
 }
 
 // asyncAllocate mocks base method.
-func (m *MockvalueAllocator) asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, error)) error {
+func (m *MockvalueAllocator) asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, timestamp.Timestamp, error)) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "asyncAllocate", ctx, tableID, col, count, txnOp, cb)
 	ret0, _ := ret[0].(error)
@@ -323,7 +355,7 @@ func (m *MockvalueAllocator) asyncAllocate(ctx context.Context, tableID uint64, 
 }
 
 // asyncAllocate indicates an expected call of asyncAllocate.
-func (mr *MockvalueAllocatorMockRecorder) asyncAllocate(ctx, tableID, col, count, txnOp, cb any) *gomock.Call {
+func (mr *MockvalueAllocatorMockRecorder) asyncAllocate(ctx, tableID, col, count, txnOp, cb interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "asyncAllocate", reflect.TypeOf((*MockvalueAllocator)(nil).asyncAllocate), ctx, tableID, col, count, txnOp, cb)
 }
@@ -349,7 +381,7 @@ func (m *MockvalueAllocator) updateMinValue(ctx context.Context, tableID uint64,
 }
 
 // updateMinValue indicates an expected call of updateMinValue.
-func (mr *MockvalueAllocatorMockRecorder) updateMinValue(ctx, tableID, col, minValue, txnOp any) *gomock.Call {
+func (mr *MockvalueAllocatorMockRecorder) updateMinValue(ctx, tableID, col, minValue, txnOp interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "updateMinValue", reflect.TypeOf((*MockvalueAllocator)(nil).updateMinValue), ctx, tableID, col, minValue, txnOp)
 }
@@ -378,17 +410,18 @@ func (m *MockIncrValueStore) EXPECT() *MockIncrValueStoreMockRecorder {
 }
 
 // Allocate mocks base method.
-func (m *MockIncrValueStore) Allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error) {
+func (m *MockIncrValueStore) Allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Allocate", ctx, tableID, col, count, txnOp)
 	ret0, _ := ret[0].(uint64)
 	ret1, _ := ret[1].(uint64)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret2, _ := ret[2].(timestamp.Timestamp)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
 }
 
 // Allocate indicates an expected call of Allocate.
-func (mr *MockIncrValueStoreMockRecorder) Allocate(ctx, tableID, col, count, txnOp any) *gomock.Call {
+func (mr *MockIncrValueStoreMockRecorder) Allocate(ctx, tableID, col, count, txnOp interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Allocate", reflect.TypeOf((*MockIncrValueStore)(nil).Allocate), ctx, tableID, col, count, txnOp)
 }
@@ -414,7 +447,7 @@ func (m *MockIncrValueStore) Create(ctx context.Context, tableID uint64, cols []
 }
 
 // Create indicates an expected call of Create.
-func (mr *MockIncrValueStoreMockRecorder) Create(ctx, tableID, cols, txnOp any) *gomock.Call {
+func (mr *MockIncrValueStoreMockRecorder) Create(ctx, tableID, cols, txnOp interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockIncrValueStore)(nil).Create), ctx, tableID, cols, txnOp)
 }
@@ -428,7 +461,7 @@ func (m *MockIncrValueStore) Delete(ctx context.Context, tableID uint64) error {
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockIncrValueStoreMockRecorder) Delete(ctx, tableID any) *gomock.Call {
+func (mr *MockIncrValueStoreMockRecorder) Delete(ctx, tableID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockIncrValueStore)(nil).Delete), ctx, tableID)
 }
@@ -443,7 +476,7 @@ func (m *MockIncrValueStore) GetColumns(ctx context.Context, tableID uint64, txn
 }
 
 // GetColumns indicates an expected call of GetColumns.
-func (mr *MockIncrValueStoreMockRecorder) GetColumns(ctx, tableID, txnOp any) *gomock.Call {
+func (mr *MockIncrValueStoreMockRecorder) GetColumns(ctx, tableID, txnOp interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumns", reflect.TypeOf((*MockIncrValueStore)(nil).GetColumns), ctx, tableID, txnOp)
 }
@@ -457,7 +490,7 @@ func (m *MockIncrValueStore) UpdateMinValue(ctx context.Context, tableID uint64,
 }
 
 // UpdateMinValue indicates an expected call of UpdateMinValue.
-func (mr *MockIncrValueStoreMockRecorder) UpdateMinValue(ctx, tableID, col, minValue, txnOp any) *gomock.Call {
+func (mr *MockIncrValueStoreMockRecorder) UpdateMinValue(ctx, tableID, col, minValue, txnOp interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateMinValue", reflect.TypeOf((*MockIncrValueStore)(nil).UpdateMinValue), ctx, tableID, col, minValue, txnOp)
 }

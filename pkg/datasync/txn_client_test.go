@@ -105,6 +105,9 @@ func (c *mockHAKeeperClient) GetClusterDetails(_ context.Context) (logpb.Cluster
 func (c *mockHAKeeperClient) GetClusterState(_ context.Context) (logpb.CheckerState, error) {
 	return logpb.CheckerState{}, nil
 }
+func (c *mockHAKeeperClient) CheckLogServiceHealth(_ context.Context) error {
+	return nil
+}
 
 func (c *mockHAKeeperClient) addTN(id string, addr string, replicaID uint64) {
 	c.Lock()

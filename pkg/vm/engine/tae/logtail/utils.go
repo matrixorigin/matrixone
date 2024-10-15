@@ -1471,9 +1471,7 @@ func (data *CheckpointData) readMetaBatch(
 	return
 }
 
-func (data *CheckpointData) replayMetaBatch(version uint32) {
-	bat := data.bats[MetaIDX]
-	data.locations = make(map[string]objectio.Location)
+func buildMeta(bat *containers.Batch, locations map[string]objectio.Location, metas map[uint64]*CheckpointMeta) {
 	tidVec := vector.MustFixedColWithTypeCheck[uint64](bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	insVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
 	dataObjectVec := bat.GetVectorByName(SnapshotMetaAttr_DataObjectBatchLocation).GetDownstreamVector()
@@ -1491,7 +1489,7 @@ func (data *CheckpointData) replayMetaBatch(version uint32) {
 			for it.HasNext() {
 				block := it.Next()
 				if !block.GetLocation().IsEmpty() {
-					data.locations[block.GetLocation().Name().String()] = block.GetLocation()
+					locations[block.GetLocation().Name().String()] = block.GetLocation()
 				}
 			}
 			continue
@@ -1507,10 +1505,10 @@ func (data *CheckpointData) replayMetaBatch(version uint32) {
 
 		tableMeta := NewCheckpointMeta()
 		tableMeta.DecodeFromString(tmp)
-		data.meta[tid] = tableMeta
+		metas[tid] = tableMeta
 	}
 
-	for _, meta := range data.meta {
+	for _, meta := range metas {
 		for _, table := range meta.tables {
 			if table == nil {
 				continue
@@ -1520,11 +1518,17 @@ func (data *CheckpointData) replayMetaBatch(version uint32) {
 			for it.HasNext() {
 				block := it.Next()
 				if !block.GetLocation().IsEmpty() {
-					data.locations[block.GetLocation().Name().String()] = block.GetLocation()
+					locations[block.GetLocation().Name().String()] = block.GetLocation()
 				}
 			}
 		}
 	}
+}
+
+func (data *CheckpointData) replayMetaBatch(version uint32) {
+	bat := data.bats[MetaIDX]
+	data.locations = make(map[string]objectio.Location)
+	buildMeta(bat, data.locations, data.meta)
 }
 
 func (data *CheckpointData) readAll(

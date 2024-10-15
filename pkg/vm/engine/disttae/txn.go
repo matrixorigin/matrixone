@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -42,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -440,7 +441,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 				size += uint64(txn.writes[i].bat.Size())
 			}
 		}
-		if size < WorkspaceThreshold {
+		if size < txn.engine.workspaceThreshold {
 			return nil
 		}
 		size = 0
@@ -899,12 +900,8 @@ func (txn *Transaction) deleteTableWrites(
 		if e.bat == nil || e.bat.RowCount() == 0 {
 			continue
 		}
-		if e.typ == ALTER {
-			continue
-		}
-		// for 3 and 4 above.
-		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc ||
-			e.bat.Attrs[0] == catalog.BlockMeta_DeltaLoc {
+		if e.typ == ALTER || e.typ == DELETE ||
+			e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
 			continue
 		}
 		sels = sels[:0]

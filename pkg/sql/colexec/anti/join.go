@@ -199,12 +199,16 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 	}
 
 	count := inbat.RowCount()
-	mSels := ctr.mp.Sels()
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
 	}
 	itr := ctr.itr
-	eligible := make([]int64, 0, hashmap.UnitLimit)
+	if ctr.eligible == nil {
+		ctr.eligible = make([]int64, 0, hashmap.UnitLimit)
+	} else {
+		ctr.eligible = ctr.eligible[:0]
+	}
+
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -218,12 +222,12 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 				continue
 			}
 			if vals[k] == 0 {
-				eligible = append(eligible, int64(i+k))
+				ctr.eligible = append(ctr.eligible, int64(i+k))
 				rowCountIncrease++
 				continue
 			}
 			if ap.Cond != nil {
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, inbat, int64(i+k),
 						1, ctr.cfs1); err != nil {
@@ -246,7 +250,7 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 					}
 				} else {
 					matched := false // mark if any tuple satisfies the condition
-					sels := mSels[vals[k]-1]
+					sels := ctr.mp.GetSels(vals[k] - 1)
 					for _, sel := range sels {
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 						if err := colexec.SetJoinBatchValues(ctr.joinBat1, inbat, int64(i+k),
@@ -274,18 +278,18 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 						continue
 					}
 				}
-				eligible = append(eligible, int64(i+k))
+				ctr.eligible = append(ctr.eligible, int64(i+k))
 				rowCountIncrease++
 			}
 		}
 		ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
 
 		for j, pos := range ap.Result {
-			if err := ctr.rbat.Vecs[j].Union(inbat.Vecs[pos], eligible, proc.Mp()); err != nil {
+			if err := ctr.rbat.Vecs[j].Union(inbat.Vecs[pos], ctr.eligible, proc.Mp()); err != nil {
 				return err
 			}
 		}
-		eligible = eligible[:0]
+		ctr.eligible = ctr.eligible[:0]
 	}
 
 	result.Batch = ctr.rbat

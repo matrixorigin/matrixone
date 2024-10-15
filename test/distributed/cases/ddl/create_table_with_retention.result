@@ -54,9 +54,9 @@ use test;
 show tables;
 Tables_in_test
 drop account acc0;
-select mo_ctl('cn', 'task', 'retention:*/5 * * * * ?');
-mo_ctl(cn, task, retention:*/5 * * * * ?)
+select mo_ctl('cn', 'task', 'retention:*/5 * * * *');
+mo_ctl(cn, task, retention:*/5 * * * *)
 {\n  "method": "TASK",\n  "result": "OK"\n}\n
-select mo_ctl('cn', 'task', 'retention:* */10 * * * * ?');
-mo_ctl(cn, task, retention:* */10 * * * * ?)
+select mo_ctl('cn', 'task', 'retention:0 */15 * * * *');
+mo_ctl(cn, task, retention:0 */15 * * * *)
 {\n  "method": "TASK",\n  "result": "OK"\n}\n

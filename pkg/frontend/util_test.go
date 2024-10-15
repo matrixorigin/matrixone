@@ -608,7 +608,7 @@ func TestGetExprValue(t *testing.T) {
 		relData := &memoryengine.MemRelationData{
 			Shards: ranges,
 		}
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
 		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
@@ -634,13 +634,12 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -649,7 +648,7 @@ func TestGetExprValue(t *testing.T) {
 		}
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		ses.SetDatabaseName("db")
 		var c clock.Clock
@@ -745,13 +744,12 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -760,7 +758,7 @@ func TestGetExprValue(t *testing.T) {
 		}
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
@@ -915,7 +913,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-	setGlobalPu(pu)
+	setPu("", pu)
 	ses1 := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
@@ -1213,6 +1211,11 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 		defines.MYSQL_TYPE_TIME,
 		defines.MYSQL_TYPE_DATETIME,
 		defines.MYSQL_TYPE_TIMESTAMP,
+		defines.MYSQL_TYPE_ENUM,
+		defines.MYSQL_TYPE_TINY,
+		defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_VARCHAR,
+		defines.MYSQL_TYPE_TEXT,
 	}
 	colNames := make([]string, len(colMysqlTyps))
 	mrs := &MysqlResultSet{}
@@ -1234,7 +1237,7 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			case defines.MYSQL_TYPE_VAR_STRING:
 				row[j] = "abc"
 			case defines.MYSQL_TYPE_SHORT:
-				row[j] = int32(math.MaxInt16)
+				row[j] = int16(math.MaxInt16)
 			case defines.MYSQL_TYPE_LONG:
 				row[j] = int32(math.MaxInt32)
 			case defines.MYSQL_TYPE_LONGLONG:
@@ -1253,6 +1256,15 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 				row[j] = types.Timestamp(0)
 			case defines.MYSQL_TYPE_ENUM:
 				row[j] = types.Enum(1)
+			case defines.MYSQL_TYPE_TEXT:
+				if j%2 == 0 {
+					row[j] = "abc"
+				} else {
+					row[j] = int16(math.MaxInt16)
+				}
+			case defines.MYSQL_TYPE_TINY:
+				row[j] = int8(math.MaxInt8)
+
 			default:
 				assert.True(t, false)
 			}
@@ -1292,11 +1304,50 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			case types.T_enum:
 				assert.Equal(t, mrs.Data[i][j].(types.Enum), row[j])
 				continue
+			case types.T_text:
+				if j%2 == 0 {
+					row[j] = string(row[j].([]uint8))
+				} else {
+					row[j] = int16(math.MaxInt16)
+				}
 			}
 			assert.Equal(t, mrs.Data[i][j], row[j])
 		}
 
 	}
+}
+
+func Test_convertRowsIntoBatchError(t *testing.T) {
+	colMysqlTyps := []defines.MysqlType{
+		defines.MYSQL_TYPE_TIMESTAMP,
+	}
+	colNames := make([]string, len(colMysqlTyps))
+	mrs := &MysqlResultSet{}
+	cnt := 5
+	for colIdx, mysqlTyp := range colMysqlTyps {
+		col := new(MysqlColumn)
+		col.SetColumnType(mysqlTyp)
+		col.SetName(colNames[colIdx])
+		mrs.AddColumn(col)
+	}
+
+	for i := 0; i < cnt; i++ {
+		row := make([]any, len(mrs.Columns))
+		mrs.AddRow(row)
+		for j := 0; j < len(mrs.Columns); j++ {
+			switch mrs.Columns[j].ColumnType() {
+			case defines.MYSQL_TYPE_TIMESTAMP:
+				row[j] = int64(0)
+			default:
+				assert.True(t, false)
+			}
+		}
+	}
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	_, _, err = convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.Error(t, err)
 }
 
 func Test_issue3482(t *testing.T) {
@@ -1450,11 +1501,11 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
 
-		rm, err := NewRoutineManager(ctx)
+		rm, err := NewRoutineManager(ctx, "")
 		assert.Nil(t, err)
 		ses.rm = rm
 

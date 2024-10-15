@@ -16,6 +16,7 @@ package taestorage
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -23,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 )
 
 func (s *taeStorage) Debug(ctx context.Context,
@@ -73,7 +73,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 	case uint32(api.OpCode_OpInspect):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleInspectTN)
 		if err != nil {
-			return types.Encode(&db.InspectResp{
+			return types.Encode(&cmd_util.InspectResp{
 				Message: "Failed",
 			})
 		}
@@ -99,7 +99,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		}
 		return resp.Read()
 	case uint32(api.OpCode_OpTraceSpan):
-		req := db.TraceSpan{}
+		req := cmd_util.TraceSpan{}
 		if err := req.Unmarshal(data); err != nil {
 			return nil, err
 		}
