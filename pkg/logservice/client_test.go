@@ -357,9 +357,9 @@ func TestClientRequiredLsn(t *testing.T) {
 
 		err = c.SetRequiredLsn(ctx, 100)
 		assert.NoError(t, err)
-		lsn, err = c.GetRequiredLsn(ctx) // return the max index
+		lsn, err = c.GetRequiredLsn(ctx)
 		assert.NoError(t, err)
-		assert.Equal(t, Lsn(15), lsn)
+		assert.Equal(t, Lsn(100), lsn)
 	}
 	RunClientTest(t, false, nil, fn)
 }

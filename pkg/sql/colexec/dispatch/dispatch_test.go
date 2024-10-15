@@ -15,11 +15,14 @@
 package dispatch
 
 import (
+	"testing"
+
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestPrepareRemote(t *testing.T) {
@@ -45,4 +48,20 @@ func TestPrepareRemote(t *testing.T) {
 	require.True(t, b)
 	require.Equal(t, proc, p)
 	require.Equal(t, d.ctr.remoteInfo, c)
+}
+
+func TestReceiverDone(t *testing.T) {
+	proc := testutil.NewProcess()
+	d := &Dispatch{
+		ctr: &container{},
+	}
+	d.ctr.localRegsCnt = 1
+	d.ctr.remoteReceivers = make([]*process.WrapCs, 1)
+	d.ctr.remoteReceivers[0] = &process.WrapCs{ReceiverDone: true, Err: make(chan error, 2)}
+	d.ctr.remoteToIdx = make(map[uuid.UUID]int)
+	d.ctr.remoteToIdx[d.ctr.remoteReceivers[0].Uid] = 0
+	bat := batch.New(nil)
+	bat.SetRowCount(1)
+	sendBatToIndex(d, proc, bat, 0)
+	sendBatToMultiMatchedReg(d, proc, bat, 0)
 }

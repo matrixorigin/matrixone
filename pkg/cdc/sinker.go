@@ -111,6 +111,8 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 	return nil
 }
 
+func (s *consoleSinker) Close() {}
+
 var _ Sinker = new(mysqlSinker)
 
 type mysqlSinker struct {
@@ -480,6 +482,20 @@ func (s *mysqlSinker) getDeleteRowBuf(ctx context.Context) (err error) {
 	return
 }
 
+func (s *mysqlSinker) Close() {
+	s.mysql.Close()
+	s.sqlBuf = nil
+	s.rowBuf = nil
+	s.insertPrefix = nil
+	s.deletePrefix = nil
+	s.tsInsertPrefix = nil
+	s.tsDeletePrefix = nil
+	s.insertTypes = nil
+	s.deleteTypes = nil
+	s.insertRow = nil
+	s.deleteRow = nil
+}
+
 type mysqlSink struct {
 	conn           *sql.DB
 	user, password string
@@ -522,6 +538,8 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sql string) (er
 	for retry, startTime := 0, time.Now(); needRetry(retry, startTime); retry++ {
 		select {
 		case <-ctx.Done():
+			return
+		case <-ar.Pause:
 			return
 		case <-ar.Cancel:
 			return
