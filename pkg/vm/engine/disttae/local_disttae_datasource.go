@@ -972,20 +972,24 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 	begin := ls.rangesCursor
 	end := ls.rangesCursor + batchSize
 
-	blks := make([]*objectio.BlockInfo, end-begin)
+	var preObj types.Objectid
 	for idx := begin; idx < end; idx++ {
-		blks[idx-begin] = ls.rangeSlice.Get(idx)
-	}
+		blk := ls.rangeSlice.Get(idx)
+		if blk.BlockID.Object().EQ(&preObj) {
+			continue
+		}
 
-	// prefetch blk data
-	err := blockio.Prefetch(
-		ls.table.proc.Load().GetService(), ls.fs, blks[0].MetaLocation())
-	if err != nil {
-		logutil.Errorf("pefetch block data: %s", err.Error())
-	}
+		preObj = *blk.BlockID.Object()
 
-	ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RLock()
-	defer ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RUnlock()
+		// prefetch blk data
+		err := blockio.Prefetch(
+			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
+		if err != nil {
+			logutil.Errorf("pefetch block data: %s, blk:%s",
+				err.Error(),
+				blk.String())
+		}
+	}
 
 	ls.rc.batchPrefetchCursor = end
 }

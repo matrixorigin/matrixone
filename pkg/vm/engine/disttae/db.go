@@ -262,12 +262,14 @@ func (e *Engine) getOrCreateSnapPart(
 	ts types.TS) (*logtailreplay.PartitionState, error) {
 
 	//check whether the latest partition is available for reuse.
-	// if the snapshot-read's ts is too old , subscribing table maybe timeout.
-	//if err := tbl.updateLogtail(ctx); err == nil {
-	//	if p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
-	//		return p, nil
-	//	}
-	//}
+	if _, err := tbl.tryToSubscribe(ctx); err == nil {
+		if p := tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
+			return p.Snapshot(), nil
+		}
+	}
+
+	//subscribe failed : 1. network timeout,
+	//2. table id is too old ,pls ref to issue:https://github.com/matrixorigin/matrixone/issues/17012
 
 	//check whether the snapshot partitions are available for reuse.
 	e.mu.Lock()
