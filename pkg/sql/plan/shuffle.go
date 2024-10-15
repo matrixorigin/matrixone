@@ -572,17 +572,14 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 }
 
 func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
-	if s == nil {
-		return true
-	}
-	if s.Overlap > 0.25 {
+	if s == nil || math.IsNaN(s.Overlap) || s.Overlap > 0.25 {
 		return true
 	}
 	return false
 }
 
 func shouldUseShuffleRanges(s *pb.ShuffleRange) []float64 {
-	if s.Uniform < 0.5 {
+	if s == nil || math.IsNaN(s.Uniform) || s.Uniform < 0.3 {
 		return nil
 	}
 	return s.Result
