@@ -4564,29 +4564,6 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		orgPkColPos, orgPkType := getPkPos(delCtx.tableDef, false)
 
-		// testing postdml
-		postdmlProject := getProjectionByLastNode(builder, lastNodeId)
-		postdml := &plan.Node{
-			NodeType:    plan.Node_POSTDML,
-			ProjectList: postdmlProject,
-			Children:    []int32{lastNodeId},
-			PostDmlCtx: &plan.PostDmlCtx{
-				Ref:            indexObjRef,
-				PrimaryKeyIdx:  int32(orgPkColPos),
-				PrimaryKeyName: delCtx.tableDef.Pkey.PkeyColName,
-				FullText: &plan.PostDmlFullTextCtx{
-					IsDelete:        true,
-					IsInsert:        false,
-					SourceTableName: delCtx.tableDef.Name,
-					IndexTableName:  indexTableDef.Name,
-					Parts:           indexdef.Parts,
-					AlgoParams:      indexdef.IndexAlgoParams,
-				},
-			},
-		}
-		lastNodeId = builder.appendNode(postdml, bindCtx)
-		// end postdml
-
 		var rightRowIdPos int32 = -1
 		var rightPkPos int32 = 0 // doc_id
 		scanNodeProject := make([]*Expr, len(indexTableDef.Cols))
