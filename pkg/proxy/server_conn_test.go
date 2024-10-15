@@ -29,12 +29,13 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/stretchr/testify/require"
 )
 
 var testSlat = []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0}
@@ -121,6 +122,7 @@ type testCNServer struct {
 	tlsConfig  *tls.Config
 
 	beforeHandle func()
+	service      string
 }
 
 type testHandler struct {
@@ -138,6 +140,12 @@ type option func(s *testCNServer)
 func withBeforeHandle(f func()) option {
 	return func(s *testCNServer) {
 		s.beforeHandle = f
+	}
+}
+
+func withService(name string) option {
+	return func(s *testCNServer) {
+		s.service = name
 	}
 }
 
@@ -238,7 +246,8 @@ func (s *testCNServer) Start() error {
 				c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()),
 					goetty.WithSessionConn(uint64(cid), conn))
 				pu := config.NewParameterUnit(&fp, nil, nil, nil)
-				ios, err := frontend.NewIOSession(c.RawConn(), pu)
+				frontend.SetSessionAlloc("", frontend.NewSessionAllocator(pu))
+				ios, err := frontend.NewIOSession(c.RawConn(), pu, s.service)
 				if err != nil {
 					return err
 				}

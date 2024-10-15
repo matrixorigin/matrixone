@@ -24,13 +24,14 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
-	"go.uber.org/zap"
 )
 
 // serverBaseConnID is the base connection ID for server.
@@ -114,7 +115,9 @@ func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Durati
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
 	pu := config.NewParameterUnit(&fp, nil, nil, nil)
-	ios, err := frontend.NewIOSession(c.RawConn(), pu)
+	frontend.InitServerLevelVars(cn.uuid)
+	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(pu))
+	ios, err := frontend.NewIOSession(c.RawConn(), pu, cn.uuid)
 	if err != nil {
 		return nil, err
 	}

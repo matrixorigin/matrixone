@@ -20,6 +20,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -167,6 +168,9 @@ func NewService(
 		morpc.WithServerLogger(service.runtime.Logger().RawLogger()),
 	)
 	if err != nil {
+		if closeErr := store.close(); closeErr != nil {
+			service.runtime.Logger().Error("failed to close log store", zap.Error(closeErr))
+		}
 		return nil, err
 	}
 
@@ -201,6 +205,27 @@ func NewService(
 	service.initTaskHolder()
 	service.initSqlWriterFactory()
 	return service, nil
+}
+
+// NewServiceWithRetry mainly used in tests which create new service.
+// If an error occurred and the error is syscall.EADDRINUSE, retry to
+// create a new service instance.
+func NewServiceWithRetry(
+	genCfg func() Config,
+	fileService fileservice.FileService,
+	shutdownC chan struct{},
+	opts ...Option,
+) (*Service, error) {
+	for {
+		s, err := NewService(genCfg(), fileService, shutdownC, opts...)
+		if err != nil {
+			if strings.Contains(err.Error(), "address already in use") {
+				continue
+			}
+			return nil, err
+		}
+		return s, nil
+	}
 }
 
 func (s *Service) Start() error {
@@ -315,6 +340,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetRequiredLsn(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_LEADER_ID:
 		return s.handleGetLeaderID(ctx, req), pb.LogRecordResponse{}
+	case pb.CHECK_HEALTH:
+		return s.handleCheckHealth(ctx, req), pb.LogRecordResponse{}
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -665,6 +692,15 @@ func (s *Service) handleBootstrapShard(cmd pb.ScheduleCommand) {
 			zap.Error(err),
 		)
 	}
+}
+
+func (s *Service) handleCheckHealth(_ context.Context, req pb.Request) pb.Response {
+	r := req.CheckHealth
+	resp := getResponse(req)
+	if err := s.store.checkHealth(r.ShardID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
 }
 
 func (s *Service) getBackendOptions() []morpc.BackendOption {

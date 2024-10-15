@@ -560,6 +560,10 @@ func (m *mockHKClient) GetClusterState(ctx context.Context) (pb.CheckerState, er
 	return pb.CheckerState{}, nil
 }
 
+func (c *mockHKClient) CheckLogServiceHealth(_ context.Context) error {
+	return nil
+}
+
 func (m *mockHKClient) GetBackupData(ctx context.Context) ([]byte, error) {
 	return nil, nil
 }
