@@ -647,18 +647,6 @@ type notifyMessageResult struct {
 	err    error
 }
 
-func (s *Scope) ReplaceLeafOp(dstLeafOp vm.Operator) {
-	vm.HandleLeafOp(nil, s.RootOp, func(leafOpParent vm.Operator, leafOp vm.Operator) error {
-		leafOp.Release()
-		if leafOpParent == nil {
-			s.RootOp = dstLeafOp
-		} else {
-			leafOpParent.GetOperatorBase().SetChild(dstLeafOp, 0)
-		}
-		return nil
-	})
-}
-
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
 // and keep receiving the data until the query was done or data is ended.
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
