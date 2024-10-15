@@ -88,6 +88,17 @@ func TestFullText(t *testing.T) {
 		ctr: container{},
 	}
 
+	arg.GetOperatorBase()
+
+	tn := arg.TypeName()
+	require.Equal(t, tn, "postdml")
+
+	rows := arg.AffectedRows()
+	require.Equal(t, rows, uint64(0))
+
+	rows = *arg.GetAffectedRows()
+	require.Equal(t, rows, uint64(0))
+
 	resetChildren(&arg)
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
@@ -110,6 +121,8 @@ func TestFullText(t *testing.T) {
 		require.Equal(t, s, rs)
 	}
 	arg.Free(proc, false, nil)
+
+	arg.Release()
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
