@@ -1015,7 +1015,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		if err != nil {
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
-			cdc.close()
+			cdc.close(true, true)
 		}
 		// if Resume/Restart successfully will reach here, do nothing
 	}()
@@ -1278,8 +1278,14 @@ var Start = func(ctx context.Context, cdc *CdcTask, firstTime bool) error {
 
 // Resume cdc task from last recorded watermark
 func (cdc *CdcTask) Resume() (err error) {
+	logutil.Infof("cdc task %s resume\n", cdc.cdcTask.TaskName)
+	defer func() {
+		logutil.Infof("cdc task %s resume success\n", cdc.cdcTask.TaskName)
+	}()
+
 	for {
 		// closed in Pause, need renew
+		cdc.activeRoutine.Pause = make(chan struct{})
 		cdc.activeRoutine.Cancel = make(chan struct{})
 		if err = Start(context.Background(), cdc, false); err == nil {
 			return
@@ -1290,8 +1296,14 @@ func (cdc *CdcTask) Resume() (err error) {
 
 // Restart cdc task from init watermark
 func (cdc *CdcTask) Restart() (err error) {
+	logutil.Infof("cdc task %s restart\n", cdc.cdcTask.TaskName)
+	defer func() {
+		logutil.Infof("cdc task %s restart success\n", cdc.cdcTask.TaskName)
+	}()
+
 	for {
 		// closed in Pause, need renew
+		cdc.activeRoutine.Pause = make(chan struct{})
 		cdc.activeRoutine.Cancel = make(chan struct{})
 		// delete previous records
 		if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err == nil {
@@ -1304,27 +1316,46 @@ func (cdc *CdcTask) Restart() (err error) {
 }
 
 // Pause cdc task
-func (cdc *CdcTask) Pause() error {
-	cdc.close()
-	return nil
+func (cdc *CdcTask) Pause() (err error) {
+	logutil.Infof("cdc task %s pause\n", cdc.cdcTask.TaskName)
+	defer func() {
+		if err == nil {
+			logutil.Infof("cdc task %s pause success\n", cdc.cdcTask.TaskName)
+		} else {
+			logutil.Infof("cdc task %s pause failed, err: %v\n", cdc.cdcTask.TaskName, err)
+		}
+	}()
+
+	cdc.close(true, false)
+	return
 }
 
 // Cancel cdc task
-func (cdc *CdcTask) Cancel() error {
-	cdc.close()
+func (cdc *CdcTask) Cancel() (err error) {
+	logutil.Infof("cdc task %s cancel\n", cdc.cdcTask.TaskName)
+	defer func() {
+		if err == nil {
+			logutil.Infof("cdc task %s cancel success\n", cdc.cdcTask.TaskName)
+		} else {
+			logutil.Infof("cdc task %s cancel failed, err: %v\n", cdc.cdcTask.TaskName, err)
+		}
+	}()
 
-	// delete watermark records
-	if err := cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
+	cdc.close(false, true)
+	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
 		return err
 	}
 
 	// let Start() go
 	cdc.holdCh <- 1
-	return nil
+	return
 }
 
-func (cdc *CdcTask) close() {
-	if cdc.activeRoutine.Cancel != nil {
+func (cdc *CdcTask) close(closePause, closeCancel bool) {
+	if closePause {
+		close(cdc.activeRoutine.Pause)
+	}
+	if closeCancel {
 		close(cdc.activeRoutine.Cancel)
 	}
 

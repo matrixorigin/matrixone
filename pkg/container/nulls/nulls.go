@@ -59,6 +59,10 @@ func (nsp *Nulls) Reset() {
 	nsp.np.Reset()
 }
 
+func (nsp *Nulls) Clear() {
+	nsp.np.Clear()
+}
+
 func (nsp *Nulls) GetBitmap() *bitmap.Bitmap {
 	return &nsp.np
 }
