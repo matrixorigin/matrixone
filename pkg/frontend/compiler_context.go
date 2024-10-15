@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"slices"
 	"sort"
 	"strconv"
@@ -908,6 +907,13 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 		return nil, false
 	}
 
+	second := int64(time.Now().Second())
+	if s.ApproxObjectNumber != 0 && second-s.TimeSecond < s.ApproxObjectNumber {
+		// do not call ApproxObjectsNum within a short time limit
+		return s, false
+	}
+	s.TimeSecond = second
+
 	var partitionInfo *plan2.PartitionByDef
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
@@ -927,17 +933,12 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 	}
 	approxNumObjects := 0
 	if partitionInfo != nil {
-		if rand.Float32() < 0.999 {
-			// for partition table,  do not update stats for 99.9% probability
-			approxNumObjects = int(s.ApproxObjectNumber)
-		} else {
-			for _, PartitionTableName := range partitionInfo.PartitionTableNames {
-				_, ptable, err := tcc.getRelation(dbName, PartitionTableName, nil, snapshot)
-				if err != nil {
-					return nil, false
-				}
-				approxNumObjects += ptable.ApproxObjectsNum(ctx)
+		for _, PartitionTableName := range partitionInfo.PartitionTableNames {
+			_, ptable, err := tcc.getRelation(dbName, PartitionTableName, nil, snapshot)
+			if err != nil {
+				return nil, false
 			}
+			approxNumObjects += ptable.ApproxObjectsNum(ctx)
 		}
 	} else {
 		approxNumObjects = table.ApproxObjectsNum(ctx)
