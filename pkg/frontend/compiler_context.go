@@ -253,18 +253,18 @@ func (tcc *TxnCompilerContext) GetConfig(varName string, dbName string, tblName 
 	case "unique_check_on_autoincr":
 		// check if the database is a system database
 		if _, ok := sysDatabases[dbName]; !ok {
-			ses := tcc.GetSession()
-			if _, ok := ses.(*backSession); ok {
-				return "None", nil
-			}
-			ret, err := ses.GetConfig(tcc.GetContext(), varName, dbName, tblName)
-			if err != nil {
-				return "", err
-			}
-			if ret != nil {
-				return ret.(string), nil
-			}
-			return "None", nil
+			// ses := tcc.GetSession()
+			// if _, ok := ses.(*backSession); ok {
+			// 	return "None", nil
+			// }
+			// ret, err := ses.GetConfig(tcc.GetContext(), varName, dbName, tblName)
+			// if err != nil {
+			// 	return "", err
+			// }
+			// if ret != nil {
+			// 	return ret.(string), nil
+			// }
+			// return "None", nil
 		}
 		return "Check", nil
 	default:
