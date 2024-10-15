@@ -454,6 +454,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
+	stats := statistic.StatsInfoFromContext(ctx)
+
 	for _, cache := range vector.Caches {
 
 		t0 := time.Now()
@@ -506,13 +508,6 @@ read_memory_cache:
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
-
-	// Record diskIO and netwokIO(un memory IO) resource
-	stats := statistic.StatsInfoFromContext(ctx)
-	ioStart := time.Now()
-	defer func() {
-		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
-	}()
 
 read_disk_cache:
 	if s.diskCache != nil {
@@ -628,6 +623,13 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 }
 
 func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
+	// Record diskIO and netwokIO(un memory IO) resource
+	stats := statistic.StatsInfoFromContext(ctx)
+	ioStart := time.Now()
+	defer func() {
+		stats.AddS3IOReadTimeConsumption(time.Since(ioStart))
+	}()
+
 	if vector.allDone() {
 		// all cache hit
 		return nil

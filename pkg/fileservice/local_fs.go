@@ -360,13 +360,6 @@ read_memory_cache:
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
-
-	// Record diskIO and netwokIO(un memory IO) resource
-	ioStart := time.Now()
-	defer func() {
-		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
-	}()
-
 read_disk_cache:
 	if l.diskCache != nil {
 
@@ -471,6 +464,13 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 }
 
 func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.Int64) (err error) {
+	// Record diskIO and netwokIO(un memory IO) resource
+	stats := statistic.StatsInfoFromContext(ctx)
+	ioStart := time.Now()
+	defer func() {
+		stats.AddLocalIOReadTimeConsumption(time.Since(ioStart))
+	}()
+
 	if vector.allDone() {
 		// all cache hit
 		return nil
