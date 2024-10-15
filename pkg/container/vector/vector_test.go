@@ -2485,6 +2485,8 @@ func TestSetFunction2(t *testing.T) {
 func TestMisc(t *testing.T) {
 	vec := NewVec(types.T_int8.ToType())
 	var gsp nulls.Nulls
+	vec.SetGrouping(&gsp)
+	require.False(t, vec.HasGrouping())
 	gsp.Add(1, 3)
 	vec.SetGrouping(&gsp)
 	require.True(t, vec.HasGrouping())
@@ -2553,6 +2555,8 @@ func TestMisc(t *testing.T) {
 		types.T_datetime.ToType(),
 		types.T_timestamp.ToType(),
 	}
+	gsp.Clear()
+	gsp.Add(0, 1, 2)
 	for _, fType := range fixSizedTypes {
 		v1 := NewVec(fType)
 		v2 := NewVec(fType)
@@ -2566,6 +2570,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]int8, 3)
 			err = AppendFixedList[int8](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_int16:
 			vals := make([]int16, 2)
 			err = AppendFixedList[int16](v1, vals, []bool{true, true}, mp)
@@ -2573,6 +2578,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]int16, 3)
 			err = AppendFixedList[int16](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_int32:
 			vals := make([]int32, 2)
 			err = AppendFixedList[int32](v1, vals, []bool{true, true}, mp)
@@ -2580,6 +2586,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]int32, 3)
 			err = AppendFixedList[int32](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_int64:
 			vals := make([]int64, 2)
 			err = AppendFixedList[int64](v1, vals, []bool{true, true}, mp)
@@ -2587,6 +2594,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]int64, 3)
 			err = AppendFixedList[int64](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_uint8:
 			vals := make([]uint8, 2)
 			err = AppendFixedList[uint8](v1, vals, []bool{true, true}, mp)
@@ -2594,6 +2602,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]uint8, 3)
 			err = AppendFixedList[uint8](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_uint16:
 			vals := make([]uint16, 2)
 			err = AppendFixedList[uint16](v1, vals, []bool{true, true}, mp)
@@ -2601,6 +2610,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]uint16, 3)
 			err = AppendFixedList[uint16](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_uint32:
 			vals := make([]uint32, 2)
 			err = AppendFixedList[uint32](v1, vals, []bool{true, true}, mp)
@@ -2608,6 +2618,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]uint32, 3)
 			err = AppendFixedList[uint32](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_uint64:
 			vals := make([]uint64, 2)
 			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
@@ -2615,6 +2626,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]uint64, 3)
 			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_float32:
 			vals := make([]float32, 2)
 			err = AppendFixedList[float32](v1, vals, []bool{true, true}, mp)
@@ -2622,6 +2634,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]float32, 3)
 			err = AppendFixedList[float32](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_float64:
 			vals := make([]float64, 2)
 			err = AppendFixedList[float64](v1, vals, []bool{true, true}, mp)
@@ -2629,6 +2642,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]float64, 3)
 			err = AppendFixedList[float64](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_bool:
 			vals := make([]bool, 2)
 			err = AppendFixedList[bool](v1, vals, []bool{true, true}, mp)
@@ -2636,6 +2650,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]bool, 3)
 			err = AppendFixedList[bool](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_bit:
 			vals := make([]uint64, 2)
 			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
@@ -2643,6 +2658,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]uint64, 3)
 			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_Rowid:
 			vals := make([]types.Rowid, 2)
 			err = AppendFixedList[types.Rowid](v1, vals, []bool{true, true}, mp)
@@ -2650,6 +2666,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]types.Rowid, 3)
 			err = AppendFixedList[types.Rowid](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_TS:
 			vals := make([]types.TS, 2)
 			err = AppendFixedList[types.TS](v1, vals, []bool{true, true}, mp)
@@ -2657,6 +2674,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]types.TS, 3)
 			err = AppendFixedList[types.TS](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_uuid:
 			vals := make([]types.Uuid, 2)
 			err = AppendFixedList[types.Uuid](v1, vals, []bool{true, true}, mp)
@@ -2664,6 +2682,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]types.Uuid, 3)
 			err = AppendFixedList[types.Uuid](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_datetime:
 			vals := make([]types.Datetime, 2)
 			err = AppendFixedList[types.Datetime](v1, vals, []bool{true, true}, mp)
@@ -2671,6 +2690,7 @@ func TestMisc(t *testing.T) {
 			vals = make([]types.Datetime, 3)
 			err = AppendFixedList[types.Datetime](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		case types.T_timestamp:
 			vals := make([]types.Timestamp, 2)
 			err = AppendFixedList[types.Timestamp](v1, vals, []bool{true, true}, mp)
@@ -2678,12 +2698,14 @@ func TestMisc(t *testing.T) {
 			vals = make([]types.Timestamp, 3)
 			err = AppendFixedList[types.Timestamp](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
 		}
 		union := GetUnionAllFunction(fType, mp)
 		err = union(v1, v2)
 		require.NoError(t, err)
 		require.Equal(t, 5, v1.Length())
 		require.Equal(t, 5, v1.GetNulls().Count())
+		require.Equal(t, 3, v1.GetGrouping().Count())
 	}
 }
 
