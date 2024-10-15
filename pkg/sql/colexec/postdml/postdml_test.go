@@ -273,7 +273,7 @@ func TestGetAny(t *testing.T) {
 		typ := types.T_decimal128.ToType()
 		typ.Scale = 2
 		v := vector.NewVec(typ)
-		err := vector.AppendFixedList(v, []types.Decimal128{{1234, 0}, {2345, 0}}, nil, mp)
+		err := vector.AppendFixedList(v, []types.Decimal128{{B0_63: 1234, B64_127: 0}, {B0_63: 2345, B64_127: 0}}, nil, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(v, 0)
 		require.NoError(t, err)
