@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1976,7 +1977,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		return getNonSortedPKSearchFuncByPKVec(keys)
 	}
 
-	cacheBat := batch.EmptyBatchWithSize(1)
+	cacheVectors := containers.NewVectors(1)
 	//read block ,check if keys exist in the block.
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
@@ -1988,7 +1989,7 @@ func (tbl *txnTable) PKPersistedBetween(
 			[]types.Type{pkType},
 			fs,
 			blk.MetaLocation(),
-			&cacheBat,
+			cacheVectors,
 			tbl.proc.Load().GetMPool(),
 			fileservice.Policy(0),
 		)
@@ -2001,7 +2002,7 @@ func (tbl *txnTable) PKPersistedBetween(
 			searchFunc = buildUnsortedFilter()
 		}
 
-		sels := searchFunc(cacheBat.Vecs)
+		sels := searchFunc([]*vector.Vector{&cacheVectors[0]})
 		release()
 		if len(sels) > 0 {
 			return true, nil
