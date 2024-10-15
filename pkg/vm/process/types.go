@@ -454,6 +454,10 @@ func (proc *Process) SetBaseProcessRunningStatus(status bool) {
 	proc.Base.atRuntime = status
 }
 
+func (proc *Process) GetPostDmlSqlList() *threadsafe.Slice[string] {
+	return proc.Base.PostDmlSqlList
+}
+
 func (si *SessionInfo) GetUser() string {
 	return si.User
 }
