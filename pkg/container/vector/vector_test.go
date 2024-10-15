@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -2479,6 +2480,16 @@ func TestSetFunction2(t *testing.T) {
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+}
+
+func TestMisc(t *testing.T) {
+	vec := NewVec(types.T_int8.ToType())
+	var gsp nulls.Nulls
+	gsp.Add(1, 3)
+	vec.SetGrouping(&gsp)
+	require.True(t, vec.HasGrouping())
+	require.True(t, vec.GetGrouping().Contains(1))
+	require.True(t, vec.GetGrouping().Contains(3))
 }
 
 func BenchmarkUnmarshal(b *testing.B) {
