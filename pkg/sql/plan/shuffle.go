@@ -38,6 +38,9 @@ const (
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
+
+	overlapThreshold = 0.55
+	uniformThreshold = 0.3
 )
 
 const (
@@ -588,14 +591,14 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 }
 
 func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
-	if s == nil || math.IsNaN(s.Overlap) || s.Overlap > 0.5 {
+	if s == nil || math.IsNaN(s.Overlap) || s.Overlap > overlapThreshold {
 		return true
 	}
 	return false
 }
 
 func shouldUseShuffleRanges(s *pb.ShuffleRange) []float64 {
-	if s == nil || math.IsNaN(s.Uniform) || s.Uniform < 0.3 {
+	if s == nil || math.IsNaN(s.Uniform) || s.Uniform < uniformThreshold {
 		return nil
 	}
 	return s.Result
