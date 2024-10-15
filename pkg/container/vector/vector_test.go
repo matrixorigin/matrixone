@@ -2510,6 +2510,20 @@ func TestMisc(t *testing.T) {
 	require.True(t, vec4.GetGrouping().Contains(0))
 	require.True(t, vec4.GetGrouping().Contains(1))
 	require.False(t, vec4.GetGrouping().Contains(2))
+
+	vec5 := NewVec(types.T_int8.ToType())
+	defer vec5.Free(mp)
+	vec6 := NewConstNull(types.T_int8.ToType(), 5, mp)
+	defer vec6.Free(mp)
+
+	err = AppendFixed(vec5, int8(1), false, mp)
+	require.NoError(t, err)
+	err = vec5.UnionMulti(vec6, 1, 2, mp)
+	require.NoError(t, err)
+	require.False(t, vec5.GetNulls().Contains(0))
+	require.True(t, vec5.GetNulls().Contains(1))
+	require.True(t, vec5.GetNulls().Contains(2))
+	require.False(t, vec5.GetNulls().Contains(3))
 }
 
 func BenchmarkUnmarshal(b *testing.B) {
