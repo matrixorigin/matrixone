@@ -557,12 +557,12 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 
 				buffer.WriteString("\tCPU Usage: \n")
 				buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+BuildReader(%d)-IOAccess(%d)-IOMerge(%d)\n",
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-IOAccess(%d)-IOMerge(%d)\n",
 					statsInfo.ParseDuration,
 					statsInfo.PlanDuration,
 					statsInfo.CompileDuration,
 					gblStats.OperatorTimeConsumed,
-					statsInfo.BuildReaderDuration,
+					gblStats.ScopePrepareTimeConsumed+statsInfo.CompilePreRunOnceDuration,
 					statsInfo.IOAccessTimeConsumption,
 					statsInfo.IOMergerTimeConsumption()))
 			}
@@ -593,9 +593,10 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 			buffer.WriteString(fmt.Sprintf("\t\t- Compile TableScan Duration: %dns \n", statsInfo.CompileTableScanDuration))
 
 			//-------------------------------------------------------------------------------------------------------
-			buffer.WriteString("Query Prepare Exec Stage:\n")
-			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed))
+			buffer.WriteString("\tQuery Prepare Exec Stage:\n")
+			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.CompilePreRunOnceDuration))
 			buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %dns \n", statsInfo.BuildReaderDuration))
+			buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.CompilePreRunOnceDuration))
 			buffer.WriteString(fmt.Sprintf("\t\t- S3ListRequest:%d, S3HeadRequest:%d, S3PutRequest:%d, S3GetRequest:%d, S3DeleteRequest:%d, S3DeleteMulRequest:%d\n",
 				statsInfo.ScopePrepareS3Request.List,
 				statsInfo.ScopePrepareS3Request.Head,

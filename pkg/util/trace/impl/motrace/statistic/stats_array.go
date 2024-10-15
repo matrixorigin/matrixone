@@ -271,10 +271,10 @@ type StatsInfo struct {
 	ScopePrepareS3Request S3Request `json:"ScopePrepareS3Request"`
 	ScopePrepareDuration  int64     `json:"ScopePrepareDuration"` // unit: ns
 	//--------------------------------------------------------------------------------
-
+	CompilePreRunOnceDuration int64 `json:"CompilePreRunOnceDuration"`
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
-
+	//--------------------------------------------------------------------------------
 	IOAccessTimeConsumption int64
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
@@ -414,6 +414,13 @@ func (stats *StatsInfo) ResetBuildReaderTimeConsumption() {
 	atomic.StoreInt64(&stats.BuildReaderDuration, 0)
 }
 
+func (stats *StatsInfo) ResetCompilePreRunOnceDuration() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.CompilePreRunOnceDuration, 0)
+}
+
 func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
 	if stats == nil {
 		return 0
@@ -486,6 +493,14 @@ func (stats *StatsInfo) AddScopePrepareDuration(d int64) {
 		return
 	}
 	atomic.AddInt64(&stats.ScopePrepareDuration, d)
+}
+
+// NOTE: CompilePreRunOnceDuration is a one-time statistic and does not require accumulation
+func (stats *StatsInfo) StoreCompilePreRunOnceDuration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.CompilePreRunOnceDuration, int64(d))
 }
 
 //--------------------------------------------------------------------------------------------------------------

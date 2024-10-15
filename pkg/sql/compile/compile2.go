@@ -224,14 +224,20 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
 	for {
+		// Record the time from the beginning of Run to just before runOnce().
+		preRunOnceStart := time.Now()
 		// Before compile.runOnce, reset `StatsInfo` IO resources which in sql context
 		stats.ResetIOAccessTimeConsumption()
 		stats.ResetIOMergerTimeConsumption()
 		stats.ResetBuildReaderTimeConsumption()
+		stats.ResetCompilePreRunOnceDuration()
 
 		// running.
 		if err = runC.prePipelineInitializer(); err == nil {
 			runC.MessageBoard.BeforeRunonce()
+			// Calculate time spent between the start and runOnce execution
+			stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
+
 			if err = runC.runOnce(); err == nil {
 				if runC.anal != nil {
 					runC.anal.retryTimes = retryTimes
