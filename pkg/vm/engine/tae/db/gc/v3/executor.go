@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,7 +45,8 @@ func BuildBloomfilter(
 	buffer containers.IBatchBuffer,
 	mp *mpool.MPool,
 ) (bf *bloomfilter.BloomFilter, err error) {
-	bf = bloomfilter.New(int64(rowCount), probability)
+	nbf := bloomfilter.New(int64(rowCount), probability)
+	bf = &nbf
 	bat := buffer.Fetch()
 	defer buffer.Putback(bat, mp)
 	var done bool
