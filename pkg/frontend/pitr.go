@@ -1666,11 +1666,11 @@ func nanoTimeFormat(ts int64) string {
 // then return an error
 // if the ts bigger than now(), then return an error
 func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
-	// if the timestamp time less than the pitrRecord modified time, then return error
-	// modified time is utc time string, ts is coverted to utc too
-	modifiedTimeStr := pitrRecord.modifiedTime
-	// parse modifiedTimeStr to utc time
-	t, err := time.ParseInLocation("2006-01-02 15:04:05", modifiedTimeStr, time.UTC)
+	// if the timestamp time less than the pitrRecord create time, then return error
+	// create time is utc time string, ts is coverted to utc too
+	createTimeStr := pitrRecord.createTime
+	// parse createTimeStr to utc time
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", createTimeStr, time.UTC)
 	if err != nil {
 		return
 	}
@@ -1749,6 +1749,7 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 				return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore other account %s", tenantInfo.GetTenant(), string(stmt.AccountName))
 			}
 
+			// can't restore sys account
 			if stmt.AccountName == sysAccountName {
 				return moerr.NewInternalErrorNoCtxf("can not restore sys account by pitr %s", pitrRecord.pitrName)
 			}
@@ -1758,10 +1759,24 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 				return moerr.NewInternalErrorNoCtxf("can not restore account %s by pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
 			}
 
-			// if the pitr level is account, can not restore sys account
-			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() {
-				if pitrRecord.accountName == sysAccountName {
-					return moerr.NewInternalErrorNoCtxf("can not restore sys account to new account %s by pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
+			if len(stmt.SrcAccountName) == 0 {
+				// if the pitr level is cluster and src account is empty, return err
+				if pitrRecord.level == tree.PITRLEVELCLUSTER.String() {
+					return moerr.NewInternalErrorNoCtxf("can not restore account %s by pitr %s, source account is empty", string(stmt.AccountName), pitrRecord.pitrName)
+				}
+				// if the pitr level is account, can not restore sys account
+				if pitrRecord.level == tree.PITRLEVELACCOUNT.String() {
+					if pitrRecord.accountName == sysAccountName {
+						return moerr.NewInternalErrorNoCtxf("can not restore sys account to new account %s by pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
+					}
+				}
+			} else {
+				// if src account is not empty, and the pitr level is not cluster, return err
+				if pitrRecord.level != tree.PITRLEVELCLUSTER.String() {
+					return moerr.NewInternalErrorNoCtxf("can not restore account %s by pitr %s, the pitr level is not cluster", string(stmt.SrcAccountName), pitrRecord.pitrName)
+				}
+				if stmt.SrcAccountName == sysAccountName {
+					return moerr.NewInternalErrorNoCtxf("can not restore account %s by pitr %s, source account is sys account", string(stmt.AccountName), pitrRecord.pitrName)
 				}
 			}
 		}
