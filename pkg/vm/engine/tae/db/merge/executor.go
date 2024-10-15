@@ -245,7 +245,7 @@ func (e *executor) scheduleMergeObjects(scopes []common.ID, policyID jobs.MergeP
 	osize, esize := estimateMergeConsume(mobjs)
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		txn.GetMemo().IsFlushOrMerge = true
-		return jobs.NewMergeObjectsTask(ctx, txn, 0, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes, isTombstone)
+		return jobs.NewMergeObjectsTask(ctx, txn, policyID, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes, isTombstone)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
 	if err != nil {
