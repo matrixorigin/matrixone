@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -130,7 +129,7 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 				sql = fmt.Sprintf(fulltextDeleteSqlFmt, indextbl, values)
 			}
 
-			logutil.Infof("DELETE SQL : %s", sql)
+			//logutil.Infof("POST DELETE SQL : %s", sql)
 			proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)
 		}
 
@@ -138,7 +137,7 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			sql := fmt.Sprintf(fulltextInsertSqlFmt, indextbl, sourcetbl, alias,
 				ftctx.AlgoParams, pkcolname, strings.Join(parts, ", "),
 				pkcolname, values)
-			logutil.Infof("INSERT SQL : %s", sql)
+			//logutil.Infof("POST INSERT SQL : %s", sql)
 			proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)
 
 		}
