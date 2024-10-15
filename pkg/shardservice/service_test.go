@@ -557,6 +557,11 @@ func TestMoveReplicaFromPauseCN(t *testing.T) {
 	)
 }
 
+func TestGetReplicaOnDisabledShardServiceCannotPanic(t *testing.T) {
+	var s *service
+	require.Equal(t, int64(0), s.ReplicaCount())
+}
+
 func addTestUncommittedTable(
 	s *service,
 	tableID uint64,
