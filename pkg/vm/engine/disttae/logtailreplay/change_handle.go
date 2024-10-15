@@ -768,7 +768,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	if time.Since(p.lastPrint) > LogThreshold {
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
-			logutil.Infof("ChangesHandle-Slow-Next, %d/%d, read %v, copy %v, update %v, total %v",
+			logutil.Infof("ChangesHandle-Slow, %d/%d, read %v, copy %v, update %v, total %v",
 				p.dataLength, p.tombstoneLength, p.readDuration, p.copyDuration, p.updateDuration, p.totalDuration)
 		}
 	}
