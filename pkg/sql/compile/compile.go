@@ -499,11 +499,11 @@ func (c *Compile) runOnce() (err error) {
 		}
 	}
 
-	// run post dml sql
+	// cleanup post dml sql
 	defer func() {
-		c.proc.Base.PostDmlSqlList = nil
+		c.proc.Base.PostDmlSqlList.Clear()
 	}()
-	for _, sql := range c.proc.Base.PostDmlSqlList {
+	for _, sql := range c.proc.Base.PostDmlSqlList.Values() {
 		err = c.runSql(sql)
 		if err != nil {
 			return err
