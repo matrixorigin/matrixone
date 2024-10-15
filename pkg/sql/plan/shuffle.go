@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"math/bits"
 	"unsafe"
@@ -285,9 +284,9 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		return
 	}
 	if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
-		if s.ShuffleRangeMap[colName] != nil {
-			logutil.Infof("shuffle debug: colname %v, uniform %v, overlap %v", colName, s.ShuffleRangeMap[colName].Uniform, s.ShuffleRangeMap[colName].Overlap)
-		}
+		//if s.ShuffleRangeMap[colName] != nil {
+		//	logutil.Infof("shuffle debug: colname %v, uniform %v, overlap %v", colName, s.ShuffleRangeMap[colName].Uniform, s.ShuffleRangeMap[colName].Overlap)
+		//}
 		return
 	}
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
@@ -589,7 +588,7 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 }
 
 func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
-	if s == nil || math.IsNaN(s.Overlap) || s.Overlap > 0.25 {
+	if s == nil || math.IsNaN(s.Overlap) || s.Overlap > 0.5 {
 		return true
 	}
 	return false
