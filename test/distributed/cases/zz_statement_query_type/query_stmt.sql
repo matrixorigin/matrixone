@@ -18,4 +18,4 @@ select IF(span_kind="internal", 1, IF(span_kind="statement", 1, IF(span_kind="se
 
 -- issue: https://github.com/matrixorigin/MO-Cloud/issues/4241
 -- case: check host not ""
-select statement_id, account, `user`, `database`, host, statement from system.statement_info where host = '' limit 10;
+select statement_id, account, `user`, `database`, host, statement from system.statement_info where host = '' and request_at > date_sub(now(), interval 5 minute) limit 10;
