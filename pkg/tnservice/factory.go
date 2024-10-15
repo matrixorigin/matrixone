@@ -103,6 +103,7 @@ func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, 
 		LogShardID:       shard.LogShardID,
 		TNReplicaID:      shard.ReplicaID,
 		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
+		DiscoveryAddress: s.cfg.HAKeeper.ClientConfig.DiscoveryAddress,
 		MaxMessageSize:   int(s.cfg.RPC.MaxMessageSize),
 	})
 }
@@ -158,6 +159,10 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
 		DisableGC:      s.cfg.GCCfg.DisableGC,
 		CheckGC:        s.cfg.GCCfg.CheckGC,
+		CacheSize:      s.cfg.GCCfg.CacheSize,
+		GCMergeCount:   s.cfg.GCCfg.GCMergeCount,
+		GCestimateRows: s.cfg.GCCfg.GCestimateRows,
+		GCProbility:    s.cfg.GCCfg.GCProbility,
 	}
 
 	mergeCfg := &options.MergeConfig{

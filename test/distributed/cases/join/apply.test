@@ -47,3 +47,19 @@ select count(*) from jt cross apply unnest(tags, '$') u where id = 19;
 select count(*) from jt cross apply unnest(tags, '$') u where id = 20;
 
 drop table jt;
+
+drop table if exists t1;
+create table t1(a int, b int);
+insert into t1 values(1,3),(1,-1);
+select * from t1 cross apply generate_series(t1.a,t1.b,1)g;
+select * from t1 outer apply generate_series(t1.a,t1.b,1)g;
+select * from t1 cross apply generate_series(t1.a,t1.b,-1)g;
+select * from t1 outer apply generate_series(t1.a,t1.b,-1)g;
+drop table t1;
+
+drop table if exists t2;
+create table t2(id int,j json);
+insert into t2 values(1,'{"tag1": "v1", "tag2": "v2", "tag3": "v3"}');
+insert into t2 values(2,null);
+select t2.id,tf.* from t2 cross apply unnest(t2.j,'$')tf;
+select t2.id,tf.* from t2 outer apply unnest(t2.j,'$')tf;

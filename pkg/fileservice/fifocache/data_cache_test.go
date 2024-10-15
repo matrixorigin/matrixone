@@ -12,18 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1_3_0
+package fifocache
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/cdc"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
-var InsertInitDataKey = func(txn executor.TxnExecutor, kek string) (err error) {
-	sql, err := cdc.GetInitDataKeySql(kek)
-	if err != nil {
-		return
-	}
-	_, err = txn.Exec(sql, executor.StatementOption{})
-	return
+func BenchmarkEnsureNBytesAndSet(b *testing.B) {
+	cache := NewDataCache(
+		fscache.ConstCapacity(1024),
+		nil, nil, nil,
+	)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			cache.EnsureNBytes(1, 1)
+		}
+	})
 }

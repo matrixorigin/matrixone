@@ -511,7 +511,7 @@ func (selectList *FunctionSelectList) IgnoreAllRow() bool {
 }
 
 func (selectList *FunctionSelectList) Contains(row uint64) bool {
-	if selectList == nil {
+	if selectList == nil || len(selectList.SelectList) <= int(row) {
 		return false
 	}
 	return !selectList.SelectList[row]

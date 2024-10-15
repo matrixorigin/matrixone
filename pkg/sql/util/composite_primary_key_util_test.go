@@ -200,7 +200,7 @@ func MakeBatch(columnSize int, rowCount int, mp *mpool.MPool) (*batch.Batch, *pl
 			keys = append(keys, strconv.Itoa(i))
 		}
 	}
-	bat := batch.New(true, attrs)
+	bat := batch.New(attrs)
 	valueCount := make(map[[2]int]interface{})
 	for i := 0; i < columnSize; i++ {
 		bat.Vecs[i] = vector.NewVec(randType().ToType())

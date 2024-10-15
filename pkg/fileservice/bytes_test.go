@@ -12,13 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1_3_0
+package fileservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/stretchr/testify/assert"
 )
 
-func getLogger(sid string) *log.MOLogger {
-	return runtime.ServiceRuntime(sid).Logger()
+func TestBytes(t *testing.T) {
+	t.Run("Bytes without refs", func(t *testing.T) {
+		bytes, deallocator, err := ioAllocator().Allocate(42, malloc.NoHints)
+		assert.Nil(t, err)
+		bs := &Bytes{
+			bytes:       bytes,
+			deallocator: deallocator,
+		}
+		bs.Release()
+	})
 }

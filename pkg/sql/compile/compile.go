@@ -112,7 +112,7 @@ func NewCompile(
 	cnLabel map[string]string,
 	startAt time.Time,
 ) *Compile {
-	c := GetCompileService().getCompile(proc)
+	c := allocateNewCompile(proc)
 
 	c.e = e
 	c.db = db
@@ -145,7 +145,7 @@ func (c *Compile) Release() {
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 	}
-	GetCompileService().putCompile(c)
+	releaseCompile(c)
 }
 
 func (c Compile) TypeName() string {
@@ -423,74 +423,80 @@ func (c *Compile) printPipeline() {
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
 */
-// run once
-func (c *Compile) runOnce() error {
-	var wg sync.WaitGroup
-	err := c.lockMetaTables()
-	if err != nil {
+
+// prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
+//
+// for example
+// 1. lock table.
+// 2. init data source.
+func (c *Compile) prePipelineInitializer() (err error) {
+	// do table lock.
+	if err = c.lockMetaTables(); err != nil {
+		return err
+	}
+	if err = c.lockTable(); err != nil {
 		return err
 	}
 
-	err = c.lockTable()
-	if err != nil {
-		return err
-	}
-	errC := make(chan error, len(c.scopes))
+	// init data source.
 	for _, s := range c.scopes {
-		err = s.InitAllDataSource(c)
-		if err != nil {
+		if err = s.InitAllDataSource(c); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
-	if err = GetCompileService().recordRunningCompile(c); err != nil {
-		return err
-	}
-	defer func() {
-		_, _ = GetCompileService().removeRunningCompile(c)
-	}()
+// run once
+func (c *Compile) runOnce() (err error) {
+	var wg sync.WaitGroup
 
-	//c.printPipeline()
-
-	for i := range c.scopes {
-		wg.Add(1)
-		scope := c.scopes[i]
-		errSubmit := ants.Submit(func() {
-			defer func() {
-				if e := recover(); e != nil {
-					err := moerr.ConvertPanicError(c.proc.Ctx, e)
-					c.proc.Error(c.proc.Ctx, "panic in run",
-						zap.String("sql", c.sql),
-						zap.String("error", err.Error()))
-					errC <- err
-				}
-				wg.Done()
-			}()
-			errC <- c.run(scope)
-		})
-		if errSubmit != nil {
-			errC <- errSubmit
-			wg.Done()
+	if c.execType == plan2.ExecTypeTP && len(c.scopes) == 1 {
+		if err = c.run(c.scopes[0]); err != nil {
+			return err
 		}
-	}
-	wg.Wait()
-	close(errC)
-
-	errList := make([]error, 0, len(c.scopes))
-	for e := range errC {
-		if e != nil {
-			errList = append(errList, e)
-			if c.isRetryErr(e) {
-				return e
+	} else {
+		errC := make(chan error, len(c.scopes))
+		for i := range c.scopes {
+			wg.Add(1)
+			scope := c.scopes[i]
+			errSubmit := ants.Submit(func() {
+				defer func() {
+					if e := recover(); e != nil {
+						err := moerr.ConvertPanicError(c.proc.Ctx, e)
+						c.proc.Error(c.proc.Ctx, "panic in run",
+							zap.String("sql", c.sql),
+							zap.String("error", err.Error()))
+						errC <- err
+					}
+					wg.Done()
+				}()
+				errC <- c.run(scope)
+			})
+			if errSubmit != nil {
+				errC <- errSubmit
+				wg.Done()
 			}
 		}
-	}
+		wg.Wait()
+		close(errC)
 
-	if len(errList) > 0 {
-		err = errList[0]
-	}
-	if err != nil {
-		return err
+		errList := make([]error, 0, len(c.scopes))
+		for e := range errC {
+			if e != nil {
+				errList = append(errList, e)
+				if c.isRetryErr(e) {
+					return e
+				}
+			}
+		}
+
+		if len(errList) > 0 {
+			err = errList[0]
+		}
+		if err != nil {
+			return err
+		}
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
@@ -2599,6 +2605,12 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 		}
+	case plan.Node_OUTERAPPLY:
+		for i := range rs {
+			op := constructApply(node, right, apply.OUTER, c.proc)
+			op.SetIdx(c.anal.curNodeIdx)
+			rs[i].setRootOperator(op)
+		}
 	default:
 		panic("unknown apply")
 	}
@@ -3841,7 +3853,15 @@ func (c *Compile) expandRanges(
 	if err != nil {
 		return nil, err
 	}
-	relData, err = rel.Ranges(ctx, blockFilterList, c.TxnOffset)
+	preAllocSize := 2
+	if !c.IsTpQuery() {
+		if len(blockFilterList) > 0 {
+			preAllocSize = 64
+		} else {
+			preAllocSize = int(n.Stats.BlockNum)
+		}
+	}
+	relData, err = rel.Ranges(ctx, blockFilterList, preAllocSize, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -3855,7 +3875,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, blockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3877,7 +3897,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, blockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}

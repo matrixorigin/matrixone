@@ -135,8 +135,22 @@ func (c *Compile) Compile(
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
-	// clear the last query context to avoid process reuse.
+	var txnOperator = c.proc.GetTxnOperator()
+
+	// init context for pipeline.
 	c.proc.ResetQueryContext()
+	c.InitPipelineContextToExecuteQuery()
+
+	// record this query to compile service.
+	GetCompileService().recordRunningCompile(c, txnOperator)
+	defer func() {
+		GetCompileService().removeRunningCompile(c, txnOperator)
+	}()
+
+	// check if there is any action to cancel this query.
+	if err = thisQueryStillRunning(c.proc, txnOperator); err != nil {
+		return nil, err
+	}
 
 	// the runC is the final object for executing the query, it's not always the same as c because of retry.
 	var runC = c
@@ -147,14 +161,12 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 
 	// track the entire execution lifecycle and release memory after it ends.
-	var txnOperator = c.proc.GetTxnOperator()
 	var seq = uint64(0)
 	var writeOffset = uint64(0)
 	if txnOperator != nil {
 		seq = txnOperator.NextSequence()
 		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
 		txnOperator.GetWorkspace().IncrSQLCount()
-		txnOperator.EnterRunSql()
 	}
 
 	var isExplainPhyPlan = false
@@ -168,9 +180,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// if a rerun occurs, it differs from the original c, so we need to release it.
 		if runC != c {
 			runC.Release()
-		}
-		if txnOperator != nil {
-			txnOperator.ExitRunSql()
 		}
 		c.proc.CleanValueScanBatchs()
 		c.proc.SetPrepareBatch(nil)
@@ -220,14 +229,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		stats.ResetIOMergerTimeConsumption()
 		stats.ResetBuildReaderTimeConsumption()
 
-		// build query context and pipeline contexts for the current run.
-		runC.InitPipelineContextToExecuteQuery()
-		runC.MessageBoard.BeforeRunonce()
-		if err = runC.runOnce(); err == nil {
-			if runC.anal != nil {
-				runC.anal.retryTimes = retryTimes
+		// running.
+		if err = runC.prePipelineInitializer(); err == nil {
+			runC.MessageBoard.BeforeRunonce()
+			if err = runC.runOnce(); err == nil {
+				if runC.anal != nil {
+					runC.anal.retryTimes = retryTimes
+				}
+				break
 			}
-			break
 		}
 
 		c.fatalLog(retryTimes, err)
@@ -263,6 +273,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC, err = c.prepareRetry(defChanged); err != nil {
 			return nil, err
 		}
+
+		// rebuild context for the retry.
+		runC.InitPipelineContextToReryQuery()
 	}
 
 	if err = runC.proc.GetQueryContextError(); err != nil {
@@ -332,7 +345,26 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 // 2. if there's a data transfer between two pipelines, the lifecycle of the sender's context ends with the receiver's termination.
 func (c *Compile) InitPipelineContextToExecuteQuery() {
 	contextBase := c.proc.Base.GetContextBase()
-	contextBase.BuildQueryCtx()
+	contextBase.BuildQueryCtx(c.proc.GetTopContext())
+	contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
+	queryContext := contextBase.WithCounterSetToQueryContext(c.counterSet)
+
+	// build pipeline context.
+	currentContext := c.proc.BuildPipelineContext(queryContext)
+	for _, pipeline := range c.scopes {
+		if pipeline.Proc == nil {
+			continue
+		}
+		pipeline.buildContextFromParentCtx(currentContext)
+	}
+}
+
+// InitPipelineContextToReryQuery initializes the context for each pipeline tree.
+// the only place diff to InitPipelineContextToExecuteQuery is this function build query context from the last query.
+func (c *Compile) InitPipelineContextToReryQuery() {
+	lastQueryCtx, _ := process.GetQueryCtxFromProc(c.proc)
+	contextBase := c.proc.Base.GetContextBase()
+	contextBase.BuildQueryCtx(lastQueryCtx)
 	contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
 	queryContext := contextBase.WithCounterSetToQueryContext(c.counterSet)
 
