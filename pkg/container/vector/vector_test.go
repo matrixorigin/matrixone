@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -2478,6 +2479,233 @@ func TestSetFunction2(t *testing.T) {
 		v.Free(mp)
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+	}
+}
+
+func TestMisc(t *testing.T) {
+	vec := NewVec(types.T_int8.ToType())
+	var gsp nulls.Nulls
+	vec.SetGrouping(&gsp)
+	require.False(t, vec.HasGrouping())
+	gsp.Add(1, 3)
+	vec.SetGrouping(&gsp)
+	require.True(t, vec.HasGrouping())
+	require.True(t, vec.GetGrouping().Contains(1))
+	require.True(t, vec.GetGrouping().Contains(3))
+
+	mp := mpool.MustNewZero()
+	vec2 := NewRollupConst(types.T_int8.ToType(), 5, mp)
+	defer vec2.Free(mp)
+	vec3 := NewVec(types.T_int8.ToType())
+	defer vec3.Free(mp)
+	require.False(t, vec3.HasGrouping())
+	err := vec3.UnionOne(vec2, 0, mp)
+	require.NoError(t, err)
+	require.True(t, vec3.HasGrouping())
+	require.True(t, vec3.GetGrouping().Contains(0))
+
+	vec4 := NewVec(types.T_int8.ToType())
+	defer vec4.Free(mp)
+	err = vec4.UnionMulti(vec2, 1, 2, mp)
+	require.NoError(t, err)
+	require.True(t, vec4.HasGrouping())
+	require.True(t, vec4.GetGrouping().Contains(0))
+	require.True(t, vec4.GetGrouping().Contains(1))
+	require.False(t, vec4.GetGrouping().Contains(2))
+
+	vec5 := NewVec(types.T_int8.ToType())
+	defer vec5.Free(mp)
+	vec6 := NewConstNull(types.T_int8.ToType(), 5, mp)
+	defer vec6.Free(mp)
+
+	err = AppendFixed(vec5, int8(1), false, mp)
+	require.NoError(t, err)
+	err = vec5.UnionMulti(vec6, 1, 2, mp)
+	require.NoError(t, err)
+	require.False(t, vec5.GetNulls().Contains(0))
+	require.True(t, vec5.GetNulls().Contains(1))
+	require.True(t, vec5.GetNulls().Contains(2))
+	require.False(t, vec5.GetNulls().Contains(3))
+
+	vec7 := NewVec(types.T_char.ToType())
+	defer vec7.Free(mp)
+	err = AppendMultiBytes(vec7, nil, true, 2, mp)
+	require.NoError(t, err)
+	require.True(t, vec7.GetNulls().Contains(0))
+	require.True(t, vec7.GetNulls().Contains(1))
+	require.False(t, vec7.GetNulls().Contains(2))
+	require.Equal(t, 2, vec7.Length())
+
+	fixSizedTypes := []types.Type{
+		types.T_int8.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint8.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint64.ToType(),
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+		types.T_bool.ToType(),
+		types.T_bit.ToType(),
+		types.T_Rowid.ToType(),
+		types.T_TS.ToType(),
+		types.T_uuid.ToType(),
+		types.T_datetime.ToType(),
+		types.T_timestamp.ToType(),
+	}
+	gsp.Clear()
+	gsp.Add(0, 1, 2)
+	for _, fType := range fixSizedTypes {
+		v1 := NewVec(fType)
+		v2 := NewVec(fType)
+		defer v1.Free(mp)
+		defer v2.Free(mp)
+		switch fType.Oid {
+		case types.T_int8:
+			vals := make([]int8, 2)
+			err = AppendFixedList[int8](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int8, 3)
+			err = AppendFixedList[int8](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_int16:
+			vals := make([]int16, 2)
+			err = AppendFixedList[int16](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int16, 3)
+			err = AppendFixedList[int16](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_int32:
+			vals := make([]int32, 2)
+			err = AppendFixedList[int32](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int32, 3)
+			err = AppendFixedList[int32](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_int64:
+			vals := make([]int64, 2)
+			err = AppendFixedList[int64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int64, 3)
+			err = AppendFixedList[int64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_uint8:
+			vals := make([]uint8, 2)
+			err = AppendFixedList[uint8](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint8, 3)
+			err = AppendFixedList[uint8](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_uint16:
+			vals := make([]uint16, 2)
+			err = AppendFixedList[uint16](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint16, 3)
+			err = AppendFixedList[uint16](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_uint32:
+			vals := make([]uint32, 2)
+			err = AppendFixedList[uint32](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint32, 3)
+			err = AppendFixedList[uint32](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_uint64:
+			vals := make([]uint64, 2)
+			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint64, 3)
+			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_float32:
+			vals := make([]float32, 2)
+			err = AppendFixedList[float32](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]float32, 3)
+			err = AppendFixedList[float32](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_float64:
+			vals := make([]float64, 2)
+			err = AppendFixedList[float64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]float64, 3)
+			err = AppendFixedList[float64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_bool:
+			vals := make([]bool, 2)
+			err = AppendFixedList[bool](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]bool, 3)
+			err = AppendFixedList[bool](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_bit:
+			vals := make([]uint64, 2)
+			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint64, 3)
+			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_Rowid:
+			vals := make([]types.Rowid, 2)
+			err = AppendFixedList[types.Rowid](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Rowid, 3)
+			err = AppendFixedList[types.Rowid](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_TS:
+			vals := make([]types.TS, 2)
+			err = AppendFixedList[types.TS](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.TS, 3)
+			err = AppendFixedList[types.TS](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_uuid:
+			vals := make([]types.Uuid, 2)
+			err = AppendFixedList[types.Uuid](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Uuid, 3)
+			err = AppendFixedList[types.Uuid](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_datetime:
+			vals := make([]types.Datetime, 2)
+			err = AppendFixedList[types.Datetime](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Datetime, 3)
+			err = AppendFixedList[types.Datetime](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_timestamp:
+			vals := make([]types.Timestamp, 2)
+			err = AppendFixedList[types.Timestamp](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Timestamp, 3)
+			err = AppendFixedList[types.Timestamp](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		}
+		union := GetUnionAllFunction(fType, mp)
+		err = union(v1, v2)
+		require.NoError(t, err)
+		require.Equal(t, 5, v1.Length())
+		require.Equal(t, 5, v1.GetNulls().Count())
+		require.Equal(t, 3, v1.GetGrouping().Count())
 	}
 }
 

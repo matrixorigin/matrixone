@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -83,9 +82,8 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 			return err
 		}
 
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = '%s', `%s` = '%s' where `%s` = %d and `%s` = '%s'",
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = '%s' where `%s` = %d and `%s` = '%s'",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newDb.GetDatabaseId(ctx),
-			catalog.MO_PITR_MODIFIED_TIME, types.CurrentTimestamp().String2(time.UTC, 0),
 			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
 			catalog.MO_PITR_DB_NAME, dbName)
 
@@ -1324,9 +1322,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = '%s' where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d  where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newRelation.GetTableID(c.proc.Ctx),
-			catalog.MO_PITR_MODIFIED_TIME, types.CurrentTimestamp().String2(time.UTC, 0),
 			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
 			catalog.MO_PITR_DB_NAME, dbName,
 			catalog.MO_PITR_TABLE_NAME, tblName)
@@ -2705,7 +2702,6 @@ last_seq_num | min_value| max_value| start_value| increment_value| cycle| is_cal
 
 func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, tableDef *plan.TableDef, proc *process.Process, result []interface{}, curval string) (*batch.Batch, error) {
 	var bat batch.Batch
-	bat.Ro = true
 	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
 	for i := range attrs {
@@ -2814,7 +2810,6 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
-	bat.Ro = true
 	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
 	for i := range attrs {

@@ -383,7 +383,7 @@ func TestConsume(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -405,7 +405,7 @@ func TestConsume(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -442,7 +442,7 @@ func TestConsumeEntries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -452,7 +452,7 @@ func TestConsumeEntries(t *testing.T) {
 
 		var initSyncedLsn uint64 = 8
 		c.syncedLsn.Store(initSyncedLsn)
-		err = c.consumerEntries(ctx, []logservice.LogRecord{
+		err = c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: rec.Data,
@@ -469,7 +469,7 @@ func TestConsumeEntries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -492,7 +492,7 @@ func TestConsumeEntries(t *testing.T) {
 		lc := c.logClient.(*mockLogClient)
 		lc.fakeError("setRequiredLsn")
 		defer lc.clearFakeError("setRequiredLsn")
-		err = c.consumerEntries(ctx, []logservice.LogRecord{
+		err = c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: rec.Data,
@@ -509,7 +509,7 @@ func TestConsumeEntries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -529,7 +529,7 @@ func TestConsumeEntries(t *testing.T) {
 		}))
 		var initSyncedLsn uint64 = 8
 		c.syncedLsn.Store(initSyncedLsn)
-		err = c.consumerEntries(ctx, []logservice.LogRecord{
+		err = c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: rec.Data,
@@ -548,7 +548,7 @@ func TestConsumeEntries(t *testing.T) {
 
 		var initSyncedLsn uint64 = 8
 		c.syncedLsn.Store(initSyncedLsn)
-		err := c.consumerEntries(ctx, []logservice.LogRecord{
+		err := c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: make([]byte, 100),
@@ -570,7 +570,7 @@ func TestConsumeEntries(t *testing.T) {
 		lc := c.logClient.(*mockLogClient)
 		lc.fakeError("setRequiredLsn")
 		defer lc.clearFakeError("setRequiredLsn")
-		err := c.consumerEntries(ctx, []logservice.LogRecord{
+		err := c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: make([]byte, 100),
@@ -587,7 +587,7 @@ func TestConsumeEntries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -607,7 +607,7 @@ func TestConsumeEntries(t *testing.T) {
 		}))
 		var initSyncedLsn uint64 = 8
 		c.syncedLsn.Store(initSyncedLsn)
-		err = c.consumerEntries(ctx, []logservice.LogRecord{
+		err = c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: rec.Data,

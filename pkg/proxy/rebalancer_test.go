@@ -23,12 +23,14 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/stretchr/testify/require"
 )
 
 func testRebalancer(
@@ -259,7 +261,8 @@ func TestDoRebalance(t *testing.T) {
 	var err error
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
-
+	frontend.InitServerLevelVars("")
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 	temp := os.TempDir()
 	// Construct backend CN servers.
 	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
@@ -270,6 +273,8 @@ func TestDoRebalance(t *testing.T) {
 			"k2": "v2",
 		}),
 	)
+	frontend.InitServerLevelVars(cn11.uuid)
+	frontend.SetSessionAlloc(cn11.uuid, frontend.NewSessionAllocator(newTestPu()))
 	li := labelInfo{
 		Tenant: "t1",
 		Labels: map[string]string{
@@ -297,6 +302,8 @@ func TestDoRebalance(t *testing.T) {
 			"k2": "v2",
 		}),
 	)
+	frontend.InitServerLevelVars(cn12.uuid)
+	frontend.SetSessionAlloc(cn12.uuid, frontend.NewSessionAllocator(newTestPu()))
 	cn12.hash, err = li.getHash()
 	require.NoError(t, err)
 	tp.hc.updateCN("cn12", cn12.addr, map[string]metadata.LabelList{

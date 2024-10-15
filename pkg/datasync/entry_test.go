@@ -249,21 +249,21 @@ func TestEntry_ParseLocation(t *testing.T) {
 		rec := logservice.LogRecord{
 			Type: logservice.Internal,
 		}
-		assert.Equal(t, []string(nil), getLocations(rec))
+		assert.Equal(t, []string(nil), getLocations(rec, ""))
 	})
 
 	t.Run("invalid header size", func(t *testing.T) {
 		rec := logservice.LogRecord{
 			Data: make([]byte, 2),
 		}
-		assert.Equal(t, []string(nil), getLocations(rec))
+		assert.Equal(t, []string(nil), getLocations(rec, ""))
 	})
 
 	t.Run("read buffer error", func(t *testing.T) {
 		rec := logservice.LogRecord{
 			Data: make([]byte, 22),
 		}
-		assert.Equal(t, []string(nil), getLocations(rec))
+		assert.Equal(t, []string(nil), getLocations(rec, ""))
 	})
 
 	t.Run("invalid meta type", func(t *testing.T) {
@@ -273,7 +273,7 @@ func TestEntry_ParseLocation(t *testing.T) {
 		)
 		assert.NoError(t, err)
 		assert.NotNil(t, p)
-		assert.Equal(t, []string(nil), getLocations(genRecord(p, 0)))
+		assert.Equal(t, []string(nil), getLocations(genRecord(p, 0), ""))
 	})
 
 	t.Run("invalid group type", func(t *testing.T) {
@@ -283,7 +283,7 @@ func TestEntry_ParseLocation(t *testing.T) {
 		)
 		assert.NoError(t, err)
 		assert.NotNil(t, p)
-		assert.Equal(t, []string(nil), getLocations(genRecord(p, 0)))
+		assert.Equal(t, []string(nil), getLocations(genRecord(p, 0), ""))
 	})
 
 	t.Run("ckp, invalid payload", func(t *testing.T) {
@@ -294,7 +294,7 @@ func TestEntry_ParseLocation(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, p)
 		assert.Panics(t, func() {
-			getLocations(genRecord(p, 0))
+			getLocations(genRecord(p, 0), "")
 		})
 	})
 
@@ -303,7 +303,7 @@ func TestEntry_ParseLocation(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 	})
 
@@ -316,7 +316,7 @@ func TestEntry_ParseLocation(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			files,
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 	})
 }

@@ -1802,3 +1802,53 @@ func VectorToZM(vec *vector.Vector, zm ZM) ZM {
 	}
 	return zm
 }
+
+// StrictlyCompareZmMaxAndMin
+// Consider this scenario:
+//  1. If not truncated, maxBuf is smaller than minBuf.
+//  2. If truncated, maxBuf is equal to or larger than minBuf.
+//
+// For example:
+//
+//		maxBuf: 0xa 0xff 0xff 0xff 0xff 0xff 0xff 0xff 0xff ==> 0xb 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+//		minBuf: 0xb
+//		maxBuf should be smaller than minBuf, but after truncating, maxBuf is bigger than minBuf.
+//		this is not accepted in overlap check.
+//
+//		maxBuf: 0xa 0xff 0xff 0xff 0xff 0xff 0xff 0xff 0xff ==> 0xb 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+//		minBuf: 0xb 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xff ==> 0xb 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+//	    maxBuf should be smaller than minBuf, but after truncating, maxBuf is equal to minBuf.
+//
+// In this case, StrictlyCompareZmMaxAndMin will return -1 even when truncated,
+// indicating a possibly false negative response to the declaration that two ZMs intersect
+func StrictlyCompareZmMaxAndMin(maxBuf, minBuf []byte, t types.T, scale1, scale2 int32) int {
+	if t.FixedLength() >= 0 || len(maxBuf) != 30 {
+		return compute.Compare(maxBuf, minBuf, t, scale1, scale2)
+	}
+
+	if len(minBuf) < 30 {
+		// only maxBuf is truncated.
+		if cmp := bytes.Compare(maxBuf[:len(minBuf)], minBuf); cmp != 0 {
+			return cmp
+		}
+		for _, b := range maxBuf[len(minBuf):] {
+			if b != 0 {
+				return 1
+			}
+		}
+		return -1
+	}
+
+	// both maxBuf and minBuf are truncated.
+	if cmp := bytes.Compare(maxBuf[:29], minBuf[:29]); cmp != 0 {
+		return cmp
+	}
+	if hasMaxPrefix(maxBuf) {
+		return -1 // unknown, return -1
+	}
+	i, j := maxBuf[29], minBuf[29]
+	if i <= j || i-j == 1 {
+		return -1
+	}
+	return 1
+}

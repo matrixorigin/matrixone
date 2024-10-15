@@ -17,12 +17,13 @@ package testutil
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"os"
 	"os/user"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -339,7 +340,7 @@ func TxnRanges(
 	relation engine.Relation,
 	exprs []*plan.Expr,
 ) (engine.RelData, error) {
-	return relation.Ranges(ctx, exprs, txn.GetWorkspace().GetSnapshotWriteOffset())
+	return relation.Ranges(ctx, exprs, 2, txn.GetWorkspace().GetSnapshotWriteOffset())
 }
 
 func GetRelationReader(

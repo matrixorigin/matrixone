@@ -35,6 +35,8 @@ const (
 	DefaultMaxAllowedPacket uint64 = 64 * 1024 * 1024
 	DefaultRetryTimes              = -1
 	DefaultRetryDuration           = 30 * time.Minute
+
+	sqlPrintLen = 200
 )
 
 func NewSinker(
@@ -81,13 +83,13 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 
 	logutil.Infof("output type %s", data.outputTyp)
 	switch data.outputTyp {
-	case OutputTypeCheckpoint:
+	case OutputTypeSnapshot:
 		if data.checkpointBat != nil && data.checkpointBat.RowCount() > 0 {
 			//FIXME: only test here
 			logutil.Info("checkpoint")
 			//logutil.Info(data.checkpointBat.String())
 		}
-	case OutputTypeTailDone:
+	case OutputTypeTail:
 		if data.insertAtmBatch != nil && data.insertAtmBatch.Rows.Len() > 0 {
 			//FIXME: only test here
 			wantedColCnt := len(data.insertAtmBatch.Batches[0].Vecs) - 2
@@ -102,13 +104,14 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 				_ = iter.Row(ctx, row)
 				logutil.Infof("insert %v", row)
 			}
+			iter.Close()
 		}
-	case OutputTypeUnfinishedTailWIP:
-		logutil.Info("====tail wip====")
 	}
 
 	return nil
 }
+
+func (s *consoleSinker) Close() {}
 
 var _ Sinker = new(mysqlSinker)
 
@@ -129,10 +132,6 @@ type mysqlSinker struct {
 	deletePrefix   []byte
 	tsInsertPrefix []byte
 	tsDeletePrefix []byte
-
-	// iterators
-	insertIters []RowIterator
-	deleteIters []RowIterator
 
 	// only contains user defined column types, no mo meta cols
 	insertTypes []*types.Type
@@ -202,15 +201,22 @@ var NewMysqlSinker = func(
 }
 
 func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error) {
-	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceTblId)
+	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceTblIdStr)
 	if data.toTs.LE(&watermark) {
 		logutil.Errorf("^^^^^ Sinker: unexpected watermark: %s, current watermark: %s",
 			data.toTs.ToString(), watermark.ToString())
 		return
 	}
 
-	//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%s, %s) ckpBatSize() = %d, insertBatSize() = %d, deleteBatSize() = %d\n",
-	//	data.fromTs.ToString(), data.toTs.ToString(), data.ckpBatSize(), data.insertBatSize(), data.deleteBatSize())
+	if data.noMoreData {
+		s.watermarkUpdater.UpdateMem(s.dbTblInfo.SourceTblIdStr, data.toTs)
+		return
+	}
+
+	start := time.Now()
+	defer func() {
+		v2.CdcSinkDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	tsPrefix := fmt.Sprintf("/* [%s, %s) */", data.fromTs.ToString(), data.toTs.ToString())
 	s.tsInsertPrefix = s.tsInsertPrefix[:0]
@@ -220,26 +226,18 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error)
 	s.tsDeletePrefix = append(s.tsDeletePrefix, []byte(tsPrefix)...)
 	s.tsDeletePrefix = append(s.tsDeletePrefix, s.deletePrefix...)
 
-	if data.noMoreData {
-		if err = s.sinkRemain(ctx); err != nil {
-			return
-		}
-		s.watermarkUpdater.UpdateMem(s.dbTblInfo.SourceTblId, data.toTs)
-		return
-	}
-
-	if data.outputTyp == OutputTypeCheckpoint {
-		return s.sinkCkp(ctx, data.checkpointBat)
-	} else if data.outputTyp == OutputTypeTailDone {
+	if data.outputTyp == OutputTypeSnapshot {
+		return s.sinkSnapshot(ctx, data.checkpointBat)
+	} else if data.outputTyp == OutputTypeTail {
 		return s.sinkTail(ctx, data.insertAtmBatch, data.deleteAtmBatch)
 	}
 	return
 }
 
-func (s *mysqlSinker) sinkCkp(ctx context.Context, bat *batch.Batch) (err error) {
+func (s *mysqlSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) (err error) {
 	s.sqlBuf = append(s.sqlBuf[:0], s.tsInsertPrefix...)
 
-	for i := 0; i < bat.RowCount(); i++ {
+	for i := 0; i < batchRowCount(bat); i++ {
 		// step1: get row from the batch
 		if err = extractRowFromEveryVector(ctx, bat, i, s.insertRow); err != nil {
 			return
@@ -265,88 +263,70 @@ func (s *mysqlSinker) sinkCkp(ctx context.Context, bat *batch.Batch) (err error)
 	return
 }
 
+// insertBatch and deleteBatch is sorted by ts
+// for the same ts, delete first, then insert
 func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *AtomicBatch) (err error) {
-	// merge-sort like process:
-	//
-	//                   tail                   head
-	// insertIter queue: ins_itn ... ins_it2, ins_it1  \
-	//                                                  compare and output the less one
-	// deleteIter queue: del_itm ... del_it2, del_it1  /
-	// do until one iterator reach the end, then remove this iterator and get the next one from the queue
-	//
-	//
-	// do until one queue is empty, remain the non-empty queue and remember cursor location of the first iterator:
-	// insertIter queue:        (empty)       \
-	//                                         compare and output the less one
-	// deleteIter queue: del_itm ... del_itx  /
-	//                                  ^
-	//                                  |  cursor in iterator
-	//
-	//
-	// when receive new tail data, push new iters:
-	// insertIter queue: ins_itN ... ins_it(n+2), ins_it(n+1)           \
-	//                                                                   compare and output the less one
-	// deleteIter queue: del_itM ... del_it(m+1), del_itm ... del_itx  /
-	//                                                            ^
-	//                                                            |  cursor in iterator
-	// continue with the remembered cursor location
+	insertIter := insertBatch.GetRowIterator().(*atomicBatchRowIter)
+	deleteIter := deleteBatch.GetRowIterator().(*atomicBatchRowIter)
+	defer func() {
+		insertIter.Close()
+		deleteIter.Close()
+	}()
 
-	if insertBatch != nil {
-		s.insertIters = append(s.insertIters, insertBatch.GetRowIterator())
-	}
-	if deleteBatch != nil {
-		s.deleteIters = append(s.deleteIters, deleteBatch.GetRowIterator())
-	}
-
-	// do until one queue is empty
-	for len(s.insertIters) > 0 && len(s.deleteIters) > 0 {
-		// pick the head ones from two queues
-		insertIter, deleteIter := s.insertIters[0].(*atomicBatchRowIter), s.deleteIters[0].(*atomicBatchRowIter)
-
-		// output sql until one iterator reach the end
-		insertIterHasNext, deleteIterHasNext := insertIter.Next(), deleteIter.Next()
-		for insertIterHasNext && deleteIterHasNext {
-			insertItem, deleteItem := insertIter.Item(), deleteIter.Item()
-			// compare the smallest item of insert and delete tree
-			if insertItem.Less(deleteItem) {
-				if err = s.sinkInsert(ctx, insertIter); err != nil {
-					return
-				}
-				// get next item
-				insertIterHasNext = insertIter.Next()
-			} else {
-				if err = s.sinkDelete(ctx, deleteIter); err != nil {
-					return
-				}
-				// get next item
-				deleteIterHasNext = deleteIter.Next()
+	// output sql until one iterator reach the end
+	insertIterHasNext, deleteIterHasNext := insertIter.Next(), deleteIter.Next()
+	for insertIterHasNext && deleteIterHasNext {
+		insertItem, deleteItem := insertIter.Item(), deleteIter.Item()
+		// compare ts, ignore pk
+		if insertItem.Ts.LT(&deleteItem.Ts) {
+			if err = s.sinkInsert(ctx, insertIter); err != nil {
+				return
 			}
-		}
-
-		// iterator reach the end, remove it
-		if !insertIterHasNext {
-			_ = insertIter.Close()
-			s.insertIters = s.insertIters[1:]
+			// get next item
+			insertIterHasNext = insertIter.Next()
 		} else {
-			// did an extra Next() before, need to move back here
-			if !insertIter.Prev() {
-				insertIter.Reset()
+			if err = s.sinkDelete(ctx, deleteIter); err != nil {
+				return
 			}
-		}
-		if !deleteIterHasNext {
-			_ = deleteIter.Close()
-			s.deleteIters = s.deleteIters[1:]
-		} else {
-			if !deleteIter.Prev() {
-				deleteIter.Reset()
-			}
+			// get next item
+			deleteIterHasNext = deleteIter.Next()
 		}
 	}
+
+	// output the rest of insert iterator
+	for insertIterHasNext {
+		if err = s.sinkInsert(ctx, insertIter); err != nil {
+			return
+		}
+		// get next item
+		insertIterHasNext = insertIter.Next()
+	}
+
+	// output the rest of delete iterator
+	for deleteIterHasNext {
+		if err = s.sinkDelete(ctx, deleteIter); err != nil {
+			return
+		}
+		// get next item
+		deleteIterHasNext = deleteIter.Next()
+	}
+
+	// output the last sql
+	if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.tsInsertPrefix) {
+		if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
+			return
+		}
+	} else if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.tsDeletePrefix) {
+		s.sqlBuf = appendByte(s.sqlBuf, ')')
+		if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
+			return
+		}
+	}
+
+	// reset status
+	s.sqlBuf = s.sqlBuf[:0]
+	s.preRowType = NoOp
 	return
-}
-
-var sinkInsert = func(ctx context.Context, sk *mysqlSinker, insertIter *atomicBatchRowIter) (err error) {
-	return sk.sinkInsert(ctx, insertIter)
 }
 
 func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter) (err error) {
@@ -380,7 +360,7 @@ func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRow
 	return
 }
 
-func (s *mysqlSinker) sinkDelete(ctx context.Context, insertIter *atomicBatchRowIter) (err error) {
+func (s *mysqlSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
 	// if last row is not delete row, need output sql first
 	if s.preRowType != DeleteRow {
 		if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.tsInsertPrefix) {
@@ -393,7 +373,7 @@ func (s *mysqlSinker) sinkDelete(ctx context.Context, insertIter *atomicBatchRow
 	}
 
 	// step1: get row from the batch
-	if err = insertIter.Row(ctx, s.deleteRow); err != nil {
+	if err = deleteIter.Row(ctx, s.deleteRow); err != nil {
 		return
 	}
 
@@ -407,63 +387,6 @@ func (s *mysqlSinker) sinkDelete(ctx context.Context, insertIter *atomicBatchRow
 		return
 	}
 
-	return
-}
-
-// sinkRemain sinks the remain rows in insertBatch and deleteBatch when receive NoMoreData signal
-func (s *mysqlSinker) sinkRemain(ctx context.Context) (err error) {
-	// if queue is not empty
-	for len(s.insertIters) > 0 {
-		insertIter := s.insertIters[0].(*atomicBatchRowIter)
-
-		// output sql until one iterator reach the end
-		insertIterHasNext := insertIter.Next()
-		for insertIterHasNext {
-			if err = sinkInsert(ctx, s, insertIter); err != nil {
-				return
-			}
-			// get next item
-			insertIterHasNext = insertIter.Next()
-		}
-
-		// iterator reach the end, remove it
-		_ = insertIter.Close()
-		s.insertIters = s.insertIters[1:]
-	}
-
-	// if queue is not empty
-	for len(s.deleteIters) > 0 {
-		deleteIter := s.deleteIters[0].(*atomicBatchRowIter)
-
-		// output sql until one iterator reach the end
-		deleteIterHasNext := deleteIter.Next()
-		for deleteIterHasNext {
-			if err = s.sinkDelete(ctx, deleteIter); err != nil {
-				return
-			}
-			// get next item
-			deleteIterHasNext = deleteIter.Next()
-		}
-
-		// iterator reach the end, remove it
-		_ = deleteIter.Close()
-		s.deleteIters = s.deleteIters[1:]
-	}
-
-	if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.tsInsertPrefix) {
-		if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
-			return
-		}
-	} else if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.tsDeletePrefix) {
-		s.sqlBuf = appendByte(s.sqlBuf, ')')
-		if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
-			return
-		}
-	}
-
-	// reset status
-	s.sqlBuf = s.sqlBuf[:0]
-	s.preRowType = NoOp
 	return
 }
 
@@ -559,6 +482,20 @@ func (s *mysqlSinker) getDeleteRowBuf(ctx context.Context) (err error) {
 	return
 }
 
+func (s *mysqlSinker) Close() {
+	s.mysql.Close()
+	s.sqlBuf = nil
+	s.rowBuf = nil
+	s.insertPrefix = nil
+	s.deletePrefix = nil
+	s.tsInsertPrefix = nil
+	s.tsDeletePrefix = nil
+	s.insertTypes = nil
+	s.deleteTypes = nil
+	s.insertRow = nil
+	s.deleteRow = nil
+}
+
 type mysqlSink struct {
 	conn           *sql.DB
 	user, password string
@@ -602,17 +539,23 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sql string) (er
 		select {
 		case <-ctx.Done():
 			return
+		case <-ar.Pause:
+			return
 		case <-ar.Cancel:
 			return
 		default:
 		}
 
+		start := time.Now()
+		_, err = s.conn.Exec(sql)
+		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
 		// return if success
-		if _, err = s.conn.Exec(sql); err == nil {
-			//logutil.Errorf("----mysql send sql----, success")
+		if err == nil {
+			//logutil.Errorf("----mysql send sql----, success, sql: %s", sql)
 			return
 		}
-		logutil.Errorf("----mysql send sql----, failed, err: %v", err)
+
+		logutil.Errorf("----mysql send sql----, failed, err: %v, sql: %s", err, sql[:min(len(sql), sqlPrintLen)])
 		v2.CdcMysqlSinkErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
