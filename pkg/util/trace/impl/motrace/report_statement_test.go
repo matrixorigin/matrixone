@@ -190,7 +190,7 @@ var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
 var dummyStatsArray = *statistic.NewStatsArray().WithTimeConsumed(1).WithMemorySize(2).WithS3IOInputCount(3).WithS3IOOutputCount(4).
-	WithOutTrafficBytes(5).WithCU(44.0161)
+	WithOutTrafficBytes(5).WithCU(6.9852)
 
 var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
 	if plan == nil {

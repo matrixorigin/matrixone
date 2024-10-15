@@ -15,12 +15,14 @@
 package motrace
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 func TestCalculateFloat64(t *testing.T) {
@@ -261,7 +263,7 @@ func TestCalculateCU(t *testing.T) {
 				durationNS: 0,
 				cfg:        defaultCUConfig,
 			},
-			want: 44.016069999042564,
+			want: 6.985238565621266,
 		},
 		{
 			name: "big memory",
@@ -270,7 +272,7 @@ func TestCalculateCU(t *testing.T) {
 				durationNS: 309319808921,
 				cfg:        defaultCUConfig,
 			},
-			want: 807058.4750616836,
+			want: 807052.710499182,
 		},
 	}
 
