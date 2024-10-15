@@ -20,14 +20,12 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,10 +98,14 @@ func TestFullText(t *testing.T) {
 	_, err = arg.Call(proc)
 	require.NoError(t, err)
 
-	sql := []string{"DELETE FROM `testDb`.`index_tblan` WHERE doc_id IN (1,1000)",
+	sqls := []string{"DELETE FROM `testDb`.`index_tblan` WHERE doc_id IN (1,1000)",
 		"INSERT INTO `testDb`.`index_tblan` SELECT f.* FROM `testDb`.`src` as src CROSS APPLY fulltext_index_tokenize('', src.pk, src.body, src.title) as f WHERE src.pk IN (1,1000)"}
 
-	require.Equal(t, sql, proc.Base.PostDmlSqlList)
+	for i, s := range sqls {
+		rs, ok := proc.Base.PostDmlSqlList.Get(i)
+		require.True(t, ok)
+		require.Equal(t, s, rs)
+	}
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
@@ -115,16 +117,4 @@ func resetChildren(arg *PostDml) {
 	op.WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
-}
-
-func newBatch(proc *process.Process, rows int64) *batch.Batch {
-	// not random
-	ts := []types.Type{types.New(types.T_Rowid, 0, 0), types.New(types.T_int32, 0, 0), types.New(types.T_int32, 0, 0)}
-	bat := testutil.NewBatch(ts, false, int(rows), proc.Mp())
-	pkAttr := make([]string, 3)
-	pkAttr[0] = "rowid"
-	pkAttr[1] = "pk"
-	pkAttr[2] = "partition_id"
-	bat.SetAttributes(pkAttr)
-	return bat
 }
