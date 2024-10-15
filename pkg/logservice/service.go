@@ -666,6 +666,7 @@ func (s *Service) handleAddLogShard(cmd pb.ScheduleCommand) {
 		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*3, moerr.CauseHandleAddLogShard)
 		defer cancel()
 		if err := s.store.addLogShard(ctx, pb.AddLogShard{ShardID: shardID}); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			s.runtime.Logger().Error("failed to add shard",
 				zap.Uint64("shard ID", shardID),
 				zap.Error(err),

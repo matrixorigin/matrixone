@@ -84,6 +84,7 @@ func (c *clientConn) upgradeToTLS() error {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), c.tlsConnectTimeout, moerr.CauseUpgradeToTLS)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		err = moerr.AttachCause(ctx, err)
 		return moerr.NewInternalErrorf(ctx, "TSL handshake error: %v", err)
 	}
 	c.conn.UseConn(tlsConn)

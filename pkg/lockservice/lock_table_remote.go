@@ -200,7 +200,7 @@ func (l *remoteLockTable) doUnlock(
 		defer releaseResponse(resp)
 		return l.maybeHandleBindChanged(resp)
 	}
-	return err
+	return moerr.AttachCause(ctx, err)
 }
 
 func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, error) {
@@ -237,7 +237,7 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		}
 		return lock, true, nil
 	}
-	return Lock{}, false, err
+	return Lock{}, false, moerr.AttachCause(ctx, err)
 }
 
 func (l *remoteLockTable) getBind() pb.LockTable {

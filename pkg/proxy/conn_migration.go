@@ -38,7 +38,7 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 	r := resp.MigrateConnFromResponse
 
@@ -96,7 +96,7 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 	defer cancel()
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	c.queryClient.Release(resp)
 	return nil

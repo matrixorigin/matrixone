@@ -178,6 +178,7 @@ func NewLogHAKeeperClientWithRetry(
 		defer cancel()
 		client, err := NewClusterHAKeeperClient(ctx, sid, cfg)
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("failed to create HAKeeper client: %v", err)
 			return err
 		}

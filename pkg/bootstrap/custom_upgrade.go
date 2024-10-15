@@ -16,7 +16,6 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -163,7 +162,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		},
 		opts)
 	if err != nil {
-		return errors.Join(err, context.Cause(ctx))
+		return moerr.AttachCause(ctx, err)
 	}
 	s.mu.Lock()
 	s.mu.tenants[tenantID] = true

@@ -527,7 +527,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 
 			resp, err := l.client.Send(ctx, req)
 			if err != nil {
-				return false, nil, err
+				return false, nil, moerr.AttachCause(ctx, err)
 			}
 			defer releaseResponse(resp)
 
@@ -952,6 +952,7 @@ func validateService(
 
 	resp, err := client.Send(ctx, req)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logPingFailed(logger, serviceID, err)
 		return false, err
 	}

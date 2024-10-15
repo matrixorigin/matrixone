@@ -102,6 +102,7 @@ func (s *scheduler) queryTasks(status task.TaskStatus) []task.AsyncTask {
 
 	tasks, err := ts.QueryAsyncTask(ctx, taskservice.WithTaskStatusCond(status))
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		runtime.ServiceRuntime(s.service).Logger().Error("failed to query tasks",
 			zap.String("status", status.String()),
 			zap.Error(err))
@@ -154,6 +155,7 @@ func allocateTask(
 	defer cancel()
 
 	if err := ts.Allocate(ctx, t, runner.uuid); err != nil {
+		err = moerr.AttachCause(ctx, err)
 		runtime.ServiceRuntime(service).Logger().Error("failed to allocate task",
 			zap.Uint64("task-id", t.ID),
 			zap.String("task-metadata-id", t.Metadata.ID),

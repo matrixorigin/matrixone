@@ -150,6 +150,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			binds = append(binds, bind)
 			continue
 		}
+		err = moerr.AttachCause(ctx, err)
 		logKeepRemoteLocksFailed(k.service.logger, bind, err)
 		if !isRetryError(err) {
 			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
@@ -192,6 +193,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	defer cancel()
 	resp, err := k.client.Send(ctx, req)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logKeepBindFailed(k.service.logger, err)
 		return
 	}

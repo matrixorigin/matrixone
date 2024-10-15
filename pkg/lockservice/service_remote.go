@@ -91,7 +91,7 @@ func (s *service) initRemote() {
 
 			resp, err := s.remote.client.Send(ctx, req)
 			if err != nil {
-				return nil, err
+				return nil, moerr.AttachCause(ctx, err)
 			}
 			defer releaseResponse(resp)
 			return resp.CannotCommit.CommittingTxn, nil
@@ -108,7 +108,7 @@ func (s *service) initRemote() {
 
 			resp, err := s.remote.client.Send(ctx, req)
 			if err != nil {
-				return false, err
+				return false, moerr.AttachCause(ctx, err)
 			}
 			defer releaseResponse(resp)
 
@@ -472,7 +472,7 @@ func (s *service) getTxnWaitingListOnRemote(
 
 	resp, err := s.remote.client.Send(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 	defer releaseResponse(resp)
 	v := resp.GetWaitingList.WaitingList
@@ -530,7 +530,7 @@ func getLockTableBind(
 
 	resp, err := c.Send(ctx, req)
 	if err != nil {
-		return pb.LockTable{}, err
+		return pb.LockTable{}, moerr.AttachCause(ctx, err)
 	}
 	defer releaseResponse(resp)
 	v := resp.GetBind.LockTable

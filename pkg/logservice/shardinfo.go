@@ -80,7 +80,7 @@ func GetShardInfo(
 	}
 	future, err := cc.Send(ctx, address, rpcReq)
 	if err != nil {
-		return ShardInfo{}, false, err
+		return ShardInfo{}, false, moerr.AttachCause(ctx, err)
 	}
 	defer future.Close()
 	msg, err := future.Get()

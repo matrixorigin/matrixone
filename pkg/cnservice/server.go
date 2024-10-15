@@ -19,7 +19,6 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -324,7 +323,7 @@ func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*30, moerr.CauseCheckTenantUpgrade)
 	defer cancel()
 	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
-		return errors.Join(err, context.Cause(ctx))
+		return moerr.AttachCause(ctx, err)
 	}
 	return nil
 }
@@ -334,7 +333,7 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCou
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseUpgradeTenant)
 	defer cancel()
 	if _, err := s.bootstrapService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount); err != nil {
-		return errors.Join(err, context.Cause(ctx))
+		return moerr.AttachCause(ctx, err)
 	}
 	return nil
 }
@@ -532,7 +531,7 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 		defer cancel()
 		client, err = logservice.NewCNHAKeeperClient(ctx, s.cfg.UUID, s.cfg.HAKeeper.ClientConfig)
 		if err != nil {
-			err = errors.Join(err, context.Cause(ctx))
+			err = moerr.AttachCause(ctx, err)
 			return
 		}
 		s._hakeeperClient = client
@@ -909,7 +908,7 @@ func (s *service) bootstrap() error {
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
-		err = errors.Join(err, context.Cause(ctx))
+		err = moerr.AttachCause(ctx, err)
 		panic(err)
 	}
 
@@ -920,7 +919,7 @@ func (s *service) bootstrap() error {
 			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseBootstrap2)
 			defer cancel()
 			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
-				err = errors.Join(err, context.Cause(ctx))
+				err = moerr.AttachCause(ctx, err)
 				if err != context.Canceled {
 					runtime.DefaultRuntime().Logger().Error("bootstrap system automatic upgrade failed by: ", zap.Error(err))
 					//panic(err)
@@ -991,7 +990,7 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 	defer cancel()
 	err = etlFS.Write(ctx, writeVec)
 	if err != nil {
-		err = errors.Join(err, context.Cause(ctx))
+		err = moerr.AttachCause(ctx, err)
 		logutil.Errorf("save profile %s failed. err:%v", profilePath, err)
 		return
 	}

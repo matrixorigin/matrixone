@@ -61,6 +61,7 @@ func main() {
 	defer cancel()
 
 	if err := st.Send(ctx, &message.ExampleMessage{MsgID: st.ID(), Content: "first message"}); err != nil {
+		err = moerr.AttachCause(ctx, err)
 		panic(err)
 	}
 

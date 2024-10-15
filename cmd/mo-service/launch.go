@@ -221,7 +221,7 @@ func waitHAKeeperReady(
 		defer cancel()
 		client, err := logservice.NewCNHAKeeperClient(ctx, service, cfg)
 		if err != nil {
-			err = errors.Join(err, context.Cause(ctx))
+			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("hakeeper not ready, err: %v", err)
 			return nil, err
 		}
@@ -252,7 +252,7 @@ func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
 	for {
 		state, err := client.GetClusterState(ctx)
 		if errors.Is(err, context.DeadlineExceeded) {
-			return errors.Join(err, context.Cause(ctx))
+			return moerr.AttachCause(ctx, err)
 		}
 		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
 			state.State != logpb.HAKeeperRunning {
@@ -275,7 +275,7 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 			details, err := client.GetClusterDetails(ctx)
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
-					err = errors.Join(err, context.Cause(ctx))
+					err = moerr.AttachCause(ctx, err)
 					logutil.Errorf("wait TN ready timeout: %s", err)
 					return false, err
 				}

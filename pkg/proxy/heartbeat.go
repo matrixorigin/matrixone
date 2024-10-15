@@ -54,6 +54,7 @@ func (s *Server) doHeartbeat(ctx context.Context) {
 		ConfigData:    s.configData.GetData(),
 	})
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		s.runtime.Logger().Error("failed to send heartbeat", zap.Error(err))
 	}
 	s.configData.DecrCount()

@@ -364,6 +364,7 @@ func (l *store) addReplica(shardID uint64, replicaID uint64,
 	for {
 		count++
 		if err := l.nh.SyncRequestAddReplica(ctx, shardID, replicaID, target, cci); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				l.retryWait()
 				continue
@@ -389,6 +390,7 @@ func (l *store) addNonVotingReplica(
 	for {
 		count++
 		if err := l.nh.SyncRequestAddNonVoting(ctx, shardID, replicaID, target, cci); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				l.retryWait()
 				continue
@@ -409,6 +411,7 @@ func (l *store) removeReplica(shardID uint64, replicaID uint64, cci uint64) erro
 	for {
 		count++
 		if err := l.nh.SyncRequestDeleteReplica(ctx, shardID, replicaID, cci); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				l.retryWait()
 				continue
@@ -1035,6 +1038,7 @@ func (l *store) hakeeperTick() {
 		defer cancel()
 		session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 		if _, err := l.propose(ctx, session, cmd); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			l.runtime.Logger().Error("propose tick failed", zap.Error(err))
 			return
 		}

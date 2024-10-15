@@ -209,6 +209,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 		}
 		cc, err := NewLogHAKeeperClient(ctx2, s.cfg.UUID, s.cfg.GetHAKeeperClientConfig())
 		if err != nil {
+			err = moerr.AttachCause(ctx2, err)
 			s.runtime.Logger().Error("failed to create HAKeeper client", zap.Error(err))
 			return
 		}
@@ -221,6 +222,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {
+		err = moerr.AttachCause(ctx2, err)
 		v2.LogHeartbeatFailureCounter.Inc()
 		s.runtime.Logger().Error("failed to send log service heartbeat", zap.Error(err))
 		return

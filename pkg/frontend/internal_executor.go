@@ -157,7 +157,12 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 		ses:    sess,
 	}
 	defer tempExecCtx.Close()
-	return doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	if err != nil {
+		err = moerr.AttachCause(ctx, err)
+		return err
+	}
+	return
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -178,6 +183,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	}
 	defer tempExecCtx.Close()
 	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	err = moerr.AttachCause(ctx, err)
 	res := ie.proto.swapOutResult()
 	res.err = err
 	return res

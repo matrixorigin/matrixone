@@ -178,6 +178,7 @@ func (a *allocator) doAllocate(act action) {
 		act.col,
 		act.count,
 		act.txnOp)
+	err = moerr.AttachCause(ctx, err)
 	if a.logger.Enabled(zap.DebugLevel) {
 		a.logger.Debug(
 			"allocate new range",
@@ -202,6 +203,7 @@ func (a *allocator) doUpdate(act action) {
 		act.col,
 		act.minValue,
 		act.txnOp)
+	err = moerr.AttachCause(ctx, err)
 	if a.logger.Enabled(zap.DebugLevel) {
 		a.logger.Debug(
 			"update range min value",

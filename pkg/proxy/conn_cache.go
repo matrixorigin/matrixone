@@ -299,6 +299,7 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		c.logger.Error("failed to send clear session request",
 			zap.Uint32("conn ID", sc.ConnID()), zap.Error(err))
 		return nil, err

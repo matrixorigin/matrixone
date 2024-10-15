@@ -100,6 +100,7 @@ func (l *store) setInitialClusterInfo(
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		l.runtime.Logger().Error("failed to propose initial cluster info", zap.Error(err))
 		return err
 	}
@@ -119,6 +120,7 @@ func (l *store) updateIDAlloc(count uint64) error {
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		l.runtime.Logger().Error("propose get id failed", zap.Error(err))
 		return err
 	}
@@ -211,6 +213,7 @@ func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
 			l.runtime.Logger().Debug("adding schedule command to hakeeper", zap.String("command", cmd.LogString()))
 		}
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			l.runtime.Logger().Error("failed to add schedule commands", zap.Error(err))
 			return
 		}
@@ -260,6 +263,7 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 			ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseLogServiceBootstrap)
 			defer cancel()
 			if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
+				err = moerr.AttachCause(ctx, err)
 				l.runtime.Logger().Error("failed to add schedule commands", zap.Error(err))
 				return err
 			}
@@ -321,7 +325,7 @@ func (l *store) setBootstrapState(success bool) error {
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	_, err := l.propose(ctx, session, cmd)
-	return err
+	return moerr.AttachCause(ctx, err)
 }
 
 func (l *store) getCheckerState() (*pb.CheckerState, error) {
@@ -329,7 +333,7 @@ func (l *store) getCheckerState() (*pb.CheckerState, error) {
 	defer cancel()
 	s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
 	if err != nil {
-		return &pb.CheckerState{}, err
+		return &pb.CheckerState{}, moerr.AttachCause(ctx, err)
 	}
 	return s.(*pb.CheckerState), nil
 }
@@ -356,6 +360,7 @@ func (l *store) setTaskTableUser(user pb.TaskTableUser) error {
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		l.runtime.Logger().Error("failed to propose task user info", zap.Error(err))
 		return err
 	}

@@ -130,6 +130,7 @@ func (s *service) canClaimDaemonTask(taskAccount string) bool {
 
 	state, err := s._hakeeperClient.GetClusterState(ctx)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		return false
 	}
 	stores := state.CNState.Stores
@@ -304,7 +305,7 @@ func (s *service) registerExecutorsLocked() {
 			defer cancel()
 			opts := executor.Options{}.WithWaitCommittedLogApplied()
 			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
-			return err
+			return moerr.AttachCause(ctx, err)
 		},
 	)
 
@@ -314,6 +315,7 @@ func (s *service) registerExecutorsLocked() {
 			executor.Options{}.WithWaitCommittedLogApplied())
 		cancel1()
 		if err != nil {
+			err = moerr.AttachCause(ctx1, err)
 			return err
 		}
 		accounts := make([]int32, 0)
@@ -332,7 +334,7 @@ func (s *service) registerExecutorsLocked() {
 			err = s.sqlExecutor.ExecTxn(ctx2, func(txn executor.TxnExecutor) error {
 				results, err := txn.Exec("select database_name, table_name, retention_deadline from mo_catalog.mo_retention", executor.StatementOption{})
 				if err != nil {
-					return err
+					return moerr.AttachCause(ctx2, err)
 				}
 
 				results.ReadRows(func(rows int, cols []*vector.Vector) bool {

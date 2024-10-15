@@ -87,14 +87,14 @@ func NewAwsSDKv2(
 
 	credentialProvider, err := args.credentialsProviderForAwsSDKv2(ctx)
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 
 	// validate
 	if credentialProvider != nil {
 		_, err := credentialProvider.Retrieve(ctx)
 		if err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 	}
 
@@ -108,7 +108,7 @@ func NewAwsSDKv2(
 	}
 	config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 
 	// options for s3 client
@@ -186,6 +186,7 @@ func NewAwsSDKv2(
 			Bucket: ptrTo(args.Bucket),
 		})
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			return nil, moerr.NewInternalErrorNoCtxf("bad s3 config: %v", err)
 		}
 	}

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -460,7 +459,7 @@ func saveMallocProfile() {
 	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*3, moerr.CauseSaveMallocProfileTimeout)
 	defer cancel()
 	if err := globalEtlFS.Write(ctx, writeVec); err != nil {
-		err = errors.Join(err, context.Cause(ctx))
+		err = moerr.AttachCause(ctx, err)
 		logutil.GetGlobalLogger().Error("failed to save malloc profile", zap.Error(err))
 	}
 }

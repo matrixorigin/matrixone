@@ -16,7 +16,6 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -268,7 +267,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 		if err != nil {
 			s.logger.Error("tenant task handle failed",
 				zap.Error(err))
-			return false, errors.Join(err, context.Cause(ctx))
+			return false, moerr.AttachCause(ctx, err)
 		}
 		return hasUpgradeTenants, nil
 	}

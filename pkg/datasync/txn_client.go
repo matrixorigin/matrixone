@@ -150,7 +150,7 @@ func (c *txnClient) getLatestCheckpoint(ctx context.Context) (*api.CheckpointRes
 		},
 	})
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 	defer result.Release()
 

@@ -16,7 +16,6 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -288,7 +287,7 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 				return err
 			},
 			opts)
-		return completed, errors.Join(err, context.Cause(ctx))
+		return completed, moerr.AttachCause(ctx, err)
 	}
 
 	timer := time.NewTimer(s.upgrade.checkUpgradeDuration)

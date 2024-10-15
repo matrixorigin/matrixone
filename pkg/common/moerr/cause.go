@@ -16,6 +16,7 @@ package moerr
 
 import (
 	"context"
+	"errors"
 )
 
 var (
@@ -286,3 +287,13 @@ var (
 	//pkg/vm/message
 	CauseReceiveMessage = NewInternalError(context.Background(), "ReceiveMessage")
 )
+
+func AttachCause(ctx context.Context, err error) error {
+	if err == nil {
+		return err
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		err = errors.Join(err, context.Cause(ctx))
+	}
+	return err
+}

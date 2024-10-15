@@ -921,7 +921,7 @@ func RegisterCdcExecutor(
 			taskservice.WithTaskIDCond(taskservice.EQ, T.GetID()),
 		)
 		if err != nil {
-			return err
+			return moerr.AttachCause(ctx1, err)
 		}
 		if len(tasks) != 1 {
 			return moerr.NewInternalErrorf(ctx, "invalid tasks count %d", len(tasks))

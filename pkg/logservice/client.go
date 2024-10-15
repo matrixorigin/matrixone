@@ -149,6 +149,7 @@ func NewStandbyClientWithRetry(
 		defer cancel()
 		lc, err := NewStandbyClient(ctx, sid, cfg)
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("failed to create logservice client: %v", err)
 			return err
 		}

@@ -400,7 +400,7 @@ func (op *operator) waitHAKeeperRunningLocked(
 	for {
 		state, err := client.GetClusterState(ctx)
 		if errors.Is(err, context.DeadlineExceeded) {
-			return err
+			return moerr.AttachCause(ctx, err)
 		}
 		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
 			state.State != logpb.HAKeeperRunning {
@@ -423,6 +423,7 @@ func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) 
 			details, err := client.GetClusterDetails(ctx)
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
+					err = moerr.AttachCause(ctx, err)
 					op.reset.logger.Error(
 						"wait TN ready timeout",
 						zap.Error(err),
@@ -462,6 +463,7 @@ func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, erro
 			op.cfg.HAKeeperClient,
 		)
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			op.reset.logger.Error(
 				"hakeeper not ready",
 				zap.Error(err),
@@ -476,7 +478,7 @@ func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, erro
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout")
+			return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"),moerr.CauseWaitHAKeeperReadyLocked2
 		default:
 			client, err := getClient()
 			if err == nil {
