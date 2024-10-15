@@ -94,25 +94,21 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, withoutOutput bool, processData []byte, err error) {
 	// if simpleRun is true, it indicates that this pipeline will not produce any output.
-	withoutOutput = false
+	withoutOutput = true
 
 	// if the last operator is a sender operator, we need to keep it in local for sending batch to its receivers correctly.
 	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
-		withoutOutput = true
-
+		withoutOutput = false
 		originRoot := s.RootOp
+		defer func() {
+			s.doSetRootOperator(originRoot)
+		}()
+
 		if originRoot.GetOperatorBase().NumChildren() == 0 {
 			s.RootOp = nil
 		} else {
 			s.RootOp = originRoot.GetOperatorBase().GetChildren(0)
 		}
-
-		// todo: I'm sure the following code to set nil for root operator's children is a bug.
-		//		but I got an operator release double once I remove it.
-		originRoot.GetOperatorBase().SetChildren(nil)
-		defer func() {
-			s.doSetRootOperator(originRoot)
-		}()
 	}
 
 	// Encode the ScopeList which need to be sent.
