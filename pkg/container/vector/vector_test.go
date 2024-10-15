@@ -2490,6 +2490,18 @@ func TestMisc(t *testing.T) {
 	require.True(t, vec.HasGrouping())
 	require.True(t, vec.GetGrouping().Contains(1))
 	require.True(t, vec.GetGrouping().Contains(3))
+
+	mp := mpool.MustNewZero()
+	vec2 := NewRollupConst(types.T_int8.ToType(), 1, mp)
+	defer vec2.Free(mp)
+	vec2.GetGrouping().Add(0)
+	vec3 := NewVec(types.T_int8.ToType())
+	defer vec3.Free(mp)
+	require.False(t, vec3.HasGrouping())
+	err := vec3.UnionOne(vec2, 0, mp)
+	require.NoError(t, err)
+	require.True(t, vec3.HasGrouping())
+	require.True(t, vec3.GetGrouping().Contains(0))
 }
 
 func BenchmarkUnmarshal(b *testing.B) {
