@@ -1659,3 +1659,8 @@ func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error)
 func (c *checkpointCleaner) GetSnapshotsLocked() (map[uint32]containers.Vector, error) {
 	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
 }
+func (c *checkpointCleaner) GetTablePK(tid uint64) string {
+	c.mutation.Lock()
+	defer c.mutation.Unlock()
+	return c.mutation.snapshotMeta.GetTablePK(tid)
+}

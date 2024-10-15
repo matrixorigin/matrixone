@@ -1452,6 +1452,13 @@ func (sm *SnapshotMeta) MergeTableInfo(
 	return nil
 }
 
+// for test
+func (sm *SnapshotMeta) GetTablePK(tid uint64) string {
+	sm.RLock()
+	defer sm.RUnlock()
+	return sm.tableIDIndex[tid].pk
+}
+
 func (sm *SnapshotMeta) String() string {
 	sm.RLock()
 	defer sm.RUnlock()
