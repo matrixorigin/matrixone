@@ -2534,6 +2534,157 @@ func TestMisc(t *testing.T) {
 	require.False(t, vec7.GetNulls().Contains(2))
 	require.Equal(t, 2, vec7.Length())
 
+	fixSizedTypes := []types.Type{
+		types.T_int8.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint8.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint64.ToType(),
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+		types.T_bool.ToType(),
+		types.T_bit.ToType(),
+		types.T_Rowid.ToType(),
+		types.T_TS.ToType(),
+		types.T_uuid.ToType(),
+		types.T_datetime.ToType(),
+		types.T_timestamp.ToType(),
+	}
+	for _, fType := range fixSizedTypes {
+		v1 := NewVec(fType)
+		v2 := NewVec(fType)
+		defer v1.Free(mp)
+		defer v2.Free(mp)
+		switch fType.Oid {
+		case types.T_int8:
+			vals := make([]int8, 2)
+			err = AppendFixedList[int8](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int8, 3)
+			err = AppendFixedList[int8](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_int16:
+			vals := make([]int16, 2)
+			err = AppendFixedList[int16](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int16, 3)
+			err = AppendFixedList[int16](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_int32:
+			vals := make([]int32, 2)
+			err = AppendFixedList[int32](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int32, 3)
+			err = AppendFixedList[int32](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_int64:
+			vals := make([]int64, 2)
+			err = AppendFixedList[int64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int64, 3)
+			err = AppendFixedList[int64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_uint8:
+			vals := make([]uint8, 2)
+			err = AppendFixedList[uint8](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint8, 3)
+			err = AppendFixedList[uint8](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_uint16:
+			vals := make([]uint16, 2)
+			err = AppendFixedList[uint16](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint16, 3)
+			err = AppendFixedList[uint16](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_uint32:
+			vals := make([]uint32, 2)
+			err = AppendFixedList[uint32](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint32, 3)
+			err = AppendFixedList[uint32](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_uint64:
+			vals := make([]uint64, 2)
+			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint64, 3)
+			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_float32:
+			vals := make([]float32, 2)
+			err = AppendFixedList[float32](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]float32, 3)
+			err = AppendFixedList[float32](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_float64:
+			vals := make([]float64, 2)
+			err = AppendFixedList[float64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]float64, 3)
+			err = AppendFixedList[float64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_bool:
+			vals := make([]bool, 2)
+			err = AppendFixedList[bool](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]bool, 3)
+			err = AppendFixedList[bool](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_bit:
+			vals := make([]uint64, 2)
+			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint64, 3)
+			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_Rowid:
+			vals := make([]types.Rowid, 2)
+			err = AppendFixedList[types.Rowid](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Rowid, 3)
+			err = AppendFixedList[types.Rowid](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_TS:
+			vals := make([]types.TS, 2)
+			err = AppendFixedList[types.TS](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.TS, 3)
+			err = AppendFixedList[types.TS](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_uuid:
+			vals := make([]types.Uuid, 2)
+			err = AppendFixedList[types.Uuid](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Uuid, 3)
+			err = AppendFixedList[types.Uuid](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_datetime:
+			vals := make([]types.Datetime, 2)
+			err = AppendFixedList[types.Datetime](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Datetime, 3)
+			err = AppendFixedList[types.Datetime](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		case types.T_timestamp:
+			vals := make([]types.Timestamp, 2)
+			err = AppendFixedList[types.Timestamp](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Timestamp, 3)
+			err = AppendFixedList[types.Timestamp](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+		}
+		union := GetUnionAllFunction(fType, mp)
+		err = union(v1, v2)
+		require.NoError(t, err)
+		require.Equal(t, 5, v1.Length())
+		require.Equal(t, 5, v1.GetNulls().Count())
+	}
 }
 
 func BenchmarkUnmarshal(b *testing.B) {
