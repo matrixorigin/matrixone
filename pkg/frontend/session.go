@@ -174,6 +174,8 @@ type Session struct {
 	// sentRows used to record rows it sent to client for motrace.StatementInfo.
 	// If there is NO exec_plan, sentRows will be 0.
 	sentRows atomic.Int64
+	// writeBytes count of bytes send back to client.
+	writeBytes int
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
 	// packetCounter count the tcp packet send to client.
@@ -429,13 +431,15 @@ func (ses *Session) CountPayload(length int) {
 	}
 	ses.payloadCounter += int64(length)
 }
-func (ses *Session) CountPacket(delta int64) {
+
+// CountFlushPackage count the raw conn flush op.
+func (ses *Session) CountFlushPackage(delta int64) {
 	if ses == nil {
 		return
 	}
 	ses.packetCounter.Add(delta)
 }
-func (ses *Session) GetPacketCnt() int64 {
+func (ses *Session) GetFlushPacketCnt() int64 {
 	if ses == nil {
 		return 0
 	}
@@ -447,6 +451,16 @@ func (ses *Session) ResetPacketCounter() {
 	}
 	ses.packetCounter.Store(0)
 	ses.payloadCounter = 0
+	ses.writeBytes = 0
+}
+func (ses *Session) CountOutputBytes(delta int) {
+	if ses == nil {
+		return
+	}
+	ses.writeBytes += delta
+}
+func (ses *Session) GetOutputBytes() int {
+	return ses.writeBytes
 }
 
 // SetTStmt do set the Session.tStmt
@@ -605,7 +619,6 @@ func (ses *Session) Close() {
 	ses.ep = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler.Close()
-		ses.txnHandler = nil
 	}
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.execCtx = nil
@@ -776,8 +789,9 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 	ses.EnterFPrint(FPGetShareTxnBackgroundExec)
 	defer ses.ExitFPrint(FPGetShareTxnBackgroundExec)
 	var txnOp TxnOperator
-	if ses.GetTxnHandler() != nil {
-		txnOp = ses.GetTxnHandler().GetTxn()
+	txnHandle := ses.GetTxnHandler()
+	if txnHandle != nil {
+		txnOp = txnHandle.GetTxn()
 	}
 
 	var callback outputCallBackFunc
@@ -1091,7 +1105,7 @@ func (ses *Session) SetUserName(uname string) {
 func (ses *Session) GetConnectionID() uint32 {
 	protocol := ses.GetResponser()
 	if protocol != nil {
-		return ses.GetResponser().GetU32(CONNID)
+		return protocol.GetU32(CONNID)
 	}
 	return 0
 }
@@ -1099,13 +1113,14 @@ func (ses *Session) GetConnectionID() uint32 {
 func (ses *Session) SetConnectionID(v uint32) {
 	protocol := ses.GetResponser()
 	if protocol != nil {
-		ses.GetResponser().SetU32(CONNID, v)
+		protocol.SetU32(CONNID, v)
 	}
 }
 
 func (ses *Session) skipAuthForSpecialUser() bool {
-	if ses.GetTenantInfo() != nil {
-		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
+	acc := ses.GetTenantInfo()
+	if acc != nil {
+		ok, _, _ := isSpecialUser(acc.GetUser())
 		return ok
 	}
 	return false
@@ -1716,8 +1731,9 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
 	nodeCtx := cancelRequestCtx
-	if ses.getRoutineManager() != nil && ses.getRoutineManager().baseService != nil {
-		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, ses.getRoutineManager().baseService.ID())
+	rm := ses.getRoutineManager()
+	if rm != nil && rm.baseService != nil {
+		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, rm.baseService.ID())
 	}
 	ctx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 

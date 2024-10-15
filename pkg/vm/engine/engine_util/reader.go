@@ -40,12 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
-const (
-	SMALL = iota
-	NORMAL
-	LARGE
-)
-
 // -----------------------------------------------------------------
 // ------------------------ withFilterMixin ------------------------
 // -----------------------------------------------------------------
@@ -230,12 +224,8 @@ type reader struct {
 
 	memFilter MemPKFilter
 
-	scanType   int
-	cacheBatch *batch.Batch
-}
-
-func (r *reader) SetScanType(typ int) {
-	r.scanType = typ
+	cacheBatch   *batch.Batch
+	readBlockCnt uint64
 }
 
 type mergeReader struct {
@@ -443,9 +433,10 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.scanType == LARGE || r.scanType == NORMAL {
+	if r.readBlockCnt > 100 {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
+	r.readBlockCnt++
 
 	if r.cacheBatch == nil {
 		cacheBatch := batch.EmptyBatchWithSize(len(r.columns.seqnums) + 1)

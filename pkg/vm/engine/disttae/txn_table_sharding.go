@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -495,7 +497,6 @@ type shardingLocalReader struct {
 	//relation data to distribute to remote CN which holds shard's partition state.
 	remoteRelData         engine.RelData
 	remoteTombApplyPolicy engine.TombstoneApplyPolicy
-	remoteScanType        int
 }
 
 // TODO::
@@ -514,6 +515,15 @@ func (r *shardingLocalReader) Read(
 		if err != nil || isEnd {
 			r.close()
 		}
+		//for test issue-19202
+		logutil.Infof("xxxx shardingLocalReader read, "+
+			"txn:%s, table:%s, isEnd:%v,err:%v, bat:%s, state:%v",
+			r.tblDelegate.origin.db.op.Txn().DebugString(),
+			r.tblDelegate.origin.tableName,
+			isEnd,
+			err,
+			common.MoBatchToString(bat, 10),
+			r.iteratePhase)
 	}()
 
 	for {
@@ -543,7 +553,6 @@ func (r *shardingLocalReader) Read(
 				func(param *shard.ReadParam) {
 					param.ReaderBuildParam.RelData = relData
 					param.ReaderBuildParam.Expr = expr
-					param.ReaderBuildParam.ScanType = int32(r.remoteScanType)
 					param.ReaderBuildParam.TombstoneApplyPolicy = int32(r.remoteTombApplyPolicy)
 				},
 				func(resp []byte) {
@@ -692,7 +701,6 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		}
 	}
 
-	scanType := determineScanType(relData, newNum)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
 	current := 0
@@ -711,7 +719,6 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		srd := &shardingLocalReader{
 			tblDelegate:           tbl,
 			remoteTombApplyPolicy: engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3,
-			remoteScanType:        scanType,
 		}
 
 		if localRelData.DataCnt() > 0 {
@@ -737,7 +744,6 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 			if err != nil {
 				return nil, err
 			}
-			lrd.SetScanType(scanType)
 			srd.lrd = lrd
 		}
 
