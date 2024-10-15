@@ -191,11 +191,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
-		if err = GetCompileService().recordRunningCompile(runCompile); err != nil {
-			return err
-		}
+		GetCompileService().recordRunningCompile(runCompile, runCompile.proc.GetTxnOperator())
 		defer func() {
-			_, _ = GetCompileService().removeRunningCompile(runCompile)
+			GetCompileService().removeRunningCompile(runCompile, runCompile.proc.GetTxnOperator())
 		}()
 
 		err = s.MergeRun(runCompile)
@@ -380,7 +378,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}
 
-	c := GetCompileService().getCompile(proc)
+	c := allocateNewCompile(proc)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
