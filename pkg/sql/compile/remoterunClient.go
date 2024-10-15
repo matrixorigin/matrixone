@@ -99,16 +99,21 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, wit
 	// if the last operator is a sender operator, we need to keep it in local for sending batch to its receivers correctly.
 	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
 		withoutOutput = false
-		originRoot := s.RootOp
-		defer func() {
-			s.doSetRootOperator(originRoot)
-		}()
 
+		originRoot := s.RootOp
 		if originRoot.GetOperatorBase().NumChildren() == 0 {
 			s.RootOp = nil
 		} else {
 			s.RootOp = originRoot.GetOperatorBase().GetChildren(0)
 		}
+
+		// todo: the following code to set children to nil must be a bug.
+		// 		but I kept it here because there will be an operator release twice bug once I remove this code.
+		//		I cannot find it why, maybe two scopes hold the same operator list pointer.
+		originRoot.GetOperatorBase().SetChildren(nil)
+		defer func() {
+			s.doSetRootOperator(originRoot)
+		}()
 	}
 
 	// Encode the ScopeList which need to be sent.
