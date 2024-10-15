@@ -205,10 +205,12 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyzer pr
 			ctr.rbat = batch.NewWithSize(len(ap.Result))
 
 			for i, pos := range ap.Result {
-				ctr.rbat.Vecs[i] = vector.NewVec(ap.RightTypes[pos])
+				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[pos])
 			}
 		}
-
+		if err := ctr.rbat.PreExtend(proc.Mp(), len(sels)); err != nil {
+			return false, err
+		}
 		for j, pos := range ap.Result {
 			for _, sel := range sels {
 				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
@@ -219,15 +221,18 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyzer pr
 		}
 		ctr.rbat.AddRowCount(len(sels))
 
-		ap.ctr.buf = []*batch.Batch{ctr.rbat}
+		ctr.buf = []*batch.Batch{ctr.rbat}
 		return false, nil
 	} else {
 		n := (len(sels)-1)/colexec.DefaultBatchSize + 1
-		ap.ctr.buf = make([]*batch.Batch, n)
+		ctr.buf = make([]*batch.Batch, n)
 		for k := range ap.ctr.buf {
-			ap.ctr.buf[k] = batch.NewWithSize(len(ap.Result))
+			ctr.buf[k] = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
-				ap.ctr.buf[k].Vecs[i] = vector.NewVec(ap.RightTypes[pos])
+				ctr.buf[k].Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[pos])
+			}
+			if err := ctr.buf[k].PreExtend(proc.Mp(), colexec.DefaultBatchSize); err != nil {
+				return false, err
 			}
 			var newsels []int32
 			if (k+1)*colexec.DefaultBatchSize <= len(sels) {
@@ -243,7 +248,7 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyzer pr
 					}
 				}
 			}
-			ap.ctr.buf[k].SetRowCount(len(newsels))
+			ctr.buf[k].SetRowCount(len(newsels))
 		}
 		return false, nil
 	}
