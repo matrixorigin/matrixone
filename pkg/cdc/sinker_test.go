@@ -90,14 +90,14 @@ func TestNewSinker(t *testing.T) {
 	})
 	defer sinkStub.Reset()
 
-	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef, _ *ActiveRoutine) Sinker {
+	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef, _ *ActiveRoutine, _ bool) Sinker {
 		return nil
 	})
 	defer sinkerStub.Reset()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar)
+			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, true)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewSinker(%v, %v, %v, %v, %v, %v)", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -319,7 +319,7 @@ func TestNewMysqlSinker(t *testing.T) {
 			Names: []string{"pk"},
 		},
 	}
-	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine())
+	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), true)
 }
 
 func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
@@ -435,6 +435,8 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	sink := &mysqlSink{
 		user:          "root",
@@ -469,7 +471,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 		},
 	}
 
-	sinker := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, NewCdcActiveRoutine())
+	sinker := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, NewCdcActiveRoutine(), true)
 
 	packerPool := fileservice.NewPool(
 		128,
