@@ -167,8 +167,6 @@ func NewFlushTableTailTask(
 	}
 	task.schema = rel.Schema(false).(*catalog.Schema)
 
-	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
-
 	for _, obj := range objs {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
 		var hdl handle.Object
@@ -231,7 +229,7 @@ func NewFlushTableTailTask(
 		}
 	}
 
-	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
+	task.BaseTask = tasks.NewBaseTask(task, tasks.FlushTableTailTask, ctx)
 
 	task.createAt = time.Now()
 	return

@@ -112,7 +112,7 @@ func NewCompile(
 	cnLabel map[string]string,
 	startAt time.Time,
 ) *Compile {
-	c := GetCompileService().getCompile(proc)
+	c := allocateNewCompile(proc)
 
 	c.e = e
 	c.db = db
@@ -145,7 +145,7 @@ func (c *Compile) Release() {
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 	}
-	GetCompileService().putCompile(c)
+	releaseCompile(c)
 }
 
 func (c Compile) TypeName() string {
@@ -423,37 +423,36 @@ func (c *Compile) printPipeline() {
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
 */
-// run once
-func (c *Compile) runOnce() error {
-	var wg sync.WaitGroup
-	err := c.lockMetaTables()
-	if err != nil {
+
+// prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
+//
+// for example
+// 1. lock table.
+// 2. init data source.
+func (c *Compile) prePipelineInitializer() (err error) {
+	// do table lock.
+	if err = c.lockMetaTables(); err != nil {
+		return err
+	}
+	if err = c.lockTable(); err != nil {
 		return err
 	}
 
-	err = c.lockTable()
-	if err != nil {
-		return err
-	}
-
+	// init data source.
 	for _, s := range c.scopes {
-		err = s.InitAllDataSource(c)
-		if err != nil {
+		if err = s.InitAllDataSource(c); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
-	if err = GetCompileService().recordRunningCompile(c); err != nil {
-		return err
-	}
-	defer func() {
-		_, _ = GetCompileService().removeRunningCompile(c)
-	}()
-
-	//c.printPipeline()
+// run once
+func (c *Compile) runOnce() (err error) {
+	var wg sync.WaitGroup
 
 	if c.execType == plan2.ExecTypeTP && len(c.scopes) == 1 {
-		if err := c.run(c.scopes[0]); err != nil {
+		if err = c.run(c.scopes[0]); err != nil {
 			return err
 		}
 	} else {
