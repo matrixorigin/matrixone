@@ -267,10 +267,10 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int64 {
 		}
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
-		for row, v := range groupByCol {
+		for row := range groupByCol {
 			var regIndex uint64 = 0
 			if !groupByVec.IsNull(uint64(row)) {
-				regIndex = plan2.SimpleCharHashToRange(v.GetByteSlice(area), lenRegs)
+				regIndex = plan2.SimpleCharHashToRange(groupByCol[row].GetByteSlice(area), lenRegs)
 			}
 			sels[regIndex] = append(sels[regIndex], int64(row))
 		}
@@ -323,8 +323,8 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int64 {
 		}
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.SimpleCharHashToRange(v.GetByteSlice(area), bucketNum)
+		for row := range groupByCol {
+			regIndex := plan2.SimpleCharHashToRange(groupByCol[row].GetByteSlice(area), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int64(row))
 		}
 	default:

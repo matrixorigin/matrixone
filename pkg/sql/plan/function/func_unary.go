@@ -1372,7 +1372,7 @@ func ICULIBVersion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 func LastInsertID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
-		return proc.GetSessionInfo().LastInsertID
+		return proc.GetLastInsertID()
 	})
 }
 
