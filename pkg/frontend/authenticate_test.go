@@ -7427,8 +7427,7 @@ type MockBaseService struct {
 }
 
 func (m *MockBaseService) ID() string {
-	//TODO implement me
-	panic("implement me")
+	return "mock base service"
 }
 
 func (m *MockBaseService) SQLAddress() string {
