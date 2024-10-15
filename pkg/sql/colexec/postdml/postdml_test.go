@@ -220,6 +220,45 @@ func TestGetAny(t *testing.T) {
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+	{ // int16
+		mp := mpool.MustNewZero()
+		w := vector.NewVec(types.T_uint16.ToType())
+		err := vector.AppendFixedList(w, []uint16{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s, err := GetAnyAsString(w, 0)
+		require.NoError(t, err)
+		require.Equal(t, "1", s)
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int32
+		mp := mpool.MustNewZero()
+		w := vector.NewVec(types.T_uint32.ToType())
+		err := vector.AppendFixedList(w, []uint32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s, err := GetAnyAsString(w, 0)
+		require.NoError(t, err)
+		require.Equal(t, "1", s)
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int64
+		mp := mpool.MustNewZero()
+		w := vector.NewVec(types.T_uint64.ToType())
+		err := vector.AppendFixedList(w, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s, err := GetAnyAsString(w, 0)
+		require.NoError(t, err)
+		require.Equal(t, "1", s)
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
 	{ // text
 		mp := mpool.MustNewZero()
 		v := vector.NewVec(types.T_text.ToType())
