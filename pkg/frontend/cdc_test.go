@@ -2567,6 +2567,9 @@ func TestCdcTask_Resume(t *testing.T) {
 			name: "t1",
 			fields: fields{
 				activeRoutine: cdc2.NewCdcActiveRoutine(),
+				cdcTask: &task.CreateCdcDetails{
+					TaskName: "task1",
+				},
 			},
 		},
 	}
@@ -2646,6 +2649,9 @@ func TestCdcTask_Restart(t *testing.T) {
 					"taskID-0",
 					tie,
 				),
+				cdcTask: &task.CreateCdcDetails{
+					TaskName: "task1",
+				},
 			},
 		},
 	}
@@ -2679,6 +2685,9 @@ func TestCdcTask_Restart(t *testing.T) {
 func TestCdcTask_Pause(t *testing.T) {
 	cdc := &CdcTask{
 		activeRoutine: cdc2.NewCdcActiveRoutine(),
+		cdcTask: &task.CreateCdcDetails{
+			TaskName: "task1",
+		},
 	}
 	err := cdc.Pause()
 	assert.NoErrorf(t, err, "Pause()")
@@ -2705,6 +2714,9 @@ func TestCdcTask_Cancel(t *testing.T) {
 			"taskID-1",
 			tie,
 		),
+		cdcTask: &task.CreateCdcDetails{
+			TaskName: "task1",
+		},
 		holdCh: ch,
 	}
 	err = cdc.Cancel()
