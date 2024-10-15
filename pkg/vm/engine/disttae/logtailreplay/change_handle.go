@@ -18,10 +18,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	goSort "sort"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 
@@ -80,6 +82,7 @@ const (
 	CoarseMaxRow        = 8192
 
 	LoadParallism = 20
+	LogThreshold  = time.Minute
 )
 
 type BatchHandle struct {
@@ -89,13 +92,16 @@ type BatchHandle struct {
 	batches     *batch.Batch
 	batchLength int
 	ctx         context.Context
+
+	baseHandle *baseHandle
 }
 
-func NewRowHandle(data *batch.Batch, mp *mpool.MPool, ctx context.Context) (handle *BatchHandle) {
+func NewRowHandle(data *batch.Batch, mp *mpool.MPool, baseHandle *baseHandle, ctx context.Context) (handle *BatchHandle) {
 	handle = &BatchHandle{
-		mp:      mp,
-		batches: data,
-		ctx:     ctx,
+		mp:         mp,
+		batches:    data,
+		ctx:        ctx,
+		baseHandle: baseHandle,
 	}
 	if data != nil {
 		handle.batchLength = data.Vecs[0].Length()
@@ -160,6 +166,7 @@ func (r *BatchHandle) QuickNext(data **batch.Batch, mp *mpool.MPool) (err error)
 }
 
 func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (err error) {
+	t0 := time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(0)
 		(*bat).Attrs = append((*bat).Attrs, r.batches.Attrs...)
@@ -175,6 +182,7 @@ func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (
 			appendFromEntry(r.batches.Vecs[i], vec, r.rowOffsetCursor, mp)
 		}
 	}
+	r.baseHandle.changesHandle.copyDuration += time.Since(t0)
 	return
 }
 
@@ -202,6 +210,7 @@ func NewCNObjectHandle(isTombstone bool, objects []*ObjectEntry, fs fileservice.
 	}
 }
 func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
+	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
 	for i := 0; i < LoadParallism; i++ {
 		if h.objectOffsetCursor >= len(h.objects) {
@@ -221,12 +230,14 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		res := job.GetResult()
 		if res.Err != nil {
 			err = res.Err
+			h.base.changesHandle.readDuration += time.Since(t0)
 			return
 		}
 		putJob(job)
 		bat := res.Res.(*batch.Batch)
 		h.cache = append(h.cache, bat)
 	}
+	h.base.changesHandle.readDuration += time.Since(t0)
 	return
 }
 func (h *CNObjectHandle) isEnd() bool {
@@ -249,6 +260,7 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 	ts := h.TSs[0]
 	h.cache = h.cache[1:]
 	h.TSs = h.TSs[1:]
+	t0 := time.Now()
 	if h.isTombstone {
 		updateCNTombstoneBatch(
 			data,
@@ -262,6 +274,8 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 			h.mp,
 		)
 	}
+	h.base.changesHandle.updateDuration += time.Since(t0)
+	t0 = time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(0)
 		(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
@@ -282,6 +296,7 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		src := data.Vecs[i]
 		vec.Union(src, sels, mp)
 	}
+	h.base.changesHandle.copyDuration += time.Since(t0)
 	return
 }
 
@@ -328,6 +343,7 @@ func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, star
 	return handle
 }
 func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
+	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
 	for i := 0; i < LoadParallism; i++ {
 		if h.objectOffsetCursor >= len(h.objects) {
@@ -342,12 +358,14 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		res := job.GetResult()
 		if res.Err != nil {
 			err = res.Err
+			h.p.changesHandle.readDuration += time.Since(t0)
 			return
 		}
 		putJob(job)
 		bat := res.Res.(*batch.Batch)
 		h.cache = append(h.cache, bat)
 	}
+	h.p.changesHandle.readDuration += time.Since(t0)
 	return
 }
 func (h *AObjectHandle) init(ctx context.Context, quick bool) (err error) {
@@ -378,11 +396,13 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 		}
 		h.currentBatch = h.cache[0]
 		h.cache = h.cache[1:]
+		t0 := time.Now()
 		if h.isTombstone {
 			updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, h.mp)
 		} else {
 			updateDataBatch(h.currentBatch, h.start, h.end, h.mp)
 		}
+		h.p.changesHandle.updateDuration += time.Since(t0)
 		h.batchLength = h.currentBatch.Vecs[0].Length()
 		if h.batchLength > 0 {
 			return
@@ -414,12 +434,14 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 	if h.isEnd() && h.rowOffsetCursor >= h.batchLength {
 		return moerr.GetOkExpectedEOF()
 	}
+	t0 := time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(len(h.currentBatch.Vecs))
 		(*bat).Attrs = append((*bat).Attrs, h.currentBatch.Attrs...)
 		for i, vec := range h.currentBatch.Vecs {
 			newVec, err := vec.CloneWindow(start, end, mp)
 			if err != nil {
+				h.p.changesHandle.copyDuration += time.Since(t0)
 				return err
 			}
 			(*bat).Vecs[i] = newVec
@@ -429,6 +451,7 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 			appendFromEntry(h.currentBatch.Vecs[i], vec, h.rowOffsetCursor, mp)
 		}
 	}
+	h.p.changesHandle.copyDuration += time.Since(t0)
 	h.rowOffsetCursor = end
 	if h.rowOffsetCursor >= h.batchLength {
 		h.currentBatch.Clean(h.mp)
@@ -604,7 +627,7 @@ func (p *baseHandle) newBatchHandleWithRowIterator(ctx context.Context, iter btr
 	if bat == nil {
 		return nil
 	}
-	h = NewRowHandle(bat, mp, ctx)
+	h = NewRowHandle(bat, mp, p, ctx)
 	return
 }
 func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[RowEntry], start, end types.TS, tombstone bool, mp *mpool.MPool) (bat *batch.Batch) {
@@ -665,6 +688,11 @@ type ChangeHandler struct {
 	coarseMaxRow    int
 	quick           bool
 	scheduler       tasks.JobScheduler
+
+	readDuration, copyDuration    time.Duration
+	updateDuration, totalDuration time.Duration
+	dataLength, tombstoneLength   int
+	lastPrint                     time.Time
 }
 
 func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (changeHandle *ChangeHandler, err error) {
@@ -737,9 +765,24 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 	return
 }
 func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	if time.Since(p.lastPrint) > LogThreshold {
+		p.lastPrint = time.Now()
+		if p.dataLength != 0 || p.tombstoneLength != 0 {
+			logutil.Infof("ChangesHandle-Slow-Next, %d/%d, read %v, copy %v, update %v, total %v",
+				p.dataLength, p.tombstoneLength, p.readDuration, p.copyDuration, p.updateDuration, p.totalDuration)
+		}
+	}
 	hint = engine.ChangesHandle_Tail_done
+	t0 := time.Now()
 	if p.quick {
 		data, tombstone, err = p.quickNext(ctx, mp)
+		p.totalDuration += time.Since(t0)
+		if data != nil {
+			p.dataLength += data.Vecs[0].Length()
+		}
+		if tombstone != nil {
+			p.tombstoneLength += tombstone.Vecs[0].Length()
+		}
 		return
 	}
 	for {
@@ -748,19 +791,47 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
 			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow {
+				p.totalDuration += time.Since(t0)
+				if data != nil {
+					p.dataLength += data.Vecs[0].Length()
+				}
+				if tombstone != nil {
+					p.tombstoneLength += tombstone.Vecs[0].Length()
+				}
 				return
 			}
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
 			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow {
+				p.totalDuration += time.Since(t0)
+				if data != nil {
+					p.dataLength += data.Vecs[0].Length()
+				}
+				if tombstone != nil {
+					p.tombstoneLength += tombstone.Vecs[0].Length()
+				}
 				return
 			}
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
+			p.totalDuration += time.Since(t0)
+			if data != nil {
+				p.dataLength += data.Vecs[0].Length()
+			}
+			if tombstone != nil {
+				p.tombstoneLength += tombstone.Vecs[0].Length()
+			}
 			return
 		}
 		if err != nil {
+			p.totalDuration += time.Since(t0)
+			if data != nil {
+				p.dataLength += data.Vecs[0].Length()
+			}
+			if tombstone != nil {
+				p.tombstoneLength += tombstone.Vecs[0].Length()
+			}
 			return
 		}
 	}
