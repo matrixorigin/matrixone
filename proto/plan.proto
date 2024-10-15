@@ -984,13 +984,10 @@ message DeleteCtx {
 }
 
 message PostDmlFullTextCtx {
-	bool is_delete = 1;
-	bool is_insert = 2;
-	string source_table_name = 3;
-	string index_table_name = 4;
-	repeated string parts = 5;
-	string algo_params = 6;
-	bool is_delete_without_filters = 7;
+	string source_table_name = 1;
+	string index_table_name = 2;
+	repeated string parts = 3;
+	string algo_params = 4;
 }
 
 message PostDmlCtx {
@@ -998,7 +995,10 @@ message PostDmlCtx {
 	bool add_affected_rows 	= 2;
 	int32 primary_key_idx = 3;
 	string primary_key_name = 4;
-	PostDmlFullTextCtx full_text = 5;
+	bool is_delete = 5;
+	bool is_insert = 6;
+	bool is_delete_without_filters = 7;
+	PostDmlFullTextCtx full_text = 8;
 }
 
 message Query {

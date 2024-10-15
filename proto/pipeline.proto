@@ -184,7 +184,10 @@ message PostDml {
   bool add_affected_rows = 2;
   int32 primary_key_idx = 3;
   string primary_key_name = 4;
-  plan.PostDmlFullTextCtx full_text = 5;
+  bool is_delete = 5;
+  bool is_insert = 6;
+  bool is_delete_without_filters = 7;
+  plan.PostDmlFullTextCtx full_text = 8;
 }
 
 message LockTarget {

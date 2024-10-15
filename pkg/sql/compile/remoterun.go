@@ -823,21 +823,21 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *postdml.PostDml:
 		in.PostDml = &pipeline.PostDml{
-			AddAffectedRows: t.PostDmlCtx.AddAffectedRows,
-			Ref:             t.PostDmlCtx.Ref,
-			PrimaryKeyIdx:   t.PostDmlCtx.PrimaryKeyIdx,
-			PrimaryKeyName:  t.PostDmlCtx.PrimaryKeyName,
+			AddAffectedRows:        t.PostDmlCtx.AddAffectedRows,
+			Ref:                    t.PostDmlCtx.Ref,
+			PrimaryKeyIdx:          t.PostDmlCtx.PrimaryKeyIdx,
+			PrimaryKeyName:         t.PostDmlCtx.PrimaryKeyName,
+			IsDelete:               t.PostDmlCtx.IsDelete,
+			IsInsert:               t.PostDmlCtx.IsInsert,
+			IsDeleteWithoutFilters: t.PostDmlCtx.IsDeleteWithoutFilters,
 		}
 		if t.PostDmlCtx.FullText != nil {
 			ft := t.PostDmlCtx.FullText
 			fulltext := &plan.PostDmlFullTextCtx{
-				IsDelete:               ft.IsDelete,
-				IsInsert:               ft.IsInsert,
-				SourceTableName:        ft.SourceTableName,
-				IndexTableName:         ft.IndexTableName,
-				Parts:                  ft.Parts,
-				AlgoParams:             ft.AlgoParams,
-				IsDeleteWithoutFilters: ft.IsDeleteWithoutFilters,
+				SourceTableName: ft.SourceTableName,
+				IndexTableName:  ft.IndexTableName,
+				Parts:           ft.Parts,
+				AlgoParams:      ft.AlgoParams,
 			}
 			in.PostDml.FullText = fulltext
 		}
@@ -1313,22 +1313,22 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetPostDml()
 		arg := postdml.NewArgument()
 		arg.PostDmlCtx = &postdml.PostDmlCtx{
-			Ref:             t.Ref,
-			AddAffectedRows: t.AddAffectedRows,
-			PrimaryKeyIdx:   t.PrimaryKeyIdx,
-			PrimaryKeyName:  t.PrimaryKeyName,
+			Ref:                    t.Ref,
+			AddAffectedRows:        t.AddAffectedRows,
+			PrimaryKeyIdx:          t.PrimaryKeyIdx,
+			PrimaryKeyName:         t.PrimaryKeyName,
+			IsDelete:               t.IsDelete,
+			IsInsert:               t.IsInsert,
+			IsDeleteWithoutFilters: t.IsDeleteWithoutFilters,
 		}
 
 		if t.FullText != nil {
 			ft := t.FullText
 			fulltext := &postdml.PostDmlFullTextCtx{
-				IsDelete:               ft.IsDelete,
-				IsInsert:               ft.IsInsert,
-				SourceTableName:        ft.SourceTableName,
-				IndexTableName:         ft.IndexTableName,
-				Parts:                  ft.Parts,
-				AlgoParams:             ft.AlgoParams,
-				IsDeleteWithoutFilters: ft.IsDeleteWithoutFilters,
+				SourceTableName: ft.SourceTableName,
+				IndexTableName:  ft.IndexTableName,
+				Parts:           ft.Parts,
+				AlgoParams:      ft.AlgoParams,
 			}
 			arg.PostDmlCtx.FullText = fulltext
 		}

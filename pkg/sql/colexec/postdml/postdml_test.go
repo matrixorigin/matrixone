@@ -9,7 +9,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -64,9 +63,9 @@ func TestFullText(t *testing.T) {
 			},
 			PrimaryKeyIdx:  1,
 			PrimaryKeyName: "pk",
+			IsDelete:       true,
+			IsInsert:       true,
 			FullText: &PostDmlFullTextCtx{
-				IsDelete:        true,
-				IsInsert:        true,
 				SourceTableName: "src",
 				IndexTableName:  "index_tblan",
 				Parts:           []string{"body", "title"},
@@ -89,7 +88,10 @@ func TestFullText(t *testing.T) {
 	_, err = arg.Call(proc)
 	require.NoError(t, err)
 
-	logutil.Infof("%v", proc.Base.PostDmlSqlList)
+	sql := []string{"DELETE FROM `testDb`.`index_tblan` WHERE doc_id IN (1,1000)",
+		"INSERT INTO `testDb`.`index_tblan` SELECT f.* FROM `testDb`.`src` as src CROSS APPLY fulltext_index_tokenize('', src.pk, src.body, src.title) as f WHERE src.pk IN (1,1000)"}
+
+	require.Equal(t, sql, proc.Base.PostDmlSqlList)
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())

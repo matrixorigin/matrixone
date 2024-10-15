@@ -70,20 +70,20 @@ func (postdml *PostDml) Release() {
 }
 
 type PostDmlFullTextCtx struct {
-	IsDelete               bool
-	IsInsert               bool
-	SourceTableName        string
-	IndexTableName         string
-	Parts                  []string
-	AlgoParams             string
-	IsDeleteWithoutFilters bool
+	SourceTableName string
+	IndexTableName  string
+	Parts           []string
+	AlgoParams      string
 }
 
 type PostDmlCtx struct {
-	Ref             *plan.ObjectRef
-	AddAffectedRows bool
-	PrimaryKeyIdx   int32
-	PrimaryKeyName  string
+	Ref                    *plan.ObjectRef
+	AddAffectedRows        bool
+	PrimaryKeyIdx          int32
+	PrimaryKeyName         string
+	IsDelete               bool
+	IsInsert               bool
+	IsDeleteWithoutFilters bool
 
 	// define various context for different tasks
 	FullText *PostDmlFullTextCtx

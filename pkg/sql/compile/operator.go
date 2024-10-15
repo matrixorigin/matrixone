@@ -1925,21 +1925,21 @@ func exprRelPos(expr *plan.Expr) int32 {
 func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
 	oldCtx := n.PostDmlCtx
 	delCtx := &postdml.PostDmlCtx{
-		Ref:             oldCtx.Ref,
-		AddAffectedRows: oldCtx.AddAffectedRows,
-		PrimaryKeyIdx:   oldCtx.PrimaryKeyIdx,
-		PrimaryKeyName:  oldCtx.PrimaryKeyName,
+		Ref:                    oldCtx.Ref,
+		AddAffectedRows:        oldCtx.AddAffectedRows,
+		PrimaryKeyIdx:          oldCtx.PrimaryKeyIdx,
+		PrimaryKeyName:         oldCtx.PrimaryKeyName,
+		IsDelete:               oldCtx.IsDelete,
+		IsInsert:               oldCtx.IsInsert,
+		IsDeleteWithoutFilters: oldCtx.IsDeleteWithoutFilters,
 	}
 
 	if oldCtx.FullText != nil {
 		delCtx.FullText = &postdml.PostDmlFullTextCtx{
-			IsDelete:               oldCtx.FullText.IsDelete,
-			IsInsert:               oldCtx.FullText.IsInsert,
-			SourceTableName:        oldCtx.FullText.SourceTableName,
-			IndexTableName:         oldCtx.FullText.IndexTableName,
-			Parts:                  oldCtx.FullText.Parts,
-			AlgoParams:             oldCtx.FullText.AlgoParams,
-			IsDeleteWithoutFilters: oldCtx.FullText.IsDeleteWithoutFilters,
+			SourceTableName: oldCtx.FullText.SourceTableName,
+			IndexTableName:  oldCtx.FullText.IndexTableName,
+			Parts:           oldCtx.FullText.Parts,
+			AlgoParams:      oldCtx.FullText.AlgoParams,
 		}
 	}
 

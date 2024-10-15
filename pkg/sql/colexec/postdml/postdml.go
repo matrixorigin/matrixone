@@ -83,25 +83,29 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 	bat := result.Batch
 	pkvec := bat.Vecs[postdml.PostDmlCtx.PrimaryKeyIdx]
 	pkTyp := pkvec.GetType()
-	in_list = make([]string, 0, bat.RowCount())
-	for i := 0; i < bat.RowCount(); i++ {
-		pkey, err := GetAnyAsString(pkvec, i)
-		if err != nil {
-			return err
-		}
 
-		switch pkTyp.Oid {
-		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_uuid,
-			types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json,
-			types.T_blob, types.T_text, types.T_datalink:
-			pkey = "'" + pkey + "'"
-		case types.T_array_float32, types.T_array_float64:
-			return moerr.NewInternalError(proc.Ctx, "array cannot be primary key")
-		}
+	var values string
+	if !postdml.PostDmlCtx.IsDeleteWithoutFilters {
+		in_list = make([]string, 0, bat.RowCount())
+		for i := 0; i < bat.RowCount(); i++ {
+			pkey, err := GetAnyAsString(pkvec, i)
+			if err != nil {
+				return err
+			}
 
-		in_list = append(in_list, pkey)
+			switch pkTyp.Oid {
+			case types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_uuid,
+				types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json,
+				types.T_blob, types.T_text, types.T_datalink:
+				pkey = "'" + pkey + "'"
+			case types.T_array_float32, types.T_array_float64:
+				return moerr.NewInternalError(proc.Ctx, "array cannot be primary key")
+			}
+
+			in_list = append(in_list, pkey)
+		}
+		values = strings.Join(in_list, ",")
 	}
-	values := strings.Join(in_list, ",")
 
 	// you may add new context to generate post dml SQL
 	if postdml.PostDmlCtx.FullText != nil {
@@ -119,10 +123,10 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			parts = append(parts, fmt.Sprintf("%s.%s", alias, p))
 		}
 
-		if ftctx.IsDelete {
+		if postdml.PostDmlCtx.IsDelete {
 			var sql string
 			// append Delete SQL
-			if ftctx.IsDeleteWithoutFilters {
+			if postdml.PostDmlCtx.IsDeleteWithoutFilters {
 				// delete all
 				sql = fmt.Sprintf(fulltextDeleteAllSqlFmt, indextbl)
 			} else {
@@ -133,7 +137,7 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)
 		}
 
-		if ftctx.IsInsert {
+		if postdml.PostDmlCtx.IsInsert {
 			sql := fmt.Sprintf(fulltextInsertSqlFmt, indextbl, sourcetbl, alias,
 				ftctx.AlgoParams, pkcolname, strings.Join(parts, ", "),
 				pkcolname, values)
