@@ -60,8 +60,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
-	var withoutOutput bool
-	scopeEncodeData, withoutOutput, processEncodeData, err = prepareRemoteRunSendingData(c.sql, s)
+	scopeEncodeData, processEncodeData, err = prepareRemoteRunSendingData(c.sql, s)
 	if err != nil {
 		return nil, err
 	}
@@ -81,88 +80,95 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 
-	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput); err != nil {
+	if err = sender.sendPipeline(scopeEncodeData, processEncodeData); err != nil {
 		return sender, err
 	}
 
 	sender.safeToClose = false
 	sender.alreadyClose = false
-	err = receiveMessageFromCnServer(s, withoutOutput, sender)
+	err = receiveMessageFromCnServer(c, s, sender)
 	return sender, err
 }
 
-func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, withoutOutput bool, processData []byte, err error) {
-	// if simpleRun is true, it indicates that this pipeline will not produce any output.
-	withoutOutput = false
-
-	// if the last operator is a sender operator, we need to keep it in local for sending batch to its receivers correctly.
-	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
-		originRoot := s.RootOp
-		withoutOutput = true
-		defer func() {
-			s.doSetRootOperator(originRoot)
-		}()
-
-		if originRoot.GetOperatorBase().NumChildren() == 0 {
-			s.RootOp = nil
-		} else {
-			s.RootOp = originRoot.GetOperatorBase().GetChildren(0)
-		}
+func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, processData []byte, err error) {
+	// 1.
+	// Encode the Scope related.
+	// encode all operators in the scope except the last one.
+	// because we need to keep it local for receiving and sending batch to next pipeline.
+	rootOp := s.RootOp
+	if rootOp.GetOperatorBase().NumChildren() == 0 {
+		s.RootOp = nil
+	} else {
+		s.RootOp = s.RootOp.GetOperatorBase().GetChildren(0)
 	}
+	rootOp.GetOperatorBase().SetChildren(nil)
+	defer func() {
+		s.doSetRootOperator(rootOp)
+	}()
 
-	// Encode the ScopeList which need to be sent.
 	if scopeData, err = encodeScope(s); err != nil {
-		return nil, false, nil, err
+		return nil, nil, err
 	}
 
+	// 2.
 	// Encode the Process related information.
 	if processData, err = encodeProcessInfo(s.Proc, sqlStr); err != nil {
-		return nil, false, nil, err
+		return nil, nil, err
 	}
 
-	return scopeData, withoutOutput, processData, nil
+	return scopeData, processData, nil
 }
 
-func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSenderOnClient) error {
-	if !withoutOutput {
-		// if the last operator was connector,
-		// we can send data to the receiver channel to reduce spool's copy.
-		if _, isConnector := s.RootOp.(*connector.Connector); isConnector {
-			return receiveMessageFromCnServerIfConnector(s, sender)
-		}
-
-		// generate a new pipeline to send data in local.
-		// value_scan -> dispatch -> next pipeline.
-		if _, isDispatch := s.RootOp.(*dispatch.Dispatch); isDispatch {
-			return receiveMessageFromCnServerIfDispatch(s, sender)
-		}
-
-		panic(fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", s.RootOp.OpType()))
+func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnClient) error {
+	// if the last operator was connector,
+	// we can send data to the receiver channel to reduce spool's copy.
+	if _, isConnector := s.RootOp.(*connector.Connector); isConnector {
+		return receiveMessageFromCnServerIfConnector(s, sender)
 	}
 
-	// if the last operator is neither a connector nor a dispatch,
-	// this indicates that it is a pipeline that does not require any local cooperation;
-	// we simply need to wait for the remote execution to finish.
-	return receiveMessageFromCnServerIfOnlyRun(s, sender)
-}
-
-func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient) error {
-	var bat *batch.Batch
-	var end bool
-	var err error
-
-	mp := s.Proc.Mp()
-	// Waiting the EndMessage or ErrorMessage.
-	// In fact, for a pipeline that only needs to be executed remotely but without sending data back,
-	// there should be no message sent back except for EndMessage or ErrorMessage.
-	// However, I have used a loop here to ensure that the query can still be executed normally even if this situation occurs.
-	for {
-		bat, end, err = sender.receiveBatch()
-		if err != nil || end || bat == nil {
+	// generate a new pipeline to send data in local.
+	// value_scan -> dispatch -> next pipeline.
+	if arg, isDispatch := s.RootOp.(*dispatch.Dispatch); isDispatch {
+		fakeValueScanOperator := value_scan.NewValueScanFromItSelf()
+		if err := fakeValueScanOperator.Prepare(s.Proc); err != nil {
 			return err
 		}
-		bat.Clean(mp)
+
+		oldChildren := arg.Children
+		arg.Children = nil
+		arg.AppendChild(fakeValueScanOperator)
+		defer func() {
+			arg.Children = oldChildren
+			fakeValueScanOperator.Release()
+		}()
+
+		if err := s.RootOp.Prepare(s.Proc); err != nil {
+			return err
+		}
+
+		var bat *batch.Batch
+		var end bool
+		var err error
+		dispatchAnalyze := s.RootOp.GetOperatorBase().OpAnalyzer
+
+		for {
+			bat, end, err = sender.receiveBatch()
+			if err != nil || end || bat == nil {
+				return err
+			}
+
+			dispatchAnalyze.Network(bat)
+			fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
+
+			result, errCall := s.RootOp.Call(s.Proc)
+			bat.Clean(c.proc.GetMPool())
+			if errCall != nil || result.Status == vm.ExecStop {
+				return errCall
+			}
+		}
 	}
+
+	panic(fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", s.RootOp.OpType()))
 }
 
 func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClient) error {
@@ -184,48 +190,6 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		connectorAnalyze.Network(bat)
 
 		nextChannel <- process.NewPipelineSignalToDirectly(bat, mp)
-	}
-}
-
-func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClient) error {
-	var bat *batch.Batch
-	var end bool
-	var err error
-
-	arg := s.RootOp.(*dispatch.Dispatch)
-	fakeValueScanOperator := value_scan.NewValueScanFromItSelf()
-	if err := fakeValueScanOperator.Prepare(s.Proc); err != nil {
-		return err
-	}
-
-	oldChildren := arg.Children
-	arg.Children = nil
-	arg.AppendChild(fakeValueScanOperator)
-	defer func() {
-		arg.Children = oldChildren
-		fakeValueScanOperator.Release()
-	}()
-
-	if err = s.RootOp.Prepare(s.Proc); err != nil {
-		return err
-	}
-	dispatchAnalyze := s.RootOp.GetOperatorBase().OpAnalyzer
-
-	mp := s.Proc.Mp()
-	for {
-		bat, end, err = sender.receiveBatch()
-		if err != nil || end || bat == nil {
-			return err
-		}
-
-		dispatchAnalyze.Network(bat)
-		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
-
-		result, errCall := s.RootOp.Call(s.Proc)
-		bat.Clean(mp)
-		if errCall != nil || result.Status == vm.ExecStop {
-			return errCall
-		}
 	}
 }
 
@@ -292,7 +256,7 @@ func newMessageSenderOnClient(
 }
 
 func (sender *messageSenderOnClient) sendPipeline(
-	scopeData, procData []byte, noDataBack bool) error {
+	scopeData, procData []byte) error {
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
 		message := cnclient.AcquireMessage()
@@ -301,7 +265,7 @@ func (sender *messageSenderOnClient) sendPipeline(
 		message.SetData(scopeData)
 		message.SetProcData(procData)
 		message.SetSid(pipeline.Status_Last)
-		message.NeedNotReply = noDataBack
+		message.NeedNotReply = false
 		return sender.streamSender.Send(sender.ctx, message)
 	}
 
@@ -320,7 +284,7 @@ func (sender *messageSenderOnClient) sendPipeline(
 			message.SetData(scopeData[start:end])
 			message.SetSid(pipeline.Status_WaitingNext)
 		}
-		message.NeedNotReply = noDataBack
+		message.NeedNotReply = false
 
 		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
@@ -445,7 +409,7 @@ func generateStopSendingMessage(streamID uint64) *pipeline.Message {
 	message := cnclient.AcquireMessage()
 	message.SetMessageType(pipeline.Method_StopSending)
 	message.SetID(streamID)
-	message.NeedNotReply = false
+	message.NeedNotReply = true
 	return message
 }
 
