@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	threshHoldForShuffleGroup       = 320000
+	threshHoldForShuffleGroup       = 64000
 	threshHoldForRightJoinShuffle   = 8192
 	threshHoldForShuffleJoin        = 120000
 	threshHoldForHybirdShuffle      = 4000000

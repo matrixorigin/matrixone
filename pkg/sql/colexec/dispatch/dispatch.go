@@ -17,7 +17,6 @@ package dispatch
 import (
 	"bytes"
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
