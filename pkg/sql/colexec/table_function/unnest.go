@@ -177,6 +177,9 @@ func (u *unnestState) start(tf *TableFunction, proc *process.Process, nthRow int
 	u.called = false
 	// clean up the batch
 	u.batch.CleanOnlyData()
+	for i := range u.batch.Vecs {
+		u.batch.Vecs[i].SetClass(vector.FLAT)
+	}
 
 	switch jsonVec.GetType().Oid {
 	case types.T_json:
@@ -201,12 +204,12 @@ func handle(bat *batch.Batch, jsonVec *vector.Vector, nthRow int,
 		return err
 	}
 	//
-	ures, err := json.Unnest(path, outer, unnestRecursive, unnestMode, param.FilterMap)
+	ures, thiscnt, err := json.Unnest(path, outer, unnestRecursive, unnestMode, param.FilterMap)
 	if err != nil {
 		return err
 	}
 
-	err = makeBatch(bat, ures, param, arg, proc)
+	err = makeBatch(bat, ures, param, arg, thiscnt, proc)
 	if err != nil {
 		return err
 	}
@@ -214,7 +217,7 @@ func handle(bat *batch.Batch, jsonVec *vector.Vector, nthRow int,
 	return nil
 }
 
-func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *TableFunction, proc *process.Process) error {
+func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *TableFunction, thiscnt int, proc *process.Process) error {
 	for i := 0; i < len(ures); i++ {
 		for j := 0; j < len(arg.Attrs); j++ {
 			vec := bat.GetVector(int32(j))
@@ -232,9 +235,21 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 					intVal, _ := strconv.ParseInt(string(val), 10, 32)
 					err = vector.AppendFixed(vec, int32(intVal), false, proc.Mp())
 				}
-			case "key", "path", "value", "this":
+			case "key", "path", "value":
 				val, ok := ures[i][arg.Attrs[j]]
 				err = vector.AppendBytes(vec, val, !ok || val == nil, proc.Mp())
+			case "this":
+				if thiscnt == 1 {
+					if i == 0 {
+						val, ok := ures[i][arg.Attrs[j]]
+						err = vector.AppendBytes(vec, val, !ok || val == nil, proc.Mp())
+						vec.SetClass(vector.CONSTANT)
+						vec.SetLength(len(ures))
+					}
+				} else {
+					val, ok := ures[i][arg.Attrs[j]]
+					err = vector.AppendBytes(vec, val, !ok || val == nil, proc.Mp())
+				}
 			default:
 				err = moerr.NewInvalidArg(proc.Ctx, "unnest: invalid column name:%s", arg.Attrs[j])
 			}

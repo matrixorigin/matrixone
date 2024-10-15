@@ -206,7 +206,6 @@ func (ctr *container) probe(ap *LeftJoin, proc *process.Process, result *vm.Call
 	}
 
 	count := ap.ctr.inbat.RowCount()
-	mSels := ctr.mp.Sels()
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
 	}
@@ -244,7 +243,7 @@ func (ctr *container) probe(ap *LeftJoin, proc *process.Process, result *vm.Call
 			}
 
 			matched := false
-			if ap.HashOnPK {
+			if ap.HashOnPK || ctr.mp.HashOnUnique() {
 				idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 				if ap.Cond != nil {
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, ap.ctr.inbat, int64(i+k),
@@ -294,7 +293,7 @@ func (ctr *container) probe(ap *LeftJoin, proc *process.Process, result *vm.Call
 					rowCount++
 				}
 			} else {
-				sels := mSels[vals[k]-1]
+				sels := ctr.mp.GetSels(vals[k] - 1)
 				if ap.Cond != nil {
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, ap.ctr.inbat, int64(i+k),
 						1, ctr.cfs1); err != nil {

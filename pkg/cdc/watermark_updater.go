@@ -76,9 +76,10 @@ func (u *WatermarkUpdater) Run(ctx context.Context, ar *ActiveRoutine) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ar.Pause:
+			return
 		case <-ar.Cancel:
 			return
-
 		case <-time.After(watermarkUpdateInterval):
 			u.flushAll()
 		}
