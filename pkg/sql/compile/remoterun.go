@@ -16,8 +16,9 @@ package compile
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -47,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -711,17 +711,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PipelineId:     ctx0.id,
 			ConnectorIndex: idx,
 		}
-	case *mark.MarkJoin:
-		in.MarkJoin = &pipeline.MarkJoin{
-			Result:     t.Result,
-			LeftCond:   t.Conditions[0],
-			RightCond:  t.Conditions[1],
-			Expr:       t.Cond,
-			OnList:     t.OnList,
-			HashOnPk:   t.HashOnPK,
-			JoinMapTag: t.JoinMapTag,
-		}
-		in.ProjectList = t.ProjectList
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
 			Attrs:  t.Attrs,
@@ -1133,17 +1122,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Typs = convertToTypes(t.Types)
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
-		arg.HashOnPK = t.HashOnPk
-		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
-		op = arg
-	case vm.Mark:
-		t := opr.GetMarkJoin()
-		arg := mark.NewArgument()
-		arg.Result = t.Result
-		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
-		arg.Cond = t.Expr
-		arg.OnList = t.OnList
 		arg.HashOnPK = t.HashOnPk
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ProjectList = opr.ProjectList
