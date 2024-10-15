@@ -82,7 +82,7 @@ func (rel *TxnRelation) GetObject(id *types.Objectid, isTombstone bool) (obj han
 }
 func (rel *TxnRelation) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err error) { return }
 func (rel *TxnRelation) CreateObject(bool) (obj handle.Object, err error)                  { return }
-func (rel *TxnRelation) CreateNonAppendableObject(bool, *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (rel *TxnRelation) CreateNonAppendableObject(*objectio.CreateObjOpt) (obj handle.Object, err error) {
 	return
 }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16, bool) (v any, isNull bool, err error) {

@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package objectio
 
 import (
@@ -29,6 +30,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
+type GenerateHint int
+
+const (
+	Flush GenerateHint = iota
+	NormalMerge
+	ZMMerge
+)
+
 var (
 	VarcharType types.Type
 	RowidType   types.Type
@@ -44,8 +53,9 @@ func init() {
 }
 
 type CreateObjOpt struct {
-	Stats       *ObjectStats
-	IsTombstone bool
+	Stats        *ObjectStats
+	IsTombstone  bool
+	GenerateHint GenerateHint
 }
 
 func (o *CreateObjOpt) WithObjectStats(stats *ObjectStats) *CreateObjOpt {
@@ -55,6 +65,11 @@ func (o *CreateObjOpt) WithObjectStats(stats *ObjectStats) *CreateObjOpt {
 
 func (o *CreateObjOpt) WithIsTombstone(tombstone bool) *CreateObjOpt {
 	o.IsTombstone = tombstone
+	return o
+}
+
+func (o *CreateObjOpt) WithGenerateHint(hint GenerateHint) *CreateObjOpt {
+	o.GenerateHint = hint
 	return o
 }
 

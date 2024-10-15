@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -44,7 +43,9 @@ type ObjectEntry struct {
 	objData     data.Object
 	ObjectState uint8
 
-	HasPrintedPrepareComapct atomic.Bool
+	HasPrintedPrepareCompact atomic.Bool
+
+	GenerateHint objectio.GenerateHint
 }
 
 func (entry *ObjectEntry) ID() *objectio.ObjectId {
@@ -307,6 +308,10 @@ func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.
 	return entry.table.getObjectList(entry.IsTombstone).UpdateObjectInfo(entry, txn, stats)
 }
 
+func (entry *ObjectEntry) IsGeneratedBy(hint objectio.GenerateHint) bool {
+	return entry.GenerateHint == hint
+}
+
 func (entry *ObjectEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmdType := IOET_WALTxnCommand_Object
 	return newObjectCmd(id, cmdType, entry), nil
@@ -512,10 +517,10 @@ func (entry *ObjectEntry) CheckPrintPrepareCompactLocked(duration time.Duration)
 
 // TODO: REMOVEME
 func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
-	if entry.HasPrintedPrepareComapct.Load() {
+	if entry.HasPrintedPrepareCompact.Load() {
 		return
 	}
-	entry.HasPrintedPrepareComapct.Store(true)
+	entry.HasPrintedPrepareCompact.Store(true)
 	s := fmt.Sprintf("prepare compact failed, obj %v", entry.PPString(3, 0, ""))
 	lastNode := entry.GetLastMVCCNode()
 	startTS := lastNode.GetStart()

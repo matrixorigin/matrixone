@@ -45,6 +45,15 @@ import (
 	"go.uber.org/zap"
 )
 
+type MergePolicyID int
+
+const (
+	BasicPolicyID MergePolicyID = iota
+	CompactPolicyID
+	OverlapPolicyID
+	TombstonePolicyID
+)
+
 type mergeObjectsTask struct {
 	*tasks.BaseTask
 	txn               txnif.AsyncTxn
@@ -59,6 +68,7 @@ type mergeObjectsTask struct {
 	tableEntry        *catalog.TableEntry
 	did, tid          uint64
 	isTombstone       bool
+	mergePolicyID     MergePolicyID
 
 	blkCnt     []int
 	nMergedBlk []int
@@ -74,6 +84,7 @@ type mergeObjectsTask struct {
 func NewMergeObjectsTask(
 	ctx *tasks.Context,
 	txn txnif.AsyncTxn,
+	policyID MergePolicyID,
 	mergedObjs []*catalog.ObjectEntry,
 	rt *dbutils.Runtime,
 	targetObjSize uint32,
@@ -94,6 +105,7 @@ func NewMergeObjectsTask(
 		blkCnt:           make([]int, len(mergedObjs)),
 		targetObjSize:    targetObjSize,
 		createAt:         time.Now(),
+		mergePolicyID:    policyID,
 	}
 
 	database, err := txn.GetDatabaseByID(task.did)
@@ -274,11 +286,17 @@ func (task *mergeObjectsTask) GetTransferMaps() api.TransferMaps {
 }
 
 func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
-	commitEntry := &api.MergeCommitEntry{}
-	commitEntry.DbId = task.did
-	commitEntry.TblId = task.tid
-	commitEntry.TableName = task.schema.Name
-	commitEntry.StartTs = task.txn.GetStartTS().ToTimestamp()
+	commitEntry := &api.MergeCommitEntry{
+		DbId:       task.did,
+		TblId:      task.tid,
+		TableName:  task.schema.Name,
+		StartTs:    task.txn.GetStartTS().ToTimestamp(),
+		MergedObjs: make([][]byte, 0, len(task.mergedObjs)),
+		MergeType:  api.MergeCommitEntry_normal,
+	}
+	if task.mergePolicyID == OverlapPolicyID {
+		commitEntry.MergeType = api.MergeCommitEntry_zm
+	}
 	for _, o := range task.mergedObjs {
 		obj := *o.GetObjectStats()
 		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj[:])
@@ -423,9 +441,13 @@ func HandleMergeEntryInTxn(
 		if err != nil {
 			return nil, err
 		}
+		objectGenerateHint := objectio.NormalMerge
+		if entry.MergeType == api.MergeCommitEntry_zm {
+			objectGenerateHint = objectio.ZMMerge
+		}
 		obj, err := rel.CreateNonAppendableObject(
-			isTombstone,
-			new(objectio.CreateObjOpt).WithObjectStats(objstats).WithIsTombstone(isTombstone))
+			&objectio.CreateObjOpt{Stats: objstats, IsTombstone: isTombstone, GenerateHint: objectGenerateHint},
+		)
 		if err != nil {
 			return nil, err
 		}

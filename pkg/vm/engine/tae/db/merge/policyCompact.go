@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 )
 
 type objCompactPolicy struct {
@@ -100,10 +101,10 @@ func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	o.filterValidTombstones()
 	results := make([]reviseResult, 0, len(o.objects)+len(o.tombstones))
 	for _, obj := range o.objects {
-		results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, TaskHostDN})
+		results = append(results, reviseResult{objs: []*catalog.ObjectEntry{obj}, policyID: jobs.CompactPolicyID, kind: TaskHostDN})
 	}
 	if len(o.tombstoneStats) > 0 {
-		results = append(results, reviseResult{o.tombstones, TaskHostDN})
+		results = append(results, reviseResult{objs: o.tombstones, policyID: jobs.CompactPolicyID, kind: TaskHostDN})
 	}
 	return results
 }

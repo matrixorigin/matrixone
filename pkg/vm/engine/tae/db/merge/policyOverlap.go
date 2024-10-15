@@ -18,10 +18,12 @@ import (
 	"cmp"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 )
 
 var _ policy = (*objOverlapPolicy)(nil)
@@ -42,6 +44,9 @@ func newObjOverlapPolicy() *objOverlapPolicy {
 
 func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
 	if obj.IsTombstone {
+		return false
+	}
+	if obj.GenerateHint == objectio.ZMMerge {
 		return false
 	}
 	if obj.OriginSize() < config.ObjectMinOsize {
@@ -68,7 +73,7 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	objs, taskHostKind := m.reviseDataObjs(config)
 	objs = controlMem(objs, mem)
 	if len(objs) > 1 {
-		return []reviseResult{{objs, taskHostKind}}
+		return []reviseResult{{objs: objs, policyID: jobs.OverlapPolicyID, kind: taskHostKind}}
 	}
 	return nil
 }

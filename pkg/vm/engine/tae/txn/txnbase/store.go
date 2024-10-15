@@ -106,7 +106,7 @@ func (store *NoopTxnStore) GetObject(id *common.ID, isTombstone bool) (obj handl
 func (store *NoopTxnStore) CreateObject(dbId, tid uint64, isTombstone bool) (obj handle.Object, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool, _ *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	return
 }
 func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (err error) {

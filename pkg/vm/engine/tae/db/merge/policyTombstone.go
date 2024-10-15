@@ -16,6 +16,7 @@ package merge
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 )
 
 type tombstonePolicy struct {
@@ -37,7 +38,7 @@ func (t *tombstonePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []re
 	if len(t.tombstones) < 2 {
 		return nil
 	}
-	return []reviseResult{{t.tombstones, TaskHostDN}}
+	return []reviseResult{{objs: t.tombstones, policyID: jobs.TombstonePolicyID, kind: TaskHostDN}}
 }
 
 func (t *tombstonePolicy) resetForTable(*catalog.TableEntry) {

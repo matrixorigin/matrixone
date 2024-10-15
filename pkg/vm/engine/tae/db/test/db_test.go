@@ -460,7 +460,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		rel, err := database.GetRelationByName(schema.Name)
 		readSchema := rel.Schema(false)
 		assert.Nil(t, err)
-		obj, err := rel.CreateNonAppendableObject(false, nil)
+		obj, err := rel.CreateNonAppendableObject(nil)
 		assert.Nil(t, err)
 		dataBlk := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
 		name := objectio.BuildObjectNameWithObjectID(obj.GetID())
@@ -543,7 +543,7 @@ func TestCreateObject(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ := db.GetRelationByName(schema.Name)
-	obj, err := rel.CreateNonAppendableObject(false, nil)
+	obj, err := rel.CreateNonAppendableObject(nil)
 	assert.Nil(t, err)
 	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, txn.Commit(context.Background()))
@@ -2685,7 +2685,7 @@ func TestMergeblocks2(t *testing.T) {
 		assert.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
-		task, err := jobs.NewMergeObjectsTask(nil, txn, objsToMerge, tae.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, 0, objsToMerge, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -2767,7 +2767,7 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 		assert.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
-		task, err := jobs.NewMergeObjectsTask(nil, txn, objsToMerge, tae.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, 0, objsToMerge, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 		assert.NoError(t, task.OnExec(context.Background()))
 		assert.NoError(t, txn.Commit(context.Background()))
@@ -2815,7 +2815,7 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 		testutil.CheckAllColRowsByScan(t, rel, 10, true)
 
 		objsToMerge := []*catalog.ObjectEntry{objHandle1.GetMeta().(*catalog.ObjectEntry), objHandle2.GetMeta().(*catalog.ObjectEntry)}
-		task, err := jobs.NewMergeObjectsTask(nil, txn, objsToMerge, tae.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, 0, objsToMerge, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 		assert.NoError(t, task.OnExec(context.Background()))
 		assert.NoError(t, txn.Commit(context.Background()))
@@ -2876,7 +2876,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 		assert.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
-		task, err := jobs.NewMergeObjectsTask(nil, txn, objsToMerge, tae.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, 0, objsToMerge, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -4393,7 +4393,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		t.Log(tae.Catalog.SimplePPString(3))
 
 		txn, _ = tae.GetRelation()
-		task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, 0, []*catalog.ObjectEntry{meta}, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -4857,7 +4857,7 @@ func TestMergeBlocks3(t *testing.T) {
 		assert.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{obj1}
-		task, err := jobs.NewMergeObjectsTask(nil, mergetxn, objsToMerge, tae.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, mergetxn, 0, objsToMerge, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 		assert.NoError(t, task.OnExec(context.Background()))
 
@@ -5069,7 +5069,7 @@ func TestMergeMemsize(t *testing.T) {
 
 	{
 		txn, _ := tae.StartTxn(nil)
-		task, err := jobs.NewMergeObjectsTask(nil, txn, metas, tae.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, 0, metas, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 
 		dbutils.PrintMemStats()
@@ -9338,9 +9338,7 @@ func TestDeletesInMerge(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	obj := testutil.GetOneBlockMeta(rel)
-	task, _ := jobs.NewMergeObjectsTask(
-		nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime,
-		common.DefaultMaxOsizeObjMB*common.Const1MBytes, false)
+	task, _ := jobs.NewMergeObjectsTask(nil, txn, 0, []*catalog.ObjectEntry{obj}, tae.Runtime, common.DefaultMaxOsizeObjMB*common.Const1MBytes, false)
 	task.Execute(ctx)
 	{
 		txn, rel := tae.GetRelation()
@@ -9751,7 +9749,7 @@ func TestMergeBlocks4(t *testing.T) {
 
 	txn, rel := tae.GetRelation()
 	obj := testutil.GetOneBlockMeta(rel)
-	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, 0, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
 	assert.NoError(t, err)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -9770,7 +9768,7 @@ func TestMergeBlocks4(t *testing.T) {
 		time.Sleep(time.Millisecond * 500)
 		txn, rel := tae.GetRelation()
 		obj := testutil.GetOneTombstoneMeta(rel)
-		task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, true)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, 0, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, true)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -9874,7 +9872,7 @@ func TestDeleteWithObjectStats(t *testing.T) {
 		iter.Next()
 		obj := iter.GetObject()
 		metas := []*catalog.ObjectEntry{obj.GetMeta().(*catalog.ObjectEntry)}
-		task, err := jobs.NewMergeObjectsTask(nil, txn, metas, tae.Runtime, 0, false)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, 0, metas, tae.Runtime, 0, false)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -10030,7 +10028,7 @@ func TestRollbackMergeInQueue(t *testing.T) {
 
 	txn, rel := tae.GetRelation()
 	obj := testutil.GetOneBlockMeta(rel)
-	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, 0, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
 	assert.NoError(t, err)
 
 	err = task.OnExec(context.Background())
@@ -10066,7 +10064,7 @@ func TestTransferInMerge(t *testing.T) {
 
 	txn, rel := tae.GetRelation()
 	obj := testutil.GetOneBlockMeta(rel)
-	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, 0, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
 	assert.NoError(t, err)
 	err = task.OnExec(context.Background())
 	{

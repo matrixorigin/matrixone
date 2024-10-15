@@ -725,15 +725,13 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	var createdObjectHandle handle.Object
 	if isTombstone {
 		if task.createdTombstoneHandles, err = task.rel.CreateNonAppendableObject(
-			isTombstone,
-			&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone}); err != nil {
+			&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone, GenerateHint: objectio.Flush}); err != nil {
 			return
 		}
 		createdObjectHandle = task.createdTombstoneHandles
 	} else {
 		if task.createdObjHandles, err = task.rel.CreateNonAppendableObject(
-			isTombstone,
-			&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone}); err != nil {
+			&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone, GenerateHint: objectio.Flush}); err != nil {
 			return
 		}
 		createdObjectHandle = task.createdObjHandles
