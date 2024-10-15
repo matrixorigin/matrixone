@@ -946,7 +946,7 @@ func restoreToAccountWithPitr(
 	viewMap map[string]*tableInfo,
 	curAccount uint32,
 ) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account , restore timestamp : %d", pitrName, ts))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account %d, restore timestamp : %d", pitrName, curAccount, ts))
 
 	var dbNames []string
 	// delete current dbs
