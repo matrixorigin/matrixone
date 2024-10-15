@@ -85,13 +85,16 @@ func NewTableReader(
 	return reader
 }
 
-func (reader *tableReader) Close() {}
+func (reader *tableReader) Close() {
+	reader.sinker.Close()
+}
 
 func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine) {
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 	defer func() {
+		reader.Close()
 		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
 	}()
 
