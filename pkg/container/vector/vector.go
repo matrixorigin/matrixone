@@ -342,6 +342,9 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	return types.GetArray[T](&bs[i], v.area)
 }
 
+// WARNING: GetAny() return value with any type will cause memory escape to heap which will result in slow GC.
+// If you know the actual type, better use the GetFixedAtWithTypeCheck() to get the values.
+// Only use when you have no choice, e.g. you are dealing with column with any type that don't know in advanced.
 func GetAny(vec *Vector, i int) any {
 	switch vec.typ.Oid {
 	case types.T_bool:
@@ -2748,6 +2751,9 @@ func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mp
 	return nil
 }
 
+// WARNING: AppendAny() append value with any type will cause memory escape to heap which will result in slow GC.
+// If you know the actual type, better use the AppendFixed() to append the values.
+// Only use when you have no choice, e.g. you are dealing with column with any type that don't know in advanced.
 func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
