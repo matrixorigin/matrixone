@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"math/bits"
 	"unsafe"
@@ -284,6 +285,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		return
 	}
 	if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
+		logutil.Infof("shuffle debug: colname %v, uniform %v, overlap %v", colName, s.ShuffleRangeMap[colName].Uniform, s.ShuffleRangeMap[colName].Overlap)
 		return
 	}
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
