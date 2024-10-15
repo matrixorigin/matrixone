@@ -329,7 +329,7 @@ func (c *consumer) completeData(ctx context.Context) error {
 			c.log.Error("failed to read entries", zap.Error(err))
 			return err
 		}
-		if err := c.consumerEntries(ctx, entries, true); err != nil {
+		if err := c.consumeEntries(ctx, entries, true); err != nil {
 			c.log.Error("failed to consumer entries", zap.Error(err))
 			return err
 		}
@@ -395,7 +395,7 @@ func (c *consumer) loop(ctx context.Context, interval time.Duration) error {
 				c.log.Error("failed to read entries", zap.Error(err))
 				continue
 			}
-			if err := c.consumerEntries(ctx, entries, false); err != nil {
+			if err := c.consumeEntries(ctx, entries, false); err != nil {
 				c.log.Error("failed to consume entries", zap.Error(err))
 
 				// If the error is ErrFileNotFound, probably means that the file in
@@ -431,7 +431,7 @@ func (c *consumer) checkRole(ctx context.Context) bool {
 	return v.(uint64) == leaderID
 }
 
-func (c *consumer) consumerEntries(
+func (c *consumer) consumeEntries(
 	ctx context.Context, entries []logservice.LogRecord, upstream bool,
 ) error {
 	for _, entry := range entries {
@@ -453,7 +453,7 @@ func (c *consumer) consumerEntries(
 	count := len(entries)
 	for count > 0 {
 		entry := entries[count-1]
-		locations := getLocations(entry)
+		locations := getLocations(entry, "")
 		if len(locations) == 0 {
 			count--
 			continue
@@ -479,7 +479,7 @@ func (c *consumer) consume(ctx context.Context, rec logservice.LogRecord, upstre
 	if len(rec.Data) == 0 {
 		return nil
 	}
-	locations := getLocations(rec)
+	locations := getLocations(rec, "consume")
 	if len(locations) == 0 {
 		c.log.Debug("not a file location cmd", zap.Uint64("LSN", rec.Lsn))
 		return nil
