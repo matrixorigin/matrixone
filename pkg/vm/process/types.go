@@ -25,6 +25,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
+	"github.com/hayageek/threadsafe"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -296,9 +297,7 @@ type BaseProcess struct {
 	CloneTxnOperator    client.TxnOperator
 
 	// post dml sqls run right after all pipelines finished.
-	// Note: this is not thread safe but we don't need to be thread safe because
-	// only single thread will access it either INSERT or (DELETE/UPDATE) pipline but not both
-	PostDmlSqlList []string
+	PostDmlSqlList *threadsafe.Slice[string]
 }
 
 // Process contains context used in query execution

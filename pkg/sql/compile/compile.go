@@ -476,6 +476,11 @@ func (c *Compile) runOnce() error {
 	wg.Wait()
 	close(errC)
 
+	// cleanup post dml sql
+	defer func() {
+		c.proc.Base.PostDmlSqlList.Clear()
+	}()
+
 	errList := make([]error, 0, len(c.scopes))
 	for e := range errC {
 		if e != nil {
@@ -493,11 +498,7 @@ func (c *Compile) runOnce() error {
 		return err
 	}
 
-	// run post dml sql
-	defer func() {
-		c.proc.Base.PostDmlSqlList = nil
-	}()
-	for _, sql := range c.proc.Base.PostDmlSqlList {
+	for _, sql := range c.proc.Base.PostDmlSqlList.Values() {
 		err = c.runSql(sql)
 		if err != nil {
 			return err

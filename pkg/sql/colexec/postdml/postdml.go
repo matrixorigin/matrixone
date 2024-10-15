@@ -134,7 +134,7 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			}
 
 			//logutil.Infof("POST DELETE SQL : %s", sql)
-			proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)
+			proc.Base.PostDmlSqlList.Append(sql)
 		}
 
 		if postdml.PostDmlCtx.IsInsert {
@@ -142,8 +142,7 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 				ftctx.AlgoParams, pkcolname, strings.Join(parts, ", "),
 				pkcolname, values)
 			//logutil.Infof("POST INSERT SQL : %s", sql)
-			proc.Base.PostDmlSqlList = append(proc.Base.PostDmlSqlList, sql)
-
+			proc.Base.PostDmlSqlList.Append(sql)
 		}
 	}
 
