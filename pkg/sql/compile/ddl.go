@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -83,9 +82,8 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 			return err
 		}
 
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = '%s', `%s` = '%s' where `%s` = %d and `%s` = '%s'",
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = '%s' where `%s` = %d and `%s` = '%s'",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newDb.GetDatabaseId(ctx),
-			catalog.MO_PITR_MODIFIED_TIME, types.CurrentTimestamp().String2(time.UTC, 0),
 			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
 			catalog.MO_PITR_DB_NAME, dbName)
 
@@ -157,7 +155,11 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 	// 4. delete retention info
-	return c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
+	err = c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return nil
+	}
+	return err
 }
 
 func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
@@ -1308,9 +1310,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = '%s' where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d  where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newRelation.GetTableID(c.proc.Ctx),
-			catalog.MO_PITR_MODIFIED_TIME, types.CurrentTimestamp().String2(time.UTC, 0),
 			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
 			catalog.MO_PITR_DB_NAME, dbName,
 			catalog.MO_PITR_TABLE_NAME, tblName)
@@ -2359,7 +2360,11 @@ func (s *Scope) DropTable(c *Compile) error {
 		return nil
 	}
 	deleteRetentionSQL := fmt.Sprintf(deleteMoRetentionWithDatabaseNameAndTableNameFormat, dbName, tblName)
-	return c.runSql(deleteRetentionSQL)
+	err = c.runSql(deleteRetentionSQL)
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return nil
+	}
+	return err
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {

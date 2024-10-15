@@ -28,6 +28,46 @@ import (
 
 var _ Message = new(JoinMapMsg)
 
+const selsDivideLength = 1024
+
+type JoinSels struct {
+	sels [][][]int32
+}
+
+func (js *JoinSels) InitSel(len int) {
+	js.sels = make([][][]int32, 0, len/selsDivideLength+1)
+}
+
+func (js *JoinSels) Free() {
+	js.sels = nil
+}
+
+func (js *JoinSels) InsertSel(k, v int32) {
+	i := k / selsDivideLength
+	j := k % selsDivideLength
+	if len(js.sels) <= int(i) {
+		if i == 0 {
+			js.sels = append(js.sels, make([][]int32, 16))
+		} else {
+			s := make([][]int32, selsDivideLength)
+			js.sels = append(js.sels, s)
+		}
+	}
+	if len(js.sels[i]) <= int(j) {
+		js.sels[i] = append(js.sels[i], make([]int32, 0))
+	}
+	if js.sels[i][j] == nil {
+		js.sels[i][j] = make([]int32, 0)
+	}
+	js.sels[i][j] = append(js.sels[i][j], v)
+}
+
+func (js *JoinSels) GetSels(k int32) []int32 {
+	i := k / selsDivideLength
+	j := k % selsDivideLength
+	return js.sels[i][j]
+}
+
 // JoinMap is used for join
 type JoinMap struct {
 	runtimeFilter_In bool
@@ -37,11 +77,11 @@ type JoinMap struct {
 	shm              *hashmap.StrHashMap
 	ihm              *hashmap.IntHashMap
 	mpool            *mpool.MPool
-	multiSels        [][]int32
+	multiSels        JoinSels
 	batches          []*batch.Batch
 }
 
-func NewJoinMap(sels [][]int32, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
+func NewJoinMap(sels JoinSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
 	return &JoinMap{
 		shm:       shm,
 		ihm:       ihm,
@@ -85,8 +125,12 @@ func (jm *JoinMap) PushedRuntimeFilterIn() bool {
 	return jm.runtimeFilter_In
 }
 
-func (jm *JoinMap) Sels() [][]int32 {
-	return jm.multiSels
+func (jm *JoinMap) HashOnUnique() bool {
+	return jm.multiSels.sels == nil
+}
+
+func (jm *JoinMap) GetSels(k uint64) []int32 {
+	return jm.multiSels.GetSels(int32(k))
 }
 
 func (jm *JoinMap) NewIterator() hashmap.Iterator {
@@ -106,10 +150,7 @@ func (jm *JoinMap) IsValid() bool {
 }
 
 func (jm *JoinMap) FreeMemory() {
-	for i := range jm.multiSels {
-		jm.multiSels[i] = nil
-	}
-	jm.multiSels = nil
+	jm.multiSels.Free()
 	if jm.ihm != nil {
 		jm.ihm.Free()
 		jm.ihm = nil
