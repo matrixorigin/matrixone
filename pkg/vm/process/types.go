@@ -295,7 +295,9 @@ type BaseProcess struct {
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
 
-	// post dml sqls run right after all pipelines finished
+	// post dml sqls run right after all pipelines finished.
+	// Note: this is not thread safe but we don't need to be thread safe because
+	// only single thread will access it either INSERT or (DELETE/UPDATE) pipline but not both
 	PostDmlSqlList []string
 }
 
