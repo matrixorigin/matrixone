@@ -2524,6 +2524,16 @@ func TestMisc(t *testing.T) {
 	require.True(t, vec5.GetNulls().Contains(1))
 	require.True(t, vec5.GetNulls().Contains(2))
 	require.False(t, vec5.GetNulls().Contains(3))
+
+	vec7 := NewVec(types.T_char.ToType())
+	defer vec7.Free(mp)
+	err = AppendMultiBytes(vec7, nil, true, 2, mp)
+	require.NoError(t, err)
+	require.True(t, vec7.GetNulls().Contains(0))
+	require.True(t, vec7.GetNulls().Contains(1))
+	require.False(t, vec7.GetNulls().Contains(2))
+	require.Equal(t, 2, vec7.Length())
+
 }
 
 func BenchmarkUnmarshal(b *testing.B) {
