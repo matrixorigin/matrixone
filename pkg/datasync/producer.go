@@ -68,7 +68,7 @@ func newProducer(
 			if locations := getLocations(logservice.LogRecord{
 				Type: logservice.UserRecord,
 				Data: w.data,
-			}); len(locations) == 0 {
+			}, ""); len(locations) == 0 {
 				return true
 			}
 			return false
@@ -132,7 +132,7 @@ func (p *producer) handle(ctx context.Context, w *wrappedData) {
 	if locations := getLocations(logservice.LogRecord{
 		Type: logservice.UserRecord,
 		Data: w.data,
-	}); len(locations) > 0 {
+	}, "produce"); len(locations) > 0 {
 		// TODO(volgariver6): maybe we should produce a parsed instance?
 		p.produce(ctx, w)
 	}

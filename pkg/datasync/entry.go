@@ -16,6 +16,7 @@ package datasync
 
 import (
 	"bytes"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -41,7 +42,7 @@ const (
 
 // getLocations checks if the cmd is file-action in storage.
 // If it is, return the location of the file.
-func getLocations(rec logservice.LogRecord) []string {
+func getLocations(rec logservice.LogRecord, tag string) []string {
 	if rec.Type != logservice.UserRecord {
 		return nil
 	}
@@ -71,16 +72,16 @@ func getLocations(rec logservice.LogRecord) []string {
 		ei := e.Entry.GetInfo().(*entry2.Info)
 		payload := e.Entry.GetPayload()
 		if ei.Group == wal.GroupPrepare {
-			locations = append(locations, parseCommonFiles(payload)...)
+			locations = append(locations, parseCommonFiles(payload, tag)...)
 		} else if ei.Group == store.GroupFiles {
-			locations = append(locations, parseMetaFiles(payload)...)
+			locations = append(locations, parseMetaFiles(payload, tag)...)
 		}
 	}
 	return locations
 }
 
 // parseCommonFiles parses the common files which are in the root directory.
-func parseCommonFiles(payload []byte) []string {
+func parseCommonFiles(payload []byte, tag string) []string {
 	if len(payload) < entryHeaderSize {
 		return nil
 	}
@@ -117,21 +118,40 @@ func parseCommonFiles(payload []byte) []string {
 			locations = append(locations, mvccNode.BaseNode.ObjectLocation().String())
 		}
 	}
+	// TODO(volgariver6): remove the following log.
+	if len(tag) > 0 && len(locations) > 0 {
+		logutil.Infof("parsed common files: %v, txn: [%X,%s], tag: %s",
+			locations,
+			txnCmd.GetID(),
+			txnCmd.GetPrepareTS().ToString(),
+			tag,
+		)
+	}
 	return locations
 }
 
 // parseMetaFiles parses the meta files which are in ckp/ or gc/ directory.
-func parseMetaFiles(payload []byte) []string {
+func parseMetaFiles(payload []byte, tag string) []string {
 	vec := vector.NewVec(types.Type{})
 	if err := vec.UnmarshalBinary(payload); err != nil {
 		logutil.Errorf("failed to unmarshal checkpoint file: %v", err)
 		return nil
 	}
+	var ignore bool
 	var locations []string
 	for i := 0; i < vec.Length(); i++ {
 		file := vec.GetStringAt(i)
-		logutil.Infof("parsed meta file: %s", file)
+		if strings.Contains(file, "gc/") {
+			ignore = true
+			break
+		}
 		locations = append(locations, file)
+	}
+	if ignore {
+		return nil
+	}
+	if len(tag) > 0 && len(locations) > 0 {
+		logutil.Infof("parsed meta files: %v, tag: %s", locations, tag)
 	}
 	return locations
 }

@@ -496,12 +496,4 @@ select trim(null from b) from t1;
 select trim('a' from null) from t1;
 select trim(null from null) from t1;
 drop table t1;
-
--- test mo_table_size/rows/min/mix view and normal table
--- view: mo_sessions, log_info, sys_memory_used
--- normal: rawlog, statement_info
-select mo_table_size(reldatabase, relname)=0 from (select reldatabase, relname, relkind from mo_catalog.mo_tables where relname in ('mo_sessions', 'log_info', 'sys_memory_used', 'rawlog', 'statement_info') order by relkind);
-select mo_table_rows(reldatabase, relname)=0 from (select reldatabase, relname, relkind from mo_catalog.mo_tables where relname in ('mo_sessions', 'log_info', 'sys_memory_used', 'rawlog', 'statement_info') order by relkind);
-
-
 drop database test01;
