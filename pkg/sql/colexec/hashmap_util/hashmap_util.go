@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,7 +36,7 @@ type HashmapBuilder struct {
 	vecs               [][]*vector.Vector
 	IntHashMap         *hashmap.IntHashMap
 	StrHashMap         *hashmap.StrHashMap
-	MultiSels          [][]int32
+	MultiSels          message.JoinSels
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	Batches            colexec.Batches
 	executor           []colexec.ExpressionExecutor
@@ -114,9 +115,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process) {
 		hb.UniqueJoinKeys[i].CleanOnlyData()
 	}
 	hb.UniqueJoinKeys = nil
-	if len(hb.MultiSels) > 0 {
-		hb.MultiSels = hb.MultiSels[:0]
-	}
+	hb.MultiSels.Free()
 	for i := range hb.executor {
 		if hb.executor[i] != nil {
 			hb.executor[i].ResetForNextQuery()
@@ -129,7 +128,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
-	hb.MultiSels = nil
+	hb.MultiSels.Free()
 	for i := range hb.executor {
 		if hb.executor[i] != nil {
 			hb.executor[i].Free()
@@ -160,7 +159,7 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 func (hb *HashmapBuilder) FreeWithError(proc *process.Process) {
 	hb.needDupVec = false
 	hb.FreeHashMapAndBatches(proc)
-	hb.MultiSels = nil
+	hb.MultiSels.Free()
 	for i := range hb.executor {
 		if hb.executor[i] != nil {
 			hb.executor[i].Free()
@@ -239,7 +238,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	} else {
 		if needAllocateSels {
-			hb.MultiSels = make([][]int32, hb.InputBatchRowCount)
+			hb.MultiSels.InitSel(hb.InputBatchRowCount)
 		}
 	}
 
@@ -324,10 +323,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 					vOld = v
 				}
 			} else if !hashOnPK && needAllocateSels {
-				if hb.MultiSels[ai] == nil {
-					hb.MultiSels[ai] = make([]int32, 0)
-				}
-				hb.MultiSels[ai] = append(hb.MultiSels[ai], int32(i+k))
+				hb.MultiSels.InsertSel(int32(ai), int32(i+k))
 			}
 		}
 
@@ -379,5 +375,16 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	}
 
+	// if groupcount == inputrowcount, it means building hashmap on unique rows
+	// we can free sels now
+	if hb.keyWidth <= 8 {
+		if hb.InputBatchRowCount == int(hb.IntHashMap.GroupCount()) {
+			hb.MultiSels.Free()
+		}
+	} else {
+		if hb.InputBatchRowCount == int(hb.StrHashMap.GroupCount()) {
+			hb.MultiSels.Free()
+		}
+	}
 	return nil
 }
