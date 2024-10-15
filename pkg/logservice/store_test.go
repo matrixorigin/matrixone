@@ -1153,7 +1153,7 @@ func TestRequiredLsn(t *testing.T) {
 		assert.NoError(t, store.setRequiredLsn(ctx, 1, 800))
 		lsn, err = store.getRequiredLsn(ctx, 1)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(15), lsn)
+		assert.Equal(t, uint64(800), lsn)
 	}
 	runStoreTest(t, fn)
 }

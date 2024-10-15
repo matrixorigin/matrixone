@@ -278,7 +278,12 @@ func Test_mysqlSink_Send(t *testing.T) {
 		retryDuration: DefaultRetryDuration,
 		conn:          db,
 	}
-	err = sink.Send(context.Background(), NewCdcActiveRoutine(), "sql")
+	ar := NewCdcActiveRoutine()
+	err = sink.Send(context.Background(), ar, "sql")
+	assert.NoError(t, err)
+
+	close(ar.Pause)
+	err = sink.Send(context.Background(), ar, "sql")
 	assert.NoError(t, err)
 }
 

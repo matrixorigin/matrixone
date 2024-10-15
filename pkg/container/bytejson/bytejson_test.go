@@ -460,7 +460,7 @@ func TestUnnest(t *testing.T) {
 			path, err = ParseJsonPath(kase.pathStr)
 			require.Nil(t, err)
 		}
-		out, err := bj.Unnest(&path, kase.outer, kase.recursive, kase.mode, filterMap)
+		out, _, err := bj.Unnest(&path, kase.outer, kase.recursive, kase.mode, filterMap)
 		if !kase.valid {
 			require.NotNil(t, err)
 			continue
