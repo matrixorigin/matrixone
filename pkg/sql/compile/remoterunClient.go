@@ -82,7 +82,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 
-	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput); err != nil {
+	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc); err != nil {
 		return sender, err
 	}
 
@@ -143,7 +143,7 @@ func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSen
 			return receiveMessageFromCnServerIfDispatch(s, sender)
 		}
 
-		panic(fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", s.RootOp.OpType()))
+		return moerr.NewInternalError(s.Proc.Ctx, fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", s.RootOp.OpType()))
 	}
 
 	// if the last operator is neither a connector nor a dispatch,
@@ -298,9 +298,9 @@ func newMessageSenderOnClient(
 }
 
 func (sender *messageSenderOnClient) sendPipeline(
-	scopeData, procData []byte, noDataBack bool) error {
+	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int) error {
 	sdLen := len(scopeData)
-	if sdLen <= maxMessageSizeToMoRpc {
+	if sdLen <= eachMessageSizeLimitation {
 		message := cnclient.AcquireMessage()
 		message.SetID(sender.streamSender.ID())
 		message.SetMessageType(pipeline.Method_PipelineMessage)
@@ -313,7 +313,7 @@ func (sender *messageSenderOnClient) sendPipeline(
 
 	start := 0
 	for start < sdLen {
-		end := start + maxMessageSizeToMoRpc
+		end := start + eachMessageSizeLimitation
 
 		message := cnclient.AcquireMessage()
 		message.SetID(sender.streamSender.ID())
