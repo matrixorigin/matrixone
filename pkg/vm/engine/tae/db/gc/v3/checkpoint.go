@@ -299,7 +299,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 			ext:   ext,
 		}
 	}
-	readDirs := make([]fileservice.DirEntry, 0)
+	gcMetaDirs := make([]fileservice.DirEntry, 0)
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.SnapshotExt || ext == blockio.AcctExt {
@@ -308,14 +308,24 @@ func (c *checkpointCleaner) Replay() (err error) {
 		if maxConsumedStart.IsEmpty() || maxConsumedStart.LT(&end) {
 			maxConsumedStart = start
 			maxConsumedEnd = end
-			readDirs = append(readDirs, dir)
+			gcMetaDirs = append(gcMetaDirs, dir)
 		}
 	}
-	if len(readDirs) == 0 {
+
+	// In the normal process, gcMetaDirs is empty, and it is impossible to have snapFile and acctFile,
+	// but when upgrading from 1.2 to 1.3, there may be such a situation, so you need to replay table info first
+	if acctFile != "" {
+		if err = c.mutation.snapshotMeta.ReadTableInfo(
+			c.ctx, GCMetaDir+acctFile, c.fs.Service,
+		); err != nil {
+			return
+		}
+	}
+	if len(gcMetaDirs) == 0 {
 		return
 	}
 	logger := logutil.Info
-	for _, dir := range readDirs {
+	for _, dir := range gcMetaDirs {
 		start := time.Now()
 		window := NewGCWindow(c.mp, c.fs.Service)
 		err = window.ReadTable(c.ctx, GCMetaDir+dir.Name, c.fs)
@@ -332,13 +342,6 @@ func (c *checkpointCleaner) Replay() (err error) {
 			return
 		}
 		c.mutAddScannedLocked(window)
-	}
-	if acctFile != "" {
-		if err = c.mutation.snapshotMeta.ReadTableInfo(
-			c.ctx, GCMetaDir+acctFile, c.fs.Service,
-		); err != nil {
-			return
-		}
 	}
 	if snapFile != "" {
 		if err = c.mutation.snapshotMeta.ReadMeta(
@@ -1655,4 +1658,9 @@ func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error)
 }
 func (c *checkpointCleaner) GetSnapshotsLocked() (map[uint32]containers.Vector, error) {
 	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
+}
+func (c *checkpointCleaner) GetTablePK(tid uint64) string {
+	c.mutation.Lock()
+	defer c.mutation.Unlock()
+	return c.mutation.snapshotMeta.GetTablePK(tid)
 }
