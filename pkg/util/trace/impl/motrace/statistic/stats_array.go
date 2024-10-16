@@ -270,19 +270,17 @@ type StatsInfo struct {
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
 
+	IOAccessTimeConsumption int64
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
 
-	// read data from local FileService
-	LocalFSIOReadTimeConsumption int64
-	// Local FileService blocking wait time
+	// Local FileService blocking wait IOMerge time Consumption, which is included in IOAccessTimeConsumption
 	LocalFSReadIOMergerTimeConsumption int64
+	// S3 FileService blocking wait IOMerge time Consumption, which is included in IOAccessTimeConsumption
+	S3FSReadIOMergerTimeConsumption int64
 
-	// read data from S3 FileService
-	S3FSIOReadTimeConsumption int64
-	// S3 FileService blocking wait time
+	// S3 FileService Prefetch File IOMerge time Consumption
 	S3FSPrefetchFileIOMergerTimeConsumption int64
-	S3FSReadIOMergerTimeConsumption         int64
 
 	ParseStartTime     time.Time `json:"ParseStartTime"`
 	PlanStartTime      time.Time `json:"PlanStartTime"`
@@ -353,18 +351,11 @@ func (stats *StatsInfo) AddBuidReaderTimeConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.BuildReaderDuration, int64(d))
 }
 
-func (stats *StatsInfo) AddLocalIOReadTimeConsumption(d time.Duration) {
+func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.LocalFSIOReadTimeConsumption, int64(d))
-}
-
-func (stats *StatsInfo) AddS3IOReadTimeConsumption(d time.Duration) {
-	if stats == nil {
-		return
-	}
-	atomic.AddInt64(&stats.S3FSIOReadTimeConsumption, int64(d))
+	atomic.AddInt64(&stats.IOAccessTimeConsumption, int64(d))
 }
 
 func (stats *StatsInfo) AddLocalFSReadIOMergerTimeConsumption(d time.Duration) {
@@ -395,12 +386,11 @@ func (stats *StatsInfo) ResetIOMergerTimeConsumption() {
 	atomic.StoreInt64(&stats.S3FSReadIOMergerTimeConsumption, 0)
 }
 
-func (stats *StatsInfo) ResetIOReadTimeConsumption() {
+func (stats *StatsInfo) ResetIOAccessTimeConsumption() {
 	if stats == nil {
 		return
 	}
-	atomic.StoreInt64(&stats.S3FSIOReadTimeConsumption, 0)
-	atomic.StoreInt64(&stats.LocalFSIOReadTimeConsumption, 0)
+	atomic.StoreInt64(&stats.IOAccessTimeConsumption, 0)
 }
 
 func (stats *StatsInfo) ResetBuildReaderTimeConsumption() {

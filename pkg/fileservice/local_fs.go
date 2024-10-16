@@ -299,6 +299,13 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 }
 
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
+	// Record diskIO IO and netwokIO(un memory IO) time Consumption
+	stats := statistic.StatsInfoFromContext(ctx)
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -313,8 +320,6 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
-
-	stats := statistic.StatsInfoFromContext(ctx)
 
 	for _, cache := range vector.Caches {
 
@@ -464,13 +469,6 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 }
 
 func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.Int64) (err error) {
-	// Record diskIO and netwokIO(un memory IO) resource
-	stats := statistic.StatsInfoFromContext(ctx)
-	ioStart := time.Now()
-	defer func() {
-		stats.AddLocalIOReadTimeConsumption(time.Since(ioStart))
-	}()
-
 	if vector.allDone() {
 		// all cache hit
 		return nil

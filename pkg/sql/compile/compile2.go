@@ -225,8 +225,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	v2.TxnStatementTotalCounter.Inc()
 	for {
 		// Before compile.runOnce, reset `StatsInfo` IO resources which in sql context
-		//stats.ResetIOAccessTimeConsumption()
-		stats.ResetIOReadTimeConsumption()
+		stats.ResetIOAccessTimeConsumption()
 		stats.ResetIOMergerTimeConsumption()
 		stats.ResetBuildReaderTimeConsumption()
 
