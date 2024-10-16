@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/btree"
@@ -564,7 +565,7 @@ func Test_mysqlSinker_sinkSnapshot(t *testing.T) {
 	assert.NoError(t, err)
 	mock.ExpectExec("begin;").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("rollback;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(".*").WillReturnError(fmt.Errorf("err"))
+	mock.ExpectExec(".*").WillReturnError(moerr.NewInternalErrorNoCtx(""))
 
 	sinker := &mysqlSinker{
 		mysql: &mysqlSink{
@@ -718,7 +719,7 @@ func Test_mysqlSinker_sinkTail(t *testing.T) {
 	assert.NoError(t, err)
 	mock.ExpectExec("begin;").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("rollback;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(".*").WillReturnError(fmt.Errorf("err"))
+	mock.ExpectExec(".*").WillReturnError(moerr.NewInternalErrorNoCtx(""))
 
 	packerPool := fileservice.NewPool(
 		128,

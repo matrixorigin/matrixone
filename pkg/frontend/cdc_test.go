@@ -663,7 +663,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	sql3_1 := "select count.*att_constraint_type.* from `mo_catalog`.`mo_columns` where account_id = 0 and att_database = 'db1' and att_relname = 't2' and att_constraint_type = 'p'"
 	mock.ExpectQuery(sql3_1).WillReturnRows(sqlmock.NewRows([]string{"count(att_constraint_type)"}).AddRow(uint64(1)))
 
-	sql4 := "insert into mo_catalog.mo_cdc_task values.*0,\".*\",\"task1\",\".*\",\"\",\".*\",\"mysql\",\".*\",\"\",\"\",\"\",\".*\",\".*\",\"\",\"common\",\"common\",\"\",\"\",\"\",\".*\",\"running\",0,\"0\",\"false\",\"\",'{\"InitSnapshotSplitTxn\":true}',\"\",\"\",\"\",\"\".*"
+	sql4 := "insert into mo_catalog.mo_cdc_task values.*0,\".*\",\"task1\",\".*\",\"\",\".*\",\"mysql\",\".*\",\"\",\"\",\"\",\".*\",\".*\",\"\",\"common\",\"common\",\"\",\"\",\"\",\".*\",\"running\",0,\"0\",\"false\",\"\",'{\"InitSnapshotSplitTxn\":false}',\"\",\"\",\"\",\"\".*"
 	mock.ExpectExec(sql4).WillReturnResult(sqlmock.NewResult(1, 1))
 	////
 
@@ -687,6 +687,8 @@ func Test_handleCreateCdc(t *testing.T) {
 			sysAccountName,
 			"Rules",
 			"db2.t3,db2.t4",
+			cdc2.InitSnapshotSplitTxn,
+			"false",
 		},
 	}
 
@@ -2801,7 +2803,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		tables,
 		filters,
 		true,
-		"{}",
+		"{\"InitSnapshotSplitTxn\": false}",
 	),
 	)
 
