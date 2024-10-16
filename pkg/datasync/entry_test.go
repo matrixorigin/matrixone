@@ -143,9 +143,8 @@ func generateCmdPayload(param parameter, loc objectio.Location) ([]byte, error) 
 		obj := catalog.NewObjectEntry(
 			tb,
 			txn,
-			objectio.ZeroObjectStats,
 			dataFactory.MakeObjectFactory(),
-			false,
+			&objectio.CreateObjOpt{Stats: &objectio.ZeroObjectStats, IsTombstone: false},
 		)
 
 		if err := objectio.SetObjectStatsLocation(&obj.ObjectStats, loc); err != nil {

@@ -228,15 +228,14 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 func NewObjectEntry(
 	table *TableEntry,
 	txn txnif.AsyncTxn,
-	stats objectio.ObjectStats,
 	dataFactory ObjectDataFactory,
-	isTombstone bool,
+	opts *objectio.CreateObjOpt,
 ) *ObjectEntry {
 	e := &ObjectEntry{
 		table: table,
 		ObjectNode: ObjectNode{
 			SortHint:    table.GetDB().catalog.NextObject(),
-			IsTombstone: isTombstone,
+			IsTombstone: opts.IsTombstone,
 		},
 		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
@@ -244,8 +243,9 @@ func NewObjectEntry(
 		CreateNode:  *txnbase.NewTxnMVCCNodeWithTxn(txn),
 		ObjectState: ObjectState_Create_Active,
 		ObjectMVCCNode: ObjectMVCCNode{
-			ObjectStats: stats,
+			ObjectStats: *opts.Stats,
 		},
+		GenerateHint: opts.GenerateHint,
 	}
 	if dataFactory != nil {
 		e.objData = dataFactory(e)

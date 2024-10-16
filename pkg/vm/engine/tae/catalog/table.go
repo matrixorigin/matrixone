@@ -216,8 +216,7 @@ func (entry *TableEntry) CreateObject(
 ) (created *ObjectEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	created = NewObjectEntry(entry, txn, *opts.Stats, dataFactory, opts.IsTombstone)
-	created.GenerateHint = opts.GenerateHint
+	created = NewObjectEntry(entry, txn, dataFactory, opts)
 	entry.AddEntryLocked(created)
 	return
 }
