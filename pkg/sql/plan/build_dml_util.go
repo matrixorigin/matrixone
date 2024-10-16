@@ -39,7 +39,7 @@ import (
 
 // TODO: choose either PostInsertFullText or PreInsertFullText
 var (
-	postdml_flag bool = true
+	postdml_flag bool = false
 )
 
 var dmlPlanCtxPool = sync.Pool{
