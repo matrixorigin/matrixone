@@ -65,9 +65,11 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 }
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+
 	if builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0 {
 		return nodeID
 	}
+
 	node := builder.qry.Nodes[nodeID]
 	for i, childID := range node.Children {
 		node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)
@@ -86,6 +88,7 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 		return builder.applyIndicesForProject(nodeID, node, colRefCnt, idxColMap)
 
 	}
+
 	return nodeID
 }
 
@@ -95,6 +98,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
+
 	// 1. Master Index Check
 	{
 		masterIndexes := make([]*plan.IndexDef, 0)
@@ -135,7 +139,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				goto END0
 			}
 		}
-
 		for _, indexDef := range masterIndexes {
 			isAllFilterColumnsIncluded := true
 			for _, expr := range node.FilterList {
@@ -164,6 +167,64 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	// FullText
+	{
+		// support the followings:
+		// 1. project -> scan
+		// 2. project -> sort -> scan
+		// 3. project -> aggregate -> scan
+		// try to find scanNode, sortNode from projNode
+		var sortNode, aggNode *plan.Node
+		sortNode = nil
+		aggNode = nil
+		scanNode := builder.resolveScanNodeFromProject(projNode, 1)
+		if scanNode == nil {
+			sortNode = builder.resolveSortNode(projNode, 1)
+			if sortNode == nil {
+				aggNode = builder.resolveAggNode(projNode, 1)
+				if aggNode == nil {
+					goto END0
+				}
+			}
+
+			if sortNode != nil {
+				scanNode = builder.resolveScanNodeWithIndex(sortNode, 1)
+				if scanNode == nil {
+					goto END0
+				}
+			}
+			if aggNode != nil {
+				scanNode = builder.resolveScanNodeWithIndex(aggNode, 1)
+				if scanNode == nil {
+					goto END0
+				}
+			}
+		}
+
+		if aggNode != nil {
+			// agg node and scan node present
+			// get the list of filter that is fulltext_match func
+			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+
+			// apply fulltext indices when fulltext_match exists
+			if len(filterids) > 0 {
+				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, aggNode, scanNode,
+					filterids, filter_ftidxs, colRefCnt, idxColMap)
+			}
+		} else {
+			// get the list of project that is fulltext_match func
+			projids, proj_ftidxs := builder.getFullTextMatchFromProject(projNode, scanNode)
+
+			// get the list of filter that is fulltext_match func
+			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+
+			// apply fulltext indices when fulltext_match exists
+			if len(filterids) > 0 || len(projids) > 0 {
+				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode,
+					filterids, filter_ftidxs, projids, proj_ftidxs, colRefCnt, idxColMap)
+			}
+		}
+	}
 
 	// 1. Vector Index Check
 	// Handle Queries like
