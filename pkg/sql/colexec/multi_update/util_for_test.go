@@ -59,17 +59,17 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 	var err error
 	var res vm.CallResult
 
-	dupBatchs := func(bats []*batch.Batch) []*batch.Batch {
-		ret := make([]*batch.Batch, len(bats))
-		for i, bat := range bats {
-			ret[i], _ = bat.Dup(proc.GetMPool())
-		}
-		return ret
-	}
+	// dupBatchs := func(bats []*batch.Batch) []*batch.Batch {
+	// 	ret := make([]*batch.Batch, len(bats))
+	// 	for i, bat := range bats {
+	// 		ret[i], _ = bat.Dup(proc.GetMPool())
+	// 	}
+	// 	return ret
+	// }
 
 	// logutil.Info("begin to run multi_update test")
 	for _, tc := range tcs {
-		child := colexec.NewMockOperator().WithBatchs(dupBatchs(tc.inputBatchs))
+		child := colexec.NewMockOperator().WithBatchs(tc.inputBatchs)
 		tc.op.AppendChild(child)
 		err = tc.op.Prepare(proc)
 		require.NoError(t, err)
@@ -96,10 +96,11 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 		require.NoError(t, err)
 		require.Equal(t, tc.affectedRows, tc.op.GetAffectedRows())
 
+		child.ResetBatchs()
 		tc.op.Children[0].Reset(proc, false, nil)
 		tc.op.Reset(proc, false, nil)
 
-		child.ResetBatchs(proc, tc.inputBatchs)
+		child.WithBatchs(tc.inputBatchs)
 		err = tc.op.Prepare(proc)
 		require.NoError(t, err)
 		for {

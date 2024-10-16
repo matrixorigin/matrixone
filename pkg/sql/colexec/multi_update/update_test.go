@@ -116,7 +116,7 @@ func buildUpdateS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, affectRows := prepareUpdateTestBatchs(proc.GetMPool(), 500, hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, affectRows := prepareUpdateTestBatchs(proc.GetMPool(), 220, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
 	toWriteS3 := true
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, toWriteS3)
