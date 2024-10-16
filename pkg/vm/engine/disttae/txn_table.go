@@ -118,7 +118,7 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 		approxObjectNum,
 		stats,
 	)
-	if err := UpdateStats(ctx, req, nil); err != nil {
+	if err := UpdateStats(ctx, req, nil, tbl.proc.Load().GetService()); err != nil {
 		logutil.Errorf("failed to init stats info for table %d", tbl.tableId)
 		return nil, err
 	}

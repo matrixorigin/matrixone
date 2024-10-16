@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -565,7 +567,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		approxObjectNum,
 		stats,
 	)
-	if err := UpdateStats(gs.ctx, req, gs.concurrentExecutor); err != nil {
+	if err := UpdateStats(gs.ctx, req, gs.concurrentExecutor, gs.engine.GetService()); err != nil {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
@@ -757,15 +759,33 @@ func updateInfoFromZoneMap(
 	return nil
 }
 
-func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
+func getNDVUsingInternalSql(serviceID string) float64 {
+	v, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service!")
+	}
+
+}
+
+func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef, serviceID string) {
 	lenCols := len(tableDef.Cols) - 1 /* row-id */
 
 	if info.AccurateObjectNumber > 1 {
 		for idx := range tableDef.Cols[:lenCols] {
 			rate := info.ColumnNDVs[idx] / info.TableCnt
-			if rate > 1 {
-				rate = 1
+			if info.ColumnNDVs[idx] < 3 {
+				info.ColumnNDVs[idx] *= (4 - info.ColumnNDVs[idx])
+				continue
 			}
+			if rate < 0.001 && info.TableCnt*rate < 100 {
+				info.ColumnNDVs[idx] = info.TableCnt * rate
+				continue
+			}
+			if rate > 0.5 {
+				info.ColumnNDVs[idx] = info.TableCnt * rate
+				continue
+			}
+
 			if rate < 0.2 {
 				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
 				if plan2.GetSortOrder(tableDef, int32(idx)) == -1 { //non sorted column, need to adjust ndv down
@@ -784,10 +804,6 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 				info.ColumnNDVs[idx] = ndvUsingZonemap
 			}
 
-			if info.ColumnNDVs[idx] < 3 {
-				info.ColumnNDVs[idx] *= (4 - info.ColumnNDVs[idx])
-			}
-
 			if info.ColumnNDVs[idx] > info.TableCnt {
 				info.ColumnNDVs[idx] = info.TableCnt
 			}
@@ -796,9 +812,7 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 }
 
 // UpdateStats is the main function to calculate and update the stats for scan node.
-func UpdateStats(
-	ctx context.Context, req *updateStatsRequest, executor ConcurrentExecutor,
-) error {
+func UpdateStats(ctx context.Context, req *updateStatsRequest, executor ConcurrentExecutor, serviceID string) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
@@ -814,7 +828,7 @@ func UpdateStats(
 	if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
 		return err
 	}
-	adjustNDV(info, baseTableDef)
+	adjustNDV(info, baseTableDef, serviceID)
 	plan2.UpdateStatsInfo(info, baseTableDef, req.statsInfo)
 	return nil
 }
