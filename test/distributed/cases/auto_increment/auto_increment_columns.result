@@ -806,3 +806,26 @@ insert into t1 values();
 select last_insert_id();
 last_insert_id()
 101
+Drop table if exists auto_increment02;
+Create table auto_increment02(col1 int auto_increment unique key)auto_increment = 10;
+Select * from auto_increment02;
+col1
+select last_insert_id();
+last_insert_id()
+101
+Insert into auto_increment02 values();
+Select * from auto_increment02;
+col1
+10
+select last_insert_id();
+last_insert_id()
+10
+Insert into auto_increment02 values(10);
+Duplicate entry '10' for key '__mo_index_idx_col'
+Select * from auto_increment02;
+col1
+10
+select last_insert_id();
+last_insert_id()
+10
+Drop table auto_increment02;
