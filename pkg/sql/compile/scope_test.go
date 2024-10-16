@@ -478,3 +478,22 @@ func getReverseList2(rootOp vm.Operator, stack []vm.OpType) []vm.OpType {
 	stack = append(stack, rootOp.OpType())
 	return stack
 }
+
+func TestRemoveStringBetween(t *testing.T) {
+	cases := []struct {
+		input, output string
+	}{
+		{
+			input:  "/* comment */ replace into t1 values (1);",
+			output: " replace into t1 values (1);",
+		},
+		{
+			input:  "/* comment */ replace /* replace */ into t1 values (1);",
+			output: " replace  into t1 values (1);",
+		},
+	}
+
+	for _, c := range cases {
+		require.Equal(t, c.output, removeStringBetween(c.input, "/*", "*/"))
+	}
+}
