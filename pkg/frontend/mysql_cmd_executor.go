@@ -2635,9 +2635,17 @@ func executeStmt(ses *Session,
 	var cmpBegin time.Time
 	var ret interface{}
 
-	switch execCtx.stmt.StmtKind().ExecLocation() {
+	getExecLocation := func() tree.ExecLocation {
+		// because when isBinaryProtExecute is true, execCtx.stmt is preparestmt, actually it's execute
+		if execCtx.input.isBinaryProtExecute {
+			return tree.EXEC_IN_ENGINE
+		}
+		return execCtx.stmt.StmtKind().ExecLocation()
+	}
+	switch getExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
 		return execInFrontend(ses, execCtx)
+
 	case tree.EXEC_IN_ENGINE:
 		//in the computation engine
 	}
