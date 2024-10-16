@@ -72,16 +72,6 @@ func NewWithSchema(offHeap bool, attrs []string, attTypes []types.Type) *Batch {
 	return bat
 }
 
-func EmptyBatchWithSize(n int) Batch {
-	bat := Batch{
-		Vecs: make([]*vector.Vector, n),
-	}
-	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.NewVec(types.T_any.ToType())
-	}
-	return bat
-}
-
 func EmptyBatchWithAttrs(attrs []string) Batch {
 	bat := Batch{
 		Attrs: attrs,
