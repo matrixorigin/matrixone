@@ -830,27 +830,23 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 				// collect views and tables during table restoration
 				viewMap := make(map[string]*tableInfo)
 
-				rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount, false, nil)
-				if rtnErr != nil {
+				if rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount, false, nil); rtnErr != nil {
 					return rtnErr
 				}
 
 				if len(fkTableMap) > 0 {
-					rtnErr = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, ts)
-					if rtnErr != nil {
+					if rtnErr = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, ts); rtnErr != nil {
 						return
 					}
 				}
 
 				if len(viewMap) > 0 {
-					rtnErr = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId)
-					if rtnErr != nil {
+					if rtnErr = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId); rtnErr != nil {
 						return
 					}
 				}
 				// checks if the given context has been canceled.
-				rtnErr = CancelCheck(ctx)
-				if rtnErr != nil {
+				if rtnErr = CancelCheck(ctx); rtnErr != nil {
 					return
 				}
 				return rtnErr
@@ -908,28 +904,23 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 
 				// collect views and tables during table restoration
 				viewMap := make(map[string]*tableInfo)
-
-				rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount, false, nil)
-				if rtnErr != nil {
+				if rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount, false, nil); rtnErr != nil {
 					return rtnErr
 				}
 
 				if len(fkTableMap) > 0 {
-					rtnErr = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, ts)
-					if rtnErr != nil {
+					if rtnErr = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, ts); rtnErr != nil {
 						return
 					}
 				}
 
 				if len(viewMap) > 0 {
-					rtnErr = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId)
-					if rtnErr != nil {
+					if rtnErr = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId); rtnErr != nil {
 						return
 					}
 				}
 				// checks if the given context has been canceled.
-				rtnErr = CancelCheck(ctx)
-				if rtnErr != nil {
+				if rtnErr = CancelCheck(ctx); rtnErr != nil {
 					return
 				}
 				return rtnErr
