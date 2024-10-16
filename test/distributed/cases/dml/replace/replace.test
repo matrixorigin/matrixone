@@ -15,6 +15,8 @@ replace into names set id = 2, name = "Ciro", age = 17;
 select name, age from names where id = 2;
 REPLACE INTO names values (2, "Bob", 19);
 select name, age from names where id = 2;
+/* comment */ replace into names set id = 2, name = "Dylan";
+select name, age from names where id = 2;
 -- table without keys
 drop table if exists t1;
 create table t1(a int, b int, c int);
