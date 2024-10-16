@@ -2831,6 +2831,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		LogLevel:             zapcore.InfoLevel, //TODO: need set by session level config
 		SessionId:            ses.GetSessId(),
 	}
+	proc.SetLastInsertID(ses.GetLastInsertID())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.

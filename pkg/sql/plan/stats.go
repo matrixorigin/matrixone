@@ -1502,10 +1502,10 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 		return sel * math.Pow(10, float64(sortOrder+1))
 	}
 	overlap := s.ShuffleRangeMap[colname].Overlap
-	if overlap > 0.5 {
+	if overlap > overlapThreshold {
 		return 1
 	}
-	ret := sel * math.Pow(10000, overlap/2)
+	ret := sel * math.Pow(1000, overlap/2)
 	if ret > 1 {
 		ret = 1
 	}

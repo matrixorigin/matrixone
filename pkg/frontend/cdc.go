@@ -971,8 +971,6 @@ type CdcTask struct {
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
 	sunkWatermarkUpdater *cdc2.WatermarkUpdater
-	readers              []cdc2.Reader
-	sinkers              []cdc2.Sinker
 	holdCh               chan int
 }
 
@@ -1015,7 +1013,8 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		if err != nil {
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
-			cdc.close(true, true)
+			close(cdc.activeRoutine.Pause)
+			close(cdc.activeRoutine.Cancel)
 		}
 		// if Resume/Restart successfully will reach here, do nothing
 	}()
@@ -1107,8 +1106,6 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 	go cdc.sunkWatermarkUpdater.Run(ctx, cdc.activeRoutine)
 
 	// create exec pipelines
-	cdc.readers = make([]cdc2.Reader, 0, len(dbTableInfos))
-	cdc.sinkers = make([]cdc2.Sinker, 0, len(dbTableInfos))
 	for _, info = range dbTableInfos {
 		if err = cdc.addExecPipelineForTable(info, txnOp); err != nil {
 			return
@@ -1326,7 +1323,7 @@ func (cdc *CdcTask) Pause() (err error) {
 		}
 	}()
 
-	cdc.close(true, false)
+	close(cdc.activeRoutine.Pause)
 	return
 }
 
@@ -1341,7 +1338,7 @@ func (cdc *CdcTask) Cancel() (err error) {
 		}
 	}()
 
-	cdc.close(false, true)
+	close(cdc.activeRoutine.Cancel)
 	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
 		return err
 	}
@@ -1349,25 +1346,6 @@ func (cdc *CdcTask) Cancel() (err error) {
 	// let Start() go
 	cdc.holdCh <- 1
 	return
-}
-
-func (cdc *CdcTask) close(closePause, closeCancel bool) {
-	if closePause {
-		close(cdc.activeRoutine.Pause)
-	}
-	if closeCancel {
-		close(cdc.activeRoutine.Cancel)
-	}
-
-	for _, reader := range cdc.readers {
-		reader.Close()
-	}
-	cdc.readers = nil
-
-	for _, sinker := range cdc.sinkers {
-		sinker.Close()
-	}
-	cdc.sinkers = nil
 }
 
 func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client.TxnOperator) error {
@@ -1399,7 +1377,6 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 	if err != nil {
 		return err
 	}
-	cdc.sinkers = append(cdc.sinkers, sinker)
 
 	// make reader
 	reader := cdc2.NewTableReader(
@@ -1413,7 +1390,6 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		tableDef,
 		cdc.ResetWatermarkForTable,
 	)
-	cdc.readers = append(cdc.readers, reader)
 	go reader.Run(ctx, cdc.activeRoutine)
 
 	return nil

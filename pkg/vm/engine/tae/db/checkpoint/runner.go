@@ -945,7 +945,7 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 	}
 
 	factory := jobs.FlushTableTailTaskFactory(metas, tombstoneMetas, r.rt)
-	if _, err := r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory); err != nil {
+	if _, err := r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.FlushTableTailTask, scopes, factory); err != nil {
 		if err != tasks.ErrScheduleScopeConflict {
 			logutil.Error("[FlushTabletail] Sched Failure", zap.String("table", tableDesc), zap.Error(err))
 		}
