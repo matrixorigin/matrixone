@@ -268,7 +268,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC != c {
 			runC.Release()
 		}
-
+		c.retryTimes = retryTimes
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		if runC, err = c.prepareRetry(defChanged); err != nil {
 			return nil, err

@@ -982,11 +982,11 @@ func ForeachWindowVarlen(
 				}
 			}
 		} else {
-			for i, v := range slice {
+			for i := range slice {
 				var val []byte
 				isNull := vec.IsNull(uint64(i + start))
 				if !isNull {
-					val = v.GetByteSlice(area)
+					val = slice[i].GetByteSlice(area)
 				}
 				if op != nil {
 					if err = op(val, isNull, i+start); err != nil {

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -306,6 +307,65 @@ func TestGenerateTimestamp(t *testing.T) {
 		} else {
 			require.Equal(t, kase.res, res)
 		}
+	}
+}
+
+func TestInitStartAndEndNumNoTypeCheck(t *testing.T) {
+	proc := testutil.NewProc()
+	tests := []struct {
+		name    string
+		start   interface{}
+		end     interface{}
+		step    interface{}
+		wantErr bool
+	}{
+		{"ValidInt32", int32(1), int32(10), int32(1), false},
+		{"ValidInt64", int64(1), int64(10), int64(1), false},
+		{"StepZero", int32(1), int32(10), int32(0), true},
+		{"InvalidStartType", "1", int32(10), int32(1), true},
+		{"InvalidEndType", int32(1), "10", int32(1), true},
+		{"InvalidStepType", int32(1), int32(10), "1", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gs genNumState[int64]
+			startVec, endVec, stepVec := createVectors(tt.start, tt.end, tt.step, proc)
+			err := initStartAndEndNumNoTypeCheck(&gs, proc, startVec, endVec, stepVec, 0)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("initStartAndEndNumNoTypeCheck() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func createVectors(start, end, step interface{}, proc *process.Process) (*vector.Vector, *vector.Vector, *vector.Vector) {
+	var startVec, endVec, stepVec *vector.Vector
+	if start != nil {
+		startVec = createVector(start, proc)
+	}
+	if end != nil {
+		endVec = createVector(end, proc)
+	}
+	if step != nil {
+		stepVec = createVector(step, proc)
+	}
+	return startVec, endVec, stepVec
+}
+
+func createVector(value interface{}, proc *process.Process) *vector.Vector {
+	switch v := value.(type) {
+	case int32:
+		vec, _ := vector.NewConstFixed(types.T_int32.ToType(), v, 1, proc.Mp())
+		return vec
+	case int64:
+		vec, _ := vector.NewConstFixed(types.T_int64.ToType(), v, 1, proc.Mp())
+		return vec
+	case string:
+		vec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(v), 1, proc.Mp())
+		return vec
+	default:
+		return nil
 	}
 }
 

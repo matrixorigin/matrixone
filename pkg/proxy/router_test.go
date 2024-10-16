@@ -272,8 +272,9 @@ func TestRouter_SelectByConnID(t *testing.T) {
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
 	frontend.InitServerLevelVars(cn1.uuid)
 	frontend.SetSessionAlloc(cn1.uuid, frontend.NewSessionAllocator(newTestPu()))
-	_, _, err := ru.Connect(cn1, testPacket, nil)
+	sc1, _, err := ru.Connect(cn1, testPacket, nil)
 	require.NoError(t, err)
+	defer sc1.Close()
 
 	cn2, err := ru.SelectByConnID(10)
 	require.NoError(t, err)
@@ -361,8 +362,9 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	frontend.InitServerLevelVars(cn.uuid)
 	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu1 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu1)
+	sc1, _, err := ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
+	defer sc1.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li2 := labelInfo{
@@ -380,8 +382,9 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	frontend.InitServerLevelVars(cn.uuid)
 	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu2 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu2)
+	sc2, _, err := ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
+	defer sc2.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li3 := labelInfo{
@@ -399,8 +402,9 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	frontend.InitServerLevelVars(cn.uuid)
 	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu3 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu3)
+	sc3, _, err := ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
+	defer sc3.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	require.Equal(t, 3, len(connResult))
@@ -474,8 +478,9 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	tu1 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu1)
+	sc1, _, err := ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
+	defer sc1.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li2 := labelInfo{
@@ -490,8 +495,9 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	tu2 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu2)
+	sc2, _, err := ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
+	defer sc2.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li3 := labelInfo{
@@ -506,8 +512,9 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	tu3 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu3)
+	sc3, _, err := ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
+	defer sc3.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	require.Equal(t, 2, len(connResult))
@@ -644,8 +651,9 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	_, _, err = ru.Connect(cn, testPacket, tu1)
+	sc1, _, err := ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
+	defer sc1.Close()
 	require.Equal(t, "cn1", cn.uuid)
 
 	// could not connect to cn3, because of timeout.
