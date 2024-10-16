@@ -20,6 +20,10 @@ REPLACE INTO names values (2, "Bob", 19);
 select name, age from names where id = 2;
 name    age
 Bob    19
+/* comment */ replace into names set id = 2, name = "Dylan";
+select name, age from names where id = 2;
+name    age
+Dylan    null
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values (1,1,1), (2,2,2), (3,3,3);
